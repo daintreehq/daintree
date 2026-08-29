@@ -31,8 +31,10 @@ import {
   LAUNCHABLE_AGENT_IDS,
 } from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
+import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type { ActionContext, ActionId } from "@shared/types/actions";
+import type { CliAvailability } from "@shared/types";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
 import type {
@@ -251,10 +253,12 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     // These are the same normalized renderer stores the toolbar reads. Fall back to
     // cache-aware IPC clients only before hydration; neither path exposes settings
     // details beyond the narrow fields each discovery action selects below.
-    const [{ useAgentSettingsStore }, { useCliAvailabilityStore }] = await Promise.all([
-      import("@/store/agentSettingsStore"),
-      import("@/store/cliAvailabilityStore"),
-    ]);
+    const [{ useAgentSettingsStore }, { useCliAvailabilityStore }, { useAgentPreferencesStore }] =
+      await Promise.all([
+        import("@/store/agentSettingsStore"),
+        import("@/store/cliAvailabilityStore"),
+        import("@/store/agentPreferencesStore"),
+      ]);
     const storeSettings = useAgentSettingsStore.getState().settings;
     const settings = storeSettings ?? (await agentSettingsClient.get());
     const availabilityStore = useCliAvailabilityStore.getState();
@@ -268,7 +272,52 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     // reading `availability` directly because it must mirror the live toolbar,
     // which renders from the same hydrating store.
     const availabilityLive = availabilityStore.isInitialized === true;
-    return { settings, availability, availabilityLive };
+    // The default-agent pick has no IPC client to fall back to — it is renderer
+    // state persisted to localStorage, and `createSafeJSONStorage` reads
+    // synchronously, so `persist` has already hydrated it by the time this
+    // dynamic import resolves. There is no pre-hydration window to guard.
+    const { defaultAgent } = useAgentPreferencesStore.getState();
+    return { settings, availability, availabilityLive, defaultAgent };
+  };
+
+  /**
+   * The two default-agent fields both discovery listings report.
+   *
+   * `defaultAgentId` is the user's explicit pick in Settings > CLI Agents;
+   * `resolvedDefaultAgentId` is what a launch would actually spawn right now,
+   * which differs when the pick is unset ("None (First available)") or when its
+   * CLI is not currently launchable.
+   *
+   * Assistant-only ids are excluded from BOTH. These listings are catalogs of
+   * direct agents a caller can spawn, and `LAUNCHABLE_AGENT_IDS` already keeps
+   * the assistant out of their rows, so naming it here would point at an id the
+   * same result never lists. It is also the honest answer to the question these
+   * fields exist to settle: picking "Daintree Assistant" as the default means
+   * "open the assistant when I launch", not "delegate work to it", so a caller
+   * asking which direct agent to spawn has no explicit pick to honour. Passing
+   * the direct-agent set as `selectedAgents` applies that exclusion to all
+   * three of `getDefaultAgentId`'s branches at once, including its own
+   * favour-the-assistant fallback, so no path can return one.
+   *
+   * The resolved value is withheld until a live probe has run, for the same
+   * reason `installed`/`launchable` are: it is derived from launchability, and
+   * a hydrating cache synthesizes "missing" for unprobed agents, which would
+   * resolve straight past a default that is in fact installed.
+   */
+  const resolveDefaultAgentIds = (
+    defaultAgent: string | undefined,
+    availability: CliAvailability,
+    availabilityLive: boolean
+  ) => {
+    const directAgents = new Set<string>(LAUNCHABLE_AGENT_IDS);
+    const explicit = defaultAgent && directAgents.has(defaultAgent) ? defaultAgent : undefined;
+    const resolved = availabilityLive
+      ? getDefaultAgentId(defaultAgent, undefined, availability, directAgents)
+      : null;
+    return {
+      ...(explicit ? { defaultAgentId: explicit } : {}),
+      ...(resolved ? { resolvedDefaultAgentId: resolved } : {}),
+    };
   };
 
   /**
@@ -1311,10 +1360,14 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
           visible: z.boolean(),
         })
       ),
+      defaultAgentId: z.string().optional(),
+      resolvedDefaultAgentId: z.string().optional(),
     }),
     run: async () => {
-      const { settings, availability } = await readAgentDiscoveryState();
+      const { settings, availability, availabilityLive, defaultAgent } =
+        await readAgentDiscoveryState();
       return {
+        ...resolveDefaultAgentIds(defaultAgent, availability, availabilityLive),
         agents: LAUNCHABLE_AGENT_IDS.map((id) => {
           const entry = settings.agents?.[id];
           const state = availability[id];
@@ -1346,6 +1399,14 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     resultSchema: z.object({
       complete: z.literal(true),
       availabilityComplete: z.boolean(),
+      defaultAgentId: z
+        .string()
+        .optional()
+        .describe("The user's default agent; absent when they chose none."),
+      resolvedDefaultAgentId: z
+        .string()
+        .optional()
+        .describe("Launch this when the user names no agent."),
       agents: z.array(
         z.object({
           id: z.string(),
@@ -1363,7 +1424,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     }),
     mcpOutputSchema: true,
     run: async () => {
-      const [{ settings, availability, availabilityLive }, registry, userRegistry] =
+      const [{ settings, availability, availabilityLive, defaultAgent }, registry, userRegistry] =
         await readAvailableAgentSources();
       const registryIds = [
         ...LAUNCHABLE_AGENT_IDS.filter((id) => Object.hasOwn(registry, id)),
@@ -1378,6 +1439,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         // the own-key check and mislabel a never-checked agent as uninstalled.
         availabilityComplete:
           availabilityLive && registryIds.every((id) => Object.hasOwn(availability, id)),
+        ...resolveDefaultAgentIds(defaultAgent, availability, availabilityLive),
         agents: registryIds.map((id) => {
           // `rawState` mirrors what the toolbar renders (used for toolbarVisible);
           // `probedState` is the authoritative probe result we're willing to
