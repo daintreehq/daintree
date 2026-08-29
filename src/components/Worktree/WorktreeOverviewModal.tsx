@@ -229,10 +229,19 @@ function OverviewGridCell(props: OverviewWorktreeCardProps & { isCursor?: boolea
         // `overlay-subtle` is a 2% step, around 1.1:1 — so the mark has to
         // carry the ratio on its own.
         //
-        // The rail is inset 12px top and bottom rather than the palette's 6px:
-        // the card's own status mark is a 12x12 corner wedge at this edge, and
-        // 6px put the two in the same gutter. It is on the leading edge, where
-        // the trailing edge already carries the current-worktree stripe.
+        // Inset 12px top and bottom rather than the palette's 6px, and
+        // symmetric: the two marks no longer share a column, so no vertical
+        // clearance is needed at either end. The card's content column starts
+        // 16px in (the grip column, or `ps-4` standing in for it) and the tick
+        // is `-start-2.5` w-1 against it, so it paints at x 6-10px, while this
+        // rail is `start-0` w-[3px] at x 0-3px. The 12px is the old wedge's
+        // number kept because it still looks right, not because anything is
+        // being cleared. Leading edge, because the trailing edge already
+        // carries the current-worktree stripe.
+        //
+        // The two marks are also told apart by radius, not just position: this
+        // rail is a pill and the status tick is square-ended. Rounding the tick
+        // would collapse that distinction.
         "relative",
         isSelected && "bg-overlay-medium",
         isSelected &&
