@@ -53,6 +53,8 @@ export function AssistantPanel({
     decideApproval,
     answerQuestion,
     requestOperations,
+    requestTimers,
+    cancelTimer,
     retractInterjection,
   } = useAssistantSession({
     projectId,
@@ -101,6 +103,9 @@ export function AssistantPanel({
       mcpToolCount: s.mcpToolCount,
       commands: s.commands,
       operations: s.operations,
+      timers: s.timers,
+      timerCancelPending: s.timerCancelPending,
+      timerCancelErrors: s.timerCancelErrors,
       toolGrants: s.toolGrants,
       queuedInterjections: s.queuedInterjections,
       retractedDraft: s.retractedDraft,
@@ -210,6 +215,8 @@ export function AssistantPanel({
       onAnswerQuestion={answerQuestion}
       onGrantTool={grantTool}
       onRequestOperations={requestOperations}
+      onRequestTimers={requestTimers}
+      onCancelTimer={cancelTimer}
       operationsOpen={operationsOpen}
       onOperationsOpenChange={onOperationsOpenChange}
       onRetractInterjection={retractInterjection}

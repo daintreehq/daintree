@@ -48,7 +48,7 @@
 
 import { createInterface } from "node:readline";
 
-const PROTOCOL_VERSION = 3;
+const PROTOCOL_VERSION = 4;
 const SCENARIO = process.env.FAKE_ENGINE_SCENARIO ?? "streaming";
 const SPEED = Number(process.env.FAKE_ENGINE_SPEED ?? "1");
 
@@ -104,6 +104,60 @@ const BACKEND_CHOICES = [
 ];
 /** Which one is answering. MUTATED by an answered `/backend`, as the real engine is. */
 let backendUrl = BACKEND_CHOICES[1].url;
+/**
+ * The scheduled timers this engine is pretending to hold.
+ *
+ * Stateful, unlike the rest of the deck, because the timer surface is the one that
+ * MUTATES: a cancel has to actually remove a row, or a test cannot tell a UI that
+ * dropped the row optimistically from one that really retired it.
+ */
+const timers = new Map();
+
+/** Builds a full-shape timer row. Fixed shape — every field always present. */
+function timerRow(over = {}) {
+  return {
+    id: "tmr_1",
+    label: "Re-check CI",
+    dueAt: now() + 900_000,
+    createdAt: now() - 60_000,
+    payloadKind: "reminder",
+    toolName: "",
+    runCount: 0,
+    repeatEveryMs: 0,
+    repeatMaxRuns: 0,
+    repeatUntilAt: 0,
+    targetWorktreeId: "",
+    targetTerminalId: "",
+    liveGrants: 0,
+    grantsUnknown: false,
+    ...over,
+  };
+}
+
+/** Seeds the timer table on first read, so a run that never asks pays nothing. */
+function seedTimers() {
+  if (timers.size > 0) return;
+  if (process.env.FAKE_ENGINE_TIMERS === "empty") return;
+  timers.set("tmr_1", timerRow());
+  timers.set(
+    "tmr_2",
+    timerRow({
+      id: "tmr_2",
+      label: "Nightly deploy check",
+      dueAt: now() + 3_600_000,
+      payloadKind: "tool_call",
+      toolName: "agentTask.spawnForEdits",
+      repeatEveryMs: 86_400_000,
+      repeatMaxRuns: 7,
+      runCount: 2,
+      targetWorktreeId: "/p/app",
+      // A timer holding live authority — the case the cancel confirmation has to
+      // describe, and the one a bare count would under-report.
+      liveGrants: 2,
+    })
+  );
+}
+
 /** Counts operations requests, so each reading is DISTINGUISHABLE from the last. */
 let operationsReads = 0;
 /** Announced-but-unsettled calls, so an interrupt can terminalize them like the engine. */
@@ -1121,8 +1175,56 @@ async function handleCommand(cmd) {
         async: [
           { id: "as_1", title: "npm test", tool: "terminal.run.async", startedAt: at - 60_000 },
         ],
-        timers: [{ id: "tm_1", label: "Re-check CI", dueAt: at + 900_000 }],
+        // The SAME rows the timers:snapshot serves. The real engine builds both from
+        // one place, so a fake that let them differ would hide exactly the drift the
+        // shared builder exists to prevent.
+        timers: (seedTimers(), [...timers.values()]),
         audit: [{ tool: "fs.read", outcome: "ok", durationMs: 12, at: at - 5_000 }],
+      });
+      return;
+    }
+    case "timers": {
+      seedTimers();
+      // FAKE_ENGINE_TIMERS=read-fail drives the branch a manager must not read as
+      // "nothing scheduled".
+      emit({
+        type: "timers:snapshot",
+        timers: process.env.FAKE_ENGINE_TIMERS === "read-fail" ? [] : [...timers.values()],
+        takenAt: now(),
+        readFailed: process.env.FAKE_ENGINE_TIMERS === "read-fail",
+      });
+      return;
+    }
+    case "timer:cancel": {
+      seedTimers();
+      const existing = timers.get(cmd.timerId);
+      if (!existing) {
+        // Answered, not silent. The host has a row in a pending state and an
+        // unknown id has to settle it just like a success does.
+        emit({
+          type: "timer:cancelled",
+          timerId: cmd.timerId,
+          cancelled: false,
+          alreadyInactive: false,
+          priorStatus: "",
+          revokedGrants: 0,
+          grantRevokeFailed: false,
+          error: `No timer with id ${cmd.timerId} — it may already have been cancelled.`,
+        });
+        return;
+      }
+      timers.delete(cmd.timerId);
+      emit({
+        type: "timer:cancelled",
+        timerId: cmd.timerId,
+        cancelled: true,
+        alreadyInactive: false,
+        priorStatus: "scheduled",
+        revokedGrants: existing.liveGrants,
+        // FAKE_ENGINE_TIMER_CANCEL=grant-fail drives the half-done branch: the timer
+        // is retired but its authority is not, which a UI must not report as clean.
+        grantRevokeFailed: process.env.FAKE_ENGINE_TIMER_CANCEL === "grant-fail",
+        error: "",
       });
       return;
     }

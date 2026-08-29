@@ -201,6 +201,48 @@ export interface AssistantQuestion {
   requestedAt: number;
 }
 
+/**
+ * Drops pending marks for timers the engine no longer lists.
+ *
+ * The pending set is the only place a row can get stuck: it is set optimistically on
+ * send and cleared by the matching outcome, so an outcome that never arrives — a
+ * session that died mid-cancel, a frame lost with the process — would leave the row
+ * disabled for the life of the panel. A fresh snapshot is the natural reconciliation
+ * point, because a timer that is gone from it is not one anybody is still cancelling.
+ */
+function reconcilePending(
+  pending: Record<string, true>,
+  rows: AssistantTimerRow[]
+): Record<string, true> {
+  const ids = new Set(rows.map((r) => r.id));
+  const next: Record<string, true> = {};
+  for (const id of Object.keys(pending)) {
+    if (ids.has(id)) next[id] = true;
+  }
+  return next;
+}
+
+/** One reading of the scheduled-timer list, with when the ENGINE took it. */
+export interface AssistantTimers {
+  rows: AssistantTimerRow[];
+  /**
+   * The engine could not read its timer table, so `rows` being empty says nothing.
+   *
+   * A manager that renders a failed read as "nothing scheduled" tells the user to
+   * stop worrying about work that is still queued — so the two states stay apart all
+   * the way to the screen.
+   */
+  readFailed: boolean;
+  /**
+   * The engine's own read time, not ours.
+   *
+   * `Date.now()` at arrival would be the time the frame landed, which is a different
+   * claim: it says the list is current when what we actually know is when the store
+   * was read. The gap is small but the honest number is the one the engine sent.
+   */
+  takenAt: number;
+}
+
 /** One reading of the operations deck, with when it was taken. */
 export interface AssistantOperations {
   inbox: AssistantInboxRow[];
@@ -264,6 +306,28 @@ export interface AssistantSessionState {
    * for a view nobody is looking at.
    */
   operations: AssistantOperations | null;
+  /**
+   * The scheduled-timer list, or null before one has been asked for.
+   *
+   * Held separately from `operations` even though the deck also carries timers. The
+   * manager refreshes on its own cadence, and folding it into the deck snapshot would
+   * mean a timer refresh silently replacing the agents, workflows and audit tail a
+   * user might be reading — or the manager having to pull six sections to show one.
+   */
+  timers: AssistantTimers | null;
+  /**
+   * Timers with a cancel in flight, so a row can show its own pending state rather
+   * than the whole list going busy. Cleared by the matching `timer:cancelled`.
+   */
+  timerCancelPending: Record<string, true>;
+  /**
+   * Why a cancel failed, per timer — rendered against the row it belongs to.
+   *
+   * A failed cancel is not a toast: the user is looking at the exact row that failed,
+   * and the recovery (try again) is right there. Cleared when the row is retried or
+   * the list is refreshed.
+   */
+  timerCancelErrors: Record<string, string>;
   /**
    * Tools the user has said not to ask about again this session, and how many uses
    * remain (`Infinity` for "always").
@@ -384,6 +448,11 @@ interface AssistantStoreActions {
    * undelivered message sitting in the transcript as though it had been sent.
    */
   dropUndeliveredText: (text: string) => void;
+  /**
+   * Mark a timer as having a cancel in flight, clearing any error from a previous
+   * attempt on the same row so a retry does not show the last failure while running.
+   */
+  markTimerCancelPending: (timerId: string) => void;
   /** Take the handed-back follow-up, clearing it so it is consumed once. */
   takeRetractedDraft: () => string | null;
   dropQueuedInterjection: (text: string) => void;
@@ -429,6 +498,9 @@ const EMPTY: AssistantSessionState = {
   mcpToolCount: null,
   commands: [],
   operations: null,
+  timers: null,
+  timerCancelPending: {},
+  timerCancelErrors: {},
   toolGrants: {},
   queuedInterjections: [],
   retractedDraft: null,
@@ -660,6 +732,11 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
       // Nothing is owed by an engine that is gone; holding the composer for a result
       // that can never arrive would leave it dead for the rest of the session.
       awaitingLocalCommand: false,
+      // Same reasoning for a cancel in flight. Its `timer:cancelled` can no longer
+      // arrive, so the row would sit disabled and unretryable — the one state a
+      // manager must never strand, because the timer it names is still live and
+      // still counting down.
+      timerCancelPending: {},
       // Nothing is queued once the engine is gone. The words are kept — they were
       // typed — but as ordinary turns rather than as a promise of delivery that will
       // never be honoured.
@@ -733,6 +810,14 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
   },
 
   dropLocalTurn: (turnId) => set((s) => ({ turns: s.turns.filter((t) => t.turnId !== turnId) })),
+
+  markTimerCancelPending: (timerId: string) => {
+    const { [timerId]: _cleared, ...errors } = get().timerCancelErrors;
+    set({
+      timerCancelPending: { ...get().timerCancelPending, [timerId]: true },
+      timerCancelErrors: errors,
+    });
+  },
 
   takeRetractedDraft: () => {
     const text = get().retractedDraft;
@@ -1209,6 +1294,65 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
         });
         return;
 
+      case "timers:snapshot":
+        // A fresh list clears every stale per-row error: those errors describe rows
+        // from the previous reading, and one pinned to a timer that is no longer
+        // there — or that someone else has since retired — is worse than no error.
+        set({
+          timers: { rows: event.timers, takenAt: event.takenAt, readFailed: event.readFailed },
+          timerCancelErrors: {},
+          // A snapshot is the engine's current truth about what exists. Anything we
+          // still believe is mid-cancel but which the engine no longer lists has
+          // already settled one way or another, and keeping it pending would leave a
+          // row inert forever if its outcome was lost with a dead session.
+          timerCancelPending: reconcilePending(get().timerCancelPending, event.timers),
+        });
+        return;
+
+      case "timer:cancelled": {
+        const { [event.timerId]: _wasPending, ...pending } = get().timerCancelPending;
+        const errors = { ...get().timerCancelErrors };
+        // "Already inactive" is not an error and not a success. The timer is gone
+        // either way, so the row leaves the list; saying "cancelled" would claim we
+        // stopped something that had already run.
+        if (event.error) {
+          errors[event.timerId] = event.error;
+        } else {
+          delete errors[event.timerId];
+        }
+        const gone = !event.error;
+        const current = get().timers;
+        const next: Partial<AssistantSessionState> = {
+          timerCancelPending: pending,
+          timerCancelErrors: errors,
+          // Drop the row optimistically rather than waiting for a refresh. The engine
+          // has already settled it; leaving it on screen until the next pull would
+          // show a cancelled timer still counting down.
+          timers:
+            gone && current
+              ? { ...current, rows: current.rows.filter((r) => r.id !== event.timerId) }
+              : current,
+        };
+        // The timer is retired but its authority is NOT, and the row it would have
+        // been attached to has just been removed — so without this the one failure
+        // the wire contract says a host MUST surface would disappear silently,
+        // leaving a grant that an actor which no longer exists could still spend.
+        // A notice outlives the row and stays in the transcript to be acted on.
+        if (event.grantRevokeFailed) {
+          next.notices = appendNotice(get(), {
+            id: noticeId(),
+            level: "warning" as const,
+            message:
+              `Timer ${event.timerId} was cancelled, but the automation grants it held could NOT be revoked. ` +
+              `They are still spendable — run /grants to see them and revoke them.`,
+            at: Date.now(),
+            turnId: null,
+          });
+        }
+        set(next);
+        return;
+      }
+
       case "mcp:status":
         // The AUTHORITATIVE reading, replacing whatever provisioning reported at
         // start: this one is the engine saying whether it can actually reach Daintree
@@ -1267,6 +1411,14 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
             // line says so). Keeping the last reading would show work that has just
             // been deleted, as though it were still running.
             operations: null,
+            // TIMERS ARE NOT CLEARED, and that is not an oversight. /clear tears down
+            // watchers, async work and the inbox; it deliberately leaves the timer
+            // table alone (internal/commands/handlers_ui.go), because a durable
+            // schedule is not conversation state — a reminder set for 6pm survives
+            // starting a fresh conversation. Nulling the list here would tell the user
+            // their timers had gone with it. Only the per-row errors go, since they
+            // describe attempts made against the transcript that just ended.
+            timerCancelErrors: {},
             // The transcript it would have anchored to is exactly what /clear just
             // removed, so this one starts the new transcript rather than trailing the
             // old one.
