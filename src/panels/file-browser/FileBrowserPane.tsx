@@ -1112,7 +1112,7 @@ export function FileBrowserPane({
             )}
             style={viewerCollapsed ? undefined : { width: sidebarWidth }}
           >
-            {/* py-1.5 + border-overlay + 16px icons match FileViewerToolbar.Root
+            {/* py-1.5 + border-overlay + TOOLBAR_ICON_CLASS icons match FileViewerToolbar.Root
                 so the two header bars share one height and border token, and the
                 line under them reads continuous across the divider (#11328). */}
             <div
@@ -1200,8 +1200,8 @@ export function FileBrowserPane({
                   together, in the header of whichever column is rendering the
                   tree. This also takes the header back under the
                   three-to-four-control ceiling a sub-300px sidebar can carry:
-                  at the worktree root it is now View options, Refresh, and the
-                  viewer toggle. */}
+                  at the worktree root it is now View options and the viewer
+                  toggle. */}
               <FileBrowserViewOptions
                 sort={sort}
                 onSortChange={handleSortChange}

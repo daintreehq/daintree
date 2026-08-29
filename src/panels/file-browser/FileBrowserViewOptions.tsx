@@ -31,25 +31,6 @@ function toSortKey(value: string, fallback: FileBrowserSortKey): FileBrowserSort
   return SORT_OPTIONS.find((option) => option.value === value)?.value ?? fallback;
 }
 
-/**
- * The sentence the badge, the tooltip and the accessible name all read from, so
- * the number a user sees and the number a screen reader hears can never drift.
- * Empty string when nothing is hidden — the caller renders no badge then.
- */
-export function hiddenSummary(counts: HiddenRowCounts): string {
-  const parts: string[] = [];
-  if (counts.dotfiles > 0) {
-    parts.push(`${counts.dotfiles} dotfile${counts.dotfiles === 1 ? "" : "s"} hidden`);
-  }
-  if (counts.alwaysHidden > 0) {
-    // Named by where the recovery lives, not by what matched: "always hidden"
-    // is the setting's internal name and means nothing from here, whereas
-    // Settings is somewhere the user can actually go.
-    parts.push(`${counts.alwaysHidden} hidden by Settings`);
-  }
-  return parts.join(", ");
-}
-
 export interface FileBrowserViewOptionsProps {
   sort: FileBrowserSortOrder;
   onSortChange: (next: FileBrowserSortOrder) => void;
