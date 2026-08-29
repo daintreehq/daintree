@@ -191,6 +191,21 @@ export const AssistantMessage = memo(function AssistantMessage({
           </code>
         );
       },
+      // Markers are drawn from a CSS counter (see the stylesheet), so the ONE thing
+      // the native list gave away for free has to be handed back: a list that does
+      // not start at 1. `3. first item` is real markdown and arrives here as
+      // `<ol start="3">`, which a counter knows nothing about — it would renumber the
+      // list from 1 and quietly contradict the text.
+      ol: ({ node: _node, start, style, ...props }) => (
+        <ol
+          {...props}
+          style={
+            typeof start === "number" && start !== 1
+              ? { ...style, ["--assistant-ol-start" as string]: String(start - 1) }
+              : style
+          }
+        />
+      ),
       // Navigable text, in one primitive. A markdown link and a forge reference are
       // different elements for a mechanical reason (a reference has no URL of its
       // own) but ONE signal — both open the system browser — so `AssistantLink`
