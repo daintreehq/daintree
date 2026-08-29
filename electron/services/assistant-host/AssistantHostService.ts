@@ -258,6 +258,39 @@ export class AssistantHostService {
       webContentsId: opts.webContentsId,
     });
 
+    // A project's engine belongs to the surface that started it.
+    //
+    // Displacing unconditionally is what shipped before, and it meant opening a project
+    // in a SECOND window silently tore down the conversation the first window was
+    // showing — the user watched a live transcript disappear with nothing said. Running
+    // two engines is not the alternative: the engine takes an exclusive flock lease on
+    // the project's state, so the newcomer would queue behind its sibling and time out
+    // after a minute of saying "starting".
+    //
+    // So a different surface is REFUSED, in words, and the window that has the
+    // conversation keeps it. Sharing one engine between surfaces is the real answer and
+    // is a larger piece of work: the engine does not echo user prompts (they exist only
+    // in the submitting renderer's store, see `useAssistantSession`), and its MCP bearer
+    // is pinned to one view — so a second surface would need prompt mirroring and
+    // per-surface control-plane routing before it saw the same conversation rather than
+    // half of one.
+    //
+    // The SAME surface restarting is not displacement: a view re-running its start
+    // effect, or switching projects, must be able to replace its own engine.
+    const existing = this.byProject.get(opts.projectId);
+    if (existing && existing.webContentsId !== opts.webContentsId) {
+      logger.info("refused a second surface for a project that already has an engine", {
+        sessionId: existing.sessionId,
+        projectId: opts.projectId,
+        heldBy: existing.webContentsId,
+        requestedBy: opts.webContentsId,
+      });
+      throw new Error(
+        "This project's assistant is already open in another window. " +
+          "Only one window can run it at a time — close the assistant there to move it here."
+      );
+    }
+
     // Displace first, and await it, so the outgoing engine has released the project's
     // state lease before the new one tries to take it.
     await this.stopProject(opts.projectId);
