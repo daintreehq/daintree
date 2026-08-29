@@ -541,10 +541,70 @@ test("sidebar worktree card review — states and themes", async () => {
     });
 
     // 8. Card fully collapsed — disclosure as a pair with the expanded state.
+    //
+    //    Two different states, and the second is the one that repeats. A
+    //    collapsed card that is active or hovered carries the focused sub-line,
+    //    so it is two lines tall; every other collapsed card in the list is a
+    //    single line, and that is the shape a sidebar full of collapsed cards
+    //    actually shows. The pointer is parked off the sidebar first, because a
+    //    card left under the cursor renders the hovered two-line form and the
+    //    capture would be of the wrong state entirely.
     await step("collapsed", async () => {
       await setCardCollapsed(flagship, true);
       await snap(page, "70-card-collapsed", flagship);
       await snap(page, "71-sidebar-collapsed", sidebar);
+      await setCardCollapsed(plain, true);
+      await setCardCollapsed(quiet, true);
+      await setCardCollapsed(long, true);
+      await page.mouse.move(1600, 980);
+      await snap(page, "72-card-collapsed-resting", plain);
+      await snap(page, "73-card-collapsed-resting-issue", quiet);
+      await snap(page, "74-sidebar-all-collapsed", sidebar);
+      // The drag grip is `opacity-0` until the card is hovered, so at rest the
+      // gutter is empty and its alignment against the title row cannot be
+      // judged at all. A real hover does not survive the capture — Playwright
+      // scrolls the element into view to shoot it and Chromium drops the hover
+      // — so the grip is revealed for this one frame with a capture-only
+      // override. Opacity is the only thing it changes; where the glyph lands
+      // is layout, and layout is what this shot is for.
+      const revealGrip = await page.addStyleTag({
+        content: "[data-worktree-row-drag-handle] { opacity: 1 !important; }",
+      });
+      await snap(page, "75-card-collapsed-grip", plain);
+      await revealGrip.evaluate((node) => node.remove());
+      // The defect this shot exists for was a 4px offset between the grip and
+      // the line it sits beside, which is small enough to survive a glance at
+      // the PNG — so the harness measures it rather than trusting the reader.
+      // The collapse toggle is the reference because it is the tallest thing in
+      // the title row and therefore defines that row's centre.
+      const gripGlyph = await plain
+        .locator("[data-worktree-row-drag-handle] svg")
+        .first()
+        .boundingBox();
+      const toggleBox = await plain
+        .locator('[data-worktree-row-toolbar] [aria-label="Expand card"]')
+        .first()
+        .boundingBox();
+      if (!gripGlyph || !toggleBox) {
+        throw new Error("collapsed row: grip glyph or collapse toggle has no box to measure");
+      }
+      const gripCentre = gripGlyph.y + gripGlyph.height / 2;
+      const rowCentre = toggleBox.y + toggleBox.height / 2;
+      expect(
+        Math.abs(gripCentre - rowCentre),
+        `collapsed row is not on one centre line: grip at ${gripCentre}, row at ${rowCentre}`
+      ).toBeLessThanOrEqual(1);
+      await page.mouse.move(1600, 980);
+      // The other collapsed shape: the active card grows a focused sub-line, so
+      // it is two lines inside the same collapsed chrome. It is the only state
+      // in which the header block's padding has something between it and the
+      // card's bottom edge, which is exactly where a one-sided pad would show.
+      await flagship.locator(".sidebar-worktree-card").first().click();
+      await page.mouse.move(1600, 980);
+      await snap(page, "76-card-collapsed-active", flagship);
+      await setCardCollapsed(long, false);
+      await setCardCollapsed(quiet, false);
+      await setCardCollapsed(plain, false);
       await setCardCollapsed(flagship, false);
     });
 

@@ -1119,10 +1119,31 @@ export function WorktreeCard({
                 "pe-4"
               )}
             >
-              {/* pt-2 only: the body below supplies the gap to the next row.
-                  Both spending 8px put 16px between the branch line and the
-                  commit row, which read as a break in the middle of one
+              {/* Expanded, pt-2 only: the body below supplies the gap to the
+                  next row. Both spending 8px put 16px between the branch line
+                  and the commit row, which read as a break in the middle of one
                   cluster rather than as the space between two.
+
+                  Collapsed, there is no body below, so nothing supplies the
+                  bottom gap and this padding is the card's whole vertical
+                  budget: `pt-2` alone made the header row the card's full
+                  height plus 8px of ceiling and no floor. Everything keyed to
+                  the card rather than to the row then landed 4px high — the
+                  drag grip, which is a stretched sibling column centring itself
+                  in the card, most visibly of all, since a one-line row is
+                  exactly where a 4px error between the grip and the label it
+                  sits beside has nothing else to hide behind. Splitting the
+                  same 8px across both ends keeps the collapsed card's height
+                  (4 + 26 + 4) and puts the SINGLE-LINE collapsed card's row,
+                  status tick and grip on one centre line.
+
+                  Two lines — the sub-line is open — is a different shape and
+                  keeps each mark on the thing it describes: the tick still
+                  spans the title row it is anchored to, the grip still centres
+                  on the card, and those are now two different centres because
+                  the card is two lines tall. That is the same split an
+                  expanded card already has. The sub-line's own bottom padding
+                  moved here with it, so that shape stays symmetric too.
 
                   The grid reserves the membership toggle's column here, on the
                   header block alone, not on the whole content column. The
@@ -1134,7 +1155,9 @@ export function WorktreeCard({
                   reserved unconditionally rather than on hover: a slot that
                   appears when the pointer arrives shifts the header sideways
                   under the cursor. */}
-              <div className={cn("pt-2", variant === "grid" && "pr-5")}>
+              <div
+                className={cn(effectiveIsCollapsed ? "py-1" : "pt-2", variant === "grid" && "pr-5")}
+              >
                 <WorktreeHeader
                   worktree={worktree}
                   isActive={isActive}

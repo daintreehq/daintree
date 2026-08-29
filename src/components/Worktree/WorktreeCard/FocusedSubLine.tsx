@@ -40,7 +40,12 @@ export function FocusedSubLine({
     >
       <div
         className={cn(
-          "flex min-w-0 items-center gap-1.5 pb-1 text-xs text-text-secondary",
+          // No bottom padding of its own: the collapsed header block is padded
+          // symmetrically and that padding falls below this line, so a `pb-1`
+          // here would stack on it and tip the two-line collapsed card
+          // bottom-heavy — the same asymmetry the block's own comment records
+          // paying for.
+          "flex min-w-0 items-center gap-1.5 text-xs text-text-secondary",
           // Lands on the card's text column, under the title it summarises,
           // rather than on the glyph column one tier left of it.
           SECTION_TEXT_COLUMN,
