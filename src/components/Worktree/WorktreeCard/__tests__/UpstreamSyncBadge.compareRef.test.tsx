@@ -197,3 +197,44 @@ describe("UpstreamSyncBadge — a branch tracking its own base", () => {
     expect(pill.textContent?.match(/↓4/g)).toHaveLength(1);
   });
 });
+
+describe("UpstreamSyncBadge — the auth-failed tooltip (#12074)", () => {
+  const longBase = "release/2026-08-long-lived-integration-branch";
+  const authed: Partial<Props> = { fetchAuthFailed: true, hasAuthFailedSignIn: true };
+
+  it("names the ref it compared against, so a name the pill had to ellipsize is still readable", () => {
+    // The normal tooltip has always named the ref; this variant carried only
+    // recovery copy. Once the pill can truncate the name, this is the one state
+    // with nowhere left to read it in full.
+    const { rerender } = renderBadge({
+      ...authed,
+      baseBranchName: longBase,
+      baseCompareRef: `upstream/${longBase}`,
+    });
+    expect(document.body.textContent).toContain(`Compared with upstream/${longBase}`);
+    // Still bare in the dense row itself, same as the normal variant.
+    expect(screen.getByTestId("upstream-sync-indicator").textContent).not.toContain("upstream/");
+
+    rerender(
+      <UpstreamSyncBadge
+        {...baseProps}
+        {...authed}
+        baseBranchName={longBase}
+        baseCompareRef={null}
+      />
+    );
+    expect(document.body.textContent).toContain(`Compared with ${longBase}`);
+
+    rerender(
+      <UpstreamSyncBadge
+        {...baseProps}
+        {...authed}
+        baseBranchName={null}
+        baseAheadCount={null}
+        baseBehindCount={null}
+        baseCompareRef={null}
+      />
+    );
+    expect(document.body.textContent).not.toContain("Compared with");
+  });
+});

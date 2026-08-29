@@ -180,7 +180,10 @@ export function UpstreamSyncBadge({
 
   if (fetchAuthFailed && hasAuthFailedSignIn) {
     return (
-      <Tooltip>
+      // autoDismiss={false}: the pill can ellipsize the base name now, so this
+      // tooltip is the only place to read it in full — a full-text reveal, which
+      // `tooltip.tsx` exempts from the 2.5s deadline meant for transient hints.
+      <Tooltip autoDismiss={false}>
         <TooltipTrigger asChild>
           <button
             type="button"
@@ -194,17 +197,32 @@ export function UpstreamSyncBadge({
             data-fetch-auth-failed="true"
             aria-label="Forge authentication failed — click to reconnect"
           >
-            <span className="flex items-center gap-1.5 text-text-muted">
-              {showUpstreamDelta && hasAhead && <span>↑{aheadCount}</span>}
-              {showUpstreamDelta && hasBehind && <span>↓{behindCount}</span>}
+            {/* min-w-0: this row is a flex *item* of the button above it, so
+                its own automatic minimum size is its min-content width — the
+                whole unbroken branch name, since the label below sets
+                white-space: nowrap. Without this the row refuses to shrink and
+                the label never gets narrow enough to ellipsize. The normal
+                variant has no equivalent level: its row is a cross-axis child
+                of the card's column, where min-width: auto resolves to 0. */}
+            <span className="flex items-center gap-1.5 text-text-muted min-w-0">
+              {showUpstreamDelta && hasAhead && <span className="shrink-0">↑{aheadCount}</span>}
+              {showUpstreamDelta && hasBehind && <span className="shrink-0">↓{behindCount}</span>}
               {showBaseSegment && (
                 <>
-                  <span data-testid="upstream-sync-base">
+                  <span className="min-w-0 truncate" data-testid="upstream-sync-base">
                     {showBaseDivergence ? "Δ" : "≡"} {baseBranchName}
                   </span>
-                  {displayedBaseAhead != null && <span>↑{displayedBaseAhead}</span>}
-                  {displayedBaseBehind != null && <span>↓{displayedBaseBehind}</span>}
-                  {hasNoUpstream && <span data-testid="upstream-sync-unpushed">· local</span>}
+                  {displayedBaseAhead != null && (
+                    <span className="shrink-0">↑{displayedBaseAhead}</span>
+                  )}
+                  {displayedBaseBehind != null && (
+                    <span className="shrink-0">↓{displayedBaseBehind}</span>
+                  )}
+                  {hasNoUpstream && (
+                    <span className="shrink-0" data-testid="upstream-sync-unpushed">
+                      · local
+                    </span>
+                  )}
                 </>
               )}
               {!showUpstreamDelta && !showBaseSegment && <span>—</span>}
@@ -214,6 +232,14 @@ export function UpstreamSyncBadge({
         <TooltipContent side="right" className="text-xs">
           <div>Forge authentication failed</div>
           <div className="text-text-secondary mt-0.5">Click to reconnect your code forge</div>
+          {/* The pill can now ellipsize the base name, and this variant's copy
+              never said what it was. Without this line the auth state is the
+              one place a truncated name has nowhere to be read in full. */}
+          {showBaseSegment && baseBranchName && (
+            <div className="text-text-muted break-words">
+              Compared with {baseCompareRef || baseBranchName}
+            </div>
+          )}
           {lastFetchedAt != null && (
             <div className="text-text-muted">Last fetched {formatRelativeTime(lastFetchedAt)}</div>
           )}
@@ -225,7 +251,8 @@ export function UpstreamSyncBadge({
   if (!showUpstreamDelta && !showBaseSegment) return null;
 
   return (
-    <Tooltip>
+    // Same full-text reveal as the auth-failed variant above.
+    <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <span
           className={cn(
@@ -242,10 +269,10 @@ export function UpstreamSyncBadge({
           onAnimationEnd={() => setIsFlashing(false)}
         >
           {showUpstreamDelta && hasAhead && (
-            <span className="text-status-success">↑{aheadCount}</span>
+            <span className="text-status-success shrink-0">↑{aheadCount}</span>
           )}
           {showUpstreamDelta && hasBehind && (
-            <span className="text-status-warning">↓{behindCount}</span>
+            <span className="text-status-warning shrink-0">↓{behindCount}</span>
           )}
           {showBaseSegment && (
             <>
@@ -263,19 +290,29 @@ export function UpstreamSyncBadge({
                   `Δ develop` beside a `Δ develop ↑3` would claim a divergence
                   it does not have. ≡ says the two are the same commit, which
                   is the whole content of the resting line. */}
-              <span className="text-text-secondary" data-testid="upstream-sync-base">
+              {/* The only thing on this line allowed to shrink. Everything
+                  beside it is shrink-0, so a base branch long enough to
+                  outgrow the card ellipsizes here instead of pushing the
+                  counts and the · local marker off the right edge — they are
+                  the state the line exists to carry, and the tooltip below
+                  still names the branch in full. Glyph and name stay one text
+                  run so the ellipsis eats the name from the right. */}
+              <span
+                className="text-text-secondary min-w-0 truncate"
+                data-testid="upstream-sync-base"
+              >
                 {showBaseDivergence ? "Δ" : "≡"} {baseBranchName}
               </span>
               {baseAheadCount != null && baseAheadCount > 0 && (
-                <span className="text-status-success">↑{baseAheadCount}</span>
+                <span className="text-status-success shrink-0">↑{baseAheadCount}</span>
               )}
               {baseBehindCount != null && baseBehindCount > 0 && (
-                <span className="text-status-warning">↓{baseBehindCount}</span>
+                <span className="text-status-warning shrink-0">↓{baseBehindCount}</span>
               )}
               {/* Same tier as the branch name it qualifies, so it inherits the
                   same contrast reasoning — never text-muted. */}
               {hasNoUpstream && (
-                <span className="text-text-secondary" data-testid="upstream-sync-unpushed">
+                <span className="text-text-secondary shrink-0" data-testid="upstream-sync-unpushed">
                   · local
                 </span>
               )}
@@ -301,7 +338,7 @@ export function UpstreamSyncBadge({
           </div>
         )}
         {showBaseDivergence && baseBranchName && (
-          <div className="text-text-muted/70">
+          <div className="text-text-muted/70 break-words">
             {baseAheadCount != null && baseAheadCount > 0 && (
               <span>
                 {baseAheadCount} ahead of {baseCompareRef || baseBranchName}
@@ -315,7 +352,9 @@ export function UpstreamSyncBadge({
           </div>
         )}
         {showBaseResting && baseBranchName && (
-          <div className="text-text-muted">In sync with {baseCompareRef || baseBranchName}</div>
+          <div className="text-text-muted break-words">
+            In sync with {baseCompareRef || baseBranchName}
+          </div>
         )}
         {hasNoUpstream && showBaseSegment && (
           <div className="text-text-muted">No upstream branch configured</div>

@@ -395,3 +395,83 @@ describe("UpstreamSyncBadge — resting base relationship", () => {
     expect(screen.queryByTestId("upstream-sync-unpushed")).not.toBeNull();
   });
 });
+
+describe("UpstreamSyncBadge — a base branch longer than the card (#12074)", () => {
+  const longBase = "feature/stacked-worktree-base-branch-name-that-keeps-going";
+
+  // Distinct numbers per pair: identical ones would let a whole pair go
+  // missing without any assertion noticing.
+  const crowded: Partial<Props> = {
+    aheadCount: 12,
+    behindCount: 3,
+    baseBranchName: longBase,
+    baseMatchesUpstream: false,
+    hasNoUpstream: true,
+  };
+
+  /**
+   * jsdom computes no widths, so the ellipsis itself is not observable. What is
+   * observable is the layout priority the fix installs: of the tokens the row
+   * happens to hold, exactly one may give up width, it is the base label, and
+   * it is the same element that clips. Read off the rendered row rather than
+   * hardcoded per variant, so it holds for both and for tokens added later.
+   *
+   * It is still spelled in Tailwind's utilities, so an equivalent restyle would
+   * have to update it — the trade for having any coverage at all here, since
+   * mocking layout would only test the mock.
+   */
+  function assertOnlyTheNameYields(glyph: string, tokens: string[]) {
+    const label = screen.getByTestId("upstream-sync-base");
+    const row = label.parentElement!;
+    const children = Array.from(row.children);
+    expect(children.length).toBe(tokens.length + 1);
+
+    const shrinkable = children.filter((el) => !el.classList.contains("shrink-0"));
+    expect(shrinkable).toHaveLength(1);
+    expect(shrinkable[0]).toBe(label);
+
+    const clipping = children.filter((el) => el.classList.contains("truncate"));
+    expect(clipping).toHaveLength(1);
+    expect(clipping[0]).toBe(label);
+
+    // The row itself has to be able to give up width, or the label inside it
+    // never gets narrow enough to yield. In the auth-failed variant the row is
+    // a flex item of the button above it and needs its own floor removed; in
+    // the normal variant the row is the badge root, stretched across the card,
+    // and there is nothing in between.
+    const root = screen.getByTestId("upstream-sync-indicator");
+    for (let el = row; el !== root; el = el.parentElement!) {
+      expect(el.classList.contains("min-w-0")).toBe(true);
+    }
+
+    // The counts and the marker are the state the line exists to carry, so
+    // they are what has to survive beside the name that yielded.
+    const rendered = children.filter((el) => el !== label).map((el) => el.textContent);
+    expect(rendered).toEqual(tokens);
+
+    // Nothing caps the name on the way in — this is presentation-only, so the
+    // full ref stays in the DOM for the tooltip to reveal.
+    expect(label.textContent).toBe(`${glyph} ${longBase}`);
+  }
+
+  it("yields the name and keeps every count on the normal badge", () => {
+    renderBadge({ ...crowded, baseAheadCount: 7, baseBehindCount: 5 });
+    assertOnlyTheNameYields("Δ", ["↑12", "↓3", "↑7", "↓5", "· local"]);
+  });
+
+  it("yields the name and keeps every count on the auth-failed badge too", () => {
+    renderBadge({
+      ...crowded,
+      baseAheadCount: 7,
+      baseBehindCount: 5,
+      fetchAuthFailed: true,
+      hasAuthFailedSignIn: true,
+    });
+    assertOnlyTheNameYields("Δ", ["↑12", "↓3", "↑7", "↓5", "· local"]);
+  });
+
+  it("yields a long name on the resting line too, where there are no base counts", () => {
+    renderBadge({ ...crowded, baseAheadCount: 0, baseBehindCount: 0 });
+    assertOnlyTheNameYields("≡", ["↑12", "↓3", "· local"]);
+  });
+});
