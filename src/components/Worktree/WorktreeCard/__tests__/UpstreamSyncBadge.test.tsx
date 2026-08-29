@@ -51,7 +51,6 @@ function renderBadge(extra: Partial<Props> = {}) {
 
 afterEach(() => {
   cleanup();
-  vi.unstubAllGlobals();
 });
 
 describe("UpstreamSyncBadge — auth-failed sign-in branch (issue #9982)", () => {
