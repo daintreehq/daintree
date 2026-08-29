@@ -46,15 +46,34 @@ interface LiveSession {
   sessionId: string;
   projectId: string;
   host: AssistantHostProcess;
-  webContentsId: number;
   /**
-   * The window that owns this session.
+   * Every surface watching this session: WebContents id → its attachment.
    *
-   * Recorded alongside the WebContents id because the two are lost at different moments
-   * and by different code. A view is evicted or crashes; a window is closed. Both are
-   * "the owner is gone", and a session reachable by only one of them survives the other.
+   * One project, one engine, many windows. Two engines is not an alternative — the
+   * engine takes an exclusive lease on the project's state, so a sibling would queue
+   * behind it and time out — and displacing was what shipped before, which silently
+   * tore down whichever window had the conversation first.
+   *
+   * The window id rides along because a surface is lost in two different ways, at
+   * different moments and by different code: a view is evicted or crashes, a window is
+   * closed. A subscriber reachable by only one of those survives the other.
    */
-  windowId: number;
+  subscribers: Map<number, { windowId: number; attachmentId: string }>;
+  /**
+   * The surface whose view this engine's MCP bearer is pinned to.
+   *
+   * The pin is captured once, when the control plane hands out the session, and the MCP
+   * layer deliberately never re-points it — a session that could flip to another
+   * window's tool surface is the leak lessons #7003/#9887 exist to prevent. So tool
+   * calls always act on THIS view, whichever window the prompt came from, and an engine
+   * whose pinned view is gone can still talk but can no longer do anything.
+   *
+   * Rather than leave the other windows holding a half-dead assistant, the session ends
+   * with this surface. They see an ordinary exit and can start it again — which is a
+   * long way from the silent teardown this whole change replaced, and honest about a
+   * limitation that only a per-attachment control plane can actually remove.
+   */
+  provisionerWebContentsId: number;
 }
 
 /**
@@ -68,6 +87,11 @@ interface LiveSession {
  * a stuck start names the phase it is stuck in.
  */
 const logger = createLogger("main:AssistantHost");
+
+/** A fresh id for one surface's attachment to a session. */
+function newAttachmentId(): string {
+  return `att_${randomBytes(6).toString("hex")}`;
+}
 
 /** The roster id the MCP tier policy is keyed on for this surface. */
 const ASSISTANT_AGENT_ID = "daintree-assistant";
@@ -205,6 +229,20 @@ export class AssistantHostService {
    * Entries are removed when the child actually exits, not when Daintree stops caring.
    */
   private readonly spawnedHosts = new Set<AssistantHostProcess>();
+  /**
+   * Surfaces that went away while one of their own starts was still queued.
+   *
+   * `startQueue` serializes per project, so a second window's start can still be
+   * waiting when its view is destroyed — and the teardown that would have removed it
+   * runs BEFORE it was ever registered. Registering it afterwards leaves a subscriber
+   * that nothing will ever remove, which holds the engine (and the project's lease)
+   * open forever, because lazy reaping only happens when an event is delivered and a
+   * quiet engine delivers nothing.
+   *
+   * An entry is cleared by the next `start` from that surface: an IPC call is proof the
+   * renderer is alive again, which also makes this safe against WebContents id reuse.
+   */
+  private readonly departedSurfaces = new Set<number>();
 
   /**
    * Starts an engine for a project, displacing any existing one.
@@ -226,6 +264,9 @@ export class AssistantHostService {
     // the shared helper's renderer fallback has no business deciding it here.
     const platform = assistantPlatformSupport(process.platform);
     if (!platform.supported) throw new Error(`${platform.reason}. ${platform.detail}`);
+    // This call came FROM the renderer, so the surface is alive right now — whatever a
+    // previous teardown recorded about it is stale.
+    this.departedSurfaces.delete(opts.webContentsId);
     // Serialized per project. `start` awaits twice — the displacement grace period and
     // the engine's own readiness — and the one-per-project invariant lives in a plain
     // Map, so two overlapping starts could both clear the project entry and then both
@@ -258,41 +299,20 @@ export class AssistantHostService {
       webContentsId: opts.webContentsId,
     });
 
-    // A project's engine belongs to the surface that started it.
+    // One engine per project, shared by every surface showing it.
     //
-    // Displacing unconditionally is what shipped before, and it meant opening a project
-    // in a SECOND window silently tore down the conversation the first window was
-    // showing — the user watched a live transcript disappear with nothing said. Running
-    // two engines is not the alternative: the engine takes an exclusive flock lease on
-    // the project's state, so the newcomer would queue behind its sibling and time out
-    // after a minute of saying "starting".
-    //
-    // So a different surface is REFUSED, in words, and the window that has the
-    // conversation keeps it. Sharing one engine between surfaces is the real answer and
-    // is a larger piece of work: the engine does not echo user prompts (they exist only
-    // in the submitting renderer's store, see `useAssistantSession`), and its MCP bearer
-    // is pinned to one view — so a second surface would need prompt mirroring and
-    // per-surface control-plane routing before it saw the same conversation rather than
-    // half of one.
-    //
-    // The SAME surface restarting is not displacement: a view re-running its start
-    // effect, or switching projects, must be able to replace its own engine.
+    // A second window JOINS the running session. It cannot start its own — the engine
+    // holds an exclusive flock lease on the project's state, so a sibling queues behind
+    // it and times out — and it must not displace the first, which is what shipped
+    // before: opening a project in a second window silently tore down the conversation
+    // the first window was showing.
     const existing = this.byProject.get(opts.projectId);
-    if (existing && existing.webContentsId !== opts.webContentsId) {
-      logger.info("refused a second surface for a project that already has an engine", {
-        sessionId: existing.sessionId,
-        projectId: opts.projectId,
-        heldBy: existing.webContentsId,
-        requestedBy: opts.webContentsId,
-      });
-      throw new Error(
-        "This project's assistant is already open in another window. " +
-          "Only one window can run it at a time — close the assistant there to move it here."
-      );
+    if (existing && !existing.host.hasExited()) {
+      return this.attach(existing, opts, elapsedMs());
     }
 
-    // Displace first, and await it, so the outgoing engine has released the project's
-    // state lease before the new one tries to take it.
+    // Only a session belonging to THIS surface is displaced — a view re-running its
+    // start effect, or switching projects, must be able to replace its own engine.
     await this.stopProject(opts.projectId);
 
     // Logged as well as thrown. The renderer surfaces this one, but a resolution failure
@@ -477,9 +497,9 @@ export class AssistantHostService {
         // honest "no control plane" it already knows how to degrade around.
         ...(mcp?.url ? { DAINTREE_MCP_URL: mcp.url, DAINTREE_MCP_TOKEN: mcp.token } : {}),
       },
-      onEvent: (event) => this.deliver(opts.webContentsId, CHANNELS.ASSISTANT_HOST_EVENT, event),
+      onEvent: (event) => this.broadcast(sessionId, CHANNELS.ASSISTANT_HOST_EVENT, event),
       onSequenceGap: (info) =>
-        this.deliver(opts.webContentsId, CHANNELS.ASSISTANT_HOST_GAP, { sessionId, ...info }),
+        this.broadcast(sessionId, CHANNELS.ASSISTANT_HOST_GAP, { sessionId, ...info }),
       onDiagnostic: (line) => {
         // Engine diagnostics are developer-facing, not conversation. They go to the
         // main log rather than the transcript, exactly as stderr is separated from the
@@ -489,16 +509,20 @@ export class AssistantHostService {
       onExit: (code, signal) => {
         logger.info("engine exited", { sessionId, code, signal, elapsedMs: elapsedMs() });
         this.spawnedHosts.delete(host);
+        // Read the watchers BEFORE deregistering: every surface showing this session
+        // has to be told it ended, and `broadcast` resolves through the map this is
+        // about to clear.
+        const watching = [...(this.bySession.get(sessionId)?.subscribers.keys() ?? [])];
         this.bySession.delete(sessionId);
         revokeHelpSessionFor(sessionId);
         if (this.byProject.get(opts.projectId)?.sessionId === sessionId) {
           this.byProject.delete(opts.projectId);
         }
-        this.deliver(opts.webContentsId, CHANNELS.ASSISTANT_HOST_EXIT, {
-          sessionId,
-          code,
-          signal,
-        });
+        // Falls back to the starter when the session never registered: a start that
+        // failed before registration still has a panel waiting for an answer.
+        for (const webContentsId of watching.length > 0 ? watching : [opts.webContentsId]) {
+          this.deliver(webContentsId, CHANNELS.ASSISTANT_HOST_EXIT, { sessionId, code, signal });
+        }
       },
     });
 
@@ -506,12 +530,13 @@ export class AssistantHostService {
     // (see `onExit` above) — never when Daintree merely stops tracking the session.
     this.spawnedHosts.add(host);
 
+    const attachmentId = newAttachmentId();
     const session: LiveSession = {
       sessionId,
       projectId: opts.projectId,
       host,
-      webContentsId: opts.webContentsId,
-      windowId: opts.windowId,
+      provisionerWebContentsId: opts.webContentsId,
+      subscribers: new Map([[opts.webContentsId, { windowId: opts.windowId, attachmentId }]]),
     };
     this.byProject.set(opts.projectId, session);
     this.bySession.set(sessionId, session);
@@ -527,6 +552,20 @@ export class AssistantHostService {
       });
     }, READY_PROGRESS_MS);
     readyProgress.unref?.();
+
+    if (this.closing) {
+      // Shutdown began, and swept, while this start was resolving its binary and
+      // provisioning. Spawning now produces a child nothing will reap: the sweep has
+      // already taken its snapshot, and `app.exit()` is moments away — leaving an
+      // engine orphaned and holding the project's lease.
+      this.bySession.delete(sessionId);
+      revokeHelpSessionFor(sessionId);
+      if (this.byProject.get(opts.projectId)?.sessionId === sessionId) {
+        this.byProject.delete(opts.projectId);
+      }
+      this.spawnedHosts.delete(host);
+      throw new Error("Daintree is shutting down");
+    }
 
     try {
       // `host.start()` is INSIDE the try: child_process.spawn validates its options
@@ -586,8 +625,18 @@ export class AssistantHostService {
       clearInterval(readyProgress);
     }
 
+    // The surface went away while this start was queued behind another. Registering it
+    // would leave a subscriber nothing can remove.
+    if (this.departedSurfaces.has(opts.webContentsId)) {
+      this.detach(session, opts.webContentsId);
+      throw new Error("The assistant panel closed before its engine finished starting.");
+    }
+
     return {
       sessionId,
+      attachmentId,
+      replayPrompts: [],
+      replayTruncated: false,
       ready: host.getReadyEvent(),
       // Anything the engine said before the renderer could know its session id — the
       // control-plane status among them. Handed back rather than left in that gap.
@@ -596,11 +645,38 @@ export class AssistantHostService {
     };
   }
 
-  /** Sends a command to a live session. Returns false when the session is gone. */
-  send(command: AssistantHostCommand): boolean {
+  /**
+   * Sends a command to a live session. Returns false when the session is gone.
+   *
+   * `fromWebContentsId` names the surface that sent it, which matters for two things a
+   * shared engine cannot get right on its own: mirroring the prompt to the other
+   * windows, and moving the control plane to the window the user is actually using.
+   */
+  send(command: AssistantHostCommand, fromWebContentsId?: number): boolean {
     const session = this.bySession.get(command.sessionId);
     if (!session) return false;
-    return session.host.send(command);
+    const delivered = session.host.send(command);
+    if (!delivered || command.type !== "prompt") return delivered;
+
+    // The engine never echoes a prompt: a user turn exists only in the store of the
+    // renderer that submitted it. So the host records it for anyone joining later and
+    // mirrors it to the surfaces already watching — without this the windows sharing
+    // one engine diverge on the first message either of them sends, one showing a
+    // question with no answer and the other an answer with no question.
+    session.host.recordPrompt(command.text);
+    for (const webContentsId of [...session.subscribers.keys()]) {
+      if (webContentsId === fromWebContentsId) continue;
+      this.deliver(webContentsId, CHANNELS.ASSISTANT_HOST_PEER_PROMPT, {
+        sessionId: session.sessionId,
+        text: command.text,
+      });
+    }
+
+    // NOT re-pinned to the sender. The MCP layer snapshots a session's view at
+    // handshake and never re-points it, deliberately (#7003/#9887), so tool calls act
+    // on the window that started the engine no matter which window typed. Mutating the
+    // record here would look like it moved the control plane and move nothing.
+    return delivered;
   }
 
   /** Stops one session. */
@@ -613,6 +689,103 @@ export class AssistantHostService {
       this.byProject.delete(session.projectId);
     }
     session.host.dispose();
+  }
+
+  /** Adds a surface to a session that is already running, and hands it the conversation. */
+  private attach(
+    session: LiveSession,
+    opts: StartSessionOptions,
+    elapsedMs: number
+  ): AssistantHostStartResult {
+    const attachmentId = newAttachmentId();
+    session.subscribers.set(opts.webContentsId, { windowId: opts.windowId, attachmentId });
+    if (this.departedSurfaces.has(opts.webContentsId)) {
+      this.detach(session, opts.webContentsId);
+      throw new Error("The assistant panel closed before its engine finished starting.");
+    }
+    const transcript = session.host.getTranscript();
+    logger.info("surface joined the project's running engine", {
+      sessionId: session.sessionId,
+      projectId: opts.projectId,
+      webContentsId: opts.webContentsId,
+      subscribers: session.subscribers.size,
+      replayEvents: transcript.events.length,
+      replayPrompts: transcript.prompts.length,
+      replayTruncated: transcript.truncated,
+      elapsedMs,
+    });
+    return {
+      sessionId: session.sessionId,
+      attachmentId,
+      // The joiner needs the same readiness frame the first surface got: it carries the
+      // engine version and whether approvals are switched off, and a panel that never
+      // applies it renders a session it believes nothing about.
+      ready: session.host.getReadyEvent(),
+      replay: transcript.events,
+      replayPrompts: transcript.prompts,
+      replayTruncated: transcript.truncated,
+      // Provisioning belongs to the engine's own start. A joiner did not do one, and a
+      // stale reason here would put a control-plane warning on a panel whose control
+      // plane is whatever the running engine actually has.
+      mcpUnavailableReason: null,
+    };
+  }
+
+  /** Sends one payload to every surface watching a session. */
+  private broadcast(sessionId: string, channel: string, payload: unknown): void {
+    const session = this.bySession.get(sessionId);
+    if (!session) return;
+    // Copied: `deliver` detaches a surface whose view has gone, which mutates the map
+    // being walked.
+    for (const webContentsId of [...session.subscribers.keys()]) {
+      this.deliver(webContentsId, channel, payload);
+    }
+  }
+
+  /**
+   * Detaches one surface, stopping the engine when the last one leaves.
+   *
+   * `attachmentId`, when given, must match the CURRENT attachment for that surface. A
+   * panel re-running its start effect resolves the new attach before the old one's
+   * teardown runs, so an unqualified detach would remove the live attachment and stop
+   * an engine that something is still using.
+   */
+  private detach(session: LiveSession, webContentsId: number, attachmentId?: string): void {
+    const subscriber = session.subscribers.get(webContentsId);
+    if (!subscriber) return;
+    if (attachmentId !== undefined && subscriber.attachmentId !== attachmentId) return;
+    session.subscribers.delete(webContentsId);
+
+    if (session.subscribers.size > 0 && webContentsId !== session.provisionerWebContentsId) {
+      logger.info("surface left the project's engine; others remain", {
+        sessionId: session.sessionId,
+        webContentsId,
+        subscribers: session.subscribers.size,
+      });
+      return;
+    }
+    if (session.subscribers.size > 0) {
+      // The surface the control plane is pinned to has gone. The engine could keep
+      // talking, but every tool call would target a destroyed view — so end it here
+      // rather than leave the other windows with an assistant that answers and cannot
+      // act. They get an ordinary exit and can start it again.
+      logger.info("the surface holding the control plane left; ending the shared session", {
+        sessionId: session.sessionId,
+        webContentsId,
+        strandedSubscribers: session.subscribers.size,
+      });
+    }
+    logger.info("last surface left; stopping the engine", {
+      sessionId: session.sessionId,
+      webContentsId,
+    });
+    this.stop(session.sessionId);
+  }
+
+  /** Detaches one surface's attachment, by id. */
+  detachSession(sessionId: string, webContentsId: number, attachmentId: string): void {
+    const session = this.bySession.get(sessionId);
+    if (session) this.detach(session, webContentsId, attachmentId);
   }
 
   /** Stops whatever session a project has, if any. */
@@ -686,9 +859,9 @@ export class AssistantHostService {
   private deliver(webContentsId: number, channel: string, payload: unknown): void {
     const target: WebContents | undefined = webContents.fromId(webContentsId) ?? undefined;
     if (!target || target.isDestroyed()) {
-      // The owner is gone, so nothing will ever stop this engine from the renderer
-      // side — the panel that would have run its cleanup no longer exists. Reap it
-      // here instead of leaving a headless process holding the project's lease.
+      // This surface is gone, so nothing will ever detach it from the renderer side —
+      // the panel that would have run its cleanup no longer exists. Detach it here,
+      // which reaps the engine only when it was the last one watching.
       this.stopByWebContents(webContentsId);
       return;
     }
@@ -703,11 +876,19 @@ export class AssistantHostService {
     }
   }
 
-  /** Stops every session owned by a renderer (destroyed view, crashed view). */
+  /**
+   * Detaches a renderer from every session it was watching (destroyed view, crashed view).
+   *
+   * Named `stop*` for its callers, who mean "this surface is gone" — but a surface
+   * going away only ENDS the engine when no other window is still showing it.
+   *
+   * The surface is also recorded as departed, because one of its own starts may still
+   * be queued behind another project's: registering it afterwards would leave a
+   * subscriber nothing can ever remove.
+   */
   stopByWebContents(webContentsId: number): void {
-    for (const session of [...this.bySession.values()]) {
-      if (session.webContentsId === webContentsId) this.stop(session.sessionId);
-    }
+    this.departedSurfaces.add(webContentsId);
+    for (const session of [...this.bySession.values()]) this.detach(session, webContentsId);
   }
 
   /**
@@ -724,13 +905,18 @@ export class AssistantHostService {
    */
   stopByWindow(windowId: number): void {
     for (const session of [...this.bySession.values()]) {
-      if (session.windowId === windowId) this.stop(session.sessionId);
+      for (const [webContentsId, subscriber] of [...session.subscribers]) {
+        if (subscriber.windowId === windowId) {
+          this.departedSurfaces.add(webContentsId);
+          this.detach(session, webContentsId);
+        }
+      }
     }
   }
 
-  /** True when `sessionId` is a live session owned by `webContentsId`. */
+  /** True when `webContentsId` is one of the surfaces watching `sessionId`. */
   isOwnedBy(sessionId: string, webContentsId: number): boolean {
-    return this.bySession.get(sessionId)?.webContentsId === webContentsId;
+    return this.bySession.get(sessionId)?.subscribers.has(webContentsId) ?? false;
   }
 }
 
