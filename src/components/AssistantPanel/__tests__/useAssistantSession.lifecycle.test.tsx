@@ -26,6 +26,8 @@ let send: ReturnType<typeof vi.fn>;
 /** Resolves the pending `start()` by hand, so "still starting" is a state we can hold. */
 let releaseStart: (result: {
   sessionId: string;
+  /** The surface's attachment, which is what a detach names — see `AssistantHostService`. */
+  attachmentId: string;
   ready: null;
   replay?: Record<string, unknown>[];
 }) => void;
@@ -55,6 +57,7 @@ beforeEach(() => {
           eventCbs = eventCbs.filter((c) => c !== cb);
         };
       },
+      onPeerPrompt: () => () => {},
       onSequenceGap: () => () => {},
       onExit: (cb: ExitCb) => {
         exitCbs.push(cb);
@@ -92,13 +95,13 @@ describe("useAssistantSession — a session is never left running", () => {
     expect(stop).not.toHaveBeenCalled(); // nothing to stop yet — no session id exists
 
     await act(async () => {
-      releaseStart({ sessionId: "ses_late", ready: null });
+      releaseStart({ sessionId: "ses_late", attachmentId: "att_test", ready: null });
     });
 
     // The engine that arrived late is stopped rather than adopted. Without this it
     // keeps running with no component holding its id, holding the project's lease
     // against every subsequent start.
-    expect(stop).toHaveBeenCalledWith("ses_late");
+    expect(stop).toHaveBeenCalledWith("ses_late", "att_test");
   });
 
   it("stops the superseded engine when the project changes mid-start", async () => {
@@ -112,10 +115,10 @@ describe("useAssistantSession — a session is never left running", () => {
     await waitFor(() => expect(start).toHaveBeenCalledTimes(2));
 
     await act(async () => {
-      releaseFirst({ sessionId: "ses_first", ready: null });
+      releaseFirst({ sessionId: "ses_first", attachmentId: "att_test", ready: null });
     });
 
-    expect(stop).toHaveBeenCalledWith("ses_first");
+    expect(stop).toHaveBeenCalledWith("ses_first", "att_test");
   });
 });
 
@@ -124,7 +127,7 @@ describe("useAssistantSession — a dead session refuses work", () => {
     const hook = renderHook(() => useAssistantSession(OPTS));
     await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
     await act(async () => {
-      releaseStart({ sessionId: "ses_live", ready: null });
+      releaseStart({ sessionId: "ses_live", attachmentId: "att_test", ready: null });
     });
     return hook;
   }
@@ -181,6 +184,7 @@ describe("useAssistantSession — what the engine said before anyone could hear 
     await act(async () => {
       releaseStart({
         sessionId: "ses_r",
+        attachmentId: "att_test",
         ready: null,
         // The engine reports its control plane at boot, before this renderer can match
         // any frame to a session. Without the replay it lands in that gap and the
@@ -209,7 +213,7 @@ describe("useAssistantSession — a mid-turn message main refuses", () => {
     const { result } = renderHook(() => useAssistantSession(OPTS));
     await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
     await act(async () => {
-      releaseStart({ sessionId: "ses_q", ready: null });
+      releaseStart({ sessionId: "ses_q", attachmentId: "att_test", ready: null });
     });
 
     // A running turn: input is QUEUED rather than appended, so there is no local turn
@@ -253,7 +257,7 @@ describe("useAssistantSession — a mid-turn message main refuses", () => {
     expect(send).not.toHaveBeenCalled();
 
     await act(async () => {
-      releaseStart({ sessionId: "ses_q", ready: null });
+      releaseStart({ sessionId: "ses_q", attachmentId: "att_test", ready: null });
     });
 
     // Main refused it — the session is no longer owned, or its process is gone.
