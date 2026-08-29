@@ -27,10 +27,12 @@ import { MCP_EXTERNAL_BASE_MANIFEST } from "./generated/mcpExternalBaseManifest.
  * fail-closed rather than borrowing the host's word for what the action is.
  */
 export function getExternalBaseManifest(): ActionManifestEntry[] {
-  // Cloned per call: this array is process-global and a session that mutated a
-  // shared entry would rewrite every later session's surface. One level of
-  // spread is enough — no consumer reaches into the schema objects, and a deep
-  // clone of 27 JSON schemas on every `tools/list` is real work for a hazard
-  // nothing exercises.
+  // A shallow clone per call, guarding the one mutation that is plausible: a
+  // caller reassigning a top-level field (`enabled`, `danger`) on an entry and
+  // rewriting every later session's surface. Nested values — schemas, examples
+  // — stay shared with the imported artifact, so a future consumer that mutates
+  // a schema in place would still cross sessions; every current one treats them
+  // as read-only, and deep-cloning the whole catalog on every `tools/list`
+  // would be real work for a hazard nothing exercises.
   return MCP_EXTERNAL_BASE_MANIFEST.map((entry) => ({ ...entry }));
 }

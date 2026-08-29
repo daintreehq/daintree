@@ -125,6 +125,12 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       clearElevationTimer: vi.fn(),
       revokeSession: vi.fn(() => false),
       registerClientMetadata: vi.fn(),
+      // The rest of the teardown surface. Stubbed rather than omitted because
+      // the uninitialized-session sweep (#12082) walks all of it, and an
+      // absent method there is a TypeError that reads as a lifecycle bug.
+      clearClientMetadata: vi.fn(),
+      clearDedupState: vi.fn(),
+      clearFigureCounter: vi.fn(),
       listExternalActiveClients: vi.fn(() => []),
       resolveLiveTransportForHelpSession: vi.fn(() => null),
       grantCache: {
@@ -1804,19 +1810,37 @@ describe("HttpLifecycle", () => {
       });
     });
 
-    describe("handshake binding when the workspace has no single live view (#12082)", () => {
+    describe("binding allocation when the workspace has no single live view (#12082)", () => {
+      // Scoped to what the lifecycle itself does with the selector: whether a
+      // session is allocated and what it binds to. These stop short of a
+      // completed MCP handshake — the SDK transport rejects the stub request on
+      // its own — so "the client really can connect and use the surface" is
+      // proved end to end in `McpServerService.authAndToolSurface.test.ts`
+      // against a real `StreamableHTTPClientTransport`, not here.
       /**
-       * The handshake runs to completion here, so the SDK transport is reached
-       * with a stub request it rejects on its own (no Host header), and the
-       * lifecycle logs and swallows that. Everything these tests assert is
-       * written before that point, which is the part under test: whether a
-       * session came into existence at all, and bound to what.
+       * Run a real handshake and report what it bound.
+       *
+       * The SDK transport rejects the stub request on its own (no Host header),
+       * and the lifecycle then reclaims the uninitialized session — correctly,
+       * and asserted below. So the maps are empty by the time the promise
+       * settles, and the binding has to be observed as it is written rather
+       * than read off the wreckage afterwards. Wrapping the real `set` is the
+       * narrowest way to do that: it watches the exact production write instead
+       * of a proxy for it.
        */
       async function handshake(deps: HttpLifecycleDeps, headers: Record<string, string>) {
+        const map = deps.sessionStore.sessionWorkspaceMap;
+        const realSet = map.set.bind(map);
+        const bound: string[] = [];
+        map.set = (sessionId: string, workspaceId: string) => {
+          bound.push(workspaceId);
+          return realSet(sessionId, workspaceId);
+        };
+
         const lc = new HttpLifecycle(deps);
         const res = fakeRes();
         await handshakeHandler(lc)(fakeReq(headers), res, new URL("http://127.0.0.1:45454/mcp"));
-        return res;
+        return { res, bound };
       }
 
       /**
@@ -1838,40 +1862,60 @@ describe("HttpLifecycle", () => {
         }
       }
 
+      function viewlessDeps(workspaceId: string, reason: "not-found" | "ambiguous") {
+        return fakeDeps({
+          resolveWorkspaceBinding: vi.fn(() => {
+            throw new WorkspaceBindingError(workspaceId, reason);
+          }),
+        });
+      }
+
       it.each([
         ["no live view", WS_MISSING, "not-found" as const],
         ["more than one live view", WS_DUP, "ambiguous" as const],
       ])(
-        "binds a workspace with %s instead of refusing the handshake",
+        "allocates a bound session for a workspace with %s instead of refusing the handshake",
         async (_label, id, reason) => {
           // A 400 at `initialize` is terminal in every MCP client SDK, so
           // refusing here costs the client Daintree's whole tool surface for its
           // lifetime over a condition the user fixes by opening a window.
-          const deps = fakeDeps({
-            resolveWorkspaceBinding: vi.fn(() => {
-              throw new WorkspaceBindingError(id, reason);
-            }),
-          });
+          const deps = viewlessDeps(id, reason);
 
-          const res = await handshake(deps, { "daintree-workspace-id": id });
+          const { res, bound } = await handshake(deps, { "daintree-workspace-id": id });
 
           expect(rejectionCode(res)).toBeNull();
-          expect([...deps.sessionStore.sessionWorkspaceMap.values()]).toEqual([id]);
-          expect(deps.sessionStore.sessionTierMap.size).toBe(1);
+          expect(bound).toEqual([id]);
           expect(deps.sessionStore.registerClientMetadata).toHaveBeenCalled();
         }
       );
 
-      it("binds a scratch workspace id, not just a project id", async () => {
-        const deps = fakeDeps({
-          resolveWorkspaceBinding: vi.fn(() => {
-            throw new WorkspaceBindingError(WS_SCRATCH, "not-found");
-          }),
-        });
+      it("allocates a binding for a scratch workspace id, not just a project id", async () => {
+        const deps = viewlessDeps(WS_SCRATCH, "not-found");
 
-        await handshake(deps, { "daintree-workspace-id": WS_SCRATCH });
+        const { bound } = await handshake(deps, { "daintree-workspace-id": WS_SCRATCH });
 
-        expect([...deps.sessionStore.sessionWorkspaceMap.values()]).toEqual([WS_SCRATCH]);
+        expect(bound).toEqual([WS_SCRATCH]);
+      });
+
+      it("leaves nothing behind when the SDK rejects the request before initializing", async () => {
+        // The SDK answers a malformed pre-initialize request rather than
+        // throwing, so `onsessioninitialized` never fires and there is no
+        // `httpSessions` entry for the idle reaper to find. Without the
+        // post-`handleRequest` sweep the tier, origin and workspace rows would
+        // outlive the request forever — and a bound handshake now writes a
+        // workspace row on this path.
+        const deps = viewlessDeps(WS_MISSING, "not-found");
+
+        const { bound } = await handshake(deps, { "daintree-workspace-id": WS_MISSING });
+
+        // Premise: a binding really was written, so the emptiness below is the
+        // sweep doing its job rather than the handshake never getting there.
+        expect(bound).toEqual([WS_MISSING]);
+        expect(deps.sessionStore.httpSessions.size).toBe(0);
+        expect(deps.sessionStore.sessionWorkspaceMap.size).toBe(0);
+        expect(deps.sessionStore.sessionTierMap.size).toBe(0);
+        expect(deps.sessionStore.sessionOriginMap.size).toBe(0);
+        expect(deps.sessionStore.clearClientMetadata).toHaveBeenCalled();
       });
 
       it("keeps the bound session routed at its workspace rather than following focus", async () => {

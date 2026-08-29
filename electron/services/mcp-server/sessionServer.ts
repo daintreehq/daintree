@@ -550,7 +550,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
    * Shared by `tools/list` and `mcp.surface` so the two cannot describe
    * different manifests: a surface report built off a stale cache while the
    * listing served a live fetch would be exactly the drift the report exists to
-   * detect (#11549).
+   * detect (#11549). The one place they separate is a workspace-bound session
+   * with no reachable view (#12082) — `mcp.surface` is a tool call, so it meets
+   * the bound pre-dispatch guard and reports the unreachable route before ever
+   * arriving here, which is the honest answer for a report about what this
+   * session can reach.
    */
   const resolveManifest = async (
     label: string
@@ -579,22 +583,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       // manifest would answer `tools/list` from a view this session can no
       // longer reach. Surface SESSION_BINDING_GONE in `data` so a client can
       // tell "reconnect and rebind" from "retry in a moment".
-      if (err instanceof McpRouteBindingError) {
-        // Same envelope the resource path already puts on `McpError.data`, so a
-        // client reads one shape for a binding failure whichever surface it hit
-        // — including `retriable`, which is the field that actually stops a
-        // conductor from hammering a dead binding. Read off the instance, since
-        // the code alone cannot tell the two binding failures apart.
-        throw new McpError(
-          ErrorCode.InternalError,
-          err.message,
-          buildMcpErrorPayload({
-            code: SESSION_BINDING_GONE,
-            message: err.message,
-            retriable: err.retriable,
-          })
-        );
-      }
+      const routed = routeBindingMcpError(err);
+      if (routed) throw routed;
       if (cachedFallback === null) {
         throw new McpError(ErrorCode.InternalError, "Action manifest unavailable");
       }
@@ -1941,8 +1931,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         buildMcpErrorPayload({ code: TIER_NOT_PERMITTED_CODE, message })
       );
     }
-    const contents = await readResourceContents(uri, parsed, dispatchAction);
-    return { contents: [contents] };
+    try {
+      return { contents: [await readResourceContents(uri, parsed, dispatchAction)] };
+    } catch (err) {
+      const routed = routeBindingMcpError(err);
+      if (routed) throw routed;
+      throw err;
+    }
   });
 
   server.setRequestHandler(SubscribeRequestSchema, async (request) => {
@@ -2206,6 +2201,13 @@ async function tryDispatchList(
     }
     return [];
   } catch (err) {
+    // An unreachable route is not an empty workspace (#12082). Swallowing it
+    // here would answer `resources/list` with an authoritative-looking "you
+    // have nothing" for a bound session whose workspace is simply not open —
+    // the same lie the terminal handshake used to tell, in a quieter place.
+    // Ordinary enumeration failures keep degrading to a partial listing.
+    const routed = routeBindingMcpError(err);
+    if (routed) throw routed;
     console.error(`[MCP] Failed to enumerate resources via ${actionId}:`, err);
     return [];
   }
@@ -2341,6 +2343,30 @@ async function collectPromptContext(
   }
 
   return context;
+}
+
+/**
+ * The structured envelope a route-binding failure must reach the client as
+ * (#12082).
+ *
+ * `McpRouteBindingError` is one of ours: it carries a string `code` and no
+ * `data`, and the SDK only preserves numeric codes and explicit `error.data`,
+ * so letting one escape a handler serializes it as a bare `-32603` with the
+ * `SESSION_BINDING_GONE` reason and the `retriable` verdict both stripped. Every
+ * surface that can raise one converts it here, so a client reads one shape
+ * whichever request hit it.
+ */
+function routeBindingMcpError(err: unknown): McpError | null {
+  if (!(err instanceof McpRouteBindingError)) return null;
+  return new McpError(
+    ErrorCode.InternalError,
+    err.message,
+    buildMcpErrorPayload({
+      code: SESSION_BINDING_GONE,
+      message: err.message,
+      retriable: err.retriable,
+    })
+  );
 }
 
 async function safeDispatch(

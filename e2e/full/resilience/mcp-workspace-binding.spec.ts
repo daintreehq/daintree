@@ -484,8 +484,8 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
     // Only conditions that will never become valid are refused (#12082): a
     // non-2xx `initialize` is terminal in every MCP client SDK, so refusing a
     // condition the user can fix would cost the client Daintree's whole tool
-    // surface for its lifetime. A value outside both id spaces is not such a
-    // condition — it names nothing that could ever exist.
+    // surface for its lifetime. A value outside both id spaces is exactly such
+    // a condition — it names nothing that could ever exist.
     const unknown = await post(
       endpoint,
       {
@@ -527,18 +527,22 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
     expect(JSON.stringify(mismatch.body)).toContain("WORKSPACE_SELECTOR_MISMATCH");
   });
 
-  test("a workspace with no live view connects and serves tools, then routes once it opens", async () => {
-    // The regression #12081 reported: the client was told its whole tool
-    // surface was gone because of which window happened to be open, and only a
-    // client restart recovered. Now the handshake completes, discovery answers
-    // from the host's own base surface, and the per-call failure says "retry".
+  test("a workspace with no live view connects and serves its full tool surface", async () => {
+    // Half of the #12082 regression, on the real transport: the client used to
+    // be told its whole tool surface was gone because of which window happened
+    // to be open. It now connects, discovery answers from the host's own base
+    // surface, and the per-call failure says "retry" rather than "never".
+    //
+    // The other half — the same session recovering once the workspace opens —
+    // needs a second window mid-test, which this serial suite's fixtures are not
+    // set up for. It is covered against a real MCP client in
+    // `McpServerService.authAndToolSurface.test.ts`.
     const closedWorkspace = "f".repeat(64);
     const bound = await initializeSession(endpoint, {
       workspaceId: closedWorkspace,
       clientName: "viewless-binding",
     });
 
-    expect(bound.sessionId).toBeTruthy();
     expect(
       bound.init.body?.result?.capabilities?.experimental?.[BINDING_CAPABILITY]?.workspaceId
     ).toBe(closedWorkspace);

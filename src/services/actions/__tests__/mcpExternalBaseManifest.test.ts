@@ -54,10 +54,10 @@ const VIEW_DEPENDENT_FIELDS = [
  * Materialize the external surface through the real `ActionService`, not a
  * reimplementation of `toManifestEntry`.
  *
- * The projection is not trivial — schemas are compiled from Zod, `danger` runs
- * through `resolveEffectiveActionDanger`, `band` through `deriveBand`, and
- * `requiresArgs` is derived from the args schema — so a second copy of it here
- * would be the only thing this artifact could ever drift against.
+ * The projection is not trivial — schemas are compiled from Zod, `band` is
+ * derived through `deriveBand`, `requiresArgs` from the args schema, and the
+ * palette fields from `definition.palette` — so a second copy of it here would
+ * be the only thing this artifact could ever drift against.
  */
 type BaseManifestEntry = Record<string, unknown>;
 
@@ -70,9 +70,25 @@ async function buildExpectedEntries(): Promise<BaseManifestEntry[]> {
     service.register(definition);
   }
 
+  // Nothing on the external surface may decide its own visibility or
+  // enablement from context. `list()` evaluates `isVisible` against whatever
+  // context it is handed, so an action with one would be present or absent here
+  // according to the empty context below — a view-dependent answer baked into a
+  // view-independent artifact. Refused rather than documented, because the
+  // failure is silent: the tool would simply be missing from every viewless
+  // session's surface.
+  const contextual = [...MCP_EXTERNAL_TIER_TOOLS].filter((id) => {
+    const definition = registry.get(id as ActionId)?.();
+    return definition?.isVisible !== undefined || definition?.isEnabled !== undefined;
+  });
+  if (contextual.length > 0) {
+    throw new Error(
+      `External-tier actions must not gate on context to appear in the host base ` +
+        `manifest, but these declare isVisible/isEnabled: ${contextual.join(", ")}`
+    );
+  }
+
   // An empty context on purpose: the catalog describes actions, not a session.
-  // Any `isVisible`/`isEnabled` predicate that reads context would make an
-  // entry view-dependent, which the assertion below refuses outright.
   const listed = service.list({}, { includeSchemas: true });
   const byId = new Map(listed.map((entry) => [entry.id, entry]));
 
@@ -95,8 +111,11 @@ async function buildExpectedEntries(): Promise<BaseManifestEntry[]> {
     //
     // Key order is part of the emitted file, so it is normalized here rather
     // than inherited from whatever order `toManifestEntry` happened to assign.
+    // Code-unit order, not `localeCompare`: this string ends up byte-compared
+    // against a checked-in file on three platforms, and ICU collation is free
+    // to differ by locale.
     return Object.fromEntries(
-      Object.entries({ ...entry, enabled: true }).sort(([a], [b]) => a.localeCompare(b))
+      Object.entries({ ...entry, enabled: true }).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     );
   });
 }
@@ -105,7 +124,8 @@ async function renderArtifact(entries: BaseManifestEntry[]): Promise<string> {
   const source = `// GENERATED FILE — do not edit by hand.
 //
 // The tool surface served to a workspace-bound external MCP session whose
-// workspace has no live view (#12082). Regenerate with:
+// workspace has no single live view — none open, or more than one (#12082).
+// Regenerate with:
 //
 //   UPDATE_MCP_BASE_MANIFEST=1 npx vitest run src/services/actions/__tests__/mcpExternalBaseManifest.test.ts
 //
@@ -127,8 +147,13 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = ${JSON
 }
 
 describe("MCP external base manifest artifact", () => {
+  // One materialization for the file: it walks the whole action registry and
+  // compiles every schema, which is the only slow thing here.
+  let expectedEntries: Promise<BaseManifestEntry[]>;
+  const expected = () => (expectedEntries ??= buildExpectedEntries());
+
   it("matches the surface the real action registry produces", async () => {
-    const entries = await buildExpectedEntries();
+    const entries = await expected();
     const rendered = await renderArtifact(entries);
 
     if (process.env.UPDATE_MCP_BASE_MANIFEST === "1") {
@@ -153,23 +178,22 @@ describe("MCP external base manifest artifact", () => {
       new Set(MCP_EXTERNAL_TIER_TOOLS)
     );
     expect(MCP_EXTERNAL_BASE_MANIFEST.every((e) => e.pluginId === undefined)).toBe(true);
-  }, 60_000);
+  });
 
   it("carries the schemas a client needs to call the tools", async () => {
     const { MCP_EXTERNAL_BASE_MANIFEST } =
       await import("../../../../electron/services/mcp-server/generated/mcpExternalBaseManifest");
-    const expected = await buildExpectedEntries();
+    const entries = await expected();
 
     // The point of publishing a full surface rather than an empty one is that a
     // client can actually *call* what it sees, so every tool the live registry
     // gives an input schema must carry the identical schema here.
-    for (const entry of expected) {
+    for (const entry of entries) {
       const shipped = MCP_EXTERNAL_BASE_MANIFEST.find((e) => e.id === entry.id);
       expect(shipped?.inputSchema).toEqual(entry.inputSchema);
       expect(shipped?.outputSchema).toEqual(entry.outputSchema);
       expect(shipped?.danger).toBe(entry.danger);
       expect(shipped?.requiresArgs).toBe(entry.requiresArgs);
     }
-    expect(expected.length).toBe(MCP_EXTERNAL_TIER_TOOLS.length);
   }, 60_000);
 });

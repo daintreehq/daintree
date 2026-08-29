@@ -45,6 +45,8 @@ import { TOOL_RESULT_TEXT_MAX_BYTES } from "../toolCallResult.js";
 import {
   isTierPermitted,
   shouldExposeTool,
+  buildToolInputSchema,
+  buildToolOutputSchema,
   ACTIONS_SEARCH_TOOL_ID,
   ACTIONS_GET_SCHEMA_TOOL_ID,
 } from "../tierAuth.js";
@@ -75,12 +77,37 @@ interface ListedTool {
   name: string;
   description?: string;
   inputSchema?: { properties?: Record<string, unknown> };
+  outputSchema?: Record<string, unknown>;
 }
 
 async function listBaseTools(
   server: ReturnType<typeof createSessionServer>
 ): Promise<ListedTool[]> {
   return ((await listTools(server)) as unknown as { tools: ListedTool[] }).tools;
+}
+
+/** Drive any registered request handler directly, the way `listTools` does. */
+function callHandler(
+  server: ReturnType<typeof createSessionServer>,
+  method: string,
+  params: Record<string, unknown> = {}
+): Promise<unknown> {
+  const handlers = (
+    server as unknown as {
+      _requestHandlers: Map<string, (req: unknown, extra: unknown) => Promise<unknown>>;
+    }
+  )._requestHandlers;
+  const handler = handlers.get(method);
+  if (!handler) throw new Error(`${method} handler not found`);
+  return handler(
+    { method, params, jsonrpc: "2.0", id: 1 },
+    {
+      signal: new AbortController().signal,
+      _meta: {},
+      sendNotification: vi.fn(),
+      requestId: 1,
+    }
+  );
 }
 
 /** The structured error envelope a failed tool call carries in its text content. */
@@ -5215,8 +5242,45 @@ describe("workspace-bound external sessions (#11789)", () => {
       await server.connect(makeMockTransport());
 
       const tools = await listBaseTools(server);
-      const withArgs = tools.filter((t) => Object.keys(t.inputSchema?.properties ?? {}).length > 0);
-      expect(withArgs.length).toBeGreaterThan(0);
+      // Every exposed tool, not a sample: "at least one tool has at least one
+      // parameter" would still pass with every other schema dropped in the
+      // plumbing between the artifact and the wire.
+      for (const tool of tools) {
+        const source = MCP_EXTERNAL_BASE_MANIFEST.find((e) => e.id === tool.name);
+        expect(source).toBeDefined();
+        expect(tool.inputSchema).toEqual(buildToolInputSchema(source!));
+        expect(tool.outputSchema).toEqual(buildToolOutputSchema(source!));
+      }
+      // Premise: the loop is vacuous on an empty listing, and several of these
+      // tools genuinely take arguments.
+      expect(
+        tools.filter((t) => Object.keys(t.inputSchema?.properties ?? {}).length > 0).length
+      ).toBeGreaterThan(1);
+    });
+
+    it("reports mcp.surface as an unreachable route rather than describing the base surface", async () => {
+      // `tools/list` and `mcp.surface` deliberately diverge while the binding is
+      // unresolved. `mcp.surface` is a tool call, so it meets the bound
+      // pre-dispatch guard first and never reaches `resolveManifest` — which is
+      // right: it reports what this session can actually reach, and that is
+      // currently nothing. Pinned here because the divergence falls out of
+      // handler ordering, which a later refactor could change silently.
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "mcp.surface", arguments: {} });
+
+      expect(result.isError).toBe(true);
+      expect(toolErrorPayload(result)).toMatchObject({
+        code: SESSION_BINDING_GONE,
+        retriable: true,
+      });
     });
 
     it("never serves a cached manifest after a binding failure", async () => {
@@ -5241,6 +5305,53 @@ describe("workspace-bound external sessions (#11789)", () => {
       expect(served?.description).toBe(
         MCP_EXTERNAL_BASE_MANIFEST.find((e) => e.id === "terminal.list")?.description
       );
+    });
+
+    it.each([
+      ["resources/list", {}],
+      // `scrollback` is backed by `terminal.getOutput`, which the external tier
+      // permits — a `pulse` URI would be refused as TIER_NOT_PERMITTED before
+      // dispatch and never reach the binding at all.
+      ["resources/read", { uri: "daintree://terminal/t-1/scrollback" }],
+    ])(
+      "reports an unreachable workspace on %s rather than answering as if it were empty",
+      async (method, params) => {
+        // `tools/list` gets a host surface because the tool *set* is knowable
+        // without a view; a resource listing is not — it enumerates what is
+        // actually open in that workspace. Answering `{ resources: [] }` there
+        // would be an authoritative "you have nothing", which is the same lie
+        // the terminal handshake told, in a quieter place.
+        const deps = boundDeps({
+          dispatchAction: vi
+            .fn()
+            .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+          requestManifest: vi
+            .fn()
+            .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+          getCachedManifest: vi.fn(() => null),
+        });
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        await expect(callHandler(server, method, params)).rejects.toMatchObject({
+          data: { code: SESSION_BINDING_GONE, retriable: true, errorCategory: "business" },
+        });
+      }
+    );
+
+    it("still degrades a resource listing gracefully for an ordinary dispatch failure", async () => {
+      // The rethrow above is scoped to route-binding failures; a flaky
+      // enumeration must keep returning a partial listing rather than failing
+      // the whole request.
+      const deps = boundDeps({
+        dispatchAction: vi.fn().mockRejectedValue(new Error("renderer hiccup")),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      await expect(callHandler(server, "resources/list", {})).resolves.toMatchObject({
+        resources: expect.any(Array),
+      });
     });
 
     it("still fails tools/list closed for a destroyed pinned view", async () => {

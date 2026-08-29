@@ -807,8 +807,9 @@ export function createRendererBridge(
     /**
      * Validate a handshake workspace selector and describe what it resolved to
      * (#11789). Throws {@link WorkspaceBindingError} when the workspace has no
-     * live view or more than one, so the handshake is refused before any session
-     * state exists.
+     * live view or more than one. That is no longer a refusal (#12082): the
+     * caller binds identity-only and reports the unreachable route per call,
+     * because which windows are open is not a fact about the selector.
      *
      * The descriptive fields are best-effort: `workspaceId` is the routing
      * identity and is always returned, while `kind`/`workspacePath` come from

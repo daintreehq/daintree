@@ -1455,9 +1455,45 @@ export class HttpLifecycle {
       cleanupResourceSubscriptions(id, this.deps.sessionStore);
     };
 
+    /**
+     * Reclaim everything written for a session the SDK never initialized.
+     *
+     * The SDK answers a malformed pre-initialize request — wrong `Accept`, an
+     * unparseable body, a JSON-RPC method that is not `initialize` — by writing
+     * a 4xx rather than throwing, so `onsessioninitialized` never fires and
+     * nothing is inserted into `httpSessions`. Without this, the tier, origin,
+     * client metadata and (since #12082) workspace rows above outlive the
+     * request forever: the idle reaper walks `httpSessions`, which has no entry
+     * to find.
+     */
+    const discardUninitializedSession = (): void => {
+      this.deps.sessionStore.clearElevationTimer(newSessionId);
+      this.deps.sessionStore.sessionTierMap.delete(newSessionId);
+      this.deps.sessionStore.grantCache.revokeSession(newSessionId, "session-ended");
+      this.deps.sessionStore.clearSessionBinding(newSessionId);
+      // Resolve the public help-session id before deleting the map entry.
+      this.deps.sessionStore.clearFigureCounter(newSessionId);
+      this.deps.sessionStore.sessionHelpIdMap.delete(newSessionId);
+      this.deps.sessionStore.clearDedupState(newSessionId);
+      this.deps.sessionStore.clearClientMetadata(newSessionId);
+      this.deps.abusePolicy.dropSession(newSessionId);
+      this.detachBearerSession(newSessionId);
+      cleanupResourceSubscriptions(newSessionId, this.deps.sessionStore);
+    };
+
     try {
       await server.connect(transport);
       await transport.handleRequest(req, res);
+      // Both conditions, because they answer the question from opposite ends:
+      // the SDK sets `sessionId` when it accepts the handshake, and our own
+      // `onsessioninitialized` is what files the session for the reaper. A
+      // session is real only when both happened.
+      if (
+        transport.sessionId === undefined &&
+        !this.deps.sessionStore.httpSessions.has(newSessionId)
+      ) {
+        discardUninitializedSession();
+      }
     } catch (err) {
       console.error("[MCP] Streamable HTTP request failed:", err);
       const id = transport.sessionId;
@@ -1480,18 +1516,7 @@ export class HttpLifecycle {
         this.detachBearerSession(id);
         cleanupResourceSubscriptions(id, this.deps.sessionStore);
       } else {
-        this.deps.sessionStore.clearElevationTimer(newSessionId);
-        this.deps.sessionStore.sessionTierMap.delete(newSessionId);
-        this.deps.sessionStore.grantCache.revokeSession(newSessionId, "session-ended");
-        this.deps.sessionStore.clearSessionBinding(newSessionId);
-        // Resolve the public help-session id before deleting the map entry.
-        this.deps.sessionStore.clearFigureCounter(newSessionId);
-        this.deps.sessionStore.sessionHelpIdMap.delete(newSessionId);
-        this.deps.sessionStore.clearDedupState(newSessionId);
-        this.deps.sessionStore.clearClientMetadata(newSessionId);
-        this.deps.abusePolicy.dropSession(newSessionId);
-        this.detachBearerSession(newSessionId);
-        cleanupResourceSubscriptions(newSessionId, this.deps.sessionStore);
+        discardUninitializedSession();
       }
       await transport.close().catch(() => {});
       if (!res.headersSent) {

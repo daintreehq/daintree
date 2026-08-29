@@ -1747,39 +1747,28 @@ describe("rendererBridge — thaw and eviction lease for routed operations (#117
 });
 
 describe("binding error retriability (#12082)", () => {
-  it("marks a workspace route recoverable and a destroyed pin not", () => {
-    // Both report SESSION_BINDING_GONE, so the code alone cannot answer this —
-    // which is exactly why the verdict rides the instance. A workspace id
-    // outlives every view, so reopening the workspace makes the identical call
-    // route; a destroyed pinned WebContents is the session's identity and never
-    // comes back.
-    expect(new WorkspaceBindingError("ws", "not-found").retriable).toBe(true);
-    expect(new WorkspaceBindingError("ws", "ambiguous").retriable).toBe(true);
-    expect(new SessionBindingError(7).retriable).toBe(false);
-
+  it("cannot answer retriability from the code alone", () => {
+    // The premise the instance-level flag exists for. Both failures report the
+    // same code and need opposite answers, so anything keyed on the code —
+    // `RETRIABLE_ERROR_CODES` included — is structurally unable to tell them
+    // apart, and adding the code to that set would have made a destroyed pin
+    // retriable too.
     expect(new WorkspaceBindingError("ws", "not-found").code).toBe(new SessionBindingError(7).code);
+    expect(RETRIABLE_ERROR_CODES.has(new SessionBindingError(7).code)).toBe(false);
   });
 
-  it("carries the instance verdict into the wire payload", () => {
-    const workspace = new WorkspaceBindingError("ws", "not-found");
-    const pinned = new SessionBindingError(7);
-
+  it.each([
+    ["a workspace with no live view", () => new WorkspaceBindingError("ws", "not-found"), true],
+    ["a workspace open in two views", () => new WorkspaceBindingError("ws", "ambiguous"), true],
+    ["a destroyed pinned view", () => new SessionBindingError(7), false],
+  ])("reports %s on the wire", (_label, make, retriable) => {
+    // Asserted through `buildMcpErrorPayload` rather than off the class field:
+    // what matters is the value a client actually receives, and the payload
+    // builder is where a code-keyed default could still override it.
+    const err = make();
     expect(
-      buildMcpErrorPayload({
-        code: workspace.code,
-        message: workspace.message,
-        retriable: workspace.retriable,
-      }).retriable
-    ).toBe(true);
-    expect(
-      buildMcpErrorPayload({
-        code: pinned.code,
-        message: pinned.message,
-        retriable: pinned.retriable,
-      }).retriable
-    ).toBe(false);
-    // The static set is untouched: adding SESSION_BINDING_GONE to it would have
-    // made the destroyed-pin case retriable too.
-    expect(RETRIABLE_ERROR_CODES.has(workspace.code)).toBe(false);
+      buildMcpErrorPayload({ code: err.code, message: err.message, retriable: err.retriable })
+        .retriable
+    ).toBe(retriable);
   });
 });

@@ -1,7 +1,8 @@
 // GENERATED FILE — do not edit by hand.
 //
 // The tool surface served to a workspace-bound external MCP session whose
-// workspace has no live view (#12082). Regenerate with:
+// workspace has no single live view — none open, or more than one (#12082).
+// Regenerate with:
 //
 //   UPDATE_MCP_BASE_MANIFEST=1 npx vitest run src/services/actions/__tests__/mcpExternalBaseManifest.test.ts
 //

@@ -1699,6 +1699,68 @@ describe("McpServerService", () => {
       expect(getTextResult(afterOpen).content[0].text).toBe('"from-closed-workspace"');
     });
 
+    it("connects to an ambiguous workspace and recovers when the duplicate closes (#12082)", async () => {
+      // The other half of the transient pair. Two views own one workspace, so
+      // "the" target is undefined and every call must refuse — but closing the
+      // duplicate is a thing the user does, not a permanent fact about the
+      // selector, so the handshake must not have refused either.
+      const winA = boundWindow(REF_A, "from-window-A");
+      await service.start(winA.window);
+
+      const first = boundWindow(
+        { kind: "project", workspaceId: PROJECT_B_ID, workspacePath: "/repos/b" },
+        "from-duplicate-one"
+      );
+      boundWindow(
+        { kind: "project", workspaceId: PROJECT_B_ID, workspacePath: "/repos/b" },
+        "from-duplicate-two"
+      );
+
+      const client = await connectBound(service.currentPort!, PROJECT_B_ID);
+
+      expect((await client.listTools()).tools.map((t) => t.name)).toContain("terminal.list");
+
+      const ambiguous = await client.callTool({ name: "terminal.list", arguments: {} });
+      expect(ambiguous.isError).toBe(true);
+      const failure = JSON.parse(getTextResult(ambiguous).content[0].text as string) as {
+        code: string;
+        retriable: boolean;
+      };
+      expect(failure.code).toBe("SESSION_BINDING_GONE");
+      expect(failure.retriable).toBe(true);
+
+      // Close the duplicate. Same client, same session, no reconnect.
+      unregisterProjectView(first.webContents.id);
+
+      // Re-list for the same reason as the not-found case: the SDK caches
+      // per-tool output validators off `tools/list`, so the client has to see
+      // the live workspace manifest before calling against it.
+      await client.listTools();
+
+      const afterClose = await client.callTool({ name: "terminal.list", arguments: {} });
+      expect(getTextResult(afterClose).content[0].text).toBe('"from-duplicate-two"');
+    });
+
+    it("releases a viewless binding's workspace protection when the session closes", async () => {
+      // A binding that outlived its session would keep a workspace marked
+      // actively bound, and the freeze/eviction policies read that. Nothing
+      // about a viewless binding should make it harder to release than a live
+      // one.
+      const winA = boundWindow(REF_A, "from-window-A");
+      await service.start(winA.window);
+
+      await connectBound(service.currentPort!, CLOSED_PROJECT_ID);
+      await vi.waitFor(() => {
+        expect(service.listActiveClients()).toHaveLength(1);
+      });
+
+      await Promise.all(httpTransports.splice(0).map((t) => t.terminateSession()));
+
+      await vi.waitFor(() => {
+        expect(service.listActiveClients()).toHaveLength(0);
+      });
+    });
+
     it("still lists a bound session among the external clients", async () => {
       // A background-bound agent is the one the user most needs to be able to
       // find and disconnect, since they cannot see it working.
