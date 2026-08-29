@@ -1008,6 +1008,13 @@ export function AssistantPanelView({
     if (deckOpen) refreshDeck();
   }, [deckOpen, refreshDeck]);
 
+  // A timer firing while the deck is OPEN re-reads it. Only while open: the whole
+  // reason the snapshot is pulled rather than streamed is that a host may not be
+  // showing it, and a refresh nobody can see is a round trip spent on nothing.
+  useEffect(() => {
+    if (deckOpen && state.timersStale) onRequestTimers?.();
+  }, [deckOpen, state.timersStale, onRequestTimers]);
+
   // A live session is one that can still act. Several readouts describe the session
   // rather than the transcript, and none of them is true once it has stopped.
   const live = state.connection === "ready";
@@ -1418,6 +1425,7 @@ export function AssistantPanelView({
         <AssistantOperationsDeck
           operations={state.operations}
           timers={state.timers}
+          timersStale={state.timersStale}
           timerCancelPending={state.timerCancelPending}
           timerCancelErrors={state.timerCancelErrors}
           onCancelTimer={onCancelTimer ?? noopCancelTimer}

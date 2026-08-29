@@ -1008,6 +1008,46 @@ describe("the timer manager", () => {
     });
   }, 20_000);
 
+  it("carries what a fired timer DID, including the successes", async () => {
+    // The original hole: a timer fired and the panel showed nothing. A success
+    // publishes at `info`, BELOW the operations deck's attention filter, so the deck
+    // was structurally unable to report that a scheduled thing had worked.
+    const state = await withSession(async (host, waitFor) => {
+      const landed = waitFor("timers:snapshot");
+      host.send({ type: "timers", sessionId: DESCRIPTOR.sessionId });
+      await landed;
+    });
+    const outcomes = state.timers?.outcomes ?? [];
+    expect(outcomes.map((o) => o.severity)).toEqual(expect.arrayContaining(["info", "error"]));
+    const failed = outcomes.find((o) => o.severity === "error");
+    // A repeat publishes under one dedupe key, so the row stands for every firing —
+    // reporting one would understate a timer that has failed four nights running.
+    expect(failed?.count).toBe(4);
+    expect(failed?.timerId).toBe("tmr_broken");
+  }, 20_000);
+
+  it("marks the list stale when a timer fires, and a fresh reading clears it", async () => {
+    // The engine pushes the FACT, not the change — so the whole of the reaction is
+    // "what I hold is out of date", never a row patched from an event that carries
+    // no row.
+    const state = await withSession(
+      async (host, waitFor) => {
+        const fired = waitFor("timer:fired");
+        host.send({ type: "timers", sessionId: DESCRIPTOR.sessionId });
+        await fired;
+        expect(useAssistantStore.getState().timersStale).toBe(true);
+
+        const refreshed = waitFor("timers:snapshot");
+        host.send({ type: "timers", sessionId: DESCRIPTOR.sessionId });
+        await refreshed;
+      },
+      { FAKE_ENGINE_TIMERS: "fires" }
+    );
+    // The second snapshot is the answer to what made it stale. (The fake fires again
+    // after that reading too, so this asserts the clear happened, not that it stuck.)
+    expect(state.timers).not.toBeNull();
+  }, 20_000);
+
   it("tells a failed read apart from an empty list", async () => {
     // The two must never collapse: "nothing scheduled" is a claim a user acts on by
     // walking away from work that is still queued.

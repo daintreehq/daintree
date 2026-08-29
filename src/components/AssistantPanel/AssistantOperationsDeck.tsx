@@ -30,6 +30,8 @@ export interface AssistantOperationsDeckProps {
    * counting down until the next full deck pull.
    */
   timers: AssistantTimers | null;
+  /** A timer has fired since this reading, so the list is known to be behind. */
+  timersStale: boolean;
   timerCancelPending: Record<string, true>;
   timerCancelErrors: Record<string, string>;
   onCancelTimer: (timerId: string) => void;
@@ -78,6 +80,7 @@ function ago(at: number, now: number): string {
 export function AssistantOperationsDeck({
   operations,
   timers,
+  timersStale,
   timerCancelPending,
   timerCancelErrors,
   onCancelTimer,
@@ -87,6 +90,7 @@ export function AssistantOperationsDeck({
   const now = Date.now();
   const ops = operations;
   const timerRows = timers?.rows ?? ops?.timers ?? [];
+  const outcomes = timers?.outcomes ?? [];
 
   const running = ops ? ops.agents.length + ops.async.length : 0;
   const attention = ops ? ops.inbox.length : 0;
@@ -131,6 +135,15 @@ export function AssistantOperationsDeck({
                 <span className="ml-2 text-[var(--assistant-fg-secondary)]">
                   read {ago(ops.at, now)} ago
                 </span>
+                {/* A timer fired since this reading was taken. Said out loud rather
+                    than silently refreshed, because the deck is a snapshot and a list
+                    that changes under a reader who did not ask is worse than one that
+                    admits it is behind. */}
+                {timersStale ? (
+                  <span className="ml-2 text-[var(--assistant-warning)]">
+                    a timer has fired since — refresh
+                  </span>
+                ) : null}
               </Row>
             </Section>
 
@@ -226,6 +239,36 @@ export function AssistantOperationsDeck({
                   onCancel={onCancelTimer}
                   now={now}
                 />
+              </Section>
+            )}
+
+            {/* FIRED sits after SCHEDULED because it answers the second question, and
+                because a fired timer has LEFT the list above — without this section the
+                deck can only ever show what has not happened yet, which is how a timer
+                could fire, fail, and leave the panel showing nothing at all. */}
+            {outcomes.length > 0 && (
+              <Section title="FIRED">
+                {outcomes.map((row) => (
+                  <Row key={row.eventId} tone={row.severity === "error" ? "danger" : undefined}>
+                    <div className="truncate">
+                      {row.title}
+                      {/* A repeating timer publishes under one dedupe key, so this row
+                          stands for every firing since it was first raised. Without the
+                          count a reader would take twelve failures for one. */}
+                      {row.count > 1 ? (
+                        <span className="ml-2 text-[var(--assistant-fg-secondary)]">
+                          ×{row.count}
+                        </span>
+                      ) : null}
+                      <span className="ml-2 text-[var(--assistant-fg-secondary)]">
+                        {ago(row.updatedAt || row.createdAt, now)} ago
+                      </span>
+                    </div>
+                    <div className="truncate text-[var(--assistant-fg-secondary)]">
+                      {row.summary}
+                    </div>
+                  </Row>
+                ))}
               </Section>
             )}
 
