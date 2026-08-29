@@ -376,7 +376,7 @@ test("worktree-delete dialog review — every consequence tier", async () => {
     //    what the dialog actually counts.
     await step("terminals", async () => {
       for (let i = 0; i < 2; i++) {
-        await launchFromMenu(page, WT_CLEAN, /^Open Terminal$/);
+        await launchFromMenu(page, WT_CLEAN, /^Terminal$/);
         await settle(page, 2500);
         await dismissBlockingPalette(page);
       }
@@ -476,7 +476,7 @@ test("worktree-delete dialog review — every consequence tier", async () => {
     // LAST. Dev preview running — the other cascade the dialog discloses. Opened
     //     through the same Launch submenu so the real IPC session exists.
     await step("dev-preview", async () => {
-      await launchFromMenu(page, WT_CLEAN, /^Open Dev Preview$/);
+      await launchFromMenu(page, WT_CLEAN, /^Dev preview$/);
       await settle(page, 5000);
       await dismissBlockingPalette(page);
       await openDialog(page, WT_CLEAN);

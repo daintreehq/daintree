@@ -25,6 +25,7 @@ import {
 import { actionService } from "@/services/ActionService";
 import type { ComputedSubtitle, WorktreeReviewState } from "./hooks/useWorktreeStatus";
 import { SECTION_LABEL, CARD_DENSITY } from "./sectionChrome";
+import { resourceLifecycleVisibility } from "../utils/resourceLifecycle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ContextMenu,
@@ -184,17 +185,13 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     }
   };
 
-  const rsLower = resourceStatus?.toLowerCase();
-  const showResourceResume =
-    hasResourceConfig &&
-    (!rsLower ||
-      rsLower === "paused" ||
-      rsLower === "stopped" ||
-      rsLower === "unknown" ||
-      rsLower === "terminated" ||
-      rsLower === "down");
-  const showResourcePause = hasResourceConfig && (rsLower === "running" || rsLower === "starting");
-  const showResourceConnect = hasResourceConfig && !!onResourceConnect && rsLower === "running";
+  // Same rule the worktree menu's Runtime ▸ Environment section applies, so the
+  // inline controls and the menu can never disagree about whether this
+  // environment is resumable or pausable.
+  const lifecycle = resourceLifecycleVisibility(resourceStatus);
+  const showResourceResume = hasResourceConfig && lifecycle.showResume;
+  const showResourcePause = hasResourceConfig && lifecycle.showPause;
+  const showResourceConnect = hasResourceConfig && !!onResourceConnect && lifecycle.showConnect;
 
   const isSidebar = variant === "sidebar";
   const density = CARD_DENSITY[isSidebar ? "sidebar" : "grid"];

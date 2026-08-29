@@ -132,7 +132,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
 | Dock all sessions in active worktree | `⌘+K ⌘+M` | `Ctrl+K Ctrl+M` |
-| Maximize all sessions in active worktree | `⌘+K ⌘+X` | `Ctrl+K Ctrl+X` |
+| Move all sessions to grid in active worktree | `⌘+K ⌘+X` | `Ctrl+K Ctrl+X` |
 | Reset renderers for all sessions in active worktree | `⌘+K ⌘+V` | `Ctrl+K Ctrl+V` |
 
 ## Panels
