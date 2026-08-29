@@ -6,14 +6,12 @@ import {
   FolderTree,
   PanelRightClose,
   PanelRightOpen,
-  RefreshCw,
 } from "lucide-react";
 import { basename, join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
@@ -1164,22 +1162,10 @@ export function FileBrowserPane({
                 hideDotfiles={hideDotfiles}
                 onHideDotfilesChange={handleHideDotfilesChange}
                 hiddenCounts={hiddenCounts}
+                onRefresh={handleRefresh}
+                isRefreshing={isRefreshing}
                 data-testid="file-browser-view-options"
               />
-              {/* Refresh stays here for as long as the tree is mounted. It
-                  re-reads the whole browser rather than just the open file, so
-                  letting a selection hand it to the viewer put it at the far
-                  edge of a column the eye isn't on — at grid width that reads
-                  as no Refresh at all (#11938). The viewer grows its own only
-                  once this header is collapsed away, so there is still exactly
-                  one in every layout (#11496). */}
-              <FileViewerToolbar.IconButton label="Refresh" onClick={handleRefresh}>
-                <SpinningIcon
-                  icon={RefreshCw}
-                  active={isRefreshing}
-                  className={TOOLBAR_ICON_CLASS}
-                />
-              </FileViewerToolbar.IconButton>
               {/* The viewer's disclosure, homed here rather than in the viewer —
                   the mirror of where the tree's toggle lives (#11496). That
                   placement is also what makes "both collapsed" unreachable:

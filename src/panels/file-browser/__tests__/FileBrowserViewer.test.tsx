@@ -64,6 +64,19 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuContent: ({ children }: { children: ReactNode }) => <div role="menu">{children}</div>,
   DropdownMenuLabel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    "data-testid": testId,
+  }: {
+    children: ReactNode;
+    onSelect?: () => void;
+    "data-testid"?: string;
+  }) => (
+    <button type="button" role="menuitem" data-testid={testId} onClick={onSelect}>
+      {children}
+    </button>
+  ),
   DropdownMenuCheckboxItem: ({
     children,
     checked,
@@ -651,7 +664,7 @@ describe("FileBrowserViewer Refresh control (#11586, #11938)", () => {
     renderViewer(null, { sidebarCollapsed: false });
     // Two identical Refresh buttons in one panel would read as two different
     // actions; with no file on screen the tree header owns the only one.
-    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+    expect(screen.queryByTestId("file-browser-refresh")).toBeNull();
   });
 
   it("leaves Refresh to the tree header while the tree column is mounted and a file is open", async () => {
@@ -662,7 +675,7 @@ describe("FileBrowserViewer Refresh control (#11586, #11938)", () => {
     renderViewer("/repo/src/notes.txt", { sidebarCollapsed: false });
     await screen.findByTestId("code-viewer-mock");
 
-    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+    expect(screen.queryByTestId("file-browser-refresh")).toBeNull();
     // The group doesn't go empty in exchange — the file keeps its own actions.
     expect(screen.getByRole("button", { name: "Open in editor" })).toBeTruthy();
   });
@@ -674,7 +687,7 @@ describe("FileBrowserViewer Refresh control (#11586, #11938)", () => {
     // Nothing selected still needs it: Refresh re-reads the tree too, and a
     // workspace root has only the polled reconcile to fall back on (#11590).
     expect(screen.getByText("Nothing selected")).toBeTruthy();
-    const button = screen.getByRole("button", { name: "Refresh" });
+    const button = screen.getByTestId("file-browser-refresh");
     await act(async () => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
@@ -694,7 +707,7 @@ describe("FileBrowserViewer Refresh control (#11586, #11938)", () => {
       onRefresh,
     });
 
-    const button = screen.getByRole("button", { name: "Refresh" });
+    const button = screen.getByTestId("file-browser-refresh");
     await act(async () => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });

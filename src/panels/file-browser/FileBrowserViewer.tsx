@@ -39,7 +39,6 @@ import {
   toFileReadErrorCode,
 } from "@/components/FileViewer/fileReadErrors";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -487,23 +486,10 @@ export function FileBrowserViewer({
               hideDotfiles={hideDotfiles}
               onHideDotfilesChange={onHideDotfilesChange}
               hiddenCounts={hiddenCounts}
+              onRefresh={onRefresh}
+              isRefreshing={isRefreshing}
               data-testid="file-browser-view-options"
             />
-          )}
-          {/* Only while the tree column is collapsed away. Its header owns the
-              browser-wide Refresh the rest of the time, open file or not: this
-              copy used to take over the moment something was selected, which
-              moved the control to the far edge of the panel for no gain — both
-              buttons have always run the same handler (#11938). One Refresh in
-              every layout either way (#11496), and this one still has to exist
-              for the collapsed-tree layouts (#11586), including with nothing
-              selected: a workspace root has no worktree tick, only the polled
-              reconcile (#11590), and a poll is not a gesture — nor does it
-              re-fetch an open media preview, which needs the manual nonce. */}
-          {sidebarCollapsed && (
-            <FileViewerToolbar.IconButton label="Refresh" onClick={onRefresh}>
-              <SpinningIcon icon={RefreshCw} active={isRefreshing} className={TOOLBAR_ICON_CLASS} />
-            </FileViewerToolbar.IconButton>
           )}
           {filePath && (
             <>

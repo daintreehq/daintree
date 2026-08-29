@@ -1,9 +1,10 @@
-import { SlidersHorizontal } from "lucide-react";
+import { RefreshCw, SlidersHorizontal } from "lucide-react";
 import { TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -11,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import type { FileBrowserSortKey } from "@shared/types/panel";
 import type { FileBrowserSortOrder, HiddenRowCounts } from "./fileBrowserTree";
 
@@ -55,6 +57,14 @@ export interface FileBrowserViewOptionsProps {
   onHideDotfilesChange: (hide: boolean) => void;
   /** What the two filters are removing from the branches currently on screen. */
   hiddenCounts: HiddenRowCounts;
+  /**
+   * The manual re-read. A fallback rather than a primary: the browser already
+   * ticks off the worktree watcher, or a 2s poll where no watcher covers the
+   * root, so this exists for the cases that slip through — notably writes into
+   * a gitignored folder, which `git status` never reports (#11334).
+   */
+  onRefresh: () => void;
+  isRefreshing: boolean;
   "data-testid"?: string;
 }
 
@@ -87,10 +97,16 @@ export function FileBrowserViewOptions({
   hideDotfiles,
   onHideDotfilesChange,
   hiddenCounts,
+  onRefresh,
+  isRefreshing,
   "data-testid": testId,
 }: FileBrowserViewOptionsProps) {
-  const summary = hiddenSummary(hiddenCounts);
-  const label = summary === "" ? "View options" : `View options — ${summary}`;
+  // Just the name. What the filters are doing is announced by the strip under
+  // the tree, which is a live region, so repeating it here would say it twice
+  // to a screen reader and wrap the tooltip onto two lines for everyone else.
+  // It also kept a permanent "1 hidden by Settings" on the control in every git
+  // repo, since `.git` is always on the junk list.
+  const label = "File tree options";
 
   return (
     <DropdownMenu>
@@ -170,6 +186,26 @@ export function FileBrowserViewOptions({
             )}
           </span>
         </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        {/* An action, not a view setting, so it sits under its own rule at the
+            bottom rather than among the things above it.
+
+            Demoted from a dedicated header button on purpose. The tree already
+            refreshes itself — the worktree watcher ticks it, and a 2s poll
+            covers roots no watcher owns — so a permanently visible Refresh
+            claimed a slot in a sub-300px header for something the user rarely
+            has to reach for. Still exactly one Refresh in every layout: this
+            menu is rendered by the tree header, or by the viewer's toolbar
+            while the tree is collapsed away, never both (#11496, #11938). */}
+        <DropdownMenuItem onSelect={onRefresh} data-testid="file-browser-refresh">
+          <SpinningIcon
+            icon={RefreshCw}
+            active={isRefreshing}
+            className={TOOLBAR_ICON_CLASS}
+            aria-hidden="true"
+          />
+          Refresh
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
