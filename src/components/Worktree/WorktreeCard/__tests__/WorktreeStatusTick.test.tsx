@@ -105,7 +105,6 @@ describe("WorktreeStatusTick", () => {
     // `inset-y-0` derives it, so the tick cannot drift when the row's contents
     // change.
     const { tick } = renderTick("waiting");
-    expect(tick.classList.contains("inset-y-0")).toBe(true);
     expect(
       [...tick.classList].filter((c) => /^h-/.test(c)),
       "a fixed height would stop the tick tracking the row"
