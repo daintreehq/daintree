@@ -136,8 +136,8 @@ function resolveVersion() {
 function main() {
   const argv = process.argv.slice(2);
   const checkOnly = argv.includes("--check");
-  // `--dev` is the same host build, wired into `npm run dev` so the engine cannot
-  // silently lag the submodule.
+  // `--dev` is the same host build, wired into `npm run dev` AND `npm run build` so the
+  // engine cannot silently lag the submodule on either path.
   //
   // It exists because it already went wrong: `resources/assistant/` is written only by
   // an explicit `npm run build:assistant`, so moving the submodule and running the app
@@ -145,9 +145,10 @@ function main() {
   // said so. The symptom was a fix that had been made, tested and committed still
   // reproducing.
   //
-  // Never fatal, because it is now on the path of every `npm run dev`: a contributor
-  // without Go, or one whose submodule is not checked out, gets a warning and the app
-  // they asked for. Only a run with NO usable binary at all is worth stopping.
+  // Never fatal, because it is now on the path of every `npm run dev` and `npm run
+  // build`: a contributor without Go, or one whose submodule is not checked out, gets a
+  // warning and the app they asked for. Only a run with NO usable binary at all is worth
+  // stopping.
   const dev = argv.includes("--dev");
   const all = argv.includes("--all");
   const platformArg = argv[argv.indexOf("--platform") + 1];
