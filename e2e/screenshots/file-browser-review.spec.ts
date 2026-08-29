@@ -213,7 +213,10 @@ test("file browser review — tree sidebar chrome", async () => {
       // The tree column is the sidebar-coloured half; its header is the row the
       // review is about. Anchored on the viewer toggle, which lives in that
       // header and unmounts only when the tree column itself is gone.
-      const treeColumn = panel.locator('div:has(> div [data-testid="file-browser-viewer-toggle"])');
+      // The column itself, by its own marker. An ancestor-of-the-toggle
+      // selector matched the whole panel instead, so every "tree column" shot
+      // was silently a full-panel shot.
+      const treeColumn = panel.locator('[data-testid="file-browser-tree-column"]');
       const treeHeader = panel
         .locator('[data-testid="file-browser-viewer-toggle"]')
         .locator("xpath=ancestor::div[1]");
@@ -224,6 +227,18 @@ test("file browser review — tree sidebar chrome", async () => {
         if (target) await target.first().screenshot({ path: file, type: "png" });
         else
           await page.screenshot({ path: file, type: "png", animations: "disabled", caret: "hide" });
+      };
+
+      /**
+       * Drop focus before a capture. The resize separator paints an accent
+       * focus ring, so a shot taken while it still holds focus shows stray
+       * accent rules that are an artifact of how the harness drove it, not
+       * something a user would ever see.
+       */
+      const blurActive = async (): Promise<void> => {
+        await page.evaluate(() => {
+          (document.activeElement as HTMLElement | null)?.blur();
+        });
       };
 
       /** Back to the worktree root if the tree is scoped, else a no-op. */
@@ -252,16 +267,37 @@ test("file browser review — tree sidebar chrome", async () => {
         await snap("12-rest-header", treeHeader);
       });
 
-      const dotfileToggle = panel.getByLabel("Hide dotfiles");
+      const viewOptions = panel.locator('[data-testid="file-browser-view-options"]');
+
+      /**
+       * The dotfile filter now lives inside the view-options menu, so driving it
+       * means opening the menu and toggling the checkbox. Radix closes the menu
+       * on select, which is also what keeps this off the Escape path that
+       * black-screens the GPU-flag build.
+       */
+      const setShowDotfiles = async (show: boolean): Promise<void> => {
+        await viewOptions.click({ timeout: T_MEDIUM });
+        await settle(page, 400);
+        const item = page.locator('[data-testid="file-browser-show-dotfiles"]');
+        const checked = (await item.getAttribute("data-state")) === "checked";
+        if (checked === show) {
+          // Already where we want it — close without changing anything.
+          await page.keyboard.press("Escape");
+        } else {
+          await item.click();
+        }
+        await settle(page, 700);
+      };
 
       await step("dotfiles-hidden", async () => {
-        await dotfileToggle.click({ timeout: T_MEDIUM });
-        await settle(page, 600);
+        await setShowDotfiles(false);
         await snap("20-dotfiles-hidden-tree", treeColumn);
+        // The header carrying the hidden-row badge: the whole point of the
+        // consolidation is that this now says HOW MANY rows are missing, where
+        // the old lit icon only said the filter was on.
         await snap("21-dotfiles-hidden-header", treeHeader);
-        // Back to showing them: every later state starts from the default.
-        await dotfileToggle.click();
-        await settle(page, 600);
+        await snap("22-dotfiles-hidden-menu", panel);
+        await setShowDotfiles(true);
       });
 
       await step("viewer-collapsed", async () => {
@@ -284,10 +320,12 @@ test("file browser review — tree sidebar chrome", async () => {
         const grip = panel.locator('[data-testid="file-browser-sidebar-resize"]');
         await grip.focus();
         for (let i = 0; i < 10; i++) await page.keyboard.press("Shift+ArrowLeft");
+        await blurActive();
         await settle(page, 600);
         await snap("40-narrow-tree", treeColumn);
         await snap("41-narrow-header", treeHeader);
         for (let i = 0; i < 10; i++) await page.keyboard.press("Shift+ArrowRight");
+        await blurActive();
         await settle(page, 600);
       });
 
@@ -312,6 +350,7 @@ test("file browser review — tree sidebar chrome", async () => {
         const grip = panel.locator('[data-testid="file-browser-sidebar-resize"]');
         await grip.focus();
         for (let i = 0; i < 10; i++) await page.keyboard.press("Shift+ArrowLeft");
+        await blurActive();
         await settle(page, 600);
         await snap("60-rooted-narrow-header", treeHeader);
         for (let i = 0; i < 10; i++) await page.keyboard.press("Shift+ArrowRight");
@@ -333,25 +372,33 @@ test("file browser review — tree sidebar chrome", async () => {
         await settle(page, 400);
         await page.getByRole("menuitem", { name: /set as root/i }).click({ timeout: T_MEDIUM });
         await settle(page, 900);
-        await dotfileToggle.click();
-        await settle(page, 800);
+        await setShowDotfiles(false);
         await snap("70-filtered-empty-tree", treeColumn);
-        await dotfileToggle.click();
-        await settle(page, 600);
+        await setShowDotfiles(true);
         await resetRoot();
       });
 
-      await step("sort-menu", async () => {
+      await step("view-options", async () => {
         await resetRoot();
-        // The app's existing view-options control, for comparison: a dropdown,
-        // but homed in the VIEWER's toolbar and only while no file is open —
-        // even though sort governs the tree as well.
-        const sortTrigger = panel.locator('[data-testid="file-browser-sort-menu"]');
-        await sortTrigger.click({ timeout: T_MEDIUM });
-        await settle(page, 500);
-        await snap("80-sort-menu-open", panel);
+        // The consolidated menu, open, in the tree header where the settings it
+        // holds actually apply — both of them govern the tree.
+        await viewOptions.click({ timeout: T_MEDIUM });
+        await settle(page, 600);
+        await snap("80-view-options-open", panel);
         await page.keyboard.press("Escape");
         await settle(page, 400);
+      });
+
+      await step("view-options-collapsed", async () => {
+        // The other half of the ownership rule: with the tree column collapsed
+        // the viewer's toolbar renders the same menu, so no layout is ever
+        // without a control for a setting that is still reordering the rows.
+        await panel.locator('[data-testid="file-browser-sidebar-toggle"]').count();
+        await panel.locator('[data-testid="file-browser-viewer-toggle"]').click();
+        await settle(page, 700);
+        await snap("90-viewer-collapsed-header-after", treeHeader);
+        await panel.locator('[data-testid="file-browser-viewer-toggle"]').click();
+        await settle(page, 700);
       });
     } finally {
       if (ctx) await closeApp(ctx.app);

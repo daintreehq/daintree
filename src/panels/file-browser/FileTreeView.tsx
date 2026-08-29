@@ -18,7 +18,13 @@ import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
-import { resolveTreeKey, type FileEntryLike, type FlatTreeRow } from "./fileBrowserTree";
+import {
+  resolveTreeKey,
+  resolveTypeahead,
+  TYPEAHEAD_RESET_MS,
+  type FileEntryLike,
+  type FlatTreeRow,
+} from "./fileBrowserTree";
 import { getFileBrowserRowGitStatus, type FileBrowserGitStatusIndex } from "./fileBrowserGitStatus";
 import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
 import { FILE_TREE_ICON_CLASS, FILE_TREE_ICON_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
@@ -155,6 +161,10 @@ export function FileTreeView({
   // mint `file-browser-row-src/index.ts` — duplicate DOM ids that make
   // `aria-activedescendant` ambiguous.
   const instanceId = useId();
+  // A ref, not state: the buffer must never re-render the tree — it only steers
+  // the next keystroke, and a virtualized list re-rendering on every character
+  // typed would be a real cost for no visible change.
+  const typeaheadRef = useRef<{ buffer: string; at: number }>({ buffer: "", at: 0 });
 
   const cursorIndex = useMemo(
     () => (cursorPath === null ? -1 : rows.findIndex((row) => row.path === cursorPath)),
@@ -231,6 +241,36 @@ export function FileTreeView({
         event.preventDefault();
         event.stopPropagation();
         onInsertFileReference(cursorPath);
+        return;
+      }
+
+      // Typeahead, after the navigation keys have had their say: `resolveTreeKey`
+      // is a bare switch over the arrows plus Home/End/Enter and never claims a
+      // letter, so a printable character can only land here. Modifier-bearing
+      // keystrokes are left alone — those are shortcuts, not typing — and so is
+      // Space, which would otherwise start a buffer that matches nothing.
+      if (
+        event.key.length === 1 &&
+        event.key !== " " &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
+        const now = Date.now();
+        const buffer =
+          now - typeaheadRef.current.at > TYPEAHEAD_RESET_MS
+            ? event.key
+            : typeaheadRef.current.buffer + event.key;
+        typeaheadRef.current = { buffer, at: now };
+        const match = resolveTypeahead(buffer, rows, cursorPath);
+        // A miss moves nothing. Navigating on a failed match would turn a typo
+        // into a jump, and the buffer is kept either way so the next character
+        // can still complete a name.
+        if (match !== null) {
+          event.preventDefault();
+          const target = rows.find((candidate) => candidate.path === match);
+          onSelect(match, target?.isDirectory === true);
+        }
         return;
       }
 
@@ -583,6 +623,13 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
       // different thing whenever an agent touched the file.
       {...(describedBy && { "aria-describedby": describedBy })}
       aria-level={row.depth + 1}
+      // The tree is a flat virtualized list, so the DOM expresses no group
+      // nesting a screen reader could infer position from. Without these a user
+      // hears the depth but never "2 of 11", which is most of what makes a tree
+      // navigable by ear. Both count VISIBLE siblings — see the
+      // filter-then-enumerate step in `flattenTree`.
+      aria-posinset={row.posInSet}
+      aria-setsize={row.setSize}
       aria-selected={isSelected}
       // "The viewer is showing this one" — a different question from which row
       // the tree's cursor is on, and the only channel that answers it once the
@@ -628,7 +675,7 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
           onClick={handleChevronClick}
           onDoubleClick={handleChevronDoubleClick}
           aria-hidden="true"
-          className="flex h-4 w-4 shrink-0 items-center justify-center text-daintree-text/40"
+          className="flex h-4 w-4 shrink-0 items-center justify-center text-text-secondary"
         >
           <Chevron className="h-3 w-3" />
         </span>
@@ -680,12 +727,14 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
         </span>
       )}
       {showLoadingSpinner && (
-        // Subdued via `text-daintree-text/40` (Spinner strokes currentColor) so
-        // it stays quiet even on a selected row, per accent restraint.
+        // Subdued via the secondary text token (Spinner strokes currentColor) so
+        // it stays quiet even on a selected row, per accent restraint. A solid
+        // token, not slash-alpha: v4 bakes the alpha into `color-mix()` on
+        // `color`, so the contrast can no longer be reasoned about.
         <span
           role="status"
           aria-label={`Loading contents of ${row.name}`}
-          className="ml-1 inline-flex shrink-0 text-daintree-text/40"
+          className="ml-1 inline-flex shrink-0 text-text-secondary"
         >
           <Spinner size="xs" />
         </span>

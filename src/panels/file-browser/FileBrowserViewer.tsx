@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ArrowDownNarrowWide,
-  ArrowUpNarrowWide,
   ExternalLink,
   FileText,
   FolderTree,
@@ -44,23 +42,14 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { FolderListingView } from "./FolderListingView";
+import { FileBrowserViewOptions } from "./FileBrowserViewOptions";
 import type {
-  FileBrowserSortKey,
   FileBrowserSortOrder,
   FileEntryLike,
   FolderListingRow,
+  HiddenRowCounts,
 } from "./fileBrowserTree";
 import type { FolderListingStatus } from "./useFileBrowserTree";
 import { filesClient } from "@/clients/filesClient";
@@ -149,31 +138,19 @@ export interface FileBrowserViewerProps {
   /** Current order for the tree and the listing; driven by the toolbar menu. */
   sort: FileBrowserSortOrder;
   onSortChange: (sort: FileBrowserSortOrder) => void;
+  /**
+   * The dotfile filter, handed down so the view-options menu this toolbar
+   * renders while the tree is collapsed drives the same setting the tree
+   * header's copy does. `onShowDotfiles` below stays separate: it is the
+   * unconditional recovery an empty state offers, not a toggle.
+   */
+  hideDotfiles: boolean;
+  onHideDotfilesChange: (hide: boolean) => void;
+  hiddenCounts: HiddenRowCounts;
 }
 
 /** Toolbar sort menu entries, in menu order. */
-const SORT_OPTIONS: Array<{ value: FileBrowserSortKey; label: string }> = [
-  { value: "name", label: "Name" },
-  { value: "modified", label: "Modified" },
-  { value: "size", label: "Size" },
-  { value: "type", label: "Type" },
-];
-
 /** Narrow a menu value back to a known key, falling back to the current one. */
-function toSortKey(value: string, fallback: FileBrowserSortKey): FileBrowserSortKey {
-  return SORT_OPTIONS.find((option) => option.value === value)?.value ?? fallback;
-}
-
-/**
- * The sort control's accessible name. Spells out both halves because the arrow
- * icon that shows the direction is decorative — the name is the only place a
- * screen reader can learn which way the list runs.
- */
-function sortLabel(sort: FileBrowserSortOrder): string {
-  const key = SORT_OPTIONS.find((option) => option.value === sort.key)?.label ?? "Name";
-  return `Sort files (${key}, ${sort.direction === "asc" ? "ascending" : "descending"})`;
-}
-
 /** Which external surface a toolbar action aims the current file at. */
 type ExternalTarget = "reveal" | "editor";
 
@@ -230,6 +207,9 @@ export function FileBrowserViewer({
   basePath,
   sort,
   onSortChange,
+  hideDotfiles,
+  onHideDotfilesChange,
+  hiddenCounts,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
   // Sticky Source/Rendered choice for markdown, defaulting to the rendered view
@@ -487,79 +467,28 @@ export function FileBrowserViewer({
             Sort and Refresh both sit outside the `filePath` gate that wraps the
             block above — each has a job in the no-selection layouts too. */}
         <FileViewerToolbar.Actions>
-          {/* The single home for sort (#11620). Deliberately not duplicated as
-              clickable column headers in the listing below: two controls for
-              one setting is the same trap the Refresh gate below avoids, and a
-              header that looks sortable in one column but has no counterpart in
-              the tree would misdescribe what the setting governs. Hidden while
-              a file is open: this cluster describes what the viewer is showing,
-              and a single document has no order — Reveal and Open in editor
-              take the room. */}
-          {!filePath && (
-            <DropdownMenu>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      // Carries the current order, not just the verb: the arrow
-                      // below is decorative, so without this a screen reader
-                      // could never tell which way the list is sorted.
-                      aria-label={sortLabel(sort)}
-                      data-testid="file-browser-sort-menu"
-                      className="toolbar-icon-button rounded p-1.5 text-daintree-text/60"
-                    >
-                      {sort.direction === "asc" ? (
-                        <ArrowUpNarrowWide className="h-4 w-4" aria-hidden="true" />
-                      ) : (
-                        <ArrowDownNarrowWide className="h-4 w-4" aria-hidden="true" />
-                      )}
-                    </button>
-                  </DropdownMenuTrigger>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{sortLabel(sort)}</TooltipContent>
-              </Tooltip>
-              <DropdownMenuContent align="end" className="min-w-[180px]">
-                {/* Key and direction are two labelled radio groups rather than one
-                  group that reverses when its active item is re-picked. The
-                  compact version hides the direction behind a gesture nothing
-                  announces — the checked item stays checked, so a screen reader
-                  reports no change at all — and leaves no way to set a
-                  direction outright. Two groups cost one extra label and make
-                  both halves readable and directly settable. */}
-                {/* Each group carries its own `aria-label`: Radix renders these as
-                  `role="group"`, and the visible label above is a sibling
-                  element, not an association — without it both groups announce
-                  as unnamed containers and the two halves become
-                  indistinguishable. */}
-                <DropdownMenuLabel>Sort by</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  aria-label="Sort by"
-                  value={sort.key}
-                  onValueChange={(value) =>
-                    onSortChange({ ...sort, key: toSortKey(value, sort.key) })
-                  }
-                >
-                  {SORT_OPTIONS.map((option) => (
-                    <DropdownMenuRadioItem key={option.value} value={option.value}>
-                      {option.label}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel>Order</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  aria-label="Order"
-                  value={sort.direction}
-                  onValueChange={(value) =>
-                    onSortChange({ ...sort, direction: value === "desc" ? "desc" : "asc" })
-                  }
-                >
-                  <DropdownMenuRadioItem value="asc">Ascending</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="desc">Descending</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
+          {/* Everything that changes what the tree shows lives in one menu now
+              (sort AND the dotfile filter), and it is owned by whichever column
+              is rendering the tree's chrome. This copy appears only while the
+              tree column is collapsed away, exactly like the Refresh below it,
+              so there is precisely one view-options control in every layout.
+
+              The old gate here was `!filePath`, which was wrong in a way the
+              pixels made obvious: sort governs the TREE — `flattenTree` sorts
+              every level — so opening a file, or collapsing the viewer, removed
+              the only control for a setting that was still reordering the rows
+              on screen. It also sat above "Changed files", a churn-sorted list
+              it never governed at all, so the menu's own checkmarks contradicted
+              the order underneath it. */}
+          {sidebarCollapsed && (
+            <FileBrowserViewOptions
+              sort={sort}
+              onSortChange={onSortChange}
+              hideDotfiles={hideDotfiles}
+              onHideDotfilesChange={onHideDotfilesChange}
+              hiddenCounts={hiddenCounts}
+              data-testid="file-browser-view-options"
+            />
           )}
           {/* Only while the tree column is collapsed away. Its header owns the
               browser-wide Refresh the rest of the time, open file or not: this

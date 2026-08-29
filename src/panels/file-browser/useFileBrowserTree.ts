@@ -6,6 +6,7 @@ import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   buildFolderListingRows,
+  countHiddenRows,
   createVisibilityFilter,
   DEFAULT_FILE_SORT,
   findNodeInListings,
@@ -22,6 +23,7 @@ import {
   type FileBrowserSource,
   type FlatTreeRow,
   type FolderListingRow,
+  type HiddenRowCounts,
 } from "./fileBrowserTree";
 
 /**
@@ -120,6 +122,13 @@ export interface UseFileBrowserTreeResult {
    * empty state offer "Show dotfiles" only when it can actually help.
    */
   hasHiddenDotfiles: boolean;
+  /**
+   * How many rows each filter is removing from the branches currently on
+   * screen, for the view-options badge. Separate from `hasHiddenDotfiles`,
+   * which answers a narrower question (would the toggle reveal anything at
+   * THIS one directory) that the empty states still need.
+   */
+  hiddenCounts: HiddenRowCounts;
   /** Fetch a directory if it isn't already loaded or in flight. */
   ensureLoaded: (dirPath: string) => void;
   /**
@@ -907,6 +916,14 @@ export function useFileBrowserTree({
     [listings, rootPath, alwaysHiddenPatterns]
   );
 
+  // What the two filters are removing from the branches the user can see, for
+  // the view-options badge. Walks only loaded, expanded folders, so the number
+  // never counts rows behind a collapsed parent — see `countHiddenRows`.
+  const hiddenCounts = useMemo(
+    () => countHiddenRows(listings, expandedSet, rootPath, { hideDotfiles, alwaysHiddenPatterns }),
+    [listings, expandedSet, rootPath, hideDotfiles, alwaysHiddenPatterns]
+  );
+
   // The same question asked of the folder being listed rather than of the root
   // (#11620) — its empty state offers "Show dotfiles" only when that would
   // actually put something on screen.
@@ -936,6 +953,7 @@ export function useFileBrowserTree({
     isInitialLoading: source !== null && !hasLoadedRoot && !hasSeededRoot,
     rootError,
     hasHiddenDotfiles,
+    hiddenCounts,
     ensureLoaded,
     refresh,
     isRefreshing,

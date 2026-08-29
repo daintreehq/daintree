@@ -65,7 +65,7 @@ vi.mock("react-virtuoso", async (importOriginal) => ({
   }),
 }));
 
-function row(path: string, isDirectory = false): FlatTreeRow {
+function row(path: string, isDirectory = false, posInSet = 1, setSize = 1): FlatTreeRow {
   return {
     path,
     name: path.split("/").pop()!,
@@ -73,10 +73,12 @@ function row(path: string, isDirectory = false): FlatTreeRow {
     depth: 0,
     isExpanded: false,
     isLoading: false,
+    posInSet,
+    setSize,
   };
 }
 
-const ROWS = [row("src", true), row("README.md")];
+const ROWS = [row("src", true, 1, 2), row("README.md", false, 2, 2)];
 
 /** Absolute root the rows hang off, so a drag can name a real file. */
 const BASE_PATH = "/repo";

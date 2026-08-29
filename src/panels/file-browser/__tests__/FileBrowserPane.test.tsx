@@ -47,6 +47,7 @@ const {
       isInitialLoading: false,
       rootError: null as string | null,
       hasHiddenDotfiles: false,
+      hiddenCounts: { dotfiles: 0, alwaysHidden: 0 },
       ensureLoaded: vi.fn(),
       refresh: vi.fn(),
       isRefreshing: false,
