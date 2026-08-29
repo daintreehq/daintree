@@ -38,6 +38,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["app:get-version-info"]["args"]
     ): Promise<IpcInvokeMap["app:get-version-info"]["result"]>;
   };
+  assistantTimers: {
+    cancel(
+      ...args: IpcInvokeMap["assistant-timers:cancel"]["args"]
+    ): Promise<IpcInvokeMap["assistant-timers:cancel"]["result"]>;
+    list(
+      ...args: IpcInvokeMap["assistant-timers:list"]["args"]
+    ): Promise<IpcInvokeMap["assistant-timers:list"]["result"]>;
+  };
   claude: {
     listSubagents(
       ...args: IpcInvokeMap["claude:list-subagents"]["args"]

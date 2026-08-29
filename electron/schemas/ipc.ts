@@ -1195,6 +1195,8 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
     backend: z.string().max(2048).optional(),
     routing: z.string().max(500).optional(),
     logFile: z.string().max(4096).optional(),
+    controlSocket: z.string().max(4096).optional(),
+    stateDir: z.string().max(4096).optional(),
     commands: z
       .array(
         z.object({
