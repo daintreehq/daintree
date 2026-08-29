@@ -217,4 +217,36 @@ describe("terminal:get-for-project handler", () => {
     const unknown = result.find((t) => t.id === "t-unknown");
     expect(unknown?.ptyCols).toBeUndefined();
   });
+
+  it("strips backend worktree attribution, which is renderer-owned (#5176)", async () => {
+    // Hydration's primary path. The pty-host mapper only began reporting
+    // worktreeId in #12078, so this projection had never seen a populated
+    // value — a refactor to a spread would now let the backend win a placement
+    // decision that belongs to the renderer's saved layout state alone.
+    const ptyClient = {
+      getTerminalsForProjectAsync: vi.fn(async () => ["t-worktreed"]),
+      getTerminalAsync: vi.fn(async (id: string) => ({
+        id,
+        kind: "terminal",
+        type: "terminal",
+        cwd: "/repo/.worktrees/backend",
+        spawnedAt: Date.now(),
+        worktreeId: "/repo/.worktrees/backend",
+      })),
+    };
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalSnapshotHandlers(deps);
+
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const handler = calls.find(
+      (c) => c[0] === CHANNELS.TERMINAL_GET_FOR_PROJECT
+    )?.[1] as unknown as (event: unknown, projectId: string) => Promise<unknown[]>;
+
+    const result = await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-1");
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).not.toHaveProperty("worktreeId");
+  });
 });
