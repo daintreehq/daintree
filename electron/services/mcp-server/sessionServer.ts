@@ -60,7 +60,12 @@ import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
   MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
-import { McpRouteBindingError, RendererBridgeUnavailableError } from "./rendererBridge.js";
+import {
+  McpRouteBindingError,
+  RendererBridgeUnavailableError,
+  WorkspaceBindingError,
+} from "./rendererBridge.js";
+import { getExternalBaseManifest } from "./baseManifest.js";
 import {
   buildDedupKey,
   canonicalArgsHash,
@@ -554,22 +559,40 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     try {
       return await requestManifest();
     } catch (err) {
-      // A dead routing target is not a transient fetch failure (#11789). Both
-      // the pinned and workspace-bound routes fail closed on purpose, so
-      // serving a cached manifest here would answer `tools/list` from a view
-      // this session can no longer reach — and report it as an ordinary
-      // "unavailable" rather than the binding failure it is. Surface
-      // SESSION_BINDING_GONE in `data` so a client can tell "reconnect and
-      // rebind" from "retry in a moment".
+      // A workspace this session cannot currently reach is not a reason to have
+      // no tools (#12082). The workspace id outlives every view, so the route
+      // comes back the moment the user opens that workspace — and a client told
+      // "no tools" at discovery has no way to notice when it does. Answer from
+      // the host's own base surface instead, and let the per-call route report
+      // the truth about reachability.
+      //
+      // Emphatically NOT `cachedFallback`: that describes whichever other
+      // window last reported a manifest, which is the cross-workspace leak the
+      // bound path exists to prevent. The base surface is generated from the
+      // action registry at commit time and describes nobody's view.
+      if (err instanceof WorkspaceBindingError) {
+        return getExternalBaseManifest();
+      }
+      // A dead *pin* still is a dead end (#11789). The session's identity is
+      // the destroyed WebContents, not a workspace it can re-resolve, so there
+      // is no later state in which this succeeds — and serving a cached
+      // manifest would answer `tools/list` from a view this session can no
+      // longer reach. Surface SESSION_BINDING_GONE in `data` so a client can
+      // tell "reconnect and rebind" from "retry in a moment".
       if (err instanceof McpRouteBindingError) {
         // Same envelope the resource path already puts on `McpError.data`, so a
         // client reads one shape for a binding failure whichever surface it hit
-        // — including `retriable: false`, which is the field that actually
-        // stops a conductor from hammering a dead binding.
+        // — including `retriable`, which is the field that actually stops a
+        // conductor from hammering a dead binding. Read off the instance, since
+        // the code alone cannot tell the two binding failures apart.
         throw new McpError(
           ErrorCode.InternalError,
           err.message,
-          buildMcpErrorPayload({ code: SESSION_BINDING_GONE, message: err.message })
+          buildMcpErrorPayload({
+            code: SESSION_BINDING_GONE,
+            message: err.message,
+            retriable: err.retriable,
+          })
         );
       }
       if (cachedFallback === null) {
@@ -920,7 +943,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           console.error("[MCP] Failed to append audit record:", auditErr);
         }
         if (err instanceof McpRouteBindingError) {
-          return buildToolError({ code: SESSION_BINDING_GONE, message: err.message });
+          // Deliberately NOT answered from the host base surface, unlike
+          // `tools/list` (#12082). Discovery describes what exists; this gate
+          // decides whether a specific call runs unattended, and the host
+          // catalog is not evidence about the bound view. Fail closed, and say
+          // so retriably when the route can come back.
+          return buildToolError({
+            code: SESSION_BINDING_GONE,
+            message: err.message,
+            retriable: err.retriable,
+          });
         }
         return buildToolError({
           code: EXECUTION_ERROR_CODE,
@@ -1660,6 +1692,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: SESSION_BINDING_GONE,
               message: err.message,
+              // Instance-derived: a workspace the user can reopen is retriable,
+              // a destroyed pinned view never is, and both report this code.
+              retriable: err.retriable,
             });
           }
           // No live renderer to route the dispatch through (#10640). Every

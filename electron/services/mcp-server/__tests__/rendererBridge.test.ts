@@ -67,6 +67,7 @@ import {
 import { unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
 import { WorkspaceViewLeaseRegistry } from "../workspaceViewLease.js";
 import type { PendingRequest, DispatchEnvelope } from "../shared.js";
+import { buildMcpErrorPayload, RETRIABLE_ERROR_CODES } from "../shared.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
 /**
@@ -1742,5 +1743,43 @@ describe("rendererBridge — thaw and eviction lease for routed operations (#117
     await promise;
 
     expect(leases.has(101)).toBe(false);
+  });
+});
+
+describe("binding error retriability (#12082)", () => {
+  it("marks a workspace route recoverable and a destroyed pin not", () => {
+    // Both report SESSION_BINDING_GONE, so the code alone cannot answer this —
+    // which is exactly why the verdict rides the instance. A workspace id
+    // outlives every view, so reopening the workspace makes the identical call
+    // route; a destroyed pinned WebContents is the session's identity and never
+    // comes back.
+    expect(new WorkspaceBindingError("ws", "not-found").retriable).toBe(true);
+    expect(new WorkspaceBindingError("ws", "ambiguous").retriable).toBe(true);
+    expect(new SessionBindingError(7).retriable).toBe(false);
+
+    expect(new WorkspaceBindingError("ws", "not-found").code).toBe(new SessionBindingError(7).code);
+  });
+
+  it("carries the instance verdict into the wire payload", () => {
+    const workspace = new WorkspaceBindingError("ws", "not-found");
+    const pinned = new SessionBindingError(7);
+
+    expect(
+      buildMcpErrorPayload({
+        code: workspace.code,
+        message: workspace.message,
+        retriable: workspace.retriable,
+      }).retriable
+    ).toBe(true);
+    expect(
+      buildMcpErrorPayload({
+        code: pinned.code,
+        message: pinned.message,
+        retriable: pinned.retriable,
+      }).retriable
+    ).toBe(false);
+    // The static set is untouched: adding SESSION_BINDING_GONE to it would have
+    // made the destroyed-pin case retriable too.
+    expect(RETRIABLE_ERROR_CODES.has(workspace.code)).toBe(false);
   });
 });

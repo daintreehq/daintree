@@ -55,6 +55,39 @@ import {
 } from "../rendererBridge.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
+import { MCP_EXTERNAL_TIER_TOOLS } from "../../../../shared/config/mcpExternalTierAllowlist.js";
+import { MCP_EXTERNAL_BASE_MANIFEST } from "../generated/mcpExternalBaseManifest.js";
+
+/**
+ * Derived from the shipped artifact rather than listed, so the day a tool in
+ * the external tier gains or loses `danger: "confirm"` the expectations below
+ * move with it instead of asserting a stale pair of ids.
+ */
+const CONFIRM_GATED_EXTERNAL_TOOLS = new Set(
+  MCP_EXTERNAL_BASE_MANIFEST.filter((entry) => entry.danger === "confirm").map((entry) => entry.id)
+);
+
+/**
+ * The parts of a listed tool the #12082 assertions read. The shared `listTools`
+ * helper narrows to `{ name }`, which is all its older callers need.
+ */
+interface ListedTool {
+  name: string;
+  description?: string;
+  inputSchema?: { properties?: Record<string, unknown> };
+}
+
+async function listBaseTools(
+  server: ReturnType<typeof createSessionServer>
+): Promise<ListedTool[]> {
+  return ((await listTools(server)) as unknown as { tools: ListedTool[] }).tools;
+}
+
+/** The structured error envelope a failed tool call carries in its text content. */
+function toolErrorPayload(result: { content: unknown }): { code: string; retriable: boolean } {
+  const [first] = result.content as Array<{ text: string }>;
+  return JSON.parse(first.text) as { code: string; retriable: boolean };
+}
 
 function fakeSessionStore(
   tier: "workbench" | "action" | "system" | "external" = "workbench"
@@ -5076,10 +5109,82 @@ describe("workspace-bound external sessions (#11789)", () => {
       expect(JSON.stringify(result.content)).toContain(SESSION_BINDING_GONE);
       expect(deps.dispatchAction).not.toHaveBeenCalled();
     });
+
+    it.each([["not-found" as const], ["ambiguous" as const]])(
+      "reports a %s workspace as retriable rather than a dead end (#12082)",
+      async (reason) => {
+        // The published surface is only honest if the failure it defers to says
+        // "try again once the workspace is open". A conductor that gives up
+        // permanently on a condition the user is about to fix is the same bug
+        // one layer down from the terminal handshake this replaced.
+        const deps = boundDeps({
+          requestManifest: vi.fn().mockRejectedValue(new WorkspaceBindingError(WORKSPACE, reason)),
+          getCachedManifest: vi.fn(() => null),
+        });
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+        expect(result.isError).toBe(true);
+        const payload = toolErrorPayload(result);
+        expect(payload.code).toBe(SESSION_BINDING_GONE);
+        expect(payload.retriable).toBe(true);
+        // Fail-closed is unchanged: the call routed nowhere, least of all to
+        // the focused window.
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+      }
+    );
+
+    it("keeps a destroyed pinned view non-retriable under the same error code", async () => {
+      const deps = boundDeps({
+        requestManifest: vi.fn().mockRejectedValue(new SessionBindingError(99)),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+      const payload = toolErrorPayload(result);
+      expect(payload.code).toBe(SESSION_BINDING_GONE);
+      expect(payload.retriable).toBe(false);
+    });
   });
 
   describe("binding failures and metadata", () => {
-    it("surfaces SESSION_BINDING_GONE from tools/list instead of a generic unavailable", async () => {
+    it.each([["not-found" as const], ["ambiguous" as const]])(
+      "serves the host base surface from tools/list when the workspace is %s",
+      async (reason) => {
+        // Completing the handshake buys nothing if discovery then answers
+        // "permanently no tools" (#12082) — that is harder to diagnose than the
+        // 400 it replaced. The workspace is reachable again the moment the user
+        // opens it, so discovery describes the surface and the per-call route
+        // reports reachability.
+        const deps = boundDeps({
+          requestManifest: vi.fn().mockRejectedValue(new WorkspaceBindingError(WORKSPACE, reason)),
+          getCachedManifest: vi.fn(() => null),
+        });
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const tools = await listBaseTools(server);
+        const ids = new Set(tools.map((t) => t.name));
+
+        // Derived from the allowlist rather than a copied list, so a tool added
+        // to the external tier is covered here the day it lands.
+        const expected = MCP_EXTERNAL_TIER_TOOLS.filter(
+          (id) => !CONFIRM_GATED_EXTERNAL_TOOLS.has(id)
+        );
+        expect(ids).toEqual(new Set(expected));
+        expect(tools.length).toBeGreaterThan(0);
+      }
+    );
+
+    it("withholds confirm-gated tools from the base surface too", async () => {
+      // The ceiling keys off the binding, not off view liveness: nobody is
+      // watching a background workspace to approve a dialog whether or not a
+      // window happens to be open.
       const deps = boundDeps({
         requestManifest: vi
           .fn()
@@ -5089,27 +5194,68 @@ describe("workspace-bound external sessions (#11789)", () => {
       const server = createSessionServer(SESSION, deps);
       await server.connect(makeMockTransport());
 
-      await expect(listTools(server)).rejects.toMatchObject({
-        // Same envelope the resource path uses, so one shape covers both —
-        // `retriable: false` is what stops a conductor hammering a dead binding.
-        data: { code: SESSION_BINDING_GONE, retriable: false, errorCategory: "business" },
+      const tools = await listBaseTools(server);
+      const ids = new Set(tools.map((t) => t.name));
+
+      expect(CONFIRM_GATED_EXTERNAL_TOOLS.size).toBeGreaterThan(0);
+      for (const withheld of CONFIRM_GATED_EXTERNAL_TOOLS) expect(ids.has(withheld)).toBe(false);
+    });
+
+    it("publishes the input schemas a client needs to call the base surface", async () => {
+      // The whole reason for a full surface rather than an empty one plus a
+      // later notification: the client can call what it sees, with no
+      // cooperation required from it.
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        getCachedManifest: vi.fn(() => null),
       });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const tools = await listBaseTools(server);
+      const withArgs = tools.filter((t) => Object.keys(t.inputSchema?.properties ?? {}).length > 0);
+      expect(withArgs.length).toBeGreaterThan(0);
     });
 
     it("never serves a cached manifest after a binding failure", async () => {
-      // A cached manifest describes a view this session can no longer reach;
-      // serving it would answer with another workspace's tool surface.
+      // A cached manifest describes a view this session can no longer reach, so
+      // serving it would answer with another workspace's tool surface. The host
+      // base surface is not that — it comes from the action registry and
+      // describes nobody's view — so the tell is whose *copy* of a shared id
+      // came back, not whether the id appears at all: an id-only assertion
+      // would pass on the tier allowlist alone and prove nothing.
+      const sentinel = makeManifestEntry("terminal.list");
       const deps = boundDeps({
         requestManifest: vi
           .fn()
           .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "ambiguous")),
-        getCachedManifest: vi.fn(() => [makeManifestEntry("terminal.list")]),
+        getCachedManifest: vi.fn(() => [sentinel]),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const served = (await listBaseTools(server)).find((t) => t.name === "terminal.list");
+      expect(served?.description).not.toBe(sentinel.description);
+      expect(served?.description).toBe(
+        MCP_EXTERNAL_BASE_MANIFEST.find((e) => e.id === "terminal.list")?.description
+      );
+    });
+
+    it("still fails tools/list closed for a destroyed pinned view", async () => {
+      // A dead pin is the session's identity, not a route it can re-resolve, so
+      // there is no later state in which this succeeds — and no host surface to
+      // stand in for a window that is gone.
+      const deps = boundDeps({
+        requestManifest: vi.fn().mockRejectedValue(new SessionBindingError(77)),
+        getCachedManifest: vi.fn(() => null),
       });
       const server = createSessionServer(SESSION, deps);
       await server.connect(makeMockTransport());
 
       await expect(listTools(server)).rejects.toMatchObject({
-        data: { code: SESSION_BINDING_GONE },
+        data: { code: SESSION_BINDING_GONE, retriable: false, errorCategory: "business" },
       });
     });
 

@@ -81,7 +81,7 @@ By default an external client's calls land in whichever Daintree window you focu
 
 The plain **Copy MCP config** button is unchanged and still follows focus, so existing configs keep working exactly as before.
 
-Two things to know about a scoped client: the project has to be open in exactly one window when it connects (a closed or duplicated project refuses the connection with a message naming which), and confirm-gated tools such as `recipe.run` are not part of its tool surface — nobody is watching a background project to approve the dialog, so those calls are refused up front rather than hanging until they time out. Run those from Daintree, or connect an unscoped client for them.
+Two things to know about a scoped client: it connects whether or not the project is open, but its calls only run while that project is open in exactly one window (a closed or duplicated project fails each call with a message naming which, and the same call works once you fix it — no reconnect), and confirm-gated tools such as `recipe.run` are not part of its tool surface — nobody is watching a background project to approve the dialog, so those calls are refused up front rather than hanging until they time out. Run those from Daintree, or connect an unscoped client for them.
 
 ### Keeping a connection working
 
@@ -260,7 +260,35 @@ Both spellings are equal-authority: sending both is fine when they agree and **f
 
 An empty or whitespace-only selector is **invalid, not absent**: a client that sends the field at all believes it is scoping itself, and reading a blank one as "no selector" would hand it a focus-following session while it thought otherwise. The same reasoning covers the later legs — a selector on an established `/mcp` session must match what that session actually resolved to (it never rebinds; `DELETE` is exempt so a client can always clean up), and a selector on `POST /messages` is refused, because that is precisely where clients are known to attach headers inconsistently.
 
-Resolution goes through `getWebContentsForProject`, a registry read with no attach/thaw/focus/switch side effects. **Exactly one** live view must own the workspace; zero and many both refuse. A refused handshake returns HTTP 400 with a JSON-RPC error body at `MCP_HANDSHAKE_REJECTED_CODE` (`-32002`, distinct from the `-32001` "Session not found"), a stable `error.data.code` (`WORKSPACE_SELECTOR_MISMATCH` / `_INVALID` / `_NOT_ALLOWED`, `WORKSPACE_NOT_FOUND`, `WORKSPACE_AMBIGUOUS`), and **no** `Mcp-Session-Id` — no session state is created at all. Note that SDK 1.29's `StreamableHTTPClientTransport` surfaces a non-2xx handshake as a `StreamableHTTPError` carrying the raw body as text, so a client that wants to branch on `data.code` has to parse that body itself; the codes are a stable contract, not something the stock client destructures for you.
+Resolution goes through `getWebContentsForProject`, a registry read with no attach/thaw/focus/switch side effects. **Exactly one** live view must own the workspace for a call to _route_; zero and many both fail closed, and neither ever falls back to another window.
+
+What that costs the client is decided at the handshake, and the two are deliberately different (#12082). A refusal is permanent in practice — no MCP client SDK retries a non-2xx `initialize`, so a 400 does not mean "this attempt failed", it means "this client has no Daintree tools until someone restarts it" (#12081). So the handshake refuses only what can never become valid, and binds everything else:
+
+| Condition | Handshake | Why |
+| --- | --- | --- |
+| Header and query param disagree | 400 `WORKSPACE_SELECTOR_MISMATCH` | A config that names two workspaces names none. |
+| Empty, repeated, comma-folded, or not shaped like a workspace id | 400 `WORKSPACE_SELECTOR_INVALID` | The id space is structural (64-hex project, UUIDv4 scratch — `shared/utils/workspaceIds.ts`); a value outside it names nothing that could ever exist. |
+| Selector from a help / assistant-pane bearer, or a build with no resolver wired | 400 `WORKSPACE_SELECTOR_NOT_ALLOWED` | Neither becomes true mid-session. |
+| Workspace has zero live views, or more than one | **binds**, identity only | Which windows are open is user-controlled and changes minute to minute. The workspace id outlives every view. |
+| Resolver throws anything else | propagates to HTTP 500 | A host bug of unknown duration; nothing has been allocated yet, so it leaves no session behind. |
+
+The shape test lives in `HttpLifecycle.resolveWorkspaceSelector`, not in `parseWorkspaceSelector` — the parser stays syntax-only and never interprets an id.
+
+A degraded binding carries the `workspaceId` and nothing else: `kind` and `workspacePath` are read off the live view, so their absence is the signal. There is deliberately **no** liveness flag on the binding — `capabilities.experimental` is built once at `initialize` and never updated, so a flag would be a snapshot that is wrong seconds after it is read. The live answer is the per-call one.
+
+A refused handshake returns HTTP 400 with a JSON-RPC error body at `MCP_HANDSHAKE_REJECTED_CODE` (`-32002`, distinct from the `-32001` "Session not found"), a stable `error.data.code`, and **no** `Mcp-Session-Id` — no session state is created at all. Note that SDK 1.29's `StreamableHTTPClientTransport` surfaces a non-2xx handshake as a `StreamableHTTPError` carrying the raw body as text, so a client that wants to branch on `data.code` has to parse that body itself; the codes are a stable contract, not something the stock client destructures for you.
+
+### The bound-but-viewless surface (#12082)
+
+Completing the handshake alone would only convert "connection failed" into "connected, permanently no tools", which is harder to diagnose. So a bound session whose workspace has no single live view is served a **host-authoritative base surface** at `tools/list`: `electron/services/mcp-server/generated/mcpExternalBaseManifest.ts`, read through `getExternalBaseManifest()`.
+
+- **Generated, not hand-written.** `src/services/actions/__tests__/mcpExternalBaseManifest.test.ts` drives a real `ActionService` over the real action registry and both regenerates the artifact (`UPDATE_MCP_BASE_MANIFEST=1`) and fails when it drifts. There is no second copy of `toManifestEntry` to keep in sync.
+- **Scoped to `MCP_EXTERNAL_TIER_TOOLS`.** That is the whole reachable surface: binding is refused for any origin or tier but `external`, and a bound session can never be elevated (`setSessionTier` / `issueGrant` are gated on renderer-owned origins).
+- **Never `getCachedManifest()`.** That describes whichever _other_ window last reported a manifest — a cross-workspace isolation bug, since the bound session is specifically forbidden from routing there. The generated artifact describes nobody's view. `getCachedManifestForWorkspace` still fails closed to `null`.
+- **Discovery only.** It authorizes nothing. The bound pre-dispatch confirm guard still needs a live workspace route, and dispatch still goes through `dispatchActionForWorkspace`, so a viewless `tools/call` stays fail-closed. Confirm-gated tools are withheld either way — `sessionSurface.workspaceBound` is set from _having_ a binding, not from view liveness.
+- **A dead pin is not this case.** `SessionBindingError` (destroyed pinned WebContents) still fails `tools/list` outright; only `WorkspaceBindingError` reaches the base surface.
+
+Per-call failures report `SESSION_BINDING_GONE` as before, but `retriable` is now read off the error instance rather than the code: `WorkspaceBindingError` is retriable for both reasons (opening the workspace, or closing the duplicate, makes the identical call route), `SessionBindingError` is not. `RETRIABLE_ERROR_CODES` is deliberately untouched — adding the shared code to it would have made the destroyed-pin case retriable too.
 
 A selector from a help or assistant-pane bearer is refused: those already route through the renderer that minted them, so a selector would name a second plausible target. Binding is likewise `/mcp`-only — a selector on the deprecated `/sse` endpoint is refused rather than ignored, since a silently-ignored routing selector is worse than an unsupported one.
 

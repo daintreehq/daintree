@@ -186,6 +186,17 @@ vi.mock("../SystemSleepService.js", () => ({
 
 import { McpServerService } from "../McpServerService.js";
 
+/**
+ * Workspace ids shaped the way the real id spaces are — 64 hex for a project
+ * (#12082). The handshake now refuses a selector outside both id spaces before
+ * it ever reaches the resolver, so a `"proj-a"` placeholder would fail on shape
+ * rather than exercising the binding these tests are about.
+ */
+const PROJECT_A_ID = "a".repeat(64);
+const PROJECT_B_ID = "b".repeat(64);
+/** Well-formed, and deliberately never registered with a live view. */
+const CLOSED_PROJECT_ID = "c".repeat(64);
+
 type DispatchRequest = {
   requestId: string;
   actionId: string;
@@ -984,12 +995,12 @@ describe("McpServerService", () => {
     // session routes to the WebContents that minted it.
     const pinnedRefA = {
       kind: "project" as const,
-      workspaceId: "proj-a",
+      workspaceId: PROJECT_A_ID,
       workspacePath: "/repos/a",
     };
     const pinnedRefB = {
       kind: "project" as const,
-      workspaceId: "proj-b",
+      workspaceId: PROJECT_B_ID,
       workspacePath: "/repos/b",
     };
     const winA = createMockWindow({
@@ -1089,8 +1100,8 @@ describe("McpServerService", () => {
         kind: "query",
       }),
     ];
-    const refA = { kind: "project" as const, workspaceId: "proj-a", workspacePath: "/repos/a" };
-    const refB = { kind: "project" as const, workspaceId: "proj-b", workspacePath: "/repos/b" };
+    const refA = { kind: "project" as const, workspaceId: PROJECT_A_ID, workspacePath: "/repos/a" };
+    const refB = { kind: "project" as const, workspaceId: PROJECT_B_ID, workspacePath: "/repos/b" };
     const winA = createMockWindow({
       getManifest: manifest,
       dispatchAction: () => ({ ok: true, result: "from-window-A" }),
@@ -1466,8 +1477,16 @@ describe("McpServerService", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
   describe("workspace-bound external sessions (#11789)", () => {
-    const REF_A = { kind: "project" as const, workspaceId: "proj-a", workspacePath: "/repos/a" };
-    const REF_B = { kind: "project" as const, workspaceId: "proj-b", workspacePath: "/repos/b" };
+    const REF_A = {
+      kind: "project" as const,
+      workspaceId: PROJECT_A_ID,
+      workspacePath: "/repos/a",
+    };
+    const REF_B = {
+      kind: "project" as const,
+      workspaceId: PROJECT_B_ID,
+      workspacePath: "/repos/b",
+    };
     const registeredViews: number[] = [];
 
     afterEach(() => {
@@ -1613,13 +1632,71 @@ describe("McpServerService", () => {
       expect(unboundNames).toContain("recipe.run");
     });
 
-    it("refuses a handshake naming a workspace with no live view, creating no session", async () => {
+    it("refuses a handshake whose selector is not shaped like a workspace id", async () => {
+      // Still terminal, and deliberately so: a value outside both id spaces
+      // names nothing that could ever exist, so binding it would mint a session
+      // that can never route (#12082).
       const winA = boundWindow(REF_A, "from-window-A");
       await service.start(winA.window);
 
       await expect(connectBound(service.currentPort!, "proj-nonexistent")).rejects.toThrow();
       // The failed handshake must not leave a client behind in the inventory.
       expect(service.listActiveClients()).toHaveLength(0);
+    });
+
+    it("connects to a workspace with no live view and recovers when it opens (#12082)", async () => {
+      // The reported regression, end to end: the client used to get a terminal
+      // 400 and lose Daintree's whole tool surface for its lifetime because of
+      // which window happened to be open. Only a restart recovered.
+      const winA = boundWindow(REF_A, "from-window-A");
+      await service.start(winA.window);
+
+      const client = await connectBound(service.currentPort!, CLOSED_PROJECT_ID);
+
+      // The handshake completed, and it says what it bound to.
+      expect(
+        client.getServerCapabilities()?.experimental?.["org.daintree/workspace-binding"]
+      ).toEqual({ workspaceId: CLOSED_PROJECT_ID });
+
+      // Discovery answers from the host's base surface rather than reporting an
+      // empty or failed tool list.
+      const names = (await client.listTools()).tools.map((t) => t.name);
+      expect(names).toContain("terminal.list");
+      expect(names).not.toContain("recipe.run");
+
+      // Dispatch is still fail-closed — it must not have landed in window A,
+      // whose manifest returns "from-window-A".
+      const beforeOpen = await client.callTool({ name: "terminal.list", arguments: {} });
+      expect(beforeOpen.isError).toBe(true);
+      const failure = JSON.parse(getTextResult(beforeOpen).content[0].text as string) as {
+        code: string;
+        retriable: boolean;
+      };
+      expect(failure.code).toBe("SESSION_BINDING_GONE");
+      // The half that makes the surface honest: a conductor that gave up
+      // permanently here would be this same bug one layer down.
+      expect(failure.retriable).toBe(true);
+
+      // Open the workspace. Same client, same session, no reconnect.
+      boundWindow(
+        { kind: "project", workspaceId: CLOSED_PROJECT_ID, workspacePath: "/repos/c" },
+        "from-closed-workspace"
+      );
+
+      // The live workspace manifest takes over the moment there is a view to
+      // fetch it from — the host base surface is a stand-in, never a
+      // replacement. Re-listing here is also what a real client does with the
+      // `listChanged` capability the server already declares; the SDK caches
+      // per-tool output validators off `tools/list`, so the two surfaces have
+      // to be re-read to be compared at all.
+      expect((await client.listTools()).tools.map((t) => t.name)).toEqual(
+        boundManifest()
+          .filter((entry) => entry.danger !== "confirm")
+          .map((entry) => entry.id)
+      );
+
+      const afterOpen = await client.callTool({ name: "terminal.list", arguments: {} });
+      expect(getTextResult(afterOpen).content[0].text).toBe('"from-closed-workspace"');
     });
 
     it("still lists a bound session among the external clients", async () => {

@@ -26,6 +26,17 @@ import { MCP_MANIFEST_REQUEST_TIMEOUT_MS, MCP_DISPATCH_TIMEOUT_MS } from "./shar
  */
 export class McpRouteBindingError extends Error {
   readonly code = "SESSION_BINDING_GONE";
+  /**
+   * Whether the identical call, with the identical arguments, could succeed
+   * later (#12082).
+   *
+   * Carried on the instance rather than derived from `code`, because both
+   * subclasses report the same code and disagree about the answer. A conductor
+   * reads this to decide between "wait and try again" and "give up" — and
+   * getting it wrong in the recoverable direction is the same bug this issue
+   * fixes, one layer down.
+   */
+  readonly retriable: boolean = false;
 }
 
 export class SessionBindingError extends McpRouteBindingError {
@@ -54,6 +65,15 @@ export class SessionBindingError extends McpRouteBindingError {
 export class WorkspaceBindingError extends McpRouteBindingError {
   readonly workspaceId: string;
   readonly reason: "not-found" | "ambiguous";
+  /**
+   * Always retriable, for both reasons (#12082). The binding is to a stable
+   * workspace id that outlives any view, so opening the workspace — or closing
+   * the duplicate — makes the very same call route, with nothing changed on the
+   * caller's side. That is the definition this flag carries, and it is why
+   * `SessionBindingError` answers the opposite: a destroyed pinned WebContents
+   * is the session's identity, not a route it can re-resolve.
+   */
+  readonly retriable = true;
 
   constructor(workspaceId: string, reason: "not-found" | "ambiguous") {
     super(
