@@ -924,38 +924,6 @@ export function WorktreeCard({
               aria-label={`Select worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}`}
             />
           )}
-          {/* Worktree-level state — waiting / ready-for-cleanup / complete — as
-              a leading-edge tick, not a dot in the title row.
-
-              Two things a dot could not do. A 3x16 vertical is a different
-              aspect ratio from everything else on the card, so it never has to
-              be told apart from the pins, freshness pills, session pips and git
-              marks that already crowd the title row's trailing cluster — a dot
-              among dots is a serial hunt, a bar among dots is not; and riding
-              the card's own leading edge rather than the content grid keeps it
-              a statement about the card instead of one more item inside it.
-
-              `computeChipState` returns one state or none, never a
-              combination, so one mark is the whole vocabulary.
-
-              Each state gets its own segment count as well as its own hue, and
-              that is a requirement rather than a flourish: three marks that
-              differ only in fill carry their meaning by colour alone
-              (WCAG 1.4.1), and while `waiting` is corroborated elsewhere on
-              the card by the session glyphs, nothing else on the card
-              distinguishes `cleanup` from `complete`. The geometry and the
-              reasons every number in it is what it is live in
-              `WorktreeStatusTick`. */}
-          {chipState !== null && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <WorktreeStatusTick state={chipState} />
-              </TooltipTrigger>
-              <TooltipContent side="right" align="start" className="text-xs">
-                {CHIP_LABELS[chipState]}
-              </TooltipContent>
-            </Tooltip>
-          )}
           {flashKey > 0 && (
             <div
               key={flashKey}
@@ -1106,7 +1074,7 @@ export function WorktreeCard({
                 indented past nothing, and the main worktree — which has no
                 grip at all — indented past neither. Three columns in one
                 list. Now the grip's own 16px IS the inset when it is there,
-                and pl-4 stands in for it when it is not, so text starts on
+                and ps-4 stands in for it when it is not, so text starts on
                 the same x in every card and the grip column can run the card
                 top to bottom. */}
             <div
@@ -1115,8 +1083,13 @@ export function WorktreeCard({
                 // Grid: a column, so the status block can be pushed to the
                 // card's bottom edge and every card in a row ends level.
                 variant === "grid" && "flex h-full flex-col",
-                hasRowDragHandle ? "pl-0" : "pl-4",
-                "pr-4"
+                // Logical, not `pl-*`/`pr-*`: when there is no grip this padding
+                // IS the gutter, and the status tick centres itself in that
+                // gutter with a logical `-start-*` offset. A physical padding
+                // would keep the gutter on the left under RTL while the tick
+                // flipped to the right, and the mark would land outside it.
+                hasRowDragHandle ? "ps-0" : "ps-4",
+                "pe-4"
               )}
             >
               {/* pt-2 only: the body below supplies the gap to the next row.
@@ -1149,6 +1122,44 @@ export function WorktreeCard({
                   onToggleCollapse={handleToggleCollapse}
                   contentId={`worktree-body-${worktree.id}`}
                   branchLabel={branchLabel}
+                  /* Worktree-level state — waiting / ready-for-cleanup /
+                     complete — as a tick in the grip gutter, not a dot in the
+                     title row.
+
+                     Two things a dot could not do. A 4px vertical is a
+                     different aspect ratio from everything else on the card, so
+                     it never has to be told apart from the pins, freshness
+                     pills, session pips and git marks that already crowd the
+                     title row's trailing cluster — a dot among dots is a serial
+                     hunt, a bar among dots is not; and sitting in the gutter
+                     rather than the content grid keeps it a statement about the
+                     card instead of one more item inside it.
+
+                     It goes through the header because it takes its height from
+                     the title row. `computeChipState` returns one state or
+                     none, never a combination, so one mark is the whole
+                     vocabulary.
+
+                     Each state gets its own segment count as well as its own
+                     hue, and that is a requirement rather than a flourish:
+                     three marks that differ only in fill carry their meaning by
+                     colour alone (WCAG 1.4.1), and while `waiting` is
+                     corroborated elsewhere on the card by the session glyphs,
+                     nothing else on the card distinguishes `cleanup` from
+                     `complete`. The geometry and the reasons every number in it
+                     is what it is live in `WorktreeStatusTick`. */
+                  statusTick={
+                    chipState !== null && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <WorktreeStatusTick state={chipState} />
+                        </TooltipTrigger>
+                        <TooltipContent side="right" align="start" className="text-xs">
+                          {CHIP_LABELS[chipState]}
+                        </TooltipContent>
+                      </Tooltip>
+                    )
+                  }
                   sessionStates={terminalCounts.byState}
                   sessionTotal={terminalCounts.total}
                   environmentIcon={environmentIcon}

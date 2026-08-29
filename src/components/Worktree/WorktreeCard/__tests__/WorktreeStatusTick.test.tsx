@@ -99,36 +99,38 @@ describe("WorktreeStatusTick", () => {
     }
   });
 
-  it("cuts its slot into whole pixels at every count", () => {
-    // Read the slot and gap off what the component actually rendered rather
-    // than restating them here — the point is to catch someone retuning `h-4`
-    // or `gap-0.5` into a count that lands on a half pixel, and a copied
-    // constant would keep passing through exactly that change. A blurred edge
-    // closes the gaps, and the gaps are the encoding.
+  it("takes its height from the title row instead of carrying one of its own", () => {
+    // A fixed height has to guess at the title row's, and a mark that guesses
+    // sits proud of the text at both ends — which is the bug this replaced.
+    // `inset-y-0` derives it, so the tick cannot drift when the row's contents
+    // change.
     const { tick } = renderTick("waiting");
-    const slotPx = readScale(tick, /^h-(\d+(?:\.\d+)?)$/);
-    const gapPx = readScale(tick, /^gap-(\d+(?:\.\d+)?)$/);
+    expect(tick.classList.contains("inset-y-0")).toBe(true);
+    expect(
+      [...tick.classList].filter((c) => /^h-/.test(c)),
+      "a fixed height would stop the tick tracking the row"
+    ).toEqual([]);
+  });
 
-    for (const state of STATES) {
-      const count = CHIP_SEGMENTS[state];
-      const segmentPx = (slotPx - gapPx * (count - 1)) / count;
-      expect(
-        Number.isInteger(segmentPx),
-        `${state}: ${count} segments of a ${slotPx}px slot are ${segmentPx}px each, not a whole pixel`
-      ).toBe(true);
-      expect(
-        segmentPx,
-        `${state}: ${segmentPx}px segments are too thin to read`
-      ).toBeGreaterThanOrEqual(3);
-    }
+  it("keeps a fixed gap, which is what makes the stretch safe", () => {
+    // Segment heights follow the row and may land on fractions; the GAP is a
+    // fixed 2px whatever the row does. That asymmetry is the whole reason the
+    // encoding survives a content-derived height — a taller row costs a soft
+    // segment end, never a closed gap, and the gaps are the entire signal in
+    // forced colors.
+    const { tick } = renderTick("complete");
+    const gap = [...tick.classList].find((c) => /^gap-/.test(c));
+    expect(gap, "the tick renders no gap at all").toBeDefined();
+    expect(
+      readScalePx(gap!),
+      "the gap is too small to survive antialiasing"
+    ).toBeGreaterThanOrEqual(2);
   });
 });
 
-/** Tailwind's spacing scale in px, pulled off a rendered element's classes. */
-function readScale(element: HTMLElement, pattern: RegExp): number {
-  for (const className of element.classList) {
-    const match = pattern.exec(className);
-    if (match?.[1] !== undefined) return Number(match[1]) * 4;
-  }
-  throw new Error(`no class matching ${pattern} on ${element.className}`);
+/** A Tailwind spacing utility's value in px (`gap-0.5` -> 2). */
+function readScalePx(className: string): number {
+  const match = /-(\d+(?:\.\d+)?)$/.exec(className);
+  if (match?.[1] === undefined) throw new Error(`not a scale utility: ${className}`);
+  return Number(match[1]) * 4;
 }

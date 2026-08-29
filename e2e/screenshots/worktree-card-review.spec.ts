@@ -49,7 +49,12 @@ import { dismissBlockingPalette } from "../helpers/overlays";
 import { setAppTheme } from "../helpers/theme";
 import { getGridPanelIds } from "../helpers/panels";
 import { getTerminalText, waitForTerminalText, writeTerminalInput } from "../helpers/terminal";
-import { installFakeAgent, fakeAgentEnv, FAKE_AGENT_READY } from "../helpers/fakeAgent";
+import {
+  installFakeAgent,
+  fakeAgentEnv,
+  FAKE_AGENT_READY,
+  FAKE_AGENT_IDLE,
+} from "../helpers/fakeAgent";
 import { SEL } from "../helpers/selectors";
 import { T_LONG } from "../helpers/timeouts";
 
@@ -575,6 +580,9 @@ test("sidebar worktree card review — states and themes", async () => {
     //     agent identity, state and location to render — the densest row in
     //     the card and the one that shares a shell with Details.
     if (WITH_SESSIONS) {
+      // Held across the two steps: `waiting` drives one of the panels `sessions`
+      // launched, and relaunching there would give it a fresh working agent.
+      let agentPanelIds: string[] = [];
       await step("sessions", async () => {
         // Sessions land in the ACTIVE worktree, so the flagship has to be it.
         // The `selected` step already selected it; re-clicking by coordinate is
@@ -590,8 +598,11 @@ test("sidebar worktree card review — states and themes", async () => {
           { timeout: T_LONG }
         );
         await page.waitForTimeout(800);
-        await launchAgentSession(page);
-        await launchAgentSession(page);
+        agentPanelIds = [];
+        for (let i = 0; i < 2; i++) {
+          const id = await launchAgentSession(page);
+          if (id) agentPanelIds.push(id);
+        }
         await page.waitForTimeout(1500);
         await dismissBlockingPalette(page);
 
@@ -610,6 +621,41 @@ test("sidebar worktree card review — states and themes", async () => {
         await setSection(flagship, "details", true);
         await snap(page, "101-card-details-and-sessions", flagship, "Active sessions");
         await setSection(flagship, "details", false);
+      });
+
+      // 10b. The status tick, which had no capture coverage at all until this
+      //      step. `computeChipState` only marks a card when something is
+      //      actually asking for attention, so the two agents launched above —
+      //      both `working` — leave it null and every shot before this one
+      //      shows a card with no mark. Stopping one agent's OSC heartbeat
+      //      settles the FSM to `waiting` through the app's own path, which is
+      //      the state the tick exists for. Faking the class instead would
+      //      review a card the app never renders.
+      await step("waiting", async () => {
+        const panelId = agentPanelIds[0];
+        if (!panelId) {
+          throw new Error("[card-shots] no agent panel to drive to waiting");
+        }
+        const panel = page.locator(`[data-panel-id="${panelId}"]`);
+        await writeTerminalInput(page, panel, `${FAKE_AGENT_IDLE}\r`);
+        await expect
+          .poll(() => panel.getAttribute("data-agent-state"), {
+            timeout: T_LONG * 2,
+            intervals: [500, 1000],
+          })
+          .toBe("waiting")
+          .catch(() => {});
+        // Assert rather than warn: a capture of the un-waiting card labelled
+        // "waiting" is exactly the plausible-looking wrong artifact this
+        // harness refuses to produce elsewhere.
+        await expect(
+          panel,
+          "agent never reached waiting — the tick shot would be a lie"
+        ).toHaveAttribute("data-agent-state", "waiting", { timeout: T_LONG });
+        await settle(page, 800);
+        await setSection(flagship, "terminals", false);
+        await snap(page, "110-card-tick-waiting", flagship);
+        await snap(page, "111-sidebar-tick-waiting", sidebar);
       });
     }
 

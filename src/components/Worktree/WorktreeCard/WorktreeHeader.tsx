@@ -38,6 +38,16 @@ export interface WorktreeHeaderProps {
   onToggleCollapse?: (e: React.MouseEvent) => void;
   contentId?: string;
   branchLabel: string;
+  /**
+   * The card's status mark, rendered into the title row so it can take that
+   * row's height. It is absolutely positioned and reaches back out into the
+   * grip gutter, which is why it has to live here rather than on the card: the
+   * gutter is the header's sibling, and the row's height is content-derived, so
+   * nothing outside this component can size it without hardcoding a number the
+   * header owns. That was tried and drifted (see the grip's own comment in
+   * `WorktreeCard`).
+   */
+  statusTick?: React.ReactNode;
   sessionStates?: Record<AgentState, number>;
   sessionTotal?: number;
   aggregateCounts?: AggregateCounts;
@@ -170,6 +180,7 @@ export function WorktreeHeader({
   onToggleCollapse,
   contentId,
   branchLabel,
+  statusTick,
   sessionStates,
   sessionTotal,
   aggregateCounts,
@@ -268,7 +279,12 @@ export function WorktreeHeader({
 
   return (
     <div>
-      <div className="flex items-center gap-2 min-h-[22px]">
+      {/* `relative` for the status tick alone: it is absolutely positioned
+          against this row so that it takes the row's height, and reaches back
+          out into the grip gutter to sit centred there. Nothing else in here
+          is positioned. */}
+      <div className="relative flex items-center gap-2 min-h-[22px]">
+        {statusTick}
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isMainWorktree && (
             <Sprout
