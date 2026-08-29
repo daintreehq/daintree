@@ -275,3 +275,123 @@ describe("UpstreamSyncBadge — value-change flash", () => {
     }
   });
 });
+
+describe("UpstreamSyncBadge — resting base relationship", () => {
+  const restingProps = {
+    aheadCount: undefined,
+    behindCount: undefined,
+    baseBranchName: "develop",
+    baseAheadCount: 0,
+    baseBehindCount: 0,
+    baseMatchesUpstream: false,
+  } as const;
+
+  it("names the base branch when the counts are zero, where it used to render nothing at all", () => {
+    renderBadge(restingProps);
+    const base = screen.getByTestId("upstream-sync-base");
+    expect(base.textContent).toContain("develop");
+    expect(base.textContent).toContain("≡");
+    expect(base.textContent).not.toContain("Δ");
+  });
+
+  it("swaps the resting glyph for the drift one and adds the counts once the branch diverges", () => {
+    const { rerender } = renderBadge(restingProps);
+    expect(screen.getByTestId("upstream-sync-indicator").textContent).not.toContain("↑");
+
+    rerender(
+      <TooltipProvider>
+        <UpstreamSyncBadge {...baseProps} {...restingProps} baseAheadCount={3} />
+      </TooltipProvider>
+    );
+    const base = screen.getByTestId("upstream-sync-base");
+    expect(base.textContent).toContain("Δ");
+    expect(base.textContent).not.toContain("≡");
+    expect(screen.getByTestId("upstream-sync-indicator").textContent).toContain("↑3");
+  });
+
+  it("returns to the resting form instead of unmounting when the drift is merged away", () => {
+    const { rerender } = renderBadge({ ...restingProps, baseBehindCount: 12 });
+    expect(screen.getByTestId("upstream-sync-indicator").textContent).toContain("↓12");
+
+    rerender(
+      <TooltipProvider>
+        <UpstreamSyncBadge {...baseProps} {...restingProps} />
+      </TooltipProvider>
+    );
+    const base = screen.getByTestId("upstream-sync-base");
+    expect(base.textContent).toContain("≡");
+    expect(screen.getByTestId("upstream-sync-indicator").textContent).not.toContain("↓");
+  });
+
+  it("does not claim equality when the base counts were never measured", () => {
+    renderBadge({ ...restingProps, baseAheadCount: null, baseBehindCount: null });
+    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
+  });
+
+  it("stands the equality claim down rather than contradicting the same measurement", () => {
+    // baseMatchesUpstream says the two refs are one commit, so ↓3 beside
+    // ≡ develop would have the halves disagreeing about a single number.
+    renderBadge({
+      ...restingProps,
+      aheadCount: 0,
+      behindCount: 3,
+      baseMatchesUpstream: true,
+    });
+    const line = screen.getByTestId("upstream-sync-indicator").textContent ?? "";
+    expect(line).toContain("↓3");
+    expect(line).not.toContain("≡");
+  });
+
+  it("keeps the resting form beside upstream drift when the two refs really differ", () => {
+    renderBadge({ ...restingProps, aheadCount: 3, behindCount: 0, baseMatchesUpstream: false });
+    const line = screen.getByTestId("upstream-sync-indicator").textContent ?? "";
+    expect(line).toContain("↑3");
+    expect(line).toContain("≡ develop");
+  });
+
+  it("marks a branch with no upstream and drops the marker once it has one", () => {
+    const { rerender } = renderBadge({ ...restingProps, hasNoUpstream: true });
+    expect(screen.getByTestId("upstream-sync-unpushed").textContent).toBe("· local");
+
+    rerender(
+      <TooltipProvider>
+        <UpstreamSyncBadge
+          {...baseProps}
+          {...restingProps}
+          aheadCount={0}
+          behindCount={0}
+          hasNoUpstream={false}
+        />
+      </TooltipProvider>
+    );
+    expect(screen.queryByTestId("upstream-sync-unpushed")).toBeNull();
+    expect(screen.getByTestId("upstream-sync-base").textContent).toContain("develop");
+  });
+
+  it("keeps the marker on a branch that has drifted from its base as well as its remote", () => {
+    renderBadge({ ...restingProps, baseAheadCount: 3, hasNoUpstream: true });
+    expect(screen.getByTestId("upstream-sync-base").textContent).toContain("Δ");
+    expect(screen.queryByTestId("upstream-sync-unpushed")).not.toBeNull();
+  });
+
+  it("renders nothing when there is no base branch and no upstream delta", () => {
+    renderBadge({ aheadCount: 0, behindCount: 0, hasNoUpstream: true });
+    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
+  });
+
+  it("gives the auth-failed variant the same relationship line rather than the em-dash", () => {
+    vi.stubGlobal("electron", { worktree: { retryAuthFetch: vi.fn() } });
+    renderBadge({
+      ...restingProps,
+      aheadCount: 0,
+      behindCount: 0,
+      fetchAuthFailed: true,
+      hasAuthFailedSignIn: true,
+      hasNoUpstream: true,
+    });
+    const button = screen.getByRole("button", { name: /Forge authentication failed/ });
+    expect(button.textContent).toContain("develop");
+    expect(button.textContent).not.toContain("—");
+    expect(screen.queryByTestId("upstream-sync-unpushed")).not.toBeNull();
+  });
+});

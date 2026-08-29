@@ -67,7 +67,29 @@ export function NonMainSecondaryRow({
     worktree.linked?.pr &&
     worktree.linked.pr.state !== "closed" &&
     worktree.linked.pr.state !== "declined";
-  const showUpstreamBadge = hasUpstreamDelta || hasAuthFailedSignIn;
+  // The base relationship is not an alarm, so it does not wait for a non-zero
+  // count: a branch renders the line as soon as we know what it is measured
+  // against. `hasUpstreamDelta` still matters for the ordering below, where
+  // the question genuinely is which alarm outranks which.
+  //
+  // Detached HEAD is excluded because the relationship is a claim about a
+  // branch and there is no branch: on detach `readCurrentBranch` returns
+  // undefined and the producer's branch-change guard declines to clear the
+  // previous name, so `baseBranchName` survives the detach and would describe
+  // a bare commit as a branch sitting on its base. A detached worktree that
+  // has genuinely drifted still shows the counts — that path mounts on
+  // `hasUpstreamDelta` and is unchanged.
+  const isDetached = Boolean(worktree.isDetached);
+  const showUpstreamBadge =
+    hasUpstreamDelta || hasAuthFailedSignIn || (worktree.baseBranchName != null && !isDetached);
+
+  // `tracking` is normalised to a string or null on every status pass, so a
+  // null one with a snapshot present is a positive "no upstream configured",
+  // not a not-yet. It says nothing about whether a remote branch exists —
+  // `git push origin topic` without `-u` leaves one behind with no tracking
+  // config — which is why neither the marker nor its tooltip claims one.
+  const hasNoUpstream =
+    !isDetached && worktree.worktreeChanges != null && !worktree.worktreeChanges.tracking;
 
   const prTier = showPRBadge
     ? computeAlarmTier({ ciState: worktree.linked?.pr?.ciStatus?.state }).tier
@@ -109,6 +131,7 @@ export function NonMainSecondaryRow({
       baseBehindCount={worktree.baseBehindCount}
       baseMatchesUpstream={worktree.baseMatchesUpstream}
       baseCompareRef={worktree.baseCompareRef}
+      hasNoUpstream={hasNoUpstream}
       fetchIntervalMs={fetchIntervalMs}
     />
   ) : null;

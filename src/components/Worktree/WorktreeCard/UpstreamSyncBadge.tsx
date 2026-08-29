@@ -27,6 +27,18 @@ interface UpstreamSyncBadgeProps {
    * belongs.
    */
   baseCompareRef?: string | null;
+  /**
+   * True when the branch has no upstream configured. Since `87dc51fa9` stopped
+   * pointing fresh topic branches at their base, this is the normal state of
+   * every worktree between creation and its first push, so the line has to be
+   * able to say it rather than just showing nothing.
+   *
+   * It is "no upstream", not "never pushed": `git push origin topic` without
+   * `-u` leaves a remote branch behind with no tracking config, and so does
+   * `git branch --unset-upstream`. The tooltip says the configured thing;
+   * only the compact marker abbreviates.
+   */
+  hasNoUpstream?: boolean;
   fetchIntervalMs?: number;
 }
 
@@ -47,15 +59,28 @@ export function UpstreamSyncBadge({
   baseBehindCount,
   baseMatchesUpstream,
   baseCompareRef,
+  hasNoUpstream,
   fetchIntervalMs,
 }: UpstreamSyncBadgeProps) {
   const hasAhead = aheadCount !== undefined && aheadCount > 0;
   const hasBehind = behindCount !== undefined && behindCount > 0;
 
+  // The base segment is a *relationship*, not an alarm: it renders whenever we
+  // know which branch this one is measured against, and only its glyph and
+  // counts change with the state. Gating the whole line on a non-zero count —
+  // what it used to do — meant a worktree sitting exactly on its base with no
+  // upstream yet said nothing at all about where it came from, which is the
+  // state every worktree is in the moment it is created.
+  const hasBaseName = baseBranchName != null;
   const showBaseDivergence =
-    baseBranchName != null &&
+    hasBaseName &&
     ((baseAheadCount != null && baseAheadCount > 0) ||
       (baseBehindCount != null && baseBehindCount > 0));
+  // Equality has to be measured, not assumed. `BaseDivergence` keeps the base
+  // name and nulls a count it could not parse, so a missing count is "we do
+  // not know", and the resting form is the one claim we cannot make on a
+  // guess — it says the two are the same commit.
+  const baseCountsKnown = baseAheadCount != null && baseBehindCount != null;
 
   // A branch can end up tracking its own base — `git worktree add -b topic
   // --track origin/develop` writes `branch.topic.merge = refs/heads/develop`,
@@ -74,6 +99,22 @@ export function UpstreamSyncBadge({
   // the upstream form rather than rendering nothing.
   const dedupeToBase = baseMatchesUpstream === true && showBaseDivergence;
   const showUpstreamDelta = (hasAhead || hasBehind) && !dedupeToBase;
+
+  // That same race is the one state where the resting form must not appear.
+  // `baseMatchesUpstream` says @{u} and the base compare ref are the same
+  // commit, so the two pairs are one measurement — and `↓4 ≡ develop` would
+  // have the halves contradicting each other about it. The upstream pair is
+  // the fresher of the two there (git status runs every pass; the base counts
+  // can be served from their stat-keyed cache), so it keeps the line and the
+  // equality claim stands down. Where the two refs genuinely differ,
+  // `↑3 ≡ develop` is not a contradiction and renders as it reads: three
+  // commits the remote branch has not got, none that develop has not got.
+  const showBaseResting =
+    hasBaseName &&
+    baseCountsKnown &&
+    !showBaseDivergence &&
+    !(baseMatchesUpstream === true && showUpstreamDelta);
+  const showBaseSegment = showBaseDivergence || showBaseResting;
 
   // Flash only on changes the user can actually see — track display-gated
   // values so a null→0 transition on hidden base counts doesn't flash, and
@@ -156,14 +197,17 @@ export function UpstreamSyncBadge({
             <span className="flex items-center gap-1.5 text-text-muted">
               {showUpstreamDelta && hasAhead && <span>↑{aheadCount}</span>}
               {showUpstreamDelta && hasBehind && <span>↓{behindCount}</span>}
-              {showBaseDivergence && (
+              {showBaseSegment && (
                 <>
-                  <span>&Delta; {baseBranchName}</span>
+                  <span data-testid="upstream-sync-base">
+                    {showBaseDivergence ? "Δ" : "≡"} {baseBranchName}
+                  </span>
                   {displayedBaseAhead != null && <span>↑{displayedBaseAhead}</span>}
                   {displayedBaseBehind != null && <span>↓{displayedBaseBehind}</span>}
+                  {hasNoUpstream && <span data-testid="upstream-sync-unpushed">· local</span>}
                 </>
               )}
-              {!showUpstreamDelta && !showBaseDivergence && <span>—</span>}
+              {!showUpstreamDelta && !showBaseSegment && <span>—</span>}
             </span>
           </button>
         </TooltipTrigger>
@@ -178,7 +222,7 @@ export function UpstreamSyncBadge({
     );
   }
 
-  if (!showUpstreamDelta && !showBaseDivergence) return null;
+  if (!showUpstreamDelta && !showBaseSegment) return null;
 
   return (
     <Tooltip>
@@ -203,7 +247,7 @@ export function UpstreamSyncBadge({
           {showUpstreamDelta && hasBehind && (
             <span className="text-status-warning">↓{behindCount}</span>
           )}
-          {showBaseDivergence && (
+          {showBaseSegment && (
             <>
               {/* `text-secondary`, not `text-muted/60`: this names the branch
                   the counts beside it are counted against, so it is the only
@@ -213,13 +257,27 @@ export function UpstreamSyncBadge({
                   branch name dropped out of a line whose green +N stayed
                   legible beside it. The line is already 11px and sits under
                   two brighter rows; that is where its de-emphasis comes
-                  from. */}
-              <span className="text-text-secondary">&Delta; {baseBranchName}</span>
+                  from.
+
+                  Δ means drift, so it cannot carry the resting state: a bare
+                  `Δ develop` beside a `Δ develop ↑3` would claim a divergence
+                  it does not have. ≡ says the two are the same commit, which
+                  is the whole content of the resting line. */}
+              <span className="text-text-secondary" data-testid="upstream-sync-base">
+                {showBaseDivergence ? "Δ" : "≡"} {baseBranchName}
+              </span>
               {baseAheadCount != null && baseAheadCount > 0 && (
                 <span className="text-status-success">↑{baseAheadCount}</span>
               )}
               {baseBehindCount != null && baseBehindCount > 0 && (
                 <span className="text-status-warning">↓{baseBehindCount}</span>
+              )}
+              {/* Same tier as the branch name it qualifies, so it inherits the
+                  same contrast reasoning — never text-muted. */}
+              {hasNoUpstream && (
+                <span className="text-text-secondary" data-testid="upstream-sync-unpushed">
+                  · local
+                </span>
               )}
             </>
           )}
@@ -255,6 +313,12 @@ export function UpstreamSyncBadge({
               </span>
             )}
           </div>
+        )}
+        {showBaseResting && baseBranchName && (
+          <div className="text-text-muted">In sync with {baseCompareRef || baseBranchName}</div>
+        )}
+        {hasNoUpstream && showBaseSegment && (
+          <div className="text-text-muted">No upstream branch configured</div>
         )}
         {fetchNetworkFailed && (
           <div className="text-status-warning/80" data-testid="upstream-sync-network-warning">

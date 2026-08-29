@@ -207,13 +207,26 @@ export function WorktreeHeader({
   const hasFreshnessPill = !!(lastGitStatusCheckedAt && lastGitStatusCheckedAt > 0);
   const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
   const underlineOnHover = variant !== "sidebar" || isActive;
-  // Two rules, both load-bearing. No `!baseMatchesUpstream` term: when the two
-  // agree the badge now renders the labelled base form rather than nothing, so
-  // gating the mount on the disagreement would hide the very line that names
-  // what the counts mean. And the base terms require `baseBranchName`, because
-  // that is what the badge itself requires to draw them — mounting the row for
-  // counts the badge will decline to render leaves an empty secondary row.
+  // `hasBaseName` is the whole mount rule for the base line: the workspace-host
+  // sets it only for a non-main worktree on a branch whose base it resolved, so
+  // it is exactly "this is a branch, and we know what it is measured against".
+  // The line renders at rest too (`≡ develop`), because a worktree sitting on
+  // its base with no upstream yet — the state every worktree is created in
+  // since `87dc51fa9` stopped pointing new branches at their base — otherwise
+  // said nothing at all about where it came from.
+  //
+  // `hasUpstreamDelta` is now only the alarm question, and keeps both rules it
+  // was given. No `!baseMatchesUpstream` term: when the two agree the badge
+  // renders the labelled base form rather than nothing, so gating on the
+  // disagreement would hide the very line that names what the counts mean. And
+  // the base terms require `baseBranchName`, because that is what the badge
+  // requires to draw them.
   const hasBaseName = worktree.baseBranchName != null;
+  // Detached HEAD keeps the pre-detach branch name in the producer, so the base
+  // name outlives the branch it described. The relationship row is a claim
+  // about a branch, so it does not mount without one; the drift row still does,
+  // via `hasUpstreamDelta`.
+  const hasBaseRelationship = hasBaseName && !worktree.isDetached;
   const hasUpstreamDelta =
     (worktree.aheadCount ?? 0) > 0 ||
     (worktree.behindCount ?? 0) > 0 ||
@@ -439,6 +452,7 @@ export function WorktreeHeader({
             worktree.linked.pr.state !== "closed" &&
             worktree.linked.pr.state !== "declined") ||
           hasUpstreamDelta ||
+          hasBaseRelationship ||
           hasAuthFailedSignIn ||
           hasPlanFile) && (
           <NonMainSecondaryRow

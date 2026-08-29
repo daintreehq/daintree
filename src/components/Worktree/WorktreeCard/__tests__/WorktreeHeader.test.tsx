@@ -1663,3 +1663,30 @@ describe("WorktreeHeader external indicator", () => {
     expect(screen.queryByRole("img", { name: /external worktree/i })).toBeNull();
   });
 });
+
+describe("WorktreeHeader base relationship row", () => {
+  const onBase: WorktreeState = {
+    ...baseWorktree,
+    baseBranchName: "develop",
+    baseAheadCount: 0,
+    baseBehindCount: 0,
+    worktreeChanges: {
+      worktreeId: "test-wt",
+      rootPath: "/tmp/test-wt",
+      changes: [],
+      changedFileCount: 0,
+      tracking: null,
+    },
+  };
+
+  it("mounts the secondary row for a branch on its base with nothing else to report", () => {
+    renderHeader({ worktree: onBase });
+    expect(screen.getByTestId("upstream-sync-base").textContent).toContain("develop");
+    expect(screen.getByTestId("upstream-sync-unpushed")).not.toBeNull();
+  });
+
+  it("keeps the row unmounted once the branch name it described is gone", () => {
+    renderHeader({ worktree: { ...onBase, isDetached: true } });
+    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
+  });
+});
