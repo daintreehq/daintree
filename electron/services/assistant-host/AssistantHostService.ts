@@ -469,6 +469,24 @@ export class AssistantHostService {
         // approval. Secrets are provisioned in main, next to the service issuing them.
         DAINTREE_PROJECT_ID: opts.projectId,
         DAINTREE_WINDOW_ID: String(opts.windowId),
+        // An unpackaged build gets its own per-project state.
+        //
+        // A project's state is owned exclusively — one process holds `owner.lock` and
+        // with it the right to open `state.db` — so a dev build and the installed app
+        // open on the SAME project cannot both run an assistant. The second waits out
+        // its deadline and reports the project busy, which is what a developer running
+        // both hits every single time.
+        //
+        // The namespace moves only the PER-PROJECT directory, not the state root: the
+        // dev build is the same account talking to the same backend, with its own
+        // conversation and its own lease for that project. Which is also the right
+        // default on its own merits — a dev build's experiments have no business
+        // writing into the memories, audit trail and automation grants the installed
+        // app is using for real work.
+        //
+        // Packaged builds never set it: Electron's single-instance lock means two of
+        // them cannot run at once, so they have nothing to contend with.
+        ...(app.isPackaged ? {} : { DAINTREE_ASSISTANT_STATE_NAMESPACE: "dev" }),
         // The SAME value the descriptor above carries. The engine cross-checks the two
         // and treats a disagreement as fatal, so this is one variable holding one
         // decision rather than two independent derivations that happen to agree.

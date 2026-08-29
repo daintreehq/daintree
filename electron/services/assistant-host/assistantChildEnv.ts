@@ -49,6 +49,9 @@ export const ENGINE_CONTROLLED_ENV = [
   "DAINTREE_ASSISTANT_AUTO_APPROVE",
   "DAINTREE_ASSISTANT_DEBUG_LOG",
   "DAINTREE_ASSISTANT_LOG_DIR",
+  // Which per-project database the engine opens. Inherited, it would let a shell
+  // variable decide whose conversation a session joins.
+  "DAINTREE_ASSISTANT_STATE_NAMESPACE",
   "DAINTREE_PROJECT_ID",
   "DAINTREE_WINDOW_ID",
   // A DEPRECATED caller bearer (`APIKey` in internal/config/config.go), not the upstream
