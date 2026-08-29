@@ -395,3 +395,82 @@ describe("UpstreamSyncBadge — resting base relationship", () => {
     expect(screen.queryByTestId("upstream-sync-unpushed")).not.toBeNull();
   });
 });
+
+describe("UpstreamSyncBadge — a base branch longer than the card (#12074)", () => {
+  const longBase = "feature/stacked-worktree-base-branch-name-that-keeps-going";
+
+  // Every token the line can hold at once: upstream pair, base pair, marker.
+  // This is the crowded case, where something has to give.
+  const crowded: Partial<Props> = {
+    aheadCount: 12,
+    behindCount: 3,
+    baseBranchName: longBase,
+    baseAheadCount: 12,
+    baseBehindCount: 3,
+    baseMatchesUpstream: false,
+    hasNoUpstream: true,
+  };
+
+  /**
+   * jsdom computes no widths, so the ellipsis itself is not observable. What
+   * is observable — and is the actual invariant — is the layout priority:
+   * whichever tokens the row happens to hold, exactly one of them may give up
+   * width, and it has to be the same one that clips its overflow. Asserted as
+   * a relationship over the rendered row rather than a list of class literals,
+   * so it survives a restyle and still catches a token added without
+   * shrink protection.
+   */
+  function assertOnlyTheNameYields() {
+    const label = screen.getByTestId("upstream-sync-base");
+    const children = Array.from(label.parentElement!.children);
+    expect(children.length).toBeGreaterThan(1);
+
+    const shrinkable = children.filter((el) => !el.classList.contains("shrink-0"));
+    expect(shrinkable).toHaveLength(1);
+    expect(shrinkable[0]).toBe(label);
+
+    const clipping = children.filter((el) => el.classList.contains("truncate"));
+    expect(clipping).toHaveLength(1);
+    expect(clipping[0]).toBe(label);
+
+    // The counts and the marker are the state the line exists to carry, so
+    // they are what has to survive beside the name that yielded.
+    const line = children.map((el) => el.textContent).join(" ");
+    expect(line).toContain("↑12");
+    expect(line).toContain("↓3");
+    expect(line).toContain("· local");
+
+    // Nothing caps the name on the way in — the fix is presentation-only, so
+    // the full ref stays in the DOM for the tooltip and for assistive tech.
+    expect(label.textContent).toBe(`Δ ${longBase}`);
+  }
+
+  it("yields the name and keeps the counts on the normal badge", () => {
+    renderBadge(crowded);
+    assertOnlyTheNameYields();
+  });
+
+  it("yields the name and keeps the counts on the auth-failed badge too", () => {
+    vi.stubGlobal("electron", { worktree: { retryAuthFetch: mockRetryAuthFetch } });
+    renderBadge({ ...crowded, fetchAuthFailed: true, hasAuthFailedSignIn: true });
+    assertOnlyTheNameYields();
+  });
+
+  it("protects the em-dash the auth badge falls back to when there is nothing to report", () => {
+    vi.stubGlobal("electron", { worktree: { retryAuthFetch: mockRetryAuthFetch } });
+    renderBadge({
+      aheadCount: 0,
+      behindCount: 0,
+      baseBranchName: null,
+      baseAheadCount: null,
+      baseBehindCount: null,
+      fetchAuthFailed: true,
+      hasAuthFailedSignIn: true,
+    });
+
+    const dash = screen
+      .getAllByText("—")
+      .find((el) => el.tagName === "SPAN" && el.textContent === "—");
+    expect(dash?.classList.contains("shrink-0")).toBe(true);
+  });
+});
