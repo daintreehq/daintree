@@ -65,7 +65,7 @@ import type {
  * `internal/host/wire.go`. Daintree sends it in the session descriptor and the engine
  * refuses a mismatch rather than guessing at an unknown shape.
  */
-export const ASSISTANT_HOST_PROTOCOL_VERSION = 3;
+export const ASSISTANT_HOST_PROTOCOL_VERSION = 4;
 
 /** Author of a conversation turn in the native timeline. */
 export type AssistantTurnRole = "user" | "assistant";
@@ -202,12 +202,66 @@ export interface AssistantAsyncRow {
   startedAt: number;
 }
 
-/** One scheduled operation. */
+/**
+ * One scheduled timer.
+ *
+ * A FIXED shape, per the engine's row contract: every field is always present, and a
+ * zero value means "the engine does not have this", never "an engine too old to say".
+ * So `repeatEveryMs === 0` reads as one-shot and `toolName === ""` as "not a tool call"
+ * — a reader never has to tell an absent key from an empty one.
+ *
+ * What is deliberately NOT here: the reminder text and the scheduled call's argument
+ * object. Both are model-written free text, neither is needed to decide whether to
+ * cancel a timer, and passing them would put arbitrary content the model wrote into a
+ * renderer. The row names the tool; it does not carry what the tool was handed.
+ */
 export interface AssistantTimerRow {
   id: string;
+  /** The timer's title. */
   label: string;
+  /** Next fire time (epoch ms). A countdown ticks from this in the renderer. */
   dueAt: number;
+  createdAt: number;
+  payloadKind: AssistantTimerPayloadKind;
+  /** Set only when `payloadKind` is `"tool_call"`. */
+  toolName: string;
+  /** How many times a repeating timer has already fired. */
+  runCount: number;
+  /** 0 for a one-shot timer. */
+  repeatEveryMs: number;
+  /** 0 when the repeat is unbounded on that axis. */
+  repeatMaxRuns: number;
+  repeatUntilAt: number;
+  /** Which object the fire is about; empty when the timer named none. */
+  targetWorktreeId: string;
+  targetTerminalId: string;
+  /**
+   * How many automation grants this timer can still spend.
+   *
+   * This is what lets the cancel confirmation state its real consequence — cancelling
+   * revokes them — instead of just asking the same question twice. Meaningful only
+   * when `grantsUnknown` is false.
+   */
+  liveGrants: number;
+  /**
+   * The grant count could not be read.
+   *
+   * Carried separately because `liveGrants: 0` cannot say whether this timer holds no
+   * authority or whether we failed to find out, and that difference is quoted in a
+   * destructive confirmation. A UI must say it does not know rather than assert there
+   * is nothing to revoke.
+   */
+  grantsUnknown: boolean;
 }
+
+/**
+ * What a timer does when it fires.
+ *
+ * `"reminder"` posts an inbox item and runs nothing; `"tool_call"` dispatches one
+ * registered tool; `"legacy"` is a row written by a retired payload type, which still
+ * fires as a plain reminder but cannot honestly be described as either.
+ */
+export type AssistantTimerPayloadKind = "reminder" | "tool_call" | "legacy";
 
 /** One recent tool call. */
 export interface AssistantAuditRow {
@@ -238,6 +292,79 @@ export interface AssistantOperationsEvent extends AssistantHostEventBase {
 export interface AssistantOperationsCommand {
   type: "operations";
   sessionId: string;
+}
+
+/**
+ * The scheduled-timer list on its own.
+ *
+ * Separate from `operations:snapshot` because the timer manager refreshes on its own
+ * cadence and must not drag six unrelated deck sections along with it. The rows are the
+ * SAME shape, built by the engine from the same place, so the deck and the manager
+ * cannot describe one timer two different ways.
+ */
+export interface AssistantTimersEvent extends AssistantHostEventBase {
+  type: "timers:snapshot";
+  timers: AssistantTimerRow[];
+  /** When the engine read the store, so a view can say how stale its list is. */
+  takenAt: number;
+  /**
+   * The timer table could not be read, so an empty `timers` means NOTHING.
+   *
+   * The operations deck is best-effort — a section that fails to load beats a deck
+   * that will not open. A manager cannot inherit that: "no timers scheduled" is a
+   * claim a user acts on by walking away, and making it out of a failed read is the
+   * worst thing this surface could say.
+   */
+  readFailed: boolean;
+}
+
+/** Ask for a fresh scheduled-timer list. */
+export interface AssistantTimersCommand {
+  type: "timers";
+  sessionId: string;
+}
+
+/**
+ * Retire one timer on the USER's behalf, revoking the automation grants scoped to it.
+ *
+ * The engine does NOT raise an approval for this, and nothing should wait for one. The
+ * approval channel is for the model asking a human to allow something; this is the
+ * human having already decided, in a dialog Daintree drew, about a row Daintree is
+ * showing. Confirmation is ours; the operation is the engine's.
+ */
+export interface AssistantTimerCancelCommand {
+  type: "timer:cancel";
+  sessionId: string;
+  timerId: string;
+}
+
+/**
+ * The result of one `timer:cancel`. Emitted on every path — success, unknown id,
+ * storage fault — because the UI has a row in a pending state that has to settle.
+ *
+ * `timerId` is the correlation: at most one cancel is in flight per timer.
+ */
+export interface AssistantTimerCancelledEvent extends AssistantHostEventBase {
+  type: "timer:cancelled";
+  timerId: string;
+  /**
+   * True only when THIS call retired a live timer. A timer that had already fired
+   * comes back `false` with `alreadyInactive` — reporting otherwise would tell the
+   * user we stopped something that had already done its work.
+   */
+  cancelled: boolean;
+  alreadyInactive: boolean;
+  /** The status the row held when the engine read it. */
+  priorStatus: string;
+  revokedGrants: number;
+  /**
+   * The timer is retired but its authority is NOT. Must be surfaced: a silent
+   * `revokedGrants: 0` reads as "nothing left to clean up" while a grant is still
+   * spendable by an actor that no longer exists.
+   */
+  grantRevokeFailed: boolean;
+  /** Non-empty when the cancel itself failed. */
+  error: string;
 }
 
 /**
@@ -711,6 +838,8 @@ export type AssistantHostEvent =
   | AssistantCommandResultEvent
   | AssistantMcpStatusEvent
   | AssistantOperationsEvent
+  | AssistantTimersEvent
+  | AssistantTimerCancelledEvent
   | AssistantQuestionRequestedEvent
   | AssistantQuestionAnsweredEvent
   | AssistantModelRateLimitedEvent
@@ -797,6 +926,8 @@ export type AssistantHostCommand =
   | AssistantQuestionAnswerCommand
   | AssistantCommandCommand
   | AssistantOperationsCommand
+  | AssistantTimersCommand
+  | AssistantTimerCancelCommand
   | AssistantInterjectRetractCommand
   | AssistantInterruptCommand
   | AssistantHibernateCommand
