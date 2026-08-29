@@ -264,6 +264,18 @@ export class AssistantHostProcess {
     return this.readyEvent;
   }
 
+  /**
+   * The child's pid, or null before spawn and after exit.
+   *
+   * For the host's own logging: a startup that hangs before `host:ready` looks
+   * identical from the outside whether the engine never spawned or spawned and went
+   * quiet, and the pid is what separates the two — it is also what someone reaching for
+   * `lldb`/`sample` on a wedged engine needs.
+   */
+  getPid(): number | null {
+    return this.child?.pid ?? null;
+  }
+
   /** Events emitted before readiness, for the caller to replay. Drained by this call. */
   takePreReadyEvents(): AssistantHostEvent[] {
     this.readyReported = true;

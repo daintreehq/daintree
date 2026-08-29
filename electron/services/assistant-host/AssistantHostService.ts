@@ -15,6 +15,7 @@ import {
 } from "../../../shared/types/ipc/assistantHost.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { AssistantHostStartResult } from "../../../shared/types/ipc/assistantHostIpc.js";
+import { createLogger } from "../../utils/logger.js";
 
 /**
  * Owns the live assistant engine for each project, and routes its event stream to the
@@ -55,8 +56,29 @@ interface LiveSession {
   windowId: number;
 }
 
+/**
+ * Startup and engine diagnostics go to the main log, not bare `console`.
+ *
+ * The panel reports exactly one thing while an engine boots — "starting" — and this
+ * path can sit there legitimately for up to `READY_TIMEOUT_MS`. Without a trace,
+ * every way of failing to reach `host:ready` (no binary, a provision that hangs, a
+ * child that spawned and said nothing, a protocol refusal) presents identically, and
+ * the only evidence is a spinner. Each phase below is logged with the elapsed time, so
+ * a stuck start names the phase it is stuck in.
+ */
+const logger = createLogger("main:AssistantHost");
+
 /** The roster id the MCP tier policy is keyed on for this surface. */
 const ASSISTANT_AGENT_ID = "daintree-assistant";
+
+/**
+ * How often to say an engine is still short of `host:ready`.
+ *
+ * The readiness budget is 90s, which is a long time to show nothing. This is the
+ * heartbeat that distinguishes "still waiting" from "the host stopped waiting and
+ * nobody said so".
+ */
+const READY_PROGRESS_MS = 10_000;
 
 /**
  * How long shutdown waits for an engine to exit on its own before killing it.
@@ -83,7 +105,7 @@ function revokeHelpSessionFor(sessionId: string): void {
   if (!helpSessionId) return;
   helpSessionIdBySession.delete(sessionId);
   void helpSessionService.revokeSession(helpSessionId).catch((error: unknown) => {
-    console.warn(`[assistant-host:${sessionId}] MCP revoke failed`, error);
+    logger.warn("MCP revoke failed", { sessionId, error: formatErrorMessage(error, "unknown") });
   });
 }
 
@@ -215,11 +237,28 @@ export class AssistantHostService {
   }
 
   private async startLocked(opts: StartSessionOptions): Promise<AssistantHostStartResult> {
+    // Every log line below carries this, so a start that stalls says WHERE it stalled
+    // rather than only that it did.
+    const startedAt = Date.now();
+    const elapsedMs = () => Date.now() - startedAt;
+    logger.info("engine start requested", {
+      projectId: opts.projectId,
+      cwd: opts.cwd,
+      windowId: opts.windowId,
+      webContentsId: opts.webContentsId,
+    });
+
     // Displace first, and await it, so the outgoing engine has released the project's
     // state lease before the new one tries to take it.
     await this.stopProject(opts.projectId);
 
-    const engine = await resolveAssistantBinary();
+    // Logged as well as thrown. The renderer surfaces this one, but a resolution failure
+    // names a build step someone has to run, and the main log is where they will look for
+    // it after the panel has been closed.
+    const engine = await resolveAssistantBinary().catch((error: unknown) => {
+      logger.error("engine start failed: no engine binary", error, { elapsedMs: elapsedMs() });
+      throw error;
+    });
     const binaryPath = engine.path;
     const sessionId = `ses_${randomBytes(8).toString("hex")}`;
     // Which copy of the engine a session ran is acceptance evidence, not chatter. A
@@ -228,13 +267,21 @@ export class AssistantHostService {
     // gitlink — so the one line is recorded every start, and says more when the answer
     // is one an acceptance run must not accept. Once per engine start, not per turn.
     const substituted = app.isPackaged && engine.source !== "packaged";
-    console.warn(
-      `[assistant-host:${sessionId}] engine ${engine.source}: ${binaryPath}` +
-        (substituted
-          ? ` — ${ASSISTANT_BIN_ENV} selected this instead of the engine this app ships. ` +
-            `Unset ${ASSISTANT_BIN_ENV} and relaunch to test the packaged engine.`
-          : "")
-    );
+    if (substituted) {
+      logger.warn(
+        `Engine resolved from ${engine.source}: ${ASSISTANT_BIN_ENV} selected this instead of ` +
+          `the engine this app ships. Unset ${ASSISTANT_BIN_ENV} and relaunch to test the ` +
+          `packaged engine.`,
+        { sessionId, binaryPath, source: engine.source, elapsedMs: elapsedMs() }
+      );
+    } else {
+      logger.info(`Engine resolved from ${engine.source}`, {
+        sessionId,
+        binaryPath,
+        source: engine.source,
+        elapsedMs: elapsedMs(),
+      });
+    }
 
     // Provision the MCP binding BEFORE spawning, in main, next to the service that
     // issues it. Without this the engine starts fine and answers fine — it just has no
@@ -299,15 +346,35 @@ export class AssistantHostService {
         if (!provisioned.mcpUrl) {
           mcpUnavailableReason = "Daintree control is switched off in assistant settings.";
         }
+        // The three env-borne decisions in one line. Each of them changes how the child
+        // behaves before it says anything, and a tier that disagrees with the bearer is
+        // refused by the engine at handshake — a failure whose only visible symptom is
+        // a start that never becomes ready.
+        logger.info("MCP session provisioned", {
+          sessionId,
+          tier: engineTier,
+          mcp: Boolean(mcp?.url),
+          autoApprove,
+          debugLogging,
+          elapsedMs: elapsedMs(),
+        });
       } else {
         mcpUnavailableReason = "The assistant session could not be provisioned.";
+        logger.warn("MCP session not provisioned; engine starts without a control plane", {
+          sessionId,
+          elapsedMs: elapsedMs(),
+        });
       }
     } catch (error) {
       mcpUnavailableReason = formatErrorMessage(
         error,
         "The Daintree control plane could not be reached."
       );
-      console.warn(`[assistant-host:${sessionId}] MCP provisioning failed`, error);
+      logger.warn("MCP provisioning failed", {
+        sessionId,
+        error: formatErrorMessage(error, "unknown"),
+        elapsedMs: elapsedMs(),
+      });
     }
 
     const host = new AssistantHostProcess({
@@ -374,9 +441,10 @@ export class AssistantHostService {
         // Engine diagnostics are developer-facing, not conversation. They go to the
         // main log rather than the transcript, exactly as stderr is separated from the
         // protocol stream on the wire.
-        console.warn(`[assistant-host:${sessionId}] ${line}`);
+        logger.warn(line, { sessionId });
       },
       onExit: (code, signal) => {
+        logger.info("engine exited", { sessionId, code, signal, elapsedMs: elapsedMs() });
         this.spawnedHosts.delete(host);
         this.bySession.delete(sessionId);
         revokeHelpSessionFor(sessionId);
@@ -405,13 +473,39 @@ export class AssistantHostService {
     this.byProject.set(opts.projectId, session);
     this.bySession.set(sessionId, session);
 
+    // Beats while the handshake is outstanding. `host.start()` returning says only that
+    // a child was forked; readiness is the engine answering, and the gap between the two
+    // is the whole of what "starting" means on screen.
+    const readyProgress = setInterval(() => {
+      logger.warn("engine has not signalled ready yet", {
+        sessionId,
+        pid: host.getPid(),
+        elapsedMs: elapsedMs(),
+      });
+    }, READY_PROGRESS_MS);
+    readyProgress.unref?.();
+
     try {
       // `host.start()` is INSIDE the try: child_process.spawn validates its options
       // synchronously and throws for things like a NUL byte in cwd. That throw produces
       // no child and no exit event, so escaping here would strand a registered session,
       // a live MCP bearer and its sweep exemption with nothing left to clean them up.
       host.start();
+      logger.info("engine spawned; awaiting host:ready", {
+        sessionId,
+        pid: host.getPid(),
+        binaryPath,
+        cwd: opts.cwd,
+        tier: engineTier,
+        elapsedMs: elapsedMs(),
+      });
       await host.waitForReady();
+      logger.info("engine ready", {
+        sessionId,
+        pid: host.getPid(),
+        engineVersion: host.getReadyEvent()?.version ?? null,
+        elapsedMs: elapsedMs(),
+      });
     } catch (error) {
       // Clean up rather than leaving a half-registered session that commands would
       // route to and silently drop.
@@ -421,6 +515,11 @@ export class AssistantHostService {
       // registered, so an unconditional delete here evicts the live successor and
       // leaves it invisible to `stopProject` — an engine nothing can displace, holding
       // the project's lease against every later start.
+      logger.error("engine start failed", error, {
+        sessionId,
+        pid: host.getPid(),
+        elapsedMs: elapsedMs(),
+      });
       this.bySession.delete(sessionId);
       revokeHelpSessionFor(sessionId);
       if (this.byProject.get(opts.projectId)?.sessionId === sessionId) {
@@ -428,6 +527,8 @@ export class AssistantHostService {
       }
       host.dispose();
       throw error;
+    } finally {
+      clearInterval(readyProgress);
     }
 
     return {

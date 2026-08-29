@@ -42,6 +42,9 @@ vi.mock("../AssistantHostProcess.js", () => ({
     getReadyEvent() {
       return null;
     }
+    getPid() {
+      return null;
+    }
     takePreReadyEvents() {
       return [];
     }
