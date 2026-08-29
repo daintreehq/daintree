@@ -1270,7 +1270,7 @@ export function WorktreeCard({
                     isFocused={isFocused}
                     isStale={isStaleCard}
                     onToggleExpand={handleToggleExpand}
-                    onPathClick={handlePathClick}
+                    onPathClick={openFileBrowserForThisWorktree}
                     onDismissError={dismissError}
                     onRetryError={handleErrorRetry}
                     onOpenReviewHub={openReviewHubForThisWorktree}

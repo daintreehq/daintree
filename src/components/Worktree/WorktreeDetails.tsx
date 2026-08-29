@@ -8,7 +8,7 @@ import { LiveTimeAgo } from "./LiveTimeAgo";
 import { CommitAuthorAvatar } from "./WorktreeCard/CommitAuthorAvatar";
 import { CommitInfoTooltip } from "./WorktreeCard/CommitInfoTooltip";
 import { cn } from "../../lib/utils";
-import { GitCommit, Copy, Check, ExternalLink, FileDiff, Sparkles } from "lucide-react";
+import { GitCommit, Copy, Check, FolderTree, FileDiff, Sparkles } from "lucide-react";
 import { parseNoteWithLinks, formatPath, type TextSegment } from "../../utils/textParsing";
 import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
@@ -314,11 +314,11 @@ export function WorktreeDetails({
                   isFocused && "text-text-secondary"
                 )}
               >
-                <ExternalLink className="w-3 h-3 shrink-0 text-text-muted" />
+                <FolderTree className="w-3 h-3 shrink-0 text-text-muted" />
                 <span className="truncate">{displayPath}</span>
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{`Open folder: ${worktree.path}`}</TooltipContent>
+            <TooltipContent side="bottom">{`Browse files: ${worktree.path}`}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
