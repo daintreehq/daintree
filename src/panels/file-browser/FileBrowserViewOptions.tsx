@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { ChevronsDownUp, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import {
@@ -118,9 +119,46 @@ export function FileBrowserViewOptions({
   // repo, since `.git` is always on the junk list.
   const label = "File tree options";
 
+  // Radix opens tooltips on FOCUS as well as hover, and hands focus back to the
+  // trigger when the menu closes — so selecting an item left this trigger's
+  // tooltip hanging open under a pointer that was never on it.
+  //
+  // Suppressed LOCALLY rather than through `dismissAllTooltips()`. The global
+  // call is for surfaces that can strand a tooltip anywhere (dialogs); this menu
+  // knows exactly which tooltip is about to reopen, and closing every registered
+  // tooltip in the app to fix one of them is the blanket wiring #11034 rejected.
+  // Same shape as `AgentButton`: a controlled tooltip plus a restoring flag.
+  //
+  // Armed inside `onCloseAutoFocus`, immediately before Radix moves focus,
+  // rather than when the close begins — Radix defers restoration past the menu's
+  // 120ms exit animation, so a window armed at close-time is racing a stall it
+  // does not need to race.
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const isRestoringFocusRef = useRef(false);
+  // Set in onPointerDownOutside, read in onCloseAutoFocus: dismissing by
+  // clicking AWAY should leave no focus ring, and the clicked target takes
+  // focus itself. Deliberately NOT set for clicks on items — Radix has already
+  // unmounted the item by then, so preventing restoration there does not mean
+  // "focus without a ring", it means focus falls to document.body and the
+  // keyboard user is stranded.
+  const wasPointerCloseRef = useRef(false);
+
   return (
-    <DropdownMenu>
-      <Tooltip>
+    <DropdownMenu
+      onOpenChange={(next) => {
+        if (next) wasPointerCloseRef.current = false;
+      }}
+    >
+      <Tooltip
+        open={tooltipOpen}
+        onOpenChange={(next) => {
+          // A focus-driven open during restoration is exactly what this exists
+          // to swallow; a genuine hover still opens it, because pointerenter
+          // clears the flag first.
+          if (next && isRestoringFocusRef.current) return;
+          setTooltipOpen(next);
+        }}
+      >
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
             <button
@@ -132,6 +170,9 @@ export function FileBrowserViewOptions({
               className="toolbar-icon-button shrink-0 rounded-lg p-1.5 text-text-secondary"
               aria-label={label}
               data-testid={testId}
+              onPointerEnter={() => {
+                isRestoringFocusRef.current = false;
+              }}
             >
               <SlidersHorizontal className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
             </button>
@@ -139,7 +180,25 @@ export function FileBrowserViewOptions({
         </TooltipTrigger>
         <TooltipContent side="bottom">{label}</TooltipContent>
       </Tooltip>
-      <DropdownMenuContent align="end" className="min-w-[200px]">
+      <DropdownMenuContent
+        align="end"
+        className="min-w-[200px]"
+        onPointerDownOutside={() => {
+          wasPointerCloseRef.current = true;
+        }}
+        onCloseAutoFocus={(event) => {
+          // Always, whichever way it closed: focus is about to land on the
+          // trigger and would drag the tooltip open with it.
+          setTooltipOpen(false);
+          isRestoringFocusRef.current = true;
+          // Only a click AWAY skips restoration. An item click keeps it, so the
+          // keyboard user lands back on the control they invoked.
+          if (wasPointerCloseRef.current) {
+            event.preventDefault();
+            wasPointerCloseRef.current = false;
+          }
+        }}
+      >
         {/* Key and direction are two labelled radio groups rather than one
             group that reverses when its active item is re-picked: the compact
             version hides the direction behind a gesture nothing announces —
