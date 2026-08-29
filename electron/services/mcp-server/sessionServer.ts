@@ -1546,7 +1546,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
-        const entry = await lookupManifestEntry(actionId, getCachedManifest, requestManifest);
+        let entry: import("../../../shared/types/actions.js").ActionManifestEntry | undefined;
+        try {
+          entry = await lookupManifestEntry(actionId, getCachedManifest, requestManifest);
+        } catch (err) {
+          if (!(err instanceof McpRouteBindingError)) throw err;
+          // Narrow in practice — the bound guard above resolves a manifest
+          // first — but reachable if the route is lost between the two.
+          outcome = { kind: "throw", error: err };
+          return buildToolError({
+            code: SESSION_BINDING_GONE,
+            message: err.message,
+            retriable: err.retriable,
+          });
+        }
 
         // An action the manifest doesn't describe has unknown danger, and
         // unknown is not safe: a stale or partial manifest that omits a
@@ -1903,6 +1916,40 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   // (#11799). One capture per request: the listing helpers await dispatches
   // mid-enumeration, and re-reading across those awaits would let one response
   // mix two authorization lifetimes.
+  /**
+   * Confirm a workspace-bound session can still reach its workspace, for a read
+   * that would otherwise never consult it (#12082).
+   *
+   * Most resources are backed by a dispatch, so the binding is checked by the
+   * routing itself. `agentState` is not: it answers from the process-global
+   * `AgentAvailabilityStore`, and its tier gate (`terminal.list`) says nothing
+   * about *which* workspace the agent belongs to. Before this issue a bound
+   * session could not exist without a live view, so the viewless case was
+   * unreachable; now it is, and a bound session with an unreachable workspace
+   * must not read host-global state as if it were its own.
+   *
+   * Deliberately a route check, not an ownership check. Whether a given agent id
+   * belongs to the bound workspace is a separate, pre-existing gap in #11789 —
+   * a bound session with a *live* view can still read another workspace's agent
+   * state, and closing that needs an agent→workspace map this layer does not
+   * have. This closes only the half that is new.
+   *
+   * Probing through `requestManifest` rather than a bespoke resolver keeps the
+   * answer identical to the one dispatch would get: it re-resolves the workspace
+   * the same way and reads a warm per-view cache on success.
+   */
+  const assertBoundRouteReachable = async (): Promise<void> => {
+    if (!sessionSurface.workspaceBound) return;
+    try {
+      await requestManifest();
+    } catch (err) {
+      const routed = routeBindingMcpError(err);
+      if (routed) throw routed;
+      // Anything else is a manifest failure, not a routing one. The read does
+      // not need a manifest, so it is not this probe's business to fail it.
+    }
+  };
+
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
     const tier = sessionStore.getTier(sessionId);
     if (tier === null) throw sessionGoneError();
@@ -1931,6 +1978,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         buildMcpErrorPayload({ code: TIER_NOT_PERMITTED_CODE, message })
       );
     }
+    if (parsed.kind === "agentState") await assertBoundRouteReachable();
     try {
       return { contents: [await readResourceContents(uri, parsed, dispatchAction)] };
     } catch (err) {
@@ -1959,6 +2007,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         buildMcpErrorPayload({ code: TIER_NOT_PERMITTED_CODE, message })
       );
     }
+    // Same reason as the read above: an `agentState` subscription installs a
+    // listener on a process-global event and would push another workspace's
+    // updates at a session that cannot reach its own.
+    if (parsed.kind === "agentState") await assertBoundRouteReachable();
     subscribeResource(sessionId, server, uri, parsed, sessionStore);
     return {};
   });
@@ -2397,7 +2449,12 @@ async function lookupManifestEntry(
       // skip the shared `cachedManifest` so a re-read here would always return
       // null and silently drop host confirmation + structuredContent.
       manifest = await requestManifest();
-    } catch {
+    } catch (err) {
+      // A route that is gone is not a manifest that is merely unavailable
+      // (#12082). Collapsing it to `undefined` here makes the bound-session
+      // guard below report a non-retriable `NOT_FOUND` — "no such action" — for
+      // a workspace the user is about to reopen.
+      if (err instanceof McpRouteBindingError) throw err;
       return undefined;
     }
   }

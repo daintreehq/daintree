@@ -1818,7 +1818,7 @@ describe("HttpLifecycle", () => {
       // proved end to end in `McpServerService.authAndToolSurface.test.ts`
       // against a real `StreamableHTTPClientTransport`, not here.
       /**
-       * Run a real handshake and report what it bound.
+       * Drive the real selector path and report what it bound.
        *
        * The SDK transport rejects the stub request on its own (no Host header),
        * and the lifecycle then reclaims the uninitialized session — correctly,

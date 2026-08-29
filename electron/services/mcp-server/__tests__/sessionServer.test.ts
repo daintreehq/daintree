@@ -5339,6 +5339,47 @@ describe("workspace-bound external sessions (#11789)", () => {
       }
     );
 
+    it.each([["resources/read"], ["resources/subscribe"]])(
+      "refuses %s for host-global agent state while the workspace is unreachable",
+      async (method) => {
+        // `agentState` is the one resource with no backing dispatch — it reads
+        // the process-global agent store, and its tier gate (`terminal.list`)
+        // says nothing about which workspace the agent belongs to. Before
+        // #12082 a bound session could not exist without a live view, so this
+        // was unreachable; now it is, and it must not answer as if the
+        // host-global store were the bound workspace's.
+        const deps = boundDeps({
+          requestManifest: vi
+            .fn()
+            .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+          getCachedManifest: vi.fn(() => null),
+        });
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        await expect(
+          callHandler(server, method, { uri: "daintree://agent/agent-1/state" })
+        ).rejects.toMatchObject({
+          data: { code: SESSION_BINDING_GONE, retriable: true },
+        });
+      }
+    );
+
+    it("serves host-global agent state once the workspace is reachable again", async () => {
+      // The probe is a route check, not a new refusal: a bound session with a
+      // live view reads exactly what it read before.
+      const deps = boundDeps({
+        requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list")]),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      await expect(
+        callHandler(server, "resources/subscribe", { uri: "daintree://agent/agent-1/state" })
+      ).resolves.toEqual({});
+    });
+
     it("still degrades a resource listing gracefully for an ordinary dispatch failure", async () => {
       // The rethrow above is scoped to route-binding failures; a flaky
       // enumeration must keep returning a partial listing rather than failing

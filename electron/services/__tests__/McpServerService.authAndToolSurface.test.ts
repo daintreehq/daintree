@@ -1683,12 +1683,19 @@ describe("McpServerService", () => {
         "from-closed-workspace"
       );
 
-      // The live workspace manifest takes over the moment there is a view to
-      // fetch it from — the host base surface is a stand-in, never a
-      // replacement. Re-listing here is also what a real client does with the
-      // `listChanged` capability the server already declares; the SDK caches
-      // per-tool output validators off `tools/list`, so the two surfaces have
-      // to be re-read to be compared at all.
+      // Two things at once. The assertion is the real one: the live workspace
+      // manifest takes over the moment there is a view to fetch it from — the
+      // host base surface is a stand-in, never a replacement.
+      //
+      // The re-listing is a fixture artifact and NOT something a real client
+      // must do. The SDK caches per-tool output validators from `tools/list`,
+      // and `boundManifest` below declares no output schema while the base
+      // surface carries `terminal.list`'s real one, so the mock's plain-string
+      // result fails a validator the production result would satisfy. In a
+      // running build both surfaces project the same action definitions, so a
+      // client that listed while the workspace was closed can call straight
+      // through once it opens. Nothing sends `tools/list_changed` on route
+      // recovery, so nothing would prompt a re-list anyway.
       expect((await client.listTools()).tools.map((t) => t.name)).toEqual(
         boundManifest()
           .filter((entry) => entry.danger !== "confirm")
@@ -1732,9 +1739,10 @@ describe("McpServerService", () => {
       // Close the duplicate. Same client, same session, no reconnect.
       unregisterProjectView(first.webContents.id);
 
-      // Re-list for the same reason as the not-found case: the SDK caches
-      // per-tool output validators off `tools/list`, so the client has to see
-      // the live workspace manifest before calling against it.
+      // The same fixture artifact as the not-found case above: the mock live
+      // manifest declares no output schema, so the SDK's cached validator from
+      // the base surface has to be replaced before the mock's plain-string
+      // result is accepted. Production needs no such step.
       await client.listTools();
 
       const afterClose = await client.callTool({ name: "terminal.list", arguments: {} });
@@ -1753,12 +1761,20 @@ describe("McpServerService", () => {
       await vi.waitFor(() => {
         expect(service.listActiveClients()).toHaveLength(1);
       });
+      // Asserted through the accessor the freeze/eviction policies actually
+      // read. An inventory check alone would pass while the workspace row
+      // survived, which is the leak that matters here. The WebContents id is
+      // only the lease half of that accessor and irrelevant to `liveBinding`.
+      const liveBinding = () =>
+        service.getWorkspaceViewActivity(CLOSED_PROJECT_ID, winA.webContents.id).liveBinding;
+      expect(liveBinding()).toBe(true);
 
       await Promise.all(httpTransports.splice(0).map((t) => t.terminateSession()));
 
       await vi.waitFor(() => {
-        expect(service.listActiveClients()).toHaveLength(0);
+        expect(liveBinding()).toBe(false);
       });
+      expect(service.listActiveClients()).toHaveLength(0);
     });
 
     it("still lists a bound session among the external clients", async () => {
