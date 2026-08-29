@@ -50,6 +50,14 @@ const cliAvailabilityStoreMock = vi.hoisted(() => ({
   useCliAvailabilityStore: { getState: vi.fn() },
 }));
 
+const agentPreferencesStoreMock = vi.hoisted(() => ({
+  useAgentPreferencesStore: {
+    getState: vi.fn<() => { defaultAgent: string | undefined }>(() => ({
+      defaultAgent: undefined,
+    })),
+  },
+}));
+
 // Return types are spelled out because `vi.fn` otherwise infers them from the
 // default implementation, which narrows `hydratedProjectId` to `null` and makes
 // every ownership case below a type error rather than a test.
@@ -74,6 +82,7 @@ vi.mock("@/store/createWorktreeStore", () => currentViewStoreMock);
 vi.mock("@/store/worktreeStore", () => worktreeSelectionMock);
 vi.mock("@/store/agentSettingsStore", () => agentSettingsStoreMock);
 vi.mock("@/store/cliAvailabilityStore", () => cliAvailabilityStoreMock);
+vi.mock("@/store/agentPreferencesStore", () => agentPreferencesStoreMock);
 vi.mock("@/store/ccrPresetsStore", () => ccrPresetsStoreMock);
 vi.mock("@/store/projectPresetsStore", () => projectPresetsStoreMock);
 // Partial rather than whole-module: a factory-built namespace throws on any
@@ -1064,6 +1073,24 @@ describe("agent.listToolbar (#10838)", () => {
     return row;
   }
 
+  it("reports the default agent even when it is not on the toolbar", async () => {
+    agentPreferencesStoreMock.useAgentPreferencesStore.getState.mockReturnValue({
+      defaultAgent: "codex",
+    });
+    setStores({ agents: { codex: { pinned: false } } }, { codex: "ready" });
+    const actions = setupActions(makeCallbacks());
+    const result = (await callAction(actions, "agent.listToolbar")) as {
+      agents: ToolbarRow[];
+      defaultAgentId?: string;
+      resolvedDefaultAgentId?: string;
+    };
+    // Pinning is a display preference and the default is a launch preference; an
+    // explicitly hidden agent is still the agent a launch would pick.
+    expect(rowFor(result.agents, "codex").visible).toBe(false);
+    expect(result.defaultAgentId).toBe("codex");
+    expect(result.resolvedDefaultAgentId).toBe("codex");
+  });
+
   it("returns one row per launchable agent, in registry order", async () => {
     const rows = await listToolbar({ agents: {} }, {});
     expect(rows.map((r) => r.id)).toEqual([...LAUNCHABLE_AGENT_IDS]);
@@ -1229,6 +1256,67 @@ describe("agent.listAvailable", () => {
       isInitialized,
     });
   }
+
+  async function listAvailable(
+    defaultAgent: string | undefined,
+    availability: Record<string, string>,
+    isInitialized = true
+  ) {
+    agentPreferencesStoreMock.useAgentPreferencesStore.getState.mockReturnValue({ defaultAgent });
+    setStores({ agents: {} }, availability, true, isInitialized);
+    clientsMock.agentCapabilitiesClient.getRegistry.mockResolvedValue({
+      claude: { name: "Claude" },
+      codex: { name: "Codex" },
+    });
+    clientsMock.userAgentRegistryClient.get.mockResolvedValue({});
+    const actions = setupActions(makeCallbacks());
+    return (await callAction(actions, "agent.listAvailable")) as {
+      agents: AvailableRow[];
+      defaultAgentId?: string;
+      resolvedDefaultAgentId?: string;
+    };
+  }
+
+  it("reports the explicit default and the id a launch would actually resolve to", async () => {
+    const result = await listAvailable("codex", { claude: "ready", codex: "ready" });
+    expect(result.defaultAgentId).toBe("codex");
+    expect(result.resolvedDefaultAgentId).toBe("codex");
+  });
+
+  it("keeps the pick but resolves past it when its CLI is not launchable", async () => {
+    // The pick is what the user chose and the resolution is what they would get; a
+    // caller needs both to say it substituted an agent rather than silently doing it.
+    const result = await listAvailable("codex", { claude: "ready", codex: "missing" });
+    expect(result.defaultAgentId).toBe("codex");
+    expect(result.resolvedDefaultAgentId).toBe("claude");
+  });
+
+  it("omits the explicit default when the user picked None (first available)", async () => {
+    const result = await listAvailable(undefined, { claude: "ready" });
+    expect(result.defaultAgentId).toBeUndefined();
+    expect(result.resolvedDefaultAgentId).toBe("claude");
+  });
+
+  it("never names an assistant-only agent as the default", async () => {
+    // `daintree-assistant` is selectable in the settings dropdown but is absent from
+    // this listing's rows, and choosing it means "open the assistant", not "delegate
+    // work to it" — so a caller asking which agent to spawn has no pick to honour.
+    const result = await listAvailable("daintree-assistant", {
+      claude: "ready",
+      "daintree-assistant": "ready",
+    });
+    expect(result.defaultAgentId).toBeUndefined();
+    expect(result.resolvedDefaultAgentId).toBe("claude");
+    expect(result.agents.some((row) => row.id === "daintree-assistant")).toBe(false);
+  });
+
+  it("withholds the resolution until a live probe has run, but keeps the pick", async () => {
+    // A hydrating cache synthesizes "missing", which would resolve straight past a
+    // default whose CLI is in fact installed.
+    const result = await listAvailable("codex", { claude: "ready", codex: "missing" }, false);
+    expect(result.defaultAgentId).toBe("codex");
+    expect(result.resolvedDefaultAgentId).toBeUndefined();
+  });
 
   it("returns the complete effective registry with toolbar fields only for built-ins", async () => {
     setStores(
