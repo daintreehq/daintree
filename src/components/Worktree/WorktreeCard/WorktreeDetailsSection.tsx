@@ -212,7 +212,22 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
           // it, that gave the card two identical bordered boxes and nothing
           // saying which was git state and which was running work. The card is
           // already the container; one closed contour inside it is the budget.
-          isExpanded ? density.well : isSidebar ? "mt-1" : "mt-1.5"
+          isExpanded ? density.well : isSidebar && "border border-transparent",
+          // The summary row must not move when it is clicked. The well brings
+          // its own top margin (6px sidebar, 8px grid) and, in the sidebar, a
+          // 1px border, so opening the section used to drop the line 3px in
+          // the sidebar and 2px in the grid — a visible twitch on the one
+          // element the click is aimed at.
+          //
+          // So the margin is pinned to the collapsed value in both states
+          // (it wins over the well's via `cn`'s tailwind-merge), and the
+          // border is reserved as transparent when it isn't drawn. Collapsed
+          // is the value to keep: the metadata cluster above is spaced
+          // against this row's 4px specifically — see the `pt-2` note in
+          // `WorktreeCard.tsx`. Reserving the border also puts the collapsed
+          // row's text on the same x as the sessions row below it, which
+          // always sits inside a well.
+          isSidebar ? "mt-1" : "mt-1.5"
         )}
       >
         {isExpanded ? (
