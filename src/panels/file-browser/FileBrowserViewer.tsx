@@ -11,7 +11,7 @@ import {
 import { CircleCheck, FolderOpen } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { CodeViewer } from "@/components/FileViewer/CodeViewer";
-import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
+import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
@@ -440,9 +440,9 @@ export function FileBrowserViewer({
           data-testid="file-browser-sidebar-toggle"
         >
           {sidebarCollapsed ? (
-            <PanelLeftOpen className="h-4 w-4" />
+            <PanelLeftOpen className={TOOLBAR_ICON_CLASS} />
           ) : (
-            <PanelLeftClose className="h-4 w-4" />
+            <PanelLeftClose className={TOOLBAR_ICON_CLASS} />
           )}
         </FileViewerToolbar.IconButton>
         {filePath && (
@@ -502,7 +502,7 @@ export function FileBrowserViewer({
               re-fetch an open media preview, which needs the manual nonce. */}
           {sidebarCollapsed && (
             <FileViewerToolbar.IconButton label="Refresh" onClick={onRefresh}>
-              <SpinningIcon icon={RefreshCw} active={isRefreshing} className="h-4 w-4" />
+              <SpinningIcon icon={RefreshCw} active={isRefreshing} className={TOOLBAR_ICON_CLASS} />
             </FileViewerToolbar.IconButton>
           )}
           {filePath && (
@@ -511,13 +511,13 @@ export function FileBrowserViewer({
                 label={reveal.label}
                 onClick={() => void handleExternalAction("reveal")}
               >
-                <FolderOpen className="h-4 w-4" />
+                <FolderOpen className={TOOLBAR_ICON_CLASS} />
               </FileViewerToolbar.IconButton>
               <FileViewerToolbar.IconButton
                 label="Open in editor"
                 onClick={() => void handleExternalAction("editor")}
               >
-                <ExternalLink className="h-4 w-4" />
+                <ExternalLink className={TOOLBAR_ICON_CLASS} />
               </FileViewerToolbar.IconButton>
             </>
           )}

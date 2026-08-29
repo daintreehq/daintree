@@ -17,7 +17,7 @@ import { FolderOpen } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
-import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
+import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
@@ -584,11 +584,11 @@ export function DiffPane({
               pressed={diffWrapLines}
               onClick={() => setDiffWrapLines(!diffWrapLines)}
             >
-              <WrapText className="w-4 h-4" />
+              <WrapText className={TOOLBAR_ICON_CLASS} />
             </FileViewerToolbar.IconButton>
           )}
           <FileViewerToolbar.IconButton label="Refresh" onClick={refreshAll}>
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className={TOOLBAR_ICON_CLASS} />
           </FileViewerToolbar.IconButton>
           {absolutePath && (
             <>
@@ -596,13 +596,13 @@ export function DiffPane({
                 label={reveal.label}
                 onClick={() => void handleExternalAction("reveal")}
               >
-                <FolderOpen className="w-4 h-4" />
+                <FolderOpen className={TOOLBAR_ICON_CLASS} />
               </FileViewerToolbar.IconButton>
               <FileViewerToolbar.IconButton
                 label="Open in editor"
                 onClick={() => void handleExternalAction("editor")}
               >
-                <ExternalLink className="w-4 h-4" />
+                <ExternalLink className={TOOLBAR_ICON_CLASS} />
               </FileViewerToolbar.IconButton>
             </>
           )}
@@ -870,7 +870,7 @@ export function DiffPane({
                 label="Show file list"
                 onToggle={() => setDiffShowFileList(!diffShowFileList)}
               >
-                <PanelLeft className="w-4 h-4" />
+                <PanelLeft className={TOOLBAR_ICON_CLASS} />
               </IconToggle>
             )}
             {isWorkspace && (
@@ -884,7 +884,7 @@ export function DiffPane({
                       aria-label="Previous file"
                       className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                     >
-                      <ChevronLeft className="w-4 h-4" />
+                      <ChevronLeft className={TOOLBAR_ICON_CLASS} />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="top">Previous file ([)</TooltipContent>
@@ -904,7 +904,7 @@ export function DiffPane({
                       aria-label="Next file"
                       className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                     >
-                      <ChevronRight className="w-4 h-4" />
+                      <ChevronRight className={TOOLBAR_ICON_CLASS} />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="top">Next file (])</TooltipContent>
@@ -918,7 +918,7 @@ export function DiffPane({
               label="Viewed"
               onToggle={() => toggleViewed(worktreePath, currentEntry.viewedKey)}
             >
-              <Check className="w-4 h-4" />
+              <Check className={TOOLBAR_ICON_CLASS} />
               <span className="text-xs">Viewed</span>
             </IconToggle>
           )}

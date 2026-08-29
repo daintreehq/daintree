@@ -296,7 +296,7 @@ test("file browser review — tree sidebar chrome", async () => {
         // consolidation is that this now says HOW MANY rows are missing, where
         // the old lit icon only said the filter was on.
         await snap("21-dotfiles-hidden-header", treeHeader);
-        await snap("22-dotfiles-hidden-menu", panel);
+        await snap("22-dotfiles-hidden-full");
         await setShowDotfiles(true);
       });
 
@@ -384,7 +384,10 @@ test("file browser review — tree sidebar chrome", async () => {
         // holds actually apply — both of them govern the tree.
         await viewOptions.click({ timeout: T_MEDIUM });
         await settle(page, 600);
-        await snap("80-view-options-open", panel);
+        // Full page, not the panel: Radix portals the menu to document.body, so
+        // a panel-scoped shot crops whatever part of it falls outside the
+        // panel's own box and makes a correctly-placed menu look clipped.
+        await snap("80-view-options-open");
         await page.keyboard.press("Escape");
         await settle(page, 400);
       });

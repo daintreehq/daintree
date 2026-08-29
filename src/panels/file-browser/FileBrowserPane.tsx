@@ -14,7 +14,7 @@ import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
-import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
+import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
@@ -54,6 +54,7 @@ import {
 } from "./fileBrowserTree";
 import { useWorkspaceRootPath } from "./useWorkspaceRootPath";
 import { FileBrowserViewOptions } from "./FileBrowserViewOptions";
+import { FileBrowserHiddenStrip } from "./FileBrowserHiddenStrip";
 
 export type FileBrowserPaneProps = BasePanelProps;
 
@@ -1091,13 +1092,13 @@ export function FileBrowserPane({
                   label="Back to worktree root"
                   onClick={handleResetRoot}
                 >
-                  <FolderRoot className="h-4 w-4" />
+                  <FolderRoot className={TOOLBAR_ICON_CLASS} />
                 </FileViewerToolbar.IconButton>
               ) : (
                 // Same footprint as the button so the path text doesn't shift
                 // when the tree is re-rooted.
                 <span className="shrink-0 p-1.5 text-text-secondary" aria-hidden="true">
-                  <FolderRoot className="h-4 w-4" />
+                  <FolderRoot className={TOOLBAR_ICON_CLASS} />
                 </span>
               )}
               {/* Re-rooted, so the label names a real folder: it copies the
@@ -1145,7 +1146,7 @@ export function FileBrowserPane({
               )}
               {rootPath !== "" && (
                 <FileViewerToolbar.IconButton label="Up one level" onClick={handleUpOneLevel}>
-                  <CornerLeftUp className="h-4 w-4" />
+                  <CornerLeftUp className={TOOLBAR_ICON_CLASS} />
                 </FileViewerToolbar.IconButton>
               )}
               {/* Everything that changes what the tree shows, in one control
@@ -1173,7 +1174,11 @@ export function FileBrowserPane({
                   once this header is collapsed away, so there is still exactly
                   one in every layout (#11496). */}
               <FileViewerToolbar.IconButton label="Refresh" onClick={handleRefresh}>
-                <SpinningIcon icon={RefreshCw} active={isRefreshing} className="h-4 w-4" />
+                <SpinningIcon
+                  icon={RefreshCw}
+                  active={isRefreshing}
+                  className={TOOLBAR_ICON_CLASS}
+                />
               </FileViewerToolbar.IconButton>
               {/* The viewer's disclosure, homed here rather than in the viewer —
                   the mirror of where the tree's toggle lives (#11496). That
@@ -1193,9 +1198,9 @@ export function FileBrowserPane({
                 data-testid="file-browser-viewer-toggle"
               >
                 {viewerCollapsed ? (
-                  <PanelRightOpen className="h-4 w-4" />
+                  <PanelRightOpen className={TOOLBAR_ICON_CLASS} />
                 ) : (
-                  <PanelRightClose className="h-4 w-4" />
+                  <PanelRightClose className={TOOLBAR_ICON_CLASS} />
                 )}
               </FileViewerToolbar.IconButton>
             </div>
@@ -1353,9 +1358,14 @@ export function FileBrowserPane({
 
     if (rows.length === 0) {
       // Only offer "Show dotfiles" when it can actually help — the toggle is on
-      // and this root holds dotfiles it is what's hiding. Otherwise the folder
-      // is genuinely empty (junk-only contents count as empty too).
+      // and this root holds dotfiles it is what's hiding.
       const canRevealDotfiles = hideDotfiles && hasHiddenDotfiles;
+      // Junk-only contents used to count as empty, which made the browser say
+      // "This folder is empty" about a folder that is not: a directory holding
+      // nothing but `.git` reads as deleted rather than filtered, and no
+      // affordance anywhere named the list doing the hiding. There is no
+      // in-panel recovery — the junk list is an app-global setting — so this
+      // does not offer a button it cannot honour; it stops lying instead.
       return (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4">
           <EmptyState
@@ -1366,9 +1376,11 @@ export function FileBrowserPane({
             title={
               canRevealDotfiles
                 ? "Dotfiles are hidden here"
-                : rootPath
-                  ? "This folder is empty"
-                  : "This worktree is empty"
+                : hiddenCounts.alwaysHidden > 0
+                  ? "Everything here is on the always-hidden list"
+                  : rootPath
+                    ? "This folder is empty"
+                    : "This worktree is empty"
             }
             action={
               canRevealDotfiles ? (
@@ -1425,6 +1437,12 @@ export function FileBrowserPane({
           label={rootPath === "" ? `Files in ${title}` : `Files in ${title}/${rootPath}`}
           gitStatusIndex={gitStatusIndex}
         />
+        {/* What the dotfile filter is currently removing, and the one gesture
+            that puts it back. Conditional by construction — it renders nothing
+            while nothing is hidden — so the tree never pays height for it at
+            rest. Above the Reveal strip because it describes the whole view
+            while Reveal describes one selection. */}
+        <FileBrowserHiddenStrip counts={hiddenCounts} onShowDotfiles={handleShowDotfiles} />
         {/* Below the tree, never above: the strip unmounts the instant a
             click makes the selection reachable, and sitting above the rows it
             would shift them mid-gesture — the second click of a double-click

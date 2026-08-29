@@ -24,7 +24,7 @@ import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
-import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
+import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
@@ -1027,13 +1027,17 @@ export function FilePane({
               pressed={markdownWrapLines}
               onClick={() => setMarkdownWrapLines(!markdownWrapLines)}
             >
-              <WrapText className="w-4 h-4" />
+              <WrapText className={TOOLBAR_ICON_CLASS} />
             </FileViewerToolbar.IconButton>
           )}
           {/* Refresh follows what's on screen — re-reading the file wouldn't
               refetch a diff, and vice versa. */}
           <FileViewerToolbar.IconButton label="Refresh" onClick={handleToolbarRefresh}>
-            <SpinningIcon icon={RefreshCw} active={refreshingMode !== null} className="w-4 h-4" />
+            <SpinningIcon
+              icon={RefreshCw}
+              active={refreshingMode !== null}
+              className={TOOLBAR_ICON_CLASS}
+            />
           </FileViewerToolbar.IconButton>
           {/* Reveal is always offered, even for a file the viewer can't render
               (oversized, unsupported video) — the OS file manager is then the
@@ -1047,23 +1051,23 @@ export function FilePane({
               label="Show in file browser"
               onClick={() => void handleOpenExternal("file-browser")}
             >
-              <FolderTree className="w-4 h-4" />
+              <FolderTree className={TOOLBAR_ICON_CLASS} />
             </FileViewerToolbar.IconButton>
           )}
           <FileViewerToolbar.IconButton
             label={reveal.label}
             onClick={() => void handleOpenExternal("reveal")}
           >
-            <FolderOpen className="w-4 h-4" />
+            <FolderOpen className={TOOLBAR_ICON_CLASS} />
           </FileViewerToolbar.IconButton>
           <FileViewerToolbar.IconButton
             label={openTarget === "browser" ? "Open in browser" : "Open in editor"}
             onClick={() => void handleOpenExternal(openTarget)}
           >
             {openTarget === "browser" ? (
-              <Globe className="w-4 h-4" />
+              <Globe className={TOOLBAR_ICON_CLASS} />
             ) : (
-              <ExternalLink className="w-4 h-4" />
+              <ExternalLink className={TOOLBAR_ICON_CLASS} />
             )}
           </FileViewerToolbar.IconButton>
         </FileViewerToolbar.Actions>

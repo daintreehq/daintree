@@ -86,6 +86,22 @@ function useFittedPath(fullText: string | undefined): {
 }
 
 /**
+ * One icon size for every control in this toolbar family, so the four panels
+ * that use it (FilePane, DiffPane, and the file browser's two header rows)
+ * cannot drift apart a pixel at a time.
+ *
+ * 14px rather than 16: at 16 the glyphs read heavier than the text beside them
+ * and Refresh in particular dominated a row it only shares. With the button's
+ * `p-1.5` this still leaves a 26px target, above the 24px WCAG 2.5.8 floor.
+ *
+ * Load-bearing beyond looks: the file browser's tree header hand-rolls its own
+ * row to match `Root`'s height so the border under the two halves reads as one
+ * continuous line (#11328). Sizing icons per call site is what would let that
+ * line break, so the size lives here and callers spread it.
+ */
+export const TOOLBAR_ICON_CLASS = "h-3.5 w-3.5";
+
+/**
  * The plain-file-viewing toolbar shared by the FilePane panel and the
  * FileViewerModal dialog, so the two surfaces can't drift apart again. Both
  * render the same viewer bodies (CodeViewer/MarkdownViewer/HtmlViewer); this

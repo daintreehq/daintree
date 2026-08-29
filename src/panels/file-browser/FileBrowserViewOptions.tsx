@@ -1,5 +1,5 @@
 import { SlidersHorizontal } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -22,9 +22,10 @@ const SORT_OPTIONS: ReadonlyArray<{ value: FileBrowserSortKey; label: string }> 
 ];
 
 function toSortKey(value: string, fallback: FileBrowserSortKey): FileBrowserSortKey {
-  return SORT_OPTIONS.some((option) => option.value === value)
-    ? (value as FileBrowserSortKey)
-    : fallback;
+  // Narrowed by lookup rather than asserted: the option list is already the
+  // authority on which keys exist, so reading the key back off the matched
+  // option proves the type instead of claiming it.
+  return SORT_OPTIONS.find((option) => option.value === value)?.value ?? fallback;
 }
 
 /**
@@ -72,13 +73,13 @@ export interface FileBrowserViewOptionsProps {
  * column is collapsed away — the same conditional ownership Refresh already
  * uses, so there is exactly one of these in every layout.
  *
- * The badge counts hidden ROWS, not non-default settings, which is where this
- * departs from `FileSection`'s otherwise identical trigger. The reasoning is
- * that a badge should carry what the surface cannot otherwise say: a non-default
- * sort is self-evident from the list itself, but a hidden row leaves nothing
- * behind, and that silence is the documented failure mode where a user believes
- * files were deleted. Neutral fill and a number, never an accent or a dot — a
- * dot reads as "something new", and what matters here is how many.
+ * Deliberately NOT badged with a count, unlike `FileSection`'s otherwise
+ * identical trigger. A number inside a fixed-width icon button reads fine at
+ * "3" and falls apart at "25", where it squeezes the glyph beside it; and a
+ * trigger sized to its content drags the whole button cluster sideways every
+ * time a folder is expanded. The count belongs where there is room for words
+ * and a recovery — see `FileBrowserHiddenStrip`, which appears under the tree
+ * only while rows are actually being hidden.
  */
 export function FileBrowserViewOptions({
   sort,
@@ -88,7 +89,6 @@ export function FileBrowserViewOptions({
   hiddenCounts,
   "data-testid": testId,
 }: FileBrowserViewOptionsProps) {
-  const totalHidden = hiddenCounts.dotfiles + hiddenCounts.alwaysHidden;
   const summary = hiddenSummary(hiddenCounts);
   const label = summary === "" ? "View options" : `View options — ${summary}`;
 
@@ -99,22 +99,15 @@ export function FileBrowserViewOptions({
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              // Fixed width rather than intrinsic: the badge appears and
-              // disappears as rows are filtered, and a trigger that resizes
-              // would drag the whole button cluster sideways each time.
-              className={cn(
-                "toolbar-icon-button inline-flex w-8 shrink-0 items-center justify-center gap-1 rounded p-1",
-                totalHidden > 0 ? "text-text-primary" : "text-text-secondary"
-              )}
+              // Same footprint as its neighbours in the row. The armed chip
+              // `toolbar-icon-button` paints on `data-state="open"` is the only
+              // state this control needs to carry; what the filters are actually
+              // doing is said in words under the tree, not crammed in here.
+              className="toolbar-icon-button shrink-0 rounded-lg p-1.5 text-text-secondary"
               aria-label={label}
               data-testid={testId}
             >
-              <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
-              {totalHidden > 0 && (
-                <span aria-hidden="true" className="text-3xs font-medium leading-none tabular-nums">
-                  {totalHidden}
-                </span>
-              )}
+              <SlidersHorizontal className={TOOLBAR_ICON_CLASS} aria-hidden="true" />
             </button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
