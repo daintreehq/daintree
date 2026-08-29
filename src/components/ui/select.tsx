@@ -4,6 +4,7 @@ import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { composeHandlers, primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 
 const SelectIntentContext = React.createContext<((next: boolean) => void) | null>(null);
 
@@ -201,7 +202,16 @@ const SelectContent = React.forwardRef<
   SelectContentProps
 >(
   (
-    { className, children, position = "popper", sideOffset = 4, onEscapeKeyDown, style, ...props },
+    {
+      className,
+      children,
+      position = "popper",
+      sideOffset = 4,
+      onEscapeKeyDown,
+      onCloseAutoFocus,
+      style,
+      ...props
+    },
     ref
   ) => {
     const radix = useRadixPrimitives();
@@ -219,6 +229,14 @@ const SelectContent = React.forwardRef<
           onEscapeKeyDown={(event) => {
             event.stopPropagation();
             onEscapeKeyDown?.(event);
+          }}
+          onCloseAutoFocus={(event) => {
+            onCloseAutoFocus?.(event);
+            // Radix returns focus to the trigger here with a bare `.focus()`,
+            // which opens any tooltip that trigger carries. A select's focus
+            // policy is otherwise left alone — returning to the trigger is what
+            // a combobox is supposed to do — so only the tooltip is suppressed.
+            armTooltipFocusSuppression();
           }}
           style={{ transformOrigin: "var(--radix-select-content-transform-origin)", ...style }}
           className={cn(

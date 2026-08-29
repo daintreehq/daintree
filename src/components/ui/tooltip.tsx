@@ -10,6 +10,10 @@ import {
   notifyTooltipPointerActivity,
   registerTooltipDismiss,
 } from "@/lib/tooltipDismissRegistry";
+import {
+  clearTooltipSuppressionForElement,
+  isTooltipSuppressedForElement,
+} from "@/lib/tooltipFocusSuppression";
 
 type TooltipProviderProps = React.ComponentProps<typeof TooltipPrimitiveType.Provider>;
 
@@ -49,6 +53,22 @@ type TooltipProps = TooltipRootProps & {
   dismissOnDialogTransition?: boolean;
 };
 
+/**
+ * Publishes the trigger's DOM node to the Root, so the Root can ask whether an
+ * overlay has marked exactly this element as one whose restored focus must not
+ * open a tooltip. Reading `document.activeElement` instead would be close
+ * enough most of the time and wrong in the case that matters: it would mute
+ * every OTHER tooltip in the app while the marked element holds focus, which
+ * is the app-wide muting this mechanism exists to avoid.
+ *
+ * A setter rather than the ref itself — assigning `.current` to something a
+ * `useContext()` handed you bails the React Compiler out of the component
+ * doing it.
+ */
+const TooltipTriggerNodeContext = React.createContext<((node: HTMLElement | null) => void) | null>(
+  null
+);
+
 const Tooltip = ({
   children,
   open,
@@ -68,6 +88,10 @@ const Tooltip = ({
   // (`true`) preserves the caller's `open` value, so uncontrolled tooltips
   // and any explicit `open={true}` callers keep working unchanged.
   const dropdownVisible = React.useContext(FixedDropdownVisibleContext);
+  const triggerNodeRef = React.useRef<HTMLElement | null>(null);
+  const setTriggerNode = React.useCallback((node: HTMLElement | null) => {
+    triggerNodeRef.current = node;
+  }, []);
   // Shadow of the open state so the Root is always controlled. For
   // uncontrolled consumers this replaces Radix's internal state; for
   // controlled consumers it tracks their value so flipping between modes
@@ -92,6 +116,14 @@ const Tooltip = ({
       // during the post-dismiss suppression window; genuine hovers are
       // unaffected because pointerenter on any trigger clears it first.
       if (next && dismissOnDialogTransition && isTooltipFocusOpenSuppressed()) return;
+      // The same problem one overlay at a time. An anchored overlay (dropdown,
+      // popover, context menu) marks the single element it is about to hand
+      // focus back to; if that element is this tooltip's own trigger, the open
+      // it is asking for is the focus restoration, not a hover. Applied
+      // whatever `dismissOnDialogTransition` says: that opt-out exists to keep
+      // rich hover cards clear of the app-wide dialog hammer, and this window
+      // is one element wide.
+      if (next && isTooltipSuppressedForElement(triggerNodeRef.current)) return;
       setManagedOpen(next);
       onOpenChangeRef.current?.(next);
     },
@@ -142,7 +174,12 @@ const Tooltip = ({
     if (!dropdownVisible) setManagedOpen(false);
   }, [dropdownVisible]);
 
-  if (!radix) return <>{children}</>;
+  if (!radix)
+    return (
+      <TooltipTriggerNodeContext.Provider value={setTriggerNode}>
+        {children}
+      </TooltipTriggerNodeContext.Provider>
+    );
   const Root = radix.TooltipPrimitive.Root;
   // Key on visibility so the Radix Root remounts on each hidden/visible
   // transition, clearing any internal state the prop-forced close skipped
@@ -155,7 +192,9 @@ const Tooltip = ({
       open={effectiveOpen}
       onOpenChange={handleOpenChange}
     >
-      {children}
+      <TooltipTriggerNodeContext.Provider value={setTriggerNode}>
+        {children}
+      </TooltipTriggerNodeContext.Provider>
     </Root>
   );
 };
@@ -181,6 +220,20 @@ const TooltipTrigger = React.forwardRef<
     ref
   ) => {
     const radix = useRadixPrimitives();
+    // Published to the Root so it can tell a focus restoration aimed at THIS
+    // trigger from any other focus in the app.
+    const publishTriggerNode = React.useContext(TooltipTriggerNodeContext);
+    const setTriggerRef = React.useCallback(
+      (node: React.ElementRef<typeof TooltipPrimitiveType.Trigger> | null) => {
+        publishTriggerNode?.(node);
+        if (typeof ref === "function") {
+          ref(node);
+        } else if (ref) {
+          ref.current = node;
+        }
+      },
+      [publishTriggerNode, ref]
+    );
     // Track whether the most recent focus arrived via a pointer interaction so
     // the focus-capture handler can distinguish keyboard focus from
     // click-induced focus. `pointerdown` sets the ref; `pointerup` schedules a
@@ -196,6 +249,10 @@ const TooltipTrigger = React.forwardRef<
       // A real hover ends the post-dialog-transition focus-open
       // suppression — the user is pointing, so tooltips are wanted again.
       notifyTooltipPointerActivity();
+      // Same for the element-scoped window an overlay close armed: a pointer
+      // resting on this trigger is exactly the case that window must not
+      // swallow, and pointerenter always precedes the open it would block.
+      clearTooltipSuppressionForElement(event.currentTarget);
       primeOnEvent();
       onPointerEnter?.(event);
     };
@@ -204,7 +261,10 @@ const TooltipTrigger = React.forwardRef<
       // suppression here too — covers a pointer already resting on the
       // trigger whose next micro-move should open normally. Touch moves
       // never open Radix tooltips, so they don't count as hover intent.
-      if (event.pointerType !== "touch") notifyTooltipPointerActivity();
+      if (event.pointerType !== "touch") {
+        notifyTooltipPointerActivity();
+        clearTooltipSuppressionForElement(event.currentTarget);
+      }
       onPointerMove?.(event);
     };
     const handlePointerDown: React.PointerEventHandler<HTMLButtonElement> = (event) => {
@@ -231,7 +291,7 @@ const TooltipTrigger = React.forwardRef<
       if (asChild) {
         return (
           <Slot
-            ref={ref}
+            ref={setTriggerRef}
             onPointerEnter={handlePointerEnter}
             onPointerMove={handlePointerMove}
             onPointerDown={handlePointerDown}
@@ -246,7 +306,7 @@ const TooltipTrigger = React.forwardRef<
       return (
         <button
           type="button"
-          ref={ref as React.Ref<HTMLButtonElement>}
+          ref={setTriggerRef}
           onPointerEnter={handlePointerEnter}
           onPointerMove={handlePointerMove}
           onPointerDown={handlePointerDown}
@@ -262,7 +322,7 @@ const TooltipTrigger = React.forwardRef<
     const Trigger = radix.TooltipPrimitive.Trigger;
     return (
       <Trigger
-        ref={ref}
+        ref={setTriggerRef}
         asChild={asChild}
         onPointerEnter={handlePointerEnter}
         onPointerMove={handlePointerMove}
