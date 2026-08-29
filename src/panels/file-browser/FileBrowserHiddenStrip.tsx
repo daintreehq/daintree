@@ -54,6 +54,12 @@ export function FileBrowserHiddenStrip({ counts, onShowDotfiles }: FileBrowserHi
           rule for buttons. */}
       <button
         type="button"
+        // Verb-noun where it matters. The visible word stays short because the
+        // strip is only ~200px wide at the sidebar's minimum, and the object it
+        // acts on is stated an inch to its left; but "Show" alone is ambiguous
+        // out of context — it could mean "list them somewhere else" — so the
+        // accessible name carries the full phrase.
+        aria-label="Show dotfiles"
         onClick={onShowDotfiles}
         className="shrink-0 rounded-lg px-1 text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
       >

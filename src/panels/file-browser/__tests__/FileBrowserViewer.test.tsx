@@ -192,6 +192,8 @@ interface ViewerOpts {
   hideDotfiles?: boolean;
   onHideDotfilesChange?: (hide: boolean) => void;
   hiddenCounts?: HiddenRowCounts;
+  onCollapseAll?: () => void;
+  canCollapseAll?: boolean;
 }
 
 function change(relativePath: string, status: GitStatus = "modified"): WorkingTreeFileChange {
@@ -238,6 +240,8 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         hideDotfiles={opts.hideDotfiles ?? false}
         onHideDotfilesChange={opts.onHideDotfilesChange ?? vi.fn()}
         hiddenCounts={opts.hiddenCounts ?? NO_HIDDEN_ROWS}
+        onCollapseAll={opts.onCollapseAll ?? vi.fn()}
+        canCollapseAll={opts.canCollapseAll ?? false}
       />
     </TooltipProvider>
   );

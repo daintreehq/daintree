@@ -105,6 +105,16 @@ const FIXTURE_FILES: Record<string, string> = {
 };
 
 function seedFiles(dir: string): void {
+  // A folder with enough entries to overflow the tree viewport. The hidden-rows
+  // strip is a sibling of the scroller rather than the last row inside it, and
+  // this is the state that proves it: at the bottom of a LIST the strip would
+  // scroll out of sight in a long tree, which is the standard objection to
+  // bottom placement.
+  for (let i = 0; i < 40; i++) {
+    const name = `module-${String(i).padStart(2, "0")}`;
+    mkdirSync(path.join(dir, "packages", name), { recursive: true });
+    writeFileSync(path.join(dir, "packages", name, "index.ts"), "export {};\n");
+  }
   for (const [relative, contents] of Object.entries(FIXTURE_FILES)) {
     const target = path.join(dir, relative);
     mkdirSync(path.dirname(target), { recursive: true });
@@ -376,6 +386,17 @@ test("file browser review — tree sidebar chrome", async () => {
         await snap("70-filtered-empty-tree", treeColumn);
         await setShowDotfiles(true);
         await resetRoot();
+      });
+
+      await step("long-tree", async () => {
+        await resetRoot();
+        await setShowDotfiles(false);
+        const row = panel.locator('[role="treeitem"]', { hasText: "packages" }).first();
+        await row.click({ timeout: T_MEDIUM });
+        await settle(page, 900);
+        // The strip must still be on screen with the tree overflowing.
+        await snap("75-long-tree-strip-pinned", treeColumn);
+        await setShowDotfiles(true);
       });
 
       await step("view-options", async () => {

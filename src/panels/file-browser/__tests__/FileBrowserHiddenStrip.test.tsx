@@ -37,7 +37,9 @@ describe("FileBrowserHiddenStrip", () => {
     );
     const strip = screen.getByTestId("file-browser-hidden-strip");
     expect(strip.textContent).toContain("7");
-    fireEvent.click(screen.getByRole("button", { name: "Show" }));
+    // By its accessible name, not its visible word: "Show" alone is ambiguous
+    // out of context, so the full verb-noun is what assistive tech gets.
+    fireEvent.click(screen.getByRole("button", { name: "Show dotfiles" }));
     expect(onShowDotfiles).toHaveBeenCalledTimes(1);
   });
 

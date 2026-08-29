@@ -87,6 +87,9 @@ export interface FileBrowserViewerProps {
   onRefresh: () => void;
   /** Whether that refresh is still draining; spins the Refresh icon. */
   isRefreshing: boolean;
+  /** Collapses every expanded tree branch; disabled when none are open. */
+  onCollapseAll: () => void;
+  canCollapseAll: boolean;
   /** Whether the tree sidebar is collapsed; drives the disclosure toggle's icon and state. */
   sidebarCollapsed: boolean;
   /** Opens/closes the tree sidebar. Owned by the pane, which persists the state. */
@@ -191,6 +194,8 @@ export function FileBrowserViewer({
   surfaceRefreshNonce,
   onRefresh,
   isRefreshing,
+  onCollapseAll,
+  canCollapseAll,
   sidebarCollapsed,
   onToggleSidebar,
   treeSidebarId,
@@ -429,7 +434,7 @@ export function FileBrowserViewer({
   // icon swap and `aria-expanded` carry the open/closed state.
   return (
     <>
-      <FileViewerToolbar.Root>
+      <FileViewerToolbar.Root label="File viewer controls">
         <FileViewerToolbar.IconButton
           label="Toggle file tree"
           expanded={!sidebarCollapsed}
@@ -488,6 +493,8 @@ export function FileBrowserViewer({
               hiddenCounts={hiddenCounts}
               onRefresh={onRefresh}
               isRefreshing={isRefreshing}
+              onCollapseAll={onCollapseAll}
+              canCollapseAll={canCollapseAll}
               data-testid="file-browser-view-options"
             />
           )}

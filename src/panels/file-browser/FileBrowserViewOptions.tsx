@@ -1,4 +1,4 @@
-import { RefreshCw, SlidersHorizontal } from "lucide-react";
+import { ChevronsDownUp, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import {
   DropdownMenu,
@@ -65,6 +65,14 @@ export interface FileBrowserViewOptionsProps {
    */
   onRefresh: () => void;
   isRefreshing: boolean;
+  /**
+   * Collapses every expanded branch. Standard in comparable trees (VS Code,
+   * JetBrains, Xcode) and previously absent here entirely — the only way back
+   * from a deep tree was collapsing each branch by hand.
+   */
+  onCollapseAll: () => void;
+  /** False when nothing is expanded, so the item cannot promise a no-op. */
+  canCollapseAll: boolean;
   "data-testid"?: string;
 }
 
@@ -99,6 +107,8 @@ export function FileBrowserViewOptions({
   hiddenCounts,
   onRefresh,
   isRefreshing,
+  onCollapseAll,
+  canCollapseAll,
   "data-testid": testId,
 }: FileBrowserViewOptionsProps) {
   // Just the name. What the filters are doing is announced by the strip under
@@ -197,13 +207,31 @@ export function FileBrowserViewOptions({
             has to reach for. Still exactly one Refresh in every layout: this
             menu is rendered by the tree header, or by the viewer's toolbar
             while the tree is collapsed away, never both (#11496, #11938). */}
-        <DropdownMenuItem onSelect={onRefresh} data-testid="file-browser-refresh">
-          <SpinningIcon
-            icon={RefreshCw}
-            active={isRefreshing}
-            className={TOOLBAR_ICON_CLASS}
-            aria-hidden="true"
-          />
+        {/* `inset` plus an absolutely-placed glyph at left-2 is exactly the
+            geometry the radio and checkbox items above use for their check
+            indicators, so this row's label lands on the same left edge as
+            theirs instead of sitting a few pixels out with its icon jammed
+            against the text. */}
+        <DropdownMenuItem
+          inset
+          disabled={!canCollapseAll}
+          onSelect={onCollapseAll}
+          data-testid="file-browser-collapse-all"
+        >
+          <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
+            <ChevronsDownUp className="h-3.5 w-3.5" aria-hidden="true" />
+          </span>
+          Collapse all
+        </DropdownMenuItem>
+        <DropdownMenuItem inset onSelect={onRefresh} data-testid="file-browser-refresh">
+          <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
+            <SpinningIcon
+              icon={RefreshCw}
+              active={isRefreshing}
+              className="h-3.5 w-3.5"
+              aria-hidden="true"
+            />
+          </span>
           Refresh
         </DropdownMenuItem>
       </DropdownMenuContent>

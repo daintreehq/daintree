@@ -5,6 +5,7 @@ import {
   FolderRoot,
   FolderTree,
   PanelRightClose,
+  RefreshCw,
   PanelRightOpen,
 } from "lucide-react";
 import { basename, join } from "@shared/utils/path";
@@ -28,6 +29,7 @@ import { flushPanelPersistence } from "@/store/slices";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useExternalChangeTick } from "@/hooks/useExternalChangeTick";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { FileTreeView } from "./FileTreeView";
 import { FileBrowserViewer } from "./FileBrowserViewer";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
@@ -661,6 +663,19 @@ export function FileBrowserPane({
   // Both halves in one write: the setter's no-op guard compares each against
   // its own default, so sending them separately would let a key change land
   // while a simultaneous direction change was still being judged unchanged.
+  // Standard in every comparable tree — VS Code, JetBrains and Xcode all ship
+  // it — and this browser had no equivalent at all: the only way back from a
+  // deeply expanded tree was collapsing each branch by hand. It lives in the
+  // menu rather than the header because the header is the scarce surface this
+  // whole redesign was about, and this is a once-in-a-while gesture.
+  //
+  // Clears the set outright rather than walking it: every expanded path is a
+  // child of the root, so there is nothing to preserve, and the cursor is left
+  // alone — `FileTreeView` rehomes a cursor that a collapse put out of view.
+  const handleCollapseAll = useCallback(() => {
+    setFileBrowserView(id, { browserExpandedPaths: [] });
+  }, [id, setFileBrowserView]);
+
   const handleSortChange = useCallback(
     (next: FileBrowserSortOrder) => {
       setFileBrowserView(id, { browserSortKey: next.key, browserSortDirection: next.direction });
@@ -791,6 +806,8 @@ export function FileBrowserPane({
   // focus would fall to the document; hand it to the tree instead. rAF because
   // the tree for the new root renders on the commit after the state write.
   const treeColumnRef = useRef<HTMLDivElement>(null);
+  const treeHeaderRef = useRef<HTMLDivElement>(null);
+  const handleTreeHeaderKeyDown = useToolbarRoving(treeHeaderRef);
   const focusTree = useCallback(() => {
     requestAnimationFrame(() => {
       const column = treeColumnRef.current;
@@ -951,6 +968,15 @@ export function FileBrowserPane({
                 <FolderRoot className="w-3.5 h-3.5 mr-2" />
                 Set as root
               </ContextMenuItem>
+              {/* The second route to Refresh, and the reason demoting it out of
+                  the header is safe: a manual re-read has to stay reachable
+                  from where the user already suspects something is stale — the
+                  folder itself — not only from a menu at the top of the panel.
+                  Re-reads the whole browser, same handler as the menu item. */}
+              <ContextMenuItem onSelect={handleRefresh}>
+                <RefreshCw className="w-3.5 h-3.5 mr-2" />
+                Refresh
+              </ContextMenuItem>
               <ContextMenuSeparator />
             </>
           )}
@@ -970,7 +996,14 @@ export function FileBrowserPane({
           })}
         </>
       ),
-    [showFolderContents, handleSetRoot, renderFileRowMenuItems, basePath, gitStatusIndex]
+    [
+      showFolderContents,
+      handleSetRoot,
+      handleRefresh,
+      renderFileRowMenuItems,
+      basePath,
+      gitStatusIndex,
+    ]
   );
 
   // A restored panel remembers a selection whose ancestors may be collapsed.
@@ -1081,7 +1114,19 @@ export function FileBrowserPane({
             {/* py-1.5 + border-overlay + 16px icons match FileViewerToolbar.Root
                 so the two header bars share one height and border token, and the
                 line under them reads continuous across the divider (#11328). */}
-            <div className="flex shrink-0 items-center gap-0.5 border-b border-overlay px-1.5 py-1.5">
+            <div
+              ref={treeHeaderRef}
+              // Hand-rolled to match `FileViewerToolbar.Root`'s height and
+              // border, so it takes the same APG toolbar contract too: one tab
+              // stop for the row, Left/Right between its controls. Named
+              // distinctly from the viewer's row because both can be on screen
+              // at once, and two toolbars called the same thing are two
+              // toolbars a screen-reader user cannot tell apart.
+              role="toolbar"
+              aria-label="File tree controls"
+              onKeyDown={handleTreeHeaderKeyDown}
+              className="flex shrink-0 items-center gap-0.5 border-b border-overlay px-1.5 py-1.5"
+            >
               {/* Root anchor mirrors the diff sidebar's header: where am I
                 rooted, then the controls that reshape the view. The root icon
                 doubles as the way back when the tree is rooted somewhere. */}
@@ -1164,6 +1209,8 @@ export function FileBrowserPane({
                 hiddenCounts={hiddenCounts}
                 onRefresh={handleRefresh}
                 isRefreshing={isRefreshing}
+                onCollapseAll={handleCollapseAll}
+                canCollapseAll={stableExpandedPaths.length > 0}
                 data-testid="file-browser-view-options"
               />
               {/* The viewer's disclosure, homed here rather than in the viewer —
@@ -1251,6 +1298,8 @@ export function FileBrowserPane({
               surfaceRefreshNonce={surfaceRefreshNonce}
               onRefresh={handleRefresh}
               isRefreshing={isRefreshing}
+              onCollapseAll={handleCollapseAll}
+              canCollapseAll={stableExpandedPaths.length > 0}
               sidebarCollapsed={sidebarCollapsed}
               onToggleSidebar={handleToggleSidebar}
               treeSidebarId={treeSidebarId}

@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { Check, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -118,9 +119,27 @@ export const TOOLBAR_ICON_CLASS = "h-3.5 w-3.5";
  * caller-supplied `transition-*` utility would silently replace its transition
  * under tailwind-merge.
  */
-function Root({ children }: { children: React.ReactNode }) {
+/**
+ * `label` is required rather than optional: `role="toolbar"` without an
+ * accessible name announces as an unnamed container, and a panel with two
+ * toolbars on screen would then have two of them. Making it a required prop
+ * means the compiler asks every surface which row this is.
+ */
+function Root({ label, children }: { label: string; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const onKeyDown = useToolbarRoving(ref);
+
   return (
-    <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay shrink-0">
+    <div
+      ref={ref}
+      // The APG toolbar pattern: one tab stop for the whole row, Left/Right
+      // between its controls. Before this every button here was its own tab
+      // stop, so tabbing past a viewer toolbar cost one press per control.
+      role="toolbar"
+      aria-label={label}
+      onKeyDown={onKeyDown}
+      className="flex shrink-0 items-center gap-1.5 border-b border-overlay bg-surface px-2 py-1.5"
+    >
       {children}
     </div>
   );

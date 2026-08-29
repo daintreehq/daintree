@@ -553,7 +553,7 @@ export function DiffPane({
   const reveal = revealCopy();
   const toolbar = filePath ? (
     <>
-      <FileViewerToolbar.Root>
+      <FileViewerToolbar.Root label="Diff viewer controls">
         {!isImageMode && !isMediaMode && !isPdfMode && (
           <div role="group" aria-label="Diff layout">
             <SegmentedToggle<DiffViewType>

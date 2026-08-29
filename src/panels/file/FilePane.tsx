@@ -1011,7 +1011,7 @@ export function FilePane({
   const errorCopy = externalError ? externalTargetCopy(externalError.target, reveal) : null;
   const toolbar = filePath ? (
     <>
-      <FileViewerToolbar.Root>
+      <FileViewerToolbar.Root label="File viewer controls">
         {availableModes.length > 1 && (
           <SegmentedToggle<FileViewMode>
             options={toggleOptions}
