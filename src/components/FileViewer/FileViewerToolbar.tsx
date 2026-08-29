@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { Check, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -86,6 +87,22 @@ function useFittedPath(fullText: string | undefined): {
 }
 
 /**
+ * One icon size for every control in this toolbar family, so the four panels
+ * that use it (FilePane, DiffPane, and the file browser's two header rows)
+ * cannot drift apart a pixel at a time.
+ *
+ * 14px rather than 16: at 16 the glyphs read heavier than the text beside them
+ * and Refresh in particular dominated a row it only shares. With the button's
+ * `p-1.5` this still leaves a 26px target, above the 24px WCAG 2.5.8 floor.
+ *
+ * Load-bearing beyond looks: the file browser's tree header hand-rolls its own
+ * row to match `Root`'s height so the border under the two halves reads as one
+ * continuous line (#11328). Sizing icons per call site is what would let that
+ * line break, so the size lives here and callers spread it.
+ */
+export const TOOLBAR_ICON_CLASS = "h-3.5 w-3.5";
+
+/**
  * The plain-file-viewing toolbar shared by the FilePane panel and the
  * FileViewerModal dialog, so the two surfaces can't drift apart again. Both
  * render the same viewer bodies (CodeViewer/MarkdownViewer/HtmlViewer); this
@@ -102,9 +119,27 @@ function useFittedPath(fullText: string | undefined): {
  * caller-supplied `transition-*` utility would silently replace its transition
  * under tailwind-merge.
  */
-function Root({ children }: { children: React.ReactNode }) {
+/**
+ * `label` is required rather than optional: `role="toolbar"` without an
+ * accessible name announces as an unnamed container, and a panel with two
+ * toolbars on screen would then have two of them. Making it a required prop
+ * means the compiler asks every surface which row this is.
+ */
+function Root({ label, children }: { label: string; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const onKeyDown = useToolbarRoving(ref);
+
   return (
-    <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay shrink-0">
+    <div
+      ref={ref}
+      // The APG toolbar pattern: one tab stop for the whole row, Left/Right
+      // between its controls. Before this every button here was its own tab
+      // stop, so tabbing past a viewer toolbar cost one press per control.
+      role="toolbar"
+      aria-label={label}
+      onKeyDown={onKeyDown}
+      className="flex shrink-0 items-center gap-1.5 border-b border-overlay bg-surface px-2 py-1.5"
+    >
       {children}
     </div>
   );

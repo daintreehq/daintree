@@ -283,8 +283,26 @@ describe("resolveTreeKey", () => {
     // A directory whose *name* contains a slash-like structure would fool a
     // path-splitting parent lookup; depth is the authority.
     const rows: FlatTreeRow[] = [
-      { path: "a", name: "a", isDirectory: true, depth: 0, isExpanded: true, isLoading: false },
-      { path: "a/b", name: "b", isDirectory: true, depth: 1, isExpanded: true, isLoading: false },
+      {
+        path: "a",
+        name: "a",
+        isDirectory: true,
+        depth: 0,
+        isExpanded: true,
+        isLoading: false,
+        posInSet: 1,
+        setSize: 1,
+      },
+      {
+        path: "a/b",
+        name: "b",
+        isDirectory: true,
+        depth: 1,
+        isExpanded: true,
+        isLoading: false,
+        posInSet: 1,
+        setSize: 1,
+      },
       {
         path: "a/b/c",
         name: "c",
@@ -292,6 +310,8 @@ describe("resolveTreeKey", () => {
         depth: 2,
         isExpanded: false,
         isLoading: false,
+        posInSet: 1,
+        setSize: 1,
       },
     ];
 

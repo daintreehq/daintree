@@ -2,20 +2,18 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import type React from "react";
 import {
   CornerLeftUp,
-  EyeOff,
   FolderRoot,
   FolderTree,
   PanelRightClose,
-  PanelRightOpen,
   RefreshCw,
+  PanelRightOpen,
 } from "lucide-react";
 import { basename, join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { SpinningIcon } from "@/components/ui/SpinningIcon";
-import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
+import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
@@ -31,6 +29,7 @@ import { flushPanelPersistence } from "@/store/slices";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useExternalChangeTick } from "@/hooks/useExternalChangeTick";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { FileTreeView } from "./FileTreeView";
 import { FileBrowserViewer } from "./FileBrowserViewer";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
@@ -54,6 +53,8 @@ import {
   type FileEntryLike,
 } from "./fileBrowserTree";
 import { useWorkspaceRootPath } from "./useWorkspaceRootPath";
+import { FileBrowserViewOptions } from "./FileBrowserViewOptions";
+import { FileBrowserHiddenStrip } from "./FileBrowserHiddenStrip";
 
 export type FileBrowserPaneProps = BasePanelProps;
 
@@ -399,6 +400,7 @@ export function FileBrowserPane({
     isInitialLoading,
     rootError,
     hasHiddenDotfiles,
+    hiddenCounts,
     ensureLoaded,
     refresh,
     isRefreshing,
@@ -408,6 +410,7 @@ export function FileBrowserPane({
     listingRows,
     listingStatus,
     listingHasHiddenDotfiles,
+    listingHiddenCounts,
   } = useFileBrowserTree({
     source,
     expandedPaths: stableExpandedPaths,
@@ -641,20 +644,39 @@ export function FileBrowserPane({
   // `status: "error"` remounts its preview on Refresh instead of staying dead.
   const viewerRevision = `${changeTick ?? 0}:${surfaceRefreshNonce}`;
 
-  const handleToggleDotfiles = useCallback(() => {
-    setFileBrowserView(id, { browserHideDotfiles: !hideDotfiles });
-  }, [id, hideDotfiles, setFileBrowserView]);
+  // Takes the state it is moving TO rather than flipping what it finds: the
+  // view-options menu renders a checkbox whose `onCheckedChange` already knows
+  // the target value, and deriving it from `hideDotfiles` instead would make
+  // the handler re-created on every filter change for no gain.
+  const handleHideDotfilesChange = useCallback(
+    (hide: boolean) => {
+      setFileBrowserView(id, { browserHideDotfiles: hide });
+    },
+    [id, setFileBrowserView]
+  );
 
-  // Unconditionally turns the filter off, unlike the toggle above: it backs the
-  // "Show dotfiles" recovery on an empty state, where the only reason the
-  // control is offered is that the filter is currently hiding something.
+  // The "Show dotfiles" recovery on an empty state: unconditional, because the
+  // only reason that control is offered is that the filter is hiding something.
   const handleShowDotfiles = useCallback(() => {
-    setFileBrowserView(id, { browserHideDotfiles: false });
-  }, [id, setFileBrowserView]);
+    handleHideDotfilesChange(false);
+  }, [handleHideDotfilesChange]);
 
   // Both halves in one write: the setter's no-op guard compares each against
   // its own default, so sending them separately would let a key change land
   // while a simultaneous direction change was still being judged unchanged.
+  // Standard in every comparable tree — VS Code, JetBrains and Xcode all ship
+  // it — and this browser had no equivalent at all: the only way back from a
+  // deeply expanded tree was collapsing each branch by hand. It lives in the
+  // menu rather than the header because the header is the scarce surface this
+  // whole redesign was about, and this is a once-in-a-while gesture.
+  //
+  // Clears the set outright rather than walking it: every expanded path is a
+  // child of the root, so there is nothing to preserve, and the cursor is left
+  // alone — `FileTreeView` rehomes a cursor that a collapse put out of view.
+  const handleCollapseAll = useCallback(() => {
+    setFileBrowserView(id, { browserExpandedPaths: [] });
+  }, [id, setFileBrowserView]);
+
   const handleSortChange = useCallback(
     (next: FileBrowserSortOrder) => {
       setFileBrowserView(id, { browserSortKey: next.key, browserSortDirection: next.direction });
@@ -781,17 +803,12 @@ export function FileBrowserPane({
     if (sidebarCollapsed || viewerCollapsed) dragCleanupRef.current?.();
   }, [sidebarCollapsed, viewerCollapsed]);
 
-  const handleSetRoot = useCallback(
-    (path: string) => {
-      setFileBrowserView(id, { browserRootPath: path });
-    },
-    [id, setFileBrowserView]
-  );
-
   // Reaching the worktree root unmounts both header buttons, and keyboard
   // focus would fall to the document; hand it to the tree instead. rAF because
   // the tree for the new root renders on the commit after the state write.
   const treeColumnRef = useRef<HTMLDivElement>(null);
+  const treeHeaderRef = useRef<HTMLDivElement>(null);
+  const handleTreeHeaderKeyDown = useToolbarRoving(treeHeaderRef);
   const focusTree = useCallback(() => {
     requestAnimationFrame(() => {
       const column = treeColumnRef.current;
@@ -821,6 +838,20 @@ export function FileBrowserPane({
     setFileBrowserView(id, { browserViewerCollapsed: !viewerCollapsed });
     if (focusWasInViewer) focusTree();
   }, [id, viewerCollapsed, setFileBrowserView, focusTree]);
+
+  // Same focus recovery as the two header buttons below, and for a sharper
+  // reason: this one is driven from a row's context menu, and the row it was
+  // opened on is exactly the row that becomes the new root and stops existing.
+  // Without this the menu closes onto a dead node and focus lands on the
+  // document, so a keyboard user who scopes into a folder has to tab back in
+  // from wherever the panel begins.
+  const handleSetRoot = useCallback(
+    (path: string) => {
+      setFileBrowserView(id, { browserRootPath: path });
+      focusTree();
+    },
+    [id, setFileBrowserView, focusTree]
+  );
 
   const handleResetRoot = useCallback(() => {
     setFileBrowserView(id, { browserRootPath: "" });
@@ -938,6 +969,15 @@ export function FileBrowserPane({
                 <FolderRoot className="w-3.5 h-3.5 mr-2" />
                 Set as root
               </ContextMenuItem>
+              {/* The second route to Refresh, and the reason demoting it out of
+                  the header is safe: a manual re-read has to stay reachable
+                  from where the user already suspects something is stale — the
+                  folder itself — not only from a menu at the top of the panel.
+                  Re-reads the whole browser, same handler as the menu item. */}
+              <ContextMenuItem onSelect={handleRefresh}>
+                <RefreshCw className="w-3.5 h-3.5 mr-2" />
+                Refresh
+              </ContextMenuItem>
               <ContextMenuSeparator />
             </>
           )}
@@ -957,7 +997,14 @@ export function FileBrowserPane({
           })}
         </>
       ),
-    [showFolderContents, handleSetRoot, renderFileRowMenuItems, basePath, gitStatusIndex]
+    [
+      showFolderContents,
+      handleSetRoot,
+      handleRefresh,
+      renderFileRowMenuItems,
+      basePath,
+      gitStatusIndex,
+    ]
   );
 
   // A restored panel remembers a selection whose ancestors may be collapsed.
@@ -1052,6 +1099,7 @@ export function FileBrowserPane({
           <div
             id={treeSidebarId}
             ref={treeColumnRef}
+            data-testid="file-browser-tree-column"
             // As the sole column the tree fills the panel instead of holding its
             // dragged width: a 600px-capped tree beside dead space would keep
             // exactly the imbalance collapsing the viewer is meant to fix
@@ -1064,10 +1112,22 @@ export function FileBrowserPane({
             )}
             style={viewerCollapsed ? undefined : { width: sidebarWidth }}
           >
-            {/* py-1.5 + border-overlay + 16px icons match FileViewerToolbar.Root
+            {/* py-1.5 + border-overlay + TOOLBAR_ICON_CLASS icons match FileViewerToolbar.Root
                 so the two header bars share one height and border token, and the
                 line under them reads continuous across the divider (#11328). */}
-            <div className="flex shrink-0 items-center gap-0.5 border-b border-overlay px-1.5 py-1.5">
+            <div
+              ref={treeHeaderRef}
+              // Hand-rolled to match `FileViewerToolbar.Root`'s height and
+              // border, so it takes the same APG toolbar contract too: one tab
+              // stop for the row, Left/Right between its controls. Named
+              // distinctly from the viewer's row because both can be on screen
+              // at once, and two toolbars called the same thing are two
+              // toolbars a screen-reader user cannot tell apart.
+              role="toolbar"
+              aria-label="File tree controls"
+              onKeyDown={handleTreeHeaderKeyDown}
+              className="flex shrink-0 items-center gap-0.5 border-b border-overlay px-1.5 py-1.5"
+            >
               {/* Root anchor mirrors the diff sidebar's header: where am I
                 rooted, then the controls that reshape the view. The root icon
                 doubles as the way back when the tree is rooted somewhere. */}
@@ -1076,13 +1136,13 @@ export function FileBrowserPane({
                   label="Back to worktree root"
                   onClick={handleResetRoot}
                 >
-                  <FolderRoot className="h-4 w-4" />
+                  <FolderRoot className={TOOLBAR_ICON_CLASS} />
                 </FileViewerToolbar.IconButton>
               ) : (
                 // Same footprint as the button so the path text doesn't shift
                 // when the tree is re-rooted.
-                <span className="shrink-0 p-1.5 text-daintree-text/40" aria-hidden="true">
-                  <FolderRoot className="h-4 w-4" />
+                <span className="shrink-0 p-1.5 text-text-secondary" aria-hidden="true">
+                  <FolderRoot className={TOOLBAR_ICON_CLASS} />
                 </span>
               )}
               {/* Re-rooted, so the label names a real folder: it copies the
@@ -1130,26 +1190,30 @@ export function FileBrowserPane({
               )}
               {rootPath !== "" && (
                 <FileViewerToolbar.IconButton label="Up one level" onClick={handleUpOneLevel}>
-                  <CornerLeftUp className="h-4 w-4" />
+                  <CornerLeftUp className={TOOLBAR_ICON_CLASS} />
                 </FileViewerToolbar.IconButton>
               )}
-              <FileViewerToolbar.IconButton
-                label="Hide dotfiles"
-                pressed={hideDotfiles}
-                onClick={handleToggleDotfiles}
-              >
-                <EyeOff className="h-4 w-4" />
-              </FileViewerToolbar.IconButton>
-              {/* Refresh stays here for as long as the tree is mounted. It
-                  re-reads the whole browser rather than just the open file, so
-                  letting a selection hand it to the viewer put it at the far
-                  edge of a column the eye isn't on — at grid width that reads
-                  as no Refresh at all (#11938). The viewer grows its own only
-                  once this header is collapsed away, so there is still exactly
-                  one in every layout (#11496). */}
-              <FileViewerToolbar.IconButton label="Refresh" onClick={handleRefresh}>
-                <SpinningIcon icon={RefreshCw} active={isRefreshing} className="h-4 w-4" />
-              </FileViewerToolbar.IconButton>
+              {/* Everything that changes what the tree shows, in one control
+                  (sort AND the dotfile filter) rather than a dedicated button
+                  per setting. Sort governs the tree just as much as the filter
+                  does — `flattenTree` sorts every level — so the two belong
+                  together, in the header of whichever column is rendering the
+                  tree. This also takes the header back under the
+                  three-to-four-control ceiling a sub-300px sidebar can carry:
+                  at the worktree root it is now View options and the viewer
+                  toggle. */}
+              <FileBrowserViewOptions
+                sort={sort}
+                onSortChange={handleSortChange}
+                hideDotfiles={hideDotfiles}
+                onHideDotfilesChange={handleHideDotfilesChange}
+                hiddenCounts={hiddenCounts}
+                onRefresh={handleRefresh}
+                isRefreshing={isRefreshing}
+                onCollapseAll={handleCollapseAll}
+                canCollapseAll={stableExpandedPaths.length > 0}
+                data-testid="file-browser-view-options"
+              />
               {/* The viewer's disclosure, homed here rather than in the viewer —
                   the mirror of where the tree's toggle lives (#11496). That
                   placement is also what makes "both collapsed" unreachable:
@@ -1168,9 +1232,9 @@ export function FileBrowserPane({
                 data-testid="file-browser-viewer-toggle"
               >
                 {viewerCollapsed ? (
-                  <PanelRightOpen className="h-4 w-4" />
+                  <PanelRightOpen className={TOOLBAR_ICON_CLASS} />
                 ) : (
-                  <PanelRightClose className="h-4 w-4" />
+                  <PanelRightClose className={TOOLBAR_ICON_CLASS} />
                 )}
               </FileViewerToolbar.IconButton>
             </div>
@@ -1235,6 +1299,8 @@ export function FileBrowserPane({
               surfaceRefreshNonce={surfaceRefreshNonce}
               onRefresh={handleRefresh}
               isRefreshing={isRefreshing}
+              onCollapseAll={handleCollapseAll}
+              canCollapseAll={stableExpandedPaths.length > 0}
               sidebarCollapsed={sidebarCollapsed}
               onToggleSidebar={handleToggleSidebar}
               treeSidebarId={treeSidebarId}
@@ -1248,12 +1314,19 @@ export function FileBrowserPane({
               folderRows={listingRows}
               folderStatus={listingStatus}
               folderHasHiddenDotfiles={hideDotfiles && listingHasHiddenDotfiles}
+              folderHiddenCounts={listingHiddenCounts}
               onShowDotfiles={handleShowDotfiles}
               onSelectEntry={showInViewer}
               rowContextMenu={rowContextMenu}
               basePath={basePath}
               sort={sort}
               onSortChange={handleSortChange}
+              // For the view-options menu this toolbar renders while the tree
+              // column is collapsed away — the same two settings the tree
+              // header's copy drives, so neither layout is missing one.
+              hideDotfiles={hideDotfiles}
+              onHideDotfilesChange={handleHideDotfilesChange}
+              hiddenCounts={hiddenCounts}
             />
           </div>
         )}
@@ -1322,9 +1395,14 @@ export function FileBrowserPane({
 
     if (rows.length === 0) {
       // Only offer "Show dotfiles" when it can actually help — the toggle is on
-      // and this root holds dotfiles it is what's hiding. Otherwise the folder
-      // is genuinely empty (junk-only contents count as empty too).
+      // and this root holds dotfiles it is what's hiding.
       const canRevealDotfiles = hideDotfiles && hasHiddenDotfiles;
+      // Junk-only contents used to count as empty, which made the browser say
+      // "This folder is empty" about a folder that is not: a directory holding
+      // nothing but `.git` reads as deleted rather than filtered, and no
+      // affordance anywhere named the list doing the hiding. There is no
+      // in-panel recovery — the junk list is an app-global setting — so this
+      // does not offer a button it cannot honour; it stops lying instead.
       return (
         <div className="flex min-h-0 flex-1 items-center justify-center p-4">
           <EmptyState
@@ -1335,15 +1413,17 @@ export function FileBrowserPane({
             title={
               canRevealDotfiles
                 ? "Dotfiles are hidden here"
-                : rootPath
-                  ? "This folder is empty"
-                  : "This worktree is empty"
+                : hiddenCounts.alwaysHidden > 0
+                  ? "Everything here is on the always-hidden list"
+                  : rootPath
+                    ? "This folder is empty"
+                    : "This worktree is empty"
             }
             action={
               canRevealDotfiles ? (
                 <button
                   type="button"
-                  onClick={handleToggleDotfiles}
+                  onClick={handleShowDotfiles}
                   className="text-xs underline underline-offset-2"
                 >
                   Show dotfiles
@@ -1387,9 +1467,19 @@ export function FileBrowserPane({
           // Turns a dragged row's relative path absolute (#11576), the same
           // join the insert-reference and copy-path handlers above use.
           basePath={basePath}
-          label={`Files in ${title}`}
+          // Names the scope, not just the panel: re-rooting changes which
+          // files the tree contains, and a screen-reader user re-entering it
+          // otherwise hears the same "Files in main" whether they are at the
+          // worktree root or three folders down inside it.
+          label={rootPath === "" ? `Files in ${title}` : `Files in ${title}/${rootPath}`}
           gitStatusIndex={gitStatusIndex}
         />
+        {/* What the dotfile filter is currently removing, and the one gesture
+            that puts it back. Conditional by construction — it renders nothing
+            while nothing is hidden — so the tree never pays height for it at
+            rest. Above the Reveal strip because it describes the whole view
+            while Reveal describes one selection. */}
+        <FileBrowserHiddenStrip counts={hiddenCounts} onShowDotfiles={handleShowDotfiles} />
         {/* Below the tree, never above: the strip unmounts the instant a
             click makes the selection reachable, and sitting above the rows it
             would shift them mid-gesture — the second click of a double-click
