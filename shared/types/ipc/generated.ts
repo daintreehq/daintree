@@ -126,6 +126,14 @@ export interface GeneratedIpcInvokeMap {
     args: [sessionId: string];
     result: { stopped: boolean };
   };
+  "assistant-timers:cancel": {
+    args: [projectId: string, timerId: string];
+    result: import("./assistantTimers.js").DaemonTimerCancelResult;
+  };
+  "assistant-timers:list": {
+    args: [projectId: string];
+    result: import("./assistantTimers.js").ProjectTimersResult;
+  };
   "claude:list-subagents": {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;

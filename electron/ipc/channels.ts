@@ -779,6 +779,17 @@ export const CHANNELS = {
    * renderer, so a broadcast would put one project's conversation — and its approval
    * prompts — on another project's screen (#7003).
    */
+  /**
+   * A project's durable timers when NO engine is running — read and retired over the
+   * supervisor daemon's control socket rather than the host protocol.
+   *
+   * A separate namespace from ASSISTANT_HOST_* because it is a different transport
+   * answering the same question, and it is reachable exactly when the host channels
+   * are not: after the panel, the view, or the whole app has been restarted, while
+   * the timer the user scheduled is still counting down.
+   */
+  ASSISTANT_TIMERS_LIST: "assistant-timers:list",
+  ASSISTANT_TIMERS_CANCEL: "assistant-timers:cancel",
   ASSISTANT_HOST_START: "assistant-host:start",
   ASSISTANT_HOST_SEND: "assistant-host:send",
   ASSISTANT_HOST_STOP: "assistant-host:stop",

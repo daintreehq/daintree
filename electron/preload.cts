@@ -57,6 +57,7 @@ import { buildPluginProcessPreloadBindings } from "./ipc/handlers/pluginProcess.
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
 import { buildAssistantHostPreloadBindings } from "./ipc/handlers/assistantHost.preload.js";
+import { buildAssistantTimersPreloadBindings } from "./ipc/handlers/assistantTimers.preload.js";
 import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preload.js";
 import { buildRunHistoryPreloadBindings } from "./ipc/handlers/runHistory.preload.js";
 import { buildCopyTreeHistoryPreloadBindings } from "./ipc/handlers/copyTreeHistory.preload.js";
@@ -3106,6 +3107,15 @@ function buildElectronApi(): ElectronAPI {
       onExit: (callback: (payload: AssistantHostExitPayload) => void) =>
         _typedOn(CHANNELS.ASSISTANT_HOST_EXIT, callback),
     },
+
+    /**
+     * A project's durable timers when NO engine is running.
+     *
+     * Separate from `assistantHost` because it is a different transport answering the
+     * same question: the panel asks its own engine over the host protocol, and this
+     * asks the supervisor daemon that outlives it. A caller uses whichever it has.
+     */
+    assistantTimers: buildAssistantTimersPreloadBindings(_unwrappingInvoke),
 
     mcpBridge: {
       onGetManifestRequest: (callback: (requestId: string) => void) =>
