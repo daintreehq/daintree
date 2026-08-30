@@ -1671,3 +1671,266 @@ describe("WorkspaceService.loadProject performance behavior", () => {
     ]);
   });
 });
+
+describe("WorkspaceService.createWorktree submodule init", () => {
+  let service: WorkspaceService;
+  let mockSendEvent: any;
+
+  const GITLINK_OID = "ed89474bb0f5f812f126c359f46fa6cad2dfe365";
+  const BLOB_OID = "0123456789abcdef0123456789abcdef01234567";
+
+  /** `git ls-files --stage -z` output: NUL-TERMINATED records, tab before path. */
+  function lsFiles(entries: Array<[mode: string, oid: string, path: string]>): string {
+    return entries.map(([mode, oid, p]) => `${mode} ${oid} 0\t${p}\0`).join("");
+  }
+
+  function submoduleUpdateCalls(): string[][] {
+    return mockSimpleGit.raw.mock.calls
+      .map((call) => call[0] as string[])
+      .filter((args) => Array.isArray(args) && args[0] === "submodule");
+  }
+
+  /**
+   * The tail chains several awaits before the submodule call, so one
+   * `setImmediate` is not enough to drain it.
+   */
+  async function drainTail(): Promise<void> {
+    for (let i = 0; i < 20; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockSimpleGit.raw.mockResolvedValue(undefined);
+    mockSimpleGit.checkIsRepo.mockResolvedValue(true);
+    mockSimpleGit.branch.mockResolvedValue({ current: "main" });
+    mockSimpleGit.branchLocal.mockResolvedValue({
+      all: [],
+      current: "",
+      branches: {},
+      detached: false,
+    });
+
+    const fsPromisesModule = await import("fs/promises");
+    vi.mocked(fsPromisesModule.realpath).mockImplementation((p: any) => Promise.resolve(p));
+    vi.mocked(fsPromisesModule.stat).mockRejectedValue(
+      Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+    );
+
+    mockSendEvent = vi.fn();
+    const WorkspaceServiceModule = await import("../WorkspaceService.js");
+    service = new WorkspaceServiceModule.WorkspaceService(mockSendEvent);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function create(options: Record<string, unknown> = {}): Promise<void> {
+    await service.createWorktree("req-submodule", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/submodule",
+      path: "/test/worktree",
+      ...options,
+    } as any);
+    await drainTail();
+  }
+
+  it("does not run submodule update when the index records no gitlinks", async () => {
+    mockSimpleGit.raw.mockImplementation(async (args: string[]) =>
+      args[0] === "ls-files" ? lsFiles([["100644", BLOB_OID, "README.md"]]) : undefined
+    );
+
+    await create();
+
+    expect(submoduleUpdateCalls()).toEqual([]);
+  });
+
+  it("initializes every indexed gitlink under the `all` policy", async () => {
+    mockSimpleGit.raw.mockImplementation(async (args: string[]) =>
+      args[0] === "ls-files"
+        ? lsFiles([
+            ["160000", GITLINK_OID, "vendor/lib"],
+            ["100644", BLOB_OID, "README.md"],
+            ["160000", GITLINK_OID, "vendor/other"],
+          ])
+        : undefined
+    );
+
+    await create({ submoduleInit: "all" });
+
+    expect(submoduleUpdateCalls()).toEqual([
+      [
+        "submodule",
+        "update",
+        "--init",
+        // Forces clone progress onto a non-tty stderr, which is what keeps
+        // simple-git's 30s block timeout from killing a live large clone.
+        "--progress",
+        "--recommend-shallow",
+        "--jobs",
+        "4",
+        "--",
+        "vendor/lib",
+        "vendor/other",
+      ],
+    ]);
+  });
+
+  it("initializes only the source checkout's populated modules under `inherit`", async () => {
+    const fsPromisesModule = await import("fs/promises");
+    // `vendor/lib` is checked out in the source; `vendor/huge` was deliberately
+    // left out and must not be silently acquired by the new worktree.
+    vi.mocked(fsPromisesModule.stat).mockImplementation(async (target: any) => {
+      if (String(target).replace(/\\/g, "/").endsWith("/test/root/vendor/lib/.git")) {
+        return { isDirectory: () => true, isFile: () => false } as any;
+      }
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+    mockSimpleGit.raw.mockImplementation(async (args: string[]) =>
+      args[0] === "ls-files"
+        ? lsFiles([
+            ["160000", GITLINK_OID, "vendor/lib"],
+            ["160000", GITLINK_OID, "vendor/huge"],
+          ])
+        : undefined
+    );
+
+    await create();
+
+    const calls = submoduleUpdateCalls();
+    expect(calls.length).toBe(1);
+    expect(calls[0].slice(calls[0].indexOf("--") + 1)).toEqual(["vendor/lib"]);
+  });
+
+  it("skips the roster read entirely under the `none` policy", async () => {
+    mockSimpleGit.raw.mockImplementation(async (args: string[]) =>
+      args[0] === "ls-files" ? lsFiles([["160000", GITLINK_OID, "vendor/lib"]]) : undefined
+    );
+
+    await create({ submoduleInit: "none" });
+
+    expect(submoduleUpdateCalls()).toEqual([]);
+    const lsFilesCalls = mockSimpleGit.raw.mock.calls.filter(
+      (call) => (call[0] as string[])[0] === "ls-files"
+    );
+    expect(lsFilesCalls.length).toBe(0);
+  });
+
+  it("reports an init failure as lifecycle-setup-error without failing the create", async () => {
+    mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+      if (args[0] === "ls-files") return lsFiles([["160000", GITLINK_OID, "vendor/lib"]]);
+      if (args[0] === "submodule") throw new Error("fatal: could not read from remote repository");
+      return undefined;
+    });
+
+    await create({ submoduleInit: "all" });
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-submodule",
+        success: true,
+      })
+    );
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "lifecycle-setup-error",
+        worktreeId: path.resolve("/test/worktree"),
+        message: expect.stringContaining("Submodule initialization failed"),
+      })
+    );
+  });
+
+  it('surfaces a malformed roster instead of reading it as "no submodules"', async () => {
+    // `-z` output that does not end in NUL is a truncated stream. Treating it as
+    // an empty roster is the silent-unpopulated-worktree bug this pass exists to
+    // fix, so it has to fail visibly instead.
+    mockSimpleGit.raw.mockImplementation(async (args: string[]) =>
+      args[0] === "ls-files" ? "160000 0000 0\tvendor/lib" : undefined
+    );
+
+    await create({ submoduleInit: "all" });
+
+    expect(submoduleUpdateCalls()).toEqual([]);
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "lifecycle-setup-error",
+        message: expect.stringContaining("Submodule initialization failed"),
+      })
+    );
+  });
+
+  it("still runs lifecycle setup after an init failure", async () => {
+    mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+      if (args[0] === "ls-files") return lsFiles([["160000", GITLINK_OID, "vendor/lib"]]);
+      if (args[0] === "submodule") throw new Error("fatal: could not read from remote repository");
+      return undefined;
+    });
+    const setupSpy = vi.spyOn(service as any, "runLifecycleSetup").mockResolvedValue(undefined);
+
+    await create({ submoduleInit: "all" });
+
+    // The failing init has to have actually run, or this asserts nothing about
+    // ordering — it would pass with the whole submodule pass deleted.
+    expect(submoduleUpdateCalls().length).toBe(1);
+    // One unreachable private submodule must not leave the worktree completely
+    // unprovisioned — there is no retry path for setup.
+    expect(setupSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces an unreadable roster instead of reading it as "no submodules"', async () => {
+    // `git.raw` resolving to something that is not a string is an unknown, and an
+    // unknown answered as "no submodules" is the silent-empty-worktree bug.
+    mockSimpleGit.raw.mockResolvedValue(undefined);
+
+    await create({ submoduleInit: "all" });
+
+    expect(submoduleUpdateCalls()).toEqual([]);
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "lifecycle-setup-error",
+        message: expect.stringContaining("no readable output"),
+      })
+    );
+  });
+
+  it("finishes submodule init before lifecycle setup is dispatched", async () => {
+    const order: string[] = [];
+    let releaseUpdate!: () => void;
+    const updateGate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+
+    mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+      if (args[0] === "ls-files") return lsFiles([["160000", GITLINK_OID, "vendor/lib"]]);
+      if (args[0] === "submodule") {
+        order.push("submodule-update:start");
+        await updateGate;
+        order.push("submodule-update:end");
+      }
+      return undefined;
+    });
+
+    const setupSpy = vi.spyOn(service as any, "runLifecycleSetup").mockImplementation(async () => {
+      order.push("lifecycle-setup");
+    });
+
+    await service.createWorktree("req-order", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/order",
+      path: "/test/worktree",
+      submoduleInit: "all",
+    } as any);
+    await drainTail();
+
+    expect(order).toEqual(["submodule-update:start"]);
+    expect(setupSpy).not.toHaveBeenCalled();
+
+    releaseUpdate();
+    await drainTail();
+
+    expect(order).toEqual(["submodule-update:start", "submodule-update:end", "lifecycle-setup"]);
+  });
+});

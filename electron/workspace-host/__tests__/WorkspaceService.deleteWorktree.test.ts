@@ -3,6 +3,7 @@ import { EventEmitter } from "events";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
+import type { SubmoduleDeleteRisk } from "../../../shared/types/submodule.js";
 
 const n = (p: string) => (p as string).replace(/\\/g, "/");
 
@@ -44,6 +45,15 @@ vi.mock("../../utils/gitUtils.js", () => ({
   getGitCommonDir: vi.fn().mockReturnValue(null),
   clearGitDirCache: vi.fn(),
   clearGitCommonDirCache: vi.fn(),
+}));
+
+const submoduleInventoryMocks = vi.hoisted(() => ({
+  buildSubmoduleDeleteRisk: vi.fn(),
+}));
+
+vi.mock("../../utils/submoduleInventory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/submoduleInventory.js")>()),
+  buildSubmoduleDeleteRisk: submoduleInventoryMocks.buildSubmoduleDeleteRisk,
 }));
 
 vi.mock("../../services/worktree/mood.js", () => ({
@@ -145,6 +155,16 @@ describe("WorkspaceService.deleteWorktree", () => {
     // a custom `mockImplementation` from a prior test would leak otherwise.
     mockSimpleGit.raw.mockReset().mockResolvedValue(undefined);
     mockSimpleGit.branch.mockReset().mockResolvedValue({ current: "main" });
+    // Every delete now inventories submodules, so the default has to be a real
+    // clean risk rather than the bare `vi.fn()`'s undefined.
+    submoduleInventoryMocks.buildSubmoduleDeleteRisk.mockReset().mockResolvedValue({
+      entries: [],
+      dirtyFiles: [],
+      untrackedFiles: [],
+      atRiskCommits: [],
+      requiresMechanicalForce: false,
+      incomplete: false,
+    } satisfies SubmoduleDeleteRisk);
     mockSendEvent = vi.fn();
 
     const WorkspaceServiceModule = await import("../WorkspaceService.js");
@@ -964,6 +984,375 @@ describe("WorkspaceService.deleteWorktree", () => {
 
     it("returns null when no monitor exists for the id", async () => {
       await expect(service.getFreshWorktreeChanges("/nonexistent")).resolves.toBeNull();
+    });
+  });
+
+  describe("submodule delete gate", () => {
+    const MODULES_DIR = "/test/worktree/.git/modules";
+
+    /** `stat` answers "directory" for the worktree-owned module store. */
+    async function withModuleStore(): Promise<void> {
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.stat).mockImplementation(async (target: unknown) => {
+        if (n(target as string) === MODULES_DIR) {
+          return { isDirectory: () => true, isFile: () => false } as any;
+        }
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+      await withPresentWorktreeDir();
+    }
+
+    /** No module store on disk — git would not refuse, so no mechanical force. */
+    async function withoutModuleStore(): Promise<void> {
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.stat).mockRejectedValue(
+        Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+      );
+      await withPresentWorktreeDir();
+    }
+
+    /** Keeps the delete on the `git worktree remove` path, not the #6669 prune one. */
+    async function withPresentWorktreeDir(): Promise<void> {
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+        if (n(p as string) === "/test/worktree") return undefined;
+        throw new Error("ENOENT");
+      });
+    }
+
+    function stubRisk(overrides: Partial<SubmoduleDeleteRisk> = {}): ReturnType<typeof vi.spyOn> {
+      return vi.spyOn(service as any, "inventorySubmoduleRisk").mockResolvedValue({
+        entries: [],
+        dirtyFiles: [],
+        untrackedFiles: [],
+        atRiskCommits: [],
+        requiresMechanicalForce: false,
+        incomplete: false,
+        ...overrides,
+      } satisfies SubmoduleDeleteRisk);
+    }
+
+    function removeArgs(): string[] | undefined {
+      const call = mockSimpleGit.raw.mock.calls.find(
+        (c) => Array.isArray(c[0]) && c[0][0] === "worktree" && c[0][1] === "remove"
+      );
+      return call?.[0] as string[] | undefined;
+    }
+
+    function failureError(): string | undefined {
+      return mockSendEvent.mock.calls
+        .map((c) => c[0])
+        .find((e) => e.type === "delete-worktree-result" && e.success === false)?.error;
+    }
+
+    it("adds --force mechanically on the direct module-store probe alone", async () => {
+      // Inventory says no, the `<gitdir>/modules` stat says yes — the case where
+      // the inventory timed out and answered `requiresMechanicalForce: false`.
+      await withModuleStore();
+      stubRisk({ requiresMechanicalForce: false });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-mech-probe", "/test/worktree");
+
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "delete-worktree-result", success: true })
+      );
+      expect(removeArgs()).toContain("--force");
+    });
+
+    it("adds --force mechanically on the inventory's answer alone", async () => {
+      // The mirror case: `--git-dir` could not be resolved, so the direct probe
+      // answered false, but the inventory found the module store.
+      await withoutModuleStore();
+      stubRisk({ requiresMechanicalForce: true });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-mech-inventory", "/test/worktree");
+
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "delete-worktree-result", success: true })
+      );
+      expect(removeArgs()).toContain("--force");
+    });
+
+    it("leaves --force off when the worktree owns no module store", async () => {
+      await withoutModuleStore();
+      stubRisk();
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-nomodules", "/test/worktree");
+
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "delete-worktree-result", success: true })
+      );
+      expect(removeArgs()).not.toContain("--force");
+    });
+
+    it("still inventories when no module store exists, catching an old-form embedded repository", async () => {
+      // An embedded `.git` DIRECTORY inside the submodule checkout owns its
+      // objects without producing `<worktree gitdir>/modules`, so git raises no
+      // refusal and an ordinary unforced remove would take the whole store.
+      await withoutModuleStore();
+      stubRisk({
+        atRiskCommits: [{ oid: "feed0123abcd", subject: "embedded work" }],
+      });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-oldform", "/test/worktree");
+
+      expect(failureError()).toContain("embedded work");
+      expect(removeArgs()).toBeUndefined();
+    });
+
+    it("refuses an unforced delete that would destroy commits existing nowhere else", async () => {
+      await withModuleStore();
+      stubRisk({
+        requiresMechanicalForce: true,
+        atRiskCommits: [{ oid: "abc1234def5678", subject: "wip parser fix" }],
+      });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-atrisk", "/test/worktree");
+
+      expect(failureError()).toContain("nowhere else");
+      expect(failureError()).toContain("abc1234d");
+      expect(failureError()).toContain("wip parser fix");
+      expect(removeArgs()).toBeUndefined();
+    });
+
+    it("refuses at-risk commits even when the user passed force", async () => {
+      // `force` means "discard uncommitted changes in the working tree"
+      // everywhere it is offered, and bulk removal passes it for every selected
+      // worktree — so it is not consent to lose commits that exist nowhere else.
+      await withModuleStore();
+      stubRisk({
+        requiresMechanicalForce: true,
+        atRiskCommits: [{ oid: "0badc0de1234", subject: "detached HEAD commit" }],
+      });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-forced-atrisk", "/test/worktree", true);
+
+      expect(failureError()).toContain("detached HEAD commit");
+      expect(removeArgs()).toBeUndefined();
+    });
+
+    it("refuses an unforced delete when the inventory could not be completed", async () => {
+      await withModuleStore();
+      stubRisk({ requiresMechanicalForce: true, incomplete: true });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-incomplete", "/test/worktree");
+
+      expect(failureError()).toContain("could not be inspected");
+      expect(removeArgs()).toBeUndefined();
+    });
+
+    it("refuses an incomplete inventory even under force", async () => {
+      // `incomplete` is set by a failed rev walk and a failed module-store scan
+      // just as readily as by an unreadable working tree, so an empty
+      // `atRiskCommits` beside it means "could not tell", not "nothing there".
+      await withModuleStore();
+      stubRisk({ requiresMechanicalForce: true, incomplete: true, dirtyFiles: ["vendor/lib/a.c"] });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-forced-incomplete", "/test/worktree", true);
+
+      expect(failureError()).toContain("could not be inspected");
+      expect(removeArgs()).toBeUndefined();
+    });
+
+    it("lets force discard modified and untracked submodule files", async () => {
+      // Those ARE working-tree changes, which is exactly what force consents to.
+      await withModuleStore();
+      stubRisk({
+        requiresMechanicalForce: true,
+        dirtyFiles: ["vendor/lib/a.c"],
+        untrackedFiles: ["vendor/lib/b.txt"],
+      });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-forced-dirty", "/test/worktree", true);
+
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "delete-worktree-result", success: true })
+      );
+      expect(removeArgs()).toContain("--force");
+    });
+
+    it("names dirty and untracked submodule content in the refusal", async () => {
+      await withModuleStore();
+      stubRisk({
+        requiresMechanicalForce: true,
+        dirtyFiles: ["vendor/lib/src/main.c"],
+        untrackedFiles: ["vendor/lib/scratch.txt", "vendor/lib/notes.md"],
+      });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-dirty", "/test/worktree");
+
+      expect(failureError()).toContain("1 modified submodule file");
+      expect(failureError()).toContain("2 untracked submodule files");
+    });
+
+    it("re-reads the parent for real before adding the mechanical --force", async () => {
+      await withModuleStore();
+      stubRisk({ requiresMechanicalForce: true });
+      const monitor = createAndRegisterMonitor();
+      // Cached snapshot says clean (the monitor never polled); the fresh read
+      // disagrees. Before the mechanical --force existed, git's own refusal was
+      // the backstop for this.
+      // Clean on the pre-teardown guard, dirty on the one immediately before the
+      // remove — so this fails if the post-teardown re-check is dropped.
+      let call = 0;
+      vi.spyOn(monitor, "getFreshChanges").mockImplementation(async () => {
+        call += 1;
+        return {
+          head: "abc123",
+          isDirty: call > 1,
+          stagedFileCount: 0,
+          unstagedFileCount: call > 1 ? 1 : 0,
+          untrackedFileCount: 0,
+          conflictedFileCount: 0,
+          changedFileCount: call > 1 ? 1 : 0,
+          changes: [],
+        } as any;
+      });
+
+      await service.deleteWorktree("req-toctou", "/test/worktree");
+
+      expect(failureError()).toContain("uncommitted changes");
+      expect(removeArgs()).toBeUndefined();
+    });
+
+    it("re-checks after teardown, and the later answer is the one that decides", async () => {
+      await withModuleStore();
+      const clean = {
+        entries: [],
+        dirtyFiles: [],
+        untrackedFiles: [],
+        atRiskCommits: [],
+        requiresMechanicalForce: true,
+        incomplete: false,
+      } satisfies SubmoduleDeleteRisk;
+      // Work appears in the window teardown opens. Only the post-teardown guard
+      // can see it, so this fails if that call is dropped.
+      const riskSpy = vi
+        .spyOn(service as any, "inventorySubmoduleRisk")
+        .mockResolvedValueOnce(clean)
+        .mockResolvedValue({
+          ...clean,
+          atRiskCommits: [{ oid: "cafe12345678", subject: "landed mid-teardown" }],
+        } satisfies SubmoduleDeleteRisk);
+      const teardownSpy = vi.spyOn(service as any, "runLifecycleTeardown");
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-recheck", "/test/worktree");
+
+      expect(riskSpy.mock.calls.length).toBe(2);
+      expect(teardownSpy).toHaveBeenCalledTimes(1);
+      expect(failureError()).toContain("landed mid-teardown");
+      expect(removeArgs()).toBeUndefined();
+    });
+
+    it("refuses to prune a missing worktree whose submodule repositories survive", async () => {
+      // `worktree prune` removes `.git/worktrees/<id>`, so the module stores that
+      // outlived the deleted checkout die with it.
+      const fsModule = await import("fs/promises");
+      // `.code` matters: only ENOENT routes to the #6669 prune branch.
+      vi.mocked(fsModule.access).mockRejectedValue(
+        Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+      );
+      vi.mocked(fsModule.stat).mockImplementation(async (target: unknown) => {
+        if (n(target as string) === MODULES_DIR) {
+          return { isDirectory: () => true, isFile: () => false } as any;
+        }
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-prune", "/test/worktree");
+
+      expect(failureError()).toContain("submodule repositories");
+      const pruneCalls = mockSimpleGit.raw.mock.calls.filter(
+        (c) => Array.isArray(c[0]) && c[0][0] === "worktree" && c[0][1] === "prune"
+      );
+      expect(pruneCalls.length).toBe(0);
+    });
+
+    it("prunes a missing worktree with surviving submodule repositories under force", async () => {
+      const fsModule = await import("fs/promises");
+      // `.code` matters: only ENOENT routes to the #6669 prune branch.
+      vi.mocked(fsModule.access).mockRejectedValue(
+        Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+      );
+      vi.mocked(fsModule.stat).mockImplementation(async (target: unknown) => {
+        if (n(target as string) === MODULES_DIR) {
+          return { isDirectory: () => true, isFile: () => false } as any;
+        }
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-prune-forced", "/test/worktree", true);
+
+      const pruneCalls = mockSimpleGit.raw.mock.calls.filter(
+        (c) => Array.isArray(c[0]) && c[0][0] === "worktree" && c[0][1] === "prune"
+      );
+      expect(pruneCalls.length).toBe(1);
+    });
+  });
+
+  describe("getSubmoduleDeleteRisk", () => {
+    const cleanRisk: SubmoduleDeleteRisk = {
+      entries: [],
+      dirtyFiles: [],
+      untrackedFiles: [],
+      atRiskCommits: [],
+      requiresMechanicalForce: false,
+      incomplete: false,
+    };
+
+    it("returns null when no monitor exists for the id", async () => {
+      await expect(service.getSubmoduleDeleteRisk("/nonexistent")).resolves.toBeNull();
+    });
+
+    it("inventories the monitor's own path", async () => {
+      submoduleInventoryMocks.buildSubmoduleDeleteRisk.mockResolvedValue({
+        ...cleanRisk,
+        requiresMechanicalForce: true,
+      });
+      createAndRegisterMonitor();
+
+      const risk = await service.getSubmoduleDeleteRisk("/test/worktree");
+
+      expect(submoduleInventoryMocks.buildSubmoduleDeleteRisk).toHaveBeenCalledWith(
+        "/test/worktree",
+        expect.objectContaining({ signal: expect.anything() })
+      );
+      expect(risk?.requiresMechanicalForce).toBe(true);
+      expect(risk?.incomplete).toBe(false);
+    });
+
+    it("surfaces a watchdog expiry as incomplete rather than rejecting", async () => {
+      // A rejection here would reach the delete gate as "no risk data", which a
+      // D2 preview renders as "nothing at stake". `incomplete` is the vocabulary
+      // every caller already fails closed on.
+      vi.useFakeTimers();
+      try {
+        submoduleInventoryMocks.buildSubmoduleDeleteRisk.mockReturnValue(new Promise(() => {}));
+        createAndRegisterMonitor();
+
+        const pending = service.getSubmoduleDeleteRisk("/test/worktree");
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        await expect(pending).resolves.toMatchObject({
+          incomplete: true,
+          requiresMechanicalForce: false,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });
