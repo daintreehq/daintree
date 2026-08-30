@@ -13,6 +13,21 @@ export interface ScenarioSample {
   notes?: string;
 }
 
+/**
+ * Whether a scenario's numbers mean anything on a given platform.
+ *
+ * `supported` — the subject exists here and the number is authoritative.
+ * `diagnostic` — it runs and produces a number, but something in the path is
+ *   emulated, shimmed, or blind on this platform, so the figure is a signal and
+ *   not a measurement. Reported, never compared against another platform.
+ * `unsupported` — the subject does not exist here; the scenario is skipped.
+ *
+ * Absent means `supported` everywhere. Stated explicitly rather than inferred,
+ * because the failure this prevents is a Windows count being read as
+ * authoritative when the observer that produced it cannot see Windows spawns.
+ */
+export type PlatformApplicability = "supported" | "diagnostic" | "unsupported";
+
 export interface PerfScenario {
   id: string;
   name: string;
@@ -21,6 +36,29 @@ export interface PerfScenario {
   modes: readonly PerfMode[];
   warmups?: number;
   iterations?: Partial<Record<PerfMode, number>>;
+  /**
+   * Metric keys that prove the scenario's subject actually did its work.
+   *
+   * This is the invariant a count-reporting benchmark cannot be trusted
+   * without: a dead subsystem spawns nothing, allocates nothing and finishes
+   * instantly, which reads as the best result the harness has ever recorded.
+   * Each named metric is a MISS COUNT — it must be emitted on EVERY iteration,
+   * including healthy ones, and a healthy run reports 0.
+   *
+   * Emitting it only on failure defeats the purpose twice over: a scenario that
+   * silently stopped running reports no misses at all, and `MetricStat.count`
+   * tallies only the iterations that emitted the metric, so one healthy sample
+   * among fifteen absent ones still aggregates to `max: 0`.
+   *
+   * Required for any scenario reporting a count-class metric; enforced by the
+   * matrix test rather than by convention.
+   */
+  correctness?: readonly string[];
+  /**
+   * Per-platform applicability. Omit when the scenario is authoritative
+   * everywhere it runs.
+   */
+  platforms?: Partial<Record<NodeJS.Platform, PlatformApplicability>>;
   run: (context: ScenarioContext) => Promise<ScenarioSample> | ScenarioSample;
 }
 
@@ -90,6 +128,20 @@ export interface RunEnvironment {
   totalMemoryMb: number;
   osRelease: string;
   nodeVersion: string;
+  /**
+   * Versions of the things being measured, not just the thing measuring.
+   *
+   * A git or Electron upgrade moves subprocess counts and IPC costs on its own.
+   * Without these a results file records only that the numbers changed, leaving
+   * a real toolchain regression indistinguishable from a code regression.
+   */
+  electronVersion: string | null;
+  gitVersion: string | null;
+  /**
+   * The commit the measured code was at, so a stored "best" result can be tied
+   * back to a checkpoint rather than trusted on its filename.
+   */
+  sourceSha: string | null;
 }
 
 /**

@@ -13,8 +13,25 @@ export type ComparabilityClass =
   | "count"
   /** Deterministic byte size of a payload. Machine-independent. */
   | "size"
-  /** A normalised proportion or per-unit rate. Machine-independent. */
+  /**
+   * A proportion between two deterministic quantities — bytes against bytes,
+   * spawns against worktrees. Normalising two machine-independent numbers
+   * leaves a machine-independent number.
+   */
   | "ratio"
+  /**
+   * A proportion whose numerator or denominator is itself machine-dependent:
+   * CPU occupancy, event-loop utilization, retained-heap growth percentages.
+   *
+   * Dividing by a run's own duration or its own starting heap does NOT remove
+   * the machine from the figure — it changes the units it is wrong in. A slower
+   * CPU raises event-loop utilization for identical work, and a different
+   * allocator moves `memoryGrowthPct` with no code change at all. An earlier
+   * version of this module classified every `Pct` and `Utilization` as `ratio`
+   * and would have licensed exactly the cross-laptop claim the module exists to
+   * prevent.
+   */
+  | "derived-ratio"
   /** Wall-clock or CPU time. Only meaningful against itself on ONE machine. */
   | "duration"
   /**
@@ -50,7 +67,10 @@ export function isMachineIndependent(cls: ComparabilityClass): boolean {
  *    comparison — the exact error this module exists to prevent.
  * 2. Memory before size, so `heapDeltaMb` is not read as a deterministic byte
  *    count.
- * 3. Ratio before count, so `spawnsPerWorktreeN50` and `detectionToIntervalRatio`
+ * 3. Runtime-derived ratio before structural ratio AND before memory, so
+ *    `memoryGrowthPct` is machine-dependent rather than either a free
+ *    comparison or a raw heap reading.
+ * 4. Ratio before count, so `spawnsPerWorktreeN50` and `detectionToIntervalRatio`
  *    are not read as tallies.
  *
  * Unit tokens are matched anywhere in the name (with a word boundary), not just
@@ -74,13 +94,27 @@ const RULES: ReadonlyArray<{ cls: ComparabilityClass; pattern: RegExp }> = [
     pattern:
       /(^(ms|us)[A-Z0-9])|([a-z0-9](Ms|Us|Sec|Secs)([A-Z0-9]|$))|[Ll]atency|[Dd]uration|[Ee]lapsed|(^|[a-z])[Tt]ime([A-Z]|$)/,
   },
-  // Proportions and per-unit rates. Ahead of memory so `memoryGrowthPct` is a
-  // ratio (normalised, machine-independent) rather than a memory reading.
+  // Runtime-derived proportions, ahead of both `ratio` and `memory`. A
+  // percentage over a machine-dependent base stays machine-dependent, so
+  // `memoryGrowthPct`, `cpuPct` and `eventLoopUtilization` are caught here
+  // BEFORE the structural-ratio rule can grant them cross-machine comparison.
+  //
+  // The test is a CONJUNCTION on purpose — a runtime base AND a proportional
+  // form. A base alone is not a ratio (`heapDeltaMb` is a memory reading and
+  // must stay one), and a proportional form alone is not machine-dependent
+  // (`spawnsPerWorktree` divides two tallies and compares freely). Utilization
+  // is the one word that carries both halves by itself: there is no such thing
+  // as a machine-independent event-loop utilization.
+  {
+    cls: "derived-ratio",
+    pattern:
+      /[Uu]tili[sz]ation|[Dd]egradationX?$|((?=.*([Cc]pu|[Hh]eap|[Rr]ss|[Mm]emory|[Ff]ootprint|[Ll]oad))(?=.*([Pp]ct$|[Pp]ercent|[Ff]raction|[a-z0-9]Ratio|[a-z0-9]Per[A-Z])).*)/,
+  },
+  // Structural proportions and per-unit rates over deterministic quantities.
   // `Ratio` is capitalised or leading, never the substring inside "decorations".
   {
     cls: "ratio",
-    pattern:
-      /(^ratio|[a-z0-9]Ratio)|[Pp]ct$|[Pp]ercent|[Ff]raction|[Uu]tili[sz]ation|([a-z0-9]Per[A-Z])|[Dd]egradationX?$/,
+    pattern: /(^ratio|[a-z0-9]Ratio)|[Pp]ct$|[Pp]ercent|[Ff]raction|([a-z0-9]Per[A-Z])/,
   },
   // Runtime memory, ahead of deterministic size.
   { cls: "memory", pattern: /[Hh]eap|[Rr]ss|[Mm]emory|[Ff]ootprint|([a-z0-9](Mb|Gb)([A-Z0-9]|$))/ },
