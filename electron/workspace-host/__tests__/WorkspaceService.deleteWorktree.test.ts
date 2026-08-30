@@ -118,12 +118,17 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
   };
 });
 
+// `.code` is not decoration: the delete path distinguishes "definitively not
+// there" from "could not tell", and a code-less rejection is the second.
+const enoent = () => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+
 vi.mock("fs/promises", () => ({
-  stat: vi.fn().mockRejectedValue(new Error("ENOENT")),
+  stat: vi.fn().mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" })),
   mkdir: vi.fn().mockResolvedValue(undefined),
   writeFile: vi.fn().mockResolvedValue(undefined),
-  access: vi.fn().mockRejectedValue(new Error("ENOENT")),
-  readFile: vi.fn().mockRejectedValue(new Error("ENOENT")),
+  access: vi.fn().mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" })),
+  readFile: vi.fn().mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" })),
+  readdir: vi.fn().mockResolvedValue([]),
   cp: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -166,6 +171,15 @@ describe("WorkspaceService.deleteWorktree", () => {
       incomplete: false,
     } satisfies SubmoduleDeleteRisk);
     mockSendEvent = vi.fn();
+
+    // `restoreAllMocks` wipes the factory's implementations, so the coded
+    // rejections have to be re-established or the delete path reads "cannot
+    // tell" where the fixture means "not there".
+    const fsModule = await import("fs/promises");
+    vi.mocked(fsModule.stat).mockRejectedValue(enoent());
+    vi.mocked(fsModule.access).mockRejectedValue(enoent());
+    vi.mocked(fsModule.readFile).mockRejectedValue(enoent());
+    vi.mocked(fsModule.readdir).mockResolvedValue([]);
 
     const WorkspaceServiceModule = await import("../WorkspaceService.js");
     service = new WorkspaceServiceModule.WorkspaceService(mockSendEvent as any);
@@ -989,6 +1003,15 @@ describe("WorkspaceService.deleteWorktree", () => {
 
   describe("submodule delete gate", () => {
     const MODULES_DIR = "/test/worktree/.git/modules";
+    const SURVIVING_STORE = `${MODULES_DIR}/vendor-lib`;
+    /** Field separator in the surviving-store rev walk's `--format`. */
+    const US = "\u001f";
+
+    const dirent = (name: string, kind: "dir" | "file") => ({
+      name,
+      isDirectory: () => kind === "dir",
+      isFile: () => kind === "file",
+    });
 
     /** `stat` answers "directory" for the worktree-owned module store. */
     async function withModuleStore(): Promise<void> {
@@ -1102,6 +1125,39 @@ describe("WorkspaceService.deleteWorktree", () => {
 
       expect(failureError()).toContain("embedded work");
       expect(removeArgs()).toBeUndefined();
+    });
+
+    it("refuses dirty submodule content even when git would not have refused the removal", async () => {
+      // The working-tree refusal used to sit behind the mechanical-force gate,
+      // so an old-form embedded submodule — which produces no
+      // `<worktree gitdir>/modules` and therefore no refusal from git — had its
+      // modified and untracked files taken by a plain unforced delete.
+      await withoutModuleStore();
+      stubRisk({
+        requiresMechanicalForce: false,
+        dirtyFiles: ["vendor/lib/a.c"],
+        untrackedFiles: ["vendor/lib/b.txt"],
+      });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-oldform-dirty", "/test/worktree");
+
+      expect(failureError()).toContain("1 modified submodule file");
+      expect(failureError()).toContain("1 untracked submodule file");
+      expect(removeArgs()).toBeUndefined();
+    });
+
+    it("lets force discard old-form submodule content", async () => {
+      await withoutModuleStore();
+      stubRisk({ requiresMechanicalForce: false, dirtyFiles: ["vendor/lib/a.c"] });
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-oldform-forced", "/test/worktree", true);
+
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "delete-worktree-result", success: true })
+      );
+      expect(removeArgs()).toBeDefined();
     });
 
     it("refuses an unforced delete that would destroy commits existing nowhere else", async () => {
@@ -1255,51 +1311,123 @@ describe("WorkspaceService.deleteWorktree", () => {
       expect(removeArgs()).toBeUndefined();
     });
 
-    it("refuses to prune a missing worktree whose submodule repositories survive", async () => {
-      // `worktree prune` removes `.git/worktrees/<id>`, so the module stores that
-      // outlived the deleted checkout die with it.
+    /**
+     * A checkout that is gone while one module store under
+     * `<gitdir>/modules` outlived it — the #6669 prune branch with something at
+     * stake.
+     */
+    async function withSurvivingModuleStore(): Promise<void> {
       const fsModule = await import("fs/promises");
       // `.code` matters: only ENOENT routes to the #6669 prune branch.
-      vi.mocked(fsModule.access).mockRejectedValue(
-        Object.assign(new Error("ENOENT"), { code: "ENOENT" })
-      );
+      vi.mocked(fsModule.access).mockRejectedValue(enoent());
       vi.mocked(fsModule.stat).mockImplementation(async (target: unknown) => {
         if (n(target as string) === MODULES_DIR) {
           return { isDirectory: () => true, isFile: () => false } as any;
         }
-        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        throw enoent();
       });
+      vi.mocked(fsModule.readdir).mockImplementation(async (target: unknown) => {
+        const at = n(target as string);
+        if (at === MODULES_DIR) return [dirent("vendor-lib", "dir")] as any;
+        if (at === SURVIVING_STORE) {
+          return [dirent("HEAD", "file"), dirent("objects", "dir")] as any;
+        }
+        throw enoent();
+      });
+    }
+
+    /** Answers the surviving store's rev walk; every other git call keeps the default. */
+    function withStoreRevWalk(result: string | Error): void {
+      mockSimpleGit.raw.mockImplementation(async (args: unknown) => {
+        if (Array.isArray(args) && args[0] === "--git-dir" && args[2] === "log") {
+          if (result instanceof Error) throw result;
+          return result;
+        }
+        return undefined;
+      });
+    }
+
+    function pruneCallCount(): number {
+      return mockSimpleGit.raw.mock.calls.filter(
+        (c) => Array.isArray(c[0]) && c[0][0] === "worktree" && c[0][1] === "prune"
+      ).length;
+    }
+
+    it("never runs the checkout inventory for a worktree whose folder is already gone", async () => {
+      // The real `buildSubmoduleDeleteRisk` inventories FROM a checkout, so on a
+      // missing one it answers `incomplete` — and routing that through the
+      // checkout guard refused every phantom entry, putting the prune branch
+      // (and the only in-app recovery for one) out of reach entirely.
+      submoduleInventoryMocks.buildSubmoduleDeleteRisk.mockResolvedValue({
+        entries: [],
+        dirtyFiles: [],
+        untrackedFiles: [],
+        atRiskCommits: [],
+        requiresMechanicalForce: false,
+        incomplete: true,
+      } satisfies SubmoduleDeleteRisk);
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.access).mockRejectedValue(enoent());
       createAndRegisterMonitor();
 
-      await service.deleteWorktree("req-prune", "/test/worktree");
+      await service.deleteWorktree("req-prune-phantom", "/test/worktree");
 
-      expect(failureError()).toContain("submodule repositories");
-      const pruneCalls = mockSimpleGit.raw.mock.calls.filter(
-        (c) => Array.isArray(c[0]) && c[0][0] === "worktree" && c[0][1] === "prune"
-      );
-      expect(pruneCalls.length).toBe(0);
+      expect(failureError()).toBeUndefined();
+      expect(pruneCallCount()).toBe(1);
+      expect(submoduleInventoryMocks.buildSubmoduleDeleteRisk).not.toHaveBeenCalled();
     });
 
-    it("prunes a missing worktree with surviving submodule repositories under force", async () => {
-      const fsModule = await import("fs/promises");
-      // `.code` matters: only ENOENT routes to the #6669 prune branch.
-      vi.mocked(fsModule.access).mockRejectedValue(
-        Object.assign(new Error("ENOENT"), { code: "ENOENT" })
-      );
-      vi.mocked(fsModule.stat).mockImplementation(async (target: unknown) => {
-        if (n(target as string) === MODULES_DIR) {
-          return { isDirectory: () => true, isFile: () => false } as any;
-        }
-        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-      });
+    it("prunes a missing worktree whose surviving module stores hold nothing unique", async () => {
+      // The stores existing is not itself a loss, and this branch is the only
+      // in-app recovery for a phantom entry — so an empty rev walk lets it run.
+      await withSurvivingModuleStore();
+      withStoreRevWalk("");
       createAndRegisterMonitor();
 
-      await service.deleteWorktree("req-prune-forced", "/test/worktree", true);
+      await service.deleteWorktree("req-prune-clean", "/test/worktree");
 
-      const pruneCalls = mockSimpleGit.raw.mock.calls.filter(
-        (c) => Array.isArray(c[0]) && c[0][0] === "worktree" && c[0][1] === "prune"
-      );
-      expect(pruneCalls.length).toBe(1);
+      expect(failureError()).toBeUndefined();
+      expect(pruneCallCount()).toBe(1);
+    });
+
+    it("refuses to prune a missing worktree whose module stores hold commits existing nowhere else", async () => {
+      // `worktree prune` removes `.git/worktrees/<id>`, so the module stores that
+      // outlived the deleted checkout die with it — no dangling object, no
+      // reflog, nothing for `fsck --lost-found`.
+      await withSurvivingModuleStore();
+      withStoreRevWalk(`beefcafe1234${US}stranded submodule work\n`);
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-prune-atrisk", "/test/worktree");
+
+      expect(failureError()).toContain("stranded submodule work");
+      expect(pruneCallCount()).toBe(0);
+    });
+
+    it("refuses those commits on the prune branch even under force", async () => {
+      // The prune branch used to gate on nothing but "do the stores exist", so a
+      // forced or bulk delete pruned surviving module repositories outright.
+      // `force` consents to discarding a working tree, and here the working tree
+      // is already gone — commits are all that is left.
+      await withSurvivingModuleStore();
+      withStoreRevWalk(`beefcafe1234${US}stranded submodule work\n`);
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-prune-forced-atrisk", "/test/worktree", true);
+
+      expect(failureError()).toContain("stranded submodule work");
+      expect(pruneCallCount()).toBe(0);
+    });
+
+    it("refuses to prune when a surviving module store could not be walked", async () => {
+      await withSurvivingModuleStore();
+      withStoreRevWalk(new Error("fatal: not a git repository"));
+      createAndRegisterMonitor();
+
+      await service.deleteWorktree("req-prune-unreadable", "/test/worktree");
+
+      expect(failureError()).toContain("could not be inspected");
+      expect(pruneCallCount()).toBe(0);
     });
   });
 

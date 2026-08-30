@@ -2,7 +2,7 @@ import os from "os";
 import { randomUUID } from "node:crypto";
 import PQueue from "p-queue";
 import { existsSync } from "fs";
-import { stat, readFile, access, mkdir, realpath } from "fs/promises";
+import { stat, readFile, readdir, access, mkdir, realpath } from "fs/promises";
 import { resolve as pathResolve, isAbsolute, dirname } from "path";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import { sliceUtf8Window } from "../../shared/utils/boundedOutput.js";
@@ -38,7 +38,11 @@ import type {
 import type { GitOperationReason } from "../../shared/types/ipc/errors.js";
 import type { CIStatus, NormalizedPRState } from "../../shared/types/forge.js";
 import type { WorktreeChanges } from "../../shared/types/git.js";
-import type { SubmoduleDeleteRisk, SubmoduleInitPolicy } from "../../shared/types/submodule.js";
+import type {
+  SubmoduleAtRiskCommit,
+  SubmoduleDeleteRisk,
+  SubmoduleInitPolicy,
+} from "../../shared/types/submodule.js";
 import {
   buildSubmoduleDeleteRisk,
   inspectModuleGitDir,
@@ -173,6 +177,20 @@ const HOST_REFRESH_TIMEOUT_MS = 45_000;
 // there is a self-inflicted connection storm, not throughput.
 const SUBMODULE_INIT_JOBS = 4;
 
+// `git submodule add --name` nests module stores under namespace directories,
+// so the surviving-store scan has to descend. Bounded because the tree being
+// walked is on disk and a symlink loop there would otherwise never terminate.
+const SUBMODULE_STORE_SCAN_MAX_DEPTH = 8;
+
+// At-risk commits are a sample, not a list: one commit that exists nowhere else
+// is already the whole signal, so hitting this bound is not incompleteness.
+const SUBMODULE_AT_RISK_COMMIT_SAMPLE = 50;
+
+// Field separator inside the at-risk commit `--format`; cannot occur in a
+// subject, so a line without one means the walk answered something other than
+// what was asked.
+const SUBMODULE_COMMIT_FIELD_SEPARATOR = "\u001f";
+
 // Coalescing window for `.git/config` writes (#11155). Every worktree sharing
 // the common dir reports the same write, and git itself writes config as
 // lock-then-rename (two events), so a short trailing debounce collapses the
@@ -234,6 +252,15 @@ class RepositoryProbeError extends Error {
 }
 
 /**
+ * The two fields the unrecoverable tier is decided on.
+ *
+ * Narrower than `SubmoduleDeleteRisk` because the prune branch inventories
+ * module stores that outlived their checkout, where every other field of a risk
+ * is unanswerable — and the tier must be decided identically on both paths.
+ */
+type UnrecoverableSubmoduleRisk = Pick<SubmoduleDeleteRisk, "atRiskCommits" | "incomplete">;
+
+/**
  * The unrecoverable half of a submodule risk, as a refusal message — commits
  * that live only in a module repository this worktree owns, and the case where
  * the inventory could not rule them out.
@@ -250,7 +277,7 @@ class RepositoryProbeError extends Error {
  * subject is the difference between "2 commits" and recognising your own
  * afternoon.
  */
-function describeUnrecoverableSubmoduleLoss(risk: SubmoduleDeleteRisk): string | null {
+function describeUnrecoverableSubmoduleLoss(risk: UnrecoverableSubmoduleRisk): string | null {
   const count = risk.atRiskCommits.length;
   if (count > 0) {
     const named = risk.atRiskCommits
@@ -267,6 +294,12 @@ function describeUnrecoverableSubmoduleLoss(risk: SubmoduleDeleteRisk): string |
  * The half `force` genuinely consents to: working-tree content inside
  * submodules, which is what "discard uncommitted changes" means everywhere the
  * flag is offered.
+ *
+ * Deliberately unrelated to whether git would have refused the removal on its
+ * own. Conditioning the refusal on that was the bug: an old-form embedded
+ * submodule — a real `.git` DIRECTORY inside the checkout — produces no
+ * `<worktree gitdir>/modules`, so git raises no refusal, and an ordinary
+ * unforced remove took its dirty and untracked files without ever asking.
  */
 function describeDiscardedSubmoduleContent(risk: SubmoduleDeleteRisk): string | null {
   const parts: string[] = [];
@@ -286,6 +319,42 @@ function describeDiscardedSubmoduleContent(risk: SubmoduleDeleteRisk): string | 
 
 function plural(count: number, word: string): string {
   return count === 1 ? word : `${word}s`;
+}
+
+/**
+ * Whether a path is definitively absent. Only ENOENT answers yes: EPERM,
+ * EACCES and a dead mount are probes that failed, and the delete path routes on
+ * this, so reading one of those as an absence would send a live checkout down
+ * the prune branch.
+ */
+async function pathIsMissing(target: string): Promise<boolean> {
+  try {
+    await withTimeout(access(target), HOST_REFRESH_TIMEOUT_MS, `worktree path probe: ${target}`);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+}
+
+/**
+ * Whether a filesystem error means "definitively not there", as opposed to
+ * "could not tell". A timeout, a permission error or a dead mount establishes
+ * nothing, and a safety probe must never read one as an absence.
+ */
+function isMissingPathError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/**
+ * Path identity for comparing a pointer git wrote against one we built. Case
+ * folding on Windows only: a POSIX filesystem distinguishes `Vendor` from
+ * `vendor`, and folding there would match the wrong worktree.
+ */
+function samePath(a: string, b: string): boolean {
+  const left = pathResolve(a);
+  const right = pathResolve(b);
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
 export class WorkspaceService {
@@ -3550,8 +3619,19 @@ export class WorkspaceService {
 
       // Fail fast, before teardown stops the user's containers for a delete we
       // are about to refuse. This is UX; the call that actually protects the
-      // work is the one immediately before `git worktree remove`.
-      await this.guardSubmoduleDelete(monitor, worktreeId, force);
+      // work is the one immediately before the destructive git command.
+      //
+      // Which guard applies turns on whether the checkout is still there.
+      // `buildSubmoduleDeleteRisk` inventories FROM a checkout, so on a worktree
+      // whose folder is already gone it answers `incomplete` every time — and
+      // routing that through `guardSubmoduleDelete` would refuse every phantom
+      // entry here, taking the #6669 recovery path with it before the prune
+      // branch below could ever run.
+      if (await pathIsMissing(monitor.path)) {
+        await this.guardPrunableSubmoduleStores(monitor.path);
+      } else {
+        await this.guardSubmoduleDelete(monitor, worktreeId, force);
+      }
 
       const branchToDelete = deleteBranch ? monitor.branch : undefined;
 
@@ -3589,32 +3669,17 @@ export class WorkspaceService {
         // Only ENOENT routes to prune — other access errors (EPERM, EACCES,
         // ENOTDIR) fall through so we don't skip the remove on transient
         // permission issues; the remove call's own errors will surface.
-        let pathMissing = false;
-        try {
-          await access(monitor.path);
-        } catch (accessError) {
-          if ((accessError as NodeJS.ErrnoException).code === "ENOENT") {
-            pathMissing = true;
-          }
-        }
-
-        if (pathMissing) {
+        if (await pathIsMissing(monitor.path)) {
           // The checkout is gone, but its module repositories are not: they live
           // under `.git/worktrees/<id>/modules`, which survives a `rm -rf` of the
           // working tree and is destroyed by `worktree prune`. So commits made
           // inside this worktree's submodules are still recoverable right up
           // until this call, and pruning is what ends that.
           //
-          // Only the existence of those stores can be reported, not their
-          // contents: `buildSubmoduleDeleteRisk` inventories from the checkout,
-          // which no longer exists. So the refusal names the situation rather
-          // than the commits, and `force` is what carries the consent — refusing
-          // outright would remove the only in-app recovery for a phantom entry.
-          if (!force && (await this.worktreeOwnsSubmoduleStore(monitor.path))) {
-            throw new Error(
-              "This worktree's folder is gone but its submodule repositories are not, and they may hold commits that exist nowhere else. Cleaning up the entry deletes them. Use force delete to proceed."
-            );
-          }
+          // Re-run immediately before the prune for the same reason the remove
+          // branch re-runs its own guard: teardown can run for minutes with
+          // terminals and external processes still writing.
+          await this.guardPrunableSubmoduleStores(monitor.path);
           try {
             await this.git.raw(["worktree", "prune"]);
           } catch (pruneError) {
@@ -3783,9 +3848,11 @@ export class WorkspaceService {
    *    unreadable repository with no in-app route to deletion, which is the
    *    intended trade: a loud dead end the user can fix beats a silent
    *    irreversible one they cannot.
-   *  - Modified and untracked files inside submodules are refused only when the
-   *    mechanical force is being added on the user's behalf. Those ARE
-   *    working-tree changes, which is exactly what `force` consents to.
+   *  - Modified and untracked files inside submodules are refused whenever
+   *    `force` is absent, whether or not git would have refused the removal on
+   *    its own. Those ARE working-tree changes, which is exactly what `force`
+   *    consents to — but only `force` consents to them, and an old-form
+   *    embedded submodule gives git nothing to refuse on.
    *
    * The inventory runs regardless of whether the modules directory exists.
    * Gating it on that would have been wrong for the old-form layout: a submodule
@@ -3817,14 +3884,18 @@ export class WorkspaceService {
       );
     }
 
-    if (!needsMechanicalForce || force) return needsMechanicalForce;
-
+    // Before the mechanical-force gate, not behind it. Whether git would have
+    // refused the removal anyway says nothing about whether the user consented
+    // to losing these files, and for the old-form embedded layout git refuses
+    // nothing at all.
     const discarded = describeDiscardedSubmoduleContent(risk);
-    if (discarded) {
+    if (!force && discarded) {
       throw new Error(
-        `Worktree has ${discarded}. Removing it deletes the worktree's own submodule repositories. Use force delete to proceed.`
+        `Worktree has ${discarded}. Deleting the worktree discards them along with its submodule checkouts. Use force delete to proceed.`
       );
     }
+
+    if (!needsMechanicalForce || force) return needsMechanicalForce;
     // The changed-files guard in `deleteWorktree` reads
     // `monitor.getWorktreeChanges()`, a cached snapshot. That was safe only
     // because a stale "clean" read still met git's own non-force refusal; the
@@ -3867,6 +3938,263 @@ export class WorkspaceService {
       return info.isDirectory();
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Refuse a prune that would take submodule commits nobody consented to lose.
+   *
+   * Nothing here is force-consentable. With the checkout gone there are no
+   * working-tree files left to discard, so commits are all that remain — and
+   * `force` means "discard uncommitted changes in the working tree" everywhere
+   * it is offered, with bulk removal passing it unconditionally for every
+   * selected worktree. Refusing on the mere existence of the stores would be
+   * wrong in the other direction: this branch is the only in-app recovery for a
+   * phantom entry, so stores holding nothing unique are pruned.
+   */
+  private async guardPrunableSubmoduleStores(worktreePath: string): Promise<void> {
+    const survivors = await this.inventorySurvivingModuleStores(worktreePath);
+    const loss = describeUnrecoverableSubmoduleLoss(survivors);
+    if (!loss) return;
+    throw new Error(
+      `This worktree's folder is gone but its submodule repositories are not, and they hold ${loss}. Cleaning up the entry deletes them, and nothing recovers them afterwards — no dangling object, no reflog, nothing for \`fsck --lost-found\`. Push the commits from inside the submodule first.`
+    );
+  }
+
+  /**
+   * The commits held by module stores that outlived their checkout.
+   *
+   * `buildSubmoduleDeleteRisk` cannot answer this: it inventories FROM a
+   * checkout, and on this path the checkout is what went missing — it would come
+   * back `incomplete` for every phantom worktree, which is a blanket refusal
+   * wearing an inventory's clothes. So the scan and rev walk below run against
+   * the bare stores instead, mirroring the internals that module keeps private
+   * — its module scan and its `--reflog --all HEAD --not --remotes` walk.
+   *
+   * There is no working-tree tier in the answer because there is no working
+   * tree. What is left is commits, and an answer that could not be completed is
+   * reported as such rather than as "nothing there" — the caller treats the two
+   * identically, which is the only way `incomplete` can be safe.
+   */
+  private async inventorySurvivingModuleStores(
+    worktreePath: string
+  ): Promise<UnrecoverableSubmoduleRisk> {
+    const unknown: UnrecoverableSubmoduleRisk = { atRiskCommits: [], incomplete: true };
+    const nothing: UnrecoverableSubmoduleRisk = { atRiskCommits: [], incomplete: false };
+
+    const resolution = await this.resolveDetachedWorktreeGitDir(worktreePath);
+    if (resolution.kind === "unknown") return unknown;
+    if (resolution.kind === "none") return nothing;
+
+    const modulesDir = pathResolve(resolution.gitDir, "modules");
+    try {
+      const info = await withTimeout(
+        stat(modulesDir),
+        HOST_REFRESH_TIMEOUT_MS,
+        `surviving submodule store probe: ${worktreePath}`
+      );
+      if (!info.isDirectory()) return nothing;
+    } catch (error) {
+      return isMissingPathError(error) ? nothing : unknown;
+    }
+
+    const stores = await this.collectSurvivingModuleStores(modulesDir);
+    if (!stores) return unknown;
+
+    const atRiskCommits: SubmoduleAtRiskCommit[] = [];
+    const seen = new Set<string>();
+    let incomplete = false;
+    for (const store of stores) {
+      const commits = await this.readSurvivingStoreCommits(store);
+      if (!commits) {
+        incomplete = true;
+        continue;
+      }
+      for (const commit of commits) {
+        if (seen.has(commit.oid)) continue;
+        seen.add(commit.oid);
+        atRiskCommits.push(commit);
+      }
+    }
+    return { atRiskCommits, incomplete };
+  }
+
+  /**
+   * The worktree's OWN git directory, for a checkout that is already gone.
+   *
+   * `getGitDir` resolves from the checkout — both its filesystem fast path and
+   * its `rev-parse` fallback run with `worktreePath` as the cwd — so once the
+   * directory is missing it answers `null` on anything but a warm cache, which
+   * an app restart empties. That is precisely the case this guard exists for, so
+   * the registry under `<common>/worktrees/*` is consulted too: each entry's
+   * `gitdir` file records the path of the `.git` pointer git created for that
+   * worktree, and matching on it is how git itself decides what is prunable.
+   *
+   * `none` and `unknown` are kept apart because only one of them is evidence.
+   * `none` means the registry was read and holds no entry for this path, so
+   * there is no per-worktree git directory and therefore no module store to
+   * lose; `unknown` means nothing could be established at all.
+   */
+  private async resolveDetachedWorktreeGitDir(
+    worktreePath: string
+  ): Promise<{ kind: "resolved"; gitDir: string } | { kind: "none" } | { kind: "unknown" }> {
+    let direct: string | null;
+    try {
+      direct = await getGitDir(worktreePath, { logErrors: false });
+    } catch {
+      direct = null;
+    }
+    if (direct) return { kind: "resolved", gitDir: direct };
+
+    const rootPath = this.projectRootPath;
+    if (!rootPath) return { kind: "unknown" };
+    let commonDir: string | null;
+    try {
+      commonDir = await getGitCommonDir(rootPath, { logErrors: false });
+    } catch {
+      commonDir = null;
+    }
+    if (!commonDir) return { kind: "unknown" };
+
+    const registry = pathResolve(commonDir, "worktrees");
+    let entries;
+    try {
+      entries = await withTimeout(
+        readdir(registry, { withFileTypes: true }),
+        HOST_REFRESH_TIMEOUT_MS,
+        `worktree registry scan: ${registry}`
+      );
+    } catch (error) {
+      // No registry at all means the repository has no linked worktrees, which
+      // is a definite "no module store", not a failed probe.
+      return isMissingPathError(error) ? { kind: "none" } : { kind: "unknown" };
+    }
+
+    const target = pathResolve(worktreePath, ".git");
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const gitDir = pathResolve(registry, entry.name);
+      let pointer: string;
+      try {
+        pointer = await withTimeout(
+          readFile(pathResolve(gitDir, "gitdir"), "utf-8"),
+          HOST_REFRESH_TIMEOUT_MS,
+          `worktree registry pointer: ${gitDir}`
+        );
+      } catch {
+        // Not `continue`. A pointer that could not be read is a probe that
+        // failed, and a failed probe is no evidence that this entry belongs to
+        // some other worktree — skipping it is how a store full of unique
+        // commits gets reported as absent.
+        return { kind: "unknown" };
+      }
+      // Resolved against the entry directory, which is what
+      // `worktree.useRelativePaths` writes these relative to (git 2.48+). An
+      // absolute pointer is unaffected — `resolve` discards the base for one.
+      if (samePath(pathResolve(gitDir, pointer.trim()), target)) {
+        return { kind: "resolved", gitDir };
+      }
+    }
+    return { kind: "none" };
+  }
+
+  /**
+   * Every module git directory under `<worktree gitdir>/modules`, or `null` when
+   * any part of the scan failed — a partial scan must never read as an empty
+   * one.
+   *
+   * A directory that is not itself a repository is a `--name` namespace and is
+   * descended into. A skeleton that has lost its `HEAD` still owns objects, so
+   * it counts as a store rather than a namespace: the rev walk then fails on it
+   * and the whole answer goes incomplete, which is the right end for a store
+   * nobody can read.
+   */
+  private async collectSurvivingModuleStores(modulesDir: string): Promise<string[] | null> {
+    const found: string[] = [];
+    const walk = async (dir: string, depth: number): Promise<void> => {
+      if (depth > SUBMODULE_STORE_SCAN_MAX_DEPTH) {
+        throw new Error(`submodule store scan too deep: ${dir}`);
+      }
+      const dirents = await withTimeout(
+        readdir(dir, { withFileTypes: true }),
+        HOST_REFRESH_TIMEOUT_MS,
+        `submodule store scan: ${dir}`
+      );
+      for (const dirent of dirents) {
+        if (!dirent.isDirectory()) continue;
+        const child = pathResolve(dir, dirent.name);
+        const children = await withTimeout(
+          readdir(child, { withFileTypes: true }),
+          HOST_REFRESH_TIMEOUT_MS,
+          `submodule store scan: ${child}`
+        );
+        let store = false;
+        for (const grandchild of children) {
+          if (grandchild.name === "HEAD" && grandchild.isFile()) {
+            store = true;
+            break;
+          }
+          if (grandchild.name === "config" && grandchild.isFile()) store = true;
+          else if (
+            (grandchild.name === "objects" || grandchild.name === "refs") &&
+            grandchild.isDirectory()
+          ) {
+            store = true;
+          }
+        }
+        if (store) found.push(child);
+        else await walk(child, depth + 1);
+      }
+    };
+    try {
+      await walk(modulesDir, 0);
+      return found;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Commits reachable in one module store but on no remote, or `null` when the
+   * walk could not answer.
+   *
+   * `--reflog --all HEAD` rather than `--branches`: a healthy submodule sits on
+   * a detached HEAD, so an agent that commits into it leaves the commit on no
+   * branch at all and `--branches --not --remotes` comes back empty while the
+   * commit is still live in the store.
+   */
+  private async readSurvivingStoreCommits(
+    storeGitDir: string
+  ): Promise<SubmoduleAtRiskCommit[] | null> {
+    try {
+      const git = await createHardenedGit(storeGitDir, this._shutdownController.signal);
+      const output = await withTimeout(
+        git.raw([
+          "--git-dir",
+          storeGitDir,
+          "log",
+          `--format=%H${SUBMODULE_COMMIT_FIELD_SEPARATOR}%s`,
+          `--max-count=${SUBMODULE_AT_RISK_COMMIT_SAMPLE}`,
+          "--reflog",
+          "--all",
+          "HEAD",
+          "--not",
+          "--remotes",
+        ]),
+        HOST_REFRESH_TIMEOUT_MS,
+        `surviving submodule store rev walk: ${storeGitDir}`
+      );
+      if (typeof output !== "string") return null;
+      const commits: SubmoduleAtRiskCommit[] = [];
+      for (const line of output.split("\n")) {
+        if (!line) continue;
+        const separator = line.indexOf(SUBMODULE_COMMIT_FIELD_SEPARATOR);
+        if (separator === -1) return null;
+        commits.push({ oid: line.slice(0, separator), subject: line.slice(separator + 1) });
+      }
+      return commits;
+    } catch {
+      return null;
     }
   }
 
