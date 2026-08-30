@@ -218,7 +218,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         worktreeId: {
           description:
-            "Identifies the worktree to launch in, using an id from the worktree-listing capability. Defaults to the active worktree.",
+            "Identifies the worktree to launch in, using an id from the worktree-listing capability. Required when an agent or MCP client is calling; a person driving the UI gets the active worktree by default.",
           type: "string",
         },
         prompt: {
@@ -442,6 +442,14 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         availabilityComplete: {
           type: "boolean",
+        },
+        defaultAgentId: {
+          description: "The user's default agent; absent when they chose none.",
+          type: "string",
+        },
+        resolvedDefaultAgentId: {
+          description: "Launch this when the user names no agent.",
+          type: "string",
         },
         agents: {
           type: "array",
@@ -2446,9 +2454,9 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         idleReason: {
           type: "string",
-          enum: ["idle", "waiting_for_user", "completed", "exited", "unknown"],
+          enum: ["idle", "waiting_for_user", "completed", "exited", "closed", "unknown"],
           description:
-            "Why the terminal is not working: 'idle' at rest, 'waiting_for_user' blocked on input, 'completed' or 'exited' once the process ended, 'unknown' when the terminal is not tracked. Only the ended states carry an exit code.",
+            "Why the terminal is not working: 'idle' at rest, 'waiting_for_user' blocked on input, 'completed' or 'exited' once the process ended, 'closed' when the user closed the terminal itself (the process is still tearing down, so no exit code yet — treat the terminal as gone), 'unknown' when the terminal is not tracked. Only the ended states carry an exit code.",
         },
         trackingState: {
           type: "string",
@@ -2520,7 +2528,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Block until the first of several agents stops working, or all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each in turn, or a status snapshot with `includeOutput` to poll without blocking; both can report `lastOutputChangeAt`, not a hang verdict. Timing out means not met yet; a gone terminal settles too, so read `trackingState`.",
+      "Block until the first of several agents stops working, or all do; the fan-out primitive when agents finish at different speeds. Prefer it to waiting on each in turn, or a status snapshot with `includeOutput` to poll without blocking; both report `lastOutputChangeAt`, not a hang verdict. Timing out means not met yet; a gone terminal settles too, `closed` if user-closed; read `trackingState`.",
     enabled: true,
     id: "terminal.waitUntilIdleBatch",
     inputSchema: {
@@ -2585,7 +2593,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               idleReason: {
                 type: "string",
-                enum: ["idle", "waiting_for_user", "completed", "exited", "unknown"],
+                enum: ["idle", "waiting_for_user", "completed", "exited", "closed", "unknown"],
               },
               trackingState: {
                 type: "string",

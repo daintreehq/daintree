@@ -43,7 +43,7 @@ interface DaemonTimerView {
   title: string;
   nextFireAt: number;
   createdAt: number;
-  payloadKind: "reminder" | "tool_call" | "legacy";
+  payloadKind: "reminder" | "message" | "tool_call" | "legacy";
   toolName?: string;
   runCount: number;
   repeat?: { everyMs: number; maxRuns?: number; untilAt?: number };
