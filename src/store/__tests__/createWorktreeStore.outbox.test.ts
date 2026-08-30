@@ -192,7 +192,7 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
       await flushPromises();
       await flushPromises();
 
-      const callMutationIds = worktreeClientDeleteMock.mock.calls.map((c) => c[3]);
+      const callMutationIds = worktreeClientDeleteMock.mock.calls.map((c) => c[1].mutationId);
       expect(callMutationIds[0]).toBe(firstMutationId);
       expect(callMutationIds[1]).toBe(firstMutationId);
     });
@@ -370,7 +370,7 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
       await flushPromises();
       await flushPromises();
 
-      const lastCallId = worktreeClientDeleteMock.mock.calls.at(-1)![3];
+      const lastCallId = worktreeClientDeleteMock.mock.calls.at(-1)![1].mutationId;
       expect(lastCallId).toBe(entry.mutationId);
     });
   });
@@ -505,7 +505,7 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
       await flushPromises();
 
       // The replay used the original mutationId.
-      const lastCallId = worktreeClientDeleteMock.mock.calls.at(-1)![3];
+      const lastCallId = worktreeClientDeleteMock.mock.calls.at(-1)![1].mutationId;
       expect(lastCallId).toBe(entry.mutationId);
     });
 
@@ -610,12 +610,11 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
 
       await flushPromises();
       await flushPromises();
-      expect(worktreeClientDeleteMock).toHaveBeenLastCalledWith(
-        "wt-1",
-        false,
-        undefined,
-        entry.mutationId
-      );
+      expect(worktreeClientDeleteMock).toHaveBeenLastCalledWith("wt-1", {
+        force: false,
+        deleteBranch: undefined,
+        mutationId: entry.mutationId,
+      });
     });
 
     it("retryOutboxEntry on an unknown mutationId is a no-op", () => {

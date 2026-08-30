@@ -1480,7 +1480,11 @@ async function runDeleteAsync(
     const existingDevPreview = await window.electron.devPreview.getByWorktree({ worktreeId });
     const hadDevPreview = existingDevPreview !== null;
     await window.electron.devPreview.stopByWorktree({ worktreeId });
-    await worktreeClient.delete(worktreeId, options.force, options.deleteBranch, mutationId);
+    await worktreeClient.delete(worktreeId, {
+      force: options.force,
+      deleteBranch: options.deleteBranch,
+      mutationId,
+    });
     if (hadDevPreview) {
       notify({
         type: "success",

@@ -144,12 +144,11 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     await flushPromises();
 
     expect(closeTerminalsForWorktreeMock).toHaveBeenCalledWith("wt-1");
-    expect(worktreeClientDeleteMock).toHaveBeenCalledWith(
-      "wt-1",
-      undefined,
-      undefined,
-      expect.any(String)
-    );
+    expect(worktreeClientDeleteMock).toHaveBeenCalledWith("wt-1", {
+      force: undefined,
+      deleteBranch: undefined,
+      mutationId: expect.any(String),
+    });
   });
 
   it("stops a running dev preview before delete and emits a transient success toast (#9084)", async () => {
@@ -245,7 +244,11 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     await flushPromises();
 
     expect(closeTerminalsForWorktreeMock).not.toHaveBeenCalled();
-    expect(worktreeClientDeleteMock).toHaveBeenCalledWith("wt-1", true, true, expect.any(String));
+    expect(worktreeClientDeleteMock).toHaveBeenCalledWith("wt-1", {
+      force: true,
+      deleteBranch: true,
+      mutationId: expect.any(String),
+    });
   });
 
   it("on success, deletingIds and error maps are cleared by applyRemove", async () => {
@@ -303,16 +306,15 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     await flushPromises();
 
     expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(2);
-    expect(worktreeClientDeleteMock).toHaveBeenLastCalledWith(
-      "wt-1",
-      true,
-      true,
-      expect.any(String)
-    );
+    expect(worktreeClientDeleteMock).toHaveBeenLastCalledWith("wt-1", {
+      force: true,
+      deleteBranch: true,
+      mutationId: expect.any(String),
+    });
     // retryDelete reuses the original mutationId so the host's ack map can
     // dedupe across the retry boundary (#8405).
-    const firstId = worktreeClientDeleteMock.mock.calls[0]![3];
-    const secondId = worktreeClientDeleteMock.mock.calls[1]![3];
+    const firstId = worktreeClientDeleteMock.mock.calls[0]![1].mutationId;
+    const secondId = worktreeClientDeleteMock.mock.calls[1]![1].mutationId;
     expect(firstId).toBeDefined();
     expect(secondId).toBe(firstId);
   });
@@ -737,12 +739,11 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     await flushPromises();
 
     expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(1);
-    expect(worktreeClientDeleteMock).toHaveBeenCalledWith(
-      "wt-1",
-      false,
-      undefined,
-      expect.any(String)
-    );
+    expect(worktreeClientDeleteMock).toHaveBeenCalledWith("wt-1", {
+      force: false,
+      deleteBranch: undefined,
+      mutationId: expect.any(String),
+    });
 
     resolveDelete();
     await flushPromises();

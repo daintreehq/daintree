@@ -8,6 +8,7 @@ import type {
 } from "@shared/types";
 import type { PRServiceStatus } from "@shared/types/workspace-host";
 import type { WorktreeChanges } from "@shared/types/git";
+import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
 
 /**
  * @example
@@ -90,12 +91,29 @@ export const worktreeClient = {
     return window.electron.worktree.getAvailableBranch(rootPath, branchName);
   },
 
+  /**
+   * Options are an object rather than positional booleans on purpose: `force`,
+   * `deleteBranch` and `forceDeleteBranch` are three independent consents, and
+   * a run of same-typed positional flags is how the first two came to be
+   * conflated in the first place. Each one names exactly what it permits.
+   */
   delete: async (
     worktreeId: string,
-    force?: boolean,
-    deleteBranch?: boolean,
-    mutationId?: string
+    options: {
+      /** Remove the working tree even though it has uncommitted changes. */
+      force?: boolean;
+      /** Also delete the branch the worktree had checked out. */
+      deleteBranch?: boolean;
+      /**
+       * Delete that branch even when it holds commits no other branch does
+       * (`branch -D` rather than `-d`). Independent of `force`: consenting to
+       * discard an uncommitted file is not consenting to discard a commit.
+       */
+      forceDeleteBranch?: boolean;
+      mutationId?: string;
+    } = {}
   ): Promise<void> => {
+    const { force, deleteBranch, forceDeleteBranch, mutationId } = options;
     // Route through the dedicated worktree port (#8405) so the host's ack map
     // can dedupe outbox replays by `mutationId`, and so a host crash mid-call
     // rejects the request immediately (HOST_EXITED) instead of leaving the
@@ -107,8 +125,29 @@ export const worktreeClient = {
       worktreeId,
       force,
       deleteBranch,
+      forceDeleteBranch,
       mutationId,
     });
+  },
+
+  /**
+   * Inventory what deleting this worktree would destroy inside its submodules.
+   *
+   * The parent's `git status` reports a submodule holding any amount of
+   * uncommitted work as one changed path, so `getFreshChanges` alone cannot
+   * tell a delete-confirm surface what is actually at stake. Kept as its own
+   * call rather than a field on `WorktreeChanges`, which rides the snapshot
+   * hot path and would neither clone nor compare a nested object correctly.
+   *
+   * `risk.incomplete` means the inventory could not be finished — treat it as
+   * risk present, never as nothing found. `null` when the worktree's monitor
+   * no longer exists.
+   */
+  getSubmoduleDeleteRisk: async (worktreeId: string): Promise<SubmoduleDeleteRisk | null> => {
+    const { risk } = await window.electron.worktreePort.request("get-submodule-delete-risk", {
+      worktreeId,
+    });
+    return risk;
   },
 
   attachIssue: (payload: AttachIssuePayload): Promise<void> => {

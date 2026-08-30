@@ -225,7 +225,7 @@ export function useWorktreeBulkRemove({
               stoppedDevServerCount++;
               stoppedDevServerName = target.name;
             }
-            await worktreeClient.delete(target.id, true, false);
+            await worktreeClient.delete(target.id, { force: true, deleteBranch: false });
             successCount++;
           } catch (err) {
             const reason = formatErrorMessage(err, "Removal failed");

@@ -124,7 +124,7 @@ export function registerWorktreeCreateActions(
           // unconditionally rather than gated on `getByWorktree` — that gate
           // would miss multi-panel sessions sharing the same worktreeId.
           await window.electron.devPreview.stopByWorktree({ worktreeId });
-          await worktreeClient.delete(worktreeId, force, deleteBranch);
+          await worktreeClient.delete(worktreeId, { force, deleteBranch });
         } catch (error) {
           // This action path has no outbox retry, so a throw here ends the
           // delete. Bring the closed terminals back rather than losing them to a

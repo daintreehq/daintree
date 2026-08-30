@@ -48,6 +48,12 @@ export const WORKTREE_PORT_TIMEOUTS_MS: Partial<Record<WorktreePortAction, numbe
   // (HOST_REFRESH_TIMEOUT_MS). Match `refresh`'s 60s so the host stays the
   // limiting factor and the delete-confirm read isn't cut short on a slow repo.
   "get-worktree-changes": 60_000,
+  // Walks the index gitlink roster and stats each initialized module. Bounded
+  // by the number of submodules, which is small in practice, but each entry
+  // costs git invocations inside a separate repository — match
+  // `get-worktree-changes` so a slow repo degrades the same way on both halves
+  // of the delete gate rather than one half timing out first.
+  "get-submodule-delete-risk": 60_000,
 };
 
 /**

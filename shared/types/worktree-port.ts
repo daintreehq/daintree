@@ -17,6 +17,7 @@ import type {
   WorktreeEventVersion,
 } from "./workspace-host.js";
 import type { WorktreeChanges } from "./git.js";
+import type { SubmoduleDeleteRisk } from "./submodule.js";
 
 export type WorktreePortResourceAction = "provision" | "teardown" | "resume" | "pause" | "status";
 
@@ -77,7 +78,19 @@ export interface WorktreePortProtocol {
     // a second invocation with the same id is short-circuited to a success
     // ack without re-running `git worktree remove`. Optional so non-outbox
     // callers (e.g. integration tests) keep working without minting an id.
-    payload: { worktreeId: string; force?: boolean; deleteBranch?: boolean; mutationId?: string };
+    //
+    // `force` and `forceDeleteBranch` are two different consents and must stay
+    // separate. `force` means "remove the working tree even though it has
+    // changes"; `forceDeleteBranch` means "delete the branch even though it has
+    // commits no other branch holds". One flag meaning both let a dialog that
+    // truthfully described the first silently perform the second.
+    payload: {
+      worktreeId: string;
+      force?: boolean;
+      deleteBranch?: boolean;
+      forceDeleteBranch?: boolean;
+      mutationId?: string;
+    };
     result: { ok: true };
   };
   "list-branches": {
@@ -129,6 +142,20 @@ export interface WorktreePortProtocol {
   "get-worktree-changes": {
     payload: { worktreeId: string };
     result: { changes: WorktreeChanges | null };
+  };
+  // On-demand inventory of what a delete would destroy INSIDE this worktree's
+  // submodules. Separate from `get-worktree-changes` on purpose: the parent's
+  // porcelain-v1 status collapses a submodule holding two hundred dirty files
+  // and a dozen unpushed commits into the single row `M vendor/lib`, so the
+  // D2 preview it feeds is precise-looking and wrong.
+  //
+  // A linked worktree owns its submodule object store outright
+  // (`.git/worktrees/<id>/modules/<path>`, no `alternates`), and
+  // `git worktree remove --force` deletes that tree wholesale — commits made
+  // there survive nowhere else. `null` when no monitor exists for the id.
+  "get-submodule-delete-risk": {
+    payload: { worktreeId: string };
+    result: { risk: SubmoduleDeleteRisk | null };
   };
 }
 

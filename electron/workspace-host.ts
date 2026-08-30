@@ -243,6 +243,12 @@ async function handleWorktreePortRequest(
         break;
       }
 
+      case "get-submodule-delete-risk": {
+        const risk = await workspaceService.getSubmoduleDeleteRisk(msg.payload.worktreeId);
+        result = { risk };
+        break;
+      }
+
       default: {
         const _exhaustive: never = msg;
         throw new Error(

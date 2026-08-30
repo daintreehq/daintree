@@ -38,6 +38,7 @@ import type {
 import type { GitOperationReason } from "../../shared/types/ipc/errors.js";
 import type { CIStatus, NormalizedPRState } from "../../shared/types/forge.js";
 import type { WorktreeChanges } from "../../shared/types/git.js";
+import type { SubmoduleDeleteRisk } from "../../shared/types/submodule.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
 import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
 import { withTimeout } from "../utils/withTimeout.js";
@@ -2520,6 +2521,41 @@ export class WorkspaceService {
       HOST_REFRESH_TIMEOUT_MS,
       `get-worktree-changes watchdog: ${worktreeId}`
     );
+  }
+
+  /**
+   * Inventory what deleting this worktree would destroy inside its submodules.
+   *
+   * The parent's porcelain-v1 status — the only status the delete gate reads —
+   * collapses a submodule holding any amount of uncommitted work into a single
+   * ` M <path>` row, so the D2 preview built from it is precise-looking and
+   * materially wrong. Worse, a linked worktree owns its submodule object store
+   * outright (`.git/worktrees/<id>/modules/<path>`, no `alternates` file), and
+   * `git worktree remove --force` removes that whole tree: commits made inside
+   * a worktree's submodule exist nowhere else once it is gone.
+   *
+   * Deliberately a separate call from `getFreshWorktreeChanges` rather than a
+   * field on `WorktreeChanges` — that type rides the hot snapshot path through
+   * a one-level cache clone, a state hash, and a renderer equality fast path,
+   * none of which would carry a nested object correctly.
+   *
+   * `null` when no monitor exists for the id (already removed).
+   */
+  async getSubmoduleDeleteRisk(worktreeId: string): Promise<SubmoduleDeleteRisk | null> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor) return null;
+    // Inventory implementation lands with the create/delete lifecycle change.
+    // Reporting `incomplete` (rather than an empty risk) keeps every caller on
+    // the fail-closed branch until then: an unknown risk must never render as
+    // "nothing at stake".
+    return {
+      entries: [],
+      dirtyFiles: [],
+      untrackedFiles: [],
+      atRiskCommits: [],
+      requiresMechanicalForce: false,
+      incomplete: true,
+    };
   }
 
   /**

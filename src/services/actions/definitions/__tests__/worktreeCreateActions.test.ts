@@ -112,6 +112,9 @@ describe("worktree.delete action", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    expect(worktreeClientMock.delete).toHaveBeenCalledWith("wt-1", undefined, undefined);
+    expect(worktreeClientMock.delete).toHaveBeenCalledWith("wt-1", {
+      force: undefined,
+      deleteBranch: undefined,
+    });
   });
 });
