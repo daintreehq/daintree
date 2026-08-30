@@ -1,21 +1,37 @@
-import type { PerfScenario } from "../types";
+import { basename, join } from "node:path";
+import type { PerfScenario, ScenarioSample } from "../types";
 import type PQueueType from "p-queue";
 import type { WorktreeMonitor } from "../../../electron/workspace-host/WorktreeMonitor";
 import {
   SCALING_WORKTREE_COUNTS,
+  allSpawnMark,
+  allSpawnsSince,
   checkoutStormBranch,
+  clearCachedGitDir,
   createMonitorHarness,
   getGitPipelineFixture,
   gitSpawnMark,
   gitSpawnsSince,
   loadPipelineModules,
+  nonGitSpawnCount,
   sleep,
+  withGitDirProbeFault,
 } from "../lib/gitPipelineFixture";
+import {
+  EmitRecorder,
+  PIPELINE_QUIESCE_SETTLE_MS,
+  pollUntil,
+  quiesceGitSpawns,
+  removeFileQuietly,
+  uid,
+  writeEditFile,
+} from "../lib/worktreeSidebarFixture";
 
 /**
- * Git pipeline scenarios (PERF-100..104): the always-on workspace-host git
+ * Git pipeline scenarios (PERF-100..106): the always-on workspace-host git
  * cost — status poll cycles, subprocess spawn counts, the stat-skip fast
- * path, and watcher-storm recovery — measured against the real
+ * path, watcher-storm recovery, and the idle spawn rate with and without a
+ * transient git-dir probe failure — measured against the real
  * WorktreeMonitor + shared PQueue(3) pipeline on a synthetic repo with up to
  * 50 linked worktrees.
  *
@@ -37,6 +53,106 @@ const POLL_QUEUE_TASK_TIMEOUT_MS = 60_000;
 const STORM_SETTLE_MS = 2_000;
 const STORM_TIMEOUT_MS = 20_000;
 const WARM_STALENESS_MS = 60_000;
+
+// --- Idle spawn-rate scenarios (PERF-105/106) --------------------------------
+
+const IDLE_WINDOW_MS = 10_000;
+// #12042's own cadence: the "Performance" resource profile's 1500ms adaptive
+// base, the shortest interval the product ever falls back to. It is what makes
+// a watcher that has gone dark loud inside a 10s window (several full status
+// passes) while a healthy watcher's 300s heartbeat contributes none. Leaving
+// createMonitorHarness's 1h default in place here would report a perfect zero
+// for both the healthy and the broken monitor — measuring nothing.
+const IDLE_BASE_POLL_INTERVAL_MS = 1_500;
+const IDLE_POLL_INTERVAL_MAX_MS = 30_000;
+const IDLE_ARM_TIMEOUT_MS = 8_000;
+// The faulted monitor never goes quiet by construction, so the pre-window
+// settle has to be bounded rather than waiting out real silence.
+const IDLE_SETTLE_TIMEOUT_MS = 3_000;
+const IDLE_DETECTION_TIMEOUT_MS = 15_000;
+// Wider than the base poll interval plus its 20% jitter, so a leaked polling
+// timer has to fire inside the window rather than slipping past its end.
+const IDLE_CLEANUP_WINDOW_MS = 2_000;
+
+function failClosed(notes: string, metrics: Record<string, number>): ScenarioSample {
+  return { durationMs: 0, metrics, notes };
+}
+
+/**
+ * The idle window and its PAIRED correctness reading, measured identically
+ * for the healthy and the faulted monitor so the two counts are comparable.
+ *
+ * A spawn count on its own is a trap. A watcher that has gone permanently
+ * dark and stopped polling spawns nothing at all and scores a perfect zero —
+ * a count-only benchmark rewards breaking change detection outright. So every
+ * reading here carries `detectionMisses`: a file written at the END of the
+ * idle window must still reach a snapshot emit. Read the two together, or not
+ * at all.
+ */
+async function measureIdleWindow(
+  monitor: WorktreeMonitor,
+  recorder: EmitRecorder,
+  worktreePath: string,
+  probeName: string
+): Promise<Record<string, number>> {
+  await quiesceGitSpawns(PIPELINE_QUIESCE_SETTLE_MS, IDLE_SETTLE_TIMEOUT_MS);
+
+  const gitMark = gitSpawnMark();
+  const allMark = allSpawnMark();
+  await sleep(IDLE_WINDOW_MS);
+  const gitWindow = gitSpawnsSince(gitMark);
+  const allWindow = allSpawnsSince(allMark);
+
+  const from = recorder.cursor();
+  const editedAt = performance.now();
+  writeEditFile(worktreePath, probeName);
+  const emit = await recorder.waitFor(
+    (snapshot) =>
+      (snapshot.worktreeChanges?.changes ?? []).some(
+        (change) => basename(change.path) === probeName
+      ),
+    IDLE_DETECTION_TIMEOUT_MS,
+    from
+  );
+
+  return {
+    idleGitSpawns: gitWindow.count,
+    idleStatusPasses: gitWindow.bySubcommand["status"] ?? 0,
+    idleNonGitSpawns: nonGitSpawnCount(allWindow),
+    detectionMs: emit ? emit.atMs - editedAt : IDLE_DETECTION_TIMEOUT_MS,
+    detectionMisses: emit ? 0 : 1,
+    // Inverted so the max-ceiling budget model can gate it: 0 means a watcher
+    // is armed. Only observable at monitor granularity — `hasArmedWatcher`
+    // does not distinguish the recursive watcher from the git-only fallback,
+    // and the recursive arm's native subscription resolves after it flips.
+    watcherArmMisses: monitor.hasArmedWatcher ? 0 : 1,
+  };
+}
+
+/**
+ * Teardown reading, taken inline rather than as its own scenario: the spawn
+ * counter is process-global, so a leaked monitor bleeds into every scenario
+ * that runs after this one. The probe file is removed AFTER `stop()` on
+ * purpose — a leaked watcher or poll timer reacts to the removal, so a leak
+ * shows up as residual subprocess activity. Deliberately NOT reading
+ * `monitor.hasWatcher` here: `stop()` clears the controller's state
+ * synchronously, so that flag reads false whether or not a native handle
+ * survived. Observed behaviour after teardown is the only honest evidence.
+ */
+async function measureCleanup(
+  monitor: WorktreeMonitor,
+  probeFile: string
+): Promise<Record<string, number>> {
+  monitor.stop();
+  const gitMark = gitSpawnMark();
+  const allMark = allSpawnMark();
+  removeFileQuietly(probeFile);
+  await sleep(IDLE_CLEANUP_WINDOW_MS);
+  return {
+    residualGitSpawns: gitSpawnsSince(gitMark).count,
+    residualNonGitSpawns: nonGitSpawnCount(allSpawnsSince(allMark)),
+  };
+}
 
 interface ScalingHarness {
   monitors: WorktreeMonitor[];
@@ -257,6 +373,146 @@ export const gitPipelineScenarios: PerfScenario[] = [
         };
       } finally {
         monitor.stop();
+      }
+    },
+  },
+  {
+    id: "PERF-105",
+    name: "Git Idle Spawn Rate (healthy watcher)",
+    description:
+      "Git and non-git subprocess starts over a 10s idle window on an armed, recursively watched worktree, paired with the detection latency of an edit made at the end of that window.",
+    tier: "heavy",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 2, ci: 3, nightly: 5 },
+    warmups: 1,
+    async run() {
+      const fixture = getGitPipelineFixture();
+      const recorder = new EmitRecorder();
+      const monitor = await createMonitorHarness(fixture.idlePath, "wt-idle-branch", {
+        isCurrent: true,
+        gitWatchEnabled: true,
+        basePollingInterval: IDLE_BASE_POLL_INTERVAL_MS,
+        pollIntervalMax: IDLE_POLL_INTERVAL_MAX_MS,
+        onUpdate: (snapshot) => recorder.record(snapshot),
+      });
+      const probeName = `idle-probe-${uid()}.txt`;
+      const probeFile = join(fixture.idlePath, probeName);
+      try {
+        monitor.startWithoutGitStatus();
+        const armed = await pollUntil(() => monitor.hasArmedWatcher, IDLE_ARM_TIMEOUT_MS);
+        await monitor.refresh();
+        // startWithoutGitStatus() schedules the first poll while the arm is
+        // still in flight, when the controller reports its target mode
+        // optimistically. Re-derive the cadence from the mode that actually
+        // resolved — the ordering the real elevated start() produces.
+        monitor.reschedulePolling();
+
+        if (!armed) {
+          // Not a fast healthy monitor: an unarmed watcher makes the idle
+          // count meaningless, so refuse to report it as a good number.
+          return failClosed("watcher never armed — idle reading is not a healthy baseline", {
+            ...(await measureCleanup(monitor, probeFile)),
+            watcherArmMisses: 1,
+            detectionMisses: 1,
+          });
+        }
+
+        const idle = await measureIdleWindow(monitor, recorder, fixture.idlePath, probeName);
+        const cleanup = await measureCleanup(monitor, probeFile);
+        return {
+          // Self-timed: the headline number is a count, not a duration.
+          durationMs: 0,
+          metrics: { ...idle, ...cleanup },
+          notes:
+            idle.detectionMisses === 1
+              ? "idle window was quiet but the paired edit was never detected"
+              : undefined,
+        };
+      } finally {
+        monitor.stop();
+        removeFileQuietly(probeFile);
+      }
+    },
+  },
+  {
+    id: "PERF-106",
+    name: "Git Idle Spawn Rate (after a transient git-dir probe failure)",
+    description:
+      "The #12042 shape: one transient git-dir probe failure while the watcher arms, then a healthy repo. Reports whether the watcher recovered (watcherArmMisses 0), whether an edit was still detected, and how much git ran during a 10s idle window.",
+    tier: "heavy",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 2, ci: 3, nightly: 5 },
+    warmups: 1,
+    async run() {
+      const fixture = getGitPipelineFixture();
+      const recorder = new EmitRecorder();
+      const monitor = await createMonitorHarness(fixture.faultPath, "wt-fault-branch", {
+        isCurrent: true,
+        gitWatchEnabled: true,
+        basePollingInterval: IDLE_BASE_POLL_INTERVAL_MS,
+        pollIntervalMax: IDLE_POLL_INTERVAL_MAX_MS,
+        onUpdate: (snapshot) => recorder.record(snapshot),
+      });
+      const probeName = `idle-probe-${uid()}.txt`;
+      const probeFile = join(fixture.faultPath, probeName);
+      try {
+        // Arm the watcher WHILE the probe is failing, so whatever ends up in
+        // the git-dir cache is put there by the product's own getGitDir call.
+        // The repo is healthy again the moment this resolves.
+        const { result: wentDark, injected } = await withGitDirProbeFault(
+          fixture.faultPath,
+          async () => {
+            monitor.startWithoutGitStatus();
+            // hasWatcher stays optimistically true while an arm is in flight,
+            // and a failed recursive arm immediately starts a git-only one, so
+            // it only reads false once BOTH have failed — the dark state.
+            return pollUntil(() => !monitor.hasWatcher, IDLE_ARM_TIMEOUT_MS);
+          }
+        );
+
+        // refresh() resets the recursive retry budget and re-arms, so this is
+        // also the product's first recovery attempt against the healed repo.
+        // Wait for that arm to resolve before deriving the poll cadence:
+        // reading it mid-arm picks up the optimistic 300s watcher heartbeat
+        // and reports the runaway as silence.
+        await monitor.refresh();
+        const armSettled = await pollUntil(
+          () => !monitor.hasWatcher || monitor.hasArmedWatcher,
+          IDLE_ARM_TIMEOUT_MS
+        );
+        monitor.reschedulePolling();
+
+        const idle = await measureIdleWindow(monitor, recorder, fixture.faultPath, probeName);
+        const cleanup = await measureCleanup(monitor, probeFile);
+        const metrics = {
+          ...idle,
+          ...cleanup,
+          faultInjectionMisses: injected ? 0 : 1,
+          // Both waits timing out means the watcher lifecycle never settled,
+          // so the poll cadence measured below is whatever happened to be
+          // armed at the time — not a reading of the fault state.
+          faultStateMisses: wentDark && armSettled ? 0 : 1,
+        };
+        if (!injected || !wentDark || !armSettled) {
+          return failClosed(
+            "the #12042 fault state was not reproduced — every count here is invalid",
+            metrics
+          );
+        }
+        return {
+          durationMs: 0,
+          metrics,
+          notes:
+            idle.detectionMisses === 1
+              ? "the faulted worktree stopped detecting edits entirely — a zero spawn count here is a dead watcher, not a fix"
+              : undefined,
+        };
+      } finally {
+        monitor.stop();
+        removeFileQuietly(probeFile);
+        // Leave the cache clean so the next iteration injects its own fault
+        // rather than inheriting this one's 600s-TTL null.
+        await clearCachedGitDir(fixture.faultPath);
       }
     },
   },

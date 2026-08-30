@@ -120,6 +120,32 @@
       "maxRegressionPct": 75,
       "maxMetricValues": { "statusPasses": 3, "gitSpawns": 10 }
     },
+    "PERF-105": {
+      "p95Ms": 20000,
+      "maxRegressionPct": 100,
+      "maxMetricValues": {
+        "idleStatusPasses": 0,
+        "idleGitSpawns": 4,
+        "idleNonGitSpawns": 0,
+        "detectionMisses": 0,
+        "watcherArmMisses": 0,
+        "residualGitSpawns": 0
+      }
+    },
+    "PERF-106": {
+      "p95Ms": 20000,
+      "maxRegressionPct": 100,
+      "maxMetricValues": {
+        "idleStatusPasses": 0,
+        "idleGitSpawns": 6,
+        "idleNonGitSpawns": 0,
+        "detectionMisses": 0,
+        "watcherArmMisses": 0,
+        "faultInjectionMisses": 0,
+        "faultStateMisses": 0,
+        "residualGitSpawns": 0
+      }
+    },
 
     "PERF-130": {
       "p95Ms": 400,
