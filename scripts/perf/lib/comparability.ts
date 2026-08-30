@@ -105,10 +105,15 @@ const RULES: ReadonlyArray<{ cls: ComparabilityClass; pattern: RegExp }> = [
   // (`spawnsPerWorktree` divides two tallies and compares freely). Utilization
   // is the one word that carries both halves by itself: there is no such thing
   // as a machine-independent event-loop utilization.
+  //
+  // `Load` is anchored the way the unit tokens are, for the same reason: a bare
+  // `[Ll]oad` finds "load" inside "payload", which would read a deterministic
+  // `payloadBytesPerMessage` as a machine-dependent figure and lose its
+  // cross-machine comparison.
   {
     cls: "derived-ratio",
     pattern:
-      /[Uu]tili[sz]ation|[Dd]egradationX?$|((?=.*([Cc]pu|[Hh]eap|[Rr]ss|[Mm]emory|[Ff]ootprint|[Ll]oad))(?=.*([Pp]ct$|[Pp]ercent|[Ff]raction|[a-z0-9]Ratio|[a-z0-9]Per[A-Z])).*)/,
+      /[Uu]tili[sz]ation|[Dd]egradationX?$|((?=.*([Cc]pu|[Hh]eap|[Rr]ss|[Mm]emory|[Ff]ootprint|[Ll]oadAvg|[a-z0-9]Load([A-Z0-9]|$)))(?=.*([Pp]ct$|[Pp]ercent|[Ff]raction|[a-z0-9]Ratio|[a-z0-9]Per[A-Z])).*)/,
   },
   // Structural proportions and per-unit rates over deterministic quantities.
   // `Ratio` is capitalised or leading, never the substring inside "decorations".
@@ -143,6 +148,14 @@ export function classifyMetric(metricName: string): ComparabilityClass {
 /**
  * Short marker for report tables. `≡` reads as "compare freely", `~` as
  * "compare only against itself".
+ *
+ * Deliberately two markers and not three, now that `derived-ratio` gives a
+ * second reason for `~`. The marker answers one question — may this number be
+ * carried to another machine? — and that question is binary. A third glyph for
+ * "machine-dependent, but it looks portable" invites a partly-comparable
+ * reading, which is the exact mistake this module exists to prevent. The class
+ * name is rendered beside the marker in both renderers and is where the reason
+ * belongs.
  */
 export function comparabilityMarker(cls: ComparabilityClass): string {
   return isMachineIndependent(cls) ? "≡" : "~";

@@ -56,8 +56,9 @@ function readingGuide(env: RunEnvironment): string[] {
     "",
     "Nothing here is a verdict. The suite reports measurements and annotates the ones sitting outside a configured reference value; acting on one is a judgement call.",
     "",
-    `- \`${comparabilityMarker("count")}\` machine-independent — counts, sizes and ratios. Compare these across machines and operating systems: "Windows 34, macOS 0" is a finding. \`max\` compares freely; \`sum\` only against a run of the same scenario at the same iteration count.`,
-    `- \`${comparabilityMarker("duration")}\` machine-dependent — durations and memory. Only meaningful against another run on ${machineIdentity(env)}. Against a different machine the difference is mostly the two machines.`,
+    `- \`${comparabilityMarker("count")}\` machine-independent — \`count\`, \`size\` and \`ratio\`: tallies, byte lengths, and proportions between two of those. Compare these across machines and operating systems: "Windows 34, macOS 0" is a finding. \`max\` compares freely; \`sum\` only against a run of the same scenario at the same iteration count.`,
+    `- \`${comparabilityMarker("duration")}\` machine-dependent — \`duration\`, \`memory\`, \`derived-ratio\` and \`unknown\`. Only meaningful against another run on ${machineIdentity(env)}. Against a different machine the difference is mostly the two machines.`,
+    `- A percentage is not automatically portable. A \`derived-ratio\` divides one runtime number by another — event-loop utilization, \`memoryGrowthPct\` — which changes the units the machine is baked into rather than removing it. A slower CPU raises utilization for identical work; a different allocator moves a growth percentage with no code change. Those rows carry \`${comparabilityMarker("derived-ratio")}\`, the same marker as a duration, and are read the same way.`,
     "",
     "The median leads the latency table: at the iteration counts this harness runs, a p95 is one of the two largest samples rather than a stable tail estimate. p95 and p99 stay as detail columns.",
   ];

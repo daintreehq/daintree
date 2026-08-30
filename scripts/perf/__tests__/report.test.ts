@@ -44,7 +44,11 @@ function summary(overrides: Partial<PerfRunSummary> = {}): PerfRunSummary {
       totalMemoryMb: 65536,
       osRelease: "24.0.0",
       nodeVersion: "v22.13.0",
+      electronVersion: "42.0.0",
+      gitVersion: "2.45.2",
+      sourceSha: "0dbb0b4",
     },
+    protocol: { iterations: null, warmups: null, scenarioSelection: null },
     scenarioCount: 1,
     scenariosOutsideReference: [],
     aggregates: [aggregate()],
@@ -107,6 +111,43 @@ describe("buildMarkdownReport", () => {
     expect(countCell).toContain(classifyMetric("gitSpawns"));
     expect(durationCell).toContain(classifyMetric("applyMs"));
     expect(countCell).not.toBe(durationCell);
+  });
+
+  it("never presents a runtime-derived proportion as freely comparable", () => {
+    // A percentage reads as portable, which is exactly why this row is the one
+    // a reader is most likely to carry from a Mac report to a Windows one.
+    const report = buildMarkdownReport(
+      summary({
+        aggregates: [
+          aggregate({
+            metricStats: {
+              memoryGrowthPct: stat({ max: 18, sum: 18 }),
+              spawnsPerWorktree: stat({ max: 2, sum: 2 }),
+            },
+          }),
+        ],
+      })
+    );
+
+    const header = cells(row(report, "Scenario", "Metric"));
+    const column = header.indexOf("Comparable");
+    const derived = cells(row(report, "PERF-001", "memoryGrowthPct"))[column];
+    const structural = cells(row(report, "PERF-001", "spawnsPerWorktree"))[column];
+
+    expect(derived).toContain("derived-ratio");
+    expect(derived).toContain(comparabilityMarker("duration"));
+    expect(derived).not.toContain(comparabilityMarker("count"));
+    // A structural ratio still compares freely — the two must not collapse.
+    expect(structural).toContain(comparabilityMarker("count"));
+
+    // And the legend has to account for the class, or a reader matches the word
+    // "ratio" in the machine-independent bullet and carries the number anyway.
+    const guide = report.slice(
+      report.indexOf("## Reading these numbers"),
+      report.indexOf("## Lat")
+    );
+    expect(guide).toContain("derived-ratio");
+    expect(guide).toContain("A percentage is not automatically portable");
   });
 
   it("carries the machine identity a latency number can only be read against", () => {

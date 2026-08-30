@@ -22,7 +22,7 @@ import {
   type ComparabilityClass,
 } from "./lib/comparability";
 import { round } from "./lib/stats";
-import type { MetricStat, PerfRunSummary, ScenarioAggregate } from "./types";
+import type { MetricStat, PerfRunSummary, RunProtocol, ScenarioAggregate } from "./types";
 
 const USAGE = "usage: npm run perf compare -- <before.json> <after.json>";
 
@@ -192,6 +192,18 @@ function byId(aggregates: ScenarioAggregate[]): Map<string, ScenarioAggregate> {
 }
 
 /**
+ * `--scenario` as a set, since `run.ts` records the ids in the order they were
+ * typed while executing them in registry order. `A,B` and `B,A` are one run.
+ */
+function describeSelection(selection: string[] | null): string {
+  return selection === null ? "the whole matrix" : [...selection].sort().join(",");
+}
+
+function selectionsDiffer(before: RunProtocol, after: RunProtocol): boolean {
+  return describeSelection(before.scenarioSelection) !== describeSelection(after.scenarioSelection);
+}
+
+/**
  * Why two runs' machine-dependent figures cannot be compared, or null.
  *
  * Machine is the obvious half. Protocol is the half that is easy to miss: a
@@ -221,6 +233,20 @@ function refusalReason(before: PerfRunSummary, after: PerfRunSummary): string | 
   }
   if (before.protocol.iterations !== after.protocol.iterations) {
     return `different iteration counts (${describe(before.protocol.iterations, "per-mode default")} vs ${describe(after.protocol.iterations, "per-mode default")})`;
+  }
+
+  // A refusal rather than a warning, and the choice is not obvious: scenario
+  // A's number against scenario A's number stays a like-for-like reading of the
+  // same work, so the case for a warning is real. It loses because the
+  // surrounding run is part of the measurement. Every scenario in a run shares
+  // one process and one machine — heap occupancy, JIT state, GC pressure, page
+  // cache and thermal headroom all arrive at scenario A differently when it
+  // runs alone than when it runs fortieth. That is the same class of
+  // difference as `--warmups 0`, which is already refused, and it lands on
+  // exactly the same rows: counts, sizes and structural ratios survive
+  // untouched, so refusing costs nothing that was actually comparable.
+  if (selectionsDiffer(before.protocol, after.protocol)) {
+    return `different scenario selections (${describeSelection(before.protocol.scenarioSelection)} vs ${describeSelection(after.protocol.scenarioSelection)})`;
   }
   return null;
 }
@@ -323,6 +349,53 @@ export function buildComparison(before: PerfRunSummary, after: PerfRunSummary): 
     }
   }
 
+  // A toolchain change is a WARNING and never a refusal, and the two halves of
+  // that are decided separately.
+  //
+  // `sourceSha` stays out of `refusalReason` entirely: two runs at two commits
+  // is the whole purpose of this tool, so refusing on it would refuse every
+  // real before/after pair.
+  //
+  // A git or Electron upgrade is a genuine confound — it moves subprocess
+  // counts and IPC costs with no product change — but the refusal machinery is
+  // the wrong instrument for it. Refusal withholds machine-dependent deltas,
+  // and a git upgrade lands on `gitSpawns`: a count, which is machine-
+  // independent and survives every refusal. A warning reaches the reader
+  // whatever class the affected row is in, which is what this confound needs.
+  //
+  // Only compared when both sides recorded a version. A null means "not
+  // recorded", and warning on a missing record would fire against every older
+  // file and train the reader to skip the section.
+  for (const [field, beforeValue, afterValue] of [
+    ["git", before.environment.gitVersion, after.environment.gitVersion],
+    ["Electron", before.environment.electronVersion, after.environment.electronVersion],
+  ] as const) {
+    if (beforeValue && afterValue && beforeValue !== afterValue) {
+      warnings.push(
+        `${field} version differs (${beforeValue} vs ${afterValue}) — a toolchain upgrade moves ` +
+          "subprocess counts and IPC costs on its own, so part of every delta below may not be " +
+          "the code"
+      );
+    }
+  }
+
+  // Named unconditionally, because `refusalReason` reports only the first
+  // reason it finds: with a machine or warmup mismatch also present, a reader
+  // who fixed that one would otherwise meet the selection mismatch for the
+  // first time on their second attempt.
+  if (
+    before.protocol !== undefined &&
+    after.protocol !== undefined &&
+    selectionsDiffer(before.protocol, after.protocol)
+  ) {
+    warnings.push(
+      `scenario selection differs (${describeSelection(before.protocol.scenarioSelection)} vs ` +
+        `${describeSelection(after.protocol.scenarioSelection)}) — a scenario measured alone and ` +
+        "the same scenario measured beside the rest of the matrix ran in different process and " +
+        "machine conditions, so machine-dependent rows are refused; re-run both sides with the " +
+        "same --scenario filter"
+    );
+  }
   if (before.mode !== after.mode) {
     warnings.push(
       `run modes differ (${before.mode} vs ${after.mode}) — iteration counts and scenario ` +
@@ -519,11 +592,11 @@ export function renderComparison(
       "",
       `Reason: ${report.incomparabilityReason}.`,
       "",
-      "Durations, memory and unclassified metrics measure the machine as much as the code, so no",
-      "delta is computed for them — the raw readings are printed as a record of what each run",
-      "measured, and subtracting them by eye is the mistake this refusal exists to prevent. Counts,",
-      "sizes and ratios below are unaffected. To compare durations, run before and after on one",
-      "machine."
+      "Durations, memory, runtime-derived ratios and unclassified metrics measure the machine as",
+      "much as the code, so no delta is computed for them — the raw readings are printed as a",
+      "record of what each run measured, and subtracting them by eye is the mistake this refusal",
+      "exists to prevent. Counts, byte sizes and structural ratios below are unaffected. To compare",
+      "durations, run before and after on one machine with one protocol."
     );
   }
 
@@ -542,12 +615,12 @@ export function renderComparison(
   lines.push(
     ...metricTable(
       "Machine-independent metrics",
-      `${comparabilityMarker("count")} counts, sizes and ratios — compare freely between any two runs.`,
+      `${comparabilityMarker("count")} counts, byte sizes and structural ratios — compare freely between any two runs.`,
       report.independentMetricRows
     ),
     ...metricTable(
       "Machine-dependent metrics",
-      `${comparabilityMarker("duration")} durations, memory and unclassified metrics — comparable only against the same machine.`,
+      `${comparabilityMarker("duration")} durations, memory, runtime-derived ratios (\`derived-ratio\`) and unclassified metrics — comparable only against the same machine.`,
       report.dependentMetricRows
     ),
     ...durationTable(report),
@@ -561,6 +634,9 @@ export function renderComparison(
     "- The median is the headline for durations because it is the robust descriptive statistic here.",
     `  p95 is interpolated from the top order statistics, so below ${EXPLORATORY_P95_RUNS} iterations`,
     "  it is decided by the largest two or three observations — read its delta as exploratory.",
+    "- A percentage is not automatically portable. A `derived-ratio` — an event-loop utilization, a",
+    "  `memoryGrowthPct` — divides one runtime number by another, which changes the units the",
+    "  machine is baked into rather than removing it, so it sits with the durations.",
     "- `max` is the headline for a metric because a mean flattens the single iteration that spiked.",
     "  The second reading is a `sum` for counts and sizes and a `mean` for levels; both depend on how",
     "  many iterations reported the metric, so both are withheld when those counts differ.",

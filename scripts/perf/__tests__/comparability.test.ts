@@ -17,6 +17,9 @@ function env(overrides: Partial<RunEnvironment> = {}): RunEnvironment {
     totalMemoryMb: 65536,
     osRelease: "24.0.0",
     nodeVersion: "v22.13.0",
+    electronVersion: "42.0.0",
+    gitVersion: "2.45.2",
+    sourceSha: "0dbb0b4",
     ...overrides,
   };
 }
@@ -81,15 +84,32 @@ describe("classifyMetric", () => {
     "items",
   ];
 
+  // Proportions between two deterministic quantities. Every one of these has a
+  // proportional FORM and no runtime base, which is the half of the
+  // derived-ratio conjunction that must not be enough on its own.
   const REAL_RATIOS = [
     "detectionToIntervalRatio",
     "coldToWarmRatio",
-    "eluUtilization",
-    "echoDegradationX",
     "mapChangesPerApply",
     "notifiesPerApply",
     "spawnsPerWorktreeN50",
+    "messagesPerKLine",
+    "writeAmplificationRatio",
+    // "load" lives inside "payload", so an unanchored base token would drag a
+    // deterministic bytes-per-message figure into the machine-dependent group.
+    "payloadBytesPerMessage",
+  ];
+
+  // Proportions whose numerator or denominator is itself a runtime measurement.
+  // Normalising by a runtime number does not remove the machine, it changes the
+  // units it is wrong in.
+  const REAL_DERIVED_RATIOS = [
+    "cpuPct",
     "memoryGrowthPct",
+    "peakMemoryGrowthPct",
+    "eluUtilization",
+    "eventLoopUtilization",
+    "echoDegradationX",
   ];
 
   const REAL_MEMORY = ["heapDeltaMb", "memoryGrowthMb", "peakMemoryGrowthMb"];
@@ -108,6 +128,10 @@ describe("classifyMetric", () => {
     expect(classifyMetric(name)).toBe("ratio");
   });
 
+  it.each(REAL_DERIVED_RATIOS)("classifies %s as derived-ratio", (name) => {
+    expect(classifyMetric(name)).toBe("derived-ratio");
+  });
+
   it.each(REAL_MEMORY)("classifies %s as memory", (name) => {
     expect(classifyMetric(name)).toBe("memory");
   });
@@ -123,6 +147,26 @@ describe("classifyMetric", () => {
     for (const name of REAL_DURATIONS) {
       expect(isMachineIndependent(classifyMetric(name))).toBe(false);
     }
+  });
+
+  it("keeps a runtime-derived proportion off the cross-machine table", () => {
+    // The defect this class exists for: every `Pct` and `Utilization` used to
+    // classify as `ratio`, which licensed reading "Windows event-loop
+    // utilization 41%, macOS 12%" as a statement about the code.
+    for (const name of REAL_DERIVED_RATIOS) {
+      expect(isMachineIndependent(classifyMetric(name))).toBe(false);
+    }
+    expect(isMachineIndependent("derived-ratio")).toBe(false);
+  });
+
+  it("needs BOTH halves of the conjunction before calling a number derived", () => {
+    // A runtime base alone is not a proportion: a heap delta is a reading.
+    expect(classifyMetric("heapDeltaMb")).toBe("memory");
+    // A proportional form alone is not machine-dependent: this divides one
+    // tally by another and carries no machine at all.
+    expect(classifyMetric("spawnsPerWorktreeN50")).toBe("ratio");
+    // And one word carries both halves by itself.
+    expect(classifyMetric("eventLoopUtilization")).toBe("derived-ratio");
   });
 
   it("treats runtime memory as machine-dependent, unlike a payload size", () => {

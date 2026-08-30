@@ -19,6 +19,9 @@ const MAC: RunEnvironment = {
   totalMemoryMb: 65536,
   osRelease: "24.0.0",
   nodeVersion: "v22.13.0",
+  electronVersion: "42.0.0",
+  gitVersion: "2.45.2",
+  sourceSha: "0dbb0b4",
 };
 
 const WINDOWS: RunEnvironment = {
@@ -287,6 +290,80 @@ describe("protocol refusal", () => {
   });
 });
 
+describe("scenario-selection refusal", () => {
+  // A scenario measured alone and the same scenario measured beside the rest of
+  // the matrix ran in different process conditions — heap occupancy, GC
+  // pressure, page cache, thermal headroom. The per-scenario numbers look
+  // pairable, which is what makes this one worth refusing rather than noting.
+  const selected = (label: string, p50: number, selection: string[] | null) =>
+    summary(label, MAC, [scenario("PERF-105", p50, { gitSpawns: stat({ max: 6, sum: 24 }) })], {
+      protocol: { iterations: null, warmups: null, scenarioSelection: selection },
+    });
+
+  it("refuses machine-dependent rows when a filtered run meets a full one", () => {
+    const report = buildComparison(
+      selected("before", 200, null),
+      selected("after", 150, ["PERF-105"])
+    );
+
+    expect(report.machineDependentComparable).toBe(false);
+    expect(report.incomparabilityReason).toContain("scenario selection");
+    expect(report.incomparabilityReason).toContain("the whole matrix");
+    expect(report.incomparabilityReason).toContain("PERF-105");
+    expect(report.durationRows[0].median.absolute).toBeNull();
+    // The count is unaffected: a tally inside PERF-105 does not care what else
+    // the run executed, which is why refusing the durations costs nothing real.
+    expect(report.independentMetricRows[0].max.absolute).toBe(0);
+  });
+
+  it("refuses two different filters even when both contain the compared scenario", () => {
+    const report = buildComparison(
+      selected("before", 200, ["PERF-105"]),
+      selected("after", 150, ["PERF-105", "PERF-106"])
+    );
+
+    expect(report.incomparabilityReason).toContain("scenario selection");
+  });
+
+  it("accepts the same selection typed in a different order", () => {
+    // `run.ts` records the ids as typed and runs them in registry order, so the
+    // array order is not part of the protocol.
+    const report = buildComparison(
+      selected("before", 200, ["PERF-106", "PERF-105"]),
+      selected("after", 150, ["PERF-105", "PERF-106"])
+    );
+
+    expect(report.machineDependentComparable).toBe(true);
+    expect(report.incomparabilityReason).toBeNull();
+    expect(report.warnings).toEqual([]);
+  });
+
+  it("names the mismatch in the warnings even when another refusal fires first", () => {
+    // `refusalReason` reports only its first finding, so without this a reader
+    // who fixed the machine would meet the selection mismatch on attempt two.
+    const beforeFull = selected("before", 200, null);
+    const afterFiltered = summary(
+      "after",
+      WINDOWS,
+      [scenario("PERF-105", 150, { gitSpawns: stat({ max: 6, sum: 24 }) })],
+      { protocol: { iterations: null, warmups: null, scenarioSelection: ["PERF-105"] } }
+    );
+    const report = buildComparison(beforeFull, afterFiltered);
+
+    expect(report.incomparabilityReason).toContain("different machines");
+    expect(report.warnings.join("\n")).toContain("scenario selection differs");
+  });
+
+  it("puts the refusal and the mismatch in the rendered output", () => {
+    const output = render(selected("before", 200, null), selected("after", 150, ["PERF-105"]));
+
+    expect(output).toContain("Machine-dependent comparison REFUSED");
+    expect(output).toContain("different scenario selections");
+    expect(output).toContain("scenario selection differs");
+    expect(rowCells(output, "PERF-105")[1].slice(3, 5)).toEqual(["REFUSED", "REFUSED"]);
+  });
+});
+
 describe("withheld comparisons", () => {
   it("withholds both metric readings when the reporting iteration counts differ", () => {
     const before = summary("before", MAC, [
@@ -405,6 +482,41 @@ describe("warnings", () => {
     expect(warnings).toContain("check the argument order");
   });
 
+  it("warns about a toolchain change without refusing the comparison", () => {
+    // A git upgrade moves subprocess counts on its own, but the refusal path is
+    // the wrong instrument: it withholds machine-dependent rows, and a spawn
+    // count is machine-INdependent and would sail straight through it.
+    const newerGit = summary("after", { ...MAC, gitVersion: "2.48.0", electronVersion: "43.0.0" }, [
+      scenario("PERF-105", 150, { gitSpawns: stat({ max: 3, sum: 10 }) }),
+    ]);
+    const report = buildComparison(beforeMac, newerGit);
+    const warnings = report.warnings.join("\n");
+
+    expect(warnings).toContain("git version differs (2.45.2 vs 2.48.0)");
+    expect(warnings).toContain("Electron version differs (42.0.0 vs 43.0.0)");
+    expect(report.machineDependentComparable).toBe(true);
+    expect(report.independentMetricRows[0].max.absolute).toBe(-9);
+  });
+
+  it("never refuses or warns on a differing commit, which is the point of the tool", () => {
+    const other = summary("after", { ...MAC, sourceSha: "deadbee" }, [
+      scenario("PERF-105", 150, { gitSpawns: stat({ max: 3, sum: 10 }) }),
+    ]);
+    const report = buildComparison(beforeMac, other);
+
+    expect(report.machineDependentComparable).toBe(true);
+    expect(report.warnings).toEqual([]);
+  });
+
+  it("stays quiet when one side simply did not record a version", () => {
+    // A null is "not recorded", not a change. Warning on it would fire against
+    // every older file and train the reader to skip the section.
+    const unrecorded = summary("after", { ...MAC, gitVersion: null }, [
+      scenario("PERF-105", 150, { gitSpawns: stat({ max: 3, sum: 10 }) }),
+    ]);
+    expect(buildComparison(beforeMac, unrecorded).warnings).toEqual([]);
+  });
+
   it("surfaces recorded measurement issues from both sides", () => {
     const before = summary("before", MAC, [
       scenario("PERF-105", 200, {}, { measurementIssues: ["gitSpawns stopped being emitted"] }),
@@ -472,5 +584,26 @@ describe("cli", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("usage:");
+  });
+
+  it("exits 0 on a refusal, and says so loudly enough that nobody reads it as a pass", () => {
+    // The suite never fails a build for a number, so a refusal cannot use the
+    // exit code. That makes the *output* the whole signal, and a caller that
+    // checks only the status must not be able to mistake this for a comparison.
+    const dir = mkdtempSync(path.join(tmpdir(), "perf-compare-cli-"));
+    const write = (name: string, data: PerfRunSummary) => {
+      const filePath = path.join(dir, name);
+      writeFileSync(filePath, JSON.stringify(data), "utf8");
+      return filePath;
+    };
+    const filtered = summary("after", MAC, [scenario("PERF-105", 150, {})], {
+      protocol: { iterations: null, warmups: null, scenarioSelection: ["PERF-105"] },
+    });
+    const result = run(write("before.json", beforeMac), write("after.json", filtered));
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Machine-dependent comparison REFUSED");
+    expect(result.stdout).toContain("different scenario selections");
+    expect(result.stdout).toContain("REFUSED");
   });
 });
