@@ -72,6 +72,64 @@
       "maxRegressionPct": 20,
       "maxMetricValues": { "serializeTotalMs": 25 }
     },
+    "PERF-074": {
+      "p95Ms": 2000,
+      "maxRegressionPct": 50,
+      "maxMetricValues": {
+        "coldStartCount": 0,
+        "viewCreateCount": 0,
+        "warmSwitchMisses": 0,
+        "switchFailureCount": 0,
+        "evictionCount": 0,
+        "attachMisses": 0,
+        "closeMisses": 0,
+        "listenerLeakCount": 0
+      }
+    },
+    "PERF-075": {
+      "p95Ms": 2000,
+      "maxRegressionPct": 50,
+      "maxMetricValues": {
+        "capOverflowCount": 0,
+        "lruOrderMisses": 0,
+        "lruRequestOrderMisses": 0,
+        "bootstrapProbeMisses": 0,
+        "switchFailureCount": 0,
+        "closeMisses": 0,
+        "listenerLeakCount": 0,
+        "attachMisses": 0
+      }
+    },
+    "PERF-076": {
+      "p95Ms": 2000,
+      "maxRegressionPct": 50,
+      "maxMetricValues": {
+        "pressureLadderMisses": 0,
+        "pressureBudgetMisses": 0,
+        "healthyBandMisses": 0,
+        "forcedReportMisses": 0,
+        "forcedConvergenceMisses": 0,
+        "protectedEvictionMisses": 0,
+        "agentTierOrderMisses": 0,
+        "assistantFloorMisses": 0,
+        "closeMisses": 0,
+        "listenerLeakCount": 0,
+        "attachMisses": 0
+      }
+    },
+    "PERF-077": {
+      "p95Ms": 2000,
+      "maxRegressionPct": 50,
+      "maxMetricValues": {
+        "switchFailureCount": 0,
+        "finalActiveMisses": 0,
+        "capOverflowCount": 0,
+        "attachMisses": 0,
+        "strandedViewCount": 0,
+        "closeMisses": 0,
+        "listenerLeakCount": 0
+      }
+    },
 
     "PERF-060": {
       "p95Ms": 5000,
