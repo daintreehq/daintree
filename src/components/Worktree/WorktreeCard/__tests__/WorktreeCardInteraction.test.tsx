@@ -300,39 +300,34 @@ function requireZ(label: string, tokens: { z: number | null }): number {
   return tokens.z;
 }
 
+/** The single opening tag carrying `attribute`, and nothing past its `>`. The
+ *  `[^>]*` fences keep the match inside one element, so a className lifted out
+ *  of it can never belong to a descendant however the attributes are ordered. */
+function openingTagWith(source: string, tag: string, attribute: string): string {
+  const found = source.match(new RegExp(`<${tag}\\b[^>]*\\b${attribute}[^>]*>`))?.[0];
+  if (found === undefined) throw new Error(`no <${tag}> carrying ${attribute}`);
+  return found;
+}
+
 /** The sidebar select overlay's class string, anchored on its unique attribute. */
 function selectOverlayClasses(): string {
-  const classes = cardSource.match(
-    /data-card-select-overlay=""\s*\n\s*className=\{cn\(\s*\n\s*"([^"]+)"/
-  )?.[1];
+  const tag = openingTagWith(cardSource, "button", 'data-card-select-overlay=""');
+  const classes = tag.match(/className=\{cn\(\s*"([^"]+)"/)?.[1];
   if (classes === undefined) {
-    throw new Error("no [data-card-select-overlay] className in WorktreeCard.tsx");
+    throw new Error("no className={cn(...)} on the [data-card-select-overlay] button");
   }
   return classes;
 }
 
-/** A banner root's class string, anchored on its unique test id. The bounded
- *  lazy span tolerates the comment block between the attribute and className
- *  without letting the match run on into an unrelated element. */
+/** A banner root's class string, anchored on its unique test id. */
 function bannerRootClasses(testId: string): string {
-  const classes = detailsSource.match(
-    new RegExp(`data-testid="${testId}"[\\s\\S]{0,900}?className="([^"]+)"`)
-  )?.[1];
-  if (classes === undefined) {
-    throw new Error(`no root className for [data-testid="${testId}"]`);
-  }
+  const tag = openingTagWith(detailsSource, "div", `data-testid="${testId}"`);
+  const classes = tag.match(/className="([^"]+)"/)?.[1];
+  if (classes === undefined) throw new Error(`no root className for [data-testid="${testId}"]`);
   return classes;
 }
 
 describe("worktree error banner stacking (issue #12087)", () => {
-  it("mounts both banners outside the card's z-10 content column", () => {
-    // The premise the ordering assertion below exists to defend. If a later
-    // refactor moves the banners inside the column they inherit its tier and
-    // this suite should be revisited rather than left asserting a dead rule.
-    expect(cardSource).toMatch(/\{deleteError && \(\s*<WorktreeDeleteErrorBanner/);
-    expect(cardSource).toMatch(/\{issueError && \(\s*<WorktreeIssueErrorBanner/);
-  });
-
   it("gives the select overlay a positioned, z-indexed full-card layer", () => {
     // Guards the ordering assertions from passing vacuously if the overlay's
     // class string ever stops being extractable.

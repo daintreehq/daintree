@@ -1370,17 +1370,26 @@ function abandonDelete(
 ): void {
   const prev = get();
   const mutationId = knownMutationId ?? findDeleteMutationId(prev.mutationOutbox, worktreeId);
+  const entry = mutationId === undefined ? undefined : prev.mutationOutbox.get(mutationId);
   const hadError = prev.deleteErrors.has(worktreeId);
   const hadArgs = prev.deleteErrorArgs.has(worktreeId);
-  const hadEntry = mutationId !== undefined && prev.mutationOutbox.has(mutationId);
-  if (!hadError && !hadArgs && !hadEntry) return;
+
+  // An `in-flight` entry still has a live `runDeleteAsync` behind it, and the
+  // banner can be showing over one: `replayOutboxAfterReconnect` flips entries
+  // to `in-flight` without clearing `deleteErrors`, so a Dismiss can land on a
+  // delete that is actively running. Pruning that entry would orphan a removal
+  // still on its way to the host, and relaunching its terminals would race the
+  // removal that is about to succeed. Drop the banner, leave the mutation to
+  // settle on its own — `handleDeleteFailure` re-surfaces it if it fails again.
+  const prunable = entry !== undefined && entry.status !== "in-flight";
+  if (!hadError && !hadArgs && !prunable) return;
 
   const nextDeleteErrors = hadError ? new Map(prev.deleteErrors) : prev.deleteErrors;
   if (hadError) nextDeleteErrors.delete(worktreeId);
   const nextDeleteErrorArgs = hadArgs ? new Map(prev.deleteErrorArgs) : prev.deleteErrorArgs;
   if (hadArgs) nextDeleteErrorArgs.delete(worktreeId);
-  const nextOutbox = hadEntry ? new Map(prev.mutationOutbox) : prev.mutationOutbox;
-  if (hadEntry && mutationId !== undefined) nextOutbox.delete(mutationId);
+  const nextOutbox = prunable ? new Map(prev.mutationOutbox) : prev.mutationOutbox;
+  if (prunable && mutationId !== undefined) nextOutbox.delete(mutationId);
 
   set({
     deleteErrors: nextDeleteErrors,
@@ -1388,7 +1397,7 @@ function abandonDelete(
     mutationOutbox: nextOutbox,
   });
 
-  if (mutationId !== undefined) consumeTerminalRestore(worktreeId, mutationId);
+  if (prunable && mutationId !== undefined) consumeTerminalRestore(worktreeId, mutationId);
 }
 
 /** Drop any pending/in-flight restore bookkeeping for a worktree. Called when
