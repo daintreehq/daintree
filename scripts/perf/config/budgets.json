@@ -215,26 +215,46 @@
       }
     },
 
-    "PERF-090": {
-      "p95Ms": 15000,
-      "maxRegressionPct": 50,
+    "PERF-092": {
+      "p95Ms": 60000,
+      "maxRegressionPct": 100,
       "maxMetricValues": {
-        "wakeUpCount": 120,
-        "eventLoopLagP95Ms": 100,
-        "eluUtilization": 0.9,
-        "heapDeltaMb": 128,
-        "memoryGrowthPct": 25
+        "idleProbeSpawns": 12,
+        "idleSubprocessSpawns": 12,
+        "discoveryMisses": 0,
+        "refreshMisses": 0,
+        "residualSubprocessSpawns": 0
       }
     },
-    "PERF-091": {
-      "p95Ms": 15000,
-      "maxRegressionPct": 50,
+    "PERF-093": {
+      "p95Ms": 60000,
+      "maxRegressionPct": 100,
       "maxMetricValues": {
-        "wakeUpCount": 5,
-        "eventLoopLagP95Ms": 100,
-        "eluUtilization": 0.9,
-        "heapDeltaMb": 128,
-        "memoryGrowthPct": 25
+        "faultProbeSpawns": 8,
+        "faultSubprocessSpawns": 8,
+        "healedProbeSpawns": 8,
+        "healedSubprocessSpawns": 8,
+        "recoveryMisses": 0,
+        "postHealDiscoveryMisses": 0,
+        "faultInjectionMisses": 0,
+        "faultStateMisses": 0,
+        "preFaultRefreshMisses": 0,
+        "residualSubprocessSpawns": 0
+      }
+    },
+    "PERF-094": {
+      "p95Ms": 90000,
+      "maxRegressionPct": 100,
+      "maxMetricValues": {
+        "idleGitSpawns": 4,
+        "gitSpawnsPerMonitor": 0.2,
+        "pollTickMisses": 0,
+        "detectionMisses": 0,
+        "discoveryMisses": 0,
+        "warmMisses": 0,
+        "populationMisses": 0,
+        "settleMisses": 0,
+        "residualGitSpawns": 0
       }
     },
 
