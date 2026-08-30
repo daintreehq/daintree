@@ -332,18 +332,27 @@ export const MCP_HANDSHAKE_REJECTED_CODE = -32002;
  * Stable machine-readable reasons a workspace selector was refused, carried in
  * `error.data.code`. Clients branch on these; the human-readable `message` is
  * free to change.
+ *
+ * Every member describes a selector that will *never* become valid, because a
+ * refused handshake is permanent in practice: no MCP client SDK retries a
+ * non-2xx `initialize`, so a 400 costs the client Daintree's whole tool surface
+ * for its lifetime (#12082). State that the user can fix — the workspace has no
+ * live view, or has two — therefore binds instead of refusing, and reports the
+ * unreachable route per call as a retriable `SESSION_BINDING_GONE`. The two
+ * codes that used to cover it (`WORKSPACE_NOT_FOUND`, `WORKSPACE_AMBIGUOUS`)
+ * are deliberately gone rather than left unreachable, so a future rejection
+ * cannot quietly reintroduce a terminal answer to a transient condition.
  */
 export type McpWorkspaceSelectorRejectionCode =
   /** Header and query param both present, naming different workspaces. */
   | "WORKSPACE_SELECTOR_MISMATCH"
-  /** Empty, repeated, or comma-folded selector — no single unambiguous value. */
+  /**
+   * Empty, repeated, or comma-folded selector — no single unambiguous value —
+   * or a value that is not shaped like a workspace id at all (#12082).
+   */
   | "WORKSPACE_SELECTOR_INVALID"
   /** Selector sent by a bearer that binds through its own renderer pin instead. */
-  | "WORKSPACE_SELECTOR_NOT_ALLOWED"
-  /** No live registered view owns that workspace. */
-  | "WORKSPACE_NOT_FOUND"
-  /** More than one live view owns it, so "the" target is undefined. */
-  | "WORKSPACE_AMBIGUOUS";
+  | "WORKSPACE_SELECTOR_NOT_ALLOWED";
 
 /**
  * Application-level convention: codes here flag transient failures that a
@@ -382,11 +391,22 @@ export function buildMcpErrorPayload(input: {
   code: string;
   message: string;
   details?: unknown;
+  /**
+   * Per-instance override of the code-keyed default (#12082).
+   *
+   * {@link RETRIABLE_ERROR_CODES} answers from the code alone, which cannot
+   * describe `SESSION_BINDING_GONE`: it is raised by two failures with opposite
+   * answers — a destroyed pinned WebContents, which never comes back, and a
+   * workspace whose view the user is about to open, which does. Callers that
+   * hold the failing instance pass its own verdict here; everyone else keeps
+   * the set lookup.
+   */
+  retriable?: boolean;
 }): McpErrorPayload {
   const payload: McpErrorPayload = {
     code: input.code,
     message: input.message,
-    retriable: RETRIABLE_ERROR_CODES.has(input.code),
+    retriable: input.retriable ?? RETRIABLE_ERROR_CODES.has(input.code),
   };
   if (
     input.code === BINDING_STALE ||
@@ -418,6 +438,8 @@ export function buildToolError(input: {
   code: string;
   message: string;
   details?: unknown;
+  /** Forwarded verbatim to {@link buildMcpErrorPayload} (#12082). */
+  retriable?: boolean;
 }): CallToolResult {
   const payload = buildMcpErrorPayload(input);
   // Budgeted like a success body: `details` is renderer-supplied and unbounded,

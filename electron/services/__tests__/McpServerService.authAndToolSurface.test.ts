@@ -186,6 +186,17 @@ vi.mock("../SystemSleepService.js", () => ({
 
 import { McpServerService } from "../McpServerService.js";
 
+/**
+ * Workspace ids shaped the way the real id spaces are — 64 hex for a project
+ * (#12082). The handshake now refuses a selector outside both id spaces before
+ * it ever reaches the resolver, so a `"proj-a"` placeholder would fail on shape
+ * rather than exercising the binding these tests are about.
+ */
+const PROJECT_A_ID = "a".repeat(64);
+const PROJECT_B_ID = "b".repeat(64);
+/** Well-formed, and deliberately never registered with a live view. */
+const CLOSED_PROJECT_ID = "c".repeat(64);
+
 type DispatchRequest = {
   requestId: string;
   actionId: string;
@@ -984,12 +995,12 @@ describe("McpServerService", () => {
     // session routes to the WebContents that minted it.
     const pinnedRefA = {
       kind: "project" as const,
-      workspaceId: "proj-a",
+      workspaceId: PROJECT_A_ID,
       workspacePath: "/repos/a",
     };
     const pinnedRefB = {
       kind: "project" as const,
-      workspaceId: "proj-b",
+      workspaceId: PROJECT_B_ID,
       workspacePath: "/repos/b",
     };
     const winA = createMockWindow({
@@ -1089,8 +1100,8 @@ describe("McpServerService", () => {
         kind: "query",
       }),
     ];
-    const refA = { kind: "project" as const, workspaceId: "proj-a", workspacePath: "/repos/a" };
-    const refB = { kind: "project" as const, workspaceId: "proj-b", workspacePath: "/repos/b" };
+    const refA = { kind: "project" as const, workspaceId: PROJECT_A_ID, workspacePath: "/repos/a" };
+    const refB = { kind: "project" as const, workspaceId: PROJECT_B_ID, workspacePath: "/repos/b" };
     const winA = createMockWindow({
       getManifest: manifest,
       dispatchAction: () => ({ ok: true, result: "from-window-A" }),
@@ -1466,8 +1477,16 @@ describe("McpServerService", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
   describe("workspace-bound external sessions (#11789)", () => {
-    const REF_A = { kind: "project" as const, workspaceId: "proj-a", workspacePath: "/repos/a" };
-    const REF_B = { kind: "project" as const, workspaceId: "proj-b", workspacePath: "/repos/b" };
+    const REF_A = {
+      kind: "project" as const,
+      workspaceId: PROJECT_A_ID,
+      workspacePath: "/repos/a",
+    };
+    const REF_B = {
+      kind: "project" as const,
+      workspaceId: PROJECT_B_ID,
+      workspacePath: "/repos/b",
+    };
     const registeredViews: number[] = [];
 
     afterEach(() => {
@@ -1613,12 +1632,148 @@ describe("McpServerService", () => {
       expect(unboundNames).toContain("recipe.run");
     });
 
-    it("refuses a handshake naming a workspace with no live view, creating no session", async () => {
+    it("refuses a handshake whose selector is not shaped like a workspace id", async () => {
+      // Still terminal, and deliberately so: a value outside both id spaces
+      // names nothing that could ever exist, so binding it would mint a session
+      // that can never route (#12082).
       const winA = boundWindow(REF_A, "from-window-A");
       await service.start(winA.window);
 
       await expect(connectBound(service.currentPort!, "proj-nonexistent")).rejects.toThrow();
       // The failed handshake must not leave a client behind in the inventory.
+      expect(service.listActiveClients()).toHaveLength(0);
+    });
+
+    it("connects to a workspace with no live view and recovers when it opens (#12082)", async () => {
+      // The reported regression, end to end: the client used to get a terminal
+      // 400 and lose Daintree's whole tool surface for its lifetime because of
+      // which window happened to be open. Only a restart recovered.
+      const winA = boundWindow(REF_A, "from-window-A");
+      await service.start(winA.window);
+
+      const client = await connectBound(service.currentPort!, CLOSED_PROJECT_ID);
+
+      // The handshake completed, and it says what it bound to.
+      expect(
+        client.getServerCapabilities()?.experimental?.["org.daintree/workspace-binding"]
+      ).toEqual({ workspaceId: CLOSED_PROJECT_ID });
+
+      // Discovery answers from the host's base surface rather than reporting an
+      // empty or failed tool list.
+      const names = (await client.listTools()).tools.map((t) => t.name);
+      expect(names).toContain("terminal.list");
+      expect(names).not.toContain("recipe.run");
+
+      // Dispatch is still fail-closed — it must not have landed in window A,
+      // whose manifest returns "from-window-A".
+      const beforeOpen = await client.callTool({ name: "terminal.list", arguments: {} });
+      expect(beforeOpen.isError).toBe(true);
+      const failure = JSON.parse(getTextResult(beforeOpen).content[0].text as string) as {
+        code: string;
+        retriable: boolean;
+      };
+      expect(failure.code).toBe("SESSION_BINDING_GONE");
+      // The half that makes the surface honest: a conductor that gave up
+      // permanently here would be this same bug one layer down.
+      expect(failure.retriable).toBe(true);
+
+      // Open the workspace. Same client, same session, no reconnect.
+      boundWindow(
+        { kind: "project", workspaceId: CLOSED_PROJECT_ID, workspacePath: "/repos/c" },
+        "from-closed-workspace"
+      );
+
+      // Two things at once. The assertion is the real one: the live workspace
+      // manifest takes over the moment there is a view to fetch it from — the
+      // host base surface is a stand-in, never a replacement.
+      //
+      // The re-listing is a fixture artifact and NOT something a real client
+      // must do. The SDK caches per-tool output validators from `tools/list`,
+      // and `boundManifest` below declares no output schema while the base
+      // surface carries `terminal.list`'s real one, so the mock's plain-string
+      // result fails a validator the production result would satisfy. In a
+      // running build both surfaces project the same action definitions, so a
+      // client that listed while the workspace was closed can call straight
+      // through once it opens. Nothing sends `tools/list_changed` on route
+      // recovery, so nothing would prompt a re-list anyway.
+      expect((await client.listTools()).tools.map((t) => t.name)).toEqual(
+        boundManifest()
+          .filter((entry) => entry.danger !== "confirm")
+          .map((entry) => entry.id)
+      );
+
+      const afterOpen = await client.callTool({ name: "terminal.list", arguments: {} });
+      expect(getTextResult(afterOpen).content[0].text).toBe('"from-closed-workspace"');
+    });
+
+    it("connects to an ambiguous workspace and recovers when the duplicate closes (#12082)", async () => {
+      // The other half of the transient pair. Two views own one workspace, so
+      // "the" target is undefined and every call must refuse — but closing the
+      // duplicate is a thing the user does, not a permanent fact about the
+      // selector, so the handshake must not have refused either.
+      const winA = boundWindow(REF_A, "from-window-A");
+      await service.start(winA.window);
+
+      const first = boundWindow(
+        { kind: "project", workspaceId: PROJECT_B_ID, workspacePath: "/repos/b" },
+        "from-duplicate-one"
+      );
+      boundWindow(
+        { kind: "project", workspaceId: PROJECT_B_ID, workspacePath: "/repos/b" },
+        "from-duplicate-two"
+      );
+
+      const client = await connectBound(service.currentPort!, PROJECT_B_ID);
+
+      expect((await client.listTools()).tools.map((t) => t.name)).toContain("terminal.list");
+
+      const ambiguous = await client.callTool({ name: "terminal.list", arguments: {} });
+      expect(ambiguous.isError).toBe(true);
+      const failure = JSON.parse(getTextResult(ambiguous).content[0].text as string) as {
+        code: string;
+        retriable: boolean;
+      };
+      expect(failure.code).toBe("SESSION_BINDING_GONE");
+      expect(failure.retriable).toBe(true);
+
+      // Close the duplicate. Same client, same session, no reconnect.
+      unregisterProjectView(first.webContents.id);
+
+      // The same fixture artifact as the not-found case above: the mock live
+      // manifest declares no output schema, so the SDK's cached validator from
+      // the base surface has to be replaced before the mock's plain-string
+      // result is accepted. Production needs no such step.
+      await client.listTools();
+
+      const afterClose = await client.callTool({ name: "terminal.list", arguments: {} });
+      expect(getTextResult(afterClose).content[0].text).toBe('"from-duplicate-two"');
+    });
+
+    it("releases a viewless binding's workspace protection when the session closes", async () => {
+      // A binding that outlived its session would keep a workspace marked
+      // actively bound, and the freeze/eviction policies read that. Nothing
+      // about a viewless binding should make it harder to release than a live
+      // one.
+      const winA = boundWindow(REF_A, "from-window-A");
+      await service.start(winA.window);
+
+      await connectBound(service.currentPort!, CLOSED_PROJECT_ID);
+      await vi.waitFor(() => {
+        expect(service.listActiveClients()).toHaveLength(1);
+      });
+      // Asserted through the accessor the freeze/eviction policies actually
+      // read. An inventory check alone would pass while the workspace row
+      // survived, which is the leak that matters here. The WebContents id is
+      // only the lease half of that accessor and irrelevant to `liveBinding`.
+      const liveBinding = () =>
+        service.getWorkspaceViewActivity(CLOSED_PROJECT_ID, winA.webContents.id).liveBinding;
+      expect(liveBinding()).toBe(true);
+
+      await Promise.all(httpTransports.splice(0).map((t) => t.terminateSession()));
+
+      await vi.waitFor(() => {
+        expect(liveBinding()).toBe(false);
+      });
       expect(service.listActiveClients()).toHaveLength(0);
     });
 

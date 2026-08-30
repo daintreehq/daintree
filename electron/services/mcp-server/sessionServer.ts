@@ -60,7 +60,12 @@ import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
   MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
-import { McpRouteBindingError, RendererBridgeUnavailableError } from "./rendererBridge.js";
+import {
+  McpRouteBindingError,
+  RendererBridgeUnavailableError,
+  WorkspaceBindingError,
+} from "./rendererBridge.js";
+import { getExternalBaseManifest } from "./baseManifest.js";
 import {
   buildDedupKey,
   canonicalArgsHash,
@@ -545,7 +550,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
    * Shared by `tools/list` and `mcp.surface` so the two cannot describe
    * different manifests: a surface report built off a stale cache while the
    * listing served a live fetch would be exactly the drift the report exists to
-   * detect (#11549).
+   * detect (#11549). The one place they separate is a workspace-bound session
+   * with no reachable view (#12082) — `mcp.surface` is a tool call, so it meets
+   * the bound pre-dispatch guard and reports the unreachable route before ever
+   * arriving here, which is the honest answer for a report about what this
+   * session can reach.
    */
   const resolveManifest = async (
     label: string
@@ -554,24 +563,28 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     try {
       return await requestManifest();
     } catch (err) {
-      // A dead routing target is not a transient fetch failure (#11789). Both
-      // the pinned and workspace-bound routes fail closed on purpose, so
-      // serving a cached manifest here would answer `tools/list` from a view
-      // this session can no longer reach — and report it as an ordinary
-      // "unavailable" rather than the binding failure it is. Surface
-      // SESSION_BINDING_GONE in `data` so a client can tell "reconnect and
-      // rebind" from "retry in a moment".
-      if (err instanceof McpRouteBindingError) {
-        // Same envelope the resource path already puts on `McpError.data`, so a
-        // client reads one shape for a binding failure whichever surface it hit
-        // — including `retriable: false`, which is the field that actually
-        // stops a conductor from hammering a dead binding.
-        throw new McpError(
-          ErrorCode.InternalError,
-          err.message,
-          buildMcpErrorPayload({ code: SESSION_BINDING_GONE, message: err.message })
-        );
+      // A workspace this session cannot currently reach is not a reason to have
+      // no tools (#12082). The workspace id outlives every view, so the route
+      // comes back the moment the user opens that workspace — and a client told
+      // "no tools" at discovery has no way to notice when it does. Answer from
+      // the host's own base surface instead, and let the per-call route report
+      // the truth about reachability.
+      //
+      // Emphatically NOT `cachedFallback`: that describes whichever other
+      // window last reported a manifest, which is the cross-workspace leak the
+      // bound path exists to prevent. The base surface is generated from the
+      // action registry at commit time and describes nobody's view.
+      if (err instanceof WorkspaceBindingError) {
+        return getExternalBaseManifest();
       }
+      // A dead *pin* still is a dead end (#11789). The session's identity is
+      // the destroyed WebContents, not a workspace it can re-resolve, so there
+      // is no later state in which this succeeds — and serving a cached
+      // manifest would answer `tools/list` from a view this session can no
+      // longer reach. Surface SESSION_BINDING_GONE in `data` so a client can
+      // tell "reconnect and rebind" from "retry in a moment".
+      const routed = routeBindingMcpError(err);
+      if (routed) throw routed;
       if (cachedFallback === null) {
         throw new McpError(ErrorCode.InternalError, "Action manifest unavailable");
       }
@@ -920,7 +933,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           console.error("[MCP] Failed to append audit record:", auditErr);
         }
         if (err instanceof McpRouteBindingError) {
-          return buildToolError({ code: SESSION_BINDING_GONE, message: err.message });
+          // Deliberately NOT answered from the host base surface, unlike
+          // `tools/list` (#12082). Discovery describes what exists; this gate
+          // decides whether a specific call runs unattended, and the host
+          // catalog is not evidence about the bound view. Fail closed, and say
+          // so retriably when the route can come back.
+          return buildToolError({
+            code: SESSION_BINDING_GONE,
+            message: err.message,
+            retriable: err.retriable,
+          });
         }
         return buildToolError({
           code: EXECUTION_ERROR_CODE,
@@ -1524,7 +1546,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
-        const entry = await lookupManifestEntry(actionId, getCachedManifest, requestManifest);
+        let entry: import("../../../shared/types/actions.js").ActionManifestEntry | undefined;
+        try {
+          entry = await lookupManifestEntry(actionId, getCachedManifest, requestManifest);
+        } catch (err) {
+          if (!(err instanceof McpRouteBindingError)) throw err;
+          // Narrow in practice — the bound guard above resolves a manifest
+          // first — but reachable if the route is lost between the two.
+          outcome = { kind: "throw", error: err };
+          return buildToolError({
+            code: SESSION_BINDING_GONE,
+            message: err.message,
+            retriable: err.retriable,
+          });
+        }
 
         // An action the manifest doesn't describe has unknown danger, and
         // unknown is not safe: a stale or partial manifest that omits a
@@ -1660,6 +1695,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: SESSION_BINDING_GONE,
               message: err.message,
+              // Instance-derived: a workspace the user can reopen is retriable,
+              // a destroyed pinned view never is, and both report this code.
+              retriable: err.retriable,
             });
           }
           // No live renderer to route the dispatch through (#10640). Every
@@ -1878,6 +1916,40 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   // (#11799). One capture per request: the listing helpers await dispatches
   // mid-enumeration, and re-reading across those awaits would let one response
   // mix two authorization lifetimes.
+  /**
+   * Confirm a workspace-bound session can still reach its workspace, for a read
+   * that would otherwise never consult it (#12082).
+   *
+   * Most resources are backed by a dispatch, so the binding is checked by the
+   * routing itself. `agentState` is not: it answers from the process-global
+   * `AgentAvailabilityStore`, and its tier gate (`terminal.list`) says nothing
+   * about *which* workspace the agent belongs to. Before this issue a bound
+   * session could not exist without a live view, so the viewless case was
+   * unreachable; now it is, and a bound session with an unreachable workspace
+   * must not read host-global state as if it were its own.
+   *
+   * Deliberately a route check, not an ownership check. Whether a given agent id
+   * belongs to the bound workspace is a separate, pre-existing gap in #11789 —
+   * a bound session with a *live* view can still read another workspace's agent
+   * state, and closing that needs an agent→workspace map this layer does not
+   * have. This closes only the half that is new.
+   *
+   * Probing through `requestManifest` rather than a bespoke resolver keeps the
+   * answer identical to the one dispatch would get: it re-resolves the workspace
+   * the same way and reads a warm per-view cache on success.
+   */
+  const assertBoundRouteReachable = async (): Promise<void> => {
+    if (!sessionSurface.workspaceBound) return;
+    try {
+      await requestManifest();
+    } catch (err) {
+      const routed = routeBindingMcpError(err);
+      if (routed) throw routed;
+      // Anything else is a manifest failure, not a routing one. The read does
+      // not need a manifest, so it is not this probe's business to fail it.
+    }
+  };
+
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
     const tier = sessionStore.getTier(sessionId);
     if (tier === null) throw sessionGoneError();
@@ -1906,8 +1978,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         buildMcpErrorPayload({ code: TIER_NOT_PERMITTED_CODE, message })
       );
     }
-    const contents = await readResourceContents(uri, parsed, dispatchAction);
-    return { contents: [contents] };
+    if (parsed.kind === "agentState") await assertBoundRouteReachable();
+    try {
+      return { contents: [await readResourceContents(uri, parsed, dispatchAction)] };
+    } catch (err) {
+      const routed = routeBindingMcpError(err);
+      if (routed) throw routed;
+      throw err;
+    }
   });
 
   server.setRequestHandler(SubscribeRequestSchema, async (request) => {
@@ -1929,6 +2007,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         buildMcpErrorPayload({ code: TIER_NOT_PERMITTED_CODE, message })
       );
     }
+    // Same reason as the read above: an `agentState` subscription installs a
+    // listener on a process-global event and would push another workspace's
+    // updates at a session that cannot reach its own.
+    if (parsed.kind === "agentState") await assertBoundRouteReachable();
     subscribeResource(sessionId, server, uri, parsed, sessionStore);
     return {};
   });
@@ -2171,6 +2253,13 @@ async function tryDispatchList(
     }
     return [];
   } catch (err) {
+    // An unreachable route is not an empty workspace (#12082). Swallowing it
+    // here would answer `resources/list` with an authoritative-looking "you
+    // have nothing" for a bound session whose workspace is simply not open —
+    // the same lie the terminal handshake used to tell, in a quieter place.
+    // Ordinary enumeration failures keep degrading to a partial listing.
+    const routed = routeBindingMcpError(err);
+    if (routed) throw routed;
     console.error(`[MCP] Failed to enumerate resources via ${actionId}:`, err);
     return [];
   }
@@ -2308,6 +2397,30 @@ async function collectPromptContext(
   return context;
 }
 
+/**
+ * The structured envelope a route-binding failure must reach the client as
+ * (#12082).
+ *
+ * `McpRouteBindingError` is one of ours: it carries a string `code` and no
+ * `data`, and the SDK only preserves numeric codes and explicit `error.data`,
+ * so letting one escape a handler serializes it as a bare `-32603` with the
+ * `SESSION_BINDING_GONE` reason and the `retriable` verdict both stripped. Every
+ * surface that can raise one converts it here, so a client reads one shape
+ * whichever request hit it.
+ */
+function routeBindingMcpError(err: unknown): McpError | null {
+  if (!(err instanceof McpRouteBindingError)) return null;
+  return new McpError(
+    ErrorCode.InternalError,
+    err.message,
+    buildMcpErrorPayload({
+      code: SESSION_BINDING_GONE,
+      message: err.message,
+      retriable: err.retriable,
+    })
+  );
+}
+
 async function safeDispatch(
   actionId: string,
   args: unknown,
@@ -2336,7 +2449,12 @@ async function lookupManifestEntry(
       // skip the shared `cachedManifest` so a re-read here would always return
       // null and silently drop host confirmation + structuredContent.
       manifest = await requestManifest();
-    } catch {
+    } catch (err) {
+      // A route that is gone is not a manifest that is merely unavailable
+      // (#12082). Collapsing it to `undefined` here makes the bound-session
+      // guard below report a non-retriable `NOT_FOUND` — "no such action" — for
+      // a workspace the user is about to reopen.
+      if (err instanceof McpRouteBindingError) throw err;
       return undefined;
     }
   }

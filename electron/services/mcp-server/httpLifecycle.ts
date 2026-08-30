@@ -25,6 +25,7 @@ import type {
 } from "./shared.js";
 import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
 import { WorkspaceBindingError } from "./rendererBridge.js";
+import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
   ActiveBearerRecord,
   HelpSessionBearerRecord,
@@ -365,17 +366,43 @@ export class HttpLifecycle {
   }
 
   /**
-   * Read and resolve a new session's workspace selector (#11789).
+   * Read and resolve a new session's workspace selector (#11789, #12082).
    *
    * Returns `null` when no selector was sent (the session keeps focused-window
-   * routing, unchanged), a binding when one resolved to exactly one live view,
-   * or a rejection the caller turns into a 400 — creating no session, no
-   * transport, and no `Mcp-Session-Id`.
+   * routing, unchanged), a binding when the selector names a workspace this
+   * session may bind to, or a rejection the caller turns into a 400 — creating
+   * no session, no transport, and no `Mcp-Session-Id`.
    *
    * Only `external` sessions may bind. A help or assistant-pane bearer already
    * routes through the renderer that minted it, so a selector from one is a
    * configuration mistake with two plausible targets; refusing it keeps the two
    * binding models disjoint instead of silently letting one win.
+   *
+   * The refusal is deliberately narrower than it looks, because it is
+   * permanent: no MCP client SDK retries a non-2xx `initialize`, so a 400 does
+   * not mean "this attempt failed", it means "this client has no Daintree tools
+   * until someone restarts it" (#12081). Four conditions used to share one
+   * answer here; they are now separated by whether they can ever stop being
+   * true.
+   *
+   * - **Malformed shape** — refuse. The id space is structural (a 64-hex
+   *   project id or a UUIDv4 scratch id), so a value outside it names nothing
+   *   that could ever exist, and accepting it would let an arbitrary string
+   *   mint a session that can never route. The shape test lives here rather
+   *   than in `parseWorkspaceSelector`, which stays a syntax-only parser that
+   *   never interprets the id.
+   * - **No resolver wired** — refuse. A build that cannot resolve bindings at
+   *   all will not gain the ability mid-session.
+   * - **Zero or many live views** — bind anyway, identity only. Which windows
+   *   are open is user-controlled and changes minute to minute; the workspace
+   *   id outlives every view, so the same call routes as soon as the user opens
+   *   the workspace or closes the duplicate. `tools/list` answers from the
+   *   host-owned base surface meanwhile, and each call reports the unreachable
+   *   route as a retriable `SESSION_BINDING_GONE`.
+   * - **Anything else thrown** — propagate. An unexpected resolver failure is a
+   *   host bug of unknown duration, and this runs before any session state is
+   *   allocated, so letting it reach the request handler's 500 leaves nothing
+   *   behind while still refusing to guess on the client's behalf.
    */
   private resolveWorkspaceSelector(
     req: http.IncomingMessage,
@@ -400,28 +427,37 @@ export class HttpLifecycle {
       };
     }
 
+    if (!isProjectWorkspaceId(parsed.workspaceId) && !isScratchWorkspaceId(parsed.workspaceId)) {
+      return {
+        rejection: {
+          code: "WORKSPACE_SELECTOR_INVALID",
+          message: `'${parsed.workspaceId}' is not shaped like a Daintree workspace id, so no workspace can ever match it. Copy the id from Settings → MCP → Copy config for this project.`,
+        },
+      };
+    }
+
     const resolve = this.deps.resolveWorkspaceBinding;
     if (!resolve) {
       return {
         rejection: {
-          code: "WORKSPACE_NOT_FOUND",
-          message: "This Daintree build cannot resolve workspace bindings.",
+          code: "WORKSPACE_SELECTOR_NOT_ALLOWED",
+          message:
+            "This Daintree build cannot resolve workspace bindings. Drop the workspace selector to connect an unscoped client.",
         },
       };
     }
     try {
       return { binding: resolve(parsed.workspaceId) };
     } catch (err) {
-      const reason = err instanceof WorkspaceBindingError ? err.reason : null;
-      return {
-        rejection: {
-          code: reason === "ambiguous" ? "WORKSPACE_AMBIGUOUS" : "WORKSPACE_NOT_FOUND",
-          message: formatErrorMessage(
-            err,
-            `Workspace ${parsed.workspaceId} could not be resolved to a Daintree view.`
-          ),
-        },
-      };
+      // Bind on the recoverable ones, and carry only the identity: `kind` and
+      // `workspacePath` are read off the live view, so there is nothing
+      // truthful to put there. Their absence is the whole signal a client
+      // needs — a liveness flag would be a snapshot of handshake time echoed in
+      // a capability that never updates, wrong within seconds of being read.
+      if (err instanceof WorkspaceBindingError) {
+        return { binding: { workspaceId: parsed.workspaceId } };
+      }
+      throw err;
     }
   }
 
@@ -1419,9 +1455,45 @@ export class HttpLifecycle {
       cleanupResourceSubscriptions(id, this.deps.sessionStore);
     };
 
+    /**
+     * Reclaim everything written for a session the SDK never initialized.
+     *
+     * The SDK answers a malformed pre-initialize request — wrong `Accept`, an
+     * unparseable body, a JSON-RPC method that is not `initialize` — by writing
+     * a 4xx rather than throwing, so `onsessioninitialized` never fires and
+     * nothing is inserted into `httpSessions`. Without this, the tier, origin,
+     * client metadata and (since #12082) workspace rows above outlive the
+     * request forever: the idle reaper walks `httpSessions`, which has no entry
+     * to find.
+     */
+    const discardUninitializedSession = (): void => {
+      this.deps.sessionStore.clearElevationTimer(newSessionId);
+      this.deps.sessionStore.sessionTierMap.delete(newSessionId);
+      this.deps.sessionStore.grantCache.revokeSession(newSessionId, "session-ended");
+      this.deps.sessionStore.clearSessionBinding(newSessionId);
+      // Resolve the public help-session id before deleting the map entry.
+      this.deps.sessionStore.clearFigureCounter(newSessionId);
+      this.deps.sessionStore.sessionHelpIdMap.delete(newSessionId);
+      this.deps.sessionStore.clearDedupState(newSessionId);
+      this.deps.sessionStore.clearClientMetadata(newSessionId);
+      this.deps.abusePolicy.dropSession(newSessionId);
+      this.detachBearerSession(newSessionId);
+      cleanupResourceSubscriptions(newSessionId, this.deps.sessionStore);
+    };
+
     try {
       await server.connect(transport);
       await transport.handleRequest(req, res);
+      // Both conditions, because they answer the question from opposite ends:
+      // the SDK sets `sessionId` when it accepts the handshake, and our own
+      // `onsessioninitialized` is what files the session for the reaper. A
+      // session is real only when both happened.
+      if (
+        transport.sessionId === undefined &&
+        !this.deps.sessionStore.httpSessions.has(newSessionId)
+      ) {
+        discardUninitializedSession();
+      }
     } catch (err) {
       console.error("[MCP] Streamable HTTP request failed:", err);
       const id = transport.sessionId;
@@ -1444,18 +1516,7 @@ export class HttpLifecycle {
         this.detachBearerSession(id);
         cleanupResourceSubscriptions(id, this.deps.sessionStore);
       } else {
-        this.deps.sessionStore.clearElevationTimer(newSessionId);
-        this.deps.sessionStore.sessionTierMap.delete(newSessionId);
-        this.deps.sessionStore.grantCache.revokeSession(newSessionId, "session-ended");
-        this.deps.sessionStore.clearSessionBinding(newSessionId);
-        // Resolve the public help-session id before deleting the map entry.
-        this.deps.sessionStore.clearFigureCounter(newSessionId);
-        this.deps.sessionStore.sessionHelpIdMap.delete(newSessionId);
-        this.deps.sessionStore.clearDedupState(newSessionId);
-        this.deps.sessionStore.clearClientMetadata(newSessionId);
-        this.deps.abusePolicy.dropSession(newSessionId);
-        this.detachBearerSession(newSessionId);
-        cleanupResourceSubscriptions(newSessionId, this.deps.sessionStore);
+        discardUninitializedSession();
       }
       await transport.close().catch(() => {});
       if (!res.headersSent) {

@@ -480,7 +480,12 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
     expect(payload).toContain("workspace-bound");
   });
 
-  test("handshake refuses an unknown or ambiguous workspace without creating a session", async () => {
+  test("handshake refuses a selector that can never resolve, without creating a session", async () => {
+    // Only conditions that will never become valid are refused (#12082): a
+    // non-2xx `initialize` is terminal in every MCP client SDK, so refusing a
+    // condition the user can fix would cost the client Daintree's whole tool
+    // surface for its lifetime. A value outside both id spaces is exactly such
+    // a condition — it names nothing that could ever exist.
     const unknown = await post(
       endpoint,
       {
@@ -498,7 +503,7 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
 
     expect(unknown.status).toBe(400);
     expect(unknown.sessionId).toBeNull();
-    expect(JSON.stringify(unknown.body)).toContain("WORKSPACE_NOT_FOUND");
+    expect(JSON.stringify(unknown.body)).toContain("WORKSPACE_SELECTOR_INVALID");
 
     // Header and query param disagreeing is fatal rather than silently resolved.
     const mismatch = await post(
@@ -520,6 +525,55 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
     expect(mismatch.status).toBe(400);
     expect(mismatch.sessionId).toBeNull();
     expect(JSON.stringify(mismatch.body)).toContain("WORKSPACE_SELECTOR_MISMATCH");
+  });
+
+  test("a workspace with no live view connects and serves its full tool surface", async () => {
+    // Half of the #12082 regression, on the real transport: the client used to
+    // be told its whole tool surface was gone because of which window happened
+    // to be open. It now connects, discovery answers from the host's own base
+    // surface, and the per-call failure says "retry" rather than "never".
+    //
+    // The other half — the same session recovering once the workspace opens —
+    // needs a second window mid-test, which this serial suite's fixtures are not
+    // set up for. It is covered against a real MCP client in
+    // `McpServerService.authAndToolSurface.test.ts`.
+    const closedWorkspace = "f".repeat(64);
+    const bound = await initializeSession(endpoint, {
+      workspaceId: closedWorkspace,
+      clientName: "viewless-binding",
+    });
+
+    expect(
+      bound.init.body?.result?.capabilities?.experimental?.[BINDING_CAPABILITY]?.workspaceId
+    ).toBe(closedWorkspace);
+
+    const names = (listed: any): string[] =>
+      (listed?.result?.tools ?? []).map((t: { name: string }) => t.name);
+    const tools = names(await listTools(endpoint, bound.sessionId));
+
+    // A full surface, not an empty one: the point of publishing it at handshake
+    // is that the client needs no cooperation to use it later.
+    expect(tools).toContain("terminal.list");
+    expect(tools.length).toBeGreaterThan(1);
+    // The confirm-gated ceiling keys off the binding, not off view liveness.
+    expect(tools).not.toContain("recipe.run");
+
+    // Dispatch is still fail-closed — it must not have quietly landed in
+    // whichever window is focused, which is the guarantee the binding exists
+    // for.
+    const call = await callTool(endpoint, bound.sessionId, "terminal.list");
+    const payload = JSON.stringify(call);
+    expect(payload).toContain("SESSION_BINDING_GONE");
+    expect(payload).toContain('"retriable":true');
+    expect(resolvedWorkspaceId(call)).toBeNull();
+
+    // Every tool on the session answers the same way, including one that would
+    // otherwise report whichever window is focused. `actions.getContext` is the
+    // sharpest case: unbound, it happily describes the focused workspace, so if
+    // the binding ever leaked into focus-following this is where it would show.
+    const context = await callTool(endpoint, bound.sessionId, "actions.getContext");
+    expect(JSON.stringify(context)).toContain("SESSION_BINDING_GONE");
+    expect(resolvedWorkspaceId(context)).toBeNull();
   });
 
   test("an unbound session follows focus (documented legacy behaviour)", async () => {
