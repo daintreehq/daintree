@@ -218,7 +218,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         worktreeId: {
           description:
-            "Identifies the worktree to launch in, using an id from the worktree-listing capability. Defaults to the active worktree.",
+            "Identifies the worktree to launch in, using an id from the worktree-listing capability. Required when an agent or MCP client is calling; a person driving the UI gets the active worktree by default.",
           type: "string",
         },
         prompt: {
@@ -430,6 +430,14 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         availabilityComplete: {
           type: "boolean",
+        },
+        defaultAgentId: {
+          description: "The user's default agent; absent when they chose none.",
+          type: "string",
+        },
+        resolvedDefaultAgentId: {
+          description: "Launch this when the user names no agent.",
+          type: "string",
         },
         agents: {
           type: "array",
@@ -1875,7 +1883,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold the call open for a minute interactively, far longer headless. Timing out means not met yet; untracked terminals count as finished.",
+      "Block until the first of several agents stops working, or until all do; the fan-out primitive when agents stop at different times. Prefer it to waiting on each terminal in turn; to poll without blocking, use a status snapshot. Timing out means the predicate is unmet, not failed; untracked terminals count as settled, as does one closed mid-wait (idleReason 'closed').",
     enabled: true,
     id: "terminal.waitUntilIdleBatch",
     inputSchema: {

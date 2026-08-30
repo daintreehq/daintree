@@ -1162,7 +1162,7 @@ const AssistantTimerRowsSchema = z
       createdAt: z.number().int().finite(),
       // The one field that must NOT be lenient: the UI branches on it, and an unknown
       // kind should be caught rather than rendered as something it is not.
-      payloadKind: z.enum(["reminder", "tool_call", "legacy"]),
+      payloadKind: z.enum(["reminder", "message", "tool_call", "legacy"]),
       toolName: clipped(256),
       runCount: z.number().int().min(0),
       repeatEveryMs: z.number().int().min(0),
