@@ -2,10 +2,11 @@ import { getScenarioBudget } from "./budgets";
 import type { BaselineSummary, PerfBudgetConfig, PerfScenario } from "../types";
 
 /**
- * Baselines older than this (in days) trigger a freshness warning. The threshold
- * is an opinion, not a hard rule — a stale-but-present baseline still gates, so
- * this only ever warns. 30 days keeps committed baselines roughly aligned with
- * the runtime they encode without breaking CI for legitimately-quiet periods.
+ * Baselines older than this (in days) trigger a freshness warning. Nothing here
+ * gates: a reference value is context for reading a number, not a pass mark, so
+ * a stale baseline degrades the quality of the annotation and nothing else.
+ * 30 days keeps committed baselines roughly aligned with the runtime they
+ * encode.
  */
 export const BASELINE_FRESHNESS_DAYS = 30;
 
@@ -49,9 +50,11 @@ export function checkBaselineFreshness(
  * `verify-baselines.ts` is the one caller that still treats a gap as a failure,
  * because it is checking a freshly regenerated baseline for completeness.
  *
- * Critical scenarios are excluded — `gate.ts` already fails closed for them.
- * A null baseline returns no gaps: that's the pre-existing "no file" path, not
- * the partial-coverage gap this check targets.
+ * There are no exemptions. An earlier version excluded "critical" scenarios on
+ * the theory that `gate.ts` failed closed for them; nothing fails closed now,
+ * so the exemption only suppressed the warning for the scenarios it was meant
+ * to protect. A null baseline returns no gaps: that's the pre-existing "no
+ * file" path, not the partial-coverage gap this check targets.
  */
 export function checkBaselineCoverage(
   baseline: BaselineSummary | null,

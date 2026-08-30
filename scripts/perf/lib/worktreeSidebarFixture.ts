@@ -412,7 +412,10 @@ export class TopologyHarness {
     record = (event) => harness.events.push({ atMs: performance.now(), event });
 
     const requestId = `perf-topo-${uid()}`;
-    await svc.loadProject(requestId, repoPath);
+    // projectId is required and is threaded into every worktree id the service
+    // derives. Omitting it left `undefined` on that path, so the fixture was
+    // measuring a load the product never performs.
+    await svc.loadProject(requestId, repoPath, `perf-topo-project-${uid()}`);
     const loaded = await harness.waitForEvent(
       (e) => e.type === "load-project-result" && e.requestId === requestId,
       15_000

@@ -6,19 +6,19 @@ import { getScenariosForMode } from "./scenarios";
 import type { BaselineSummary, PerfMode } from "./types";
 
 /**
- * Integrity gate for the perf-update-baselines job.
+ * Integrity check for a freshly regenerated baseline set, run by hand.
  *
- * That job regenerates all four baselines with `continue-on-error: true` on
- * each step, because a budget regression still writes a valid baseline and
- * then exits 1. The side effect is that a step which dies from a harness
- * exception — writing nothing — is indistinguishable from a healthy one, so
- * the job would happily open a PR staging some freshly-regenerated modes
- * alongside other modes left stale. That is not theoretical: the existing
- * `perf/update-baselines-automated` branch carries a soak-only baseline commit
- * from exactly this path.
+ * This is the one place in `scripts/perf` that still exits non-zero, and the
+ * distinction is deliberate: it does not judge a NUMBER, it judges whether the
+ * FILES are a usable set. A run that died from a harness exception writes
+ * nothing and is otherwise indistinguishable from a healthy one, so a set can
+ * end up with two modes freshly regenerated and two left stale — a mixture that
+ * reads as a complete baseline and is not one.
  *
- * Run this between the regen steps and the PR step so a partial or degenerate
- * set fails the job instead of becoming a PR someone might merge.
+ * The job that used to run this automatically is gone. Baselines are now
+ * harvested from a workflow artifact and committed by hand, because the org
+ * bans Actions from opening PRs; run this against the harvested set before
+ * committing it.
  */
 
 const MODES: PerfMode[] = ["smoke", "ci", "nightly", "soak"];
