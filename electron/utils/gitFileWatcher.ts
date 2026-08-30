@@ -4,6 +4,7 @@ import { join as pathJoin, dirname, isAbsolute, basename, normalize as pathNorma
 import parcelWatcher from "@parcel/watcher";
 import { getGitDir } from "./gitUtils.js";
 import { OPERATION_SENTINEL_NAMES } from "./gitRepoOperationState.js";
+import { parcelWatcherBackendOption } from "./parcelWatcherBackend.js";
 import { logWarn } from "./logger.js";
 
 const LINUX_INOTIFY_LIMIT_HELP =
@@ -303,10 +304,12 @@ export class GitFileWatcher {
   }
 
   private startWorktreeWatcher(): void {
-    // The parcel file watcher silently drops overflow events on all platforms
-    // (macOS kFSEventStreamEventFlagMustScanSubDirs, Linux IN_Q_OVERFLOW,
-    // Windows ERROR_NOTIFY_ENUM_DIR). There is no equivalent to fs.watch's
-    // null-filename "global dirty" signal. Mitigation: WorktreeMonitor's
+    // The parcel file watcher drops overflow events without rescanning on
+    // every platform, and on Linux (IN_Q_OVERFLOW) drops them silently — only
+    // macOS (kFSEventStreamEventFlagMustScanSubDirs) and Windows
+    // (ERROR_NOTIFY_ENUM_DIR) raise an error, and neither re-enumerates. There
+    // is no equivalent to fs.watch's null-filename "global dirty" signal, so a
+    // lost batch is lost. Mitigation: WorktreeMonitor's
     // 10s polling fallback catches missed events. On macOS, the primary
     // overflow trigger — libuv FSEvents per-directory fd exhaustion — is
     // eliminated by the single-stream-per-subtree design.
@@ -325,7 +328,7 @@ export class GitFileWatcher {
           // batch instead of once per event.
           this.handleWorktreeChange(events.length);
         },
-        { ignore: WORKTREE_IGNORE_GLOBS }
+        { ignore: WORKTREE_IGNORE_GLOBS, ...parcelWatcherBackendOption() }
       )
       .then((sub) => {
         if (this.disposed) {

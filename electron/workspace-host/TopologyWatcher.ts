@@ -5,6 +5,7 @@ import PQueue from "p-queue";
 import { MutableDisposable } from "../utils/lifecycle.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import { getGitCommonDir } from "../utils/gitUtils.js";
+import { parcelWatcherBackendOption } from "../utils/parcelWatcherBackend.js";
 import type { WorkspaceHostEvent } from "../../shared/types/workspace-host.js";
 import type { WorktreeMonitor } from "./WorktreeMonitor.js";
 
@@ -184,31 +185,35 @@ export class TopologyWatcher {
     const drain = () => this.drainEventBuffer();
 
     parcelWatcher
-      .subscribe(metadataDir, (err, events) => {
-        if (err) {
-          // A runtime error on an established subscription means the watcher is
-          // no longer reliably reporting changes — same consequence as a
-          // subscribe-reject. Go dark; the periodic safety net reconciles.
-          if (generation === this.generation) {
-            this.handleDark();
-          }
-        }
-        if (Array.isArray(events)) {
-          for (const ev of events) {
-            const e = ev as { path?: unknown; type?: unknown } | null;
-            if (typeof e?.path === "string") {
-              this.eventBuffer.push({
-                path: e.path,
-                type: typeof e.type === "string" ? e.type : undefined,
-              });
+      .subscribe(
+        metadataDir,
+        (err, events) => {
+          if (err) {
+            // A runtime error on an established subscription means the watcher is
+            // no longer reliably reporting changes — same consequence as a
+            // subscribe-reject. Go dark; the periodic safety net reconciles.
+            if (generation === this.generation) {
+              this.handleDark();
             }
           }
-        }
-        if (this.debounceTimer) {
-          clearTimeout(this.debounceTimer);
-        }
-        this.debounceTimer = setTimeout(drain, TOPOLOGY_EVENT_DEBOUNCE_MS);
-      })
+          if (Array.isArray(events)) {
+            for (const ev of events) {
+              const e = ev as { path?: unknown; type?: unknown } | null;
+              if (typeof e?.path === "string") {
+                this.eventBuffer.push({
+                  path: e.path,
+                  type: typeof e.type === "string" ? e.type : undefined,
+                });
+              }
+            }
+          }
+          if (this.debounceTimer) {
+            clearTimeout(this.debounceTimer);
+          }
+          this.debounceTimer = setTimeout(drain, TOPOLOGY_EVENT_DEBOUNCE_MS);
+        },
+        parcelWatcherBackendOption()
+      )
       .then((subscription) => {
         if (generation !== this.generation) {
           // stop() incremented the generation — discard.

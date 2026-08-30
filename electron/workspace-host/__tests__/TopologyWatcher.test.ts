@@ -7,7 +7,11 @@ const { parcelWatcherCallbacks, mockGetGitCommonDir, mockParcelSubscribe } = vi.
     parcelWatcherCallbacks: callbacks,
     mockGetGitCommonDir: vi.fn<(arg: string) => string | null>().mockReturnValue(null),
     mockParcelSubscribe: vi.fn(
-      (_dir: string, cb: (err: Error | null, events: unknown[]) => void) => {
+      (
+        _dir: string,
+        cb: (err: Error | null, events: unknown[]) => void,
+        _opts?: Record<string, unknown>
+      ) => {
         callbacks.push(cb);
         return Promise.resolve({ unsubscribe: vi.fn() });
       }
@@ -87,8 +91,45 @@ describe("TopologyWatcher", () => {
       await vi.waitFor(() => expect(mockParcelSubscribe).toHaveBeenCalled());
       expect(mockParcelSubscribe).toHaveBeenCalledWith(
         "/test/root/.git/worktrees",
-        expect.any(Function)
+        expect.any(Function),
+        expect.any(Object)
       );
+    });
+
+    // The parcel backend is pinned so no arm probes watchman (a cmd.exe
+    // popen on Windows). Every teardown/re-arm cycle would pay that probe.
+    it.each([
+      ["win32", "windows"],
+      ["darwin", "fs-events"],
+      ["linux", "inotify"],
+    ])("pins the %s watcher backend to %s", async (platform, backend) => {
+      const origPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      try {
+        watcher.startWatcher();
+        await vi.waitFor(() => expect(mockParcelSubscribe).toHaveBeenCalled());
+        expect(mockParcelSubscribe.mock.calls[0]![2]).toEqual({ backend });
+      } finally {
+        Object.defineProperty(process, "platform", {
+          value: origPlatform,
+          configurable: true,
+        });
+      }
+    });
+
+    it("leaves the backend unpinned on platforms parcel has no typed backend for", async () => {
+      const origPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "freebsd", configurable: true });
+      try {
+        watcher.startWatcher();
+        await vi.waitFor(() => expect(mockParcelSubscribe).toHaveBeenCalled());
+        expect(mockParcelSubscribe.mock.calls[0]![2]).toEqual({});
+      } finally {
+        Object.defineProperty(process, "platform", {
+          value: origPlatform,
+          configurable: true,
+        });
+      }
     });
 
     it("does not start watcher when already subscribed", async () => {
