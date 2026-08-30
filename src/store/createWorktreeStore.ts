@@ -879,18 +879,10 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     },
 
     clearDeleteError(worktreeId: string) {
-      const prev = get();
-      const hadError = prev.deleteErrors.has(worktreeId);
-      const hadArgs = prev.deleteErrorArgs.has(worktreeId);
-      if (!hadError && !hadArgs) return;
-      const nextDeleteErrors = hadError ? new Map(prev.deleteErrors) : prev.deleteErrors;
-      if (hadError) nextDeleteErrors.delete(worktreeId);
-      const nextDeleteErrorArgs = hadArgs ? new Map(prev.deleteErrorArgs) : prev.deleteErrorArgs;
-      if (hadArgs) nextDeleteErrorArgs.delete(worktreeId);
-      set({
-        deleteErrors: nextDeleteErrors,
-        deleteErrorArgs: nextDeleteErrorArgs,
-      });
+      // Dismiss on the delete banner. Abandons the whole delete, not just its
+      // presentation — see `abandonDelete` for why the outbox entry and the
+      // closed terminals have to go with the banner (#12087).
+      abandonDelete(get, set, worktreeId);
     },
 
     startAttachIssue(payload: AttachIssuePayload) {
@@ -1102,6 +1094,18 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           ? new Map(prev.issueErrors)
           : prev.issueErrors;
         if (prev.issueErrors.has(entry.worktreeId)) nextIssueErrors.delete(entry.worktreeId);
+
+        // ...unless the mutation is still running. `replayOutboxAfterReconnect`
+        // flips entries to `in-flight` without clearing `issueErrors`, so a
+        // Dismiss can land on a live attach/detach. Pruning it would make
+        // `applyIssueMutationSuccess` discard a write the host had already
+        // committed, leaving the renderer's association permanently stale.
+        // Hide the banner; leave the entry and its guard to settle (#12087).
+        if (entry.status === "in-flight") {
+          set({ issueErrors: nextIssueErrors });
+          return;
+        }
+
         const nextIssueMutatingIds = prev.issueMutatingIds.has(entry.worktreeId)
           ? new Set(prev.issueMutatingIds)
           : prev.issueMutatingIds;
@@ -1115,19 +1119,9 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         return;
       }
 
-      const nextDeleteErrors = prev.deleteErrors.has(entry.worktreeId)
-        ? new Map(prev.deleteErrors)
-        : prev.deleteErrors;
-      if (prev.deleteErrors.has(entry.worktreeId)) nextDeleteErrors.delete(entry.worktreeId);
-      const nextDeleteErrorArgs = prev.deleteErrorArgs.has(entry.worktreeId)
-        ? new Map(prev.deleteErrorArgs)
-        : prev.deleteErrorArgs;
-      if (prev.deleteErrorArgs.has(entry.worktreeId)) nextDeleteErrorArgs.delete(entry.worktreeId);
-      set({
-        mutationOutbox: next,
-        deleteErrors: nextDeleteErrors,
-        deleteErrorArgs: nextDeleteErrorArgs,
-      });
+      // Same abandon as the banner's Dismiss — routed through one helper so the
+      // two paths can't drift apart (#12087).
+      abandonDelete(get, set, entry.worktreeId, mutationId);
     },
 
     replayOutboxAfterReconnect() {
@@ -1347,6 +1341,75 @@ function consumeTerminalRestore(worktreeId: string, mutationId: string): void {
     if (restoreInFlight.get(worktreeId) === done) restoreInFlight.delete(worktreeId);
   });
   restoreInFlight.set(worktreeId, done);
+}
+
+/** The delete entry parked in the outbox for a worktree, if any. A worktree has
+ *  at most one in flight — `startDelete` reuses the existing `mutationId`. */
+function findDeleteMutationId(
+  outbox: ReadonlyMap<string, MutationOutboxEntry>,
+  worktreeId: string
+): string | undefined {
+  for (const entry of outbox.values()) {
+    if (entry.type === "delete-worktree" && entry.worktreeId === worktreeId) {
+      return entry.mutationId;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Abandon a failed delete: the banner, the stored retry args and the outbox
+ * entry all go together.
+ *
+ * Clearing only the presentation state was a silent replay hazard (#12087). A
+ * failure that isn't permanent and hasn't hit the retry cap — "cannot remove a
+ * locked working tree", say — parks its entry at `pending`, and
+ * `replayOutboxAfterReconnect` skips only `failed`/`in-flight`. So a dismissed
+ * delete stayed queued and re-fired on the next reconnect.
+ *
+ * The terminals the delete closed are relaunched here for the same reason
+ * `handleDeleteFailure` relaunches them once an entry goes `failed`: the
+ * snapshot is held only while an automatic retry could still use it, and a
+ * dismissed delete is definitively abandoned.
+ */
+function abandonDelete(
+  get: () => WorktreeViewStore,
+  set: (
+    partial: Partial<WorktreeViewStore> | ((state: WorktreeViewStore) => Partial<WorktreeViewStore>)
+  ) => void,
+  worktreeId: string,
+  knownMutationId?: string
+): void {
+  const prev = get();
+  const mutationId = knownMutationId ?? findDeleteMutationId(prev.mutationOutbox, worktreeId);
+  const entry = mutationId === undefined ? undefined : prev.mutationOutbox.get(mutationId);
+  const hadError = prev.deleteErrors.has(worktreeId);
+  const hadArgs = prev.deleteErrorArgs.has(worktreeId);
+
+  // An `in-flight` entry still has a live `runDeleteAsync` behind it, and the
+  // banner can be showing over one: `replayOutboxAfterReconnect` flips entries
+  // to `in-flight` without clearing `deleteErrors`, so a Dismiss can land on a
+  // delete that is actively running. Pruning that entry would orphan a removal
+  // still on its way to the host, and relaunching its terminals would race the
+  // removal that is about to succeed. Drop the banner, leave the mutation to
+  // settle on its own — `handleDeleteFailure` re-surfaces it if it fails again.
+  const prunable = entry !== undefined && entry.status !== "in-flight";
+  if (!hadError && !hadArgs && !prunable) return;
+
+  const nextDeleteErrors = hadError ? new Map(prev.deleteErrors) : prev.deleteErrors;
+  if (hadError) nextDeleteErrors.delete(worktreeId);
+  const nextDeleteErrorArgs = hadArgs ? new Map(prev.deleteErrorArgs) : prev.deleteErrorArgs;
+  if (hadArgs) nextDeleteErrorArgs.delete(worktreeId);
+  const nextOutbox = prunable ? new Map(prev.mutationOutbox) : prev.mutationOutbox;
+  if (prunable && mutationId !== undefined) nextOutbox.delete(mutationId);
+
+  set({
+    deleteErrors: nextDeleteErrors,
+    deleteErrorArgs: nextDeleteErrorArgs,
+    mutationOutbox: nextOutbox,
+  });
+
+  if (prunable && mutationId !== undefined) consumeTerminalRestore(worktreeId, mutationId);
 }
 
 /** Drop any pending/in-flight restore bookkeeping for a worktree. Called when

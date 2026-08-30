@@ -625,12 +625,33 @@ export function WorktreeDeleteErrorBanner({
   onRetry,
   onDismiss,
 }: WorktreeDeleteErrorBannerProps) {
+  // The card root selects the worktree on any click that reaches it, and
+  // `handleCardClick` has no interactive-target guard — the card's convention
+  // (documented on its `handleDoubleClick`, #10319) is that interactive
+  // children stop click propagation themselves, as `handleRetrySetup` above
+  // does. Without this, dismissing an error on a background card would also
+  // switch the active worktree (#12087).
+  const handleRetryClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onRetry?.();
+  };
+  const handleDismissClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onDismiss?.();
+  };
   return (
     <div
       role="alert"
       aria-live="assertive"
       data-testid="worktree-delete-error-banner"
-      className="mt-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-status-error/20 bg-status-error/10 p-3 text-xs"
+      // `relative z-10` is load-bearing, not decoration. Both banners mount as
+      // bare siblings of the card's `relative z-10` content column, inside a
+      // `relative isolate` root that also carries the sidebar's full-card select
+      // overlay at `absolute inset-0 z-0`. A static block paints in an earlier
+      // step than a positioned `z-0` sibling regardless of DOM order, so without
+      // this the overlay covered the banner and swallowed every click on Retry
+      // and Dismiss (#12087). Joins the tier the content column already uses.
+      className="relative z-10 mt-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-status-error/20 bg-status-error/10 p-3 text-xs"
     >
       <AlertTriangle className="w-4 h-4 shrink-0 text-status-error" aria-hidden="true" />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -642,7 +663,7 @@ export function WorktreeDeleteErrorBanner({
           {onRetry && (
             <button
               type="button"
-              onClick={onRetry}
+              onClick={handleRetryClick}
               data-testid="worktree-delete-retry"
               className="rounded-[var(--radius-md)] border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
@@ -652,7 +673,7 @@ export function WorktreeDeleteErrorBanner({
           {onDismiss && (
             <button
               type="button"
-              onClick={onDismiss}
+              onClick={handleDismissClick}
               data-testid="worktree-delete-dismiss"
               className="rounded-[var(--radius-md)] px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
@@ -685,12 +706,33 @@ export function WorktreeIssueErrorBanner({
   onDismiss,
 }: WorktreeIssueErrorBannerProps) {
   const title = mutationType === "attach-issue" ? "Couldn't attach issue" : "Couldn't detach issue";
+  // The card root selects the worktree on any click that reaches it, and
+  // `handleCardClick` has no interactive-target guard — the card's convention
+  // (documented on its `handleDoubleClick`, #10319) is that interactive
+  // children stop click propagation themselves, as `handleRetrySetup` above
+  // does. Without this, dismissing an error on a background card would also
+  // switch the active worktree (#12087).
+  const handleRetryClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onRetry?.();
+  };
+  const handleDismissClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onDismiss?.();
+  };
   return (
     <div
       role="alert"
       aria-live="assertive"
       data-testid="worktree-issue-error-banner"
-      className="mt-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-status-error/20 bg-status-error/10 p-3 text-xs"
+      // `relative z-10` is load-bearing, not decoration. Both banners mount as
+      // bare siblings of the card's `relative z-10` content column, inside a
+      // `relative isolate` root that also carries the sidebar's full-card select
+      // overlay at `absolute inset-0 z-0`. A static block paints in an earlier
+      // step than a positioned `z-0` sibling regardless of DOM order, so without
+      // this the overlay covered the banner and swallowed every click on Retry
+      // and Dismiss (#12087). Joins the tier the content column already uses.
+      className="relative z-10 mt-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-status-error/20 bg-status-error/10 p-3 text-xs"
     >
       <AlertTriangle className="w-4 h-4 shrink-0 text-status-error" aria-hidden="true" />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -702,7 +744,7 @@ export function WorktreeIssueErrorBanner({
           {onRetry && (
             <button
               type="button"
-              onClick={onRetry}
+              onClick={handleRetryClick}
               data-testid="worktree-issue-retry"
               className="rounded-[var(--radius-md)] border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
@@ -712,7 +754,7 @@ export function WorktreeIssueErrorBanner({
           {onDismiss && (
             <button
               type="button"
-              onClick={onDismiss}
+              onClick={handleDismissClick}
               data-testid="worktree-issue-dismiss"
               className="rounded-[var(--radius-md)] px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >

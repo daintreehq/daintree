@@ -340,6 +340,110 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     expect(store.getState().deleteErrorArgs.has("wt-1")).toBe(false);
   });
 
+  // #12087 — Dismiss has to abandon the delete, not just hide its banner. A
+  // non-permanent failure parks the outbox entry at `pending`, and the reconnect
+  // sweep replays anything that isn't `failed`/`in-flight`, so clearing only the
+  // presentation state left a dismissed delete queued to re-fire.
+  it("clearDeleteError drops the outbox entry so a dismissed delete cannot replay", async () => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(
+      new Error("fatal: cannot remove a locked working tree")
+    );
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false });
+    await flushPromises();
+    await flushPromises();
+
+    // Precondition: a retryable failure leaves a live entry behind the banner.
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(true);
+    expect(store.getState().mutationOutbox.size).toBe(1);
+    expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(1);
+
+    store.getState().clearDeleteError("wt-1");
+    expect(store.getState().mutationOutbox.size).toBe(0);
+
+    // The worktree is still in the snapshot, so a surviving entry would be a
+    // replay candidate rather than being pruned as already-gone.
+    store.getState().replayOutboxAfterReconnect();
+    await flushPromises();
+    await flushPromises();
+
+    expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("clearDeleteError relaunches the terminals the failed delete closed", async () => {
+    captureWorktreeTerminalSnapshotMock.mockReturnValueOnce([{ id: "term-1" }]);
+    worktreeClientDeleteMock.mockRejectedValueOnce(
+      new Error("fatal: cannot remove a locked working tree")
+    );
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false, closeTerminals: true });
+    await flushPromises();
+    await flushPromises();
+
+    // A retryable failure deliberately holds the snapshot back — the retry that
+    // may still come would only close the terminals again.
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(true);
+    expect(restoreClosedTerminalsMock).not.toHaveBeenCalled();
+
+    store.getState().clearDeleteError("wt-1");
+    await flushPromises();
+
+    expect(restoreClosedTerminalsMock).toHaveBeenCalledTimes(1);
+    expect(restoreClosedTerminalsMock).toHaveBeenCalledWith([{ id: "term-1" }]);
+
+    // Snapshot consumed: dismissing again must not relaunch them a second time.
+    store.getState().clearDeleteError("wt-1");
+    await flushPromises();
+    expect(restoreClosedTerminalsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("clearDeleteError leaves an in-flight replay alone rather than orphaning it", async () => {
+    captureWorktreeTerminalSnapshotMock.mockReturnValueOnce([{ id: "term-1" }]);
+    worktreeClientDeleteMock.mockRejectedValueOnce(new Error("boom"));
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false, closeTerminals: true });
+    await flushPromises();
+    await flushPromises();
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(true);
+
+    // The reconnect sweep replays the pending entry and flips it to `in-flight`
+    // WITHOUT clearing the banner, so Dismiss can land on a live delete.
+    let settleDelete: () => void = () => {};
+    worktreeClientDeleteMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          settleDelete = resolve;
+        })
+    );
+    store.getState().replayOutboxAfterReconnect();
+    await flushPromises();
+
+    const entryId = Array.from(store.getState().mutationOutbox.keys())[0];
+    if (entryId === undefined) throw new Error("expected a delete outbox entry");
+    expect(store.getState().mutationOutbox.get(entryId)?.status).toBe("in-flight");
+
+    store.getState().clearDeleteError("wt-1");
+
+    // The banner goes, but the running removal keeps its entry and its
+    // terminals stay closed — relaunching them would race a delete that is
+    // still on its way to succeeding.
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(false);
+    expect(store.getState().mutationOutbox.has(entryId)).toBe(true);
+    expect(restoreClosedTerminalsMock).not.toHaveBeenCalled();
+
+    settleDelete();
+    await flushPromises();
+  });
+
   it("partial-success path: when worktree-removed arrives first, failure routes to notify() so it is not swallowed", async () => {
     // The backend emits `worktree-removed` BEFORE `git branch -d`. A branch
     // deletion failure thus arrives after `applyRemove` has cleared the card.

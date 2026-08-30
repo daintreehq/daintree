@@ -11,6 +11,8 @@ import type { ComputedSubtitle } from "../hooks/useWorktreeStatus";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   WorktreeDetailsSection,
+  WorktreeDeleteErrorBanner,
+  WorktreeIssueErrorBanner,
   type WorktreeDetailsSectionProps,
 } from "../WorktreeDetailsSection";
 
@@ -452,5 +454,67 @@ describe("WorktreeDetailsSection activity chip (collapsed row)", () => {
   it("removes the standalone 'No activity' placeholder", () => {
     renderSection({ worktree: withCommit({}), hasChanges: false });
     expect(screen.queryByText("No activity")).toBeNull();
+  });
+});
+
+// Issue #12087 — the banners mount as bare siblings of the card's `relative
+// z-10` content column, under a full-card select overlay whose click handler
+// selects the worktree. Their buttons have to reach the user AND stop the click
+// there; jsdom can't test the stacking half (no layout engine, no CSS), so the
+// paint-order invariant is asserted as a source contract in
+// WorktreeCardInteraction.test.tsx and the propagation half is asserted here.
+describe("worktree error banners (issue #12087)", () => {
+  const banners = [
+    {
+      name: "delete",
+      renderBanner: (props: { onRetry: () => void; onDismiss: () => void }) => (
+        <WorktreeDeleteErrorBanner message="cannot remove a locked working tree" {...props} />
+      ),
+    },
+    {
+      name: "issue",
+      renderBanner: (props: { onRetry: () => void; onDismiss: () => void }) => (
+        <WorktreeIssueErrorBanner
+          message="network unreachable"
+          mutationType="attach-issue"
+          {...props}
+        />
+      ),
+    },
+  ];
+
+  describe.each(banners)("$name banner", ({ renderBanner }) => {
+    it.each([["Retry"], ["Dismiss"]])(
+      "%s fires its own handler without bubbling to the card's click handler",
+      (label) => {
+        const onRetry = vi.fn();
+        const onDismiss = vi.fn();
+        const onCardClick = vi.fn();
+        render(<div onClick={onCardClick}>{renderBanner({ onRetry, onDismiss })}</div>);
+
+        fireEvent.click(screen.getByRole("button", { name: label }));
+
+        const [fired, quiet] = label === "Retry" ? [onRetry, onDismiss] : [onDismiss, onRetry];
+        expect(fired).toHaveBeenCalledTimes(1);
+        expect(quiet).not.toHaveBeenCalled();
+        // The card root selects the worktree on any click that reaches it, so a
+        // bubbled Dismiss would switch worktrees as a side effect.
+        expect(onCardClick).not.toHaveBeenCalled();
+      }
+    );
+  });
+
+  it("renders no action buttons when neither handler is supplied", () => {
+    const { rerender } = render(<WorktreeDeleteErrorBanner message="disk on fire" />);
+    // Assert the banner is actually on screen first, so "no buttons" can't pass
+    // by way of nothing having rendered. Checked via the message passed in — an
+    // input/output contract — rather than the title, which is microcopy the
+    // implementation owns.
+    expect(screen.getByRole("alert").textContent).toContain("disk on fire");
+    expect(screen.queryByRole("button")).toBeNull();
+
+    rerender(<WorktreeIssueErrorBanner message="disk on fire" mutationType="detach-issue" />);
+    expect(screen.getByRole("alert").textContent).toContain("disk on fire");
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });
