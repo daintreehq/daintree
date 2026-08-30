@@ -1,20 +1,19 @@
 import { performance } from "node:perf_hooks";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { loadBudgetConfig, getScenarioBudget } from "./lib/budgets";
 import { checkBaselineCoverage, checkBaselineFreshness } from "./lib/baselineCoverage";
-import { compareSamples } from "./lib/comparison";
 import { evaluateScenarioBudget } from "./lib/gate";
-import { appendJsonLine, readJson, writeJson, writeText, ensureDir } from "./lib/io";
+import { appendJsonLine, appendText, readJson, writeJson, writeText, ensureDir } from "./lib/io";
 import { aggregateMetrics, averageMetrics, mean, percentile, round, stdDev } from "./lib/stats";
 import { buildMarkdownReport } from "./report/generate";
 import { assertMatrixCoverage, getScenariosForMode } from "./scenarios";
 import type {
   BaselineSummary,
-  ComparisonAggregate,
   PerfMode,
   PerfRunSummary,
+  PerfScenario,
   RunEnvironment,
   ScenarioAggregate,
   ScenarioContext,
@@ -22,13 +21,21 @@ import type {
   ScenarioTier,
 } from "./types";
 
-interface CliOptions {
+export interface CliOptions {
   mode: PerfMode;
   outDir: string;
   baselinePath: string;
   updateBaseline: boolean;
-  compare: boolean;
-  compareBase: string;
+  /** Explicit scenario subset, or null for the whole matrix for this mode. */
+  scenarioIds: string[] | null;
+  /** Overrides the per-tier default iteration count for every scenario. */
+  iterations?: number;
+  /** Overrides each scenario's own warmup count. */
+  warmups?: number;
+  /** Extra destination for the summary JSON, chosen by the caller. */
+  jsonPath?: string;
+  label?: string;
+  machineLabel?: string;
 }
 
 interface RawSample {
@@ -41,11 +48,6 @@ interface RawSample {
   notes?: string;
 }
 
-interface BaselineArmData {
-  aggregates: ScenarioAggregate[];
-  durationsById: Map<string, number[]>;
-}
-
 const DEFAULT_ITERATIONS: Record<PerfMode, Record<ScenarioTier, number>> = {
   smoke: { fast: 8, heavy: 4, soak: 1 },
   ci: { fast: 16, heavy: 8, soak: 2 },
@@ -55,44 +57,181 @@ const DEFAULT_ITERATIONS: Record<PerfMode, Record<ScenarioTier, number>> = {
 
 const MODES: ReadonlySet<string> = new Set(["smoke", "ci", "nightly", "soak"]);
 
-function parseArgs(argv: string[]): CliOptions {
-  const args = new Map<string, string>();
+const VALUE_FLAGS = [
+  "mode",
+  "scenario",
+  "iterations",
+  "warmups",
+  "json",
+  "label",
+  "machine",
+  "out-dir",
+  "baseline",
+] as const;
+
+const BOOLEAN_FLAGS = ["update-baseline"] as const;
+
+const perfDir = path.dirname(fileURLToPath(import.meta.url));
+const HISTORY_DIR = path.join(perfDir, "history");
+
+/**
+ * A mistyped invocation, not a broken harness. Carried as its own class so the
+ * top-level handler can print the one useful line instead of a stack trace.
+ */
+export class UsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UsageError";
+  }
+}
+
+function knownFlagList(): string {
+  return [...VALUE_FLAGS, ...BOOLEAN_FLAGS]
+    .map((flag) => `--${flag}`)
+    .sort()
+    .join(", ");
+}
+
+function defaultOutDir(): string {
+  return path.resolve(process.cwd(), ".tmp/perf-results");
+}
+
+function defaultBaselinePath(mode: PerfMode): string {
+  return path.resolve(process.cwd(), `scripts/perf/config/baseline.${mode}.json`);
+}
+
+function parsePositiveInt(flag: string, raw: string, min: number): number {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min) {
+    throw new UsageError(`--${flag} expects an integer >= ${min}, got "${raw}"`);
+  }
+  return value;
+}
+
+/**
+ * Strict argument parsing.
+ *
+ * The previous parser skipped anything it did not recognise, so a typo'd
+ * `--secnario` silently ran the entire matrix and looked like it had worked.
+ * Every unknown flag, missing value, stray positional, and unknown scenario id
+ * throws instead — a mistyped invocation must never look like a clean run.
+ */
+export function parseArgs(argv: string[]): CliOptions {
+  const values = new Map<string, string>();
   const flags = new Set<string>();
+  const scenarioTokens: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
-    if (!token.startsWith("--")) continue;
+    if (!token.startsWith("--")) {
+      throw new UsageError(`Unexpected argument "${token}" — every option must be a --flag`);
+    }
 
-    const key = token.replace(/^--/, "");
-    const maybeValue = argv[i + 1];
-    if (!maybeValue || maybeValue.startsWith("--")) {
-      flags.add(key);
+    const body = token.slice(2);
+    const equals = body.indexOf("=");
+    const name = equals === -1 ? body : body.slice(0, equals);
+    const inlineValue = equals === -1 ? undefined : body.slice(equals + 1);
+
+    if ((BOOLEAN_FLAGS as readonly string[]).includes(name)) {
+      if (inlineValue !== undefined) {
+        throw new UsageError(`--${name} is a switch and takes no value`);
+      }
+      flags.add(name);
       continue;
     }
 
-    args.set(key, maybeValue);
-    i += 1;
+    if (!(VALUE_FLAGS as readonly string[]).includes(name)) {
+      throw new UsageError(`Unknown flag --${name}. Known flags: ${knownFlagList()}`);
+    }
+
+    let value = inlineValue;
+    if (value === undefined) {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith("--")) {
+        throw new UsageError(`--${name} expects a value`);
+      }
+      value = next;
+      i += 1;
+    }
+    if (value.trim() === "") {
+      throw new UsageError(`--${name} expects a value`);
+    }
+
+    // Repeatable, unlike every other flag: `--scenario A --scenario B` and
+    // `--scenario A,B` both mean the same set.
+    if (name === "scenario") {
+      scenarioTokens.push(value);
+      continue;
+    }
+
+    // `index.ts` prepends `--mode <mode>` to whatever the caller typed, so
+    // last-wins would let `npm run perf smoke -- --mode nightly` run nightly
+    // under a smoke banner. Same class of silent wrong answer as a typo'd flag.
+    if (values.has(name)) {
+      throw new UsageError(`--${name} given more than once`);
+    }
+
+    values.set(name, value);
   }
 
-  const modeRaw = args.get("mode") ?? "smoke";
+  const modeRaw = values.get("mode") ?? "smoke";
   if (!MODES.has(modeRaw)) {
-    throw new Error(`Invalid --mode value: ${modeRaw}`);
+    throw new UsageError(`Invalid --mode value: ${modeRaw}. Known modes: ${[...MODES].join(", ")}`);
+  }
+  const mode = modeRaw as PerfMode;
+
+  const scenarioIds = resolveScenarioIds(scenarioTokens, mode);
+
+  // A baseline is a whole-matrix artifact: writing one from a filtered run
+  // replaces every other scenario's reference with nothing, and the file that
+  // results is indistinguishable from a complete one.
+  if (scenarioIds !== null && flags.has("update-baseline")) {
+    throw new UsageError(
+      "--update-baseline needs the whole matrix — drop --scenario, or write the filtered run to --json instead"
+    );
   }
 
-  const mode = modeRaw as PerfMode;
-  const outDir = args.get("out-dir") ?? path.resolve(process.cwd(), ".tmp/perf-results");
-  const baselinePath =
-    args.get("baseline") ??
-    path.resolve(process.cwd(), `scripts/perf/config/baseline.${mode}.json`);
+  const iterationsRaw = values.get("iterations");
+  const warmupsRaw = values.get("warmups");
 
   return {
     mode,
-    outDir,
-    baselinePath,
+    outDir: values.get("out-dir") ?? defaultOutDir(),
+    baselinePath: values.get("baseline") ?? defaultBaselinePath(mode),
     updateBaseline: flags.has("update-baseline"),
-    compare: flags.has("compare"),
-    compareBase: args.get("compare-base") ?? "origin/develop",
+    scenarioIds,
+    iterations:
+      iterationsRaw === undefined ? undefined : parsePositiveInt("iterations", iterationsRaw, 1),
+    warmups: warmupsRaw === undefined ? undefined : parsePositiveInt("warmups", warmupsRaw, 0),
+    jsonPath: values.get("json"),
+    label: values.get("label"),
+    machineLabel: values.get("machine"),
   };
+}
+
+function resolveScenarioIds(tokens: string[], mode: PerfMode): string[] | null {
+  if (tokens.length === 0) return null;
+
+  const requested = tokens
+    .flatMap((token) => token.split(","))
+    .map((id) => id.trim().toUpperCase())
+    .filter((id) => id.length > 0);
+
+  if (requested.length === 0) {
+    throw new UsageError("--scenario expects at least one scenario id");
+  }
+
+  const available = getScenariosForMode(mode).map((scenario) => scenario.id);
+  const availableSet = new Set(available);
+  const unknown = requested.filter((id) => !availableSet.has(id));
+  if (unknown.length > 0) {
+    throw new UsageError(
+      `Unknown scenario id(s) for mode ${mode}: ${unknown.join(", ")}. ` +
+        `Available: ${[...available].sort().join(", ")}`
+    );
+  }
+
+  return [...new Set(requested)];
 }
 
 /**
@@ -100,11 +239,12 @@ function parseArgs(argv: string[]): CliOptions {
  *
  * Without this a results file cannot be safely diffed against another: latency
  * is only comparable to itself on one machine, and nothing recorded the machine.
- * `PERF_MACHINE_LABEL` wins so a laptop can carry a stable name across reboots;
- * otherwise the hostname, which is distinct enough between a laptop and a runner.
+ * `--machine` beats `PERF_MACHINE_LABEL`, which beats the hostname, so a laptop
+ * can carry a stable name across reboots and one run can be relabelled without
+ * touching the environment.
  */
-function defaultMachineLabel(): string {
-  const explicit = process.env.PERF_MACHINE_LABEL?.trim();
+function defaultMachineLabel(override?: string): string {
+  const explicit = override?.trim() || process.env.PERF_MACHINE_LABEL?.trim();
   if (explicit) return explicit;
 
   if (process.env.GITHUB_ACTIONS === "true") {
@@ -125,10 +265,10 @@ function defaultMachineLabel(): string {
   return `${os.hostname()}-${process.platform}-${process.arch}`.toLowerCase();
 }
 
-function describeEnvironment(): RunEnvironment {
+function describeEnvironment(machineLabel?: string): RunEnvironment {
   const cpus = os.cpus();
   return {
-    machineLabel: defaultMachineLabel(),
+    machineLabel: defaultMachineLabel(machineLabel),
     platform: process.platform,
     arch: process.arch,
     cpuModel: cpus[0]?.model?.trim() ?? "unknown",
@@ -152,6 +292,105 @@ function getIterationCount(
   return DEFAULT_ITERATIONS[mode][tier];
 }
 
+function selectScenarios(cli: CliOptions): PerfScenario[] {
+  const scenarios = getScenariosForMode(cli.mode);
+  if (cli.scenarioIds === null) return scenarios;
+
+  const wanted = new Set(cli.scenarioIds);
+  return scenarios.filter((scenario) => wanted.has(scenario.id));
+}
+
+/**
+ * Anything outside this set gets quoted. Deliberately conservative: the line is
+ * printed for a human to copy back into a shell, and a bare `$(…)` or `;` in a
+ * label would mean something there that it did not mean here.
+ */
+const SHELL_SAFE = /^[A-Za-z0-9._:,/=+-]+$/;
+
+function quoteArg(value: string): string {
+  return SHELL_SAFE.test(value) ? value : JSON.stringify(value);
+}
+
+/**
+ * The exact command that reproduces this run.
+ *
+ * A perf number is only worth anything next to another number taken the same
+ * way, so every run ends by handing the reader the invocation that produces its
+ * twin — no reconstructing flags from scrollback. Paths are reproduced only
+ * when they were overridden, which is why the defaults are recomputed here
+ * rather than remembered: `cli` holds resolved paths either way.
+ */
+function buildRerunCommand(cli: CliOptions): string {
+  const parts = ["npm", "run", "perf", cli.mode, "--"];
+  const optionCount = parts.length;
+
+  if (cli.scenarioIds !== null) parts.push("--scenario", cli.scenarioIds.join(","));
+  if (cli.iterations !== undefined) parts.push("--iterations", String(cli.iterations));
+  if (cli.warmups !== undefined) parts.push("--warmups", String(cli.warmups));
+  if (cli.label !== undefined) parts.push("--label", quoteArg(cli.label));
+  if (cli.machineLabel !== undefined) parts.push("--machine", quoteArg(cli.machineLabel));
+  if (cli.jsonPath !== undefined) parts.push("--json", quoteArg(cli.jsonPath));
+  if (cli.outDir !== defaultOutDir()) parts.push("--out-dir", quoteArg(cli.outDir));
+  if (cli.baselinePath !== defaultBaselinePath(cli.mode)) {
+    parts.push("--baseline", quoteArg(cli.baselinePath));
+  }
+  if (cli.updateBaseline) parts.push("--update-baseline");
+
+  // Nothing but the mode survived, so `--` would dangle.
+  if (parts.length === optionCount) parts.pop();
+
+  return parts.join(" ");
+}
+
+/** Filenames are shared across OSes; a hostname is not a safe path component. */
+function sanitizeForFilename(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
+}
+
+/**
+ * One small tracked file per mode per machine, overwritten each run.
+ *
+ * `git log -p scripts/perf/history/` is the point — one measurement per line,
+ * so a diff names which scenario moved and by how much. It carries p95 and each
+ * metric's max and sum, and nothing else; a full summary per run would be too
+ * large to read a diff of, which is the only thing this file is for.
+ *
+ * Metric stats are flattened to `<metric>.max` / `<metric>.sum` scalars rather
+ * than nested as an array or a sub-object. Two reasons, same root: an array
+ * here is re-wrapped by prettier, so every regenerated file would fail
+ * `format:check` the moment it was committed; a sub-object costs four lines per
+ * metric. Array-free `JSON.stringify(…, 2)` output is already prettier-clean —
+ * `config/baseline.*.json` has always relied on that.
+ */
+function writeHistory(summary: PerfRunSummary): string {
+  const historyPath = path.join(
+    HISTORY_DIR,
+    `${summary.mode}.${sanitizeForFilename(summary.environment.machineLabel)}.json`
+  );
+
+  const scenarios: Record<string, Record<string, number>> = {};
+  for (const aggregate of summary.aggregates) {
+    // `runs` rides along because `sum` is meaningless without it — two files
+    // whose sums differ may only differ in how many iterations were taken.
+    const entry: Record<string, number> = { p95Ms: aggregate.p95Ms, runs: aggregate.runs };
+    for (const [name, stat] of Object.entries(aggregate.metricStats)) {
+      entry[`${name}.max`] = stat.max;
+      entry[`${name}.sum`] = stat.sum;
+    }
+    scenarios[aggregate.id] = entry;
+  }
+
+  writeJson(historyPath, {
+    generatedAt: summary.generatedAt,
+    mode: summary.mode,
+    label: summary.label,
+    environment: summary.environment,
+    scenarios,
+  });
+
+  return historyPath;
+}
+
 async function run(): Promise<void> {
   const cli = parseArgs(process.argv.slice(2));
   assertMatrixCoverage();
@@ -163,24 +402,23 @@ async function run(): Promise<void> {
 
   checkBaselineFreshness(baseline, cli.mode);
 
-  const scenarios = getScenariosForMode(cli.mode);
+  const scenarios = selectScenarios(cli);
   if (scenarios.length === 0) {
     throw new Error(`No scenarios configured for mode ${cli.mode}`);
   }
 
-  // Regenerating the baseline is exactly how coverage gaps get fixed, so let an
-  // --update-baseline run proceed even when entries are missing.
+  // Regenerating the baseline is exactly how coverage gaps get fixed, so an
+  // --update-baseline run has nothing to be told. Everywhere else this is a
+  // note, not a problem: a scenario with no reference value yet is the normal
+  // state for a new scenario or a newly added OS.
   if (!cli.updateBaseline) {
     const coverageGaps = checkBaselineCoverage(baseline, budgetConfig, scenarios);
     if (coverageGaps.length > 0) {
       const ids = coverageGaps.map((gap) => gap.scenarioId).join(", ");
-      console.error(
-        `[perf:${cli.mode}] FAIL ${coverageGaps.length} budgeted scenario(s) missing from ` +
-          `baseline (${cli.baselinePath}) — regression gate cannot run: ${ids}. ` +
-          `Regenerate with --update-baseline.`
+      console.warn(
+        `[perf:${cli.mode}] no reference yet for ${coverageGaps.length} scenario(s) ` +
+          `(${cli.baselinePath}): ${ids}. Regenerate with --update-baseline.`
       );
-      process.exitCode = 1;
-      return;
     }
   }
 
@@ -205,8 +443,9 @@ async function run(): Promise<void> {
   >();
 
   for (const scenario of scenarios) {
-    const warmups = Math.max(0, scenario.warmups ?? 1);
-    const iterations = getIterationCount(cli.mode, scenario.tier, scenario.iterations);
+    const warmups = cli.warmups ?? Math.max(0, scenario.warmups ?? 1);
+    const iterations =
+      cli.iterations ?? getIterationCount(cli.mode, scenario.tier, scenario.iterations);
 
     for (let i = 0; i < warmups; i += 1) {
       await scenario.run(context);
@@ -299,7 +538,7 @@ async function run(): Promise<void> {
     const { outsideReference, measurementIssues, reasons } = evaluateScenarioBudget({
       scenarioId,
       p95Ms,
-      metricAverages,
+      metricStats,
       budget,
       baselineP95,
       isCritical: budgetConfig.criticalScenarios.includes(scenarioId),
@@ -346,77 +585,13 @@ async function run(): Promise<void> {
 
   aggregates.sort((a, b) => a.id.localeCompare(b.id));
 
-  // A/B comparison mode: run baseline arm and compare statistically
-  let comparisonAggregates: ComparisonAggregate[] = [];
-  if (cli.compare) {
-    const expectedComparisons = [...aggregateById.keys()].filter(
-      (id) => getScenarioBudget(budgetConfig, id).comparison !== undefined
-    );
-    const failComparison = (reason: string) => {
-      console.error(`[perf:compare] FAIL ${reason}`);
-      for (const id of expectedComparisons) {
-        if (!scenariosOutsideReference.includes(id)) {
-          scenariosOutsideReference.push(id);
-        }
-      }
-    };
-
-    const mergeBase = getMergeBase(cli.compareBase);
-    if (!mergeBase) {
-      console.warn("[perf:compare] Could not determine merge-base — skipping comparison");
-      // A requested comparison that can't run is not a pass. Fail closed when any
-      // scenario in this run carries a comparison budget.
-      if (expectedComparisons.length > 0) {
-        failComparison(
-          `merge-base unresolved — ${expectedComparisons.length} scenario(s) with comparison budgets left unenforced`
-        );
-      }
-    } else {
-      console.log(`[perf:compare] Baseline ref: ${mergeBase.slice(0, 12)}`);
-
-      const baseOutDir = path.join(cli.outDir, "baseline-arm");
-      ensureDir(baseOutDir);
-
-      const baseArmData = await runBaselineArm(mergeBase, cli, baseOutDir);
-
-      comparisonAggregates = computeComparisons(aggregateById, baseArmData, budgetConfig);
-
-      if (expectedComparisons.length > 0 && comparisonAggregates.length === 0) {
-        failComparison(
-          `comparison arm produced no data for ${expectedComparisons.length} scenario(s) with comparison budgets — baseline arm did not run`
-        );
-      }
-
-      const aggregateByIdForReport = new Map(aggregates.map((agg) => [agg.id, agg]));
-      for (const comp of comparisonAggregates) {
-        if (comp.comparison.regression) {
-          if (!scenariosOutsideReference.includes(comp.head.id)) {
-            scenariosOutsideReference.push(comp.head.id);
-          }
-          // Mutate the aggregate that gets serialized into the summary/report,
-          // not comp.head (a detached copy built by computeComparisons).
-          const reportAgg = aggregateByIdForReport.get(comp.head.id);
-          if (reportAgg) {
-            const abReason = `A/B regression (p=${round(comp.comparison.pValue)}, d=${round(comp.comparison.effectSize)})`;
-            reportAgg.outsideReference = true;
-            reportAgg.referenceNotes = reportAgg.referenceNotes
-              ? `${reportAgg.referenceNotes}; ${abReason}`
-              : abReason;
-          }
-        }
-      }
-
-      const comparisonJsonPath = path.join(cli.outDir, `${timestamp}-${cli.mode}.comparison.json`);
-      writeJson(comparisonJsonPath, comparisonAggregates);
-    }
-  }
-
   const summary: PerfRunSummary = {
     generatedAt: new Date().toISOString(),
     mode: cli.mode,
     nodeVersion: process.version,
     platform: process.platform,
-    environment: describeEnvironment(),
+    label: cli.label,
+    environment: describeEnvironment(cli.machineLabel),
     scenarioCount: aggregates.length,
     scenariosOutsideReference,
     aggregates,
@@ -426,11 +601,16 @@ async function run(): Promise<void> {
   const reportMdPath = path.join(cli.outDir, `${timestamp}-${cli.mode}.report.md`);
   const latestSummaryPath = path.join(cli.outDir, `latest-${cli.mode}.summary.json`);
   const latestReportPath = path.join(cli.outDir, `latest-${cli.mode}.report.md`);
+  const report = buildMarkdownReport(summary);
 
   writeJson(summaryJsonPath, summary);
-  writeText(reportMdPath, buildMarkdownReport(summary, comparisonAggregates));
+  writeText(reportMdPath, report);
   writeJson(latestSummaryPath, summary);
-  writeText(latestReportPath, buildMarkdownReport(summary, comparisonAggregates));
+  writeText(latestReportPath, report);
+
+  if (cli.jsonPath) {
+    writeJson(path.resolve(process.cwd(), cli.jsonPath), summary);
+  }
 
   if (cli.updateBaseline) {
     const baselineOut: BaselineSummary = {
@@ -443,160 +623,103 @@ async function run(): Promise<void> {
     writeJson(cli.baselinePath, baselineOut);
   }
 
-  const passed = scenariosOutsideReference.length === 0;
-  const gateMessage = passed ? "PASS" : "FAIL";
+  // Only a canonical run earns a history entry. A filtered run measured a slice
+  // of the matrix and an --iterations/--warmups run measured it differently,
+  // and the file has no room to say so — either would silently replace the
+  // machine's record with something that reads identically but is not
+  // comparable to what came before it.
+  const isCanonicalRun =
+    cli.scenarioIds === null && cli.iterations === undefined && cli.warmups === undefined;
+  const historyPath = isCanonicalRun ? writeHistory(summary) : null;
+
+  // The step summary is a convenience, not a result. A run whose numbers are
+  // already on disk must not fail because Actions handed us an unwritable path.
+  const stepSummaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (stepSummaryPath) {
+    try {
+      appendText(stepSummaryPath, `${report}\n`);
+    } catch (error) {
+      console.warn(`[perf:${cli.mode}] could not write GITHUB_STEP_SUMMARY: ${String(error)}`);
+    }
+  }
+
+  const measurementIssueCount = aggregates.reduce(
+    (total, aggregate) => total + aggregate.measurementIssues.length,
+    0
+  );
+
   console.log(
-    `[perf:${cli.mode}] ${gateMessage} scenarios=${aggregates.length} failed=${scenariosOutsideReference.length}`
+    `[perf:${cli.mode}] scenarios=${aggregates.length} ` +
+      `outside-reference=${scenariosOutsideReference.length} ` +
+      `measurement-issues=${measurementIssueCount}`
   );
 
   for (const aggregate of aggregates) {
-    const marker = aggregate.outsideReference ? "x" : "ok";
+    const marker = aggregate.outsideReference ? "outside" : "ok";
     const reason = aggregate.referenceNotes ? ` (${aggregate.referenceNotes})` : "";
     console.log(
       `[${marker}] ${aggregate.id} p95=${aggregate.p95Ms}ms p99=${aggregate.p99Ms}ms${reason}`
     );
   }
 
-  if (!passed) {
-    process.exitCode = 1;
-  }
-}
-
-run()
-  .then(
-    // Scenario fixtures can leave live native handles behind (file watchers,
-    // long-lived monitor harnesses), which would keep the process alive after
-    // all results are written. Drain stdout, then exit explicitly.
-    () =>
-      new Promise<never>((resolve) => {
-        process.stdout.write("", () => resolve(process.exit(process.exitCode ?? 0)));
-      })
-  )
-  .catch((error) => {
-    console.error("[perf] run failed", error);
-    process.exit(1);
-  });
-
-function getMergeBase(compareBase: string): string | null {
-  try {
-    return execFileSync("git", ["merge-base", "HEAD", compareBase], {
-      encoding: "utf-8",
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
-async function runBaselineArm(
-  _mergeBase: string,
-  _cli: CliOptions,
-  _baseOutDir: string
-): Promise<BaselineArmData> {
-  // In a full implementation, this would:
-  // 1. Create a detached worktree at mergeBase
-  // 2. Build the packaged binary in that worktree
-  // 3. Run the same scenarios against the base binary
-  // 4. Return the aggregates + raw durations
-  //
-  // For the initial implementation, we load previously-saved baseline data
-  // if available, or skip the comparison arm.
-  console.warn(
-    "[perf:compare] Baseline arm execution not yet implemented — use --baseline for static comparison"
-  );
-  return { aggregates: [], durationsById: new Map() };
-}
-
-function computeComparisons(
-  headAggregateById: Map<
-    string,
-    {
-      name: string;
-      description: string;
-      tier: ScenarioTier;
-      durations: number[];
-      metrics: Array<Record<string, number>>;
-      notes: string[];
-    }
-  >,
-  baseArmData: BaselineArmData,
-  budgetConfig: import("./types").PerfBudgetConfig
-): ComparisonAggregate[] {
-  const results: ComparisonAggregate[] = [];
-  const baseById = new Map(baseArmData.aggregates.map((a) => [a.id, a]));
-  const baseDurationsById = baseArmData.durationsById;
-
-  // Build head aggregates from raw durations for comparison
-  const headAggregates = buildAggregatesFromMap(headAggregateById);
-  const headById = new Map(headAggregates.map((a) => [a.id, a]));
-
-  for (const [scenarioId, headAgg] of headById) {
-    const baseAgg = baseById.get(scenarioId);
-    if (!baseAgg) continue;
-
-    const budget = getScenarioBudget(budgetConfig, scenarioId);
-    if (!budget.comparison) continue;
-
-    const headDurations = headAggregateById.get(scenarioId)?.durations ?? [headAgg.meanMs];
-    const baseDurations = baseDurationsById.get(scenarioId) ?? [baseAgg.meanMs];
-
-    const comp = compareSamples(
-      { label: "head", durations: headDurations },
-      { label: "base", durations: baseDurations },
-      budget.comparison.maxPValue,
-      budget.comparison.minEffectSize
+  // Printed apart from the rows above, and last, because this is the one class
+  // that is not a number being worse: a configured metric that stopped being
+  // emitted reads exactly like a pass in every row-level view.
+  if (measurementIssueCount > 0) {
+    console.warn(
+      `\n[perf:${cli.mode}] MEASUREMENT ISSUES — ${measurementIssueCount} broken measurement(s), ` +
+        `not slow numbers. Each one is a gate that has silently stopped meaning anything:`
     );
-
-    results.push({
-      id: headAgg.id,
-      head: headAgg,
-      base: baseAgg,
-      comparison: comp,
-    });
+    for (const aggregate of aggregates) {
+      for (const issue of aggregate.measurementIssues) {
+        console.warn(`  ${aggregate.id}: ${issue}`);
+      }
+    }
+    console.warn("");
   }
 
-  return results;
+  console.log(`[perf:${cli.mode}] summary: ${summaryJsonPath}`);
+  if (cli.jsonPath) console.log(`[perf:${cli.mode}] json: ${cli.jsonPath}`);
+  if (historyPath) console.log(`[perf:${cli.mode}] history: ${historyPath}`);
+  console.log(`[perf:${cli.mode}] rerun: ${buildRerunCommand(cli)}`);
 }
 
-function buildAggregatesFromMap(
-  aggregateById: Map<
-    string,
-    {
-      name: string;
-      description: string;
-      tier: ScenarioTier;
-      durations: number[];
-      metrics: Array<Record<string, number>>;
-      notes: string[];
-    }
-  >
-): ScenarioAggregate[] {
-  const aggregates: ScenarioAggregate[] = [];
+// Vitest imports this module for the arg-parser tests, so the harness only
+// starts when the file is the process entrypoint.
+const isEntrypoint =
+  process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
-  for (const [scenarioId, aggregate] of aggregateById.entries()) {
-    const p50Ms = percentile(aggregate.durations, 50);
-    const p95Ms = percentile(aggregate.durations, 95);
-    const meanMs = mean(aggregate.durations);
-    const stdDevMs = stdDev(aggregate.durations);
+/**
+ * Scenario fixtures can leave live native handles behind (file watchers,
+ * long-lived monitor harnesses), which would keep the process alive after all
+ * results are written, so the exit is explicit. Both streams are drained first:
+ * `process.exit` truncates whatever is still queued, and in CI stderr is a pipe
+ * — which is exactly where the measurement-issue block goes.
+ */
+function exitAfterFlush(code: number): Promise<never> {
+  return new Promise<never>((resolve) => {
+    let pending = 2;
+    const done = () => {
+      pending -= 1;
+      if (pending === 0) resolve(process.exit(code));
+    };
+    process.stdout.write("", done);
+    process.stderr.write("", done);
+  });
+}
 
-    aggregates.push({
-      id: scenarioId,
-      name: aggregate.name,
-      description: aggregate.description,
-      tier: aggregate.tier,
-      runs: aggregate.durations.length,
-      p50Ms: round(p50Ms),
-      p95Ms: round(p95Ms),
-      p99Ms: round(percentile(aggregate.durations, 99)),
-      maxMs: round(Math.max(...aggregate.durations)),
-      meanMs: round(meanMs),
-      stdDevMs: round(stdDevMs),
-      metricAverages: {},
-      metricStats: {},
-      outsideReference: false,
-      measurementIssues: [],
-      notes: [...new Set(aggregate.notes)].slice(0, 3),
+if (isEntrypoint) {
+  run()
+    // Hardcoded 0, not `process.exitCode`: this is the whole stance in one
+    // line. A measurement being worse than a reference value is reported and
+    // never failed on, so the only way out with a non-zero code is a throw.
+    .then(() => exitAfterFlush(0))
+    .catch((error) => {
+      if (error instanceof UsageError) {
+        console.error(`[perf] ${error.message}`);
+      } else {
+        console.error("[perf] run failed", error);
+      }
+      return exitAfterFlush(1);
     });
-  }
-
-  return aggregates;
 }

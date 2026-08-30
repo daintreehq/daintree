@@ -8,11 +8,7 @@
     "PERF-001": { "p95Ms": 3500, "maxRegressionPct": 15 },
     "PERF-002": { "p95Ms": 4500, "maxRegressionPct": 15 },
     "PERF-003": { "p95Ms": 1800, "maxRegressionPct": 15 },
-    "PERF-004": {
-      "p95Ms": 8000,
-      "maxRegressionPct": 20,
-      "comparison": { "maxPValue": 0.05, "minEffectSize": 0.5 }
-    },
+    "PERF-004": { "p95Ms": 8000, "maxRegressionPct": 20 },
 
     "PERF-010": { "p95Ms": 1800, "maxRegressionPct": 15 },
     "PERF-011": { "p95Ms": 1500, "maxRegressionPct": 15 },
@@ -244,39 +240,32 @@
     },
 
     "PERF-190": {
-      "calibrating": true,
       "p95Ms": 60,
       "maxMetricValues": { "p99KeystrokeMs": 4 }
     },
     "PERF-191": {
-      "calibrating": true,
       "p95Ms": 220,
       "maxMetricValues": { "msPerKFile": 0.5, "largeP99KeystrokeMs": 8 }
     },
     "PERF-192": {
-      "calibrating": true,
       "p95Ms": 450,
       "maxMetricValues": { "coldMsPerKFile": 22, "largeColdMs": 260 }
     },
 
     "PERF-193": {
-      "calibrating": true,
       "p95Ms": 150,
       "maxMetricValues": { "p99SearchMs": 22 }
     },
     "PERF-194": {
-      "calibrating": true,
       "p95Ms": 220,
       "maxMetricValues": { "msPerKLine": 2.5, "stepForwardMs": 2, "stepBackwardMs": 2 }
     },
 
     "PERF-195": {
-      "calibrating": true,
       "p95Ms": 1600,
       "maxMetricValues": { "p95TerminalMs": 160, "snapshotKB": 800 }
     },
     "PERF-196": {
-      "calibrating": true,
       "p95Ms": 800,
       "maxMetricValues": { "msPerKLine": 6 }
     }

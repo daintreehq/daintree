@@ -43,11 +43,11 @@ export function checkBaselineFreshness(
 /**
  * Structural pre-run check: a scenario scheduled for this run that carries a
  * regression budget (`maxRegressionPct`) but is absent from the loaded baseline
- * would otherwise silently skip its regression gate. Returns those gaps so the
- * caller can fail the run before wasting measurement time.
- *
- * Scenarios marked `calibrating` are excluded: they have deliberately not been
- * baselined yet, so a missing entry is the expected state, not a gap.
+ * has no reference to compare against yet. Returns those gaps so the caller can
+ * say so; `run.ts` reports them and carries on, because a scenario without a
+ * reference value is a normal state — a new scenario, or a newly added OS.
+ * `verify-baselines.ts` is the one caller that still treats a gap as a failure,
+ * because it is checking a freshly regenerated baseline for completeness.
  *
  * Critical scenarios are excluded — `gate.ts` already fails closed for them.
  * A null baseline returns no gaps: that's the pre-existing "no file" path, not
@@ -65,7 +65,6 @@ export function checkBaselineCoverage(
     if (budgetConfig.criticalScenarios.includes(scenario.id)) continue;
 
     const budget = getScenarioBudget(budgetConfig, scenario.id);
-    if (budget.calibrating) continue;
     if (budget.maxRegressionPct === undefined) continue;
 
     const baselineP95 = baseline.p95ByScenario?.[scenario.id];

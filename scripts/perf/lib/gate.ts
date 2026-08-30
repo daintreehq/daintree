@@ -1,5 +1,5 @@
 import { round } from "./stats";
-import type { ScenarioBudget } from "../types";
+import type { MetricStat, ScenarioBudget } from "../types";
 
 /**
  * Baselines at or above this p95 (in ms) are gated by percentage regression.
@@ -29,7 +29,13 @@ export const ABSOLUTE_REGRESSION_MS_FLOOR = 3;
 export interface GateParams {
   scenarioId: string;
   p95Ms: number;
-  metricAverages: Record<string, number>;
+  /**
+   * Full per-metric spread, not the mean. A ceiling read against the mean is
+   * not a ceiling: 20 spawns in one iteration among fifteen quiet ones averages
+   * to 1.25 and slides under a limit of 1.5, which is precisely the storm the
+   * limit exists to catch.
+   */
+  metricStats: Record<string, MetricStat>;
   budget: ScenarioBudget;
   /** Baseline p95 for this scenario, or undefined when absent/non-finite. */
   baselineP95: number | undefined;
@@ -57,13 +63,12 @@ export interface GateResult {
 
 /**
  * Pure per-scenario budget evaluation. Covers the absolute p95 budget, metric
- * ceilings, and the baseline regression gate. The regression gate fails closed
- * for critical scenarios: a missing baseline file, a missing baseline entry, or
- * a sub-floor baseline that regresses past the absolute-delta gate all fail.
- * Non-critical scenarios without a usable baseline warn but do not block CI.
+ * ceilings, and the baseline regression gate. "Fails closed" here means
+ * `outsideReference` is set — an annotation on the report, never an exit code.
+ * Only `measurementIssues` says the apparatus itself is broken.
  */
 export function evaluateScenarioBudget(params: GateParams): GateResult {
-  const { p95Ms, metricAverages, budget, baselineP95, isCritical, hasBaselineFile } = params;
+  const { p95Ms, metricStats, budget, baselineP95, isCritical, hasBaselineFile } = params;
 
   let outsideReference = false;
   const reasons: string[] = [];
@@ -90,12 +95,12 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
 
   if (budget.maxMetricValues) {
     for (const [metricName, maxValue] of Object.entries(budget.maxMetricValues)) {
-      const actual = metricAverages[metricName];
+      const stat = metricStats[metricName];
       // A configured ceiling whose metric is no longer emitted is a gate that
       // has silently disappeared — the exact failure this file exists to
       // prevent — so an absent metric fails rather than passes. Renaming a
       // metric must therefore rename it in budgets.json too.
-      if (actual === undefined) {
+      if (stat === undefined) {
         // NOT `outsideReference`: there is no measured value, so nothing is
         // outside anything. Conflating the two would report a vanished
         // measurement as a mildly-slow one, which is the more reassuring and
@@ -108,37 +113,26 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
       // defence in depth for a caller that bypasses it. It is a broken
       // measurement, not a slow one — NaN > maxValue is false either way, so
       // without this branch it would read as a clean pass.
-      if (!Number.isFinite(actual)) {
-        measurementIssues.push(`${metricName} produced a non-finite value (${actual})`);
-        reasons.push(`${metricName} non-finite (${actual})`);
+      if (!Number.isFinite(stat.max)) {
+        measurementIssues.push(`${metricName} produced a non-finite value (${stat.max})`);
+        reasons.push(`${metricName} non-finite (${stat.max})`);
         continue;
       }
-      if (actual > maxValue) {
+      // The worst iteration, not the average of them. Mean and sum ride along
+      // in the reason so a reader can tell a single spike from a steady climb.
+      if (stat.max > maxValue) {
         outsideReference = true;
-        reasons.push(`${metricName} ${round(actual)} > reference ${maxValue}`);
+        reasons.push(
+          `${metricName} max ${round(stat.max)} > reference ${maxValue} ` +
+            `(mean ${round(stat.mean)}, sum ${round(stat.sum)} over ${stat.count})`
+        );
       }
     }
   }
 
   const hasUsableBaseline = baselineP95 !== undefined && Number.isFinite(baselineP95);
 
-  // Checked before the baseline branches: a calibrating scenario has no
-  // baseline BY DESIGN, so reporting it as a missing-baseline gap would be
-  // misleading — and for a critical one it would fail closed on the expected
-  // state rather than on a real problem.
-  if (budget.calibrating && isCritical) {
-    // A critical scenario is one whose regression gate must never be skipped,
-    // so the two settings are contradictory. Fail on the contradiction rather
-    // than silently letting `calibrating` win and disarm a critical gate.
-    outsideReference = true;
-    reasons.push("critical scenario marked calibrating - contradictory budget config");
-  } else if (budget.calibrating) {
-    reasons.push(
-      hasUsableBaseline
-        ? "calibrating but a baseline now exists - remove `calibrating` to arm the regression gate"
-        : "calibrating - regression gate not yet enabled"
-    );
-  } else if (!hasUsableBaseline) {
+  if (!hasUsableBaseline) {
     if (isCritical) {
       outsideReference = true;
       reasons.push(

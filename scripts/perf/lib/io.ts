@@ -15,6 +15,16 @@ export function writeText(filePath: string, content: string): void {
   fs.writeFileSync(filePath, content, "utf-8");
 }
 
+/**
+ * Append to a file the harness does not own — `$GITHUB_STEP_SUMMARY` is the
+ * only caller, and Actions hands every step of a job the same file. Truncating
+ * it would erase whatever ran before us.
+ */
+export function appendText(filePath: string, content: string): void {
+  ensureDir(path.dirname(filePath));
+  fs.appendFileSync(filePath, content, "utf-8");
+}
+
 export function appendJsonLine(filePath: string, data: unknown): void {
   ensureDir(path.dirname(filePath));
   fs.appendFileSync(filePath, `${JSON.stringify(data)}\n`, "utf-8");

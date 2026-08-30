@@ -1,6 +1,6 @@
 import path from "node:path";
 import { checkBaselineCoverage } from "./lib/baselineCoverage";
-import { getScenarioBudget, loadBudgetConfig } from "./lib/budgets";
+import { loadBudgetConfig } from "./lib/budgets";
 import { readJson } from "./lib/io";
 import { getScenariosForMode } from "./scenarios";
 import type { BaselineSummary, PerfMode } from "./types";
@@ -89,22 +89,22 @@ function verifyMode(
     );
   }
 
-  const gaps = checkBaselineCoverage(baseline, budgetConfig, getScenariosForMode(mode));
+  const scenariosForMode = getScenariosForMode(mode);
+
+  const gaps = checkBaselineCoverage(baseline, budgetConfig, scenariosForMode);
   if (gaps.length > 0) {
     problems.push(`budgeted scenarios absent: ${gaps.map((gap) => gap.scenarioId).join(", ")}`);
   }
 
-  // `calibrating` suppresses the regression gate until a runner-generated
-  // baseline exists. Once one does, the flag is doing nothing but hiding the
-  // gate, and nothing else would ever notice — this is the forcing function.
-  const staleCalibration = getScenariosForMode(mode)
-    .filter((scenario) => getScenarioBudget(budgetConfig, scenario.id).calibrating)
+  // `checkBaselineCoverage` skips critical scenarios because `gate.ts` fails
+  // closed for them at run time — but nothing here runs the gate, so a baseline
+  // missing PERF-001 entirely would otherwise verify clean and ship.
+  const missingCritical = scenariosForMode
     .map((scenario) => scenario.id)
-    .filter((id) => Number.isFinite(p95[id]));
-  if (staleCalibration.length > 0) {
-    problems.push(
-      `calibration complete but still flagged (remove \`calibrating\` from budgets.json to arm the regression gate): ${staleCalibration.join(", ")}`
-    );
+    .filter((id) => budgetConfig.criticalScenarios.includes(id))
+    .filter((id) => !Number.isFinite(p95[id]));
+  if (missingCritical.length > 0) {
+    problems.push(`critical scenarios absent: ${missingCritical.join(", ")}`);
   }
 
   return problems;

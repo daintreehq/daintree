@@ -5,13 +5,22 @@ import {
   evaluateScenarioBudget,
   type GateParams,
 } from "../lib/gate";
-import type { ScenarioBudget } from "../types";
+import { aggregateMetrics } from "../lib/stats";
+import type { MetricStat, ScenarioBudget } from "../types";
+
+/**
+ * Metric stats built the way run.ts builds them — from per-iteration samples —
+ * so these tests exercise the real shape rather than a hand-written stat.
+ */
+function statsFor(samples: Array<Record<string, number>>): Record<string, MetricStat> {
+  return aggregateMetrics(samples);
+}
 
 function makeParams(overrides: Partial<GateParams> = {}): GateParams {
   return {
     scenarioId: "PERF-TEST",
     p95Ms: 1,
-    metricAverages: {},
+    metricStats: {},
     budget: { p95Ms: 1000, maxRegressionPct: 15 },
     baselineP95: undefined,
     isCritical: false,
@@ -28,7 +37,7 @@ describe("evaluateScenarioBudget — measurement issues vs reference drift", () 
     // measurement as a mildly slow one — the reassuring reading, and the wrong
     // one. It also reads identically to a pass, which is why it is escalated.
     const result = evaluateScenarioBudget(
-      makeParams({ budget: { maxMetricValues: { gitSpawns: 5 } }, metricAverages: {} })
+      makeParams({ budget: { maxMetricValues: { gitSpawns: 5 } }, metricStats: {} })
     );
 
     expect(result.measurementIssues).toHaveLength(1);
@@ -40,7 +49,7 @@ describe("evaluateScenarioBudget — measurement issues vs reference drift", () 
     const result = evaluateScenarioBudget(
       makeParams({
         budget: { maxMetricValues: { gitSpawns: 5 } },
-        metricAverages: { gitSpawns: 9 },
+        metricStats: statsFor([{ gitSpawns: 9 }]),
         baselineP95: 1,
       })
     );
@@ -54,7 +63,7 @@ describe("evaluateScenarioBudget — measurement issues vs reference drift", () 
     const result = evaluateScenarioBudget(
       makeParams({
         budget: { maxMetricValues: { gitSpawns: 5 } },
-        metricAverages: { gitSpawns: Number.NaN },
+        metricStats: statsFor([{ gitSpawns: Number.NaN }]),
       })
     );
 
@@ -115,7 +124,7 @@ describe("evaluateScenarioBudget — non-finite measurements are apparatus defec
       makeParams({
         budget: { p95Ms: 1000, maxMetricValues: { lag: 100 } },
         baselineP95: 50,
-        metricAverages: { lag: Number.NaN },
+        metricStats: statsFor([{ lag: Number.NaN }]),
       })
     );
     expect(result.measurementIssues).toHaveLength(1);
@@ -134,14 +143,14 @@ describe("evaluateScenarioBudget — metric ceilings", () => {
       makeParams({
         budget,
         baselineP95: 50,
-        metricAverages: { eventLoopLagMs: 150, serializeMs: 4 },
+        metricStats: statsFor([{ eventLoopLagMs: 150, serializeMs: 4 }]),
       })
     );
     const pass = evaluateScenarioBudget(
       makeParams({
         budget,
         baselineP95: 50,
-        metricAverages: { eventLoopLagMs: 99, serializeMs: 5 },
+        metricStats: statsFor([{ eventLoopLagMs: 99, serializeMs: 5 }]),
       })
     );
 
@@ -151,21 +160,65 @@ describe("evaluateScenarioBudget — metric ceilings", () => {
     expect(pass.outsideReference).toBe(false);
   });
 
-  it("escalates a configured metric that has no recorded average", () => {
-    // `averageMetrics` includes any metric reported by at least ONE sample, so
-    // an absent entry means no sample emitted it — a renamed or dropped metric
-    // whose reference silently stopped meaning anything, not a sparse
+  it("escalates a configured metric that was never recorded", () => {
+    // `aggregateMetrics` includes any metric reported by at least ONE sample,
+    // so an absent entry means no sample emitted it — a renamed or dropped
+    // metric whose reference silently stopped meaning anything, not a sparse
     // measurement. Reported as a measurement issue rather than as drift: there
     // is no value to be outside a reference.
     const result = evaluateScenarioBudget(
       makeParams({
         budget: { p95Ms: 1000, maxMetricValues: { eventLoopLagMs: 1 } },
         baselineP95: 50,
-        metricAverages: {},
+        metricStats: {},
       })
     );
     expect(result.measurementIssues).toHaveLength(1);
     expect(result.measurementIssues[0]).toContain("eventLoopLagMs");
+    expect(result.outsideReference).toBe(false);
+  });
+
+  it("compares the ceiling against the metric MAX, not its mean", () => {
+    // The bug this gate exists to catch: one iteration spawning 20 processes
+    // among fifteen quiet ones. Averaged, that is 1.25 and slides under a
+    // ceiling of 1.5 — the storm reported as "about one spawn".
+    const spiky = [{ gitSpawns: 20 }, ...Array.from({ length: 15 }, () => ({ gitSpawns: 0 }))];
+    const stats = statsFor(spiky);
+    expect(stats.gitSpawns.mean).toBeLessThan(1.5);
+
+    const result = evaluateScenarioBudget(
+      makeParams({
+        budget: { maxMetricValues: { gitSpawns: 1.5 } },
+        metricStats: stats,
+        baselineP95: 50,
+      })
+    );
+    expect(result.outsideReference).toBe(true);
+    expect(result.reasons.join(" ")).toContain("max 20");
+  });
+
+  it("reports mean and sum alongside the max that tripped the ceiling", () => {
+    const result = evaluateScenarioBudget(
+      makeParams({
+        budget: { maxMetricValues: { gitSpawns: 1 } },
+        metricStats: statsFor([{ gitSpawns: 4 }, { gitSpawns: 2 }]),
+        baselineP95: 50,
+      })
+    );
+    const reason = result.reasons.join(" ");
+    expect(reason).toContain("max 4");
+    expect(reason).toContain("mean 3");
+    expect(reason).toContain("sum 6");
+  });
+
+  it("passes a metric whose every iteration sits under the ceiling", () => {
+    const result = evaluateScenarioBudget(
+      makeParams({
+        budget: { maxMetricValues: { gitSpawns: 5 } },
+        metricStats: statsFor([{ gitSpawns: 5 }, { gitSpawns: 1 }, { gitSpawns: 4 }]),
+        baselineP95: 50,
+      })
+    );
     expect(result.outsideReference).toBe(false);
   });
 });
@@ -318,68 +371,27 @@ describe("evaluateScenarioBudget — thresholds are exported, not magic numbers"
   });
 });
 
-describe("evaluateScenarioBudget — calibrating scenarios", () => {
-  it("skips the regression gate without a baseline and says why", () => {
+describe("evaluateScenarioBudget — a scenario with no reference value yet", () => {
+  it("reports the absent baseline and enforces the ceilings it does have", () => {
+    // The state every new scenario starts in, and every scenario on a newly
+    // added OS. It is a note, not drift: the absolute p95 budget and the metric
+    // ceilings still apply, and only the regression gate is skipped.
     const result = evaluateScenarioBudget(
       makeParams({
-        budget: { p95Ms: 1000, maxRegressionPct: 15, calibrating: true },
-        baselineP95: undefined,
-      })
-    );
-    expect(result.outsideReference).toBe(false);
-    expect(result.reasons).toContain("calibrating - regression gate not yet enabled");
-    // The misleading missing-baseline reason must not also be reported.
-    expect(result.reasons).not.toContain("baseline missing - regression gate skipped");
-  });
-
-  it("rejects the contradictory critical + calibrating combination", () => {
-    const result = evaluateScenarioBudget(
-      makeParams({
-        budget: { p95Ms: 1000, maxRegressionPct: 15, calibrating: true },
-        baselineP95: undefined,
-        isCritical: true,
-      })
-    );
-    expect(result.outsideReference).toBe(true);
-    expect(result.reasons.join(" ")).toContain("contradictory");
-  });
-
-  it("reports that calibration is complete once a baseline exists", () => {
-    const result = evaluateScenarioBudget(
-      makeParams({
-        budget: { p95Ms: 1000, maxRegressionPct: 15, calibrating: true },
-        baselineP95: 40,
-      })
-    );
-    expect(result.outsideReference).toBe(false);
-    expect(result.reasons.join(" ")).toContain("remove `calibrating`");
-  });
-
-  it("still enforces the absolute p95 budget and metric ceilings", () => {
-    const result = evaluateScenarioBudget(
-      makeParams({
-        budget: { p95Ms: 100, maxMetricValues: { p99KeystrokeMs: 4 }, calibrating: true },
+        budget: { p95Ms: 100, maxRegressionPct: 15, maxMetricValues: { p99KeystrokeMs: 4 } },
         p95Ms: 250,
-        metricAverages: { p99KeystrokeMs: 9 },
+        metricStats: statsFor([{ p99KeystrokeMs: 9 }]),
+        baselineP95: undefined,
       })
     );
     expect(result.outsideReference).toBe(true);
+    expect(result.reasons).toContain("baseline missing - regression gate skipped");
     expect(result.reasons).toEqual(
       expect.arrayContaining([
         expect.stringContaining("p95"),
         expect.stringContaining("p99Keystroke"),
       ])
     );
-  });
-
-  it("suppresses a real regression that would otherwise fail", () => {
-    const budget = { p95Ms: 1000, maxRegressionPct: 15 };
-    const regressed = makeParams({ budget, p95Ms: 100, baselineP95: 50 });
-    expect(evaluateScenarioBudget(regressed).outsideReference).toBe(true);
-    expect(
-      evaluateScenarioBudget({ ...regressed, budget: { ...budget, calibrating: true } })
-        .outsideReference
-    ).toBe(false);
   });
 });
 
@@ -390,7 +402,7 @@ describe("evaluateScenarioBudget — metric-only budgets (no p95Ms)", () => {
     const result = evaluateScenarioBudget(
       makeParams({
         budget: { maxMetricValues: { p99KeystrokeMs: 4 } },
-        metricAverages: {},
+        metricStats: {},
       })
     );
     // Behaviour deliberately changed: a vanished metric is now an escalated
@@ -405,21 +417,23 @@ describe("evaluateScenarioBudget — metric-only budgets (no p95Ms)", () => {
     const result = evaluateScenarioBudget(
       makeParams({
         budget: { maxMetricValues: { a: 10, b: 20 } },
-        metricAverages: { a: 9, b: 19 },
+        metricStats: statsFor([{ a: 9, b: 19 }]),
       })
     );
     expect(result.outsideReference).toBe(false);
   });
 
-  it("still escalates a missing metric while calibrating", () => {
-    // `calibrating` softens reference wording; it must never suppress the
-    // report that a measurement disappeared entirely.
+  it("escalates one vanished metric while another is still measured", () => {
+    // The dangerous shape: the scenario still reports numbers, so every row
+    // reads healthy while one ceiling has quietly stopped meaning anything.
     const result = evaluateScenarioBudget(
       makeParams({
-        budget: { maxMetricValues: { onlyMetric: 1 }, calibrating: true },
-        metricAverages: {},
+        budget: { maxMetricValues: { stillHere: 10, renamedAway: 1 } },
+        metricStats: statsFor([{ stillHere: 2 }]),
       })
     );
     expect(result.measurementIssues).toHaveLength(1);
+    expect(result.measurementIssues[0]).toContain("renamedAway");
+    expect(result.outsideReference).toBe(false);
   });
 });
