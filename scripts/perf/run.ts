@@ -1,10 +1,11 @@
+import { execFileSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadBudgetConfig, getScenarioBudget } from "./lib/budgets";
 import { checkBaselineCoverage, checkBaselineFreshness } from "./lib/baselineCoverage";
-import { evaluateScenarioBudget } from "./lib/gate";
+import { evaluateCorrectness, evaluateScenarioBudget } from "./lib/gate";
 import { appendJsonLine, appendText, readJson, writeJson, writeText, ensureDir } from "./lib/io";
 import { aggregateMetrics, averageMetrics, mean, percentile, round, stdDev } from "./lib/stats";
 import { buildMarkdownReport } from "./report/generate";
@@ -14,6 +15,7 @@ import type {
   PerfMode,
   PerfRunSummary,
   PerfScenario,
+  PlatformApplicability,
   RunEnvironment,
   ScenarioAggregate,
   ScenarioContext,
@@ -73,6 +75,20 @@ const BOOLEAN_FLAGS = ["update-baseline"] as const;
 
 const perfDir = path.dirname(fileURLToPath(import.meta.url));
 const HISTORY_DIR = path.join(perfDir, "history");
+// Anchored to this file, not `process.cwd()`: the provenance probes must
+// describe the checkout the measured code came from, and the harness is
+// runnable from anywhere.
+const REPO_ROOT = path.resolve(perfDir, "..", "..");
+
+/**
+ * Ceiling on every provenance shell-out.
+ *
+ * `git status` refreshes the index, which on a cold FS or a repo another
+ * process is holding can take arbitrarily long. Provenance is a label on the
+ * results, never a reason to stall or fail a run, so each probe is bounded and
+ * every failure degrades to `null` plus a note.
+ */
+const PROVENANCE_TIMEOUT_MS = 5_000;
 
 /**
  * A mistyped invocation, not a broken harness. Carried as its own class so the
@@ -265,7 +281,111 @@ function defaultMachineLabel(override?: string): string {
   return `${os.hostname()}-${process.platform}-${process.arch}`.toLowerCase();
 }
 
-function describeEnvironment(machineLabel?: string): RunEnvironment {
+/**
+ * One bounded `git` invocation, or null.
+ *
+ * `GIT_OPTIONAL_LOCKS=0` keeps the probe from taking the index lock — a
+ * provenance label must never contend with whatever else is using the checkout
+ * — and stderr is discarded so a repo-state complaint cannot be mistaken for
+ * harness output.
+ */
+function probeGit(args: string[], notes: string[]): string | null {
+  try {
+    return execFileSync("git", args, {
+      cwd: REPO_ROOT,
+      encoding: "utf-8",
+      timeout: PROVENANCE_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
+    }).trim();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    notes.push(`git ${args.join(" ")} failed (${detail})`);
+    return null;
+  }
+}
+
+/**
+ * The Electron version this harness measures against.
+ *
+ * Deliberately NOT `process.versions.electron`: the perf suite runs under plain
+ * Node via tsx, so that field is always undefined here and reading it would
+ * record "no Electron" for every run. The installed package is the honest
+ * answer; the declared range is the fallback, because a range at least narrows
+ * the toolchain where inventing an exact version would not.
+ */
+function probeElectronVersion(notes: string[]): string | null {
+  try {
+    const installed = readJson<{ version?: string }>(
+      path.join(REPO_ROOT, "node_modules", "electron", "package.json")
+    );
+    const version = installed?.version?.trim();
+    if (version) return version;
+  } catch (error) {
+    notes.push(`could not read the installed Electron version (${String(error)})`);
+  }
+
+  try {
+    const pkg = readJson<{
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    }>(path.join(REPO_ROOT, "package.json"));
+    const declared = (pkg?.devDependencies?.electron ?? pkg?.dependencies?.electron)?.trim();
+    if (declared) {
+      notes.push(`Electron is not installed; recording the declared range "${declared}"`);
+      return declared;
+    }
+  } catch (error) {
+    notes.push(`could not read package.json for the Electron range (${String(error)})`);
+  }
+
+  notes.push("could not determine an Electron version");
+  return null;
+}
+
+/** `git version 2.39.5 (Apple Git-154)` → `2.39.5`. */
+function probeGitVersion(notes: string[]): string | null {
+  const raw = probeGit(["--version"], notes);
+  if (raw === null) return null;
+
+  const match = /(\d+(?:\.\d+)+)/.exec(raw);
+  if (!match) {
+    notes.push(`unrecognised git --version output, recording it verbatim: "${raw}"`);
+    return raw;
+  }
+  return match[1];
+}
+
+/**
+ * The commit the measured code was at, suffixed when the tree does not match it.
+ *
+ * A results file named "after.json" claims a checkpoint; this proves one. The
+ * dirty suffix is load-bearing rather than cosmetic — a benchmark of
+ * uncommitted work is not a benchmark of the SHA it names, and treating the two
+ * as interchangeable is how a stored "best" result gets attributed to a commit
+ * that never produced it. A dirty probe that fails is marked as unknown rather
+ * than assumed clean, since clean is the reassuring half of the guess.
+ */
+function probeSourceSha(notes: string[]): string | null {
+  const sha = probeGit(["rev-parse", "HEAD"], notes);
+  if (sha === null || !/^[0-9a-f]{7,40}$/.test(sha)) {
+    if (sha !== null) notes.push(`unrecognised git rev-parse output: "${sha}"`);
+    return null;
+  }
+
+  const statusNotes: string[] = [];
+  const status = probeGit(["status", "--porcelain"], statusNotes);
+  if (status === null) {
+    notes.push(...statusNotes, "could not determine whether the tree was dirty");
+    return `${sha}-dirty-unknown`;
+  }
+
+  return status === "" ? sha : `${sha}-dirty`;
+}
+
+export function describeEnvironment(machineLabel?: string, notes: string[] = []): RunEnvironment {
   const cpus = os.cpus();
   return {
     machineLabel: defaultMachineLabel(machineLabel),
@@ -276,7 +396,105 @@ function describeEnvironment(machineLabel?: string): RunEnvironment {
     totalMemoryMb: Math.round(os.totalmem() / (1024 * 1024)),
     osRelease: os.release(),
     nodeVersion: process.version,
+    electronVersion: probeElectronVersion(notes),
+    gitVersion: probeGitVersion(notes),
+    sourceSha: probeSourceSha(notes),
   };
+}
+
+export function scenarioApplicability(
+  scenario: PerfScenario,
+  platform: NodeJS.Platform
+): PlatformApplicability {
+  return scenario.platforms?.[platform] ?? "supported";
+}
+
+export interface PlatformPartition {
+  runnable: PerfScenario[];
+  /** Declared `unsupported` here — never executed, always reported. */
+  skipped: PerfScenario[];
+  /** Ids that run but whose numbers are signals rather than measurements. */
+  diagnostic: Set<string>;
+}
+
+/**
+ * Splits the selected matrix by what its numbers would actually mean here.
+ *
+ * The absent case is `supported`, so a scenario that says nothing behaves
+ * exactly as it did before this existed. The failure being prevented is the
+ * other two staying invisible: an unsupported scenario that simply does not
+ * appear in the results reads as a pass, and a diagnostic number read as a
+ * measurement is how a Windows count produced by an observer that cannot see
+ * Windows spawns ends up in a cross-platform comparison.
+ */
+export function partitionByPlatform(
+  scenarios: PerfScenario[],
+  platform: NodeJS.Platform
+): PlatformPartition {
+  const runnable: PerfScenario[] = [];
+  const skipped: PerfScenario[] = [];
+  const diagnostic = new Set<string>();
+
+  for (const scenario of scenarios) {
+    const applicability = scenarioApplicability(scenario, platform);
+    if (applicability === "unsupported") {
+      skipped.push(scenario);
+      continue;
+    }
+    if (applicability === "diagnostic") diagnostic.add(scenario.id);
+    runnable.push(scenario);
+  }
+
+  return { runnable, skipped, diagnostic };
+}
+
+/** Prefixed so it is unmistakable in the report's Notes column. */
+function diagnosticNote(platform: NodeJS.Platform): string {
+  return (
+    `DIAGNOSTIC on ${platform}: a signal, not a measurement — something in this path is ` +
+    `emulated or blind here, so do not read it as authoritative and do not compare it to ` +
+    `another platform`
+  );
+}
+
+/**
+ * Appended to the generated report rather than folded into a table.
+ *
+ * A skipped scenario has no row to carry an annotation, and its absence from
+ * every table is precisely what makes it read as a pass.
+ */
+export function platformApplicabilitySection(
+  skipped: PerfScenario[],
+  diagnosticIds: string[],
+  platform: NodeJS.Platform
+): string {
+  if (skipped.length === 0 && diagnosticIds.length === 0) return "";
+
+  const lines = ["", "## Platform applicability", ""];
+
+  if (skipped.length > 0) {
+    lines.push(
+      `${skipped.length} scenario(s) declare themselves unsupported on \`${platform}\` and were NOT run. They are absent from every table below; that absence is not a pass.`,
+      ""
+    );
+    for (const scenario of skipped) {
+      lines.push(`- **${scenario.id}** — ${scenario.name} (skipped: unsupported on ${platform})`);
+    }
+    lines.push("");
+  }
+
+  if (diagnosticIds.length > 0) {
+    lines.push(
+      `${diagnosticIds.length} scenario(s) are diagnostic on \`${platform}\`: they ran and reported, but the figures are signals rather than measurements. They carry no outside-reference annotation and must not be compared against another platform.`,
+      ""
+    );
+    for (const id of diagnosticIds) {
+      lines.push(`- **${id}** — diagnostic on ${platform}`);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
 }
 
 function getIterationCount(
@@ -414,10 +632,19 @@ async function run(): Promise<void> {
 
   checkBaselineFreshness(baseline, cli.mode);
 
-  const scenarios = selectScenarios(cli);
-  if (scenarios.length === 0) {
+  const selected = selectScenarios(cli);
+  if (selected.length === 0) {
     throw new Error(`No scenarios configured for mode ${cli.mode}`);
   }
+
+  // Platform filtering happens after the empty check, not before it: an empty
+  // selection is a broken matrix, whereas everything being unsupported here is
+  // a legitimate — and reported — outcome that still exits 0.
+  const {
+    runnable: scenarios,
+    skipped: skippedScenarios,
+    diagnostic: diagnosticIds,
+  } = partitionByPlatform(selected, process.platform);
 
   // Regenerating the baseline is exactly how coverage gaps get fixed, so an
   // --update-baseline run has nothing to be told. Everywhere else this is a
@@ -448,6 +675,7 @@ async function run(): Promise<void> {
       name: string;
       description: string;
       tier: ScenarioTier;
+      correctness: readonly string[] | undefined;
       durations: number[];
       metrics: Array<Record<string, number>>;
       notes: string[];
@@ -516,6 +744,7 @@ async function run(): Promise<void> {
         name: scenario.name,
         description: scenario.description,
         tier: scenario.tier,
+        correctness: scenario.correctness,
         durations: [],
         metrics: [],
         notes: [],
@@ -557,7 +786,25 @@ async function run(): Promise<void> {
       hasBaselineFile: baseline !== null,
     });
 
-    if (outsideReference) {
+    const runs = aggregate.durations.length;
+
+    // The predicate check is a measurement issue, never a gate: it says the
+    // numbers beside it cannot be trusted, which is a louder statement than
+    // "this number is worse" and a different one from `outsideReference`.
+    const correctnessIssues = evaluateCorrectness({
+      correctness: aggregate.correctness,
+      metricStats,
+      runs,
+    });
+
+    // A diagnostic number is not authoritative here, so it earns no verdict
+    // against a reference value — the reasons are kept, but presenting one as
+    // "outside reference" would dress a signal up as a measurement. Its own
+    // note says so in the row.
+    const isDiagnostic = diagnosticIds.has(scenarioId);
+    const reportedOutsideReference = outsideReference && !isDiagnostic;
+
+    if (reportedOutsideReference) {
       scenariosOutsideReference.push(scenarioId);
     }
 
@@ -566,7 +813,7 @@ async function run(): Promise<void> {
       name: aggregate.name,
       description: aggregate.description,
       tier: aggregate.tier,
-      runs: aggregate.durations.length,
+      runs,
       p50Ms: round(p50Ms),
       p95Ms: round(p95Ms),
       p99Ms: round(p99Ms),
@@ -594,14 +841,22 @@ async function run(): Promise<void> {
           },
         ])
       ),
-      outsideReference,
+      outsideReference: reportedOutsideReference,
       referenceNotes: reasons.length > 0 ? reasons.join("; ") : undefined,
-      measurementIssues,
-      notes: [...new Set(aggregate.notes)].slice(0, 3),
+      measurementIssues: [...measurementIssues, ...correctnessIssues],
+      // The diagnostic marker leads, ahead of the scenario's own notes and
+      // outside the slice that trims them, so a platform caveat can never be
+      // pushed out of the row by three ordinary notes.
+      notes: [
+        ...(isDiagnostic ? [diagnosticNote(process.platform)] : []),
+        ...[...new Set(aggregate.notes)].slice(0, 3),
+      ],
     });
   }
 
   aggregates.sort((a, b) => a.id.localeCompare(b.id));
+
+  const provenanceNotes: string[] = [];
 
   const summary: PerfRunSummary = {
     generatedAt: new Date().toISOString(),
@@ -609,7 +864,7 @@ async function run(): Promise<void> {
     nodeVersion: process.version,
     platform: process.platform,
     label: cli.label,
-    environment: describeEnvironment(cli.machineLabel),
+    environment: describeEnvironment(cli.machineLabel, provenanceNotes),
     protocol: {
       iterations: cli.iterations ?? null,
       warmups: cli.warmups ?? null,
@@ -624,7 +879,12 @@ async function run(): Promise<void> {
   const reportMdPath = path.join(cli.outDir, `${timestamp}-${cli.mode}.report.md`);
   const latestSummaryPath = path.join(cli.outDir, `latest-${cli.mode}.summary.json`);
   const latestReportPath = path.join(cli.outDir, `latest-${cli.mode}.report.md`);
-  const report = buildMarkdownReport(summary);
+  const sortedDiagnosticIds = aggregates
+    .map((aggregate) => aggregate.id)
+    .filter((id) => diagnosticIds.has(id));
+  const report =
+    buildMarkdownReport(summary) +
+    platformApplicabilitySection(skippedScenarios, sortedDiagnosticIds, process.platform);
 
   writeJson(summaryJsonPath, summary);
   writeText(reportMdPath, report);
@@ -636,11 +896,41 @@ async function run(): Promise<void> {
   }
 
   if (cli.updateBaseline) {
+    // A baseline is shared across machines and platforms, so a diagnostic p95
+    // written here would become the reference every supported platform is then
+    // measured against — the cross-platform comparison the marking exists to
+    // refuse. The previously recorded value is carried through instead of
+    // dropped: regenerating on the platform where a scenario is diagnostic must
+    // not delete the reference the platforms that CAN measure it depend on.
+    const p95ByScenario: Record<string, number> = {};
+    for (const aggregate of aggregates) {
+      if (!diagnosticIds.has(aggregate.id)) {
+        p95ByScenario[aggregate.id] = aggregate.p95Ms;
+        continue;
+      }
+      const inherited = baseline?.p95ByScenario?.[aggregate.id];
+      if (typeof inherited === "number" && Number.isFinite(inherited)) {
+        p95ByScenario[aggregate.id] = inherited;
+      }
+    }
+    // Same reasoning for a scenario that never ran here: an unsupported
+    // scenario has no measurement to contribute, and omitting it outright would
+    // erase the reference recorded on a platform that supports it.
+    for (const scenario of skippedScenarios) {
+      const inherited = baseline?.p95ByScenario?.[scenario.id];
+      if (typeof inherited === "number" && Number.isFinite(inherited)) {
+        p95ByScenario[scenario.id] = inherited;
+      }
+    }
+
     const baselineOut: BaselineSummary = {
       generatedAt: new Date().toISOString(),
       mode: cli.mode,
+      // Sorted, because inherited entries are collected after the measured ones
+      // and this file is committed — insertion order would put an unrelated
+      // reshuffle in every regeneration diff.
       p95ByScenario: Object.fromEntries(
-        aggregates.map((aggregate) => [aggregate.id, aggregate.p95Ms])
+        Object.entries(p95ByScenario).sort(([a], [b]) => a.localeCompare(b))
       ),
     };
     writeJson(cli.baselinePath, baselineOut);
@@ -673,16 +963,36 @@ async function run(): Promise<void> {
 
   console.log(
     `[perf:${cli.mode}] scenarios=${aggregates.length} ` +
+      `skipped=${skippedScenarios.length} ` +
+      `diagnostic=${sortedDiagnosticIds.length} ` +
       `outside-reference=${scenariosOutsideReference.length} ` +
       `measurement-issues=${measurementIssueCount}`
   );
 
   for (const aggregate of aggregates) {
-    const marker = aggregate.outsideReference ? "outside" : "ok";
+    const marker = diagnosticIds.has(aggregate.id)
+      ? "diagnostic"
+      : aggregate.outsideReference
+        ? "outside"
+        : "ok";
     const reason = aggregate.referenceNotes ? ` (${aggregate.referenceNotes})` : "";
     console.log(
       `[${marker}] ${aggregate.id} p95=${aggregate.p95Ms}ms p99=${aggregate.p99Ms}ms${reason}`
     );
+  }
+
+  // A skipped scenario prints nothing above and appears in no table; without
+  // this block the only trace of it is a scenario count nobody was counting.
+  if (skippedScenarios.length > 0) {
+    console.warn(
+      `\n[perf:${cli.mode}] SKIPPED — ${skippedScenarios.length} scenario(s) declare themselves ` +
+        `unsupported on ${process.platform} and were not run. Their absence from the results ` +
+        `is not a pass:`
+    );
+    for (const scenario of skippedScenarios) {
+      console.warn(`  ${scenario.id}: ${scenario.name}`);
+    }
+    console.warn("");
   }
 
   // Printed apart from the rows above, and last, because this is the one class
@@ -700,6 +1010,19 @@ async function run(): Promise<void> {
     }
     console.warn("");
   }
+
+  // A null provenance field is recoverable — the numbers are still numbers —
+  // but it must say so out loud, because a results file that cannot name its
+  // toolchain or its commit silently loses the ability to be diffed later.
+  for (const note of provenanceNotes) {
+    console.warn(`[perf:${cli.mode}] provenance: ${note}`);
+  }
+
+  const { electronVersion, gitVersion, sourceSha } = summary.environment;
+  console.log(
+    `[perf:${cli.mode}] provenance electron=${electronVersion ?? "unknown"} ` +
+      `git=${gitVersion ?? "unknown"} sha=${sourceSha ?? "unknown"}`
+  );
 
   console.log(`[perf:${cli.mode}] summary: ${summaryJsonPath}`);
   if (cli.jsonPath) console.log(`[perf:${cli.mode}] json: ${cli.jsonPath}`);

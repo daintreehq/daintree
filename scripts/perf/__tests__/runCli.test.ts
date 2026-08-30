@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -182,17 +184,21 @@ describe("run.ts as a process", () => {
   // false for a real invocation the harness would exit 0 having measured
   // nothing — invisible in every other test. These spawn the real thing.
   // A rejected flag fails during parsing, so no scenario is ever executed.
-  async function runCli(args: string[]): Promise<{ code: number; stderr: string }> {
+  async function runCli(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
     try {
-      await execFileAsync(
+      const { stdout, stderr } = await execFileAsync(
         process.execPath,
         ["--import", "tsx", path.join(perfDir, "run.ts"), ...args],
         { cwd: repoRoot }
       );
-      return { code: 0, stderr: "" };
+      return { code: 0, stdout, stderr };
     } catch (error) {
-      const failure = error as { code?: number; stderr?: string };
-      return { code: failure.code ?? -1, stderr: failure.stderr ?? "" };
+      const failure = error as { code?: number; stdout?: string; stderr?: string };
+      return {
+        code: failure.code ?? -1,
+        stdout: failure.stdout ?? "",
+        stderr: failure.stderr ?? "",
+      };
     }
   }
 
@@ -209,4 +215,51 @@ describe("run.ts as a process", () => {
     expect(code).toBe(1);
     expect(stderr).toContain("PERF-9999");
   });
+
+  // A scenario that reports a count with no correctness predicate, so the run
+  // below currently exercises the loud channel. Falling back keeps the test
+  // alive the day the id changes; the exit-code assertion is the point either
+  // way, and it holds whether or not an issue was reported.
+  const measuredId = smokeIds.includes("PERF-150") ? "PERF-150" : firstId;
+
+  it(
+    "exits 0 for a real measurement, however loudly it complains",
+    { timeout: 120_000 },
+    async () => {
+      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "perf-runcli-"));
+      try {
+        const { code, stdout, stderr } = await runCli([
+          "--mode",
+          "smoke",
+          "--scenario",
+          measuredId,
+          "--iterations",
+          "1",
+          "--warmups",
+          "0",
+          "--out-dir",
+          outDir,
+        ]);
+
+        // The whole stance in one assertion: non-zero is reserved for apparatus
+        // breakage, and a measurement issue is a warning, not an exit code.
+        expect(code).toBe(0);
+
+        const issueCount = /measurement-issues=(\d+)/.exec(stdout);
+        expect(issueCount).not.toBeNull();
+        if (Number(issueCount![1]) > 0) {
+          expect(stderr).toContain("MEASUREMENT ISSUES");
+        }
+
+        // Provenance is captured on every run, not only when it succeeds.
+        expect(stdout).toMatch(/provenance electron=\S+ git=\S+ sha=\S+/);
+        // The absent-`platforms` case must read exactly as it did before the
+        // machinery existed.
+        expect(stdout).toContain("skipped=0");
+        expect(stdout).toContain("diagnostic=0");
+      } finally {
+        fs.rmSync(outDir, { recursive: true, force: true });
+      }
+    }
+  );
 });

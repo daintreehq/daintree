@@ -1,3 +1,4 @@
+import { classifyMetric } from "./comparability";
 import { round } from "./stats";
 import type { MetricStat, ScenarioBudget } from "../types";
 
@@ -169,4 +170,85 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
   }
 
   return { outsideReference, measurementIssues, reasons };
+}
+
+export interface CorrectnessParams {
+  /** Metric keys the scenario declares as miss counts, or undefined if none. */
+  correctness: readonly string[] | undefined;
+  metricStats: Record<string, MetricStat>;
+  /** Measured iterations — the denominator every predicate has to match. */
+  runs: number;
+}
+
+/**
+ * Checks a scenario's correctness predicates against what it actually emitted.
+ *
+ * A benchmark whose subject died reports no spawns, no allocations and no
+ * elapsed time, which reads as the best result the harness has ever recorded.
+ * The predicates are the only thing standing between that and a celebrated
+ * regression, so a predicate that is missing, partial, or non-zero says the
+ * numbers around it mean nothing — a measurement issue, never a gate.
+ */
+export function evaluateCorrectness(params: CorrectnessParams): string[] {
+  const { correctness, metricStats, runs } = params;
+  const issues: string[] = [];
+
+  const declared = correctness ?? [];
+  if (declared.length === 0) {
+    // Counts only. A duration falling to zero is visible as a duration, whereas
+    // a count falling to zero is indistinguishable from the counted work never
+    // having happened — which is the entire reason the predicate exists.
+    const counts = Object.keys(metricStats)
+      .filter((name) => classifyMetric(name) === "count")
+      .sort();
+    if (counts.length > 0) {
+      issues.push(
+        `reports count-class metric(s) ${counts.join(", ")} but declares no correctness ` +
+          `predicate — nothing here can tell a real 0 from a subject that stopped running`
+      );
+    }
+    return issues;
+  }
+
+  for (const metricName of declared) {
+    const stat = metricStats[metricName];
+    if (stat === undefined) {
+      issues.push(
+        `declared correctness predicate "${metricName}" was never emitted — the one reading ` +
+          `that would prove this scenario's subject ran is the reading that is missing`
+      );
+      continue;
+    }
+
+    // run.ts rejects non-finite metrics at collection, so this is defence in
+    // depth for a caller that bypasses it. NaN > 0 is false, so without this
+    // branch a poisoned predicate reads as a healthy one.
+    if (!Number.isFinite(stat.max)) {
+      issues.push(
+        `correctness predicate "${metricName}" produced a non-finite value (${stat.max})`
+      );
+      continue;
+    }
+
+    // `count` tallies the iterations that emitted the metric, not the run
+    // count, so a predicate present on one iteration among sixteen still
+    // aggregates to `max: 0`. The blind iterations are the ones that matter.
+    if (stat.count !== runs) {
+      issues.push(
+        `correctness predicate "${metricName}" was emitted on ${stat.count} of ${runs} ` +
+          `iteration(s) — the ${runs - stat.count} missing one(s) contribute nothing to its ` +
+          `max, so an unmeasured scenario still aggregates to a clean 0`
+      );
+    }
+
+    if (stat.max > 0) {
+      issues.push(
+        `correctness predicate "${metricName}" reported misses (max ${round(stat.max)}, ` +
+          `sum ${round(stat.sum)} over ${stat.count}) — the subject misbehaved while being ` +
+          `measured, so every number from this scenario is suspect`
+      );
+    }
+  }
+
+  return issues;
 }
