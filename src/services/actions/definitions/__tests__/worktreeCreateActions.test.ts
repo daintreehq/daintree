@@ -4,6 +4,7 @@ import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../..
 const worktreeClientMock = vi.hoisted(() => ({
   create: vi.fn(),
   delete: vi.fn().mockResolvedValue(undefined),
+  getAll: vi.fn().mockResolvedValue([]),
 }));
 
 const selectionStoreMock = vi.hoisted(() => ({
@@ -38,6 +39,7 @@ vi.mock("@/store/worktreeStore", () => ({
 }));
 
 import { registerWorktreeCreateActions } from "../worktreeCreateActions";
+import { PartialSuccessError, parsePartialSuccessMessage } from "@shared/utils/partialSuccess";
 
 function setupActions() {
   const actions: ActionRegistry = new Map();
@@ -70,6 +72,8 @@ describe("worktree.delete action", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    worktreeClientMock.delete.mockResolvedValue(undefined);
+    worktreeClientMock.getAll.mockResolvedValue([]);
     panelState = {
       panelIds: ["terminal-1"],
       panelsById: {
@@ -116,5 +120,52 @@ describe("worktree.delete action", () => {
       force: undefined,
       deleteBranch: undefined,
     });
+  });
+
+  it("reports a kept branch as a partial success, not a retryable failure", async () => {
+    // The branch step runs after `git worktree remove` has already succeeded,
+    // and the branch was retained on purpose. Rethrowing it plain lands as a
+    // retryable EXECUTION_ERROR, which tells an agent to retry the one thing
+    // that cannot work — the worktree it names is gone.
+    installTerminalInfoMock(vi.fn().mockResolvedValue({ hasPty: false }));
+    worktreeClientMock.delete.mockRejectedValue(
+      new Error(
+        "Worktree deleted, but branch feature/x was kept because Git reports it isn't fully merged"
+      )
+    );
+
+    const run = setupActions();
+    const error = await run("worktree.delete", {
+      worktreeId: "wt-1",
+      deleteBranch: true,
+    }).then(
+      () => null,
+      (e: unknown) => e
+    );
+
+    expect(error).toBeInstanceOf(PartialSuccessError);
+    // Narrow by guard rather than assertion — the class IS the provenance
+    // `ActionService` keys `PARTIAL_SUCCESS` off, so the type matters here.
+    if (!(error instanceof PartialSuccessError)) throw new Error("expected a partial success");
+    expect(error.partialResult).toEqual({ worktreeDeleted: true, branchDeleted: false });
+    // The ownership ledger attributes a half-CREATED worktree off `worktreeId`;
+    // a delete's payload must never carry the field that mints ownership.
+    expect(error.partialResult.worktreeId).toBeUndefined();
+    const payload = parsePartialSuccessMessage(error.message);
+    expect(payload?.message).toContain("was kept because Git reports it isn't fully merged");
+  });
+
+  it("still rethrows an ordinary delete failure unchanged", async () => {
+    installTerminalInfoMock(vi.fn().mockResolvedValue({ hasPty: false }));
+    const raw = new Error("Cannot delete active worktree");
+    worktreeClientMock.delete.mockRejectedValue(raw);
+
+    const run = setupActions();
+    const error = await run("worktree.delete", { worktreeId: "wt-1" }).then(
+      () => null,
+      (e: unknown) => e
+    );
+
+    expect(error).toBe(raw);
   });
 });

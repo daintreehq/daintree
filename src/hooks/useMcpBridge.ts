@@ -277,6 +277,12 @@ export async function buildMcpConfirmPreview(target: McpConfirmPreviewTarget): P
       const preview = await buildWorktreeDeletePreview(target.worktreeId);
       // Monitor gone / already removed → nothing meaningful to preview.
       if (!preview) return [];
+      // Deliberately the SAME formatter the local dialog's data comes from,
+      // submodule half included. This surface is the one an agent-driven force
+      // delete gates on, and it has no typed-name gate to fall back on — a
+      // preview that listed only what the parent's status can see would leave
+      // the approver consenting to nested files and unrecoverable submodule
+      // commits they were never shown.
       return formatWorktreeDeletePreviewLines(preview);
     } catch {
       return formatWorktreeDeletePreviewLines(null);

@@ -51,6 +51,21 @@ import {
   tagMcpSpawnSource,
 } from "../useMcpBridge";
 import { TerminalSpawnSourceSchema } from "@/services/actions/definitions/schemas";
+import { hasCautionLine } from "@/lib/mcpPreviewLines";
+import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
+
+/** A completed submodule inventory that found nothing — the ordinary case. */
+function emptySubmoduleRisk(over: Partial<SubmoduleDeleteRisk> = {}): SubmoduleDeleteRisk {
+  return {
+    entries: [],
+    dirtyFiles: [],
+    untrackedFiles: [],
+    atRiskCommits: [],
+    requiresMechanicalForce: false,
+    incomplete: false,
+    ...over,
+  };
+}
 
 function safeManifestEntry(overrides: Partial<ActionManifestEntry> = {}): ActionManifestEntry {
   return {
@@ -819,6 +834,7 @@ describe("useMcpBridge", () => {
       hasTrackedChanges: true,
       hasUntrackedFiles: false,
       changes: [{ path: "src/app.ts", status: "modified", insertions: null, deletions: null }],
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
     });
 
     renderHook(() => useMcpBridge());
@@ -1443,10 +1459,50 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
       hasTrackedChanges: true,
       hasUntrackedFiles: false,
       changes: [{ path: "src/app.ts", status: "modified", insertions: null, deletions: null }],
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
     });
     const lines = await buildMcpConfirmPreview({ kind: "worktreeDelete", worktreeId: "wt-1" });
     expect(lines[0]).toContain("1 uncommitted tracked file");
     expect(lines).toContain("  M src/app.ts");
+  });
+
+  it("shows the nested submodule paths and at-risk commits an agent would destroy", async () => {
+    // This surface has no typed-name gate to fall back on, so a preview that
+    // listed only what the parent's status can see would leave the approver
+    // consenting to work they were never shown.
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      submodules: {
+        status: "verified",
+        risk: emptySubmoduleRisk({
+          dirtyFiles: ["vendor/lib/src/main.c"],
+          atRiskCommits: [{ oid: "a1b2c3d4e5f6", subject: "Fix the vendored parser" }],
+        }),
+      },
+    });
+    const lines = await buildMcpConfirmPreview({ kind: "worktreeDelete", worktreeId: "wt-1" });
+    expect(lines[0]).toBe("No uncommitted changes in the worktree itself.");
+    expect(lines).toContain("  M vendor/lib/src/main.c");
+    expect(lines).toContain("  a1b2c3d Fix the vendored parser");
+    expect(hasCautionLine(lines)).toBe(true);
+  });
+
+  it("says the submodule inventory could not be finished rather than staying silent", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      submodules: { status: "unverified", risk: null },
+    });
+    const lines = await buildMcpConfirmPreview({ kind: "worktreeDelete", worktreeId: "wt-1" });
+    expect(lines.some((l) => l.includes("Could not finish checking"))).toBe(true);
+    expect(hasCautionLine(lines)).toBe(true);
   });
 
   it("fails closed with a couldn't-verify note when the fresh fetch throws", async () => {

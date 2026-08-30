@@ -6,6 +6,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import type { WorktreeState } from "@/types";
 import type { WorktreeChanges, GitStatus } from "@shared/types/git";
+import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
+import type { WorktreeSubmoduleRiskState } from "../worktreeDeletePreview";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -200,9 +202,25 @@ function makeChanges(files: Array<{ path: string; status: GitStatus }>): Worktre
   };
 }
 
+/** A completed submodule inventory that found nothing — the ordinary case. */
+function makeRisk(over: Partial<SubmoduleDeleteRisk> = {}): SubmoduleDeleteRisk {
+  return {
+    entries: [],
+    dirtyFiles: [],
+    untrackedFiles: [],
+    atRiskCommits: [],
+    requiresMechanicalForce: false,
+    incomplete: false,
+    ...over,
+  };
+}
+
 // A fresh delete preview (what buildWorktreeDeletePreview resolves to) for the
 // on-open / on-submit fetch (#11343).
-function makePreview(files: Array<{ path: string; status: GitStatus }>) {
+function makePreview(
+  files: Array<{ path: string; status: GitStatus }>,
+  submodules: WorktreeSubmoduleRiskState = { status: "verified", risk: makeRisk() }
+) {
   const changes = files.map((f) => ({
     path: f.path,
     status: f.status,
@@ -220,6 +238,7 @@ function makePreview(files: Array<{ path: string; status: GitStatus }>) {
     hasUntrackedFiles: untrackedFileCount > 0,
     changes,
     rootPath: "/test/worktree",
+    submodules,
   };
 }
 
@@ -1381,5 +1400,166 @@ describe("WorktreeDeleteDialog — fresh status verification (#11343)", () => {
       expect(startDeleteMock).toHaveBeenCalledTimes(1);
     });
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("WorktreeDeleteDialog — submodules", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
+    devPreviewGetByWorktreeMock.mockResolvedValue(null);
+    buildPreviewMock.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("lists the real nested paths instead of the one parent entry standing for them", async () => {
+    // The parent's status collapses all of this into ` M vendor/lib`, which is
+    // worse than a count because it reads as precise.
+    buildPreviewMock.mockResolvedValue(
+      makePreview([{ path: "/test/worktree/vendor/lib", status: "modified" }], {
+        status: "verified",
+        risk: makeRisk({
+          dirtyFiles: ["vendor/lib/src/main.c", "vendor/lib/src/parse.c"],
+          untrackedFiles: ["vendor/lib/scratch.log"],
+          requiresMechanicalForce: true,
+        }),
+      })
+    );
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    const list = await screen.findByTestId("delete-worktree-submodule-file-list");
+    const text = list.textContent ?? "";
+    expect(text).toContain("vendor/lib/src/main.c");
+    expect(text).toContain("vendor/lib/src/parse.c");
+    expect(text).toContain("vendor/lib/scratch.log");
+  });
+
+  it("shows the at-risk commit subjects and demands the typed-name gate without force", async () => {
+    // The invisible case: the parent's porcelain is empty, so nothing else on
+    // this surface would ever mention these commits.
+    buildPreviewMock.mockResolvedValue(
+      makePreview([], {
+        status: "verified",
+        risk: makeRisk({
+          atRiskCommits: [{ oid: "a1b2c3d4e5f6", subject: "Fix the vendored parser" }],
+        }),
+      })
+    );
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    const list = await screen.findByTestId("delete-worktree-submodule-commit-list");
+    expect(list.textContent).toContain("Fix the vendored parser");
+    expect(list.textContent).toContain("a1b2c3d");
+    // Force is untouched, and the gate is up anyway.
+    expect(
+      (screen.getByRole("checkbox", { name: /force delete/i }) as HTMLInputElement).checked
+    ).toBe(false);
+    expect(screen.getByTestId("delete-worktree-confirm-input")).toBeDefined();
+    expect(
+      within(screen.getByTestId("delete-worktree-consequences")).getByText(
+        "1 commit inside submodules may be lost for good — it is on no remote this clone knows about"
+      )
+    ).toBeDefined();
+  });
+
+  it("blocks the plain delete when Git will refuse it over module directories", async () => {
+    buildPreviewMock.mockResolvedValue(
+      makePreview([], {
+        status: "verified",
+        risk: makeRisk({ requiresMechanicalForce: true }),
+      })
+    );
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    await waitFor(() => {
+      expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+        true
+      );
+    });
+    expect(screen.getByTestId("delete-worktree-hint").textContent).toContain(
+      "Git will not remove a worktree that owns submodules"
+    );
+  });
+
+  it("says the submodule check could not finish rather than implying it found nothing", async () => {
+    buildPreviewMock.mockResolvedValue(makePreview([], { status: "unverified", risk: null }));
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    await screen.findByText(/Couldn't finish checking this worktree's submodules/);
+    // The parent status read fine, so the parent banner must stay away.
+    expect(screen.queryByText(/Couldn't check this worktree for uncommitted work/)).toBeNull();
+  });
+
+  it("re-arms the typed-name gate when revalidation turns up commits the user never saw", async () => {
+    // Setting `freshPreview` is not proof the user saw it: on a worktree that
+    // was already D3 with the name typed, a submodule commit landing between
+    // open and submit would otherwise be destroyed under consent given for a
+    // different set of consequences.
+    buildPreviewMock.mockResolvedValue(makePreview([{ path: "a.ts", status: "modified" }]));
+    const worktree = makeWorktree(makeChanges([{ path: "a.ts", status: "modified" }]), {
+      branch: "feature/x",
+      name: "feature/x",
+    });
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    const gate = await screen.findByTestId("delete-worktree-confirm-input");
+    fireEvent.change(gate, { target: { value: "feature/x" } });
+
+    buildPreviewMock.mockResolvedValue(
+      makePreview([{ path: "a.ts", status: "modified" }], {
+        status: "verified",
+        risk: makeRisk({
+          atRiskCommits: [{ oid: "beefcafe0000", subject: "Agent fix in vendor/lib" }],
+        }),
+      })
+    );
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("delete-worktree-submodule-commit-list").textContent).toContain(
+        "Agent fix in vendor/lib"
+      );
+    });
+    expect(startDeleteMock).not.toHaveBeenCalled();
+    expect((screen.getByTestId("delete-worktree-confirm-input") as HTMLInputElement).value).toBe(
+      ""
+    );
+  });
+
+  it("escalates the submit-time revalidation on submodule commits the open-time fetch missed", async () => {
+    // An agent can commit inside a submodule between open and submit. Only the
+    // render-time tier saw the clean state; the submit path must catch up.
+    buildPreviewMock.mockResolvedValue(makePreview([{ path: "a.txt", status: "untracked" }]));
+    const worktree = makeWorktree(makeChanges([]), { branch: "feature/x", name: "feature/x" });
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    await waitFor(() => {
+      expect(buildPreviewMock).toHaveBeenCalled();
+    });
+    // Untracked-only, so no gate yet (#4927).
+    expect(screen.queryByTestId("delete-worktree-confirm-input")).toBeNull();
+
+    buildPreviewMock.mockResolvedValue(
+      makePreview([{ path: "a.txt", status: "untracked" }], {
+        status: "verified",
+        risk: makeRisk({ atRiskCommits: [{ oid: "deadbee", subject: "WIP vendored fix" }] }),
+      })
+    );
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("delete-worktree-confirm-input")).toBeDefined();
+    });
+    expect(startDeleteMock).not.toHaveBeenCalled();
   });
 });
