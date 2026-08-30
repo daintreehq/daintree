@@ -1,7 +1,7 @@
 ---
 name: optimize
 disable-model-invocation: true
-description: "USE ONLY WHEN A HUMAN EXPLICITLY INVOKES IT — never auto-select or run this proactively: not after writing code that looks slow, not because a benchmark moved, not as a step inside another workflow. This is a deliberate, multi-hour optimisation loop against ONE named metric on ONE matrix scenario. Once a human explicitly starts it with /optimize (Claude Code) or $optimize (Codex), it establishes a before measurement, then repeatedly hypothesises a cause, changes the code, re-measures against the current best, and keeps or reverts on the evidence — until the target stops improving or the budget runs out. It ends with a before/after table and a percent improvement, or an honest report that no improvement was available. It refuses to start against a scenario with no correctness predicate, because a benchmark with no correctness predicate rewards breaking the feature."
+description: "USE ONLY WHEN A HUMAN EXPLICITLY INVOKES IT — never auto-select or run this proactively: not after writing code that looks slow, not because a benchmark moved, not as a step inside another workflow. This is a deliberate, multi-hour optimisation loop against ONE named metric on ONE matrix scenario. Once a human explicitly starts it with /optimize (Claude Code) or $optimize (Codex), it establishes a before measurement, then repeatedly hypothesises a cause, changes the code, re-measures against the current best, and keeps or reverts on the evidence — until the target stops improving or the budget runs out. Any claim on a duration, memory or derived-ratio metric is made against a champion arm re-measured in the same session, interleaved with the candidate, because a stored result measured hours earlier records a different thermal state rather than a fair opponent. It ends with a before/after table and a percent improvement, or an honest report that no improvement was available. It refuses to start against a scenario with no correctness predicate, because a benchmark with no correctness predicate rewards breaking the feature."
 ---
 
 # Optimize
@@ -14,7 +14,7 @@ This is the other half of the measurement system. `scripts/perf/` answers _what 
 
 **"No improvement was available" is a successful outcome.** Most optimisation attempts fail. A run that tries six hypotheses, disproves all six, and writes down why is worth more than a run that ships a change with no evidence behind it. Never manufacture an improvement. Reverting everything and reporting an honest zero is a complete, correct run.
 
-**Nothing outside this document will stop you fooling yourself.** The harness gates nothing — `perf compare` prints `REFUSED` and exits 0; a measurement issue is a warning and exits 0; a scenario whose feature you broke still produces a number. Every guard here is a guard you must apply deliberately.
+**Nothing in the harness will stop you fooling yourself.** It gates nothing — `perf compare` prints `REFUSED` and exits 0; a measurement issue is a warning and exits 0; a scenario whose feature you broke still produces a number. The one exit code you can trust is `check-pair.mjs`, shipped beside this file: it reads both summary files itself and exits non-zero when the pair is not a result. Run it before every comparison. Every other guard here is one you must apply deliberately.
 
 ## Inputs — all seven required before you start
 
@@ -43,10 +43,14 @@ The REGISTRY commands are **not** valid targets: `launch-ab` takes `--runs` and 
 So, before any measurement:
 
 1. Read the target scenario. Find a metric that proves the work actually happened.
-2. If one exists — `detectionMisses`, `faultInjectionMisses`, `refreshMisses`, an emit count, a row count — that is your predicate.
+2. If one exists — `detectionMisses`, `faultInjectionMisses`, `refreshMisses`, an emit count, a row count — that is your candidate predicate.
 3. **If none exists, STOP.** Report that the scenario cannot be safely optimised against and what predicate it would need. Do not add one yourself: a predicate written by the run that optimises against it is worthless, for the same reason a benchmark is.
+4. **Confirm a _healthy_ run emits it.** Some scenarios have emitted a miss count only from the failure path, which is not a predicate at all: a healthy run supplies nothing, so there is nothing to check, and a scenario that silently stopped running reports no misses either. In the Phase 0 probe, the predicate must appear in `metricStats` with `count` equal to the aggregate's `runs`. Absent, or emitted on some iterations only, means you cannot use it — say so and stop rather than proceeding on the half of it that exists.
+5. **Prove it can fail.** A predicate that reads `0` because nothing sets it is indistinguishable from one that reads `0` because the feature works, and no amount of checking `count` and `max` separates them. Once, at Phase 0: break the scenario's subject deliberately on a throwaway commit — make the refresh return immediately, drop the watcher — run three iterations, and confirm the predicate goes non-zero. Then `git reset --hard` it away. If you cannot construct that break cheaply, proceed but say so in the report: the predicate is then untested evidence, not proof.
 
-The predicate is checked as an **absolute health condition every round**, not as "did not regress". A scenario that starts at `detectionMisses: 1` and stays at `1` is broken before you began and stays broken; treating that as passing is exactly the trap. Normally the condition is `max === 0`. It must hold on **every iteration**, not on average.
+The predicate is checked as an **absolute health condition every round**, not as "did not regress". A scenario that starts at `detectionMisses: 1` and stays at `1` is broken before you began and stays broken; treating that as passing is exactly the trap. It must hold on **every iteration**, not on average.
+
+**The condition is `count === runs` AND `max === 0` — both halves, every round.** `MetricStat.count` is the number of iterations that _emitted_ the metric, not the number that ran, so a predicate that vanished for fourteen of fifteen iterations still aggregates to `max: 0` and reads as perfect health. `max` alone cannot tell a working feature from an absent measurement. `check-pair.mjs` applies both; do not simplify it back to one, and do not assume your runner warns about this — check it yourself.
 
 **An improvement in the target with the predicate unhealthy is a bug, not a win.** Revert it, record it, move on. Do not try to repair it in the same round.
 
@@ -56,12 +60,13 @@ The predicate is checked as an **absolute health condition every round**, not as
 - **Measure before changing anything.** No before measurement means no table and no run.
 - **One hypothesis per round.** Two changes means you cannot attribute the result and will keep the wrong one.
 - **Compare each round against the current best, not the baseline.** Judging against the baseline keeps a hypothesis that made the best result worse, so long as it still beats where the run started. See Phase 1 step 3.
+- **No claim on a machine-dependent metric without a fresh interleaved arm.** A stored file measured hours ago is not an opponent; it is a record of a different thermal state. See **Machine-dependent claims**.
 - **Revert on the evidence, not the story.** A plausible mechanism is not a measurement.
 - **Never touch any measurement surface.** Not the scenario, not its fixture, not `scripts/perf/lib/`, not `budgets.json`, not the protocol flags. If you believe the scenario measures the wrong thing, stop the run and say so — a real finding, but not an optimisation. The final diff must contain **no** changes under `scripts/perf/`; verify that before finalising.
 - Keep the branch focused. No unrelated cleanup, no dependency bumps, no drive-by refactors.
 - Do not modify user-owned agent config (`~/.claude`, `~/.codex`, `~/.gemini`, shell hooks).
 - Read `CLAUDE.md`, `.claude/rules/perf-benchmarks.md` and `.claude/rules/testing.md` before touching production code. A faster app that breaks an architectural invariant is not shippable.
-- Expect several hours. Reserve the last of the budget for final verification — a run that spends everything on hypotheses and cannot prove the tree is green has produced nothing usable.
+- Expect several hours. Reserve the last of the budget for final verification **and the headline A/B** — six more measured arms, so budget them from the start. A run that spends everything on hypotheses cannot prove the tree is green and has produced nothing usable, and one that skips the headline A/B may not state a percentage at all: raw numbers and an explanation, or nothing. Stopping a hypothesis short to protect that reserve is the right call.
 
 ## Long-Running Loop Discipline
 
@@ -69,20 +74,22 @@ Keep the working log in conversation context. Compaction is fine; keep updates c
 
 For a durable handoff across long waits, write `.tmp/optimize-<target>.md`. `.tmp` is gitignored. Do not commit it.
 
-Track: branch and current-best commit; the seven inputs; before measurement (path, machine label, target value, predicate value); the hypothesis ledger (number, change, result, KEPT/REVERTED, why); which tests have run since the last code change.
+Track: branch, baseline sha and current champion sha; the seven inputs; before measurement (path, machine label, `sourceSha`, `gitVersion`, target value, predicate value); the precommitted statistic and threshold; the hypothesis ledger (number, change, result, KEPT/REVERTED, why); which tests have run since the last code change.
+
+The shas are not bookkeeping. They are the only thing that ties a measurement file to the code it measured once the conversation has been compacted twice and every JSON in `.tmp/opt/` has a plausible-looking name.
 
 ## The Loop
 
 ### Phase 0 — preflight and baseline
 
-1. **Preflight the tree.** `git status --porcelain` must be clean — record anything dirty and do not touch it; you will be reverting things later and must never revert someone else's work. `git fetch origin`, then branch from `origin/develop`.
+1. **Preflight the tree.** `git status --porcelain` must be **empty**. A dirty tree stops the run: you will be reverting trees and switching between commits, so you would eventually destroy work that is not yours, and a measurement of a dirty tree cannot be labelled with the commit it measured. Report what is dirty and ask. `git fetch origin`, then branch from `origin/develop` and record the branch point as the **baseline sha**.
 2. **Preflight the target.** Confirm the scenario exists in the chosen mode and that both the target metric and the correctness predicate are emitted:
 
    ```bash
    npm run perf <mode> -- --scenario <ID> --iterations 3 --label probe --json .tmp/opt/probe.json
    ```
 
-   Read the JSON. Confirm the target metric path resolves, is finite, and is **not degenerate** — a zero usually means the scenario measured nothing, which is this loop's most dangerous starting state because it looks like a perfect score. Confirm the predicate is present and healthy. If either is missing, stop.
+   Read the JSON. Confirm the target metric path resolves, is finite, and is **not degenerate** — a zero usually means the scenario measured nothing, which is this loop's most dangerous starting state because it looks like a perfect score. Confirm the predicate is present and healthy on the terms above (`count === runs`, `max === 0`). If either is missing, stop.
 
    Use `.tmp/opt/` for every artifact — `/tmp` is not portable to Windows, and the harness creates parent directories.
 
@@ -92,11 +99,11 @@ Track: branch and current-best commit; the seven inputs; before measurement (pat
    npm run perf <mode> -- --scenario <ID> --iterations <N> --warmups <W> --label before --json .tmp/opt/before.json
    ```
 
-   Counts are near-deterministic: a handful of iterations is conclusive. Durations need 15–30 **and** the precommitment in **Duration claims** below.
+   Counts are near-deterministic: a handful of iterations is conclusive. Everything else needs 15–30 **and** the precommitment and paired A/B in **Machine-dependent claims** below.
 
-4. **Record the protocol**: machine label from `environment`, plus `<N>` and `<W>`. Every later run uses exactly these. A different `--warmups` or `--iterations` makes `perf compare` refuse the machine-dependent rows — deliberately, because a protocol difference otherwise reads as a code difference.
+4. **Record the protocol and the provenance.** Machine label, `<N>`, `<W>`, and the exact `--scenario` list: every later run uses exactly these. A different `--warmups` or `--iterations` makes `perf compare` refuse the machine-dependent rows, deliberately, because a protocol difference otherwise reads as a code difference. Then record `environment.sourceSha`, `environment.gitVersion` and `environment.electronVersion` from `before.json`, and confirm the sha is the branch point. A results file that cannot name the commit it measured cannot be tied to a checkpoint later, and `git rev-parse HEAD` at the end of the run will not tell you what the file was measuring at the start.
 
-5. Set `.tmp/opt/best.json` = `.tmp/opt/before.json`. This is the file every round is judged against.
+5. Set `.tmp/opt/best.json` = `.tmp/opt/before.json`, and record the commit it belongs to as the **champion sha**. This pairing — file plus sha — is what every round is judged against. A `best.json` whose `sourceSha` is not the champion sha is stale by definition: discard it and re-measure rather than reasoning about which tree produced it.
 
 ### Phase 1 — the loop
 
@@ -104,28 +111,29 @@ Repeat until the budget is spent or credible hypotheses run out.
 
 1. **Form one hypothesis.** Name the mechanism and where it lives. "This looks inefficient" is not a hypothesis; "`GitStatusPass` re-stats every file because the gitDir is null, so the cheap path is never taken" is. Read the code first.
 
-2. **Make the smallest change that tests it.** Not the prettiest fix — the smallest one that moves the named mechanism.
+2. **Make the smallest change that tests it**, and **commit it on the branch before measuring it.** Not the prettiest fix — the smallest one that moves the named mechanism. Every measurement is of a committed tree: an uncommitted change leaves `sourceSha` naming the champion commit while the code being measured is something else, which is exactly the mislabelled-file failure this loop exists to avoid, and it also makes the A/B arms below impossible to switch between. `git status --porcelain` must be empty when a measurement starts.
 
-3. **Re-measure with the identical protocol**, then compare **against the current best**:
+3. **Re-measure with the identical protocol**, then gate the pair before you look at any number in it:
 
    ```bash
    npm run perf <mode> -- --scenario <ID> --iterations <N> --warmups <W> --label h<k> --json .tmp/opt/h<k>.json
+   node .agents/skills/optimize/check-pair.mjs --scenario <ID> --target <metric path> --predicate <predicate> --expect-before-sha <champion sha> --expect-after-sha $(git rev-parse HEAD) .tmp/opt/best.json .tmp/opt/h<k>.json
    npm run perf compare .tmp/opt/best.json .tmp/opt/h<k>.json
    ```
 
-4. **Hard-stop checks — `perf compare` and `run` both exit 0 on all of these, so you must look:**
-   - `REFUSED` in the output → the comparison did not happen. Do not read the row as a result. Fix the protocol and re-measure.
-   - A measurement-issues section, or `measurement-issues=` non-zero in the run header → the apparatus is broken. Stop and fix that before continuing; every number in the round is suspect.
-   - The target metric or the predicate absent from the JSON → stop.
-   - A mode or scenario-selection mismatch warning → stop.
+4. **Hard-stop checks. `perf compare` and `run` exit 0 on every one of these, so the exit code you act on is `check-pair.mjs`'s:**
+   - **Exit 1** → the pair is not a result. It fails on a protocol, machine, mode or `--scenario` selection mismatch, on a `sourceSha` that is not the tree you think you measured, on a `gitVersion` or `electronVersion` move between the two files, on a broken apparatus, and on a predicate that is unhealthy or under-emitted. Do not read the comparison. Fix the cause and re-measure.
+   - **Exit 3** → the runner did not stamp `sourceSha`, so neither file can be tied to a checkpoint. Proceed only if you measured both arms in this session, interleaved, and say so in the report. Never against a stored `best.json` in this state.
+   - `REFUSED` in the `perf compare` output → the comparison did not happen. `check-pair.mjs` catches every refusal cause it knows of, so a refusal it did not predict means the two runs differ in a way neither tool expected. Stop and find out what.
+   - A `measurement-issues=` non-zero in the run header, or warnings in the compare output about a count no longer emitted or a count falling to zero → read them. They describe the dead-watcher shape, which looks identical to success.
 
-5. **Check the predicate.** Unhealthy on any iteration → revert, record, next hypothesis.
+5. **Check the predicate** on the round's own JSON — `count === runs` and `max === 0`. `check-pair.mjs` does this for the file pair; if you skipped it for any reason, do it by hand. Unhealthy → revert, record, next hypothesis.
 
-6. **Check the guard metrics** against their declared tolerances. Outside tolerance → the change has a cost the human did not authorise. Revert it, or stop and ask. Do not keep it and mention it in the report.
+6. **Check the guard metrics** against their declared tolerances. Outside tolerance → the change has a cost the human did not authorise. Revert it, or stop and ask. Do not keep it and mention it in the report. Machine-dependent guards are judged against the same drift **D** as the target: a guard that moved less than D has not been shown to move, and one that moved more than D _and_ outside tolerance is a real cost, not noise. Reading a guard as noise on grounds you would not accept for the target is how a win gets bought with an unreported regression.
 
 7. **Decide:**
-   - Improvement over **best**, predicate healthy, guards inside tolerance → re-measure once more to confirm it reproduces, then KEEP. Commit a checkpoint on the branch and copy the run to `.tmp/opt/best.json`.
-   - No movement, or inside the noise → REVERT (`git checkout -- <files>` against the checkpoint). Record the disproof; it has value.
+   - Improvement over **best**, predicate healthy, guards inside tolerance → confirm it reproduces before keeping. For a `count`, `size` or `ratio` target one clean re-measurement is enough; these are near-deterministic. For anything else — `duration`, `memory`, `derived-ratio`, `unknown` — run the paired A/B in **Machine-dependent claims**, which is the only evidence that survives a four-hour thermal drift. Then KEEP: the `h<k>` commit becomes the new champion, `.tmp/opt/best.json` becomes its measurement, and the champion sha becomes `git rev-parse HEAD`.
+   - No movement, or inside the noise → REVERT with `git reset --hard <champion sha>`, which discards the `h<k>` commit and returns the tree to the champion exactly. Record the disproof; it has value.
    - Regression → REVERT.
 
 8. **Run the narrow vitest** for the touched files before the next round. A round that breaks a test and moves on compounds.
@@ -136,8 +144,8 @@ Repeat until the budget is spent or credible hypotheses run out.
 
 An improvement measured on one machine is a claim about one machine.
 
-- Re-measure the final tree on each additional machine against **that machine's own before file**, same protocol. `perf compare` refuses a cross-machine duration comparison and the refusal is correct.
-- **Counts, sizes and ratios compare across machines; durations and memory do not.** `scripts/perf/lib/comparability.ts` is the authority. If the target is a count, a cross-machine comparison belongs in the table. If it is a duration, every machine gets its own before/after pair and its own percentage.
+- Re-measure the final tree on each additional machine against **that machine's own before file**, same protocol. `perf compare` refuses a cross-machine machine-dependent comparison and the refusal is correct.
+- **Only `count`, `size` and `ratio` compare across machines.** `duration`, `memory`, `derived-ratio` and `unknown` do not, and each machine gets its own before/after pair and its own percentage. `derived-ratio` is the class that catches people out: `memoryGrowthPct`, `cpuPct` and `eventLoopUtilization` look normalised, but dividing a runtime number by another runtime number changes the units the machine is in, not whether it is there — a slower CPU raises event-loop utilization for identical work. A percentage is not automatically portable. `scripts/perf/lib/comparability.ts` is the authority; run `classifyMetric` on the name in your head before writing a cross-machine row, and if you are unsure, it is machine-dependent.
 - An improvement on one OS and not another is a finding worth reporting, not a failure to hide.
 
 ### Phase 3 — prove the tree is still good
@@ -149,29 +157,60 @@ After the last code change, with budget reserved for it:
 3. `npm run check` if anything touched types, IPC, keybindings, plugin manifests, or lint-visible code.
 4. **The E2E spec or bucket the human named** (input 6), after `npm run build:e2e`. E2E runs against the built app — a stale or failed build silently tests the code you were trying to change. If the human gave no spec, run none and say so in the report.
 5. `git diff --stat` against the branch point: confirm **nothing under `scripts/perf/` changed**.
-6. A final confirming measurement, so the table's after number comes from the tree you are leaving behind.
+6. **The headline measurement: a fresh paired A/B of the baseline sha against the final tree**, run now, in one session, on the machine you are claiming for. Not `before.json` — that file is hours old and was measured on a colder machine, and the whole run has been selecting hypotheses on differences of the size that drift produces. Whatever the rounds decided, the number in the report comes from this one pairing of the two trees that matter. For a `count`, `size` or `ratio` target a single clean pair suffices; for anything else use the full procedure in **Machine-dependent claims**. If the headline A/B does not meet all three conditions in **Machine-dependent claims**, **the improvement was not real**: this is Case 1, not a hedged Case 2. Reset the branch, report the headline numbers, and say the intermediate rounds over-read the noise. That verdict will feel wrong after hours of work on a change you can explain — the mechanism being plausible is what made it worth testing, and is not evidence that it worked.
 
 If a test fails: reproduce it narrowly, and decide whether it is a real break from your change or a known flake (`.claude/rules/testing.md` — a worker crash after all tests pass is a flake; a teardown-timer failure naming a new file is real). A real break your change caused and cannot fix means finalising as **blocked**, with the branch left for the human.
 
-## Duration claims
+## Machine-dependent claims
 
-Durations are the weakest thing this harness measures, and the easiest to lie with.
+Anything that is not a `count`, a `size` or a structural `ratio` is the weakest thing this harness measures and the easiest to lie with — durations, memory readings, and the `derived-ratio` class that looks normalised and is not.
 
-**Before the first duration measurement, precommit in writing:** the statistic (median, not p95), the iteration count, and the minimum difference you will call meaningful. Then do not change them. Deciding to run "one more round" because the last was unfavourable turns a null result into a false positive.
+**Before the first such measurement, precommit in writing:** the statistic (median, not p95), the iteration count, and the minimum difference you will call meaningful. Then do not change them. Deciding to run "one more round" because the last was unfavourable turns a null result into a false positive.
+
+### The paired A/B
+
+A stored `best.json` is not an opponent. Over a multi-hour run the machine heats, background load shifts, and a champion measured cold at hour zero loses to nothing at all by hour four. Selecting the best-looking of twenty hypotheses against that file is selecting on drift. So for every machine-dependent claim, both arms are measured now, alternating, and the claim is made against the arm you just measured.
+
+Both trees must already be commits — the champion sha and the candidate sha — because `sourceSha` is what proves each arm measured what it says it did.
+
+```bash
+BRANCH=$(git branch --show-current); CHAMP=<champion sha>; CAND=$(git rev-parse HEAD)
+arm() { git switch --detach "$1" && npm run perf <mode> -- --scenario <ID> --iterations <N> --warmups <W> --label "$2" --json ".tmp/opt/ab/$2.json"; }
+arm "$CHAMP" champ1 && arm "$CAND" cand1
+arm "$CAND" cand2 && arm "$CHAMP" champ2
+arm "$CHAMP" champ3 && arm "$CAND" cand3
+git switch "$BRANCH"
+```
+
+Three pairs minimum, uninterrupted, with nothing else running on the machine. Never all-champion-then-all-candidate: that arrangement cannot separate your change from the hour that passed. The middle pair runs in reverse order because the first arm of a session is the coldest, and a fixed order hands that handicap to the same side three times. Keep `--scenario` on every arm — an unfiltered run writes a tracked file under `scripts/perf/history/`, which both dirties the tree the next `git switch` needs clean and puts a change under `scripts/perf/` into your diff.
+
+Then two comparisons, in this order:
+
+1. **The noise floor.** `npm run perf compare` each pair of champion arms against each other — 1 v 2, 1 v 3, 2 v 3. Identical code on both sides, so every delta printed is drift, scheduling and thermal state. Take the worst of the three as **D**.
+2. **The claim.** Pick the median arm of each side by target value, run `check-pair.mjs` on that pair, then `npm run perf compare` on it. That table is the claim.
+
+It is a claim only if **all three** hold:
+
+- The candidate beats the champion in **every** pair, paired by index: `champ1` against `cand1`, and so on. One loss and there is no claim, whatever the medians say.
+- The median-to-median improvement exceeds the threshold you precommitted.
+- The improvement is **larger than D**. If the same code disagrees with itself by as much as your change moved the number, you measured the machine. Report D alongside the claim so a reader can check this themselves.
+
+More pairs are allowed only if you decide on the count before seeing the results — deciding to extend after an unfavourable pair is the same fallacy as re-rolling a threshold.
+
+### Everything else about durations
 
 - **p95 at low iteration counts is effectively one of the two largest samples.** `perf compare` leads with the median for that reason and marks p95 exploratory below 20 runs. Never claim a p95 improvement from 8 samples.
 - `perf compare` is explicitly **descriptive** — it computes no confidence interval and no significance test. It cannot tell you a 5% difference is real. If you cannot precommit a threshold you believe in, **report the raw before/after numbers with no percentage claim**. That is honest; a percentage you cannot defend is not.
-- Interleave for a marginal claim. All-after-then-all-before confounds the change with thermal state and background load.
-- Abort a contaminated run — a background install, a build, another agent on the machine. Redo it. Never delete inconvenient outliers after seeing them.
+- Abort a contaminated run — a background install, a build, another agent on the machine. Redo the whole interleave, not the contaminated arm: replacing one arm and keeping its partner reintroduces exactly the pairing this procedure exists to prevent. Never delete inconvenient outliers after seeing them.
 - Plugged in, low-power mode off, heavy background work closed.
 
-Counts have none of these problems: 16 → 0 is real on the first run.
+Counts, sizes and structural ratios have none of these problems: 16 → 0 is real on the first run, and the interleave is not required for them.
 
 ## Cross-machine work
 
 Ask for the **execution topology**, not just the OS list: which physical machines, how you reach each one, and whether the human will run a leg themselves.
 
-- **Hosted CI cannot produce a duration before/after.** Every hosted job gets a fresh VM from a pool of varying hardware, and `run.ts` folds the run id into the machine label precisely so two hosted runs are refused as different machines. CI can measure counts; it cannot measure a duration delta.
+- **Hosted CI cannot produce a machine-dependent before/after.** Every hosted job gets a fresh VM from a pool of varying hardware, and `run.ts` folds the run id into the machine label precisely so two hosted runs are refused as different machines. CI can measure counts and sizes; it cannot measure a duration, memory or `derived-ratio` delta, and the paired A/B cannot be run there because the two arms would land on two different VMs.
 - An unattended session on one machine cannot simply proceed to another. If a leg needs a machine you cannot reach, say so, produce the legs you can, and mark the rest not measured.
 
 ## Fixing Guidelines
@@ -186,13 +225,13 @@ Three cases. The first two are complete, correct outcomes.
 
 ### Case 1 — nothing improved
 
-Revert every change you made — and only yours; leave any pre-existing dirty files recorded at preflight untouched. The branch holds no production changes.
+`git reset --hard <baseline sha>`, confirm `git status --porcelain` is empty and `git diff origin/develop` is empty, then delete the branch. The per-hypothesis commits go with it; nothing lands.
 
-Report the target and its before value, every hypothesis with the measured reason it was rejected, and what you would try next or why you believe the number is at its floor. Delete the branch. **Commit nothing** — never an empty or marker commit. The evidence is the report.
+Report the target and its before value, every hypothesis with the measured reason it was rejected, and what you would try next or why you believe the number is at its floor. **Commit nothing to `develop`** — never an empty or marker commit. The evidence is the report.
 
 ### Case 2 — something improved
 
-1. Squash the checkpoints into one focused commit (or a few coherent ones), message per project convention.
+1. Squash the kept `h<k>` commits into one focused commit (or a few coherent ones), message per project convention. Squashing rewrites the sha, so the headline A/B must have been run **before** this step, against the sha it actually measured.
 2. State the measured improvement and the machine it was measured on. No AI attribution.
 3. Leave the branch for the human. **Do not push and do not open a PR unless asked.**
 
@@ -212,19 +251,23 @@ A test or E2E failure your change caused and could not fix. Leave the branch, re
 | <guard metric>         |    412 |    418 | +1.5% |
 
 Machine: <label> (<platform>/<arch>) · mode <mode> · <N> iterations · <W> warmups
-Statistic: <median|count> · precommitted threshold: <value>
+Trees: <baseline sha> → <final sha> · git <version> · Electron <version>
+Statistic: <median|count> · precommitted threshold: <value> · measured drift D: <value|n/a>
 ```
 
 - One block per machine. Never merge two machines into one table.
-- The correctness predicate is always a row. A reader must see the feature still works.
+- Both numbers come from the **headline A/B** (Phase 3 step 6), not from files measured earlier in the run. Say so.
+- The correctness predicate is always a row, and its cell reads `ok` only when `count === runs` and `max === 0` on both sides. A reader must see the feature still works and that the check was actually taken.
 - Every declared guard metric is a row, including ones that moved the wrong way.
-- Percentages only where the comparison is legitimate — never a cross-machine duration percentage, and never a percentage on a duration whose threshold you did not precommit.
+- Percentages only where the comparison is legitimate — never across machines for anything outside `count`, `size` and `ratio`, and never on a machine-dependent metric whose threshold you did not precommit or whose improvement did not exceed D.
+- If the runner did not stamp `sourceSha` (`check-pair.mjs` exit 3), the Trees line says so, and the report states that the arms are tied to the checkpoint only by the fact that you measured them yourself, back to back.
 - Below the table: the hypothesis ledger, one line each, including the rejected ones. The rejections are most of the value.
 
 ## Related
 
+- `check-pair.mjs`, beside this file — the pre-compare gate. The only exit code in this loop that means anything.
 - `scripts/perf/README.md` — the harness, its modes, and every `npm run perf` command.
 - `.claude/rules/perf-benchmarks.md` — never add a `perf:*` script to package.json; baselines are harvested by hand.
-- `scripts/perf/lib/comparability.ts` — which metrics compare across machines. Read it before claiming a cross-machine result.
+- `scripts/perf/lib/comparability.ts` — which metrics compare across machines, and why a runtime-derived percentage does not. Read it before claiming a cross-machine result.
 - `.claude/rules/testing.md` — the E2E contract. Only a human names the spec.
 - `.agents/skills/stabilize/` — whole-tree, all-OS validation. Different job: stabilize proves the tree is green, optimize moves one number.
