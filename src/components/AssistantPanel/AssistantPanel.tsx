@@ -7,7 +7,6 @@ import type { AssistantReference } from "./AssistantMessage";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { actionService } from "@/services/ActionService";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { notify } from "@/lib/notify";
 import { useAssistantTimerNotificationsFromStore } from "./useAssistantTimerNotifications";
 
 /**
@@ -175,12 +174,17 @@ export function AssistantPanel({
         reference.kind === "pr"
           ? (["forge.openPR", { cwd: projectPath, prNumber: reference.number }] as const)
           : (["forge.openIssue", { cwd: projectPath, issueNumber: reference.number }] as const);
-      // A click that does nothing has to say so.
+      // A click that does nothing has to say so — in the PANEL.
       //
-      // The notify() gate asks whether the user could observe this otherwise, and here
-      // they cannot: the whole visible effect of a working click is a browser window
-      // appearing somewhere else, so a failure looks exactly like a link that is not a
-      // link. It is timely, it has a next step, and nothing else in the UI reports it.
+      // The user cannot observe this otherwise: the whole visible effect of a working
+      // click is a browser window appearing somewhere else, so a failure looks exactly
+      // like a link that was never a link.
+      //
+      // Reported as a panel notice rather than a toast, because everything the assistant
+      // does stays inside the assistant. The reader clicked a reference in this
+      // transcript; the answer belongs beside it, not on a surface that spans the whole
+      // window and outlives the panel it came from. The cost is the one-click recovery
+      // a toast could carry, so the message names the route instead.
       //
       // Not for a number that does not exist, though — that resolves fine and the forge
       // serves its own 404 in the browser, which is the forge's answer to give. What
@@ -188,25 +192,14 @@ export function AssistantPanel({
       const reportFailure = (detail: unknown) => {
         console.warn("[assistant] could not open the reference", reference, detail);
         const label = reference.kind === "pr" ? "pull request" : "issue";
-        notify({
-          type: "error",
-          title: "Reference didn't open",
-          message: `Daintree couldn't reach the forge to open ${label} #${reference.number}. Check the connection and try again.`,
-          // ONE contextual recovery, never "Dismiss": the list is where the reader was
-          // trying to get to, and it goes through the same provider — so it either
-          // works, or it fails the same way and says so once.
-          action: {
-            label: reference.kind === "pr" ? "Open pull requests" : "Open issues",
-            actionId: reference.kind === "pr" ? "forge.openPRs" : "forge.openIssues",
-            actionArgs: { cwd: projectPath },
-            onClick: () => {},
-          },
-          // `git` rather than `connectivity`: this is one forge operation that failed in
-          // direct response to a click, not the app losing its connection — and `git`
-          // is the kind whose user-facing toggle a reader would look under to silence
-          // forge chatter.
-          context: { eventKind: "git" },
-        });
+        const list = reference.kind === "pr" ? "pull requests" : "issues";
+        useAssistantStore
+          .getState()
+          .pushNotice(
+            "warning",
+            `Couldn't reach the forge to open ${label} #${reference.number}. ` +
+              `Check the connection, or open the ${list} list from the toolbar.`
+          );
       };
       safeFireAndForget(
         actionService

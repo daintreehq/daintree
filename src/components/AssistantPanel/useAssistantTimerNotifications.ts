@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import { useAssistantStore, type AssistantTimers } from "@/store/assistantStore";
-import { notify } from "@/lib/notify";
 
 /**
  * Tells the user when a scheduled timer has actually fired.
@@ -16,11 +15,10 @@ import { notify } from "@/lib/notify";
  * notifies from the OUTCOME. One extra round trip per fire, which is affordable
  * precisely because firing is rare.
  *
- * Routing follows the notification matrix: `grid-bar`, the least-restricted surface
- * that crosses a pane boundary. A timer fires outside whatever the user is looking
- * at, and being noticed is the entire purpose of the thing they scheduled — but it is
- * not a toast, because a toast is the most restricted surface and a reminder landing
- * on time is not an interruption.
+ * It reports into the PANEL, never the app. Everything the assistant does stays inside
+ * the assistant: it can go and change the world, but its account of that belongs where
+ * the conversation is rather than on a surface spanning the whole window. A timer
+ * firing is the assistant describing its own work, so it says so in its own place.
  */
 export function useAssistantTimerNotifications({
   timers,
@@ -28,6 +26,7 @@ export function useAssistantTimerNotifications({
   sessionId,
   requestTimers,
   takeFiredTimerIds,
+  pushNotice,
 }: {
   timers: AssistantTimers | null;
   timersStale: boolean;
@@ -35,6 +34,8 @@ export function useAssistantTimerNotifications({
   requestTimers: () => void;
   /** Read-and-clear the ids the engine has told us fired. */
   takeFiredTimerIds: () => string[];
+  /** Append a notice to the ASSISTANT PANEL's own strip. */
+  pushNotice: (level: "info" | "warning" | "error", message: string) => void;
 }) {
   /**
    * Outcomes already accounted for, as `eventId:count`.
@@ -136,23 +137,21 @@ export function useAssistantTimerNotifications({
       seen.current.add(key);
 
       const failed = outcome.severity === "error";
-      notify({
-        type: failed ? "error" : "info",
-        placement: "grid-bar",
-        title: failed ? "Scheduled timer failed" : "Scheduled timer fired",
-        message: outcome.summary || outcome.title,
-        inboxMessage: outcome.summary || outcome.title,
-        // One live signal per timer: a repeat that fails every night should replace
-        // its own notice rather than stack a new one beside it each time.
-        supersedeKey: `assistant-timer:${outcome.timerId}`,
-        // `agent` is the assistant acting on its own — which is exactly what a timer
-        // is. Its policy is "active", so this reaches the user when they are here and
-        // waits in the inbox when they are not, which is the right shape for
-        // something that fires whether or not anyone is watching. Not `completed`:
-        // that is passive, inbox-only, and a reminder nobody sees is a reminder that
-        // did not work.
-        context: { eventKind: "agent" },
-      });
+      // The panel's OWN strip, never the grid bar.
+      //
+      // Everything the assistant does stays inside the assistant. It can go and change
+      // the world — spawn an agent, send a command — but its reporting belongs where the
+      // conversation is, not on a surface that spans the whole window. A timer firing is
+      // the assistant telling you about its own work, so it is told in its own place.
+      //
+      // A failure is a warning rather than an error: the timer did what it was asked, the
+      // action it carried is what failed, and the panel's error level is reserved for the
+      // session itself being broken.
+      pushNotice(
+        failed ? "warning" : "info",
+        (failed ? "Scheduled timer failed: " : "Scheduled timer fired: ") +
+          (outcome.summary || outcome.title)
+      );
     }
     seen.current = keys;
   }, [timers, sessionId]);
@@ -164,11 +163,13 @@ export function useAssistantTimerNotificationsFromStore(requestTimers: () => voi
   const timersStale = useAssistantStore((s) => s.timersStale);
   const sessionId = useAssistantStore((s) => s.sessionId);
   const takeFiredTimerIds = useAssistantStore((s) => s.takeFiredTimerIds);
+  const pushNotice = useAssistantStore((s) => s.pushNotice);
   useAssistantTimerNotifications({
     timers,
     timersStale,
     sessionId,
     requestTimers,
     takeFiredTimerIds,
+    pushNotice,
   });
 }
