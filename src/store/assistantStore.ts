@@ -565,6 +565,22 @@ const EMPTY: AssistantSessionState = {
   droppedFrames: 0,
 };
 
+/**
+ * Tools whose success means the scheduled-timer list has changed.
+ *
+ * Named rather than pattern-matched on a `timer.` prefix: the read-only members of that
+ * family (timer.list) change nothing, and refreshing on those would turn every glance at
+ * the schedule into another round trip.
+ */
+const TIMER_MUTATING_TOOLS = new Set(["timer.schedule", "timer.cancel"]);
+
+function isTimerMutatingTool(toolId: string | undefined): boolean {
+  if (!toolId) return false;
+  // The wire spelling uses double underscores; accept both so a projection change
+  // cannot quietly stop the panel refreshing.
+  return TIMER_MUTATING_TOOLS.has(toolId.replace(/__/g, "."));
+}
+
 let noticeCounter = 0;
 function noticeId(): string {
   noticeCounter += 1;
@@ -1225,6 +1241,16 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
         return;
 
       case "tool:settled":
+        // A tool that CHANGED the schedule means the timer list we hold is out of date.
+        //
+        // Nothing else was telling us. The list was read once when the session armed and
+        // again when a timer FIRED, so a timer scheduled mid-turn stayed invisible until
+        // something unrelated happened to refresh it — which in practice meant restarting
+        // the assistant. You would ask for a timer, be told it was scheduled, and see no
+        // countdown anywhere.
+        if (isTimerMutatingTool(event.toolId) && event.result === "success") {
+          set({ timersStale: true });
+        }
         set((s) => {
           const prior = s.toolCalls[event.toolCallId];
           return {
