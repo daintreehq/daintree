@@ -13,8 +13,8 @@ export interface PerfSummaryRow {
   name: string;
   mode: PerfMode;
   p95Ms: number;
-  failedBudget: boolean;
-  budgetReason?: string;
+  outsideReference: boolean;
+  referenceNotes?: string;
   generatedAt: string;
 }
 
@@ -22,8 +22,8 @@ interface ScenarioAggregateJson {
   id: string;
   name: string;
   p95Ms: number;
-  failedBudget: boolean;
-  budgetReason?: string;
+  outsideReference: boolean;
+  referenceNotes?: string;
 }
 
 interface PerfRunSummaryJson {
@@ -38,7 +38,7 @@ interface PerfMetricsState {
   cls30s: number;
   isBackgrounded: boolean;
   summaryRows: PerfSummaryRow[];
-  failedBudgetCount: number;
+  outsideReferenceCount: number;
   isLoadingSummaries: boolean;
   summaryLoadError: string | null;
   lastLoadedAt: number | null;
@@ -213,13 +213,40 @@ function isPerfMode(value: unknown): value is PerfMode {
   return value === "smoke" || value === "ci" || value === "nightly" || value === "soak";
 }
 
-function isValidAggregate(value: unknown): value is ScenarioAggregateJson {
-  if (!isRecord(value)) return false;
-  if (typeof value.id !== "string" || typeof value.name !== "string") return false;
-  if (typeof value.p95Ms !== "number" || !Number.isFinite(value.p95Ms)) return false;
-  if (typeof value.failedBudget !== "boolean") return false;
-  if (value.budgetReason !== undefined && typeof value.budgetReason !== "string") return false;
-  return true;
+/**
+ * Validate and normalise one aggregate in a single pass.
+ *
+ * Summary files written before the harness stopped gating carry `failedBudget` /
+ * `budgetReason`. They live in `.tmp/perf-results`, which survives a branch
+ * switch, so a stale file would otherwise fail validation and blank the Perf tab
+ * with no explanation. Both spellings are read; only the new one is written.
+ *
+ * Validation and normalisation are one function rather than a type guard plus
+ * casts: a guard asserting `is ScenarioAggregateJson` over an object that only
+ * carries the legacy key would be lying, and the casts needed to paper over that
+ * are exactly what the `no-unsafe-type-assertion` rule is for.
+ */
+function normalizeAggregate(value: unknown): ScenarioAggregateJson | null {
+  if (!isRecord(value)) return null;
+  const { id, name, p95Ms } = value;
+  if (typeof id !== "string" || typeof name !== "string") return null;
+  if (typeof p95Ms !== "number" || !Number.isFinite(p95Ms)) return null;
+
+  // A file carrying BOTH spellings is ambiguous, not merely redundant — it means
+  // two writers disagreed. Reject rather than silently picking a winner.
+  const hasNew = value.outsideReference !== undefined;
+  const hasLegacy = value.failedBudget !== undefined;
+  if (hasNew && hasLegacy) return null;
+  const outsideReference = hasNew ? value.outsideReference : value.failedBudget;
+  if (typeof outsideReference !== "boolean") return null;
+
+  const hasNewNotes = value.referenceNotes !== undefined;
+  const hasLegacyNotes = value.budgetReason !== undefined;
+  if (hasNewNotes && hasLegacyNotes) return null;
+  const referenceNotes = hasNewNotes ? value.referenceNotes : value.budgetReason;
+  if (referenceNotes !== undefined && typeof referenceNotes !== "string") return null;
+
+  return { id, name, p95Ms, outsideReference, referenceNotes };
 }
 
 function parseSummary(value: unknown): PerfRunSummaryJson | null {
@@ -230,8 +257,9 @@ function parseSummary(value: unknown): PerfRunSummaryJson | null {
   if (!Array.isArray(aggregates)) return null;
   const validated: ScenarioAggregateJson[] = [];
   for (const candidate of aggregates) {
-    if (!isValidAggregate(candidate)) return null;
-    validated.push(candidate);
+    const normalized = normalizeAggregate(candidate);
+    if (normalized === null) return null;
+    validated.push(normalized);
   }
   return { generatedAt, mode, aggregates: validated };
 }
@@ -260,8 +288,8 @@ function toRows(summary: PerfRunSummaryJson, mode: PerfMode): PerfSummaryRow[] {
     name: agg.name,
     mode,
     p95Ms: agg.p95Ms,
-    failedBudget: agg.failedBudget,
-    budgetReason: agg.budgetReason,
+    outsideReference: agg.outsideReference,
+    referenceNotes: agg.referenceNotes,
     generatedAt: summary.generatedAt,
   }));
 }
@@ -272,7 +300,7 @@ export const usePerfMetricsStore = create<PerfMetricsState>((set) => ({
   cls30s: 0,
   isBackgrounded: false,
   summaryRows: [],
-  failedBudgetCount: 0,
+  outsideReferenceCount: 0,
   isLoadingSummaries: false,
   summaryLoadError: null,
   lastLoadedAt: null,
@@ -285,7 +313,7 @@ export const usePerfMetricsStore = create<PerfMetricsState>((set) => ({
     if (!projectRoot) {
       set({
         summaryRows: [],
-        failedBudgetCount: 0,
+        outsideReferenceCount: 0,
         isLoadingSummaries: false,
         summaryLoadError: null,
         lastLoadedAt: Date.now(),
@@ -307,10 +335,10 @@ export const usePerfMetricsStore = create<PerfMetricsState>((set) => ({
       for (const result of results) {
         if (result) rows.push(...toRows(result.summary, result.mode));
       }
-      const failedBudgetCount = rows.reduce((n, r) => n + (r.failedBudget ? 1 : 0), 0);
+      const outsideReferenceCount = rows.reduce((n, r) => n + (r.outsideReference ? 1 : 0), 0);
       set({
         summaryRows: rows,
-        failedBudgetCount,
+        outsideReferenceCount,
         isLoadingSummaries: false,
         summaryLoadError: null,
         lastLoadedAt: Date.now(),
@@ -332,7 +360,7 @@ export const usePerfMetricsStore = create<PerfMetricsState>((set) => ({
     refreshRequestId++;
     set({
       summaryRows: [],
-      failedBudgetCount: 0,
+      outsideReferenceCount: 0,
       summaryLoadError: null,
       isLoadingSummaries: false,
       lastLoadedAt: null,
@@ -361,7 +389,7 @@ export function resetPerfMetricsForTests(): void {
     cls30s: 0,
     isBackgrounded: false,
     summaryRows: [],
-    failedBudgetCount: 0,
+    outsideReferenceCount: 0,
     isLoadingSummaries: false,
     summaryLoadError: null,
     lastLoadedAt: null,

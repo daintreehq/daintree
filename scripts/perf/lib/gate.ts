@@ -40,7 +40,18 @@ export interface GateParams {
 }
 
 export interface GateResult {
-  failedBudget: boolean;
+  /**
+   * A measured number sits outside its reference value. Informational — callers
+   * must not turn this into a non-zero exit code.
+   */
+  outsideReference: boolean;
+  /**
+   * The measurement itself is untrustworthy: a non-finite p95, or a metric with
+   * a configured reference that stopped being emitted. Kept separate from
+   * `outsideReference` because these say "this number means nothing" rather than
+   * "this number is worse", and they are the only outputs worth escalating.
+   */
+  measurementIssues: string[];
   reasons: string[];
 }
 
@@ -54,21 +65,26 @@ export interface GateResult {
 export function evaluateScenarioBudget(params: GateParams): GateResult {
   const { p95Ms, metricAverages, budget, baselineP95, isCritical, hasBaselineFile } = params;
 
-  let failedBudget = false;
+  let outsideReference = false;
   const reasons: string[] = [];
+  const measurementIssues: string[] = [];
 
   // A non-finite measurement (NaN/Infinity) means the scenario is broken. NaN
   // comparisons are always false in JS, so without this guard every gate below
   // would silently pass — fail closed instead.
   if (!Number.isFinite(p95Ms)) {
+    // A broken measurement, not a slow one. `outsideReference` stays false for
+    // the same reason a vanished metric does: there is no measured value to be
+    // outside anything, and reporting one would dress a defect up as drift.
     return {
-      failedBudget: true,
-      reasons: [`non-finite p95 measurement (${p95Ms}) - failing closed`],
+      outsideReference: false,
+      measurementIssues: [`non-finite p95 measurement (${p95Ms})`],
+      reasons: [`non-finite p95 measurement (${p95Ms})`],
     };
   }
 
   if (budget.p95Ms !== undefined && p95Ms > budget.p95Ms) {
-    failedBudget = true;
+    outsideReference = true;
     reasons.push(`p95 ${round(p95Ms)}ms > budget ${budget.p95Ms}ms`);
   }
 
@@ -80,15 +96,26 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
       // prevent — so an absent metric fails rather than passes. Renaming a
       // metric must therefore rename it in budgets.json too.
       if (actual === undefined) {
-        failedBudget = true;
-        reasons.push(`${metricName} has a configured ceiling but was not emitted - failing closed`);
+        // NOT `outsideReference`: there is no measured value, so nothing is
+        // outside anything. Conflating the two would report a vanished
+        // measurement as a mildly-slow one, which is the more reassuring and
+        // more wrong of the two readings.
+        measurementIssues.push(`${metricName} has a configured reference but was not emitted`);
+        reasons.push(`${metricName} has a configured reference but was not emitted`);
         continue;
       }
-      // Treat a non-finite metric as a breach: NaN > maxValue is false, which
-      // would otherwise let a broken metric slip past its ceiling.
-      if (!Number.isFinite(actual) || actual > maxValue) {
-        failedBudget = true;
-        reasons.push(`${metricName} ${round(actual)} > max ${maxValue}`);
+      // run.ts now rejects non-finite metrics at collection, so this is
+      // defence in depth for a caller that bypasses it. It is a broken
+      // measurement, not a slow one — NaN > maxValue is false either way, so
+      // without this branch it would read as a clean pass.
+      if (!Number.isFinite(actual)) {
+        measurementIssues.push(`${metricName} produced a non-finite value (${actual})`);
+        reasons.push(`${metricName} non-finite (${actual})`);
+        continue;
+      }
+      if (actual > maxValue) {
+        outsideReference = true;
+        reasons.push(`${metricName} ${round(actual)} > reference ${maxValue}`);
       }
     }
   }
@@ -103,7 +130,7 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
     // A critical scenario is one whose regression gate must never be skipped,
     // so the two settings are contradictory. Fail on the contradiction rather
     // than silently letting `calibrating` win and disarm a critical gate.
-    failedBudget = true;
+    outsideReference = true;
     reasons.push("critical scenario marked calibrating - contradictory budget config");
   } else if (budget.calibrating) {
     reasons.push(
@@ -113,7 +140,7 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
     );
   } else if (!hasUsableBaseline) {
     if (isCritical) {
-      failedBudget = true;
+      outsideReference = true;
       reasons.push(
         hasBaselineFile
           ? "critical scenario missing from baseline - failing closed"
@@ -126,7 +153,7 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
     if (baselineP95 >= MIN_REGRESSION_BASELINE_MS) {
       const regressionPct = ((p95Ms - baselineP95) / baselineP95) * 100;
       if (regressionPct > budget.maxRegressionPct) {
-        failedBudget = true;
+        outsideReference = true;
         reasons.push(
           `regression ${round(regressionPct)}% exceeds ${budget.maxRegressionPct}% baseline gate`
         );
@@ -134,7 +161,7 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
     } else if (isCritical) {
       const deltaMs = p95Ms - baselineP95;
       if (deltaMs > ABSOLUTE_REGRESSION_MS_FLOOR) {
-        failedBudget = true;
+        outsideReference = true;
         reasons.push(
           `regression +${round(deltaMs)}ms exceeds ${ABSOLUTE_REGRESSION_MS_FLOOR}ms absolute gate (baseline ${round(baselineP95)}ms below ${MIN_REGRESSION_BASELINE_MS}ms noise floor)`
         );
@@ -146,5 +173,5 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
     }
   }
 
-  return { failedBudget, reasons };
+  return { outsideReference, measurementIssues, reasons };
 }

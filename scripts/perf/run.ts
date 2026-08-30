@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { loadBudgetConfig, getScenarioBudget } from "./lib/budgets";
@@ -6,7 +7,7 @@ import { checkBaselineCoverage, checkBaselineFreshness } from "./lib/baselineCov
 import { compareSamples } from "./lib/comparison";
 import { evaluateScenarioBudget } from "./lib/gate";
 import { appendJsonLine, readJson, writeJson, writeText, ensureDir } from "./lib/io";
-import { averageMetrics, mean, percentile, round, stdDev } from "./lib/stats";
+import { aggregateMetrics, averageMetrics, mean, percentile, round, stdDev } from "./lib/stats";
 import { buildMarkdownReport } from "./report/generate";
 import { assertMatrixCoverage, getScenariosForMode } from "./scenarios";
 import type {
@@ -14,6 +15,7 @@ import type {
   ComparisonAggregate,
   PerfMode,
   PerfRunSummary,
+  RunEnvironment,
   ScenarioAggregate,
   ScenarioContext,
   ScenarioSample,
@@ -90,6 +92,50 @@ function parseArgs(argv: string[]): CliOptions {
     updateBaseline: flags.has("update-baseline"),
     compare: flags.has("compare"),
     compareBase: args.get("compare-base") ?? "origin/develop",
+  };
+}
+
+/**
+ * Identifies the machine a run happened on.
+ *
+ * Without this a results file cannot be safely diffed against another: latency
+ * is only comparable to itself on one machine, and nothing recorded the machine.
+ * `PERF_MACHINE_LABEL` wins so a laptop can carry a stable name across reboots;
+ * otherwise the hostname, which is distinct enough between a laptop and a runner.
+ */
+function defaultMachineLabel(): string {
+  const explicit = process.env.PERF_MACHINE_LABEL?.trim();
+  if (explicit) return explicit;
+
+  if (process.env.GITHUB_ACTIONS === "true") {
+    // Every hosted job gets a FRESH VM from a pool of varying hardware, so two
+    // runs are never the same machine even when they carry the same OS and
+    // arch. A label of "gh-linux-x64" would let `durationsComparable` green-light
+    // exactly the cross-machine latency comparison this exists to refuse — and
+    // silently, since both runs look identical. Folding in the run and job ids
+    // makes hosted runs deliberately incomparable to each other; their counts
+    // still compare, which is the part that is actually meaningful in CI.
+    const runId = process.env.GITHUB_RUN_ID ?? "norun";
+    const attempt = process.env.GITHUB_RUN_ATTEMPT ?? "1";
+    const job = process.env.GITHUB_JOB ?? "nojob";
+    const osName = process.env.RUNNER_OS ?? process.platform;
+    return `gh-${osName}-${process.arch}-${job}-${runId}.${attempt}`.toLowerCase();
+  }
+
+  return `${os.hostname()}-${process.platform}-${process.arch}`.toLowerCase();
+}
+
+function describeEnvironment(): RunEnvironment {
+  const cpus = os.cpus();
+  return {
+    machineLabel: defaultMachineLabel(),
+    platform: process.platform,
+    arch: process.arch,
+    cpuModel: cpus[0]?.model?.trim() ?? "unknown",
+    cpuCount: cpus.length,
+    totalMemoryMb: Math.round(os.totalmem() / (1024 * 1024)),
+    osRelease: os.release(),
+    nodeVersion: process.version,
   };
 }
 
@@ -187,6 +233,22 @@ async function run(): Promise<void> {
       const durationMs = sample.durationMs > 0 ? sample.durationMs : wallClockMs;
 
       const metrics = sample.metrics ?? {};
+      // A non-finite metric is a broken apparatus, not a slow number, so it
+      // throws rather than flowing onward. Two concrete reasons: NaN silently
+      // poisons every aggregate downstream (max/sum/mean all become NaN), and
+      // `JSON.stringify` writes non-finite numbers as `null`, which violates
+      // MetricStat's `number` contract and would hand the renderer a field it
+      // cannot type-check. Failing here is the stance working as intended —
+      // measurements are never gated, but a measurement that isn't a number
+      // was never a measurement.
+      for (const [metricName, value] of Object.entries(metrics)) {
+        if (typeof value !== "number" || !Number.isFinite(value)) {
+          throw new Error(
+            `Scenario ${scenario.id} iteration ${iteration} emitted a non-finite metric ` +
+              `"${metricName}" (${String(value)})`
+          );
+        }
+      }
       const note = sample.notes?.trim();
 
       appendJsonLine(rawJsonlPath, {
@@ -218,7 +280,7 @@ async function run(): Promise<void> {
     }
   }
 
-  const failedScenarios: string[] = [];
+  const scenariosOutsideReference: string[] = [];
   const aggregates: ScenarioAggregate[] = [];
 
   for (const [scenarioId, aggregate] of aggregateById.entries()) {
@@ -230,10 +292,11 @@ async function run(): Promise<void> {
     const stdDevMs = stdDev(aggregate.durations);
 
     const metricAverages = averageMetrics(aggregate.metrics);
+    const metricStats = aggregateMetrics(aggregate.metrics);
 
     const budget = getScenarioBudget(budgetConfig, scenarioId);
     const baselineP95 = baseline?.p95ByScenario?.[scenarioId];
-    const { failedBudget, reasons } = evaluateScenarioBudget({
+    const { outsideReference, measurementIssues, reasons } = evaluateScenarioBudget({
       scenarioId,
       p95Ms,
       metricAverages,
@@ -243,8 +306,8 @@ async function run(): Promise<void> {
       hasBaselineFile: baseline !== null,
     });
 
-    if (failedBudget) {
-      failedScenarios.push(scenarioId);
+    if (outsideReference) {
+      scenariosOutsideReference.push(scenarioId);
     }
 
     aggregates.push({
@@ -262,8 +325,21 @@ async function run(): Promise<void> {
       metricAverages: Object.fromEntries(
         Object.entries(metricAverages).map(([key, value]) => [key, round(value)])
       ),
-      failedBudget,
-      budgetReason: reasons.length > 0 ? reasons.join("; ") : undefined,
+      metricStats: Object.fromEntries(
+        Object.entries(metricStats).map(([key, stat]) => [
+          key,
+          {
+            mean: round(stat.mean),
+            max: round(stat.max),
+            min: round(stat.min),
+            sum: round(stat.sum),
+            count: stat.count,
+          },
+        ])
+      ),
+      outsideReference,
+      referenceNotes: reasons.length > 0 ? reasons.join("; ") : undefined,
+      measurementIssues,
       notes: [...new Set(aggregate.notes)].slice(0, 3),
     });
   }
@@ -279,8 +355,8 @@ async function run(): Promise<void> {
     const failComparison = (reason: string) => {
       console.error(`[perf:compare] FAIL ${reason}`);
       for (const id of expectedComparisons) {
-        if (!failedScenarios.includes(id)) {
-          failedScenarios.push(id);
+        if (!scenariosOutsideReference.includes(id)) {
+          scenariosOutsideReference.push(id);
         }
       }
     };
@@ -314,17 +390,17 @@ async function run(): Promise<void> {
       const aggregateByIdForReport = new Map(aggregates.map((agg) => [agg.id, agg]));
       for (const comp of comparisonAggregates) {
         if (comp.comparison.regression) {
-          if (!failedScenarios.includes(comp.head.id)) {
-            failedScenarios.push(comp.head.id);
+          if (!scenariosOutsideReference.includes(comp.head.id)) {
+            scenariosOutsideReference.push(comp.head.id);
           }
           // Mutate the aggregate that gets serialized into the summary/report,
           // not comp.head (a detached copy built by computeComparisons).
           const reportAgg = aggregateByIdForReport.get(comp.head.id);
           if (reportAgg) {
             const abReason = `A/B regression (p=${round(comp.comparison.pValue)}, d=${round(comp.comparison.effectSize)})`;
-            reportAgg.failedBudget = true;
-            reportAgg.budgetReason = reportAgg.budgetReason
-              ? `${reportAgg.budgetReason}; ${abReason}`
+            reportAgg.outsideReference = true;
+            reportAgg.referenceNotes = reportAgg.referenceNotes
+              ? `${reportAgg.referenceNotes}; ${abReason}`
               : abReason;
           }
         }
@@ -340,8 +416,9 @@ async function run(): Promise<void> {
     mode: cli.mode,
     nodeVersion: process.version,
     platform: process.platform,
+    environment: describeEnvironment(),
     scenarioCount: aggregates.length,
-    failedScenarios,
+    scenariosOutsideReference,
     aggregates,
   };
 
@@ -366,15 +443,15 @@ async function run(): Promise<void> {
     writeJson(cli.baselinePath, baselineOut);
   }
 
-  const passed = failedScenarios.length === 0;
+  const passed = scenariosOutsideReference.length === 0;
   const gateMessage = passed ? "PASS" : "FAIL";
   console.log(
-    `[perf:${cli.mode}] ${gateMessage} scenarios=${aggregates.length} failed=${failedScenarios.length}`
+    `[perf:${cli.mode}] ${gateMessage} scenarios=${aggregates.length} failed=${scenariosOutsideReference.length}`
   );
 
   for (const aggregate of aggregates) {
-    const marker = aggregate.failedBudget ? "x" : "ok";
-    const reason = aggregate.budgetReason ? ` (${aggregate.budgetReason})` : "";
+    const marker = aggregate.outsideReference ? "x" : "ok";
+    const reason = aggregate.referenceNotes ? ` (${aggregate.referenceNotes})` : "";
     console.log(
       `[${marker}] ${aggregate.id} p95=${aggregate.p95Ms}ms p99=${aggregate.p99Ms}ms${reason}`
     );
@@ -514,7 +591,9 @@ function buildAggregatesFromMap(
       meanMs: round(meanMs),
       stdDevMs: round(stdDevMs),
       metricAverages: {},
-      failedBudget: false,
+      metricStats: {},
+      outsideReference: false,
+      measurementIssues: [],
       notes: [...new Set(aggregate.notes)].slice(0, 3),
     });
   }

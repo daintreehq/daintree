@@ -20,14 +20,67 @@ function makeParams(overrides: Partial<GateParams> = {}): GateParams {
   };
 }
 
+describe("evaluateScenarioBudget — measurement issues vs reference drift", () => {
+  it("reports a vanished metric as a measurement issue, NOT as outside reference", () => {
+    // These are different claims. "Outside reference" means we measured
+    // something and it was worse; a metric that stopped being emitted means we
+    // measured nothing at all. Conflating them reports a disappeared
+    // measurement as a mildly slow one — the reassuring reading, and the wrong
+    // one. It also reads identically to a pass, which is why it is escalated.
+    const result = evaluateScenarioBudget(
+      makeParams({ budget: { maxMetricValues: { gitSpawns: 5 } }, metricAverages: {} })
+    );
+
+    expect(result.measurementIssues).toHaveLength(1);
+    expect(result.measurementIssues[0]).toContain("gitSpawns");
+    expect(result.outsideReference).toBe(false);
+  });
+
+  it("reports a metric over its reference as drift, with no measurement issue", () => {
+    const result = evaluateScenarioBudget(
+      makeParams({
+        budget: { maxMetricValues: { gitSpawns: 5 } },
+        metricAverages: { gitSpawns: 9 },
+        baselineP95: 1,
+      })
+    );
+
+    expect(result.outsideReference).toBe(true);
+    expect(result.measurementIssues).toEqual([]);
+  });
+
+  it("treats a non-finite metric as a broken measurement, not a clean pass", () => {
+    // NaN > max is false, so without an explicit branch this reads as success.
+    const result = evaluateScenarioBudget(
+      makeParams({
+        budget: { maxMetricValues: { gitSpawns: 5 } },
+        metricAverages: { gitSpawns: Number.NaN },
+      })
+    );
+
+    expect(result.measurementIssues).toHaveLength(1);
+    expect(result.measurementIssues[0]).toContain("non-finite");
+  });
+
+  it("carries a non-finite p95 as a measurement issue", () => {
+    const result = evaluateScenarioBudget(makeParams({ p95Ms: Number.NaN }));
+    expect(result.measurementIssues).toHaveLength(1);
+  });
+
+  it("leaves measurementIssues empty on an ordinary healthy scenario", () => {
+    const result = evaluateScenarioBudget(makeParams({ p95Ms: 10, baselineP95: 10 }));
+    expect(result.measurementIssues).toEqual([]);
+  });
+});
+
 describe("evaluateScenarioBudget — absolute p95 budget", () => {
   it("fails when p95 exceeds the budget and passes at or under it", () => {
     const budget: ScenarioBudget = { p95Ms: 100 };
     const over = evaluateScenarioBudget(makeParams({ p95Ms: 101, budget, baselineP95: 50 }));
     const at = evaluateScenarioBudget(makeParams({ p95Ms: 100, budget, baselineP95: 50 }));
 
-    expect(over.failedBudget).toBe(true);
-    expect(at.failedBudget).toBe(false);
+    expect(over.outsideReference).toBe(true);
+    expect(at.outsideReference).toBe(false);
   });
 
   it("ignores the p95 budget when none is configured", () => {
@@ -35,22 +88,29 @@ describe("evaluateScenarioBudget — absolute p95 budget", () => {
     const result = evaluateScenarioBudget(
       makeParams({ p95Ms: 1e6, budget: { maxRegressionPct: 15 }, baselineP95: 1e6 })
     );
-    expect(result.failedBudget).toBe(false);
+    expect(result.outsideReference).toBe(false);
   });
 });
 
-describe("evaluateScenarioBudget — non-finite measurements fail closed", () => {
+describe("evaluateScenarioBudget — non-finite measurements are apparatus defects", () => {
+  // Behaviour deliberately changed: these used to report `outsideReference`,
+  // which dressed a broken measurement up as a merely-slow one. A non-finite
+  // value means nothing was measured, so it is now an escalated measurement
+  // issue instead. The assertions are stronger, not weaker — each one also
+  // pins that the defect is actually surfaced rather than silently swallowed.
   it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
-    "fails when p95 is %p",
+    "raises a measurement issue when p95 is %p",
     (p95Ms) => {
       const result = evaluateScenarioBudget(
         makeParams({ p95Ms, budget: { p95Ms: 100 }, baselineP95: 50 })
       );
-      expect(result.failedBudget).toBe(true);
+      expect(result.measurementIssues).toHaveLength(1);
+      expect(result.outsideReference).toBe(false);
     }
   );
 
-  it("fails a non-finite metric value that would otherwise slip past its ceiling", () => {
+  it("raises a measurement issue for a non-finite metric that would slip past its ceiling", () => {
+    // NaN > ceiling is false, so without an explicit branch this reads as a pass.
     const result = evaluateScenarioBudget(
       makeParams({
         budget: { p95Ms: 1000, maxMetricValues: { lag: 100 } },
@@ -58,7 +118,9 @@ describe("evaluateScenarioBudget — non-finite measurements fail closed", () =>
         metricAverages: { lag: Number.NaN },
       })
     );
-    expect(result.failedBudget).toBe(true);
+    expect(result.measurementIssues).toHaveLength(1);
+    expect(result.measurementIssues[0]).toContain("lag");
+    expect(result.outsideReference).toBe(false);
   });
 });
 
@@ -83,17 +145,18 @@ describe("evaluateScenarioBudget — metric ceilings", () => {
       })
     );
 
-    expect(fail.failedBudget).toBe(true);
+    expect(fail.outsideReference).toBe(true);
     expect(fail.reasons.some((r) => r.includes("eventLoopLagMs"))).toBe(true);
     expect(fail.reasons.some((r) => r.includes("serializeMs"))).toBe(false);
-    expect(pass.failedBudget).toBe(false);
+    expect(pass.outsideReference).toBe(false);
   });
 
-  it("fails closed when a configured metric has no recorded average", () => {
-    // Reversed from the original ignore-and-pass behaviour. `averageMetrics`
-    // includes any metric reported by at least ONE sample, so an absent entry
-    // means no sample emitted it at all — a renamed or dropped metric whose
-    // ceiling has silently stopped gating, not a sparse measurement.
+  it("escalates a configured metric that has no recorded average", () => {
+    // `averageMetrics` includes any metric reported by at least ONE sample, so
+    // an absent entry means no sample emitted it — a renamed or dropped metric
+    // whose reference silently stopped meaning anything, not a sparse
+    // measurement. Reported as a measurement issue rather than as drift: there
+    // is no value to be outside a reference.
     const result = evaluateScenarioBudget(
       makeParams({
         budget: { p95Ms: 1000, maxMetricValues: { eventLoopLagMs: 1 } },
@@ -101,7 +164,9 @@ describe("evaluateScenarioBudget — metric ceilings", () => {
         metricAverages: {},
       })
     );
-    expect(result.failedBudget).toBe(true);
+    expect(result.measurementIssues).toHaveLength(1);
+    expect(result.measurementIssues[0]).toContain("eventLoopLagMs");
+    expect(result.outsideReference).toBe(false);
   });
 });
 
@@ -112,14 +177,14 @@ describe("evaluateScenarioBudget — percentage gate above the noise floor", () 
     const budget: ScenarioBudget = { p95Ms: 10000, maxRegressionPct: 15 };
     const regressed = baselineP95 * 1.2; // +20% > 15%
     const result = evaluateScenarioBudget(makeParams({ p95Ms: regressed, budget, baselineP95 }));
-    expect(result.failedBudget).toBe(true);
+    expect(result.outsideReference).toBe(true);
   });
 
   it("passes when the regression percentage is within the budget", () => {
     const budget: ScenarioBudget = { p95Ms: 10000, maxRegressionPct: 15 };
     const withinBudget = baselineP95 * 1.1; // +10% < 15%
     const result = evaluateScenarioBudget(makeParams({ p95Ms: withinBudget, budget, baselineP95 }));
-    expect(result.failedBudget).toBe(false);
+    expect(result.outsideReference).toBe(false);
   });
 
   it("treats the regression gate as strict at the exact budget boundary", () => {
@@ -127,10 +192,11 @@ describe("evaluateScenarioBudget — percentage gate above the noise floor", () 
     const atBoundary = baselineP95 * 1.15; // exactly +15%, strict > → passes
     const justOver = baselineP95 * 1.15 + baselineP95 * 0.0001; // marginally over → fails
     expect(
-      evaluateScenarioBudget(makeParams({ p95Ms: atBoundary, budget, baselineP95 })).failedBudget
+      evaluateScenarioBudget(makeParams({ p95Ms: atBoundary, budget, baselineP95 }))
+        .outsideReference
     ).toBe(false);
     expect(
-      evaluateScenarioBudget(makeParams({ p95Ms: justOver, budget, baselineP95 })).failedBudget
+      evaluateScenarioBudget(makeParams({ p95Ms: justOver, budget, baselineP95 })).outsideReference
     ).toBe(true);
   });
 });
@@ -148,7 +214,7 @@ describe("evaluateScenarioBudget — Bug 1: sub-floor critical scenarios", () =>
         isCritical: true,
       })
     );
-    expect(result.failedBudget).toBe(true);
+    expect(result.outsideReference).toBe(true);
   });
 
   it("does not fail a critical scenario whose absolute delta is within the floor", () => {
@@ -159,7 +225,7 @@ describe("evaluateScenarioBudget — Bug 1: sub-floor critical scenarios", () =>
         isCritical: true,
       })
     );
-    expect(result.failedBudget).toBe(false);
+    expect(result.outsideReference).toBe(false);
   });
 
   it("warns but does not block non-critical scenarios below the noise floor", () => {
@@ -170,7 +236,7 @@ describe("evaluateScenarioBudget — Bug 1: sub-floor critical scenarios", () =>
         isCritical: false,
       })
     );
-    expect(result.failedBudget).toBe(false);
+    expect(result.outsideReference).toBe(false);
     expect(result.reasons.length).toBeGreaterThan(0);
   });
 });
@@ -180,14 +246,14 @@ describe("evaluateScenarioBudget — Bug 2: baseline entry missing from a presen
     const result = evaluateScenarioBudget(
       makeParams({ baselineP95: undefined, isCritical: true, hasBaselineFile: true })
     );
-    expect(result.failedBudget).toBe(true);
+    expect(result.outsideReference).toBe(true);
   });
 
   it("warns but does not block a non-critical scenario when its entry is absent", () => {
     const result = evaluateScenarioBudget(
       makeParams({ baselineP95: undefined, isCritical: false, hasBaselineFile: true })
     );
-    expect(result.failedBudget).toBe(false);
+    expect(result.outsideReference).toBe(false);
     expect(result.reasons.length).toBeGreaterThan(0);
   });
 
@@ -195,7 +261,7 @@ describe("evaluateScenarioBudget — Bug 2: baseline entry missing from a presen
     const result = evaluateScenarioBudget(
       makeParams({ baselineP95: Number.NaN, isCritical: true, hasBaselineFile: true })
     );
-    expect(result.failedBudget).toBe(true);
+    expect(result.outsideReference).toBe(true);
   });
 });
 
@@ -204,7 +270,7 @@ describe("evaluateScenarioBudget — Bug 3: no baseline file at all", () => {
     const result = evaluateScenarioBudget(
       makeParams({ baselineP95: undefined, isCritical: true, hasBaselineFile: false })
     );
-    expect(result.failedBudget).toBe(true);
+    expect(result.outsideReference).toBe(true);
   });
 
   it("distinguishes a missing file from a missing entry in its reason", () => {
@@ -228,7 +294,7 @@ describe("evaluateScenarioBudget — thresholds are exported, not magic numbers"
         isCritical: true,
       })
     );
-    expect(atFloor.failedBudget).toBe(false);
+    expect(atFloor.outsideReference).toBe(false);
   });
 
   it("the absolute-delta gate is strict (delta must exceed the floor)", () => {
@@ -247,8 +313,8 @@ describe("evaluateScenarioBudget — thresholds are exported, not magic numbers"
         isCritical: true,
       })
     );
-    expect(justOver.failedBudget).toBe(true);
-    expect(exactly.failedBudget).toBe(false);
+    expect(justOver.outsideReference).toBe(true);
+    expect(exactly.outsideReference).toBe(false);
   });
 });
 
@@ -260,7 +326,7 @@ describe("evaluateScenarioBudget — calibrating scenarios", () => {
         baselineP95: undefined,
       })
     );
-    expect(result.failedBudget).toBe(false);
+    expect(result.outsideReference).toBe(false);
     expect(result.reasons).toContain("calibrating - regression gate not yet enabled");
     // The misleading missing-baseline reason must not also be reported.
     expect(result.reasons).not.toContain("baseline missing - regression gate skipped");
@@ -274,7 +340,7 @@ describe("evaluateScenarioBudget — calibrating scenarios", () => {
         isCritical: true,
       })
     );
-    expect(result.failedBudget).toBe(true);
+    expect(result.outsideReference).toBe(true);
     expect(result.reasons.join(" ")).toContain("contradictory");
   });
 
@@ -285,7 +351,7 @@ describe("evaluateScenarioBudget — calibrating scenarios", () => {
         baselineP95: 40,
       })
     );
-    expect(result.failedBudget).toBe(false);
+    expect(result.outsideReference).toBe(false);
     expect(result.reasons.join(" ")).toContain("remove `calibrating`");
   });
 
@@ -297,7 +363,7 @@ describe("evaluateScenarioBudget — calibrating scenarios", () => {
         metricAverages: { p99KeystrokeMs: 9 },
       })
     );
-    expect(result.failedBudget).toBe(true);
+    expect(result.outsideReference).toBe(true);
     expect(result.reasons).toEqual(
       expect.arrayContaining([
         expect.stringContaining("p95"),
@@ -309,10 +375,10 @@ describe("evaluateScenarioBudget — calibrating scenarios", () => {
   it("suppresses a real regression that would otherwise fail", () => {
     const budget = { p95Ms: 1000, maxRegressionPct: 15 };
     const regressed = makeParams({ budget, p95Ms: 100, baselineP95: 50 });
-    expect(evaluateScenarioBudget(regressed).failedBudget).toBe(true);
+    expect(evaluateScenarioBudget(regressed).outsideReference).toBe(true);
     expect(
       evaluateScenarioBudget({ ...regressed, budget: { ...budget, calibrating: true } })
-        .failedBudget
+        .outsideReference
     ).toBe(false);
   });
 });
@@ -327,7 +393,11 @@ describe("evaluateScenarioBudget — metric-only budgets (no p95Ms)", () => {
         metricAverages: {},
       })
     );
-    expect(result.failedBudget).toBe(true);
+    // Behaviour deliberately changed: a vanished metric is now an escalated
+    // measurement issue rather than reference drift. Nothing was measured, so
+    // nothing can be outside a reference.
+    expect(result.measurementIssues).toHaveLength(1);
+    expect(result.outsideReference).toBe(false);
     expect(result.reasons.join(" ")).toContain("not emitted");
   });
 
@@ -338,16 +408,18 @@ describe("evaluateScenarioBudget — metric-only budgets (no p95Ms)", () => {
         metricAverages: { a: 9, b: 19 },
       })
     );
-    expect(result.failedBudget).toBe(false);
+    expect(result.outsideReference).toBe(false);
   });
 
-  it("still fails closed for a missing metric while calibrating", () => {
+  it("still escalates a missing metric while calibrating", () => {
+    // `calibrating` softens reference wording; it must never suppress the
+    // report that a measurement disappeared entirely.
     const result = evaluateScenarioBudget(
       makeParams({
         budget: { maxMetricValues: { onlyMetric: 1 }, calibrating: true },
         metricAverages: {},
       })
     );
-    expect(result.failedBudget).toBe(true);
+    expect(result.measurementIssues).toHaveLength(1);
   });
 });

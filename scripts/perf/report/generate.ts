@@ -5,7 +5,7 @@ function format(value: number): string {
 }
 
 function aggregateLine(aggregate: ScenarioAggregate): string {
-  const status = aggregate.failedBudget ? "FAIL" : "PASS";
+  const status = aggregate.outsideReference ? "FAIL" : "PASS";
   const notes = aggregate.notes.length > 0 ? aggregate.notes.join("; ") : "";
 
   return [
@@ -53,7 +53,7 @@ export function buildMarkdownReport(
     `- Node: ${summary.nodeVersion}`,
     `- Platform: ${summary.platform}`,
     `- Scenarios: ${summary.scenarioCount}`,
-    `- Failed: ${summary.failedScenarios.length}`,
+    `- Failed: ${summary.scenariosOutsideReference.length}`,
     "",
     "## Scenario Results",
     "",
@@ -64,9 +64,14 @@ export function buildMarkdownReport(
   const body = summary.aggregates.map(aggregateLine);
 
   const failedSection =
-    summary.failedScenarios.length === 0
+    summary.scenariosOutsideReference.length === 0
       ? ["", "## Regression Gate", "", "All scenario budgets passed."]
-      : ["", "## Regression Gate", "", `Failed scenarios: ${summary.failedScenarios.join(", ")}`];
+      : [
+          "",
+          "## Regression Gate",
+          "",
+          `Failed scenarios: ${summary.scenariosOutsideReference.join(", ")}`,
+        ];
 
   return [...header, ...body, ...failedSection, ...comparisonSection(comparisons), ""].join("\n");
 }

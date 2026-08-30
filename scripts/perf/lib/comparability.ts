@@ -1,0 +1,135 @@
+import type { RunEnvironment } from "../types";
+
+/**
+ * How safely a measurement can be compared between two runs.
+ *
+ * This is the distinction the harness previously did not make, and it is the one
+ * that matters most for a workflow spanning a Mac and a Windows laptop. Reading
+ * a machine-dependent number as machine-independent is how "Windows is 80%
+ * slower" gets reported when what was actually measured is two laptops.
+ */
+export type ComparabilityClass =
+  /** Deterministic event tally. Machine-independent — compare raw. */
+  | "count"
+  /** Deterministic byte size of a payload. Machine-independent. */
+  | "size"
+  /** A normalised proportion or per-unit rate. Machine-independent. */
+  | "ratio"
+  /** Wall-clock or CPU time. Only meaningful against itself on ONE machine. */
+  | "duration"
+  /**
+   * Runtime heap/RSS measurement. Deliberately NOT grouped with `size`: a
+   * payload's byte length is arithmetic, whereas retained heap depends on GC
+   * timing, allocator behaviour and pointer width, none of which survive a
+   * platform change. Comparable run-to-run on one machine; indicative only
+   * across machines.
+   */
+  | "memory"
+  /** Unrecognised — treated as machine-dependent, the safe default. */
+  | "unknown";
+
+/**
+ * Whether a class may be compared across machines.
+ *
+ * `unknown` is deliberately excluded: an unclassified metric gets the
+ * conservative answer, so adding a metric with a novel name loses a comparison
+ * rather than inventing a false one.
+ */
+export function isMachineIndependent(cls: ComparabilityClass): boolean {
+  return cls === "count" || cls === "size" || cls === "ratio";
+}
+
+/**
+ * Ordered classification rules. Order is load-bearing and the sequence is
+ * chosen so the *unsafe* direction of every ambiguity is impossible:
+ *
+ * 1. Time units win over everything. `msPerKFile` and `cpuMsPerMb30` are rates
+ *    whose numerator is time, so they move with the machine. An earlier
+ *    suffix-only version classified `msPerKAction` as a count purely because it
+ *    ended in "n", which would have granted a latency figure cross-machine
+ *    comparison — the exact error this module exists to prevent.
+ * 2. Memory before size, so `heapDeltaMb` is not read as a deterministic byte
+ *    count.
+ * 3. Ratio before count, so `spawnsPerWorktreeN50` and `detectionToIntervalRatio`
+ *    are not read as tallies.
+ *
+ * Unit tokens are matched anywhere in the name (with a word boundary), not just
+ * as a suffix, because this codebase names metrics `applyMsN50` and `worstMs380`
+ * as often as it names them `latencyMs`.
+ */
+// Unit tokens are matched CASE-SENSITIVELY as camelCase segments (`Ms`, `Us`,
+// `Mb`), or lowercase only at the very start of a name (`msPerKFile`). A
+// case-insensitive version of these rules is actively dangerous, and every one
+// of these was a real misfire caught by the table test below:
+//   "items"        → `ms` at the end → duration
+//   "statusPasses" → `us` in "status" → duration
+//   "decorations"  → "ratio" inside "decorations" → ratio
+// Word-ish anchoring plus case sensitivity removes all three without needing an
+// explicit per-metric registry, which would classify every newly added metric
+// as `unknown` and quietly lose its comparison.
+const RULES: ReadonlyArray<{ cls: ComparabilityClass; pattern: RegExp }> = [
+  // Time. `Ms`/`Us`/`Sec` as camelCase segments, or leading `ms`/`us`.
+  {
+    cls: "duration",
+    pattern:
+      /(^(ms|us)[A-Z0-9])|([a-z0-9](Ms|Us|Sec|Secs)([A-Z0-9]|$))|[Ll]atency|[Dd]uration|[Ee]lapsed|(^|[a-z])[Tt]ime([A-Z]|$)/,
+  },
+  // Proportions and per-unit rates. Ahead of memory so `memoryGrowthPct` is a
+  // ratio (normalised, machine-independent) rather than a memory reading.
+  // `Ratio` is capitalised or leading, never the substring inside "decorations".
+  {
+    cls: "ratio",
+    pattern:
+      /(^ratio|[a-z0-9]Ratio)|[Pp]ct$|[Pp]ercent|[Ff]raction|[Uu]tili[sz]ation|([a-z0-9]Per[A-Z])|[Dd]egradationX?$/,
+  },
+  // Runtime memory, ahead of deterministic size.
+  { cls: "memory", pattern: /[Hh]eap|[Rr]ss|[Mm]emory|[Ff]ootprint|([a-z0-9](Mb|Gb)([A-Z0-9]|$))/ },
+  // Deterministic payload size.
+  {
+    cls: "size",
+    pattern: /[Bb]ytes|([a-z0-9](KB|Kb|KiB|MiB)([A-Z0-9]|$))|[Ss]ize$|^size/,
+  },
+  // Tallies. Plain word matching is safe here: it runs last, so anything a
+  // stronger rule wanted has already been claimed.
+  {
+    cls: "count",
+    pattern:
+      /[Cc]ount|[Ss]pawns|[Ss]tarts|[Ii]nvocations|[Rr]etries|[Cc]alls|[Hh]its|[Mm]isses|[Ee]vents|[Ff]lushes|[Rr]enders|[Mm]essages|[Tt]asks|[Hh]andles|[Dd]escriptors|[Ww]rites|[Rr]eads|[Pp]asses|[Aa]ttempts|[Cc]allbacks|[Kk]eystrokes|[Rr]oundTrips|[Ll]ines|[Pp]anels|[Gg]roups|[Hh]unks|[Tt]argets|[Ff]rames|[Ff]iles|[Tt]okens|[Dd]ecorations|[Cc]hanges|[Bb]atches|[Ii]tems|[Rr]esolved/,
+  },
+];
+
+/** Classify a metric by its name. */
+export function classifyMetric(metricName: string): ComparabilityClass {
+  for (const rule of RULES) {
+    if (rule.pattern.test(metricName)) return rule.cls;
+  }
+  return "unknown";
+}
+
+/**
+ * Short marker for report tables. `≡` reads as "compare freely", `~` as
+ * "compare only against itself".
+ */
+export function comparabilityMarker(cls: ComparabilityClass): string {
+  return isMachineIndependent(cls) ? "≡" : "~";
+}
+
+/**
+ * Whether two runs' machine-dependent figures may be compared at all.
+ *
+ * Machine label is the whole test. Two runs on the same host at different times
+ * still differ in thermal state and background load, but that is noise around a
+ * real comparison; two runs on different hosts are not a comparison.
+ */
+export function durationsComparable(a: RunEnvironment, b: RunEnvironment): boolean {
+  return a.machineLabel === b.machineLabel && a.platform === b.platform && a.arch === b.arch;
+}
+
+/** Human-readable reason a machine-dependent comparison was refused. */
+export function describeIncomparability(a: RunEnvironment, b: RunEnvironment): string {
+  if (a.machineLabel !== b.machineLabel) {
+    return `different machines (${a.machineLabel} vs ${b.machineLabel})`;
+  }
+  if (a.platform !== b.platform) return `different platforms (${a.platform} vs ${b.platform})`;
+  return `different architectures (${a.arch} vs ${b.arch})`;
+}

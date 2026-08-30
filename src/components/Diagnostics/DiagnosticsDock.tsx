@@ -11,7 +11,6 @@ import {
   DIAGNOSTICS_DEFAULT_HEIGHT,
 } from "@/store/diagnosticsStore";
 import { useErrorStore } from "@/store";
-import { usePerfMetricsStore } from "@/store/perfMetricsStore";
 import { ProblemsContent } from "./ProblemsContent";
 import { LogsContent } from "./LogsContent";
 import { EventsContent } from "./EventsContent";
@@ -93,7 +92,10 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       }))
     );
   const errorCount = useErrorStore((state) => state.errors.filter((e) => !e.dismissed).length);
-  const failedBudgetCount = usePerfMetricsStore((state) => state.failedBudgetCount);
+  // The Perf tab carries no badge. The tab-badge style is the error tone shared
+  // with Problems, and a perf number drifting past a reference value is not an
+  // error — the suite gates nothing. Wearing that tone made every 2% drift look
+  // like a fault and diluted the one badge that does mean something.
   // Auto-open on new errors lives in useDiagnosticsAutoOpen (always mounted in
   // AppLayout) — the dock is lazy-mounted, so a watcher here would never see
   // the first error.
@@ -282,7 +284,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     { id: "logs", label: "Logs" },
     { id: "events", label: "Events" },
     { id: "telemetry", label: "Telemetry" },
-    { id: "perf", label: "Perf", badge: failedBudgetCount },
+    { id: "perf", label: "Perf" },
     { id: "whySlow", label: "Why slow?" },
   ];
 
