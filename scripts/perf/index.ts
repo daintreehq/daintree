@@ -139,6 +139,10 @@ const REGISTRY: Record<string, Command> = {
   ci: { summary: "CI validation matrix (scheduled + manual dispatch)", runner: harness("ci") },
   nightly: { summary: "Full matrix + soak coverage", runner: harness("nightly") },
   soak: { summary: "Long-run stress matrix", runner: harness("soak") },
+  compare: {
+    summary: "Diff two run summaries into a comparability-aware delta table",
+    runner: tsxScript("compare.ts"),
+  },
   "verify-baselines": {
     summary: "Assert all four committed baselines are fresh, complete, and non-degenerate",
     runner: tsxScript("verify-baselines.ts"),
