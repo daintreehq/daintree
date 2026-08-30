@@ -160,6 +160,13 @@ async function capture(spec: Capture): Promise<AssistantSessionState> {
   // NOT added here fails compilation in this file. Without the annotation the omission
   // surfaced only in the generated `capturedStates.ts`, which points at the artifact
   // rather than at the line that needs editing.
+  //
+  // That annotation is necessary and NOT sufficient: this file is run with `tsx`,
+  // which strips types without checking them, and the timer fields had already drifted
+  // out of this list before anyone noticed. The omission still surfaces — as a build
+  // failure in the generated artifact, one regeneration later — so the rule when
+  // adding a field to the store is to add it HERE and regenerate, and the rule after
+  // regenerating is to run the build rather than trusting the script's own silence.
   const s = useAssistantStore.getState();
   return {
     sessionId: s.sessionId,
@@ -175,6 +182,11 @@ async function capture(spec: Capture): Promise<AssistantSessionState> {
     mcpToolCount: s.mcpToolCount,
     commands: s.commands,
     operations: s.operations,
+    timers: s.timers,
+    timersStale: s.timersStale,
+    pendingFiredTimerIds: s.pendingFiredTimerIds,
+    timerCancelPending: s.timerCancelPending,
+    timerCancelErrors: s.timerCancelErrors,
     toolGrants: s.toolGrants,
     queuedInterjections: s.queuedInterjections,
     retractedDraft: s.retractedDraft,

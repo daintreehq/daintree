@@ -27,11 +27,14 @@ export function useAssistantTimerNotifications({
   timersStale,
   sessionId,
   requestTimers,
+  takeFiredTimerIds,
 }: {
   timers: AssistantTimers | null;
   timersStale: boolean;
   sessionId: string | null;
   requestTimers: () => void;
+  /** Read-and-clear the ids the engine has told us fired. */
+  takeFiredTimerIds: () => string[];
 }) {
   /**
    * Outcomes already accounted for, as `eventId:count`.
@@ -43,30 +46,88 @@ export function useAssistantTimerNotifications({
    */
   const seen = useRef<Set<string> | null>(null);
   const session = useRef<string | null>(null);
+  /**
+   * Timers this session has been told fired, and whose outcome has not been reported.
+   *
+   * This is the half that made the whole feature look broken. The baseline below is
+   * right for a reading that arrives unprompted — arriving in a project should not
+   * replay yesterday's outcomes — but the FIRST reading of a session is very often the
+   * one the fire itself asked for, and baselining that one swallows the exact event it
+   * was fetched to describe. Schedule a timer, watch it fire, see nothing: the outcome
+   * was on screen in the deck and had been announced to nobody.
+   *
+   * Keyed by TIMER ID, not by a time window. The fire event names the timer and every
+   * outcome row names its timer, so the two correlate exactly — where a "stamped in
+   * the last minute" rule could neither tell a fire that landed during a slow first
+   * read apart from one that happened before anyone was watching, nor survive a first
+   * read that took longer than the window.
+   */
+  const firedIds = useRef<Set<string>>(new Set());
+
+  /**
+   * A new session starts a new baseline, and it must be established BEFORE anything
+   * this render records into it.
+   *
+   * Declared first on purpose. When the session id and a fire arrive in the same
+   * commit — a replayed pre-ready `timer:fired`, or a reconnect that lands both at
+   * once — effects run in declaration order, so a reset living further down would wipe
+   * the fire that the effect above it had just recorded and silently baseline its
+   * outcome. Ordering is the whole mechanism; do not fold this back into the announce
+   * effect.
+   */
+  useEffect(() => {
+    if (session.current === sessionId) return;
+    session.current = sessionId;
+    seen.current = null;
+    firedIds.current = new Set();
+  }, [sessionId]);
+
+  /**
+   * Read the list once, up front, so a baseline exists BEFORE anything can fire.
+   *
+   * Without this the list was fetched lazily — only when a fire marked it stale, or
+   * when someone opened the deck — which meant the common case for a session's first
+   * timer was that its own fire triggered the very first read. One cheap local read on
+   * arrival makes that the rare case instead of the guaranteed one; `firedAt` below
+   * still covers the race where a timer beats the answer back.
+   */
+  useEffect(() => {
+    if (sessionId) requestTimers();
+  }, [sessionId, requestTimers]);
 
   // A timer fired while nothing was showing the list. Re-read it, so the notification
-  // below can say WHAT happened rather than only that something did.
+  // below can say WHAT happened rather than only that something did — and remember
+  // WHEN we were told, so a first reading that arrives carrying that fire can tell it
+  // apart from the backlog it arrives alongside.
   useEffect(() => {
-    if (timersStale && sessionId) requestTimers();
-  }, [timersStale, sessionId, requestTimers]);
+    if (!timersStale || !sessionId) return;
+    for (const id of takeFiredTimerIds()) firedIds.current.add(id);
+    requestTimers();
+  }, [timersStale, sessionId, requestTimers, takeFiredTimerIds]);
 
   useEffect(() => {
-    // A new session starts a new baseline. Without this, reconnecting to a project
-    // would replay every outcome still in the queue as though it had just happened —
-    // a burst of notifications about work that finished yesterday.
-    if (session.current !== sessionId) {
-      session.current = sessionId;
-      seen.current = null;
-    }
+    // The baseline reset lives in its own effect above, which runs first. Reading
+    // `session.current` here would race it.
     if (!timers) return;
 
     const keys = new Set(timers.outcomes.map((o) => `${o.eventId}:${o.count}`));
 
     // The FIRST reading of a session is the baseline, announced to nobody. It is the
-    // state of the world on arrival, not news.
+    // state of the world on arrival, not news — UNLESS we were told a timer fired and
+    // this is the reading that answers it, in which case the fire's own outcome is the
+    // one thing in here that IS news. Everything stamped before that signal is still
+    // backlog and still goes in silently.
     if (seen.current === null) {
-      seen.current = keys;
-      return;
+      const fired = firedIds.current;
+      if (fired.size === 0) {
+        seen.current = keys;
+        return;
+      }
+      // Everything EXCEPT the outcomes belonging to a timer we were told fired goes
+      // into the baseline silently. Those are the backlog; the rest is the news.
+      seen.current = new Set(
+        timers.outcomes.filter((o) => !fired.has(o.timerId)).map((o) => `${o.eventId}:${o.count}`)
+      );
     }
 
     for (const outcome of timers.outcomes) {
@@ -102,5 +163,12 @@ export function useAssistantTimerNotificationsFromStore(requestTimers: () => voi
   const timers = useAssistantStore((s) => s.timers);
   const timersStale = useAssistantStore((s) => s.timersStale);
   const sessionId = useAssistantStore((s) => s.sessionId);
-  useAssistantTimerNotifications({ timers, timersStale, sessionId, requestTimers });
+  const takeFiredTimerIds = useAssistantStore((s) => s.takeFiredTimerIds);
+  useAssistantTimerNotifications({
+    timers,
+    timersStale,
+    sessionId,
+    requestTimers,
+    takeFiredTimerIds,
+  });
 }

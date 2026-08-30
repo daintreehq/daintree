@@ -1767,6 +1767,12 @@ export function HelpPanel({
               // transcript every time the panel was dismissed. Start on first open,
               // then live until the project changes or the view goes away.
               active={nativeSessionArmed}
+              // Separate from `active` on purpose. `active` is latched — it says the
+              // engine should be RUNNING — while this says the panel is on screen right
+              // now. Only the second one may drive a ticking clock: hiding slides the
+              // panel off-canvas rather than unmounting it, so a countdown gated on
+              // `active` would keep re-rendering behind a closed sidebar all session.
+              visible={isOpen && isVisible}
               restartNonce={nativeSessionNonce}
               operationsOpen={operationsOpen}
               onOperationsOpenChange={setOperationsOpen}
