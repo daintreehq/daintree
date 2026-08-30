@@ -328,6 +328,15 @@ function bannerRootClasses(testId: string): string {
 }
 
 describe("worktree error banner stacking (issue #12087)", () => {
+  it("renders both banners from the card", () => {
+    // Named for what it actually proves: the card still mounts them. Every
+    // other test here reads the banner definitions or renders the exports
+    // directly, so deleting these two blocks from WorktreeCard would otherwise
+    // leave the whole suite green. It says nothing about WHERE they sit.
+    expect(cardSource).toMatch(/\{deleteError && \(\s*<WorktreeDeleteErrorBanner/);
+    expect(cardSource).toMatch(/\{issueError && \(\s*<WorktreeIssueErrorBanner/);
+  });
+
   it("gives the select overlay a positioned, z-indexed full-card layer", () => {
     // Guards the ordering assertions from passing vacuously if the overlay's
     // class string ever stops being extractable.

@@ -505,14 +505,16 @@ describe("worktree error banners (issue #12087)", () => {
   });
 
   it("renders no action buttons when neither handler is supplied", () => {
-    const { rerender } = render(<WorktreeDeleteErrorBanner message="boom" />);
+    const { rerender } = render(<WorktreeDeleteErrorBanner message="disk on fire" />);
     // Assert the banner is actually on screen first, so "no buttons" can't pass
-    // by way of nothing having rendered at all.
-    expect(screen.getByRole("alert").textContent).toContain("Couldn't delete worktree");
+    // by way of nothing having rendered. Checked via the message passed in — an
+    // input/output contract — rather than the title, which is microcopy the
+    // implementation owns.
+    expect(screen.getByRole("alert").textContent).toContain("disk on fire");
     expect(screen.queryByRole("button")).toBeNull();
 
-    rerender(<WorktreeIssueErrorBanner message="boom" mutationType="detach-issue" />);
-    expect(screen.getByRole("alert").textContent).toContain("Couldn't detach issue");
+    rerender(<WorktreeIssueErrorBanner message="disk on fire" mutationType="detach-issue" />);
+    expect(screen.getByRole("alert").textContent).toContain("disk on fire");
     expect(screen.queryByRole("button")).toBeNull();
   });
 });

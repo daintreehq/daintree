@@ -1094,6 +1094,18 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           ? new Map(prev.issueErrors)
           : prev.issueErrors;
         if (prev.issueErrors.has(entry.worktreeId)) nextIssueErrors.delete(entry.worktreeId);
+
+        // ...unless the mutation is still running. `replayOutboxAfterReconnect`
+        // flips entries to `in-flight` without clearing `issueErrors`, so a
+        // Dismiss can land on a live attach/detach. Pruning it would make
+        // `applyIssueMutationSuccess` discard a write the host had already
+        // committed, leaving the renderer's association permanently stale.
+        // Hide the banner; leave the entry and its guard to settle (#12087).
+        if (entry.status === "in-flight") {
+          set({ issueErrors: nextIssueErrors });
+          return;
+        }
+
         const nextIssueMutatingIds = prev.issueMutatingIds.has(entry.worktreeId)
           ? new Set(prev.issueMutatingIds)
           : prev.issueMutatingIds;
