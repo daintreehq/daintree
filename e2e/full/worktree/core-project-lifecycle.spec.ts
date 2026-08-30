@@ -54,6 +54,40 @@ test.describe.serial("Core: Project Lifecycle", () => {
     await expect(palette).not.toBeVisible({ timeout: T_SHORT });
   });
 
+  test("every part of the pill opens the switcher; identity editing lives on right-click", async () => {
+    const { window } = ctx;
+    const pill = window.locator(SEL.toolbar.projectSwitcherTrigger);
+    const palette = window.locator(SEL.projectSwitcher.palette);
+    const identityEditor = window.getByLabel("Edit project identity");
+
+    // The emoji used to carry an invisible 28px target of its own, so a click
+    // meant for the switcher opened the rename popover instead — and both open
+    // with a text field focused, so the switcher's click-type-Enter habit
+    // renamed the project. Asserted by POSITION because the regression is in
+    // the hit map, not in any handler a unit test can see.
+    const box = await pill.boundingBox();
+    expect(box).not.toBeNull();
+    await pill.click({ position: { x: 14, y: box!.height / 2 } });
+
+    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
+    await expect(identityEditor).not.toBeVisible();
+
+    await window.keyboard.press("Escape");
+    await expect(palette).not.toBeVisible({ timeout: T_SHORT });
+
+    // Right-click anywhere on the pill is the way in now.
+    await pill.click({ button: "right" });
+    const editItem = window.getByRole("menuitem", { name: /Edit name and icon/ });
+    await expect(editItem).toBeVisible({ timeout: T_SHORT });
+    await editItem.click();
+
+    await expect(identityEditor).toBeVisible({ timeout: T_MEDIUM });
+    // Escape cancels the edit rather than committing it, so the suite's later
+    // project-name assertions still hold.
+    await window.keyboard.press("Escape");
+    await expect(identityEditor).not.toBeVisible({ timeout: T_SHORT });
+  });
+
   test("switch between projects with panel isolation", async () => {
     // Switch to Project A and spawn a terminal
     ctx.window = await selectExistingProjectAndRefresh(ctx.app, ctx.window, PROJECT_A);
