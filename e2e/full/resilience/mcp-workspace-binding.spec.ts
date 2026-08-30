@@ -562,9 +562,8 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
     // whichever window is focused, which is the guarantee the binding exists
     // for.
     const call = await callTool(endpoint, bound.sessionId, "terminal.list");
-    const payload = JSON.stringify(call);
-    expect(payload).toContain("SESSION_BINDING_GONE");
-    expect(payload).toContain('"retriable":true');
+    const failure = JSON.parse(call.result.content[0].text);
+    expect(failure).toMatchObject({ code: "SESSION_BINDING_GONE", retriable: true });
     expect(resolvedWorkspaceId(call)).toBeNull();
 
     // Every tool on the session answers the same way, including one that would
