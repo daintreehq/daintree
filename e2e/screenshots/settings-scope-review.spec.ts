@@ -78,9 +78,9 @@ const navItem = (tab: string) => `[role="tab"][data-tab="${tab}"]`;
 /** The name the fixture project carries for every state but the long-name one. */
 const SHORT_NAME = "Helios Dashboard";
 /**
- * Long enough to actually reach the truncation. The previous value fit inside 43% of
- * the header's width, so the "long name" state proved nothing about what happens when
- * a name genuinely runs out of room.
+ * Long enough to actually reach the truncation, in the Project Name field and the path
+ * row under it. The previous value fit comfortably inside both, so the "long name"
+ * state proved nothing about what happens when a name genuinely runs out of room.
  */
 const LONG_NAME = "acme-platform-infrastructure-monorepo-services-frontend-web-console-workspace";
 
@@ -275,8 +275,9 @@ const STATES: ScopeState[] = [
     },
   },
   {
-    // A long project name. Predictable truncation with a full-value affordance, or a
-    // shell that breaks — the shot decides which.
+    // A long project name. Predictable truncation in the identity row and the sidebar,
+    // or a shell that breaks — the shot decides which. The header no longer names the
+    // project, so this state is about the fields that do.
     slug: "05-project-long-name",
     target: { tab: "project:general" },
     expectSelected: "project:general",

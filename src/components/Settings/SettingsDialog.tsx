@@ -25,7 +25,7 @@ import {
   useSettingsStore,
 } from "@/store";
 import { X, Search, ChevronRight, AlertTriangle } from "lucide-react";
-import { ArrowLeftRight, Folder, Globe, TriangleAlert } from "@/components/icons";
+import { ArrowLeftRight, TriangleAlert } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
@@ -715,35 +715,26 @@ function SettingsDialogInner({
 
         <div className="settings-shell flex-1 flex flex-col min-w-0">
           <AppDialog.Header plainBody>
-            {/* A title stack, not a bare title: the section name alone is ambiguous —
-                General, Notifications and Code Forge all exist in both scopes — so the
-                line above it names what the change lands on. It rides in the header
-                rather than the scrollport, which is the only part of the pane that
-                survives the user scrolling into a long form. */}
-            <div className="flex flex-col gap-1 min-w-0">
-              <ScopeContext scope={headerScope} projectLabel={hasProject ? projectLabel : null} />
-              <AppDialog.Title
-                as="h3"
-                icon={
-                  isSearching ? (
-                    <Search className="w-5 h-5 text-text-secondary" />
-                  ) : (
-                    tabIcons[activeTab]
-                  )
-                }
-              >
-                {/* The title is what aria-labelledby points at, so the scope has to be
-                    part of it — otherwise opening the modal announces "General, dialog"
-                    and never says whose General. The visible line above is decorative
-                    for the same reason: saying it twice is worse than saying it once. */}
-                <span className="sr-only">
-                  {headerScope === "project" && hasProject
-                    ? `Project settings for ${projectLabel}, `
-                    : "Global settings for Daintree, "}
-                </span>
-                {isSearching ? "Search results" : tabTitles[activeTab]}
-              </AppDialog.Title>
-            </div>
+            <AppDialog.Title
+              as="h3"
+              icon={
+                isSearching ? (
+                  <Search className="w-5 h-5 text-text-secondary" />
+                ) : (
+                  tabIcons[activeTab]
+                )
+              }
+            >
+              {/* The title is what aria-labelledby points at, so the scope has to be part
+                  of it — otherwise opening the modal announces "General, dialog" and never
+                  says whose General. It stays screen-reader-only: a second visible heading
+                  over every section reads as a double title, and the nav the user just
+                  clicked through is the sighted answer to the same question. */}
+              <span className="sr-only">
+                {scopeAnnouncement(headerScope, hasProject ? projectLabel : null)}
+              </span>
+              {isSearching ? "Search results" : tabTitles[activeTab]}
+            </AppDialog.Title>
             <AppDialog.CloseButton aria-label="Close settings" />
           </AppDialog.Header>
 
@@ -1384,46 +1375,23 @@ function MatchBadge({ count }: { count: number }) {
   );
 }
 
-// Global settings belong to the app; the app has a name, and using it keeps the two
-// scopes symmetrical — both name a thing rather than one naming a thing and the other
-// naming an abstraction.
-const GLOBAL_ENTITY_LABEL = "Daintree";
-
 /**
- * The scope line in the content header. Names the entity a change lands on, with the
- * scope carried by the icon so the line stays short enough to sit above the section
- * title at any project-name length.
+ * The clause the dialog's accessible name opens with, so a screen reader hears whose
+ * General it just landed on rather than a bare "General, dialog". Nothing renders it
+ * visibly — the sighted answer is the nav the user clicked through.
+ *
+ * The scope branches before the entity does, and the two are separate questions.
+ * `integrations` is filed under the global nav but every control in it writes against
+ * the current project, so a project-scoped pane is reachable with no project open;
+ * folding that case into the global branch would announce "Global settings for
+ * Daintree" over it outright. With no project there is simply no entity to name, which
+ * is what the shorter project clause says.
+ *
+ * @param project the project's label, or null when no project is open.
  */
-export function ScopeContext({
-  scope,
-  projectLabel,
-}: {
-  scope: SettingsScope;
-  /** null when no project is open, which forces the global reading. */
-  projectLabel: string | null;
-}) {
-  const isProject = scope === "project" && projectLabel !== null;
-  const entity = isProject ? projectLabel : GLOBAL_ENTITY_LABEL;
-  const Icon = isProject ? Folder : Globe;
-  return (
-    <span
-      // gap-2 and a w-5 icon box, matching AppDialog.Title's icon slot exactly, so the
-      // context line's text starts on the same x as the section title's rather than
-      // 8px inside it.
-      className="flex items-center gap-2 min-w-0 text-xs text-text-secondary"
-      data-settings-scope-context={isProject ? "project" : "global"}
-      // Decorative: the same scope and entity are inside the dialog's labelled title,
-      // and a screen reader should hear them once, not on both nodes.
-      aria-hidden="true"
-    >
-      <span className="w-5 flex justify-center shrink-0">
-        <Icon className="w-3.5 h-3.5" />
-      </span>
-      <span className="truncate" title={entity}>
-        {entity}
-      </span>
-    </span>
-  );
+export function scopeAnnouncement(scope: SettingsScope, project: string | null): string {
+  if (scope !== "project") return "Global settings for Daintree, ";
+  return project === null ? "Project settings, " : `Project settings for ${project}, `;
 }
 
 /**
