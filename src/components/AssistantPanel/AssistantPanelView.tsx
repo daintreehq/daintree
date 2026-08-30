@@ -26,6 +26,7 @@ import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { AssistantBootSplash } from "./AssistantBootSplash";
 import { AssistantQuestionCard } from "./AssistantQuestionCard";
 import { AssistantOperationsDeck } from "./AssistantOperationsDeck";
+import { AssistantTimerStatusBar } from "./AssistantTimerStatusBar";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   useTerminalColorSchemeStore,
@@ -85,6 +86,8 @@ export interface AssistantPanelViewProps {
    * there among readings that are not controls. Leaving it undefined keeps the deck on
    * this component's own state, which is what the preview harness renders it with.
    */
+  /** Whether the panel is on screen — gates anything that ticks. */
+  visible?: boolean;
   operationsOpen?: boolean;
   onOperationsOpenChange?: (open: boolean) => void;
   /**
@@ -172,11 +175,6 @@ function liveStatusLabel(phase: string | null): string | null {
  */
 export const PHASES_WAITING_ON_THE_USER = new Set(["awaiting_approval", "awaiting_question"]);
 
-/**
- * Formats spend. `complete: false` means the figure is a FLOOR — a call ran whose
- * cost could not be measured — so it is rendered as "≥ $x" rather than as a settled
- * number. Presenting a floor as a receipt would under-report what a session spent.
- */
 /** Matches the cockpit's own stall threshold. */
 const STALL_THRESHOLD_MS = 5000;
 
@@ -200,11 +198,6 @@ function formatDuration(ms: number): string {
   // and keeps it there.
   const totalSeconds = Math.round(ms / 1000);
   return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
-}
-
-function formatCost(total: number, complete: boolean): string {
-  const value = total < 0.01 && total > 0 ? total.toFixed(4) : total.toFixed(2);
-  return `${complete ? "" : "≥ "}$${value}`;
 }
 
 /**
@@ -891,6 +884,7 @@ export function AssistantPanelView({
   onRequestOperations,
   onRequestTimers,
   onCancelTimer,
+  visible = true,
   operationsOpen,
   onOperationsOpenChange,
   onRetractInterjection,
@@ -1423,6 +1417,7 @@ export function AssistantPanelView({
     >
       {deckOpen && onRequestOperations ? (
         <AssistantOperationsDeck
+          visible={visible}
           operations={state.operations}
           timers={state.timers}
           timersStale={state.timersStale}
@@ -1651,6 +1646,18 @@ export function AssistantPanelView({
               />
             </div>
           )}
+          {/* What the assistant has committed to doing LATER, directly above the place
+              you talk to it. A scheduled timer used to be visible only inside the
+              operations deck, which is behind a header menu and replaces the
+              transcript — so "a timer is running" was a fact the panel held and never
+              showed, and scheduling one looked identical to nothing happening. */}
+          {state.timers && state.timers.rows.length > 0 ? (
+            <AssistantTimerStatusBar
+              timers={state.timers.rows}
+              visible={visible && !deckOpen}
+              onOpenDeck={onRequestOperations ? () => setDeckOpen(true) : undefined}
+            />
+          ) : null}
           {/* Wrapped only to be `shrink-0`: the bar is the one thing in this strip that
               must never be squeezed, and it owns its own root element. */}
           <div className="shrink-0">
@@ -1736,7 +1743,14 @@ export function AssistantPanelView({
           The CLOCK is gone from here too, for the same reason and one more: it was
           also drawn at the tail of the running turn, and down here it sat right next
           to "Connected" — reading as how long the session had been connected, not how
-          long the current turn had been running. */}
+          long the current turn had been running.
+
+          The COST is gone and is not coming back. Per-turn spend was a readout from
+          when the assistant billed by usage; it bills by subscription now, so the
+          figure answered a question nobody is being asked and implied a meter that
+          isn't running. The engine still reports `cost` on the wire and the store
+          still holds it — this is a decision about what to SHOW, not a wire change —
+          so re-adding a span here is all it would take to bring it back. Don't. */}
 
           <div
             data-testid="assistant-status-row"
@@ -1830,15 +1844,6 @@ export function AssistantPanelView({
               {live && state.autoApprove && (
                 <span className="whitespace-nowrap font-medium text-[var(--assistant-danger)]">
                   Auto-approve
-                </span>
-              )}
-              {/* Nothing is a floor of zero. A backend that reports no cost figures at
-                all yields total 0 with complete false, and "≥ $0.00" is clutter that
-                says less than saying nothing — the cockpit stayed silent on unknown
-                cost for the same reason. */}
-              {state.cost && (state.cost.total > 0 || state.cost.complete) && (
-                <span className="whitespace-nowrap">
-                  {formatCost(state.cost.total, state.cost.complete)}
                 </span>
               )}
             </span>
