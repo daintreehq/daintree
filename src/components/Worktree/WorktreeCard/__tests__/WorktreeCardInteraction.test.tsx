@@ -272,3 +272,84 @@ describe("WorktreeCard disabled drag handle (issue #8395)", () => {
     expect(cardSource).toMatch(/\{hasRowDragHandle &&/);
   });
 });
+
+// Issue #12087 — Retry/Dismiss on the delete and issue error banners were dead
+// on sidebar cards. Both banners mount as bare siblings of the card's content
+// column inside a `relative isolate` root that also carries the sidebar's
+// full-card select overlay at `absolute inset-0 z-0`. A static in-flow block
+// paints in an earlier step than a positioned `z-0` sibling no matter the DOM
+// order (CSS 2.1 Appendix E), so the overlay covered the banners and, since
+// hit-testing follows paint order, swallowed every click.
+//
+// jsdom has no layout engine and loads no CSS, so the real coordinate check is
+// impossible here — this asserts the ORDERING that makes it true. Renumbering
+// either tier keeps the test green; breaking the relationship fails it.
+
+/** Positioning/stacking tokens carried by one element's Tailwind class list. */
+function stackingTokens(classList: string): { positioned: boolean; z: number | null } {
+  const tokens = classList.split(/\s+/).filter(Boolean);
+  const positioned = tokens.some((t) => ["relative", "absolute", "fixed", "sticky"].includes(t));
+  const zToken = tokens.filter((t) => /^z-\d+$/.test(t)).pop();
+  return { positioned, z: zToken ? Number(zToken.slice(2)) : null };
+}
+
+/** A z-tier that must exist — fails with the element's name rather than
+ *  comparing against null (or asserting the type away). */
+function requireZ(label: string, tokens: { z: number | null }): number {
+  if (tokens.z === null) throw new Error(`${label} carries no z-* utility`);
+  return tokens.z;
+}
+
+/** The sidebar select overlay's class string, anchored on its unique attribute. */
+function selectOverlayClasses(): string {
+  const classes = cardSource.match(
+    /data-card-select-overlay=""\s*\n\s*className=\{cn\(\s*\n\s*"([^"]+)"/
+  )?.[1];
+  if (classes === undefined) {
+    throw new Error("no [data-card-select-overlay] className in WorktreeCard.tsx");
+  }
+  return classes;
+}
+
+/** A banner root's class string, anchored on its unique test id. The bounded
+ *  lazy span tolerates the comment block between the attribute and className
+ *  without letting the match run on into an unrelated element. */
+function bannerRootClasses(testId: string): string {
+  const classes = detailsSource.match(
+    new RegExp(`data-testid="${testId}"[\\s\\S]{0,900}?className="([^"]+)"`)
+  )?.[1];
+  if (classes === undefined) {
+    throw new Error(`no root className for [data-testid="${testId}"]`);
+  }
+  return classes;
+}
+
+describe("worktree error banner stacking (issue #12087)", () => {
+  it("mounts both banners outside the card's z-10 content column", () => {
+    // The premise the ordering assertion below exists to defend. If a later
+    // refactor moves the banners inside the column they inherit its tier and
+    // this suite should be revisited rather than left asserting a dead rule.
+    expect(cardSource).toMatch(/\{deleteError && \(\s*<WorktreeDeleteErrorBanner/);
+    expect(cardSource).toMatch(/\{issueError && \(\s*<WorktreeIssueErrorBanner/);
+  });
+
+  it("gives the select overlay a positioned, z-indexed full-card layer", () => {
+    // Guards the ordering assertions from passing vacuously if the overlay's
+    // class string ever stops being extractable.
+    const overlay = stackingTokens(selectOverlayClasses());
+    expect(overlay.positioned).toBe(true);
+    expect(overlay.z).not.toBeNull();
+  });
+
+  it.each([["worktree-delete-error-banner"], ["worktree-issue-error-banner"]])(
+    "%s is positioned above the select overlay so its buttons take the click",
+    (testId) => {
+      const overlayZ = requireZ("the select overlay", stackingTokens(selectOverlayClasses()));
+      const banner = stackingTokens(bannerRootClasses(testId));
+
+      // A z-index on a static element is inert — both halves are required.
+      expect(banner.positioned).toBe(true);
+      expect(requireZ(testId, banner)).toBeGreaterThan(overlayZ);
+    }
+  );
+});
