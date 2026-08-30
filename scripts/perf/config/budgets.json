@@ -1,5 +1,4 @@
 {
-  "criticalScenarios": ["PERF-001", "PERF-011", "PERF-020"],
   "defaultBudget": {
     "p95Ms": 5000,
     "maxRegressionPct": 15

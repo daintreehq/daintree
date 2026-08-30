@@ -62,8 +62,6 @@ export function checkBaselineCoverage(
 
   const gaps: CoverageGap[] = [];
   for (const scenario of scenariosForThisRun) {
-    if (budgetConfig.criticalScenarios.includes(scenario.id)) continue;
-
     const budget = getScenarioBudget(budgetConfig, scenario.id);
     if (budget.maxRegressionPct === undefined) continue;
 

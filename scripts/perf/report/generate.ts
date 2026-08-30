@@ -1,13 +1,7 @@
 import { classifyMetric, comparabilityMarker } from "../lib/comparability";
 import type { ComparabilityClass } from "../lib/comparability";
 import { round } from "../lib/stats";
-import type {
-  ComparisonAggregate,
-  MetricStat,
-  PerfRunSummary,
-  RunEnvironment,
-  ScenarioAggregate,
-} from "../types";
+import type { MetricStat, PerfRunSummary, RunEnvironment, ScenarioAggregate } from "../types";
 
 /**
  * A non-finite value is a broken measurement, not an absent one, so it is
@@ -215,45 +209,7 @@ function metricsSection(aggregates: ScenarioAggregate[]): string[] {
   ];
 }
 
-/**
- * `--compare` produces no data today, so this renders nothing in practice. It
- * stays wired up because the parameter is still passed by `run.ts`, and dropping
- * the section would silently discard data rather than report it.
- */
-function comparisonSection(comparisons: ComparisonAggregate[]): string[] {
-  if (comparisons.length === 0) return [];
-
-  const lines = [
-    "",
-    `## A/B comparison \`${comparabilityMarker("duration")}\``,
-    "",
-    "Both arms are durations, so this reads as a comparison only if both were measured on this machine. `Significant` is the statistical test alone; `Flagged` additionally clears the configured effect-size threshold.",
-    "",
-    "ID | Base | Head | p-value | Effect size | Significant | Flagged",
-    "--- | --- | --- | ---: | ---: | --- | ---",
-  ];
-
-  for (const { id, comparison } of comparisons) {
-    lines.push(
-      [
-        cell(id),
-        cell(comparison.baseLabel),
-        cell(comparison.headLabel),
-        format(comparison.pValue),
-        format(comparison.effectSize),
-        comparison.significant ? "yes" : "no",
-        comparison.regression ? "yes" : "no",
-      ].join(" | ")
-    );
-  }
-
-  return lines;
-}
-
-export function buildMarkdownReport(
-  summary: PerfRunSummary,
-  comparisons: ComparisonAggregate[] = []
-): string {
+export function buildMarkdownReport(summary: PerfRunSummary): string {
   const outside = summary.scenariosOutsideReference;
   const issueCount = summary.aggregates.reduce(
     (total, aggregate) => total + scenarioIssues(aggregate).length,
@@ -279,7 +235,6 @@ export function buildMarkdownReport(
     ...measurementIssuesSection(summary.aggregates),
     ...latencySection(summary),
     ...metricsSection(summary.aggregates),
-    ...comparisonSection(comparisons),
     "",
   ].join("\n");
 }

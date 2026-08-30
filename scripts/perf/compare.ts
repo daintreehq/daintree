@@ -191,11 +191,42 @@ function byId(aggregates: ScenarioAggregate[]): Map<string, ScenarioAggregate> {
   return new Map(aggregates.map((aggregate) => [aggregate.id, aggregate]));
 }
 
+/**
+ * Why two runs' machine-dependent figures cannot be compared, or null.
+ *
+ * Machine is the obvious half. Protocol is the half that is easy to miss: a
+ * `--warmups 0` run still carries cold-start cost that a warmed run has already
+ * paid, so pairing one against the other reports a difference in how the
+ * benchmark was driven as though it were a difference in the code. The measured
+ * iteration count does not reveal it — both sides can report the same `runs`.
+ */
+function refusalReason(before: PerfRunSummary, after: PerfRunSummary): string | null {
+  if (!durationsComparable(before.environment, after.environment)) {
+    return describeIncomparability(before.environment, after.environment);
+  }
+
+  // A summary written before `protocol` existed cannot prove it was driven the
+  // same way. Refusing beats guessing: the whole point of this check is that an
+  // unnoticed protocol difference is reported as a code difference, and an
+  // absent record is exactly the case where it would go unnoticed.
+  if (before.protocol === undefined || after.protocol === undefined) {
+    return "one run predates protocol recording, so identical sampling cannot be confirmed";
+  }
+
+  const describe = (value: number | null, fallback: string) =>
+    value === null ? fallback : String(value);
+
+  if (before.protocol.warmups !== after.protocol.warmups) {
+    return `different warmup counts (${describe(before.protocol.warmups, "per-scenario default")} vs ${describe(after.protocol.warmups, "per-scenario default")})`;
+  }
+  if (before.protocol.iterations !== after.protocol.iterations) {
+    return `different iteration counts (${describe(before.protocol.iterations, "per-mode default")} vs ${describe(after.protocol.iterations, "per-mode default")})`;
+  }
+  return null;
+}
+
 export function buildComparison(before: PerfRunSummary, after: PerfRunSummary): ComparisonReport {
-  const comparable = durationsComparable(before.environment, after.environment);
-  const machineRefusal = comparable
-    ? null
-    : describeIncomparability(before.environment, after.environment);
+  const machineRefusal = refusalReason(before, after);
   const beforeById = byId(before.aggregates);
   const afterById = byId(after.aggregates);
 
@@ -205,6 +236,21 @@ export function buildComparison(before: PerfRunSummary, after: PerfRunSummary): 
   const metricsOnlyInOne: MissingMetric[] = [];
   const measurementIssues: MeasurementIssue[] = [];
   const warnings: string[] = [];
+
+  // Collected across BOTH summaries in full, before pairing. Gathering these
+  // inside the paired loop dropped every issue belonging to a scenario present
+  // in only one run — exactly the scenario a filtered before/after pair
+  // produces, and a vanished measurement is the finding least safe to lose.
+  for (const [side, summary] of [
+    ["before", before],
+    ["after", after],
+  ] as const) {
+    for (const aggregate of summary.aggregates) {
+      for (const issue of aggregate.measurementIssues) {
+        measurementIssues.push({ scenarioId: aggregate.id, side, issue });
+      }
+    }
+  }
 
   for (const [id, beforeAggregate] of beforeById) {
     const afterAggregate = afterById.get(id);
@@ -239,15 +285,6 @@ export function buildComparison(before: PerfRunSummary, after: PerfRunSummary): 
         `${id}: iteration counts differ (${beforeAggregate.runs} vs ${afterAggregate.runs}) — ` +
           "the two sides sampled different amounts of work"
       );
-    }
-
-    for (const [side, aggregate] of [
-      ["before", beforeAggregate],
-      ["after", afterAggregate],
-    ] as const) {
-      for (const issue of aggregate.measurementIssues) {
-        measurementIssues.push({ scenarioId: id, side, issue });
-      }
     }
 
     const metricNames = new Set([
@@ -305,7 +342,7 @@ export function buildComparison(before: PerfRunSummary, after: PerfRunSummary): 
   return {
     beforeLabel: before.label ?? "before",
     afterLabel: after.label ?? "after",
-    machineDependentComparable: comparable,
+    machineDependentComparable: machineRefusal === null,
     incomparabilityReason: machineRefusal,
     durationRows,
     independentMetricRows,

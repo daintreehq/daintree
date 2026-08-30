@@ -370,12 +370,24 @@ function writeHistory(summary: PerfRunSummary): string {
 
   const scenarios: Record<string, Record<string, number>> = {};
   for (const aggregate of summary.aggregates) {
-    // `runs` rides along because `sum` is meaningless without it — two files
-    // whose sums differ may only differ in how many iterations were taken.
-    const entry: Record<string, number> = { p95Ms: aggregate.p95Ms, runs: aggregate.runs };
+    // p50 leads, matching what the report and `perf compare` both say: at these
+    // iteration counts a p95 is effectively one of the two largest samples, so
+    // a history keyed on it records noise as though it were trend. p95 rides
+    // along for the tail, and `runs` because a duration is uninterpretable
+    // without knowing how many samples produced it.
+    const entry: Record<string, number> = {
+      p50Ms: aggregate.p50Ms,
+      p95Ms: aggregate.p95Ms,
+      runs: aggregate.runs,
+    };
     for (const [name, stat] of Object.entries(aggregate.metricStats)) {
       entry[`${name}.max`] = stat.max;
       entry[`${name}.sum`] = stat.sum;
+      // The metric's OWN denominator, not the scenario's. A metric only some
+      // iterations emit has a smaller count, and two histories both reporting
+      // `runs: 16` can still hold sums over 1 and 16 samples respectively —
+      // which reads as a 16x regression.
+      entry[`${name}.count`] = stat.count;
     }
     scenarios[aggregate.id] = entry;
   }
@@ -541,7 +553,7 @@ async function run(): Promise<void> {
       metricStats,
       budget,
       baselineP95,
-      isCritical: budgetConfig.criticalScenarios.includes(scenarioId),
+
       hasBaselineFile: baseline !== null,
     });
 
@@ -564,14 +576,20 @@ async function run(): Promise<void> {
       metricAverages: Object.fromEntries(
         Object.entries(metricAverages).map(([key, value]) => [key, round(value)])
       ),
+      // Deliberately NOT rounded. Rounding here is lossy at the producer, and
+      // the loss is silent: PERF-151's `msPerTargetAt48` samples sit around
+      // 4e-4, so three decimal places reported its minimum as a flat `0` — a
+      // real measurement rendered as no measurement. Both consumers format for
+      // display themselves, and `perf compare` needs the precision to see a
+      // small metric move at all.
       metricStats: Object.fromEntries(
         Object.entries(metricStats).map(([key, stat]) => [
           key,
           {
-            mean: round(stat.mean),
-            max: round(stat.max),
-            min: round(stat.min),
-            sum: round(stat.sum),
+            mean: stat.mean,
+            max: stat.max,
+            min: stat.min,
+            sum: stat.sum,
             count: stat.count,
           },
         ])
@@ -592,6 +610,11 @@ async function run(): Promise<void> {
     platform: process.platform,
     label: cli.label,
     environment: describeEnvironment(cli.machineLabel),
+    protocol: {
+      iterations: cli.iterations ?? null,
+      warmups: cli.warmups ?? null,
+      scenarioSelection: cli.scenarioIds,
+    },
     scenarioCount: aggregates.length,
     scenariosOutsideReference,
     aggregates,

@@ -101,9 +101,12 @@ describe("checkBaselineCoverage", () => {
     expect(gaps).toEqual([]);
   });
 
-  it("ignores critical scenarios (gate.ts owns those)", () => {
+  it("reports every scenario with a reference but no baseline entry, with no exemptions", () => {
+    // PERF-001 was formerly exempt as a "critical" scenario, on the theory that
+    // gate.ts failed closed for it at run time. Nothing fails closed now, so the
+    // exemption only hid the warning for the scenarios it was meant to protect.
     const gaps = checkBaselineCoverage(baseline({}), budgetConfig, [scenario("PERF-001")]);
-    expect(gaps).toEqual([]);
+    expect(gaps).toEqual([{ scenarioId: "PERF-001" }]);
   });
 
   it("ignores scenarios without a regression budget", () => {

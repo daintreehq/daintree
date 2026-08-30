@@ -79,6 +79,10 @@ function summary(
     platform: environment.platform,
     label,
     environment,
+    // Both sides default to the same protocol so a fixture pair is comparable
+    // unless a test deliberately overrides it — the machine/protocol refusals
+    // are what several of these cases are about.
+    protocol: { iterations: null, warmups: null, scenarioSelection: null },
     scenarioCount: aggregates.length,
     scenariosOutsideReference: [],
     aggregates,
@@ -227,6 +231,59 @@ describe("cross-machine refusal", () => {
     expect(countRow[4]).toBe("+22");
     expect(countRow[5]).toBe("+183.3%");
     expect(countRow[8]).toBe("");
+  });
+});
+
+describe("protocol refusal", () => {
+  // Same machine is necessary but not sufficient. A `--warmups 0` run still
+  // carries cold-start cost a warmed run has already paid, so pairing them
+  // reports a difference in how the benchmark was driven as though it were a
+  // difference in the code. Both sides can report the same `runs`, so the
+  // measured iteration count cannot reveal it.
+  const cold = summary("before", MAC, [scenario("PERF-1", 10, {})], {
+    protocol: { iterations: 2, warmups: 0, scenarioSelection: null },
+  });
+  const warm = summary("after", MAC, [scenario("PERF-1", 5, {})], {
+    protocol: { iterations: 2, warmups: null, scenarioSelection: null },
+  });
+
+  it("refuses machine-dependent rows when warmups differ on the same machine", () => {
+    const report = buildComparison(cold, warm);
+    expect(report.machineDependentComparable).toBe(false);
+    expect(report.incomparabilityReason).toContain("warmup");
+  });
+
+  it("refuses when the iteration override differs", () => {
+    const other = summary("after", MAC, [scenario("PERF-1", 5, {})], {
+      protocol: { iterations: 8, warmups: 0, scenarioSelection: null },
+    });
+    expect(buildComparison(cold, other).incomparabilityReason).toContain("iteration");
+  });
+
+  it("refuses a summary that predates protocol recording rather than assuming", () => {
+    // Absence is exactly the case where a protocol difference goes unnoticed,
+    // so it must not read as agreement.
+    const legacy = summary("before", MAC, [scenario("PERF-1", 10, {})], {
+      protocol: undefined as unknown as PerfRunSummary["protocol"],
+    });
+    expect(buildComparison(legacy, warm).incomparabilityReason).toContain("predates");
+  });
+
+  it("still compares machine-independent counts across a protocol mismatch", () => {
+    // A tally does not care how many warmups preceded it.
+    const withCount = (label: string, value: number, warmups: number | null) =>
+      summary(
+        label,
+        MAC,
+        [scenario("PERF-1", 10, { gitSpawns: stat({ max: value, sum: value }) })],
+        {
+          protocol: { iterations: 2, warmups, scenarioSelection: null },
+        }
+      );
+    const report = buildComparison(withCount("before", 8, 0), withCount("after", 2, null));
+    expect(report.machineDependentComparable).toBe(false);
+    expect(report.independentMetricRows.length).toBeGreaterThan(0);
+    expect(report.independentMetricRows[0]?.max.absolute).not.toBeNull();
   });
 });
 

@@ -2,14 +2,14 @@ import { round } from "./stats";
 import type { MetricStat, ScenarioBudget } from "../types";
 
 /**
- * Baselines at or above this p95 (in ms) are gated by percentage regression.
- * Below it, percentage math is unstable (a fraction of a millisecond of
- * scheduler noise dwarfs the signal), so we fall back to an absolute-delta gate.
+ * Baselines at or above this p95 (in ms) get a percentage-drift note. Below it,
+ * percentage math is unstable — a fraction of a millisecond of scheduler noise
+ * dwarfs the signal — so the report shows an absolute delta instead.
  */
 export const MIN_REGRESSION_BASELINE_MS = 5;
 
 /**
- * Absolute p95 increase (in ms) that fails a critical scenario whose baseline
+ * Absolute p95 increase (in ms) worth flagging on a scenario whose baseline
  * sits below {@link MIN_REGRESSION_BASELINE_MS}.
  *
  * The original 1ms was calibrated against jitter of ~0.3–0.8ms, but that
@@ -20,9 +20,9 @@ export const MIN_REGRESSION_BASELINE_MS = 5;
  * regenerated 1.36ms caught the low end and failed on the next run), which
  * makes it a coin flip rather than a signal.
  *
- * 3ms is ~2x the widest observed delta. The other two critical scenarios sit
- * at 0.3ms and 0.7ms, so a real regression in any of them is an
- * order-of-magnitude blowup and still trips this comfortably.
+ * 3ms is ~2x the widest observed delta. Most sub-floor scenarios sit between
+ * 0.3ms and 0.7ms, so a real regression in one is an order-of-magnitude blowup
+ * and still trips this comfortably.
  */
 export const ABSOLUTE_REGRESSION_MS_FLOOR = 3;
 
@@ -39,8 +39,6 @@ export interface GateParams {
   budget: ScenarioBudget;
   /** Baseline p95 for this scenario, or undefined when absent/non-finite. */
   baselineP95: number | undefined;
-  /** Whether this scenario is in `criticalScenarios`. */
-  isCritical: boolean;
   /** Whether a baseline file was loaded at all (distinct from a missing entry). */
   hasBaselineFile: boolean;
 }
@@ -62,21 +60,24 @@ export interface GateResult {
 }
 
 /**
- * Pure per-scenario budget evaluation. Covers the absolute p95 budget, metric
- * ceilings, and the baseline regression gate. "Fails closed" here means
- * `outsideReference` is set — an annotation on the report, never an exit code.
- * Only `measurementIssues` says the apparatus itself is broken.
+ * Pure per-scenario evaluation against configured reference values: the p95
+ * reference, metric ceilings, and drift from the recorded baseline.
+ *
+ * Nothing here gates. Every branch produces an annotation for the report, and
+ * no caller may turn one into an exit code. Only `measurementIssues` says
+ * something is actually wrong — and it says the apparatus is broken, not that
+ * the code is slow.
  */
 export function evaluateScenarioBudget(params: GateParams): GateResult {
-  const { p95Ms, metricStats, budget, baselineP95, isCritical, hasBaselineFile } = params;
+  const { p95Ms, metricStats, budget, baselineP95, hasBaselineFile } = params;
 
   let outsideReference = false;
   const reasons: string[] = [];
   const measurementIssues: string[] = [];
 
   // A non-finite measurement (NaN/Infinity) means the scenario is broken. NaN
-  // comparisons are always false in JS, so without this guard every gate below
-  // would silently pass — fail closed instead.
+  // comparisons are always false in JS, so every check below would read as a
+  // clean result — the most reassuring possible output for a broken scenario.
   if (!Number.isFinite(p95Ms)) {
     // A broken measurement, not a slow one. `outsideReference` stays false for
     // the same reason a vanished metric does: there is no measured value to be
@@ -90,16 +91,15 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
 
   if (budget.p95Ms !== undefined && p95Ms > budget.p95Ms) {
     outsideReference = true;
-    reasons.push(`p95 ${round(p95Ms)}ms > budget ${budget.p95Ms}ms`);
+    reasons.push(`p95 ${round(p95Ms)}ms > reference ${budget.p95Ms}ms`);
   }
 
   if (budget.maxMetricValues) {
     for (const [metricName, maxValue] of Object.entries(budget.maxMetricValues)) {
       const stat = metricStats[metricName];
-      // A configured ceiling whose metric is no longer emitted is a gate that
-      // has silently disappeared — the exact failure this file exists to
-      // prevent — so an absent metric fails rather than passes. Renaming a
-      // metric must therefore rename it in budgets.json too.
+      // A configured reference whose metric is no longer emitted is a
+      // measurement that has silently disappeared, and it reads exactly like a
+      // healthy one. Renaming a metric must rename it in budgets.json too.
       if (stat === undefined) {
         // NOT `outsideReference`: there is no measured value, so nothing is
         // outside anything. Conflating the two would report a vanished
@@ -133,37 +133,38 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
   const hasUsableBaseline = baselineP95 !== undefined && Number.isFinite(baselineP95);
 
   if (!hasUsableBaseline) {
-    if (isCritical) {
+    // Normal, not a defect — a new scenario, or a machine with no recorded
+    // history yet. Deliberately NOT `outsideReference`: a missing reference is
+    // an absent comparison, not a measurement that came back worse. The old
+    // "failing closed" wording described a gate that no longer exists.
+    reasons.push(
+      hasBaselineFile ? "no recorded baseline for this scenario" : "no baseline file for this mode"
+    );
+  } else if (baselineP95 >= MIN_REGRESSION_BASELINE_MS) {
+    const driftPct = ((p95Ms - baselineP95) / baselineP95) * 100;
+    const reference = budget.maxRegressionPct;
+    if (reference !== undefined && driftPct > reference) {
       outsideReference = true;
       reasons.push(
-        hasBaselineFile
-          ? "critical scenario missing from baseline - failing closed"
-          : "baseline file missing for critical scenario - failing closed"
+        `p95 drifted ${round(driftPct)}% from baseline ${round(baselineP95)}ms (reference ${reference}%)`
       );
-    } else {
-      reasons.push("baseline missing - regression gate skipped");
     }
-  } else if (budget.maxRegressionPct !== undefined) {
-    if (baselineP95 >= MIN_REGRESSION_BASELINE_MS) {
-      const regressionPct = ((p95Ms - baselineP95) / baselineP95) * 100;
-      if (regressionPct > budget.maxRegressionPct) {
-        outsideReference = true;
-        reasons.push(
-          `regression ${round(regressionPct)}% exceeds ${budget.maxRegressionPct}% baseline gate`
-        );
-      }
-    } else if (isCritical) {
-      const deltaMs = p95Ms - baselineP95;
-      if (deltaMs > ABSOLUTE_REGRESSION_MS_FLOOR) {
-        outsideReference = true;
-        reasons.push(
-          `regression +${round(deltaMs)}ms exceeds ${ABSOLUTE_REGRESSION_MS_FLOOR}ms absolute gate (baseline ${round(baselineP95)}ms below ${MIN_REGRESSION_BASELINE_MS}ms noise floor)`
-        );
-      }
-    } else {
+  } else {
+    // Below the noise floor a percentage is meaningless — a fraction of a
+    // millisecond of scheduler jitter dwarfs the signal. This branch used to
+    // report nothing at all unless the scenario was critical, which left about
+    // a third of the suite silent. Report the absolute delta for every
+    // scenario instead: it is the only honest statement available, and it is
+    // still a number a reader can act on.
+    const deltaMs = p95Ms - baselineP95;
+    const signed = `${deltaMs >= 0 ? "+" : ""}${round(deltaMs)}ms`;
+    if (deltaMs > ABSOLUTE_REGRESSION_MS_FLOOR) {
+      outsideReference = true;
       reasons.push(
-        `baseline ${round(baselineP95)}ms below ${MIN_REGRESSION_BASELINE_MS}ms noise floor - regression gate skipped`
+        `p95 ${signed} vs baseline ${round(baselineP95)}ms — below the ${MIN_REGRESSION_BASELINE_MS}ms noise floor, so percentage drift is not meaningful`
       );
+    } else {
+      reasons.push(`p95 ${signed} vs baseline ${round(baselineP95)}ms (sub-noise-floor)`);
     }
   }
 

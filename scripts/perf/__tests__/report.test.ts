@@ -266,37 +266,6 @@ describe("buildMarkdownReport", () => {
     expect(buildMarkdownReport(summary())).not.toContain("A/B comparison");
   });
 
-  it("keeps a comparison's statistical significance apart from its flag", () => {
-    // Significant but under the configured effect-size threshold. Collapsing
-    // the two into one verdict column reported this as "no difference".
-    const base = aggregate({ id: "PERF-001" });
-    const report = buildMarkdownReport(summary(), [
-      {
-        id: "PERF-001",
-        head: base,
-        base,
-        comparison: {
-          headLabel: "head",
-          baseLabel: "merge-base",
-          uStatistic: 12,
-          pValue: 0.004,
-          effectSize: 0.11,
-          significant: true,
-          regression: false,
-        },
-      },
-    ]);
-
-    const header = cells(row(report, "ID", "Base"));
-    const values = cells(row(report, "PERF-001", "merge-base"));
-    expect(values[header.indexOf("Significant")]).toBe("yes");
-    expect(values[header.indexOf("Flagged")]).toBe("no");
-    // A fixed two decimals rendered this p-value as "0.00" — as no evidence at
-    // all, which is the opposite of what it says.
-    expect(values[header.indexOf("p-value")]).not.toBe("0.00");
-    expect(Number(values[header.indexOf("p-value")])).toBeCloseTo(0.004);
-  });
-
   it("escapes a pipe in an id or a metric name so the columns cannot shift", () => {
     const report = buildMarkdownReport(
       summary({

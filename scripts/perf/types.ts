@@ -92,6 +92,25 @@ export interface RunEnvironment {
   nodeVersion: string;
 }
 
+/**
+ * How the run was driven, as distinct from where it ran.
+ *
+ * Two runs on the same machine are still not comparable if they sampled
+ * differently. `--warmups 0` leaves cold-start cost in the numbers that a
+ * warmed run has already paid, so a before/after pair that differs here reports
+ * the difference in protocol as though it were a difference in the code. The
+ * measured iteration count alone does not reveal it, which is why this is
+ * recorded rather than inferred.
+ */
+export interface RunProtocol {
+  /** `--iterations` override, or null when each scenario used its own default. */
+  iterations: number | null;
+  /** `--warmups` override, or null when each scenario used its own default. */
+  warmups: number | null;
+  /** Scenario ids when the run was filtered with `--scenario`, else null. */
+  scenarioSelection: string[] | null;
+}
+
 export interface PerfRunSummary {
   generatedAt: string;
   mode: PerfMode;
@@ -100,6 +119,7 @@ export interface PerfRunSummary {
   /** Free-text tag for this run, e.g. "before" / "after". */
   label?: string;
   environment: RunEnvironment;
+  protocol: RunProtocol;
   scenarioCount: number;
   /** Scenarios outside a reference value. Informational — never a failure. */
   scenariosOutsideReference: string[];
@@ -136,7 +156,6 @@ export interface ComparisonAggregate {
 }
 
 export interface PerfBudgetConfig {
-  criticalScenarios: string[];
   defaultBudget: ScenarioBudget;
   scenarios: Record<string, ScenarioBudget>;
 }

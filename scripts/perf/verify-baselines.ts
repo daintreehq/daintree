@@ -96,15 +96,15 @@ function verifyMode(
     problems.push(`budgeted scenarios absent: ${gaps.map((gap) => gap.scenarioId).join(", ")}`);
   }
 
-  // `checkBaselineCoverage` skips critical scenarios because `gate.ts` fails
-  // closed for them at run time — but nothing here runs the gate, so a baseline
-  // missing PERF-001 entirely would otherwise verify clean and ship.
-  const missingCritical = scenariosForMode
+  // `checkBaselineCoverage` only inspects scenarios carrying a regression
+  // reference, so a scenario with neither a reference nor a baseline entry
+  // slips past it. A committed baseline is supposed to describe the whole
+  // matrix for its mode, and this is the one place that can say so.
+  const missingEntries = scenariosForMode
     .map((scenario) => scenario.id)
-    .filter((id) => budgetConfig.criticalScenarios.includes(id))
     .filter((id) => !Number.isFinite(p95[id]));
-  if (missingCritical.length > 0) {
-    problems.push(`critical scenarios absent: ${missingCritical.join(", ")}`);
+  if (missingEntries.length > 0) {
+    problems.push(`scenarios absent from the baseline: ${missingEntries.join(", ")}`);
   }
 
   return problems;
