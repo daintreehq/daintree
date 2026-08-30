@@ -14,7 +14,7 @@ This is the other half of the measurement system. `scripts/perf/` answers _what 
 
 **"No improvement was available" is a successful outcome.** Most optimisation attempts fail. A run that tries six hypotheses, disproves all six, and writes down why is worth more than a run that ships a change with no evidence behind it. Never manufacture an improvement. Reverting everything and reporting an honest zero is a complete, correct run.
 
-**Nothing in the harness will stop you fooling yourself.** It gates nothing — `perf compare` prints `REFUSED` and exits 0; a measurement issue is a warning and exits 0; a scenario whose feature you broke still produces a number. The one exit code you can trust is `check-pair.mjs`, shipped beside this file: it reads both summary files itself and exits non-zero when the pair is not a result. Run it before every comparison. Every other guard here is one you must apply deliberately.
+**Nothing in the harness will stop you fooling yourself.** It gates nothing — `perf compare` prints `REFUSED` and exits 0; a measurement issue is a warning and exits 0; a scenario whose feature you broke still produces a number. The one exit code you can trust is `check-pair.mjs`, shipped beside this file: it reads the summary files itself and exits non-zero when they are not a result, and in `ab` mode it computes the A/B verdict rather than leaving the arithmetic to a tired reader. Run it before every comparison. Every other guard here is one you must apply deliberately.
 
 ## Inputs — all seven required before you start
 
@@ -124,6 +124,7 @@ Repeat until the budget is spent or credible hypotheses run out.
 4. **Hard-stop checks. `perf compare` and `run` exit 0 on every one of these, so the exit code you act on is `check-pair.mjs`'s:**
    - **Exit 1** → the pair is not a result. It fails on a protocol, machine, mode or `--scenario` selection mismatch, on a `sourceSha` that is not the tree you think you measured, on a `gitVersion` or `electronVersion` move between the two files, on a broken apparatus, and on a predicate that is unhealthy or under-emitted. Do not read the comparison. Fix the cause and re-measure.
    - **Exit 3** → the runner did not stamp `sourceSha`, so neither file can be tied to a checkpoint. Proceed only if you measured both arms in this session, interleaved, and say so in the report. Never against a stored `best.json` in this state.
+   - **Exit 4** (`ab` mode only) → the arms were sound and the hypothesis lost. Revert and record it as a disproof; it is not a broken run to retry.
    - `REFUSED` in the `perf compare` output → the comparison did not happen. `check-pair.mjs` catches every refusal cause it knows of, so a refusal it did not predict means the two runs differ in a way neither tool expected. Stop and find out what.
    - A `measurement-issues=` non-zero in the run header, or warnings in the compare output about a count no longer emitted or a count falling to zero → read them. They describe the dead-watcher shape, which looks identical to success.
 
@@ -184,18 +185,19 @@ git switch "$BRANCH"
 
 Three pairs minimum, uninterrupted, with nothing else running on the machine. Never all-champion-then-all-candidate: that arrangement cannot separate your change from the hour that passed. The middle pair runs in reverse order because the first arm of a session is the coldest, and a fixed order hands that handicap to the same side three times. Keep `--scenario` on every arm — an unfiltered run writes a tracked file under `scripts/perf/history/`, which both dirties the tree the next `git switch` needs clean and puts a change under `scripts/perf/` into your diff.
 
-Then two comparisons, in this order:
+Then the verdict — computed, not eyeballed. The arithmetic here is the judgement call this whole procedure exists to remove, and an 8% improvement against a 6% drift looks like a win to anyone who has spent four hours earning it:
 
-1. **The noise floor.** `npm run perf compare` each pair of champion arms against each other — 1 v 2, 1 v 3, 2 v 3. Identical code on both sides, so every delta printed is drift, scheduling and thermal state. Take the worst of the three as **D**.
-2. **The claim.** Pick the median arm of each side by target value, run `check-pair.mjs` on that pair, then `npm run perf compare` on it. That table is the claim.
+```bash
+node .agents/skills/optimize/check-pair.mjs ab --scenario <ID> --target <metric path> --predicate <predicate> --threshold <precommitted %> --champ .tmp/opt/ab/champ1.json --champ .tmp/opt/ab/champ2.json --champ .tmp/opt/ab/champ3.json --cand .tmp/opt/ab/cand1.json --cand .tmp/opt/ab/cand2.json --cand .tmp/opt/ab/cand3.json
+```
 
-It is a claim only if **all three** hold:
+It health-checks all six arms, refuses arms that are not comparable, refuses six arms of the same tree (the shape of forgetting to commit the candidate), and then rules on the three conditions:
 
-- The candidate beats the champion in **every** pair, paired by index: `champ1` against `cand1`, and so on. One loss and there is no claim, whatever the medians say.
-- The median-to-median improvement exceeds the threshold you precommitted.
-- The improvement is **larger than D**. If the same code disagrees with itself by as much as your change moved the number, you measured the machine. Report D alongside the claim so a reader can check this themselves.
+1. The candidate won **every** index-paired arm — `champ1` against `cand1`, and so on. One loss and there is no claim, whatever the medians say.
+2. The median-to-median improvement is at least `--threshold`. That number is the one you precommitted, and passing it on this command line is what stops it being chosen after the result is visible.
+3. The improvement is larger than **D**, the worst champion-vs-champion spread, which the tool computes from the three champion arms. Identical code on both sides, so D is the machine. If your change moved the number by less than the machine moves it on its own, you measured the machine.
 
-More pairs are allowed only if you decide on the count before seeing the results — deciding to extend after an unfavourable pair is the same fallacy as re-rolling a threshold.
+`VERDICT: CLAIM` and exit 0, or `VERDICT: NO CLAIM` and **exit 4**. Exit 4 is a complete result, not a run to retry: extending to more pairs after seeing an unfavourable number is the same fallacy as re-choosing the threshold. Pick the pair count up front — three, or any odd number above it — and quote D in the report so a reader can check the arithmetic without redoing it.
 
 ### Everything else about durations
 
@@ -256,7 +258,7 @@ Statistic: <median|count> · precommitted threshold: <value> · measured drift D
 ```
 
 - One block per machine. Never merge two machines into one table.
-- Both numbers come from the **headline A/B** (Phase 3 step 6), not from files measured earlier in the run. Say so.
+- Both numbers come from the **headline A/B** (Phase 3 step 6), not from files measured earlier in the run. Paste `check-pair.mjs ab`'s verdict block verbatim below the table: it carries D, the per-pair results and the threshold the verdict actually used, so the report cannot quote a threshold the tool was not given.
 - The correctness predicate is always a row, and its cell reads `ok` only when `count === runs` and `max === 0` on both sides. A reader must see the feature still works and that the check was actually taken.
 - Every declared guard metric is a row, including ones that moved the wrong way.
 - Percentages only where the comparison is legitimate — never across machines for anything outside `count`, `size` and `ratio`, and never on a machine-dependent metric whose threshold you did not precommit or whose improvement did not exceed D.
