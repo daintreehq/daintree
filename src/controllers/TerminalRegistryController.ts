@@ -106,6 +106,7 @@ class TerminalRegistryController {
       kind,
       launchAgentId,
       title,
+      worktreeId: options.worktreeId,
     };
 
     const id = await terminalClient.spawn(spawnOptions);

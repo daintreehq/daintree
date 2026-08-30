@@ -3,7 +3,11 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
-import type { MouseEventHandler, PointerEventHandler, ReactNode } from "react";
+import type { ReactNode } from "react";
+import {
+  OverlayFocusRestoreContext,
+  type OverlayFocusRestore,
+} from "@/components/ui/overlay-focus-restore";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import type { Project } from "@shared/types";
 
@@ -15,30 +19,77 @@ vi.mock("@/store/projectStore", () => ({
 }));
 
 // Render popover content inline — this test is about the editing contract, not
-// Radix's positioning. `onEscapeKeyDown` is captured rather than swallowed:
-// Radix fires it from a document CAPTURE listener BEFORE the input's own
-// keydown, and the cancel-vs-commit ordering hangs on that. A mock that dropped
-// it would let a broken Escape path pass while production saved the edit.
+// Radix's positioning. Three handlers are captured rather than swallowed
+// because production depends on when each one fires:
+// - `onEscapeKeyDown`: Radix fires it from a document CAPTURE listener BEFORE
+//   the input's own keydown, and the cancel-vs-commit ordering hangs on that.
+//   A mock that dropped it would let a broken Escape path pass while
+//   production saved the edit.
+// - `onCloseAutoFocus`: this popover is anchored rather than triggered, so it
+//   owns the focus return itself.
+// - the root's `onOpenChange`: the dismissal path that commits a pending edit.
 let escapeKeyDownHandler: ((event: { preventDefault: () => void }) => void) | null = null;
+let closeAutoFocusHandler: ((event: { preventDefault: () => void }) => void) | null = null;
+let openChangeHandler: ((open: boolean) => void) | null = null;
+let pointerDownOutsideHandler: (() => void) | null = null;
+
+// Enough of the shared policy for the component to register its restore target
+// against. The real one is exercised by the primitives' own tests.
+const setRestoreTargetMock = vi.fn<(node: HTMLElement | null) => void>();
+const focusRestoreStub = {
+  setRestoreTarget: setRestoreTargetMock,
+  resetForOpen: () => {},
+  deferToRadix: () => {},
+  onContentPointerDown: () => {},
+  onContentPointerDownOutside: () => {},
+  onContentInteractOutside: () => {},
+  onContentKeyDown: () => {},
+  onContentClick: () => {},
+  onContentCloseAutoFocus: () => {},
+} satisfies OverlayFocusRestore;
 
 vi.mock("@/components/ui/popover", () => ({
-  // Radix's Popover root renders no DOM of its own, and neither can this mock:
-  // the trigger locates the toolbar pill through its own parentElement, so an
-  // extra wrapper would hide the pill from it.
-  Popover: ({ children }: { children: ReactNode }) => <>{children}</>,
-  PopoverTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  // Radix's Popover root renders no DOM of its own, and neither can this mock —
+  // but it does provide the shared focus-restore context, which is how the
+  // component hands the policy a restore target.
+  Popover: ({
+    children,
+    onOpenChange,
+  }: {
+    children: ReactNode;
+    onOpenChange?: (o: boolean) => void;
+  }) => {
+    openChangeHandler = onOpenChange ?? null;
+    return (
+      <OverlayFocusRestoreContext.Provider value={focusRestoreStub}>
+        {children}
+      </OverlayFocusRestoreContext.Provider>
+    );
+  },
+  PopoverAnchor: ({ children }: { children: ReactNode }) => <>{children}</>,
   PopoverContent: ({
     children,
     onEscapeKeyDown,
+    onCloseAutoFocus,
+    // Not a DOM prop — kept off the div, and handed to the tests instead.
+    onPointerDownOutside,
     onOpenAutoFocus: _onOpenAutoFocus,
     ...rest
   }: {
     children: ReactNode;
     onEscapeKeyDown?: (event: { preventDefault: () => void }) => void;
+    onCloseAutoFocus?: (event: { preventDefault: () => void }) => void;
+    onPointerDownOutside?: () => void;
     onOpenAutoFocus?: (event: { preventDefault: () => void }) => void;
   }) => {
     escapeKeyDownHandler = onEscapeKeyDown ?? null;
-    return <div {...rest}>{children}</div>;
+    closeAutoFocusHandler = onCloseAutoFocus ?? null;
+    pointerDownOutsideHandler = onPointerDownOutside ?? null;
+    return (
+      <div data-testid="popover-content" {...rest}>
+        {children}
+      </div>
+    );
   },
 }));
 
@@ -49,6 +100,19 @@ function pressEscape(): boolean {
   // makes need an explicit act().
   act(() => {
     escapeKeyDownHandler?.({
+      preventDefault: () => {
+        defaultPrevented = true;
+      },
+    });
+  });
+  return defaultPrevented;
+}
+
+/** Drive the close-time focus return the way Radix does. */
+function closeAutoFocus(): boolean {
+  let defaultPrevented = false;
+  act(() => {
+    closeAutoFocusHandler?.({
       preventDefault: () => {
         defaultPrevented = true;
       },
@@ -82,105 +146,173 @@ function nameField() {
   return screen.getByLabelText<HTMLInputElement>(/project name/i);
 }
 
+/** The component is controlled by the toolbar; every test opens it. */
+function renderEditor(
+  project: Project = makeProject(),
+  props: { onOpenChange?: (open: boolean) => void; onCloseAutoFocus?: () => void } = {}
+) {
+  return render(
+    <ProjectIdentityEditor
+      project={project}
+      open
+      onOpenChange={props.onOpenChange ?? (() => {})}
+      onCloseAutoFocus={props.onCloseAutoFocus}
+    />
+  );
+}
+
+/** Mirrors the toolbar: the pill this popover anchors to and hands focus back to. */
+function renderPill() {
+  const pill = document.createElement("button");
+  pill.type = "button";
+  pill.dataset.testid = "project-switcher-trigger";
+  document.body.appendChild(pill);
+  return pill;
+}
+
 describe("ProjectIdentityEditor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     updateProjectMock.mockResolvedValue(undefined);
+    escapeKeyDownHandler = null;
+    closeAutoFocusHandler = null;
+    openChangeHandler = null;
+    pointerDownOutsideHandler = null;
+    document.body.innerHTML = "";
   });
 
   describe("markup contract", () => {
-    it("renders the trigger as a standalone button, never nesting one inside another", () => {
-      const { container } = render(<ProjectIdentityEditor project={makeProject()} />);
-      // A nested <button> inside a <button> is invalid HTML and fires both
-      // handlers on one click — the #6928 failure mode.
+    it("offers no clickable surface of its own outside the popover", () => {
+      const { container } = renderEditor();
+      // The whole point of the rewrite: the editor no longer owns a target on
+      // the pill, so nothing it renders into the toolbar can take a click.
+      // Only the popover body's own controls are interactive.
+      const toolbarSide = container.querySelectorAll("[aria-hidden='true']");
+      for (const node of toolbarSide) {
+        expect(node.tagName).not.toBe("BUTTON");
+        expect(node.getAttribute("tabindex")).toBeNull();
+      }
       expect(container.querySelector("button button")).toBeNull();
     });
 
     it("names the popover so it is not announced as a bare dialog", () => {
-      render(<ProjectIdentityEditor project={makeProject()} />);
+      renderEditor();
       expect(screen.getByLabelText("Edit project identity")).not.toBeNull();
     });
   });
 
-  describe("pill event forwarding", () => {
-    /**
-     * Mirrors the toolbar layout: the overlay is painted on top of the pill but
-     * is a DOM sibling, so events landing on it never reach the pill's Radix
-     * context-menu and tooltip triggers unless the overlay replays them.
-     */
-    function renderOverPill() {
-      const pillHandlers = {
-        onContextMenu: vi.fn<MouseEventHandler<HTMLButtonElement>>(),
-        onPointerMove: vi.fn<PointerEventHandler<HTMLButtonElement>>(),
-        onPointerLeave: vi.fn<PointerEventHandler<HTMLButtonElement>>(),
-      };
-      render(
-        <div>
-          <ProjectIdentityEditor project={makeProject()} />
-          <button type="button" data-testid="project-switcher-trigger" {...pillHandlers}>
-            <span data-testid="pill-label">my-api</span>
-          </button>
-        </div>
-      );
-      return {
-        overlay: screen.getByRole("button", { name: /edit identity/i }),
-        pill: screen.getByTestId("project-switcher-trigger"),
-        pillHandlers,
-      };
-    }
+  describe("focus return", () => {
+    it("hands focus back to the pill after a keyboard close, which Radix cannot", () => {
+      const pill = renderPill();
+      renderEditor();
 
-    it("replays right-click onto the pill so the project context menu still opens", () => {
-      const { overlay, pillHandlers } = renderOverPill();
+      pressEscape();
+      // Radix restores to a TRIGGER; an anchored popover has none, so an
+      // unclaimed keyboard close drops focus on document.body and the next Tab
+      // restarts from the top of the document.
+      expect(closeAutoFocus()).toBe(true);
 
-      fireEvent.contextMenu(overlay, { clientX: 42, clientY: 7 });
-
-      expect(pillHandlers.onContextMenu).toHaveBeenCalledTimes(1);
-      // Radix anchors the context menu at the pointer, so the coordinates have
-      // to survive the replay or the menu lands in the corner.
-      const replayed = pillHandlers.onContextMenu.mock.calls[0]![0];
-      expect([replayed.clientX, replayed.clientY]).toEqual([42, 7]);
+      expect(document.activeElement).toBe(pill);
     });
 
-    it("replays hover onto the pill so the identity tooltip still opens", () => {
-      const { overlay, pillHandlers } = renderOverPill();
+    it("asks for the ring on a keyboard close, since Chromium paints one either way", () => {
+      const pill = renderPill();
+      const focusSpy = vi.spyOn(pill, "focus");
+      renderEditor();
 
-      fireEvent.pointerOver(overlay);
+      pressEscape();
+      closeAutoFocus();
 
-      expect(pillHandlers.onPointerMove).toHaveBeenCalledTimes(1);
+      // Anything but an explicit `focusVisible: false` leaves the ring on,
+      // which is what a keyboard user is owed.
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+      expect(focusSpy.mock.calls[0]![0]).not.toMatchObject({ focusVisible: false });
     });
 
-    it("closes the pill's tooltip when the pointer leaves the pill entirely", () => {
-      const { overlay, pillHandlers } = renderOverPill();
-      fireEvent.pointerOver(overlay);
+    it("counts a keyboard emoji pick as a keyboard close", () => {
+      const pill = renderPill();
+      renderEditor();
 
-      fireEvent.pointerOut(overlay, { relatedTarget: document.body });
+      // Tabbing into the picker and pressing Enter reaches the same select
+      // callback a mouse click does, so modality is read off the interaction.
+      fireEvent.keyDown(screen.getByTestId("popover-content"), { key: "Tab" });
+      fireEvent.click(screen.getByText("pick-unicorn"), { detail: 0 });
+      closeAutoFocus();
 
-      expect(pillHandlers.onPointerLeave).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(pill);
     });
 
-    it("keeps the tooltip up when the pointer slides from the overlay onto the pill", () => {
-      const { overlay, pillHandlers } = renderOverPill();
-      fireEvent.pointerOver(overlay);
+    it("gives the shared policy the pill to aim at, since it has no trigger to record", () => {
+      const pill = renderPill();
 
-      // The pill is natively hovered from here on, so forwarding a leave would
-      // blink the tooltip shut and straight back open.
-      fireEvent.pointerOut(overlay, { relatedTarget: screen.getByTestId("pill-label") });
+      renderEditor();
 
-      expect(pillHandlers.onPointerLeave).not.toHaveBeenCalled();
+      // Without this the shared policy has nowhere to put focus on a pointer
+      // close, and Radix's own restoration targets a null trigger.
+      expect(setRestoreTargetMock).toHaveBeenCalledWith(pill);
+    });
+
+    it("leaves a pointer close alone so it cannot steal focus from the switcher", () => {
+      const pill = renderPill();
+      const focusSpy = vi.spyOn(pill, "focus");
+      renderEditor();
+
+      // Dismissing by clicking the pill opens the switcher and focuses its
+      // search box. Restoring here would yank focus straight back out of it —
+      // the shared policy in overlay-focus-restore owns this case.
+      act(() => pointerDownOutsideHandler?.());
+      expect(closeAutoFocus()).toBe(false);
+
+      expect(focusSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not treat a pointer press that never closed the popover as keyboard", () => {
+      const pill = renderPill();
+      const focusSpy = vi.spyOn(pill, "focus");
+      renderEditor();
+
+      // Click into the name field, type, then click away: the typing must not
+      // reclassify the pointer dismissal that follows it.
+      fireEvent.keyDown(nameField(), { key: "a" });
+      act(() => pointerDownOutsideHandler?.());
+      closeAutoFocus();
+
+      expect(focusSpy).not.toHaveBeenCalled();
+    });
+
+    it("lets the toolbar hold the pill's tooltip down across every close", () => {
+      renderPill();
+      const onCloseAutoFocus = vi.fn();
+      renderEditor(makeProject(), { onCloseAutoFocus });
+
+      // Fires whoever owns the restoration — the tooltip half is never a policy
+      // choice.
+      closeAutoFocus();
+
+      expect(onCloseAutoFocus).toHaveBeenCalledTimes(1);
     });
   });
 
   describe("emoji", () => {
     it("persists an emoji picked from the full picker", () => {
-      render(<ProjectIdentityEditor project={makeProject()} />);
+      renderEditor();
 
       fireEvent.click(screen.getByText("pick-unicorn"));
 
       expect(updateProjectMock).toHaveBeenCalledWith("p1", { emoji: "🦄" });
     });
 
+    it("closes itself once an emoji is picked", () => {
+      const onOpenChange = vi.fn();
+      renderEditor(makeProject(), { onOpenChange });
+
+      fireEvent.click(screen.getByText("pick-unicorn"));
+
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+
     it("offers the name-derived suggestion while the project still shows the tree", () => {
-      render(<ProjectIdentityEditor project={makeProject({ name: "my-api" })} />);
+      renderEditor(makeProject({ name: "my-api" }));
 
       const suggested = screen.getByRole("button", { name: /use suggested/i });
       fireEvent.click(suggested);
@@ -191,13 +323,13 @@ describe("ProjectIdentityEditor", () => {
     });
 
     it("hides the suggestion once the project has a non-default emoji", () => {
-      render(<ProjectIdentityEditor project={makeProject({ emoji: "🚀" })} />);
+      renderEditor(makeProject({ emoji: "🚀" }));
 
       expect(screen.queryByRole("button", { name: /use suggested/i })).toBeNull();
     });
 
     it("does not write when the picked emoji already matches", () => {
-      render(<ProjectIdentityEditor project={makeProject({ emoji: "🦄" })} />);
+      renderEditor(makeProject({ emoji: "🦄" }));
 
       fireEvent.click(screen.getByText("pick-unicorn"));
 
@@ -205,7 +337,7 @@ describe("ProjectIdentityEditor", () => {
     });
 
     it("carries a pending name edit along when an emoji is picked", () => {
-      render(<ProjectIdentityEditor project={makeProject()} />);
+      renderEditor();
 
       fireEvent.change(nameField(), { target: { value: "Renamed" } });
       // Picking closes the popover programmatically, which does NOT fire
@@ -220,7 +352,7 @@ describe("ProjectIdentityEditor", () => {
     });
 
     it("suggests from the edited draft, not the committed name", () => {
-      render(<ProjectIdentityEditor project={makeProject({ name: "plain" })} />);
+      renderEditor(makeProject({ name: "plain" }));
 
       fireEvent.change(nameField(), { target: { value: "docs" } });
       fireEvent.click(screen.getByRole("button", { name: /use suggested/i }));
@@ -234,7 +366,7 @@ describe("ProjectIdentityEditor", () => {
 
   describe("name", () => {
     it("commits a renamed project on Enter", () => {
-      render(<ProjectIdentityEditor project={makeProject()} />);
+      renderEditor();
 
       fireEvent.change(nameField(), { target: { value: "Renamed" } });
       fireEvent.keyDown(nameField(), { key: "Enter" });
@@ -242,8 +374,19 @@ describe("ProjectIdentityEditor", () => {
       expect(updateProjectMock).toHaveBeenCalledWith("p1", { name: "Renamed" });
     });
 
+    it("commits a pending edit when the popover is dismissed", () => {
+      renderEditor();
+
+      fireEvent.change(nameField(), { target: { value: "Renamed" } });
+      // Clicking away closes through the root rather than through either of the
+      // component's own exits.
+      act(() => openChangeHandler?.(false));
+
+      expect(updateProjectMock).toHaveBeenCalledWith("p1", { name: "Renamed" });
+    });
+
     it("trims before committing", () => {
-      render(<ProjectIdentityEditor project={makeProject()} />);
+      renderEditor();
 
       fireEvent.change(nameField(), { target: { value: "   Spaced   " } });
       fireEvent.keyDown(nameField(), { key: "Enter" });
@@ -252,7 +395,7 @@ describe("ProjectIdentityEditor", () => {
     });
 
     it("treats an emptied field as no change rather than erasing the name", () => {
-      render(<ProjectIdentityEditor project={makeProject()} />);
+      renderEditor();
 
       fireEvent.change(nameField(), { target: { value: "   " } });
       fireEvent.keyDown(nameField(), { key: "Enter" });
@@ -262,7 +405,7 @@ describe("ProjectIdentityEditor", () => {
     });
 
     it("does not write when the name is unchanged", () => {
-      render(<ProjectIdentityEditor project={makeProject()} />);
+      renderEditor();
 
       fireEvent.keyDown(nameField(), { key: "Enter" });
 
@@ -270,7 +413,7 @@ describe("ProjectIdentityEditor", () => {
     });
 
     it("reverts the draft on Escape without writing", () => {
-      render(<ProjectIdentityEditor project={makeProject()} />);
+      renderEditor();
 
       fireEvent.change(nameField(), { target: { value: "Abandoned" } });
       // Radix dismisses on Escape by default, which would run the close-commit
@@ -282,20 +425,28 @@ describe("ProjectIdentityEditor", () => {
     });
 
     it("re-seeds the draft when the project changes underneath it", () => {
-      const { rerender } = render(<ProjectIdentityEditor project={makeProject()} />);
+      const { rerender } = renderEditor();
       fireEvent.change(nameField(), { target: { value: "Draft" } });
 
-      rerender(<ProjectIdentityEditor project={makeProject({ id: "p2", name: "other" })} />);
+      rerender(
+        <ProjectIdentityEditor
+          project={makeProject({ id: "p2", name: "other" })}
+          open
+          onOpenChange={() => {}}
+        />
+      );
 
       // A stale draft must never be committable against a different project.
       expect(nameField().value).toBe("other");
     });
 
     it("does not write an untouched draft over a rename from elsewhere", () => {
-      const { rerender } = render(<ProjectIdentityEditor project={makeProject({ name: "A" })} />);
+      const { rerender } = renderEditor(makeProject({ name: "A" }));
       // Same project id, renamed in another window while this sat open and
       // untouched. Closing must not resurrect the old name.
-      rerender(<ProjectIdentityEditor project={makeProject({ name: "B" })} />);
+      rerender(
+        <ProjectIdentityEditor project={makeProject({ name: "B" })} open onOpenChange={() => {}} />
+      );
 
       fireEvent.click(screen.getByText("pick-unicorn"));
 

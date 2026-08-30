@@ -97,6 +97,7 @@ const baseMenu: WorktreeHeaderProps["menu"] = {
   onCopyContextFull: noop,
   onCopyContextModified: noop,
   onCopyPath: noop,
+  onCopyBranchName: noop,
   onOpenEditor: noop,
   onRevealInFinder: noop,
   onRunRecipe: noop,
@@ -456,7 +457,14 @@ describe("WorktreeHeader primary worktree standard branch layout", () => {
       branchLabel: "main",
     });
     const projectName = screen.getByTestId("primary-worktree-project-name");
-    expect(projectName.className).toContain("text-text-muted");
+    // De-emphasised, but still readable. This is the card's headline — the
+    // only thing naming which worktree it is — and `text-text-muted` has no
+    // dark-theme contrast floor in this cohort (2.22:1 on namib), so the
+    // muting comes off the weight rather than the tone.
+    const muted = projectName.className;
+    expect(muted).not.toContain("text-text-muted");
+    expect(muted).toContain("text-text-secondary");
+    expect(muted).toContain("font-normal");
   });
 
   it("falls back to BranchLabel when isMainOnStandardBranch is undefined", () => {
@@ -1214,8 +1222,12 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     expect(prButton).toBeDefined();
     expect(prButton.className).not.toContain("opacity-60");
     const prIcon = prButton.querySelector("svg");
-    // Muted with a solid token, not the active PR-state color or opacity/grayscale.
-    expect(prIcon?.className.baseVal).toContain("text-text-muted");
+    // De-emphasised with a SOLID token, not the active PR-state colour and not
+    // opacity/grayscale. `text-text-secondary` rather than `text-text-muted`:
+    // muted has no dark contrast floor here, and this glyph is the only mark
+    // saying a token is missing.
+    expect(prIcon?.className.baseVal).toContain("text-text-secondary");
+    expect(prIcon?.className.baseVal).not.toContain("text-text-muted");
     expect(prIcon?.className.baseVal).not.toContain("text-pr-open");
     expect(prIcon?.className.baseVal).not.toContain("grayscale");
     expect(prIcon?.className.baseVal).not.toContain("opacity-50");
@@ -1413,6 +1425,78 @@ describe("WorktreeHeader upstream sync indicator", () => {
     expect(indicator.getAttribute("data-fetch-in-flight")).toBeNull();
   });
 
+  it("mounts the badge for base-only drift and labels the branch it drifted from", () => {
+    // A worktree branch created without tracking reports no upstream counts at
+    // all; if the mount gate ignored base drift the whole line would vanish.
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        aheadCount: undefined,
+        behindCount: undefined,
+        baseBranchName: "develop",
+        baseAheadCount: 0,
+        baseBehindCount: 4,
+        baseMatchesUpstream: false,
+      },
+    });
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(indicator.textContent).toContain("Δ develop");
+    expect(indicator.textContent).toContain("↓4");
+  });
+
+  it("mounts the badge when the branch tracks its own base, and shows the count once", () => {
+    // `baseMatchesUpstream` used to suppress the base line AND was subtracted
+    // from the mount gate, so this pair rendered a bare unlabelled number.
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        aheadCount: 0,
+        behindCount: 4,
+        baseBranchName: "develop",
+        baseAheadCount: 0,
+        baseBehindCount: 4,
+        baseMatchesUpstream: true,
+      },
+    });
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(indicator.textContent).toContain("Δ develop");
+    expect(indicator.textContent?.match(/↓4/g)).toHaveLength(1);
+  });
+
+  it("keeps the unlabelled pair when base counts have not caught up", () => {
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        aheadCount: 0,
+        behindCount: 4,
+        baseBranchName: "develop",
+        baseAheadCount: 0,
+        baseBehindCount: 0,
+        baseMatchesUpstream: true,
+      },
+    });
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(indicator.textContent).toContain("↓4");
+    expect(indicator.textContent).not.toContain("Δ");
+  });
+
+  it("does not mount a row for base counts the badge would decline to draw", () => {
+    // The badge needs a base branch name to render base counts. Mounting on
+    // the counts alone would leave an empty secondary row behind.
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        aheadCount: undefined,
+        behindCount: undefined,
+        baseBranchName: undefined,
+        baseAheadCount: 0,
+        baseBehindCount: 4,
+        baseMatchesUpstream: false,
+      },
+    });
+    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
+  });
+
   it("hides the indicator entirely when there are no counts and no auth failure", () => {
     renderHeader({
       worktree: { ...baseWorktree, aheadCount: 0, behindCount: 0 },
@@ -1577,5 +1661,32 @@ describe("WorktreeHeader external indicator", () => {
 
     renderHeader({ worktree: { ...baseWorktree, isExternal: undefined } });
     expect(screen.queryByRole("img", { name: /external worktree/i })).toBeNull();
+  });
+});
+
+describe("WorktreeHeader base relationship row", () => {
+  const onBase: WorktreeState = {
+    ...baseWorktree,
+    baseBranchName: "develop",
+    baseAheadCount: 0,
+    baseBehindCount: 0,
+    worktreeChanges: {
+      worktreeId: "test-wt",
+      rootPath: "/tmp/test-wt",
+      changes: [],
+      changedFileCount: 0,
+      tracking: null,
+    },
+  };
+
+  it("mounts the secondary row for a branch on its base with nothing else to report", () => {
+    renderHeader({ worktree: onBase });
+    expect(screen.getByTestId("upstream-sync-base").textContent).toContain("develop");
+    expect(screen.getByTestId("upstream-sync-unpushed")).not.toBeNull();
+  });
+
+  it("keeps the row unmounted once the branch name it described is gone", () => {
+    renderHeader({ worktree: { ...onBase, isDetached: true } });
+    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
   });
 });

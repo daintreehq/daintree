@@ -119,15 +119,29 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(source).toContain("shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]");
     });
 
-    it("applies hover background on inactive chips", () => {
-      expect(source).toContain("hover:bg-tint/[0.04]");
+    it("applies hover background on inactive chips, from the named overlay ladder", () => {
+      // The rule is that the hover fill is a NAMED step, not that it is a
+      // particular one. `bg-tint/[0.04]` was an arbitrary alpha on an unnamed
+      // tint: invisible to the theme system, so it could not follow a palette
+      // that retints its overlays, and unreviewable against the ladder every
+      // other hover in the app uses.
+      const stats = statsSlice(source);
+      expect(stats).toMatch(/hover:bg-overlay-(subtle|soft|medium)\b/);
+      expect(stats).not.toContain("bg-tint/");
     });
 
-    it("uses focus-visible:outline-hidden with ring for focus styling", () => {
+    it("paints keyboard focus with an outline, never a suppressed outline plus a ring", () => {
+      // This pairing was the exact thing the component contract bans, and for
+      // a reason that only shows up in one mode: a Tailwind `ring` is a
+      // box-shadow, forced-colors removes box-shadows outright, and
+      // `outline-hidden` drops the transparent outline that would otherwise
+      // have been repainted — so the chips had no focus indicator at all
+      // under Windows High Contrast.
       const stats = statsSlice(source);
-      expect(stats).toContain("focus-visible:outline-hidden");
-      expect(stats).toContain("focus-visible:ring-2");
-      expect(stats).toContain("focus-visible:ring-daintree-accent");
+      expect(stats).toMatch(/focus-visible:outline\b/);
+      expect(stats).toContain("focus-visible:outline-accent-primary");
+      expect(stats).not.toContain("focus-visible:outline-hidden");
+      expect(stats).not.toMatch(/focus-visible:ring-/);
     });
 
     it("wrapper uses role='group' instead of role='status'", () => {
@@ -210,10 +224,10 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     it("uses neutral (non-state-colored) text on the finished chip label", () => {
       const chip = finishedChipSlice(source);
       // Label text is neutral; only the dot carries semantic color.
-      expect(chip).toMatch(/quickStateFilter === "finished"\s*\?\s*"text-daintree-text"/);
+      expect(chip).toMatch(/quickStateFilter === "finished"\s*\?\s*"text-text-primary"/);
       expect(chip).not.toContain("text-status-warning");
       expect(chip).not.toContain("text-[var(--color-state-working)]");
-      expect(chip).not.toContain("text-daintree-accent");
+      expect(chip).not.toContain("text-accent-primary");
     });
 
     it("renders the finished count text", () => {
@@ -228,7 +242,7 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     it("working chip label is neutral, not state-colored", () => {
       const start = source.indexOf('aria-pressed={quickStateFilter === "working"}');
       const chip = source.slice(start, source.indexOf("} working", start));
-      expect(chip).toMatch(/quickStateFilter === "working"\s*\?\s*"text-daintree-text"/);
+      expect(chip).toMatch(/quickStateFilter === "working"\s*\?\s*"text-text-primary"/);
       expect(chip).not.toContain("text-[var(--color-state-working)]");
       // The dot keeps its semantic state color.
       expect(chip).toContain("bg-[var(--color-state-working)]");
@@ -237,7 +251,7 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     it("waiting chip label is neutral, not state-colored", () => {
       const start = source.indexOf('aria-pressed={quickStateFilter === "waiting"}');
       const chip = source.slice(start, source.indexOf("} waiting", start));
-      expect(chip).toMatch(/quickStateFilter === "waiting"\s*\?\s*"text-daintree-text"/);
+      expect(chip).toMatch(/quickStateFilter === "waiting"\s*\?\s*"text-text-primary"/);
       expect(chip).not.toContain("text-status-warning");
       // The dot keeps its semantic color.
       expect(chip).toContain("bg-status-warning");
@@ -284,8 +298,24 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(source).toMatch(/isSelected=\{selectedIds\.has\(worktree\.id\)\}/);
     });
 
-    it("uses bg-overlay-subtle (not accent) for the selected state", () => {
-      expect(source).toMatch(/isSelected\s*&&\s*"bg-overlay-subtle/);
+    it("marks membership with a neutral fill plus a contrast-gated neutral edge", () => {
+      // The rule, not the geometry: membership is NEUTRAL (accent belongs to
+      // the cursor alone in this arrow-key domain), and because the fill step
+      // between a selected and an unselected cell is a couple of percent —
+      // nowhere near SC 1.4.11's 3:1 — the edge has to be the actual non-text
+      // indicator. `selection-outline` is the one ink
+      // `getThemeContrastWarnings` gates at 3:1 on every theme, which is why
+      // it and not a border token.
+      const treatments = Array.from(source.matchAll(/isSelected\s*&&\s*\n?\s*"([^"]+)"/g)).map(
+        (m) => m[1] ?? ""
+      );
+      expect(treatments.length, "no isSelected treatment found on the grid cell").toBeGreaterThan(
+        0
+      );
+      const all = treatments.join(" ");
+      expect(all).toMatch(/\bbg-overlay-\w+/);
+      expect(all).toContain("selection-outline");
+      expect(all).not.toMatch(/accent/);
     });
 
     it("does not introduce any forbidden accent token for selection treatment", () => {
@@ -293,10 +323,10 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       // truth, but a local guard catches regressions before that contract
       // test runs.
       const selectionAccentTokens = [
-        "bg-daintree-accent",
+        "bg-accent-primary",
         "bg-accent-primary",
         "bg-accent-soft",
-        "text-daintree-accent",
+        "text-accent-primary",
         "text-accent-primary",
       ];
       for (const token of selectionAccentTokens) {
@@ -311,7 +341,19 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     });
 
     it("Escape with selection clears it instead of closing the modal", () => {
-      expect(source).toMatch(/if\s*\(hasSelection\)\s*\{[\s\S]*?clearSelection\(\)/);
+      expect(source).toMatch(
+        /escapeDismissRef\.current\s*&&\s*hasSelection\)\s*\{[\s\S]*?clearSelection\(\)/
+      );
+    });
+
+    it("scopes the two-stage clear-then-close guard to Escape", () => {
+      // AppDialog routes the close button and a scrim click through
+      // `onBeforeClose` as well, and both have to dismiss in one click with a
+      // selection active — so the guard reads a flag set only by an Escape
+      // keypress, recorded in capture phase ahead of the bubble-phase escape
+      // stack.
+      expect(source).toMatch(/"keydown",\s*markEscapeDismissal,\s*true\)/);
+      expect(source).toMatch(/e\.key\s*!==\s*"Escape"/);
     });
 
     it("Cmd/Ctrl+A triggers selectAllVisible", () => {
@@ -362,7 +404,14 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     });
 
     it("imports the bulk-remove hook so the modal owns the orchestrator state", () => {
-      expect(modalSource).toMatch(/import\s*\{\s*useWorktreeBulkRemove\s*\}/);
+      // Matches the named import wherever it sits in the specifier list. The
+      // original pattern required `useWorktreeBulkRemove` to be the ONLY name
+      // in the braces, which asserted the punctuation of an import statement
+      // rather than the fact under test — adding a second export from the same
+      // module broke it without changing any behaviour.
+      expect(modalSource).toMatch(
+        /import\s*\{[^}]*\buseWorktreeBulkRemove\b[^}]*\}\s*from\s*"\.\/useWorktreeBulkRemove"/
+      );
     });
 
     it("imports ConfirmDialog for the D1 close-sessions and D3 remove gates", () => {

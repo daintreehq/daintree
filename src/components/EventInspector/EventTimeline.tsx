@@ -35,7 +35,7 @@ function getCategoryStyle(category: EventCategory): CategoryStyle {
   if (!style) {
     return {
       label: "???",
-      color: "bg-daintree-border/20 text-daintree-text/60 border-daintree-border/30",
+      color: "bg-daintree-border/20 text-text-secondary border-daintree-border/30",
     };
   }
   return { label: style.shortLabel, color: style.color };
@@ -79,7 +79,7 @@ function EventRow({ event, isSelected, onSelect }: EventRowProps) {
           <TooltipTrigger asChild>
             <span
               className={cn(
-                "flex-shrink-0 inline-flex items-center justify-center w-8 px-1 py-0.5 rounded text-[11px] font-medium border",
+                "flex-shrink-0 inline-flex items-center justify-center w-8 px-1 py-0.5 rounded text-2xs font-medium border",
                 categoryStyle.color
               )}
             >

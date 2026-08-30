@@ -48,14 +48,14 @@ export function BaseBranchFileRow({
           onClick={onClick}
           className={cn(
             "relative flex min-w-0 flex-1 items-baseline rounded text-left",
-            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
           )}
         >
           <span
             aria-hidden="true"
             className={cn(
               "inline-flex items-center justify-center rounded-sm px-1 mr-2 shrink-0",
-              "text-[10px] font-medium leading-4 h-4 min-w-[16px]",
+              "text-3xs font-medium leading-4 h-4 min-w-[16px]",
               config.bg,
               config.text
             )}
@@ -66,8 +66,8 @@ export function BaseBranchFileRow({
             <span
               data-testid="base-branch-file-row-dir"
               className={cn(
-                "shrink truncate font-mono text-[11px] transition-colors",
-                "text-daintree-text/50 group-hover/baserow:text-daintree-text/70"
+                "shrink truncate font-mono text-2xs transition-colors",
+                "text-text-secondary group-hover/baserow:text-text-primary"
               )}
             >
               {dir}/
@@ -76,8 +76,8 @@ export function BaseBranchFileRow({
           <span
             data-testid="base-branch-file-row-base"
             className={cn(
-              "shrink truncate font-medium font-mono text-[11px] transition-colors",
-              "text-daintree-text group-hover/baserow:text-daintree-text"
+              "shrink truncate font-medium font-mono text-2xs transition-colors",
+              "text-text-primary group-hover/baserow:text-text-primary"
             )}
           >
             {base}
@@ -86,7 +86,7 @@ export function BaseBranchFileRow({
         {hasChurn && (
           <div
             data-testid="base-branch-file-row-churn"
-            className="ml-2 flex items-center gap-1 shrink-0 text-[10px] tabular-nums"
+            className="ml-2 flex items-center gap-1 shrink-0 text-3xs tabular-nums"
           >
             {insertions > 0 && <span className="text-status-success/80">+{insertions}</span>}
             {deletions > 0 && <span className="text-status-error/80">-{deletions}</span>}
@@ -100,7 +100,7 @@ export function BaseBranchFileRow({
             disabled={!onBadgeClick}
             className={cn(
               "shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 ml-2 rounded-full",
-              "text-[10px] font-semibold tabular-nums",
+              "text-3xs font-semibold tabular-nums",
               "bg-status-warning/15 text-status-warning",
               onBadgeClick
                 ? "hover:bg-status-warning/25 transition-colors cursor-pointer"

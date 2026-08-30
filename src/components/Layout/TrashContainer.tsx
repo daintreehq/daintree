@@ -263,7 +263,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
                 >
                   <Trash2 className="w-3.5 h-3.5 text-daintree-text/60" aria-hidden="true" />
                   {compact && count > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-daintree-text/40 text-[10px] font-bold tabular-nums text-text-inverse">
+                    <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-daintree-text/40 text-3xs font-bold tabular-nums text-text-inverse">
                       {count > 9 ? "9+" : count}
                     </span>
                   )}
@@ -299,19 +299,19 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
         >
           <div className="flex flex-col">
             <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
-              <span className="text-xs font-medium text-daintree-text/70">Recently closed</span>
+              <span className="text-xs font-medium text-text-secondary">Recently closed</span>
               {trashedTerminals.length > 0 ? (
                 <Button
                   variant="ghost-danger"
                   size="sm"
-                  className="text-[11px] h-auto py-0.5 px-1.5"
+                  className="text-2xs h-auto py-0.5 px-1.5"
                   onClick={() => setEmptyTrashConfirmOpen(true)}
                   data-testid="empty-trash-button"
                 >
                   Empty trash
                 </Button>
               ) : (
-                <span className="text-[11px] text-daintree-text/40">Auto-clears</span>
+                <span className="text-2xs text-text-secondary">Auto-clears</span>
               )}
             </div>
 
@@ -358,6 +358,9 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
           title="Empty trash?"
           description={`${trashedTerminals.length} panel${trashedTerminals.length === 1 ? "" : "s"} will be permanently removed.`}
           variant="destructive"
+          // Scrollable list of the panels being destroyed — a dialog, not an
+          // alertdialog, which APG reserves for a brief message read whole.
+          hasPreview={trashedTerminals.length > 0}
           confirmLabel="Empty trash"
           onConfirm={() => {
             if (isExecutingRef.current) return;
@@ -370,7 +373,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
           }}
         >
           <div className="max-h-40 overflow-y-auto">
-            <ul className="space-y-0.5 text-xs text-daintree-text/70">
+            <ul className="space-y-0.5 text-xs text-text-secondary">
               {trashPreviewTitles.map((title, i) => (
                 <li key={i} className="truncate">
                   {title}

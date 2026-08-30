@@ -141,10 +141,10 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
         disabled={picker.visibleIds.length === 0}
         data-testid="fleet-picker-cold-start-select-all"
         className={cn(
-          "rounded px-2.5 py-1 text-[12px] text-daintree-text/70",
-          "hover:bg-tint/[0.08] hover:text-daintree-text",
+          "rounded px-2.5 py-1 text-xs leading-[inherit] text-text-secondary",
+          "hover:bg-tint/[0.08] hover:text-text-primary",
           "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
         )}
       >
         {selectAllLabel}
@@ -155,10 +155,10 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
         disabled={agentVisibleIds.length === 0}
         data-testid="fleet-picker-cold-start-select-agents"
         className={cn(
-          "rounded px-2.5 py-1 text-[12px] text-daintree-text/70",
-          "hover:bg-tint/[0.08] hover:text-daintree-text",
+          "rounded px-2.5 py-1 text-xs leading-[inherit] text-text-secondary",
+          "hover:bg-tint/[0.08] hover:text-text-primary",
           "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
         )}
       >
         Select agents
@@ -182,12 +182,12 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
       <div className="flex flex-col">
         <div
           className={cn(
-            "flex items-center gap-2 px-4 py-3 border-b border-daintree-border",
-            "text-daintree-text"
+            "flex items-center gap-2 px-4 py-3 border-b border-border-default",
+            "text-text-primary"
           )}
         >
           <Zap className="h-4 w-4 text-daintree-text/70" aria-hidden="true" />
-          <h2 className="text-[14px] font-semibold">Select terminals to arm</h2>
+          <h2 className="text-sm leading-[inherit] font-semibold">Select terminals to arm</h2>
         </div>
 
         {picker.acquired ? (
@@ -202,7 +202,7 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
             </div>
 
             {showFooterHint && (
-              <div className="flex flex-wrap items-center gap-1.5 border-t border-daintree-border/50 px-3 py-1.5 text-[11px] text-daintree-text/55">
+              <div className="flex flex-wrap items-center gap-1.5 border-t border-daintree-border/50 px-3 py-1.5 text-2xs text-text-secondary">
                 <FleetPickerFooterHint
                   confirmedCount={picker.confirmedIds.length}
                   driftCount={picker.driftCount}
@@ -211,9 +211,9 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
               </div>
             )}
 
-            <div className="flex flex-nowrap items-center justify-between gap-2 border-t border-daintree-border px-3 py-2">
+            <div className="flex flex-nowrap items-center justify-between gap-2 border-t border-border-default px-3 py-2">
               <div
-                className="relative isolate flex bg-tint/[0.04] rounded text-[11px]"
+                className="relative isolate flex bg-tint/[0.04] rounded text-2xs"
                 role="radiogroup"
                 aria-label="Commit mode"
                 data-testid="fleet-picker-cold-start-commit-mode"
@@ -231,10 +231,8 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                       data-testid={`fleet-picker-cold-start-commit-mode-${mode}`}
                       className={cn(
                         "relative rounded px-2 py-1 transition-colors",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
-                        isActive
-                          ? "text-daintree-text"
-                          : "text-daintree-text/70 hover:bg-tint/[0.04]"
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
+                        isActive ? "text-text-primary" : "text-text-secondary hover:bg-tint/[0.04]"
                       )}
                     >
                       {isActive && (
@@ -258,9 +256,9 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                   type="button"
                   onClick={onClose}
                   className={cn(
-                    "rounded px-2.5 py-1 text-[12px] text-daintree-text/70",
-                    "hover:bg-tint/[0.08] hover:text-daintree-text",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                    "rounded px-2.5 py-1 text-xs leading-[inherit] text-text-secondary",
+                    "hover:bg-tint/[0.08] hover:text-text-primary",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                   )}
                 >
                   Cancel
@@ -271,10 +269,10 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
                   disabled={picker.confirmedIds.length === 0}
                   data-testid="fleet-picker-cold-start-confirm"
                   className={cn(
-                    "rounded border border-category-amber-border bg-category-amber-subtle px-2.5 py-1 text-[12px] text-category-amber-text transition",
+                    "rounded border border-category-amber-border bg-category-amber-subtle px-2.5 py-1 text-xs leading-[inherit] text-category-amber-text transition",
                     "hover:brightness-110",
                     "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                   )}
                 >
                   {commitMode === "append"
@@ -296,10 +294,12 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
             className="flex flex-col items-center justify-center gap-1 px-6 py-12 text-center"
             data-testid="fleet-picker-cold-start-blocked"
           >
-            <div className="text-[13px] font-medium text-daintree-text">
+            <div className="text-sm leading-[inherit] font-medium text-text-primary">
               Another fleet picker is open
             </div>
-            <div className="text-[12px] text-daintree-text/60">Close it and try again.</div>
+            <div className="text-xs leading-[inherit] text-text-secondary">
+              Close it and try again.
+            </div>
           </div>
         )}
       </div>

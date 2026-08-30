@@ -14,6 +14,7 @@ import {
   isDeletedWorktreeCleanupSeconds,
   DELETED_WORKTREE_CLEANUP_DEFAULT,
 } from "@/store/preferencesStore";
+import { FIELD_INPUT, FormGrid, FormRow } from "@/components/Worktree/views";
 import { FileBrowserVisibilitySettings } from "./FileBrowserVisibilitySettings";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
@@ -159,6 +160,10 @@ export function WorktreeSettingsTab() {
     }
   };
 
+  // A failed load leaves the pattern empty, which trips validation too — so
+  // these are reported together rather than one masking the other's cause.
+  const patternError = !isLoading && !validation.valid ? validation.error : undefined;
+
   const handleReset = () => {
     setPattern(DEFAULT_WORKTREE_PATH_PATTERN);
     setError(null);
@@ -183,83 +188,89 @@ export function WorktreeSettingsTab() {
         description="Configure the default path pattern for new worktrees. Use variables to build dynamic paths based on your repository and branch names."
       >
         <div className="contents">
-          <div className="space-y-2">
-            <label htmlFor="path-pattern" className="block text-sm font-medium text-daintree-text">
-              Pattern
-            </label>
-            <div className="flex gap-2">
-              <input
-                id="path-pattern"
-                type="text"
-                value={pattern}
-                onChange={(e) => {
-                  setPattern(e.target.value);
-                  setError(null);
-                }}
-                disabled={isLoading}
-                className={cn(
-                  "flex-1 px-3 py-1.5 bg-daintree-bg border rounded-[var(--radius-md)] text-daintree-text font-mono text-sm",
-                  "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30",
-                  !validation.valid ? "border-status-error/50" : "border-daintree-border"
-                )}
-                placeholder="{parent-dir}/{base-folder}-worktrees/{branch-slug}"
-              />
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={handleReset}
-                    disabled={isLoading}
-                    className="px-3 py-1.5 border border-daintree-border rounded-[var(--radius-md)] text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors disabled:opacity-50"
-                    aria-label="Reset to default"
+          <FormGrid>
+            <FormRow
+              label="Pattern"
+              htmlFor="path-pattern"
+              hint={
+                (patternError || error) && (
+                  <div
+                    id="path-pattern-error"
+                    className="space-y-1 text-xs text-status-error"
+                    role="alert"
                   >
-                    <RotateCcw className="w-4 h-4" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Reset to default</TooltipContent>
-              </Tooltip>
-            </div>
-
-            {!isLoading && !validation.valid && validation.error && (
-              <div className="flex items-start gap-2 text-xs text-status-error">
-                <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                <span>{validation.error}</span>
+                    {[patternError, error].filter(Boolean).map((message) => (
+                      <div key={message} className="flex items-start gap-2">
+                        <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" aria-hidden="true" />
+                        <span>{message}</span>
+                      </div>
+                    ))}
+                  </div>
+                )
+              }
+            >
+              <div className="flex gap-2">
+                <input
+                  id="path-pattern"
+                  type="text"
+                  value={pattern}
+                  onChange={(e) => {
+                    setPattern(e.target.value);
+                    setError(null);
+                  }}
+                  disabled={isLoading}
+                  aria-invalid={!!patternError}
+                  aria-describedby={patternError || error ? "path-pattern-error" : undefined}
+                  className={cn(
+                    FIELD_INPUT,
+                    "flex-1 min-w-0 font-mono",
+                    !validation.valid && "border-status-error/50"
+                  )}
+                  placeholder="{parent-dir}/{base-folder}-worktrees/{branch-slug}"
+                />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={handleReset}
+                      disabled={isLoading}
+                      className="px-3 py-1.5 border border-border-default rounded-[var(--radius-md)] text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/50 transition-colors disabled:opacity-50"
+                      aria-label="Reset to default"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Reset to default</TooltipContent>
+                </Tooltip>
               </div>
-            )}
-
-            {error && (
-              <div className="flex items-start gap-2 text-xs text-status-error">
-                <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                <span>{error}</span>
-              </div>
-            )}
-          </div>
+            </FormRow>
+          </FormGrid>
 
           <div className="space-y-2">
-            <span className="block text-xs font-medium text-daintree-text/70">
+            <span className="block text-xs font-medium text-text-secondary">
               Available variables:
             </span>
             <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
+              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
                 <code className="text-text-secondary">{"{base-folder}"}</code>
-                <span className="text-daintree-text/50">Repository folder name</span>
+                <span className="text-text-secondary">Repository folder name</span>
               </div>
-              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
+              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
                 <code className="text-text-secondary">{"{branch-slug}"}</code>
-                <span className="text-daintree-text/50">Sanitized branch name</span>
+                <span className="text-text-secondary">Sanitized branch name</span>
               </div>
-              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
+              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
                 <code className="text-text-secondary">{"{repo-name}"}</code>
-                <span className="text-daintree-text/50">Repository name</span>
+                <span className="text-text-secondary">Repository name</span>
               </div>
-              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
+              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
                 <code className="text-text-secondary">{"{parent-dir}"}</code>
-                <span className="text-daintree-text/50">Parent directory path</span>
+                <span className="text-text-secondary">Parent directory path</span>
               </div>
             </div>
           </div>
 
           <div className="space-y-2">
-            <span className="block text-xs font-medium text-daintree-text/70">Presets:</span>
+            <span className="block text-xs font-medium text-text-secondary">Presets:</span>
             <div className="flex flex-wrap gap-2">
               {PATTERN_PRESETS.map((preset) => (
                 <Tooltip key={preset.label}>
@@ -270,8 +281,8 @@ export function WorktreeSettingsTab() {
                       className={cn(
                         "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors disabled:opacity-50",
                         pattern === preset.pattern
-                          ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
-                          : "border-daintree-border text-daintree-text/70 hover:bg-daintree-border/50"
+                          ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
+                          : "border-border-default text-text-secondary hover:bg-daintree-border/50"
                       )}
                     >
                       {preset.label}
@@ -284,20 +295,20 @@ export function WorktreeSettingsTab() {
           </div>
 
           {validation.valid && preview && (
-            <div className="space-y-2 p-3 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
-              <span className="block text-xs font-medium text-daintree-text/70">Preview:</span>
+            <div className="space-y-2 p-3 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
+              <span className="block text-xs font-medium text-text-secondary">Preview:</span>
               <div className="text-xs space-y-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-daintree-text/50">Repository:</span>
-                  <code className="text-daintree-text">{sampleRootPath}</code>
+                  <span className="text-text-secondary">Repository:</span>
+                  <code className="text-text-primary">{sampleRootPath}</code>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-daintree-text/50">Branch:</span>
-                  <code className="text-daintree-text">{SAMPLE_BRANCH}</code>
+                  <span className="text-text-secondary">Branch:</span>
+                  <code className="text-text-primary">{SAMPLE_BRANCH}</code>
                 </div>
-                <div className="flex items-center gap-2 pt-1 border-t border-daintree-border mt-1">
-                  <span className="text-daintree-text/50">Result:</span>
-                  <code className="text-daintree-text break-all">{preview}</code>
+                <div className="flex items-center gap-2 pt-1 border-t border-border-default mt-1">
+                  <span className="text-text-secondary">Result:</span>
+                  <code className="text-text-primary break-all">{preview}</code>
                 </div>
               </div>
             </div>
@@ -318,15 +329,15 @@ export function WorktreeSettingsTab() {
               className={cn(
                 "px-4 py-1.5 text-sm font-medium rounded-[var(--radius-md)] transition-colors",
                 hasChanges && validation.valid
-                  ? "bg-daintree-accent text-accent-primary-foreground hover:bg-daintree-accent/90"
-                  : "bg-daintree-border text-daintree-text/50 cursor-not-allowed"
+                  ? "bg-accent-primary text-accent-primary-foreground hover:bg-daintree-accent/90"
+                  : "bg-border-default text-daintree-text/50 cursor-not-allowed"
               )}
             >
               {isSaving ? "Saving…" : "Save Changes"}
             </button>
           </div>
 
-          <p className="text-xs text-daintree-text/40">
+          <p className="text-xs text-text-secondary">
             The path pattern determines where new worktrees are created when you use the New
             Worktree dialog. Relative paths (starting with . or ..) are resolved from the repository
             root.

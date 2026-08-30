@@ -61,6 +61,30 @@ describe("forced-colors status-indicator contract (#8936)", () => {
     );
   });
 
+  // #11988: the notification inbox row's unread dot and thread-count chip are
+  // both solid backgrounds, so forced colors pushed them to Canvas. The dot is
+  // the more serious of the two — an unread row deliberately carries no border
+  // and no background tint, and an untitled one has no title to embolden, so
+  // losing the dot left that row with no unread indication at all.
+  it("index.css repaints the inbox unread dot with CanvasText !important", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    expect(block).toContain('[data-notification-unread="true"]');
+    // !important for the same reason ActivityLight needs it: it has to beat the
+    // background-color the UA otherwise forces to Canvas.
+    expect(block).toMatch(
+      /\[data-notification-unread="true"\]\s*\{[^}]*background-color:\s*CanvasText[^}]*!important/
+    );
+  });
+
+  it("index.css gives the inbox thread-count chip a border in forced colors", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    expect(block).toContain('[data-notification-count="true"]');
+    // A border, not a background: borders survive the override, backgrounds do
+    // not. Without it the count renders as a bare numeral running on from the
+    // title instead of as a chip.
+    expect(block).toMatch(/\[data-notification-count="true"\]\s*\{[^}]*border:[^}]*CanvasText/);
+  });
+
   it("index.css gives the checked SettingsSwitch track a Highlight fill", () => {
     const block = readForcedColorsBlocks(INDEX_CSS);
     expect(block).toContain('[role="switch"][data-state="checked"]');
@@ -92,5 +116,100 @@ describe("forced-colors status-indicator contract (#8936)", () => {
     expect(block).toMatch(
       /\.toolbar-badge\b[\s\S]*\.toolbar-badge-chip\b[\s\S]*\.toolbar-overflow-badge\b[\s\S]*\.toolbar-problems-badge\b\s*\{[^}]*background-color:\s*CanvasText/
     );
+  });
+});
+
+// #12000: forty-odd status marks across the app were an empty span whose only
+// visual was a background colour, so forced colors rendered every one of them as
+// nothing. The fix is one shared `.status-mark` hook repainted in the same block
+// — but a rule with no emitter is as silent a regression as an emitter with no
+// rule, so both halves are guarded here.
+describe("forced-colors shared status-mark contract (#12000)", () => {
+  it("index.css repaints the shared status mark with CanvasText !important", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    // !important for the reason ActivityLight needs it: it has to beat the
+    // author background the UA otherwise forces to Canvas.
+    expect(block).toMatch(/\.status-mark\s*\{[^}]*background-color:\s*CanvasText[^}]*!important/);
+  });
+
+  // Canvas and ButtonFace are the same colour in the stock high-contrast themes,
+  // so dropping this rule looks harmless in testing and only breaks for users on
+  // a palette that separates them.
+  it("repaints marks inside a control with ButtonText, the pair that matches ButtonFace", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    expect(block).toMatch(
+      /button\s+\.status-mark,[\s\S]{0,80}?\.status-mark\s*\{[^}]*background-color:\s*ButtonText[^}]*!important/
+    );
+  });
+
+  it("does not reach for forced-color-adjust, which would opt out of the user's palette", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    const rule = block.match(/\.status-mark\s*\{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    expect(rule?.[1]).not.toMatch(/forced-color-adjust/);
+  });
+
+  // The plugin dot is the sharpest case: `host.setPanelBadge` lets a plugin ask
+  // for a bare dot with no adjacent text, so without the hook a forced-colors
+  // user sees nothing where the plugin reported something.
+  it("is actually emitted: the plugin panel dot carries the class the rule targets", () => {
+    const badges = fs.readFileSync(
+      path.join(REPO_ROOT, "src/components/Panel/PluginPanelBadges.tsx"),
+      "utf8"
+    );
+    // Bound to the className the dot branch actually builds, not a loose
+    // substring — a passing mention in a comment would prove nothing.
+    expect(badges).toMatch(/className=\{`[^`]*\bstatus-mark\b[^`]*\$\{DOT_COLOR\[/);
+  });
+
+  // Whatever `DOT_COLOR` resolves to is still a background, so the hook stays
+  // load-bearing; if that map ever stops painting backgrounds this assertion
+  // should be revisited rather than deleted.
+  it("still needs the hook: the plugin dot is painted as a background, not a glyph", () => {
+    const badges = fs.readFileSync(
+      path.join(REPO_ROOT, "src/components/Panel/PluginPanelBadges.tsx"),
+      "utf8"
+    );
+    const map = badges.match(/const DOT_COLOR[^=]*=\s*\{([^}]*)\}/);
+    expect(map).not.toBeNull();
+    const values = [...(map?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+    expect(values.length).toBeGreaterThan(0);
+    expect(values.every((v) => v.startsWith("bg-"))).toBe(true);
+  });
+});
+
+// #11981: a destructive button is distinguished from Cancel only by its fill,
+// and forced-colors replaces every fill with a system colour — so the two
+// render as identical pills and nothing marks which one destroys. The fallback
+// is a heavier border (stroke weight is one of the few things the UA leaves
+// alone) keyed off `data-variant`, which `Button` emits. Both halves are
+// guarded: a rule with no emitter, or an emitter with no rule, is a silent
+// regression for High Contrast users.
+describe("forced-colors destructive button distinction (#11981)", () => {
+  it("keeps a heavier border on the destructive variant inside the forced-colors block", () => {
+    const blocks = readForcedColorsBlocks(INDEX_CSS);
+    const rule =
+      /button\[data-variant=["']destructive["']\]\s*\{[^}]*border:\s*2px\s+solid\s+ButtonText/;
+    expect(blocks).toMatch(rule);
+  });
+
+  it("does not use outline for that distinction — the focus ring owns outline and would win", () => {
+    const blocks = readForcedColorsBlocks(INDEX_CSS);
+    const match = blocks.match(/button\[data-variant=["']destructive["']\]\s*\{([^}]*)\}/);
+    expect(match).not.toBeNull();
+    expect(match?.[1]).not.toMatch(/outline\s*:/);
+  });
+
+  it("is actually emitted: Button renders the data-variant attribute the rule targets", () => {
+    const button = fs.readFileSync(path.join(REPO_ROOT, "src/components/ui/button.tsx"), "utf8");
+    expect(button).toMatch(/data-variant=\{/);
+  });
+
+  // The destructive focus ring used to be `focus-visible:outline-destructive`,
+  // which resolves through the same variable chain as `bg-destructive` — a
+  // focus indicator in exactly the colour of the thing it indicates.
+  it("does not paint the destructive focus ring in the button's own fill colour", () => {
+    const button = fs.readFileSync(path.join(REPO_ROOT, "src/components/ui/button.tsx"), "utf8");
+    expect(button).not.toMatch(/focus-visible:outline-destructive/);
   });
 });

@@ -87,7 +87,7 @@ function SoundFileSelect({
   const id = useId();
   return (
     <div className="space-y-1">
-      <label htmlFor={id} className="text-sm font-medium text-daintree-text block">
+      <label htmlFor={id} className="text-sm font-medium text-text-primary block">
         {label}
       </label>
       <div className="flex items-center gap-2">
@@ -95,7 +95,7 @@ function SoundFileSelect({
           id={id}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="flex-1 px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
+          className="flex-1 px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
         >
           {AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => (
             <option key={file} value={file}>
@@ -106,7 +106,7 @@ function SoundFileSelect({
         <button
           onClick={onPreview}
           title={`Preview ${label.toLowerCase()}`}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg text-daintree-text hover:bg-tint/[0.06] transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-default bg-surface-canvas text-text-primary hover:bg-tint/[0.06] transition-colors"
         >
           <Play className="h-3.5 w-3.5" />
           Preview
@@ -226,7 +226,7 @@ export function NotificationSettingsTab() {
 
   if (loadState === "error") {
     return (
-      <div className="text-sm text-daintree-text/60">
+      <div className="text-sm text-text-secondary">
         Could not load notification settings. Restart Daintree and try again.
       </div>
     );
@@ -234,7 +234,7 @@ export function NotificationSettingsTab() {
 
   return (
     <div className="space-y-6">
-      {showInlineLoading && <p className="text-xs text-daintree-text/50">Loading…</p>}
+      {showInlineLoading && <p className="text-xs text-text-secondary">Loading…</p>}
       <SettingsSwitchCard
         variant="compact"
         title="Enable notifications"
@@ -273,7 +273,7 @@ export function NotificationSettingsTab() {
               onChange={(v) => update({ waitingEnabled: v })}
             />
             {settings.waitingEnabled && (
-              <div className="ml-6 space-y-3 border-l border-daintree-border pl-4">
+              <div className="ml-6 space-y-3 border-l border-border-default pl-4">
                 <SettingsCheckbox
                   id="notif-waiting-escalation"
                   label="Escalate if still waiting"
@@ -285,7 +285,7 @@ export function NotificationSettingsTab() {
                   <div className="space-y-1">
                     <label
                       htmlFor={escalationDelayId}
-                      className="text-sm font-medium text-daintree-text block"
+                      className="text-sm font-medium text-text-primary block"
                     >
                       Escalation delay
                     </label>
@@ -293,7 +293,7 @@ export function NotificationSettingsTab() {
                       id={escalationDelayId}
                       value={settings.waitingEscalationDelayMs}
                       onChange={(e) => update({ waitingEscalationDelayMs: Number(e.target.value) })}
-                      className="px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
+                      className="px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
                     >
                       {ESCALATION_DELAY_OPTIONS.map(({ value, label }) => (
                         <option key={value} value={value}>
@@ -377,7 +377,7 @@ export function NotificationSettingsTab() {
             />
 
             {settings.quietHoursEnabled && (
-              <div className="space-y-4 ml-6 border-l border-daintree-border pl-4">
+              <div className="space-y-4 ml-6 border-l border-border-default pl-4">
                 <QuietHoursTimeRow
                   label="Starts at"
                   totalMinutes={settings.quietHoursStartMin}
@@ -389,16 +389,16 @@ export function NotificationSettingsTab() {
                   onChange={(value) => update({ quietHoursEndMin: value })}
                 />
                 {settings.quietHoursStartMin === settings.quietHoursEndMin && (
-                  <div className="text-xs text-daintree-text/60">
+                  <div className="text-xs text-text-secondary">
                     Start and end match — the schedule is effectively disabled until the times
                     differ.
                   </div>
                 )}
                 <div className="space-y-1">
-                  <span id={activeDaysId} className="text-sm font-medium text-daintree-text block">
+                  <span id={activeDaysId} className="text-sm font-medium text-text-primary block">
                     Active days
                   </span>
-                  <div className="text-xs text-daintree-text/60 mb-2">
+                  <div className="text-xs text-text-secondary mb-2">
                     Leave all boxes checked to apply every day.
                   </div>
                   <div role="group" aria-labelledby={activeDaysId} className="flex flex-wrap gap-2">
@@ -424,8 +424,8 @@ export function NotificationSettingsTab() {
                           className={cn(
                             "px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors",
                             active
-                              ? "border-border-strong bg-overlay-medium text-daintree-text"
-                              : "border-daintree-border bg-daintree-bg text-daintree-text/50 hover:text-daintree-text/80"
+                              ? "border-border-strong bg-overlay-medium text-text-primary"
+                              : "border-border-default bg-surface-canvas text-text-secondary hover:text-text-primary"
                           )}
                           aria-pressed={active}
                         >
@@ -470,10 +470,10 @@ function QuietHoursTimeRow({
 }) {
   const { hour, minute } = splitMinutes(totalMinutes);
   const selectClass =
-    "px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent/40 focus:outline-hidden transition-colors";
+    "px-3 pr-8 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors";
   return (
     <div className="space-y-1">
-      <span className="text-sm font-medium text-daintree-text block">{label}</span>
+      <span className="text-sm font-medium text-text-primary block">{label}</span>
       <div className="flex items-center gap-2">
         <select
           aria-label={`${label} hour`}

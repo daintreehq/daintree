@@ -13,17 +13,23 @@ import { cn } from "@/lib/utils";
  * box.
  */
 
-export const FIELD_LABEL_CLASS = "text-sm font-medium text-daintree-text/80";
+export const FIELD_LABEL_CLASS = "text-sm font-medium text-text-primary";
 
+/**
+ * The invalid-focused case needs the error ring, not the accent one. Left to the
+ * plain `focus:` rule, an invalid field drew a green accent ring concentric with
+ * its red error border: two colour signals disagreeing inside 2px, with the
+ * louder of the two saying nothing is wrong.
+ */
 export const FIELD_INPUT_CLASS =
-  "min-h-9 w-full rounded-md border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50 aria-invalid:border-status-error";
+  "min-h-9 w-full rounded-md border border-border-default bg-surface-canvas px-3 py-1.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 disabled:opacity-50 aria-invalid:border-status-error aria-invalid:focus:ring-status-error/50";
 
 /** Picker-backed fields: muted fill signals "typing here does nothing". */
 export const FIELD_READONLY_INPUT_CLASS =
-  "min-h-9 flex-1 truncate rounded-md border border-daintree-border bg-muted/50 px-3 py-1.5 text-sm font-mono text-daintree-text/70";
+  "min-h-9 flex-1 truncate rounded-md border border-border-default bg-muted/50 px-3 py-1.5 text-sm font-mono text-text-secondary";
 
 export const FIELD_CHECKBOX_CLASS =
-  "h-4 w-4 shrink-0 rounded border-daintree-border accent-daintree-accent";
+  "h-4 w-4 shrink-0 rounded border-border-default accent-accent-primary";
 
 /** Sits beside a `FIELD_READONLY_INPUT_CLASS` input, matched to its height. */
 export const FIELD_BROWSE_BUTTON_CLASS = "min-h-9 shrink-0 gap-1.5";
@@ -42,17 +48,27 @@ export const FIELD_EMOJI_ROW_INDENT = "ml-11";
 export function PathCaption({ path, className }: { path: string; className?: string }) {
   const displayPath = normalize(path);
   const leaf = basename(displayPath);
-  const ancestors = displayPath.slice(0, displayPath.length - leaf.length);
+  // The separator rides with the leaf, not with the ancestors. Left inside the
+  // truncating span it is the first thing the ellipsis eats, and the caption
+  // then reads as two unrelated strings ("…/some/pre  leaf") rather than as one
+  // elided path ("…/leaf").
+  const separatorIndex = displayPath.length - leaf.length - 1;
+  const separator =
+    separatorIndex >= 0 &&
+    (displayPath[separatorIndex] === "/" || displayPath[separatorIndex] === "\\")
+      ? displayPath[separatorIndex]
+      : "";
+  const ancestors = displayPath.slice(0, displayPath.length - leaf.length - separator.length);
 
   return (
-    <p
-      className={cn("flex text-xs font-mono text-daintree-text/50", className)}
-      title={displayPath}
-    >
+    <p className={cn("flex text-xs font-mono text-text-secondary", className)} title={displayPath}>
       <span className="min-w-0 truncate">{ancestors}</span>
       {/* Pinned against the ancestors, but still capped: a leaf wider than the
           dialog would otherwise overflow into a horizontal scroll. */}
-      <span className="max-w-full shrink-0 truncate">{leaf}</span>
+      <span className="max-w-full shrink-0 truncate">
+        {separator}
+        {leaf}
+      </span>
     </p>
   );
 }

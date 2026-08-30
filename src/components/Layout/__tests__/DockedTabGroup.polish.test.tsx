@@ -351,7 +351,7 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
       const dot = overflowButton!.querySelector("span.bg-daintree-text\\/70");
       expect(dot).not.toBeNull();
       // Accent restraint: the neutral cue must NOT use any accent token.
-      expect(dot!.className).not.toContain("daintree-accent");
+      expect(dot!.className).not.toMatch(/(?:daintree-accent|accent-primary)(?![\w-])/);
     });
   });
 
@@ -375,7 +375,7 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
       const activeRow = rows[0]!;
       expect(activeRow.getAttribute("aria-current")).toBe("true");
       expect(activeRow.className).toContain("font-medium");
-      expect(activeRow.className).toContain("before:bg-daintree-accent");
+      expect(activeRow.className).toContain("before:bg-accent-primary");
 
       // The non-active hidden row must NOT carry the active marker.
       const allRows = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).filter(
@@ -383,7 +383,7 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
       );
       expect(allRows.length).toBeGreaterThan(0);
       for (const row of allRows) {
-        expect(row.className).not.toContain("before:bg-daintree-accent");
+        expect(row.className).not.toContain("before:bg-accent-primary");
         expect(row.className).not.toContain("font-medium");
       }
     });

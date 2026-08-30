@@ -238,7 +238,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
       <div className="space-y-4">
         <div>
           <h4 className="text-sm font-medium mb-1">Code Forge</h4>
-          <p className="text-xs text-daintree-text/50 select-text">
+          <p className="text-xs text-text-secondary select-text">
             Configure forge providers and authentication
           </p>
         </div>
@@ -333,12 +333,12 @@ interface ForgeProviderCardProps {
 
 function ForgeProviderCard({ name, iconSlotId, children }: ForgeProviderCardProps) {
   return (
-    <div className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4">
-      <div className="flex items-center gap-3 pb-3 border-b border-daintree-border">
-        <ProviderIcon slotId={iconSlotId} className="w-6 h-6 text-daintree-text" />
+    <div className="rounded-[var(--radius-lg)] border border-border-default bg-surface p-4 space-y-4">
+      <div className="flex items-center gap-3 pb-3 border-b border-border-default">
+        <ProviderIcon slotId={iconSlotId} className="w-6 h-6 text-text-primary" />
         <div>
-          <h4 className="text-sm font-medium text-daintree-text">{name} settings</h4>
-          <p className="text-xs text-daintree-text/50 select-text">
+          <h4 className="text-sm font-medium text-text-primary">{name} settings</h4>
+          <p className="text-xs text-text-secondary select-text">
             Configure {name} authentication and integrations
           </p>
         </div>
@@ -398,19 +398,19 @@ function ProviderSettingsBody({ providerId, pluginId, contribution }: ProviderSe
           fields={credentialFields}
         />
       ) : (
-        <p className="text-xs text-daintree-text/50">
+        <p className="text-xs text-text-secondary">
           {contribution.kind === "local"
             ? "Local provider — no authentication needed"
             : "No configuration needed"}
         </p>
       )}
 
-      <div className="space-y-2 pt-2 border-t border-daintree-border">
-        <p className="text-xs text-daintree-text/50 font-mono">{pluginId}</p>
+      <div className="space-y-2 pt-2 border-t border-border-default">
+        <p className="text-xs text-text-secondary font-mono">{pluginId}</p>
         {capabilities && capabilities.length > 0 && (
           <div>
-            <p className="text-xs font-medium text-daintree-text/70 mb-1">Capabilities</p>
-            <ul className="text-xs text-daintree-text/50 space-y-0.5">
+            <p className="text-xs font-medium text-text-secondary mb-1">Capabilities</p>
+            <ul className="text-xs text-text-secondary space-y-0.5">
               {capabilities.map((cap) => (
                 <li key={cap} className="list-disc list-inside">
                   {cap}
@@ -542,21 +542,21 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
 
   return (
     <div
-      className="rounded-[var(--radius-lg)] border border-daintree-border bg-daintree-bg/30 p-4 space-y-3"
+      className="rounded-[var(--radius-lg)] border border-border-default bg-daintree-bg/30 p-4 space-y-3"
       data-testid="forge-credential-form"
     >
       <div>
-        <h5 className="text-sm font-medium text-daintree-text flex items-center gap-2">
+        <h5 className="text-sm font-medium text-text-primary flex items-center gap-2">
           <Key className="w-4 h-4 text-daintree-text/70" aria-hidden="true" />
           Authentication
         </h5>
-        <p className="text-xs text-daintree-text/50 mt-0.5 select-text">
+        <p className="text-xs text-text-secondary mt-0.5 select-text">
           Credentials are validated against {providerName} before they're saved
         </p>
       </div>
 
       {hasCredential && (
-        <div className="flex items-center gap-1 text-xs text-status-success">
+        <div className="flex items-center gap-1 text-xs text-text-secondary">
           <Check className="w-3 h-3" />
           {providerName} connected
         </div>
@@ -567,7 +567,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
           <div key={field.id} className="space-y-1">
             <label
               htmlFor={`forge-cred-${field.id}`}
-              className="text-xs font-medium text-daintree-text/70"
+              className="text-xs font-medium text-text-secondary"
             >
               {field.label}
             </label>
@@ -579,11 +579,11 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
               placeholder={field.placeholder}
               aria-label={field.label}
               autoComplete={field.type === "password" ? "new-password" : "off"}
-              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
+              className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
               disabled={isSaving}
             />
             {field.helpText && (
-              <p className="text-xs text-daintree-text/50 select-text">{field.helpText}</p>
+              <p className="text-xs text-text-secondary select-text">{field.helpText}</p>
             )}
           </div>
         ))}
@@ -606,7 +606,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
             variant="outline"
             size="sm"
             aria-label="Clear credentials"
-            className="text-status-error border-daintree-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+            className="text-status-error border-border-default hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
           >
             Clear credentials
           </Button>

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, ChevronDown, CircleCheck, Loader2, RotateCw, CircleX } from "lucide-react";
 import { m, useReducedMotion } from "framer-motion";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
-import { UI_ENTER_DURATION } from "@/lib/animationUtils";
+import { UI_ENTER_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { useSystemHealthCheck } from "./useSystemHealthCheck";
 import { PrerequisiteCard } from "./SystemToolsStep";
 
@@ -68,7 +68,7 @@ export function SystemRequirementsSection({
   const hasWarning = allDone && warningTools.length > 0;
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30">
+    <div className="rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30">
       <button
         type="button"
         onClick={() => setUserExpanded((v) => !v)}
@@ -79,31 +79,31 @@ export function SystemRequirementsSection({
         <ChevronDown
           className={`w-3.5 h-3.5 text-daintree-text/40 shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
         />
-        <span className="text-sm font-medium text-daintree-text">System requirements</span>
+        <span className="text-sm font-medium text-text-primary">System requirements</span>
 
         {isChecking && (
-          <span className="flex items-center gap-1.5 ml-auto text-[11px] text-daintree-text/40">
+          <span className="flex items-center gap-1.5 ml-auto text-2xs text-text-secondary">
             <Loader2 className="w-3 h-3 animate-spin" />
             Checking...
           </span>
         )}
 
         {allDone && !hasFatalFailure && !hasWarning && !error && (
-          <span className="flex items-center gap-1.5 ml-auto text-[11px] text-status-success">
+          <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-success">
             <CircleCheck className="w-3.5 h-3.5" />
             All system tools ready
           </span>
         )}
 
         {allDone && hasFatalFailure && (
-          <span className="flex items-center gap-1.5 ml-auto text-[11px] text-status-error">
+          <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-error">
             <CircleX className="w-3.5 h-3.5" />
             Action required: {readyCount} of {totalCount} tools ready
           </span>
         )}
 
         {allDone && !hasFatalFailure && hasWarning && (
-          <span className="flex items-center gap-1.5 ml-auto text-[11px] text-status-warning">
+          <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-warning">
             <AlertTriangle className="w-3.5 h-3.5" />
             Warning: {readyCount} of {totalCount} tools ready
           </span>
@@ -118,7 +118,7 @@ export function SystemRequirementsSection({
         transition={
           prefersReducedMotion
             ? { duration: 0 }
-            : { duration: UI_ENTER_DURATION / 1000, ease: [0.16, 1, 0.3, 1] }
+            : { duration: UI_ENTER_DURATION / 1000, ease: EASE_OUT_EXPO_FM }
         }
         style={{ overflow: "hidden" }}
       >
@@ -183,7 +183,7 @@ export function SystemRequirementsSection({
             type="button"
             onClick={() => void runCheck()}
             disabled={isChecking}
-            className="inline-flex items-center gap-1.5 text-xs text-daintree-text/50 hover:text-daintree-text disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
+            className="inline-flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
           >
             <RotateCw className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`} />
             {isChecking ? "Checking..." : "Re-check"}

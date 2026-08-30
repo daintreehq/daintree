@@ -24,7 +24,7 @@ import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
-import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
+import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
@@ -930,9 +930,10 @@ export function FilePane({
   const handleOpenExternal = useCallback(
     async (target: ExternalTarget) => {
       if (!filePath) return;
-      // Only the file-browser target carries structured args; the rest are
-      // path-only. Built before the pending flip so a missing scope can't leave
-      // the button spinning on a dispatch that was never going to happen.
+      // File-browser carries worktree-scoped args and reveal opts into the
+      // guarded out-of-root fallback; browser/editor stay path-only. Built
+      // before the pending flip so a missing scope can't leave the button
+      // spinning on a dispatch that was never going to happen.
       let args: unknown;
       if (target === "file-browser") {
         if (!revealWorktreeId) return;
@@ -946,6 +947,14 @@ export function FilePane({
             relativeFilePath && relativeFilePath !== filePath ? relativeFilePath : undefined,
           revealKind: "file",
         };
+      } else if (target === "reveal") {
+        // Sent on every reveal, in-root or not: `effectiveRootPath` already
+        // falls back to the file's own parent, so this pane deliberately
+        // displays files no project owns, and reveal was the last surface in it
+        // still asking the project registry for permission (#11934). The action
+        // decides whether the fallback is needed — a second copy of the
+        // containment rule has no business living in the renderer.
+        args = { path: filePath, allowOutsideRoots: true };
       } else {
         args = { path: filePath };
       }
@@ -1002,7 +1011,7 @@ export function FilePane({
   const errorCopy = externalError ? externalTargetCopy(externalError.target, reveal) : null;
   const toolbar = filePath ? (
     <>
-      <FileViewerToolbar.Root>
+      <FileViewerToolbar.Root label="File viewer controls">
         {availableModes.length > 1 && (
           <SegmentedToggle<FileViewMode>
             options={toggleOptions}
@@ -1018,13 +1027,17 @@ export function FilePane({
               pressed={markdownWrapLines}
               onClick={() => setMarkdownWrapLines(!markdownWrapLines)}
             >
-              <WrapText className="w-4 h-4" />
+              <WrapText className={TOOLBAR_ICON_CLASS} />
             </FileViewerToolbar.IconButton>
           )}
           {/* Refresh follows what's on screen — re-reading the file wouldn't
               refetch a diff, and vice versa. */}
           <FileViewerToolbar.IconButton label="Refresh" onClick={handleToolbarRefresh}>
-            <SpinningIcon icon={RefreshCw} active={refreshingMode !== null} className="w-4 h-4" />
+            <SpinningIcon
+              icon={RefreshCw}
+              active={refreshingMode !== null}
+              className={TOOLBAR_ICON_CLASS}
+            />
           </FileViewerToolbar.IconButton>
           {/* Reveal is always offered, even for a file the viewer can't render
               (oversized, unsupported video) — the OS file manager is then the
@@ -1038,23 +1051,23 @@ export function FilePane({
               label="Show in file browser"
               onClick={() => void handleOpenExternal("file-browser")}
             >
-              <FolderTree className="w-4 h-4" />
+              <FolderTree className={TOOLBAR_ICON_CLASS} />
             </FileViewerToolbar.IconButton>
           )}
           <FileViewerToolbar.IconButton
             label={reveal.label}
             onClick={() => void handleOpenExternal("reveal")}
           >
-            <FolderOpen className="w-4 h-4" />
+            <FolderOpen className={TOOLBAR_ICON_CLASS} />
           </FileViewerToolbar.IconButton>
           <FileViewerToolbar.IconButton
             label={openTarget === "browser" ? "Open in browser" : "Open in editor"}
             onClick={() => void handleOpenExternal(openTarget)}
           >
             {openTarget === "browser" ? (
-              <Globe className="w-4 h-4" />
+              <Globe className={TOOLBAR_ICON_CLASS} />
             ) : (
-              <ExternalLink className="w-4 h-4" />
+              <ExternalLink className={TOOLBAR_ICON_CLASS} />
             )}
           </FileViewerToolbar.IconButton>
         </FileViewerToolbar.Actions>
@@ -1117,7 +1130,7 @@ export function FilePane({
     >
       <div
         ref={heightHold.bodyRef}
-        className={`flex-1 min-h-0 overflow-auto bg-daintree-bg${
+        className={`flex-1 min-h-0 overflow-auto bg-surface-canvas${
           viewMode === "diff" ? " diff-scroll-root" : ""
         }`}
         data-testid="file-pane-body"
@@ -1146,7 +1159,13 @@ export function FilePane({
         )}
 
         {!filePath && (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-4 p-6">
+          // Auto margins on the end children rather than `justify-center`:
+          // `h-full` pins this box to the scrollport, and centred overflow
+          // spills at BOTH ends, so the empty state's icon and title become
+          // unreachable in a short pane once the recent-files list fills. Auto
+          // margins split the free space the same way and collapse to zero when
+          // there is none. Same fix as `ContentGridEmptyState`.
+          <div className="flex h-full w-full flex-col items-center gap-4 p-6 [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
             <EmptyState
               variant="zero-data"
               scale="canvas"
@@ -1160,14 +1179,14 @@ export function FilePane({
             />
             {pickerRoot && (
               <div className="w-full max-w-md flex flex-col gap-1 min-h-0">
-                <div className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-daintree-border bg-daintree-sidebar focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20">
+                <div className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-border-default bg-surface-sidebar focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20">
                   <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                   <input
                     value={pickerQuery}
                     onChange={(e) => setPickerQuery(e.target.value)}
                     placeholder="Search files"
                     aria-label="Search files"
-                    className="w-full bg-transparent text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
+                    className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
                     data-testid="file-pane-search"
                   />
                 </div>
@@ -1179,7 +1198,7 @@ export function FilePane({
                       role="option"
                       aria-selected={false}
                       onClick={() => setFilePanelPath(id, result.absolutePath)}
-                      className="text-left px-2 py-1.5 rounded text-xs font-mono truncate text-muted-foreground transition-colors hover:text-daintree-text hover:bg-daintree-border"
+                      className="text-left px-2 py-1.5 rounded text-xs font-mono truncate text-muted-foreground transition-colors hover:text-text-primary hover:bg-border-default"
                       data-testid="file-pane-result"
                     >
                       {result.relativePath}
@@ -1201,7 +1220,7 @@ export function FilePane({
         )}
 
         {filePath && viewMode !== "diff" && loadState === "error" && errorCode && (
-          <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
+          <div className="flex h-full flex-col items-center gap-3 p-6 [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
             <p className="text-sm text-muted-foreground">
               {errorMessage ?? FILE_READ_ERROR_MESSAGES[errorCode]}
             </p>
@@ -1211,7 +1230,7 @@ export function FilePane({
               <button
                 type="button"
                 onClick={() => loadFile("explicit")}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-text-primary bg-border-default hover:bg-daintree-border/80 rounded transition-colors"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 Retry
@@ -1311,7 +1330,7 @@ export function FilePane({
               {metadata && (
                 <div
                   data-testid="file-viewer-metadata"
-                  className="px-3 py-1 border-b border-daintree-border text-xs text-muted-foreground font-mono shrink-0"
+                  className="px-3 py-1 border-b border-border-default text-xs text-muted-foreground font-mono shrink-0"
                 >
                   {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
                 </div>

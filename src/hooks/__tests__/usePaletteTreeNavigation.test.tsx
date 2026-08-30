@@ -85,6 +85,7 @@ function setup(
     shouldPreserveInputCaretKey?: (event: KeyboardEvent<HTMLInputElement>) => boolean;
     selectionScopeKey?: string;
     isActive?: boolean;
+    preferredInitialRowId?: string | null;
   } = {}
 ) {
   const onActivate = options.onActivate ?? vi.fn();
@@ -94,6 +95,7 @@ function setup(
         groups,
         isActive: options.isActive ?? true,
         selectionScopeKey: scope ?? null,
+        preferredInitialRowId: options.preferredInitialRowId ?? null,
         onActivate,
         shouldPreserveInputCaretKey: options.shouldPreserveInputCaretKey,
       }),
@@ -223,6 +225,82 @@ describe("usePaletteTreeNavigation", () => {
       act(() => result.current.step(1));
       // Third entry in `rows` (h:a, i:a1, h:b, i:b1) but second navigable one.
       expect(result.current.selectedNavigableIndex).toBe(1);
+    });
+  });
+
+  describe("preferred initial row", () => {
+    /**
+     * The caller names where the highlight should start; every movement key has
+     * to agree with what is drawn. They did not: the index shown came from the
+     * preferred row while `step` and `page` counted from zero, so the first
+     * arrow after opening jumped somewhere the user had not been.
+     */
+    it("seats the highlight on the preferred row", () => {
+      const { result } = setup(
+        [
+          ["a", ["a1", "a2"]],
+          ["b", ["b1"]],
+        ],
+        { preferredInitialRowId: "i:a2" }
+      );
+
+      expect(result.current.selectedRow?.rowId).toBe("i:a2");
+      expect(result.current.selectedNavigableIndex).toBe(1);
+    });
+
+    it("moves the FIRST arrow relative to the preferred row, not to the top", () => {
+      const { result } = setup(
+        [
+          ["a", ["a1", "a2"]],
+          ["b", ["b1"]],
+        ],
+        { preferredInitialRowId: "i:a2" }
+      );
+
+      act(() => result.current.step(1));
+      expect(result.current.selectedRow?.rowId).toBe("i:b1");
+    });
+
+    it("moves the first ArrowUp and the first page key from it too", () => {
+      const { result } = setup(
+        [
+          ["a", ["a1", "a2"]],
+          ["b", ["b1"]],
+        ],
+        { preferredInitialRowId: "i:a2" }
+      );
+
+      act(() => result.current.step(-1));
+      expect(result.current.selectedRow?.rowId).toBe("i:a1");
+
+      const paged = setup(
+        [
+          ["a", ["a1", "a2"]],
+          ["b", ["b1"]],
+        ],
+        { preferredInitialRowId: "i:a2" }
+      );
+      // Page keys clamp rather than wrap, so a page down from the middle of a
+      // three-row list lands on the last row.
+      act(() => paged.result.current.handleInputKeyDown(keyEvent("PageDown").event));
+      expect(paged.result.current.selectedRow?.rowId).toBe("i:b1");
+    });
+
+    it("yields to the user's own selection, and to a preference that no longer exists", () => {
+      const { result } = setup(
+        [
+          ["a", ["a1", "a2"]],
+          ["b", ["b1"]],
+        ],
+        { preferredInitialRowId: "i:a2" }
+      );
+
+      act(() => result.current.selectRow("i:b1"));
+      act(() => result.current.step(-1));
+      expect(result.current.selectedRow?.rowId).toBe("i:a2");
+
+      const missing = setup([["a", ["a1", "a2"]]], { preferredInitialRowId: "i:gone" });
+      expect(missing.result.current.selectedRow?.rowId).toBe("i:a1");
     });
   });
 

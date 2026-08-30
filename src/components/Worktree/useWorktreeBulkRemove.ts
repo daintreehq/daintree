@@ -17,6 +17,35 @@ export interface BulkRemoveTarget {
   aheadCount: number;
 }
 
+/**
+ * The per-target risk line for the D3 confirmation.
+ *
+ * Every count this preview derives has to reach the user: a worktree holding
+ * nothing but untracked files is not a safe deletion, and for a long time it
+ * rendered as a row with no warning at all because only tracked changes and
+ * unpushed commits were surfaced. Adding a count to {@link BulkRemoveTarget}
+ * without adding it here is the #7880 failure mode — the confirmation
+ * understating what the action destroys — so the invariant is asserted over the
+ * target's numeric fields rather than over this function's wording.
+ */
+export function describeBulkRemoveRisks(target: BulkRemoveTarget): string[] {
+  const risks: string[] = [];
+  if (target.trackedChangeCount > 0) {
+    risks.push(
+      `${target.trackedChangeCount} uncommitted file${target.trackedChangeCount === 1 ? "" : "s"}`
+    );
+  }
+  if (target.untrackedFileCount > 0) {
+    risks.push(
+      `${target.untrackedFileCount} untracked file${target.untrackedFileCount === 1 ? "" : "s"}`
+    );
+  }
+  if (target.aheadCount > 0) {
+    risks.push(`${target.aheadCount} unpushed commit${target.aheadCount === 1 ? "" : "s"}`);
+  }
+  return risks;
+}
+
 interface UseWorktreeBulkRemoveArgs {
   selectedIds: Set<string>;
   worktreeMap: Map<string, WorktreeState>;

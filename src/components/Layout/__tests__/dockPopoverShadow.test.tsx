@@ -121,7 +121,7 @@ describe("Dock Popover Visual Layer - Issue #2316", () => {
         const filePath = path.resolve(__dirname, relativePath);
         const content = await fs.readFile(filePath, "utf-8");
 
-        expect(content).not.toContain("ring-daintree-accent");
+        expect(content).not.toContain("ring-accent-primary");
         expect(content).not.toContain("border-daintree-accent/40");
       });
 

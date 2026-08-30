@@ -132,6 +132,11 @@ vi.mock("../../../projectMenuState.js", () => ({
 
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
+import {
+  getProjectHistory,
+  disposeProjectHistory,
+  resetProjectHistory,
+} from "../../../services/ProjectHistoryService.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
 import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
 import type { HandlerDependencies } from "../../types.js";
@@ -494,6 +499,60 @@ describe("project switch/reopen refuses a row whose repository is gone (#11649)"
       handlerFor(CHANNELS.PROJECT_REOPEN, makePvm())({ sender: { id: 10 } }, "proj-gone")
     ).rejects.toThrow(/status/);
     expect(probeGitMarkerMock).not.toHaveBeenCalled();
+  });
+});
+
+// #11936: `ProjectViewManager` registers a view under whatever workspace id it
+// was handed, so the sender binding this path already reads is a scratch UUID
+// when the switch is leaving a scratch. That was never the missing half — the
+// reader pruning every non-project entry was — so this pins the behavior the fix
+// now depends on.
+describe("project:switch records the workspace it is leaving", () => {
+  const SCRATCH_ID = "11111111-1111-4111-8111-111111111111";
+  const PROJECT_ID = "a".repeat(64);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("records a scratch-bound sender behind the incoming project", async () => {
+    const mockView = { webContents: { id: 200, isDestroyed: () => false, send: vi.fn() } };
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: false }),
+      getProjectIdForWebContents: vi.fn(),
+    };
+    const ctx = makeWindowContext(5, 50, { projectViewManager: pvm as never });
+    const registry = makeWindowRegistry([ctx]);
+
+    mockGetWindowForWebContents.mockReturnValue({ id: 5, isDestroyed: () => false });
+    // The window is showing a scratch, so its view is bound to the scratch id
+    // and the global project pointer has been cleared.
+    mockGetProjectForWebContents.mockReturnValue(SCRATCH_ID);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: PROJECT_ID,
+      name: "New Project",
+      path: "/projects/new",
+    });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+
+    const deps = {
+      mainWindow: { id: 5 } as unknown,
+      windowRegistry: registry,
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+
+    resetProjectHistory(5);
+    registerProjectCrudHandlers(deps);
+
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+    await handleMap.get(CHANNELS.PROJECT_SWITCH)!({ sender: { id: 50 } }, PROJECT_ID);
+
+    expect(getProjectHistory(5).snapshot().entries).toEqual([PROJECT_ID, SCRATCH_ID]);
+    disposeProjectHistory(5);
   });
 });
 

@@ -64,7 +64,9 @@ export const SEL = {
     mcpServerEmptyState: "text=MCP server is off",
     mcpServerEnableButton: 'button:has-text("Turn on MCP server")',
     mcpConnectionMarker: "text=The server binds to 127.0.0.1",
-    scopeSelect: '[aria-label="Settings scope"]',
+    scopeControl: '[role="radiogroup"][aria-label="Settings scope"]',
+    scopeOption: (label: string) =>
+      `[role="radiogroup"][aria-label="Settings scope"] [role="radio"]:text-is("${label}")`,
     searchResultsRegion: '[role="region"][aria-label="Search results"]',
   },
   panel: {
@@ -112,21 +114,30 @@ export const SEL = {
     branchNameInput: '[data-testid="branch-name-input"]',
     createButton: '[data-testid="create-worktree-button"]',
     deleteDialog: '[data-testid="delete-worktree-dialog"]',
-    deleteConfirm: '[data-testid="delete-worktree-confirm"]',
+    deleteConfirm: '[role="dialog"] button:has-text("delete worktree")',
     deleteConfirmInput: '[data-testid="delete-worktree-confirm-input"]',
     searchInput: '[aria-label="Search worktrees"]',
     searchClear: '[aria-label="Clear search"]',
-    reviewHubButton: '[aria-label="Open Review & Commit"]',
+    // Prefix match, deliberately. The card builds this label from the worktree's
+    // review state (`WorktreeDetailsSection.reviewHubButtonLabel`): "Open Review &
+    // commit" normally, "Open Review & push" once the tree is clean but commits
+    // are unpushed. An exact selector silently stops matching the moment either
+    // the verb or its casing shifts — which is what happened here, leaving every
+    // ReviewHub spec unable to open the hub. Note the button is ABSENT entirely
+    // when there is nothing to review and nothing to push.
+    reviewHubButton: '[aria-label^="Open Review &"]',
     filterButton: '[aria-label="Filter and sort worktrees"]',
     filterPopover: '[data-testid="worktree-filter-popover"]',
     openOverviewButton: '[aria-label="Open worktrees overview"]',
-    overviewModal: '[role="dialog"][aria-labelledby="worktree-overview-title"]',
+    // Keyed on the test id rather than `aria-labelledby`: the overview is
+    // composed from AppDialog now, which mints its own title id via `useId()`.
+    overviewModal: '[data-testid="worktree-overview-modal"]',
     overviewClose: '[aria-label="Close overview"]',
     quickCreatePalette: '[role="dialog"][aria-label="Quick create worktree palette"]',
     quickCreateCustomize: "#quick-create-option-__customize__",
     newWorktreeButton: '[aria-label="Create new worktree"]',
     branchModeGroup: '[role="radiogroup"][aria-label="Branch mode"]',
-    environmentGroup: '[role="radiogroup"][aria-label="Worktree environment mode"]',
+    environmentGroup: '[role="radiogroup"][aria-label="Environment"]',
     recipeTrigger: "#recipe-selector-trigger",
     recipeListbox: "#recipe-selector",
     baseBranchTrigger: "#base-branch",
@@ -251,8 +262,7 @@ export const SEL = {
   firstRun: {
     welcomeTitle: 'h1:has-text("Welcome to Daintree")',
     agentTitle: 'text="Choose your AI agents"',
-    agentSetupDialog:
-      '[role="dialog"]:has-text("Agent Setup"), [role="dialog"]:has-text("Welcome to Daintree")',
+    agentSetupDialog: '[data-testid="agent-setup-wizard"]',
     agentSetupBanner: '[data-testid="agent-setup-banner"]',
     agentSetupBannerCta: '[data-testid="agent-setup-banner-cta"]',
     agentSetupBannerDismiss: '[data-testid="agent-setup-banner-dismiss"]',
@@ -343,6 +353,7 @@ export const SEL = {
     gridBar: '[data-testid="grid-notification-bar"]',
     gridBarStatus: '[data-testid="grid-notification-bar"] [role="status"]',
     // Notification center (NotificationCenter.tsx)
+    center: '[data-testid="notification-center"]',
     centerList: '[role="list"][aria-label="Notifications"]',
     centerRow: '[role="listitem"]',
     centerFilter: (label: string) => `button[aria-pressed]:has-text("${label}")`,
@@ -423,7 +434,7 @@ export const SEL = {
     noTokenEmptyState: 'text="GitHub not connected"',
     rateLimitedEmptyState: 'text="GitHub requests are paused"',
     // Bulk selection action bar + dialog
-    bulkActionBar: '[role="toolbar"][aria-label="Bulk actions"]',
+    bulkActionBar: '[role="group"][aria-label="Bulk actions"]',
     bulkCreateButton: '[data-testid="bulk-action-create-worktrees-button"]',
     bulkClearButton: '[aria-label="Clear selection"]',
     bulkCreateDialog: '[data-testid="bulk-create-worktree-dialog"]',

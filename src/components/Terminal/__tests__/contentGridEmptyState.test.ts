@@ -7,8 +7,21 @@ const EMPTY_STATE_PATH = resolve(__dirname, "../ContentGridEmptyState.tsx");
 describe("ContentGrid EmptyState — RecipeRunner integration", () => {
   it("identity is a centered stacked hero — mark above the name, one alignment axis", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    // Centered identity block…
-    expect(content).toContain('"mb-6 flex flex-col items-center text-center"');
+    // Centered identity block — asserted as the two properties that make it
+    // one, not as a class string. The block has picked up a reserved height and
+    // a bottom-alignment since, and a literal would have failed on both without
+    // anything about the lockup having changed.
+    // Centered identity block — asserted as the two properties that make it
+    // one, not as a class string. The block has since picked up a reserved
+    // height and a bottom alignment, and a literal would have failed on both
+    // without anything about the lockup having changed.
+    const identity =
+      /"([^"]*)",\s*\n\s*SECTION_ENTRY\s*\n\s*\)\}\s*\n\s*>\s*\n\s*<div className="mb-3">\{identityMark\}/.exec(
+        content
+      );
+    expect(identity, "identity block wrapper not found").not.toBeNull();
+    expect(identity![1]).toContain("items-center");
+    expect(identity![1]).toContain("text-center");
     // …with the mark stacked above the name (no left-aligned lockup, no
     // gear-overlaid logo wrapper from the pre-redesign layout)…
     expect(content).toContain("identityMark");
@@ -32,8 +45,8 @@ describe("ContentGrid EmptyState — RecipeRunner integration", () => {
 
   it("derives hasEverLaunchedAgent from the panel store to gate teaching content", async () => {
     // RecipeRunner itself is deliberately NOT gated on hasEverLaunchedAgent
-    // (recipes are the launcher hero; see the CLAUDE.md recipe-gating gotcha) —
-    // the flag only gates teaching content like RotatingTip.
+    // (see the CLAUDE.md recipe-gating gotcha) — the flag only gates teaching
+    // content like RotatingTip.
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain("hasEverLaunchedAgent");
     expect(content).toContain("usePanelStore");
@@ -44,8 +57,8 @@ describe("ContentGrid EmptyState — RecipeRunner integration", () => {
   // wait for the first launch (#6752) and are withheld from scratches entirely.
 });
 
-describe("ContentGrid EmptyState — recipe-forward launcher composition", () => {
-  it("composes recipes (hero), a single-line resume, and quick-launch actions", async () => {
+describe("ContentGrid EmptyState — anchor-forward launcher composition", () => {
+  it("composes the launch anchor, a single-line resume, and recipes", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain("<RecipeRunner");
     expect(content).toContain("<ResumeSessionLine />");
@@ -111,15 +124,16 @@ describe("ContentGrid EmptyState — initialization gate (issue #8645)", () => {
   // The cold-start flash guard (silent until initialized, then the right copy
   // variant) is asserted by rendering in ContentGridEmptyState.workspace.test.tsx.
 
-  it("does not render bare <p> with text-daintree-text/60 in the no-worktree branch", async () => {
+  it("does not hand-roll the no-worktree body copy as a bare <p>", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    // The old bare <p> with diluted text color is gone — replaced by EmptyState.
+    // The old shape was a bare `<p className="max-w-md …">` carrying its own
+    // colour. `EmptyState` owns that copy now. This used to key off the diluted
+    // `text-daintree-text/60` the old paragraph wore, but #12065 retired the
+    // ramp, so a class that can no longer exist would have made the guard pass
+    // for the wrong reason. The measure is the hand-rolled prose block itself.
     const hasOldPattern = content
       .split("\n")
-      .some(
-        (line) =>
-          line.includes("<p") && line.includes("text-daintree-text/60") && line.includes("max-w-md")
-      );
+      .some((line) => line.includes("<p") && line.includes("max-w-md"));
     expect(hasOldPattern).toBe(false);
   });
 });

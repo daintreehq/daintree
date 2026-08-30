@@ -1,14 +1,33 @@
+import { useRef } from "react";
 import { cn } from "@/lib/utils";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import type { QuickStateFilter } from "@/lib/worktreeFilters";
 import { CheckCircle2 } from "lucide-react";
 import { HollowCircle, SpinnerCircle } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { STATE_COLORS } from "./terminalStateConfig";
 
+/**
+ * "Attention", not "Waiting", for the bucket that filters on a waiting agent.
+ *
+ * `agentState === "waiting"` covers an agent stopped on an error as well as one
+ * asking a question, so this bucket has always been wider than the word — and
+ * Pilot's matching segment, which can tell the two apart, ended up drawing an
+ * errored run's glyph beside it. "Attention" is what both members want — a
+ * look — without claiming anything about why, which is the only thing true of
+ * an errored run and a polite question at once. Renamed on both surfaces at
+ * once rather than on one: `PILOT_BAND_FILTER_LABEL` carries the same string,
+ * and one bucket with two names across two surfaces is a vocabulary to learn
+ * twice.
+ *
+ * The worktree filter popover's session checkbox keeps "Waiting", because there
+ * it sits beside "Completed" and "Exited" as one state among states rather than
+ * as a bucket over them.
+ */
 const FILTER_OPTIONS: { value: QuickStateFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "working", label: "Working" },
-  { value: "waiting", label: "Waiting" },
+  { value: "waiting", label: "Attention" },
   { value: "finished", label: "Finished" },
 ];
 
@@ -50,8 +69,16 @@ export function QuickStateFilterBar({
   trailing,
 }: QuickStateFilterBarProps) {
   const workingActive = counts !== undefined && counts.working > 0;
+  // This row already claimed `role="toolbar"` without implementing any of it,
+  // which is worse than no role at all: it promises a screen-reader user one
+  // tab stop with arrow navigation and delivered five separate tab stops and
+  // dead arrow keys. The shared hook supplies the behaviour the role advertises.
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const handleToolbarKeyDown = useToolbarRoving(toolbarRef);
   return (
     <div
+      ref={toolbarRef}
+      onKeyDown={handleToolbarKeyDown}
       className="flex border-b border-border-default"
       role="toolbar"
       aria-label="Quick state filter"
@@ -80,7 +107,7 @@ export function QuickStateFilterBar({
                 onClick={() => onChange(isActive ? "all" : option.value)}
                 className={cn(
                   "inline-flex items-center justify-center gap-1 min-w-0 px-2 py-1.5 transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
                   // "All" is the only labelled segment and always carries the
                   // total — give it the lion's share; the icon-only status
                   // segments split the rest equally.
@@ -105,7 +132,7 @@ export function QuickStateFilterBar({
                     aria-hidden="true"
                     className={cn(
                       "text-xs",
-                      isActive ? "font-medium text-daintree-text" : "text-daintree-text/60"
+                      isActive ? "font-medium text-text-primary" : "text-text-secondary"
                     )}
                   >
                     All
@@ -116,7 +143,7 @@ export function QuickStateFilterBar({
                     aria-hidden="true"
                     className={cn(
                       "text-xs tabular-nums",
-                      isActive ? "text-daintree-text" : "text-daintree-text/60"
+                      isActive ? "text-text-primary" : "text-text-secondary"
                     )}
                   >
                     {rawCount}

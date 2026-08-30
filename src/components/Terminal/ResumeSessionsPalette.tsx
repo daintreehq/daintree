@@ -32,8 +32,8 @@ function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: Resu
       className={cn(
         PALETTE_ROW_CLASS,
         "w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
-        "text-daintree-text/70",
-        "hover:bg-overlay-subtle hover:text-daintree-text",
+        "text-text-secondary",
+        "hover:bg-overlay-subtle hover:text-text-primary",
         item.isStale && "opacity-50"
       )}
       onClick={() => onSelect(item)}
@@ -42,15 +42,15 @@ function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: Resu
         <PanelKindIcon iconId={item.iconId} color={item.color} size={16} />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-daintree-text truncate">
+        <div className="text-sm font-medium text-text-primary truncate">
           <HighlightedText text={item.name} indices={findMatchIndices(matches, "name")} />
         </div>
         {item.description && (
-          <div className="text-xs text-daintree-text/50 truncate">{item.description}</div>
+          <div className="text-xs text-text-secondary truncate">{item.description}</div>
         )}
       </div>
       {item.isStale && (
-        <span className="shrink-0 mt-0.5 text-[10px] font-medium text-daintree-text/40">
+        <span className="shrink-0 mt-0.5 text-3xs font-medium text-text-secondary">
           Worktree removed
         </span>
       )}
@@ -196,7 +196,7 @@ export function ResumeSessionsPalette() {
               emptyMessage="No closed sessions yet"
               noMatchMessage={`No sessions match "${query.length > 40 ? query.slice(0, 40) + "…" : query}"`}
             >
-              <p className="mt-2 text-xs text-daintree-text/40">
+              <p className="mt-2 text-xs text-text-secondary">
                 Sessions you close appear here so you can pick them back up later.
               </p>
             </AppPaletteDialog.Empty>
@@ -212,7 +212,7 @@ export function ResumeSessionsPalette() {
                 tabIndex={-1}
                 onPointerDown={(e) => e.preventDefault()}
                 onClick={showMore}
-                className="w-full px-3 py-2 rounded-[var(--radius-md)] text-xs text-daintree-text/50 transition-colors hover:bg-overlay-subtle hover:text-daintree-text/80"
+                className="w-full px-3 py-2 rounded-[var(--radius-md)] text-xs text-text-secondary transition-colors hover:bg-overlay-subtle hover:text-text-primary"
               >
                 Load more ({hiddenCount})
               </button>

@@ -78,7 +78,7 @@ const searchPanelTheme = EditorView.theme({
     backgroundColor: "var(--theme-surface-canvas)",
     color: "var(--theme-text-primary)",
     border: "1px solid var(--theme-border-default)",
-    borderRadius: "3px",
+    borderRadius: "var(--radius-xs)",
     outline: "none",
   },
   ".cm-search .cm-button": {
@@ -86,7 +86,7 @@ const searchPanelTheme = EditorView.theme({
     backgroundColor: "var(--theme-surface-canvas)",
     color: "var(--theme-text-primary)",
     border: "1px solid var(--theme-border-default)",
-    borderRadius: "3px",
+    borderRadius: "var(--radius-xs)",
   },
   ".cm-search .cm-button:hover": {
     backgroundColor: "var(--theme-border-default)",
@@ -107,7 +107,7 @@ const searchPanelTheme = EditorView.theme({
     backgroundColor: "var(--theme-surface-canvas)",
     color: "var(--theme-text-primary)",
     border: "1px solid var(--theme-border-default)",
-    borderRadius: "3px",
+    borderRadius: "var(--radius-xs)",
     outline: "none",
   },
 });
@@ -359,7 +359,7 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
       ref={scrollRef}
       onScroll={handleScroll}
       className={cn(
-        "overflow-auto text-[13px] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
+        "overflow-auto text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
         className
       )}
     >

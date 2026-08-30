@@ -89,14 +89,17 @@ export function BehavioralControls({
     <>
       <div id="agents-custom-args" className="group/args space-y-1.5">
         <div className="flex items-center gap-2">
-          <label className="text-sm font-medium text-daintree-text">Custom arguments</label>
+          <label className="text-sm font-medium text-text-primary">Custom arguments</label>
           {scopeKind === "custom" && customFlagsOverride !== undefined && (
             <>
-              <span className="w-1.5 h-1.5 rounded-full bg-state-modified" aria-hidden="true" />
+              <span
+                className="status-mark w-1.5 h-1.5 rounded-full bg-state-modified"
+                aria-hidden="true"
+              />
               <button
                 type="button"
                 aria-label={`Reset custom arguments override for ${scopeLabel}`}
-                className="p-0.5 rounded-sm text-daintree-text/40 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent transition-colors"
+                className="p-0.5 rounded-sm text-daintree-text/40 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary transition-colors"
                 onClick={onCustomFlagsOverrideReset}
                 data-testid="preset-custom-flags-reset"
               >
@@ -106,13 +109,13 @@ export function BehavioralControls({
           )}
         </div>
         <input
-          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-placeholder"
+          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-2 text-sm font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-placeholder"
           value={customArgsValue}
           onChange={(e) => onCustomFlagsChange(e.target.value)}
           placeholder={customArgsPlaceholder}
           data-testid={scopeKind === "custom" ? "preset-custom-flags-input" : undefined}
         />
-        <p className="text-xs text-daintree-text/40 select-text">{customArgsDescription}</p>
+        <p className="text-xs text-text-secondary select-text">{customArgsDescription}</p>
       </div>
 
       <div id="agents-skip-permissions" className="space-y-1.5">
@@ -125,14 +128,14 @@ export function BehavioralControls({
           options={dangerousModeOptions}
         />
         {dangerousMode === "inherit" && (
-          <p className="text-xs text-daintree-text/40 select-text">
+          <p className="text-xs text-text-secondary select-text">
             Inherited from {inheritOriginLabel}
           </p>
         )}
         {effectiveSkipPerms && defaultDangerousArg && (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
             <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
-            <span className="text-xs text-daintree-text/40">added to command</span>
+            <span className="text-xs text-text-secondary">added to command</span>
           </div>
         )}
       </div>
@@ -148,7 +151,7 @@ export function BehavioralControls({
             options={inlineModeOptions}
           />
           {inlineMode === "inherit" && (
-            <p className="text-xs text-daintree-text/40 select-text">
+            <p className="text-xs text-text-secondary select-text">
               Inherited from {inlineInheritOriginLabel}
             </p>
           )}

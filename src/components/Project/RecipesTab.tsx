@@ -191,11 +191,11 @@ export function RecipesTab({
   return (
     <>
       <div className="mb-6">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <Workflow className="h-4 w-4" />
           Terminal Recipes
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Manage saved terminal configurations. Recipes can spawn multiple terminals with predefined
           commands and settings.
         </p>
@@ -213,7 +213,7 @@ export function RecipesTab({
                 <AlertTriangle className="h-4 w-4 text-status-warning mt-0.5 shrink-0" />
                 <div>
                   <p className="text-sm text-status-warning">Default recipe unavailable</p>
-                  <p className="text-xs text-daintree-text/60 mt-1">
+                  <p className="text-xs text-text-secondary mt-1">
                     The previously pinned recipe was deleted or is no longer eligible. Pin another
                     recipe or clear the default below.
                   </p>
@@ -231,14 +231,14 @@ export function RecipesTab({
           {recipesLoading ? (
             <Skeleton
               label="Loading recipes"
-              className="space-y-2 p-3 border border-dashed border-daintree-border rounded-[var(--radius-md)]"
+              className="space-y-2 p-3 border border-dashed border-border-default rounded-[var(--radius-md)]"
             >
               <SkeletonBone className="h-14 w-full" />
               <SkeletonBone className="h-14 w-full" />
               <SkeletonBone className="h-14 w-full" />
             </Skeleton>
           ) : recipes.length === 0 ? (
-            <div className="border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+            <div className="border border-dashed border-border-default rounded-[var(--radius-md)]">
               <EmptyState
                 variant="zero-data"
                 scale="sidebar"
@@ -247,7 +247,7 @@ export function RecipesTab({
               />
             </div>
           ) : (
-            <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
+            <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
               {recipes.map((recipe) => {
                 const exported = exportFeedback === recipe.id;
                 const isEligibleForDefault = !recipe.worktreeId && !recipe.shadowedBy;
@@ -282,7 +282,7 @@ export function RecipesTab({
                             const scopeInfo = getRecipeScope(recipe, resolveWorktreeName);
                             return (
                               <span
-                                className={`text-[11px] px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1 ${
+                                className={`text-2xs px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1 ${
                                   scopeInfo.isGlobal
                                     ? "text-status-info bg-status-info/10"
                                     : "text-muted-foreground bg-muted"
@@ -293,23 +293,23 @@ export function RecipesTab({
                               </span>
                             );
                           })()}
-                          <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
+                          <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
                             {recipe.terminals.length} terminal
                             {recipe.terminals.length !== 1 ? "s" : ""}
                           </span>
                           {isShadowed && (
-                            <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
+                            <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
                               Overridden
                             </span>
                           )}
                           {isDefault && (
-                            <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
+                            <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
                               <Pin className="h-3 w-3" />
                               Default
                             </span>
                           )}
                           {recipe.showInEmptyState && (
-                            <span className="text-[11px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
+                            <span className="text-2xs text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
                               Empty State
                             </span>
                           )}
@@ -483,14 +483,14 @@ export function RecipesTab({
         </AppDialog.Header>
 
         <AppDialog.Body>
-          <p className="text-sm text-daintree-text/60 mb-4">
+          <p className="text-sm text-text-secondary mb-4">
             Paste the JSON configuration for the recipe you want to import.
           </p>
           <textarea
             value={importJson}
             onChange={(e) => setImportJson(e.target.value)}
             placeholder='{"name": "My Recipe", "terminals": [...]}'
-            className="w-full h-64 px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 resize-none"
+            className="w-full h-64 px-3 py-2 bg-surface-canvas border border-border-default rounded-[var(--radius-md)] text-sm text-text-primary font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 resize-none"
             spellCheck={false}
           />
           {importError && (
@@ -511,7 +511,7 @@ export function RecipesTab({
           >
             Cancel
           </Button>
-          <Button onClick={handleImportRecipe} disabled={!importJson.trim()}>
+          <Button variant="contrast" onClick={handleImportRecipe} disabled={!importJson.trim()}>
             Import
           </Button>
         </AppDialog.Footer>

@@ -30,8 +30,8 @@ export function QuickSwitcherItem({
       className={cn(
         PALETTE_ROW_CLASS,
         "group w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
-        "text-daintree-text/70",
-        "hover:bg-overlay-subtle hover:text-daintree-text"
+        "text-text-secondary",
+        "hover:bg-overlay-subtle hover:text-text-primary"
       )}
       onClick={() => onSelect(item)}
       aria-selected={isSelected}
@@ -49,13 +49,13 @@ export function QuickSwitcherItem({
 
       <div className="flex-1 min-w-0 overflow-hidden">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-daintree-text truncate">{item.title}</span>
+          <span className="text-sm font-medium text-text-primary truncate">{item.title}</span>
           <span
             className={cn(
               "shrink-0 px-1.5 py-0.5 text-xs rounded-[var(--radius-sm)] border",
               item.type === "terminal"
-                ? "bg-overlay-medium text-daintree-text/70 border-border-strong"
-                : "bg-status-success/10 text-status-success border-status-success/30"
+                ? "bg-overlay-medium text-text-secondary border-border-strong"
+                : "bg-overlay-subtle text-text-secondary border-border-default"
             )}
           >
             {item.type === "terminal"
@@ -66,7 +66,7 @@ export function QuickSwitcherItem({
         {item.subtitle && (
           <Tooltip autoDismiss={false}>
             <TooltipTrigger asChild>
-              <div className="text-xs text-daintree-text/50 truncate transition-colors group-aria-selected:text-daintree-text/60">
+              <div className="text-xs text-text-secondary truncate transition-colors group-aria-selected:text-text-primary">
                 {item.subtitle}
               </div>
             </TooltipTrigger>

@@ -153,7 +153,7 @@ function GroupDismissPreview({ preview }: { preview: DeletedWorktreeGroupPreview
     <ul className="mt-3 max-h-56 space-y-3 overflow-y-auto rounded border border-border-default bg-overlay-subtle p-3">
       {preview.map((entry) => (
         <li key={entry.worktreeId}>
-          <span className="block truncate font-mono text-[11px] font-medium text-text-secondary">
+          <span className="block truncate font-mono text-2xs font-medium text-text-secondary">
             {entry.worktreeTitle}
           </span>
           <ul className="mt-1 space-y-0.5">
@@ -164,7 +164,7 @@ function GroupDismissPreview({ preview }: { preview: DeletedWorktreeGroupPreview
               >
                 <span className="truncate">{terminal.terminalTitle}</span>
                 {terminal.hasRunningAgent && (
-                  <span className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-[10px] text-text-muted">
+                  <span className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-3xs text-text-muted">
                     Running
                   </span>
                 )}

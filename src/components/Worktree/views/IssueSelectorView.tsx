@@ -4,31 +4,25 @@ import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import type { ForgeIssueSelectorProps } from "@/types/forgeSlotProps";
 import { useProjectStore } from "@/store/projectStore";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Info, UserPlus } from "lucide-react";
+import { UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface IssueLinkerViewProps {
   projectPath: string;
   selectedIssue: Issue | null;
   onSelectIssue: (issue: Issue | null) => void;
-  canAssignIssue: boolean;
-  assignWorktreeToSelf: boolean;
-  onSetAssignWorktreeToSelf: (assign: boolean) => void;
-  currentUser?: string;
-  currentUserAvatar?: string;
   disabled?: boolean;
 }
 
+/**
+ * Control only — "Issue" lives on the form's label rail, and the assign-to-me
+ * switch is a separate {@link AssignIssueToggle} the row hangs off its hint
+ * slot, the same rail "Create from remote branch" rides.
+ */
 export function IssueLinkerView({
   projectPath,
   selectedIssue,
   onSelectIssue,
-  canAssignIssue,
-  assignWorktreeToSelf,
-  onSetAssignWorktreeToSelf,
-  currentUser,
-  currentUserAvatar,
   disabled,
 }: IssueLinkerViewProps) {
   // Resolve the issue-selector view from the active provider's slot so any
@@ -38,86 +32,77 @@ export function IssueLinkerView({
   const IssueSelector = useBuiltinView<ForgeIssueSelectorProps>(
     entry?.contribution.slots?.issueSelector ?? ""
   );
-  return (
-    <>
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <label className="block text-sm font-medium text-daintree-text">
-            Link Issue (Optional)
-          </label>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
-                aria-label="Help for Link Issue field"
-                disabled={disabled}
-              >
-                <Info className="w-3.5 h-3.5" aria-hidden="true" />
-                <span className="sr-only">Help for Link Issue field</span>
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              <p>Select an issue to auto-generate a branch name</p>
-            </TooltipContent>
-          </Tooltip>
-        </div>
-        {IssueSelector && (
-          <Suspense fallback={null}>
-            <IssueSelector
-              projectPath={projectPath}
-              selectedIssue={selectedIssue}
-              onSelect={onSelectIssue}
-              disabled={disabled}
-            />
-          </Suspense>
-        )}
-      </div>
 
-      {canAssignIssue && (
-        <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-daintree-bg/50 border-daintree-border transition-colors">
-          {currentUserAvatar ? (
-            <img
-              src={`${currentUserAvatar}${currentUserAvatar.includes("?") ? "&" : "?"}s=64`}
-              alt={currentUser}
-              className="w-8 h-8 rounded-full shrink-0"
-            />
-          ) : (
-            <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-overlay-medium text-daintree-text/60">
-              <UserPlus className="w-4 h-4" />
-            </div>
+  if (!IssueSelector) return null;
+
+  return (
+    <Suspense fallback={null}>
+      <IssueSelector
+        projectPath={projectPath}
+        selectedIssue={selectedIssue}
+        onSelect={onSelectIssue}
+        disabled={disabled}
+      />
+    </Suspense>
+  );
+}
+
+interface AssignIssueToggleProps {
+  assignWorktreeToSelf: boolean;
+  onSetAssignWorktreeToSelf: (assign: boolean) => void;
+  currentUser?: string;
+  currentUserAvatar?: string;
+  disabled?: boolean;
+}
+
+/**
+ * Rides directly under the selector because it is meaningless without a linked
+ * issue; the caller renders it only once the forge can actually assign one.
+ */
+export function AssignIssueToggle({
+  assignWorktreeToSelf,
+  onSetAssignWorktreeToSelf,
+  currentUser,
+  currentUserAvatar,
+  disabled,
+}: AssignIssueToggleProps) {
+  return (
+    <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
+      <span className="relative inline-flex shrink-0">
+        <input
+          type="checkbox"
+          checked={assignWorktreeToSelf}
+          onChange={(e) => onSetAssignWorktreeToSelf(e.target.checked)}
+          disabled={disabled}
+          aria-label="Assign issue to me when creating worktree"
+          className={cn(
+            "h-4 w-7 appearance-none rounded-full border transition-colors duration-150 ease-out",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+            assignWorktreeToSelf
+              ? "border-text-primary bg-text-primary"
+              : "border-border-strong bg-surface-inset",
+            disabled && "cursor-not-allowed opacity-50"
           )}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-daintree-text">Assign to me</span>
-              <span className="text-xs text-daintree-text/50 font-mono">@{currentUser}</span>
-            </div>
-          </div>
-          <label className="relative inline-flex items-center cursor-pointer">
-            <input
-              type="checkbox"
-              checked={assignWorktreeToSelf}
-              onChange={(e) => onSetAssignWorktreeToSelf(e.target.checked)}
-              disabled={disabled}
-              className="sr-only peer"
-              aria-label="Assign issue to me when creating worktree"
-            />
-            <div
-              className={cn(
-                "w-9 h-5 rounded-full transition-colors",
-                "peer-focus-visible:ring-2 peer-focus-visible:ring-daintree-accent",
-                "after:content-[''] after:absolute after:top-0.5 after:left-0.5",
-                "after:rounded-full after:h-4 after:w-4",
-                "after:transition-transform after:duration-150",
-                assignWorktreeToSelf
-                  ? "bg-daintree-accent after:translate-x-4 after:bg-text-inverse"
-                  : "bg-daintree-border after:translate-x-0 after:bg-daintree-text",
-                disabled && "opacity-50 cursor-not-allowed"
-              )}
-            />
-          </label>
-        </div>
+        />
+        <span
+          className={cn(
+            "status-mark pointer-events-none absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full",
+            "transition-[left] duration-150 ease-out",
+            assignWorktreeToSelf ? "left-[0.875rem] bg-text-inverse" : "left-0.5 bg-text-secondary"
+          )}
+          aria-hidden="true"
+        />
+      </span>
+      {currentUserAvatar ? (
+        <img
+          src={`${currentUserAvatar}${currentUserAvatar.includes("?") ? "&" : "?"}s=48`}
+          alt=""
+          className="h-4 w-4 shrink-0 rounded-full"
+        />
+      ) : (
+        <UserPlus className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       )}
-    </>
+      <span className="truncate">Assign to {currentUser ? `@${currentUser}` : "me"}</span>
+    </label>
   );
 }

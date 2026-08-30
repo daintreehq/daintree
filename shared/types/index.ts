@@ -147,6 +147,7 @@ export type {
   CopyTreeBudgetStats,
   CopyTreeTruncatedBy,
   FileTreeNode,
+  FileTreeSymlink,
   // Worktree IPC types
   WorktreeRemovePayload,
   WorktreeSetActivePayload,

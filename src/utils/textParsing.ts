@@ -42,7 +42,10 @@ export function formatPath(targetPath: string, homeDir?: string): string {
 }
 
 export function middleTruncate(text: string, maxLength: number = 40): string {
-  if (text.length <= maxLength) {
+  // Code points, not UTF-16 units: slicing by index splits a surrogate pair in
+  // half and renders a replacement glyph (git allows UTF-8 refs and paths).
+  const chars = Array.from(text);
+  if (chars.length <= maxLength) {
     return text;
   }
 
@@ -51,7 +54,9 @@ export function middleTruncate(text: string, maxLength: number = 40): string {
   const frontChars = Math.ceil(charsToShow / 2);
   const backChars = Math.floor(charsToShow / 2);
 
-  return text.slice(0, frontChars) + ellipsis + text.slice(text.length - backChars);
+  return (
+    chars.slice(0, frontChars).join("") + ellipsis + chars.slice(chars.length - backChars).join("")
+  );
 }
 
 export function formatTimestamp(timestamp: number | null | undefined): string {

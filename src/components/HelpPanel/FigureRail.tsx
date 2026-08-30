@@ -43,7 +43,7 @@ export function FigureRail({ figures }: { figures: HelpFigure[] }) {
 
   return (
     <div
-      className="shrink-0 h-[88px] overflow-hidden border-t border-daintree-border"
+      className="shrink-0 h-[88px] overflow-hidden border-t border-border-default"
       data-testid="figure-rail"
     >
       <div
@@ -88,19 +88,19 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
   return (
     <div
       className={cn(
-        "relative shrink-0 h-[72px] w-[104px] rounded-[var(--radius-md)] overflow-hidden border border-daintree-border bg-overlay-subtle",
+        "relative shrink-0 h-[72px] w-[104px] rounded-[var(--radius-md)] overflow-hidden border border-border-default bg-overlay-subtle",
         isNewest && "animate-figure-arrive"
       )}
       data-testid="figure-thumbnail"
     >
       {status === "failed" ? (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-daintree-text/50">
+        <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-text-secondary">
           <ImageOff className="w-4 h-4" aria-hidden="true" />
           <button
             type="button"
             onClick={handleRetry}
             aria-label={`Retry figure ${figure.figureNumber}`}
-            className="flex items-center gap-1 text-[10px] text-daintree-text/60 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent rounded"
+            className="flex items-center gap-1 text-3xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded"
           >
             <RotateCw className="w-2.5 h-2.5" aria-hidden="true" />
             Retry
@@ -115,7 +115,7 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
               ? `Figure ${figure.figureNumber}: ${figure.caption}`
               : `Figure ${figure.figureNumber}`
           }
-          className="block h-full w-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2"
+          className="block h-full w-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
         >
           {/* Animated WebP demo loops play natively through the browser image
               decoder — no decoding hint or poster-swap is needed, and rail
@@ -152,7 +152,7 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
       )}
 
       {status === "loaded" && (
-        <span className="pointer-events-none absolute bottom-0 left-0 right-0 bg-scrim-medium px-1.5 py-0.5 text-[10px] font-medium text-daintree-text/90">
+        <span className="pointer-events-none absolute bottom-0 left-0 right-0 bg-scrim-medium px-1.5 py-0.5 text-3xs font-medium text-text-primary">
           {figure.figureLabel}
         </span>
       )}

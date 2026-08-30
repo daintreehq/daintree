@@ -26,7 +26,7 @@ export const GIT_STATUS_PRESENTATION = {
   untracked: { marker: "?", name: "Untracked", colorClass: "text-status-success" },
   renamed: { marker: "R", name: "Renamed", colorClass: "text-status-info" },
   copied: { marker: "C", name: "Copied", colorClass: "text-status-info" },
-  ignored: { marker: "I", name: "Ignored", colorClass: "text-daintree-text/40" },
+  ignored: { marker: "I", name: "Ignored", colorClass: "text-text-secondary" },
   conflicted: { marker: "!", name: "Conflicted", colorClass: "text-status-error" },
 } satisfies Record<GitStatus, GitStatusPresentation>;
 

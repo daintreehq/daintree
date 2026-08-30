@@ -93,9 +93,7 @@ function PreferredSchemePicker({
 }) {
   return (
     <div className="space-y-1">
-      <p className="text-[10px] font-medium uppercase tracking-wider text-daintree-text/40">
-        {label}
-      </p>
+      <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary">{label}</p>
       <div className="flex flex-wrap gap-1.5">
         {schemes.map((scheme) => (
           <button
@@ -105,8 +103,8 @@ function PreferredSchemePicker({
             className={cn(
               "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] border text-xs transition-colors",
               selectedId === scheme.id
-                ? "border-border-strong bg-overlay-medium text-daintree-text"
-                : "border-daintree-border text-daintree-text/70 hover:bg-surface-hover"
+                ? "border-border-strong bg-overlay-medium text-text-primary"
+                : "border-border-default text-text-secondary hover:bg-surface-hover"
             )}
           >
             <div
@@ -555,19 +553,19 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
               )}
             />
             <div className="min-w-0">
-              <p className="text-xs text-daintree-text">{importMessage}</p>
+              <p className="text-xs text-text-primary">{importMessage}</p>
               {importWarnings.length > 0 && (
                 <ul className="mt-1 space-y-1.5">
                   {groupWarningsByKind(importWarnings).map(({ kind, messages }) => (
-                    <li key={kind} className="text-[11px] text-daintree-text/60">
+                    <li key={kind} className="text-2xs text-text-secondary">
                       {WARNING_KIND_COPY[kind] ?? "Some theme values may need attention"}
                       <details className="mt-0.5">
-                        <summary className="cursor-pointer text-daintree-text/40 transition-colors hover:text-daintree-text/70">
+                        <summary className="cursor-pointer text-text-secondary transition-colors hover:text-text-primary">
                           Technical details
                         </summary>
                         <ul className="mt-1 space-y-0.5 pl-3">
                           {messages.map((message, index) => (
-                            <li key={index} className="break-words text-daintree-text/40">
+                            <li key={index} className="break-words text-text-secondary">
                               {message}
                             </li>
                           ))}
@@ -582,7 +580,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         </div>
       )}
 
-      <div className="flex flex-col rounded-[var(--radius-md)] border border-daintree-border overflow-hidden">
+      <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default overflow-hidden">
         <div className="relative h-[200px] shrink-0 overflow-hidden">
           {selectedScheme.heroImage && !heroError ? (
             <img
@@ -610,15 +608,15 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
               {selectedScheme.name}
             </span>
             {selectedScheme.location && (
-              <span className="text-[11px] text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+              <span className="text-2xs text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
                 {selectedScheme.location}
               </span>
             )}
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-daintree-border bg-daintree-bg">
-          <span className="min-w-0 truncate text-xs text-daintree-text/60">Current theme</span>
+        <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-border-default bg-surface-canvas">
+          <span className="min-w-0 truncate text-xs text-text-secondary">Current theme</span>
           {onClose && (
             <Button variant="contrast" size="sm" onClick={handleChangeTheme} className="shrink-0">
               Change theme…
@@ -629,7 +627,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
 
       <section
         aria-label="Accent color"
-        className="flex items-center gap-3 p-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg"
+        className="flex items-center gap-3 p-2 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas"
       >
         <label
           htmlFor="accent-color-override-input"
@@ -637,7 +635,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
           style={{ width: 32, height: 32 }}
         >
           <div
-            className="w-full h-full rounded-md border border-daintree-border"
+            className="w-full h-full rounded-md border border-border-default"
             style={{ backgroundColor: effectiveAccent }}
             aria-hidden="true"
           />
@@ -653,8 +651,8 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
           />
         </label>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-daintree-text">Accent color</div>
-          <div className="text-xs text-daintree-text/60">
+          <div className="text-sm font-medium text-text-primary">Accent color</div>
+          <div className="text-xs text-text-secondary">
             {accentColorOverride
               ? `Overriding theme accent (${effectiveAccent})`
               : "Click the swatch to override the theme accent"}
@@ -665,7 +663,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
             type="button"
             onClick={handleAccentReset}
             data-testid="accent-color-override-reset"
-            className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors shrink-0"
+            className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors shrink-0"
           >
             Reset to theme default
           </button>
@@ -678,7 +676,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
           className="flex items-start gap-2 rounded-[var(--radius-md)] border border-overlay bg-surface-panel px-3 py-2"
         >
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-warning" />
-          <p className="min-w-0 text-xs text-daintree-text">
+          <p className="min-w-0 text-xs text-text-primary">
             {accentContrastFail.mode === "foreground"
               ? `Low contrast: button text scores only ${accentContrastFail.worstRatio.toFixed(2)}:1 on the accent color — pick a lighter or darker accent`
               : `Low contrast: the accent scores only ${accentContrastFail.worstRatio.toFixed(2)}:1 on ${selectedScheme.name} surfaces — pick a more distinct accent`}
@@ -689,13 +687,13 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
       <div className="flex items-center gap-3">
         <button
           onClick={handleExport}
-          className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors"
+          className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
         >
           Export app theme...
         </button>
         <button
           onClick={handleImport}
-          className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors"
+          className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
         >
           Import app theme...
         </button>
@@ -703,7 +701,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
           <button
             type="button"
             onClick={handleShuffle}
-            className="ml-auto flex items-center gap-1.5 text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors"
+            className="ml-auto flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
           >
             <Shuffle className="h-3 w-3" />
             Random theme

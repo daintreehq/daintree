@@ -262,7 +262,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
       />
 
       {previousSessionEntry && !filters?.search && (
-        <div className="shrink-0 max-h-48 overflow-y-auto overflow-x-hidden border-b border-daintree-border bg-surface-panel/50 p-3">
+        <div className="shrink-0 max-h-48 overflow-y-auto overflow-x-hidden border-b border-border-default bg-surface-panel/50 p-3">
           <div className="flex items-center gap-2 text-text-secondary text-xs font-medium mb-2">
             <div className="w-2 h-2 rounded-full bg-text-secondary/40" />
             <span>Previous session</span>
@@ -284,7 +284,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
                 action={
                   <button
                     onClick={clearFilters}
-                    className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
+                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
                   >
                     Clear filters
                   </button>

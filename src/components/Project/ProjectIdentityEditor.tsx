@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState } from "react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
+import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { useProjectStore } from "@/store/projectStore";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
@@ -7,36 +8,72 @@ import type { Project } from "@shared/types";
 
 interface ProjectIdentityEditorProps {
   project: Project;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /**
+   * Fired as the popover hands focus back, so the pill's controlled tooltip
+   * can stay down through the restoration.
+   */
+  onCloseAutoFocus?: () => void;
 }
 
 const PILL_SELECTOR = '[data-testid="project-switcher-trigger"]';
 
+function findPill(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(PILL_SELECTOR);
+}
+
 /**
- * One-click identity editing for the toolbar project pill: the emoji becomes
- * its own target that opens a popover holding the name field and the full
- * picker.
+ * Hands the shared close-time focus policy somewhere to put focus.
  *
- * Rendered as a SIBLING of the pill button, never nested inside it — the pill
- * is already wrapped by the switcher popover, context-menu and tooltip
- * triggers, and nesting a fourth interactive element there produces invalid
- * nested-button markup and fires both handlers on one click (#6928). The
- * transparent overlay sits exactly over the pill's own emoji glyph, so the
- * pill's layout and styling are untouched.
- *
- * Being a sibling means the pill's Radix triggers never see pointer activity
- * over this region, so right-click and hover are replayed onto the pill below
- * (see `replayOnPill`) to keep the project context menu and the identity
- * tooltip alive across the whole pill.
+ * It records the trigger, and an anchored popover has none — so without this
+ * every pointer close falls through to Radix, which focuses a null trigger and
+ * leaves focus on `document.body`. Rendered inside `Popover` because the
+ * context only exists below the root.
  */
-export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
+function PillRestoreTarget({ open }: { open: boolean }) {
+  const overlay = useOverlayFocusRestore();
+  useEffect(() => {
+    if (!open) return;
+    overlay?.setRestoreTarget(findPill());
+  }, [open, overlay]);
+  return null;
+}
+
+/**
+ * Display-identity editing for the current project — the name and the emoji,
+ * in one popover anchored under the toolbar pill.
+ *
+ * Opened from the pill's context menu, never from a click on the pill itself.
+ * It used to own a transparent 28px overlay sitting on the emoji glyph, so a
+ * left-click there edited the project instead of opening the switcher. That
+ * put a rare action inside the hit box of a very frequent one with no visible
+ * boundary, and the two surfaces were easy to confuse: both open with a text
+ * field focused, so the switcher's own click-type-Enter muscle memory landed
+ * in the name field and renamed the project.
+ *
+ * Anchored rather than triggered: the pill is already wrapped by the switcher
+ * popover, the context menu and the tooltip, and it has one job on click. This
+ * renders as a sibling of the pill inside the toolbar's project group, but as
+ * a zero-height, pointer-transparent anchor rather than the old overlay — it
+ * borrows the group's position and can never take a click of its own.
+ */
+export function ProjectIdentityEditor({
+  project,
+  open,
+  onOpenChange,
+  onCloseAutoFocus,
+}: ProjectIdentityEditorProps) {
   const updateProject = useProjectStore((state) => state.updateProject);
-  const overlayRef = useRef<HTMLButtonElement>(null);
-  const [isOpen, setIsOpen] = useState(false);
   const [draftName, setDraftName] = useState(project.name);
   // Only a name the user actually typed is worth writing back. Without this,
   // an untouched draft would overwrite a rename that landed from another
   // window while this popover sat open.
   const [isNameDirty, setIsNameDirty] = useState(false);
+  // Whether the last interaction in this opening came from the keyboard. Read
+  // for exactly one decision — see the close handler — and deliberately not a
+  // second copy of the shared policy, which still owns every pointer close.
+  const lastInputWasKeyboardRef = useRef(false);
 
   const resetDraft = useCallback(() => {
     setDraftName(project.name);
@@ -49,7 +86,7 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
   // `project.name` would wipe the field mid-edit the moment an optimistic
   // rename lands, and omitting it needs an exhaustive-deps suppression that
   // opts the whole component out of the React Compiler.
-  const seedKey = `${project.id}:${isOpen ? "open" : "closed"}`;
+  const seedKey = `${project.id}:${open ? "open" : "closed"}`;
   const [lastSeedKey, setLastSeedKey] = useState(seedKey);
   if (lastSeedKey !== seedKey) {
     setLastSeedKey(seedKey);
@@ -95,9 +132,9 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
   const handleEmojiSelect = useCallback(
     (picked: string) => {
       commitIdentity(picked);
-      setIsOpen(false);
+      onOpenChange(false);
     },
-    [commitIdentity]
+    [commitIdentity, onOpenChange]
   );
 
   // While a project still carries the default tree, offer the name-derived
@@ -110,103 +147,87 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
       ? suggestProjectEmoji(draftName.trim() || project.name)
       : null;
 
-  // The pill renders alongside this overlay inside the toolbar's project group.
-  const findPill = useCallback(
-    () => overlayRef.current?.parentElement?.querySelector<HTMLElement>(PILL_SELECTOR) ?? null,
-    []
-  );
-
-  /**
-   * Re-fire a native event on the pill so its Radix triggers react as if the
-   * pointer had reached them. `PointerEvent` is not constructible in every test
-   * environment; `MouseEvent` carries everything these triggers read.
-   */
-  const replayOnPill = useCallback(
-    (type: string, init: MouseEventInit) => {
-      const pill = findPill();
-      if (!pill) return;
-      const Ctor: typeof MouseEvent =
-        typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
-      pill.dispatchEvent(new Ctor(type, { bubbles: true, ...init }));
-    },
-    [findPill]
-  );
-
   return (
     <Popover
-      open={isOpen}
+      open={open}
       onOpenChange={(next) => {
         if (!next) commitIdentity();
-        setIsOpen(next);
+        onOpenChange(next);
       }}
     >
-      <PopoverTrigger asChild>
-        <button
-          ref={overlayRef}
-          type="button"
-          // Joins the toolbar's roving-tabindex domain in DOM order (it renders
-          // just before the pill), so it is one arrow stop rather than a stray
-          // extra Tab stop outside the model.
-          data-toolbar-item=""
-          data-project-identity-trigger=""
-          aria-label={`Edit identity for ${project.name}, currently ${project.emoji}`}
-          // The pill owns the project context menu (pin, copy path, locate,
-          // settings, close); this overlay has none of its own, so hand the
-          // right-click straight down to it.
-          onContextMenu={(event) => {
-            event.preventDefault();
-            replayOnPill("contextmenu", {
-              cancelable: true,
-              clientX: event.clientX,
-              clientY: event.clientY,
-            });
-          }}
-          // Radix's tooltip trigger opens on `pointermove`, so one replayed
-          // move per entry is enough to raise the pill's identity tooltip.
-          onPointerEnter={(event) => {
-            if (event.pointerType === "touch") return;
-            replayOnPill("pointermove", {});
-          }}
-          onPointerLeave={(event) => {
-            const pill = findPill();
-            const next = event.relatedTarget;
-            // Sliding onto the rest of the pill leaves it natively hovered;
-            // closing here would blink the tooltip shut and straight back open.
-            if (!pill || (next instanceof Node && pill.contains(next))) return;
-            // React synthesises `onPointerLeave` from `pointerout`, so a raw
-            // `pointerleave` dispatch would never reach the trigger's handler.
-            // It also reports `window` when the pointer left the React tree
-            // entirely, which is not a valid `relatedTarget` to construct with.
-            replayOnPill("pointerout", { relatedTarget: next instanceof Element ? next : null });
-          }}
-          className="pointer-events-auto absolute left-1.5 top-1/2 z-10 h-7 w-7 -translate-y-1/2 rounded-[var(--radius-md)] bg-transparent transition-colors hover:bg-overlay-subtle focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
-        />
-      </PopoverTrigger>
+      <PillRestoreTarget open={open} />
+      {/* Spans the group's width along its bottom edge, so the popover centres
+          under the pill. Zero height and no pointer surface: the whole point of
+          this component's rewrite is that nothing here is clickable. */}
+      <PopoverAnchor asChild>
+        <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-0" />
+      </PopoverAnchor>
       <PopoverContent
         className="w-auto p-0"
-        align="start"
+        align="center"
         aria-label="Edit project identity"
         // Hand focus to the name field instead of letting Radix park it on the
         // popover container.
         onOpenAutoFocus={(event) => {
           event.preventDefault();
+          lastInputWasKeyboardRef.current = false;
+        }}
+        // Modality, tracked for the close handler below and nothing else. A
+        // keydown supersedes an earlier pointer press for the same reason the
+        // shared policy's own does: a click that did not close the popover —
+        // into the name field, say — must not decide how a later Escape ends.
+        onKeyDown={() => {
+          lastInputWasKeyboardRef.current = true;
+        }}
+        onPointerDown={() => {
+          lastInputWasKeyboardRef.current = false;
+        }}
+        onPointerDownOutside={() => {
+          lastInputWasKeyboardRef.current = false;
         }}
         // Escape means "cancel the edit". Radix's dismissable layer sees the
         // key on a document CAPTURE listener, so its default dismissal would
         // fire `onOpenChange` — and with it the commit — before any handler on
         // the input could revert the draft. Take the close over manually so the
-        // revert lands first and no commit runs at all.
+        // revert lands first and no commit runs at all. The capture listener
+        // also means the content's own `onKeyDown` may never see this key, so
+        // the modality is recorded here too.
         onEscapeKeyDown={(event) => {
           event.preventDefault();
+          lastInputWasKeyboardRef.current = true;
           resetDraft();
-          setIsOpen(false);
+          onOpenChange(false);
+        }}
+        // Pointer closes belong to the shared policy in `overlay-focus-restore`
+        // — it runs straight after this one, and `PillRestoreTarget` has given
+        // it the pill to aim at. Claiming them here instead would steal focus
+        // from whatever the closing click just opened: dismissing this popover
+        // by clicking the pill opens the switcher and focuses its search box,
+        // and a blanket restore would yank focus straight back out of it.
+        //
+        // The keyboard close is the one case the shared policy cannot cover:
+        // it defers to Radix, which restores to a TRIGGER, and an anchored
+        // popover has none — so focus lands on `document.body` and the next Tab
+        // restarts from the top of the document.
+        onCloseAutoFocus={(event) => {
+          onCloseAutoFocus?.();
+          // Cleared before the branch, not inside it: `onOpenAutoFocus` is the
+          // other reset, and Radix skips dispatching it when focus is already
+          // inside the content — which `autoFocus` on the name field arranges
+          // on most openings. So this is the one that always runs.
+          const wasKeyboard = lastInputWasKeyboardRef.current;
+          lastInputWasKeyboardRef.current = false;
+          if (!wasKeyboard) return;
+          event.preventDefault();
+          // Ringed on purpose — a keyboard user has to see where they landed.
+          findPill()?.focus({ preventScroll: true });
         }}
       >
         <div className="flex flex-col">
-          <div className="flex flex-col gap-1.5 border-b border-daintree-border p-3">
+          <div className="flex flex-col gap-1.5 border-b border-border-default p-3">
             <label
               htmlFor="project-identity-name"
-              className="text-xs font-medium text-daintree-text/60"
+              className="text-xs font-medium text-text-secondary"
             >
               Project name
             </label>
@@ -226,18 +247,19 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
                 // sees it first, on a document capture listener.
                 if (event.key === "Enter") {
                   event.preventDefault();
+                  lastInputWasKeyboardRef.current = true;
                   commitIdentity();
-                  setIsOpen(false);
+                  onOpenChange(false);
                 }
               }}
-              className="w-[280px] rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+              className="w-[280px] rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-3 py-1.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
               placeholder={project.name}
             />
             {suggestion && (
               <button
                 type="button"
                 onClick={() => handleEmojiSelect(suggestion)}
-                className="flex items-center gap-2 self-start rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text/70 transition-colors hover:bg-overlay-subtle"
+                className="flex items-center gap-2 self-start rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-overlay-subtle"
               >
                 <span className="text-base leading-none">{suggestion}</span>
                 <span>Use suggested</span>

@@ -102,7 +102,7 @@ export function ForgeProviderSelectorDropdown({
           data-testid="forge-provider-selector-trigger"
           className={cn(
             "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-            "border border-daintree-border bg-daintree-bg text-daintree-text",
+            "border border-border-default bg-surface-canvas text-text-primary",
             "hover:border-border-strong transition-colors",
             "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50"
           )}
@@ -139,7 +139,7 @@ export function ForgeProviderSelectorDropdown({
         style={{ width: "var(--radix-popover-trigger-width)" }}
         onEscapeKeyDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-daintree-border">
+        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border-default">
           <Search size={14} className="shrink-0 text-daintree-text/40" aria-hidden="true" />
           <input
             ref={inputRef}
@@ -159,7 +159,7 @@ export function ForgeProviderSelectorDropdown({
                 ? `forge-provider-selector-item-${items[activeIndex].id}`
                 : undefined
             }
-            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
+            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
           />
         </div>
         <div
@@ -186,8 +186,8 @@ export function ForgeProviderSelectorDropdown({
                 className={cn(
                   "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm",
                   isActive && "bg-overlay-selected",
-                  isSelected && "text-daintree-text font-medium",
-                  !isActive && !isSelected && "text-daintree-text"
+                  isSelected && "text-text-primary font-medium",
+                  !isActive && !isSelected && "text-text-primary"
                 )}
               >
                 {item.kind === "general" ? (
@@ -195,7 +195,7 @@ export function ForgeProviderSelectorDropdown({
                     <GitBranch size={16} className="shrink-0 text-daintree-text/60" />
                     <div className="flex-1 min-w-0">
                       <div className="truncate">General</div>
-                      <div className="text-xs text-daintree-text/40 truncate">
+                      <div className="text-xs text-text-secondary truncate">
                         Global forge settings
                       </div>
                     </div>
@@ -215,7 +215,7 @@ export function ForgeProviderSelectorDropdown({
             );
           })}
           {items.length === 1 && filterQuery && (
-            <div className="px-2 py-3 text-xs text-daintree-text/40 text-center">
+            <div className="px-2 py-3 text-xs text-text-secondary text-center">
               No providers match "{filterQuery}"
             </div>
           )}

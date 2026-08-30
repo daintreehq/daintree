@@ -27,6 +27,18 @@ interface UpstreamSyncBadgeProps {
    * belongs.
    */
   baseCompareRef?: string | null;
+  /**
+   * True when the branch has no upstream configured. Since `87dc51fa9` stopped
+   * pointing fresh topic branches at their base, this is the normal state of
+   * every worktree between creation and its first push, so the line has to be
+   * able to say it rather than just showing nothing.
+   *
+   * It is "no upstream", not "never pushed": `git push origin topic` without
+   * `-u` leaves a remote branch behind with no tracking config, and so does
+   * `git branch --unset-upstream`. The tooltip says the configured thing;
+   * only the compact marker abbreviates.
+   */
+  hasNoUpstream?: boolean;
   fetchIntervalMs?: number;
 }
 
@@ -47,22 +59,69 @@ export function UpstreamSyncBadge({
   baseBehindCount,
   baseMatchesUpstream,
   baseCompareRef,
+  hasNoUpstream,
   fetchIntervalMs,
 }: UpstreamSyncBadgeProps) {
   const hasAhead = aheadCount !== undefined && aheadCount > 0;
   const hasBehind = behindCount !== undefined && behindCount > 0;
 
+  // The base segment is a *relationship*, not an alarm: it renders whenever we
+  // know which branch this one is measured against, and only its glyph and
+  // counts change with the state. Gating the whole line on a non-zero count —
+  // what it used to do — meant a worktree sitting exactly on its base with no
+  // upstream yet said nothing at all about where it came from, which is the
+  // state every worktree is in the moment it is created.
+  const hasBaseName = baseBranchName != null;
   const showBaseDivergence =
-    baseBranchName != null &&
-    !baseMatchesUpstream &&
+    hasBaseName &&
     ((baseAheadCount != null && baseAheadCount > 0) ||
       (baseBehindCount != null && baseBehindCount > 0));
+  // Equality has to be measured, not assumed. `BaseDivergence` keeps the base
+  // name and nulls a count it could not parse, so a missing count is "we do
+  // not know", and the resting form is the one claim we cannot make on a
+  // guess — it says the two are the same commit.
+  const baseCountsKnown = baseAheadCount != null && baseBehindCount != null;
+
+  // A branch can end up tracking its own base — `git worktree add -b topic
+  // --track origin/develop` writes `branch.topic.merge = refs/heads/develop`,
+  // and any branch may be pointed at an integration branch by hand. Then
+  // `@{u}` and the base compare ref are the same commit, both pairs carry the
+  // same number, and only one of them says what the number is counted against.
+  //
+  // Drop the unlabelled pair, never the label. The old rule did the reverse,
+  // so two worktrees on the same commit off the same base rendered as
+  // `Δ develop ↓4` and a bare `↓4` purely on how their tracking config
+  // happened to be written — and a bare `↓4` beside a labelled one reads as a
+  // different measurement, not the same one.
+  //
+  // Gated on the base pair actually being non-zero so an inter-pass race that
+  // zeroes the base counts while upstream still reports drift falls back to
+  // the upstream form rather than rendering nothing.
+  const dedupeToBase = baseMatchesUpstream === true && showBaseDivergence;
+  const showUpstreamDelta = (hasAhead || hasBehind) && !dedupeToBase;
+
+  // That same race is the one state where the resting form must not appear.
+  // `baseMatchesUpstream` says @{u} and the base compare ref are the same
+  // commit, so the two pairs are one measurement — and `↓4 ≡ develop` would
+  // have the halves contradicting each other about it. The upstream pair is
+  // the fresher of the two there (git status runs every pass; the base counts
+  // can be served from their stat-keyed cache), so it keeps the line and the
+  // equality claim stands down. Where the two refs genuinely differ,
+  // `↑3 ≡ develop` is not a contradiction and renders as it reads: three
+  // commits the remote branch has not got, none that develop has not got.
+  const showBaseResting =
+    hasBaseName &&
+    baseCountsKnown &&
+    !showBaseDivergence &&
+    !(baseMatchesUpstream === true && showUpstreamDelta);
+  const showBaseSegment = showBaseDivergence || showBaseResting;
 
   // Flash only on changes the user can actually see — track display-gated
   // values so a null→0 transition on hidden base counts doesn't flash, and
-  // a baseMatchesUpstream flip that reveals existing counts does.
-  const displayedAhead = hasAhead ? aheadCount : null;
-  const displayedBehind = hasBehind ? behindCount : null;
+  // a baseMatchesUpstream flip that moves the counts between the two forms
+  // does.
+  const displayedAhead = showUpstreamDelta && hasAhead ? aheadCount : null;
+  const displayedBehind = showUpstreamDelta && hasBehind ? behindCount : null;
   const displayedBaseAhead =
     showBaseDivergence && baseAheadCount != null && baseAheadCount > 0 ? baseAheadCount : null;
   const displayedBaseBehind =
@@ -121,30 +180,66 @@ export function UpstreamSyncBadge({
 
   if (fetchAuthFailed && hasAuthFailedSignIn) {
     return (
-      <Tooltip>
+      // autoDismiss={false}: the pill can ellipsize the base name now, so this
+      // tooltip is the only place to read it in full — a full-text reveal, which
+      // `tooltip.tsx` exempts from the 2.5s deadline meant for transient hints.
+      <Tooltip autoDismiss={false}>
         <TooltipTrigger asChild>
           <button
             type="button"
             onClick={handleSignInClick}
             data-no-dnd
             className={cn(
-              "flex items-center text-[10px] font-mono tabular-nums cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+              "flex items-center text-3xs font-mono tabular-nums cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
               containerGapClass
             )}
             data-testid="upstream-sync-indicator"
             data-fetch-auth-failed="true"
             aria-label="Forge authentication failed — click to reconnect"
           >
-            <span className="flex items-center gap-1.5 text-text-muted">
-              {hasAhead && <span>↑{aheadCount}</span>}
-              {hasBehind && <span>↓{behindCount}</span>}
-              {!hasAhead && !hasBehind && <span>—</span>}
+            {/* min-w-0: this row is a flex *item* of the button above it, so
+                its own automatic minimum size is its min-content width — the
+                whole unbroken branch name, since the label below sets
+                white-space: nowrap. Without this the row refuses to shrink and
+                the label never gets narrow enough to ellipsize. The normal
+                variant has no equivalent level: its row is a cross-axis child
+                of the card's column, where min-width: auto resolves to 0. */}
+            <span className="flex items-center gap-1.5 text-text-muted min-w-0">
+              {showUpstreamDelta && hasAhead && <span className="shrink-0">↑{aheadCount}</span>}
+              {showUpstreamDelta && hasBehind && <span className="shrink-0">↓{behindCount}</span>}
+              {showBaseSegment && (
+                <>
+                  <span className="min-w-0 truncate" data-testid="upstream-sync-base">
+                    {showBaseDivergence ? "Δ" : "≡"} {baseBranchName}
+                  </span>
+                  {displayedBaseAhead != null && (
+                    <span className="shrink-0">↑{displayedBaseAhead}</span>
+                  )}
+                  {displayedBaseBehind != null && (
+                    <span className="shrink-0">↓{displayedBaseBehind}</span>
+                  )}
+                  {hasNoUpstream && (
+                    <span className="shrink-0" data-testid="upstream-sync-unpushed">
+                      · local
+                    </span>
+                  )}
+                </>
+              )}
+              {!showUpstreamDelta && !showBaseSegment && <span>—</span>}
             </span>
           </button>
         </TooltipTrigger>
         <TooltipContent side="right" className="text-xs">
           <div>Forge authentication failed</div>
-          <div className="text-daintree-text/70 mt-0.5">Click to reconnect your code forge</div>
+          <div className="text-text-secondary mt-0.5">Click to reconnect your code forge</div>
+          {/* The pill can now ellipsize the base name, and this variant's copy
+              never said what it was. Without this line the auth state is the
+              one place a truncated name has nowhere to be read in full. */}
+          {showBaseSegment && baseBranchName && (
+            <div className="text-text-muted break-words">
+              Compared with {baseCompareRef || baseBranchName}
+            </div>
+          )}
           {lastFetchedAt != null && (
             <div className="text-text-muted">Last fetched {formatRelativeTime(lastFetchedAt)}</div>
           )}
@@ -153,14 +248,15 @@ export function UpstreamSyncBadge({
     );
   }
 
-  if (!hasAhead && !hasBehind && !showBaseDivergence) return null;
+  if (!showUpstreamDelta && !showBaseSegment) return null;
 
   return (
-    <Tooltip>
+    // Same full-text reveal as the auth-failed variant above.
+    <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <span
           className={cn(
-            "flex items-center text-[10px] font-mono tabular-nums",
+            "flex items-center text-3xs font-mono tabular-nums",
             containerGapClass,
             isFlashing && "animate-upstream-badge-flash",
             fetchNetworkFailed && "opacity-75",
@@ -172,38 +268,77 @@ export function UpstreamSyncBadge({
           data-stale={isStale ? "true" : undefined}
           onAnimationEnd={() => setIsFlashing(false)}
         >
-          {hasAhead && <span className="text-status-success">↑{aheadCount}</span>}
-          {hasBehind && <span className="text-status-warning">↓{behindCount}</span>}
-          {showBaseDivergence && (
+          {showUpstreamDelta && hasAhead && (
+            <span className="text-status-success shrink-0">↑{aheadCount}</span>
+          )}
+          {showUpstreamDelta && hasBehind && (
+            <span className="text-status-warning shrink-0">↓{behindCount}</span>
+          )}
+          {showBaseSegment && (
             <>
-              <span className="text-text-muted/60">&Delta; {baseBranchName}</span>
+              {/* `text-secondary`, not `text-muted/60`: this names the branch
+                  the counts beside it are counted against, so it is the only
+                  thing that makes them mean anything. `text-muted` has no
+                  contrast floor on the darkest palettes and the /60 halved
+                  what was left — 1.45:1 on namib, 2.06:1 on bondi, so the
+                  branch name dropped out of a line whose green +N stayed
+                  legible beside it. The line is already 11px and sits under
+                  two brighter rows; that is where its de-emphasis comes
+                  from.
+
+                  Δ means drift, so it cannot carry the resting state: a bare
+                  `Δ develop` beside a `Δ develop ↑3` would claim a divergence
+                  it does not have. ≡ says the two are the same commit, which
+                  is the whole content of the resting line. */}
+              {/* The only thing on this line allowed to shrink. Everything
+                  beside it is shrink-0, so a base branch long enough to
+                  outgrow the card ellipsizes here instead of pushing the
+                  counts and the · local marker off the right edge — they are
+                  the state the line exists to carry, and the tooltip below
+                  still names the branch in full. Glyph and name stay one text
+                  run so the ellipsis eats the name from the right. */}
+              <span
+                className="text-text-secondary min-w-0 truncate"
+                data-testid="upstream-sync-base"
+              >
+                {showBaseDivergence ? "Δ" : "≡"} {baseBranchName}
+              </span>
               {baseAheadCount != null && baseAheadCount > 0 && (
-                <span className="text-status-success">↑{baseAheadCount}</span>
+                <span className="text-status-success shrink-0">↑{baseAheadCount}</span>
               )}
               {baseBehindCount != null && baseBehindCount > 0 && (
-                <span className="text-status-warning">↓{baseBehindCount}</span>
+                <span className="text-status-warning shrink-0">↓{baseBehindCount}</span>
+              )}
+              {/* Same tier as the branch name it qualifies, so it inherits the
+                  same contrast reasoning — never text-muted. */}
+              {hasNoUpstream && (
+                <span className="text-text-secondary shrink-0" data-testid="upstream-sync-unpushed">
+                  · local
+                </span>
               )}
             </>
           )}
         </span>
       </TooltipTrigger>
       <TooltipContent side="right" className="text-xs">
-        <div>
-          {hasAhead && (
-            <span>
-              {aheadCount} commit{aheadCount !== 1 ? "s" : ""} ahead
-            </span>
-          )}
-          {hasAhead && hasBehind && <span>, </span>}
-          {hasBehind && (
-            <span>
-              {behindCount} commit{behindCount !== 1 ? "s" : ""} behind
-            </span>
-          )}
-          <span> upstream</span>
-        </div>
+        {showUpstreamDelta && (
+          <div>
+            {hasAhead && (
+              <span>
+                {aheadCount} commit{aheadCount !== 1 ? "s" : ""} ahead
+              </span>
+            )}
+            {hasAhead && hasBehind && <span>, </span>}
+            {hasBehind && (
+              <span>
+                {behindCount} commit{behindCount !== 1 ? "s" : ""} behind
+              </span>
+            )}
+            <span> upstream</span>
+          </div>
+        )}
         {showBaseDivergence && baseBranchName && (
-          <div className="text-text-muted/70">
+          <div className="text-text-muted/70 break-words">
             {baseAheadCount != null && baseAheadCount > 0 && (
               <span>
                 {baseAheadCount} ahead of {baseCompareRef || baseBranchName}
@@ -215,6 +350,14 @@ export function UpstreamSyncBadge({
               </span>
             )}
           </div>
+        )}
+        {showBaseResting && baseBranchName && (
+          <div className="text-text-muted break-words">
+            In sync with {baseCompareRef || baseBranchName}
+          </div>
+        )}
+        {hasNoUpstream && showBaseSegment && (
+          <div className="text-text-muted">No upstream branch configured</div>
         )}
         {fetchNetworkFailed && (
           <div className="text-status-warning/80" data-testid="upstream-sync-network-warning">

@@ -165,7 +165,7 @@ function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
                   { source }
                 );
               }}
-              className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-emphasis hover:text-daintree-text group-data-[highlighted]/wt-row:opacity-100"
+              className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-emphasis hover:text-text-primary group-data-[highlighted]/wt-row:opacity-100"
             >
               <PanelBottom className="h-3 w-3" />
             </span>
@@ -510,7 +510,7 @@ export function AgentButton({
                     onFocus={hover.onFocus}
                     onBlur={hover.onBlur}
                     className={cn(
-                      "toolbar-agent-button text-daintree-text relative",
+                      "toolbar-agent-button text-text-primary relative",
                       needsSetup && "opacity-70",
                       "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                     )}
@@ -602,7 +602,7 @@ export function AgentButton({
                 onFocus={hover.onFocus}
                 onBlur={hover.onBlur}
                 className={cn(
-                  "toolbar-agent-button text-daintree-text rounded-r-none border-r border-transparent relative",
+                  "toolbar-agent-button text-text-primary rounded-r-none border-r border-transparent relative",
                   showSeam && "toolbar-agent-split-seam",
                   needsSetup && "opacity-70",
                   "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
@@ -650,7 +650,7 @@ export function AgentButton({
                     data-toolbar-item={dataToolbarItem}
                     onPointerEnter={clearFocusRestoreSuppression}
                     className={cn(
-                      "toolbar-agent-button text-daintree-text rounded-l-none",
+                      "toolbar-agent-button text-text-primary rounded-l-none",
                       "h-8 w-6 p-0 flex items-center justify-center",
                       "aria-disabled:opacity-60 aria-disabled:cursor-not-allowed"
                     )}

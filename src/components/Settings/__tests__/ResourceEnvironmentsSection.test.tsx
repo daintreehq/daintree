@@ -112,7 +112,9 @@ describe("ResourceEnvironmentsSection", () => {
       />
     );
 
-    const selector = screen.getByLabelText("Select environment");
+    // The rail's visible label is "Environment", so the select's own name has to
+    // match it rather than read "Select environment" (WCAG 2.5.3).
+    const selector = screen.getByLabelText("Environment");
     expect(selector).toBeTruthy();
 
     const options = selector.querySelectorAll("option");
@@ -138,6 +140,16 @@ describe("ResourceEnvironmentsSection", () => {
     expect(screen.getByText(/replaced at runtime in all commands/i)).toBeTruthy();
     expect(screen.getByText("{branch}")).toBeTruthy();
     expect(screen.getByText("{worktree_name}")).toBeTruthy();
+
+    // Token and description are ranked by weight and colour, so they have to be
+    // separately styleable rather than one dash-joined run. Nothing may sit
+    // between them, and the detail keeps the leading space that stops the pair
+    // announcing as "{branch}branch name".
+    const token = screen.getByText("{branch}");
+    const description = screen.getByText("branch name");
+    expect(description.previousSibling).toBe(token);
+    expect(description.textContent).toMatch(/^\s/);
+    expect(token.parentElement?.textContent).toBe(`${token.textContent}${description.textContent}`);
   });
 
   it("renders add environment button when no environments exist", () => {
@@ -169,7 +181,7 @@ describe("ResourceEnvironmentsSection", () => {
       />
     );
 
-    expect(screen.getByText("Default Worktree Mode")).toBeTruthy();
+    expect(screen.getByText("Default worktree mode")).toBeTruthy();
     expect(screen.getByText("Default mode when creating new worktrees")).toBeTruthy();
 
     const localRadio = screen.getByRole("radio", { name: "Local" });

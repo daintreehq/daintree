@@ -74,10 +74,11 @@ export function NonGitFolderDialog({
 
       <AppDialog.Body className="space-y-3">
         <PathCaption path={directoryPath} />
-        <p className="text-sm text-daintree-text/70">
+        <p className="text-sm text-text-secondary">
           This folder isn&rsquo;t a git repository. Open it as-is and terminals, agents, recipes,
           and the file browser all work — worktrees, review, and diffs stay unavailable until it
-          becomes a repository. Nothing in the folder is changed either way.
+          becomes a repository, and nothing in the folder is touched. Setting up a repository writes
+          into it: you&rsquo;ll see exactly what before it runs.
         </p>
       </AppDialog.Body>
 
@@ -85,7 +86,9 @@ export function NonGitFolderDialog({
         <Button variant="outline" onClick={() => setStep("initialize")}>
           Initialize repository
         </Button>
-        <Button onClick={onOpenWithoutGit}>Open without git</Button>
+        <Button variant="contrast" onClick={onOpenWithoutGit}>
+          Open without git
+        </Button>
       </AppDialog.Footer>
     </AppDialog>
   );

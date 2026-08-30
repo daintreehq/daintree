@@ -26,7 +26,7 @@ export function ContentGridMaximizedSingle({
       data-macro-focus={ctx.isMacroFocused ? "true" : undefined}
       onKeyDown={ctx.handleGridRegionKeyDown}
       className={cn(
-        "h-full flex flex-col bg-daintree-bg outline-hidden",
+        "h-full flex flex-col bg-surface-canvas outline-hidden",
         "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-border-default data-[macro-focus=true]:ring-inset",
         className
       )}

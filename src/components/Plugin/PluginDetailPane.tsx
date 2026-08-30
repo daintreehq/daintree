@@ -40,7 +40,7 @@ export function pluginLabel(plugin: LoadedPluginInfo): string {
 }
 
 const BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide";
+  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-daintree-border/50 text-text-secondary uppercase tracking-wide";
 
 /**
  * Declared capabilities in the order {@link BUILT_IN_PLUGIN_CAPABILITIES} defines
@@ -74,13 +74,13 @@ function PluginCapabilityList({
 
   return (
     <div className="space-y-2">
-      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
+      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
         Permissions
       </h4>
       {plugin.pluginDanger === "confirm" && (
         <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
           <AlertTriangle className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5" />
-          <p className="text-[11px] text-status-warning break-words">
+          <p className="text-2xs text-status-warning break-words">
             Requests sensitive permissions — review before enabling
           </p>
         </div>
@@ -115,19 +115,17 @@ function PluginCapabilityList({
 function PluginContributedCommands({ commands }: { commands: PluginActionContribution[] }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
-        Commands
-      </h4>
+      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Commands</h4>
       <ul className="space-y-2">
         {commands.map((command) => (
           <li key={command.id} className="text-xs">
-            <div className="text-daintree-text/80">{command.title}</div>
+            <div className="text-text-primary">{command.title}</div>
             {command.description && (
-              <div className="text-[11px] text-daintree-text/50 mt-0.5 break-words">
+              <div className="text-2xs text-text-secondary mt-0.5 break-words">
                 {command.description}
               </div>
             )}
-            <div className="text-[11px] text-daintree-text/40 mt-0.5">
+            <div className="text-2xs text-daintree-text/40 mt-0.5">
               {command.kind === "query"
                 ? "Available to agents and automation"
                 : "Run it from the command palette"}
@@ -148,14 +146,12 @@ function PluginContributedCommands({ commands }: { commands: PluginActionContrib
 function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
-        Panels
-      </h4>
+      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Panels</h4>
       <ul className="space-y-2">
         {panels.map((panel) => (
           <li key={panel.id} className="text-xs">
-            <div className="text-daintree-text/80">{panel.name}</div>
-            <div className="text-[11px] text-daintree-text/40 mt-0.5">
+            <div className="text-text-primary">{panel.name}</div>
+            <div className="text-2xs text-text-secondary mt-0.5">
               {panel.showInPalette === false
                 ? "Opened by the plugin"
                 : "Open it from the new-panel menu"}
@@ -179,7 +175,7 @@ function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
 function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
+      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
         Contributors
       </h4>
       <ul className="space-y-2">
@@ -187,9 +183,9 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
           const { name, url, email, role } = author;
           return (
             <li key={`${name}-${index}`} className="text-xs">
-              <div className="text-daintree-text/80">
+              <div className="text-text-primary">
                 {name}
-                {role && <span className="text-[11px] text-daintree-text/40"> · {role}</span>}
+                {role && <span className="text-2xs text-text-secondary"> · {role}</span>}
               </div>
               {(url || email) && (
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
@@ -197,7 +193,7 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
                     <button
                       type="button"
                       onClick={() => void systemClient.openExternal(url)}
-                      className="text-[11px] text-daintree-text/50 hover:text-daintree-text/80 hover:underline break-all"
+                      className="text-2xs text-text-secondary hover:text-text-primary hover:underline break-all"
                     >
                       {url}
                     </button>
@@ -206,7 +202,7 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
                     <button
                       type="button"
                       onClick={() => void systemClient.openExternal(`mailto:${email}`)}
-                      className="text-[11px] text-daintree-text/50 hover:text-daintree-text/80 hover:underline break-all"
+                      className="text-2xs text-text-secondary hover:text-text-primary hover:underline break-all"
                     >
                       {email}
                     </button>
@@ -315,20 +311,20 @@ export function PluginDetailPane({
   }, [currentTab, activeTab]);
 
   return (
-    <div className="text-daintree-text">
+    <div className="text-text-primary">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3.5 min-w-0">
           <PluginIconTile manifest={plugin.manifest} size="lg" dimmed={plugin.disabled === true} />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
               <h3 className="text-base font-medium truncate">{label}</h3>
-              <span className="text-xs font-normal text-daintree-text/40">
+              <span className="text-xs font-normal text-text-secondary">
                 v{plugin.manifest.version}
               </span>
               <span className={BADGE_CLASS}>{categoryLabel}</span>
               <span className={BADGE_CLASS}>{sourceLabel}</span>
               {plugin.blocklisted === true && (
-                <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-status-danger uppercase tracking-wide">
+                <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
                   <AlertCircle className="w-3 h-3" aria-hidden="true" />
                   Blocked
                 </span>
@@ -338,21 +334,21 @@ export function PluginDetailPane({
               )}
               {plugin.devMode && <span className={BADGE_CLASS}>Dev</span>}
               {restartRequired && (
-                <span className={`${BADGE_CLASS} text-daintree-text/50`}>Restart required</span>
+                <span className={`${BADGE_CLASS} text-text-secondary`}>Restart required</span>
               )}
             </div>
             {plugin.manifest.tagline && (
-              <p className="text-sm text-daintree-text/60 mt-1">{plugin.manifest.tagline}</p>
+              <p className="text-sm text-text-secondary mt-1">{plugin.manifest.tagline}</p>
             )}
             {!plugin.isBuiltin && plugin.installedAt > 0 && (
-              <div className="text-[11px] text-daintree-text/40 mt-1">
+              <div className="text-2xs text-daintree-text/40 mt-1">
                 {plugin.updatedAt
                   ? `Updated ${formatRelativeTime(plugin.updatedAt)}`
                   : `Installed ${formatRelativeTime(plugin.installedAt)}`}
               </div>
             )}
             {upToDate && (
-              <div className="text-[11px] text-daintree-text/50 mt-1" role="status">
+              <div className="text-2xs text-text-secondary mt-1" role="status">
                 Already up to date
               </div>
             )}
@@ -428,11 +424,9 @@ export function PluginDetailPane({
       {currentTab === "overview" && (
         <div className="space-y-4">
           {plugin.manifest.description ? (
-            <p className="text-xs text-daintree-text/70 select-text">
-              {plugin.manifest.description}
-            </p>
+            <p className="text-xs text-text-secondary select-text">{plugin.manifest.description}</p>
           ) : (
-            <p className="text-xs text-daintree-text/40">No description provided.</p>
+            <p className="text-xs text-text-secondary">No description provided.</p>
           )}
 
           {commands.length > 0 && <PluginContributedCommands commands={commands} />}
@@ -446,7 +440,7 @@ export function PluginDetailPane({
           {plugin.blocklisted === true && (
             <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
               <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-              <p className="text-[11px] text-status-danger break-words">
+              <p className="text-2xs text-status-danger break-words">
                 Blocked from loading:{" "}
                 {plugin.blocklistReason ?? "flagged by the Daintree blocklist"}
               </p>
@@ -456,7 +450,7 @@ export function PluginDetailPane({
           {plugin.loadError && (
             <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
               <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-              <p className="text-[11px] text-status-danger break-words">
+              <p className="text-2xs text-status-danger break-words">
                 Failed to load: {plugin.loadError.message}
               </p>
             </div>

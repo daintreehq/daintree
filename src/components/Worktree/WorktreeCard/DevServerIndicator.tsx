@@ -44,7 +44,7 @@ export function DevServerIndicator({ session }: DevServerIndicatorProps) {
             aria-label={url ? `Dev server running at ${url}` : "Dev server running"}
             className="inline-flex items-center gap-1 text-xs text-text-muted shrink-0"
           >
-            <Globe className="w-3 h-3 shrink-0 text-status-success" aria-hidden="true" />
+            <Globe className="w-3 h-3 shrink-0 text-activity-working" aria-hidden="true" />
             {port && <span className="tabular-nums">:{port}</span>}
           </span>
         </TooltipTrigger>

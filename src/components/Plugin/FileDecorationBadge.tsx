@@ -36,8 +36,8 @@ export function FileDecorationBadge({ decoration, className }: FileDecorationBad
   // accent-restraint rule).
   const shared = cn(
     "shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full",
-    "text-[10px] font-semibold tabular-nums",
-    "bg-overlay-subtle text-daintree-text/80",
+    "text-3xs font-semibold tabular-nums",
+    "bg-overlay-subtle text-text-primary",
     decoration?.color,
     className
   );
@@ -57,7 +57,7 @@ export function FileDecorationBadge({ decoration, className }: FileDecorationBad
         className={cn(
           shared,
           "hover:bg-tint/10 transition-colors cursor-pointer",
-          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
+          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary"
         )}
       >
         {badge}

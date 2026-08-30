@@ -108,7 +108,7 @@ function createTooltipContent(command: SlashCommand): HTMLElement {
   container.className = "max-w-[260px]";
 
   const description = document.createElement("p");
-  description.className = "text-[11px] text-text-primary/80 leading-snug";
+  description.className = "text-2xs text-text-primary/80 leading-snug";
   description.textContent = command.description ?? command.label ?? "";
   container.appendChild(description);
 
@@ -133,7 +133,7 @@ export function createSlashTooltip(commandMap: Map<string, SlashCommand>) {
         dom.className = "px-2 py-1 text-xs";
         dom.style.cssText = `
           background: color-mix(in oklab, var(--theme-surface-canvas) 95%, transparent);
-          border-radius: 4px;
+          border-radius: var(--radius-xs);
           border: 1px solid var(--theme-border-subtle);
           box-shadow: 0 2px 8px var(--theme-scrim-soft);
         `;

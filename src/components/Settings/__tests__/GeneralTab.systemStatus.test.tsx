@@ -133,8 +133,9 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     expect(screen.queryByText("Codex")).toBeNull();
     expect(screen.queryByText("Opencode")).toBeNull();
     expect(screen.queryByText("Cursor")).toBeNull();
-    // Both visible rows render the "Ready" badge
-    expect(screen.getAllByText("Ready")).toHaveLength(2);
+    // Ready is the expected state, so neither row is labelled at all
+    expect(screen.queryByText("Ready")).toBeNull();
+    expect(screen.queryByText("Needs setup")).toBeNull();
   });
 
   it("shows installed agents regardless of pin state (issue #5117)", async () => {
@@ -291,7 +292,66 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     });
 
     expect(screen.getByText("Needs setup")).toBeTruthy();
-    expect(screen.getByText("Ready")).toBeTruthy();
+    // Only the agent needing attention is labelled; the ready one stays quiet.
+    expect(screen.queryByText("Ready")).toBeNull();
+  });
+
+  // Green ambient chrome is gone (issue #12002), so colour can no longer be
+  // what separates these rows — each attention state has to carry its own
+  // glyph, and the expected state has to carry nothing at all.
+  it("gives every attention state its own glyph and leaves ready rows bare", async () => {
+    setupDispatchMock(
+      {
+        claude: "blocked",
+        gemini: "unauthenticated",
+        codex: "installed",
+        opencode: "ready",
+        cursor: "missing",
+      },
+      {
+        agents: {
+          claude: { pinned: true },
+          gemini: { pinned: true },
+          codex: { pinned: true },
+          opencode: { pinned: true },
+        },
+      } as unknown as AgentSettings
+    );
+
+    await renderGeneralTab();
+
+    const rowFor = (name: string) =>
+      screen.getByLabelText(new RegExp(`^Go to ${name} agent settings\\b`));
+    const attention = [
+      { name: "Claude", label: "Blocked" },
+      { name: "Gemini", label: "Login required" },
+      { name: "Codex", label: "Needs setup" },
+    ];
+
+    await waitFor(() => {
+      expect(rowFor("Claude").textContent).toContain("Blocked");
+    });
+
+    // Each attention state must own both its label and a glyph nothing else uses.
+    const glyphs = attention.map(({ name, label }) => {
+      const row = rowFor(name);
+      expect(row.textContent).toContain(label);
+      // The row's aria-label overrides its inner text for assistive tech, so
+      // the state has to be repeated there or it is announced as nothing.
+      expect(row.getAttribute("aria-label")).toContain(label);
+      const svg = row.querySelector("svg");
+      expect(svg).toBeTruthy();
+      return svg!.innerHTML;
+    });
+    expect(new Set(glyphs).size).toBe(3);
+
+    const readyRow = rowFor("Opencode");
+    expect(readyRow.querySelector("svg")).toBeNull();
+    for (const { label } of attention) {
+      expect(readyRow.textContent).not.toContain(label);
+      expect(readyRow.getAttribute("aria-label")).not.toContain(label);
+    }
+    expect(readyRow.textContent).not.toContain("Ready");
   });
 
   it("renders empty-state CTA when no agents installed", async () => {

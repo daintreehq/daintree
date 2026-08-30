@@ -148,7 +148,7 @@ function FileChangeRow({
               aria-label={`Open ${change.relativePath}`}
               className={cn(
                 "group/filerow flex items-center text-xs font-mono hover:bg-tint/5 rounded px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-daintree-accent",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary",
                 // The row whose menu is open lifts to a neutral raised tier
                 // so it reads as "the menu targets this row" — these rows
                 // are ~20px and densely stacked, and the menu otherwise
@@ -182,12 +182,12 @@ function FileChangeRow({
                     {displayDir}/
                   </span>
                 )}
-                <span className="text-daintree-text group-hover/filerow:text-daintree-text font-medium truncate min-w-0">
+                <span className="text-text-primary group-hover/filerow:text-text-primary font-medium truncate min-w-0">
                   {base}
                 </span>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0 text-[11px]">
+              <div className="flex items-center gap-2 shrink-0 text-2xs">
                 {(change.insertions ?? 0) > 0 && (
                   <span className="text-status-success/80">+{change.insertions}</span>
                 )}
@@ -424,10 +424,20 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
           >
             {groupedChanges.map((group) => (
               <div key={group.dir}>
-                <div className="flex items-center gap-1.5 text-[11px] text-daintree-text/40 mb-1">
+                {/* `text-secondary` rather than the `/40` alpha this used to
+                    carry: the directory is what tells you WHERE a changed file
+                    lives, and at 40% it measured 2.40:1 on bondi and 3.07:1 on
+                    namib — the least legible part of the tree it exists to
+                    organise. The 11px size, the mono face and the file rows'
+                    indent under it already carry the hierarchy; the tone does
+                    not have to as well. The count beside it rides the same
+                    token for the same reason — how many files a folder holds
+                    is information, and `text-muted` has no contrast floor on
+                    the dark palettes (2.22:1 on namib) to carry it. */}
+                <div className="flex items-center gap-1.5 text-2xs text-text-secondary mb-1">
                   <Folder className="w-3 h-3 shrink-0" />
                   <span className="min-w-0 truncate font-mono">{group.displayDir}</span>
-                  <span className="shrink-0 text-daintree-text/30">({group.files.length})</span>
+                  <span className="shrink-0 text-text-secondary">({group.files.length})</span>
                 </div>
                 <div className="pl-4 flex flex-col gap-0.5">
                   {group.files.map((file) => {
@@ -451,7 +461,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
               </div>
             ))}
             {remainingCount > 0 && (
-              <div className="text-[11px] text-daintree-text/60 pl-4 pt-1">
+              <div className="text-2xs text-text-secondary pl-4 pt-1">
                 ...and {remainingCount} more
                 {remainingFiles.length > 0 && (
                   <span className="ml-1 opacity-75">
@@ -497,7 +507,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
           })}
 
           {remainingCount > 0 && (
-            <div className="text-[11px] text-daintree-text/60 pl-5 pt-1">
+            <div className="text-2xs text-text-secondary pl-5 pt-1">
               ...and {remainingCount} more
               {remainingFiles.length > 0 && (
                 <span className="ml-1 opacity-75">

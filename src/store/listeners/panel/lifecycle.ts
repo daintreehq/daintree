@@ -427,8 +427,8 @@ export function setupLifecycleListeners(): DisposableStore {
         // stream live (Finding 1), so they keep draining and self-resume; a
         // frozen/LRU-evicted view stays paused only until it returns and drains —
         // the documented experiment scope. The user-initiated force-resume action
-        // remains the deliberate all-token escape hatch. See
-        // docs/HIBERNATION-REMOVAL-EXPERIMENT.md.
+        // remains the deliberate all-token escape hatch. Landed in `eb9cd64a7`
+        // (#10807).
       })
     )
   );

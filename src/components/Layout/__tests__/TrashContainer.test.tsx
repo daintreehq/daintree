@@ -259,7 +259,7 @@ describe("TrashContainer", () => {
     expect(ghost.className).toContain("bg-overlay-soft");
     expect(ghost.className).toContain("ring-border-default");
     expect(ghost.className).toContain("cursor-copy");
-    expect(ghost.className).not.toContain("daintree-accent");
+    expect(ghost.className).not.toMatch(/(?:daintree-accent|accent-primary)(?![\w-])/);
   });
 
   it("applies armed isOver classes on the real pill when dragged onto", () => {
@@ -270,7 +270,7 @@ describe("TrashContainer", () => {
     expect(pill.className).toContain("bg-overlay-soft");
     expect(pill.className).toContain("ring-border-default");
     expect(pill.className).toContain("cursor-copy");
-    expect(pill.className).not.toContain("daintree-accent");
+    expect(pill.className).not.toMatch(/(?:daintree-accent|accent-primary)(?![\w-])/);
   });
 
   it("does not render ghost pill during worktree-sort drags", () => {

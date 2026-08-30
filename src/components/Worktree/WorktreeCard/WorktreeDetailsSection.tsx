@@ -24,6 +24,8 @@ import {
 } from "lucide-react";
 import { actionService } from "@/services/ActionService";
 import type { ComputedSubtitle, WorktreeReviewState } from "./hooks/useWorktreeStatus";
+import { SECTION_LABEL, CARD_DENSITY } from "./sectionChrome";
+import { resourceLifecycleVisibility } from "../utils/resourceLifecycle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ContextMenu,
@@ -36,6 +38,19 @@ import {
 export interface WorktreeDetailsSectionProps {
   worktree: WorktreeState;
   homeDir?: string;
+  /**
+   * Which density this card is drawn at — see `CARD_DENSITY` in
+   * `./sectionChrome`. Both variants are now the same construction: a flat
+   * summary row on the card surface, and one well when the section is opened.
+   *
+   * The grid used to keep a bordered, filled well in both states. That was
+   * defensible while the reasoning was "the sidebar row is already a
+   * container, the grid card is not" — but the grid card IS a container, and
+   * a second bordered plane inside it (with a third for the note and a fourth
+   * for the file list) is the card-in-card that Carbon and Material 3 both
+   * name as the failure mode for this component.
+   */
+  variant?: "sidebar" | "grid";
   isExpanded: boolean;
   hasChanges: boolean;
   computedSubtitle: ComputedSubtitle;
@@ -70,6 +85,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const {
     worktree,
     homeDir,
+    variant = "sidebar",
     isExpanded,
     hasChanges,
     computedSubtitle,
@@ -144,8 +160,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   // push — so the opener stays visible; only the label shifts to match.
   const isUnpushedClean = reviewState === "unpushed-clean" && !hasChanges;
   const showReviewHubButton = !!onOpenReviewHub && (hasChanges || isUnpushedClean);
-  const reviewHubButtonLabel = isUnpushedClean ? "Review & Push" : "Review & Commit";
-  const rightButtonGroupShown = showReviewHubButton;
+  const reviewHubButtonLabel = isUnpushedClean ? "Review & push" : "Review & commit";
 
   const lifecycleState = worktree.lifecycleStatus?.state;
   const lifecycleFailed = lifecycleState === "failed" || lifecycleState === "timed-out";
@@ -170,54 +185,108 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     }
   };
 
-  const rsLower = resourceStatus?.toLowerCase();
-  const showResourceResume =
-    hasResourceConfig &&
-    (!rsLower ||
-      rsLower === "paused" ||
-      rsLower === "stopped" ||
-      rsLower === "unknown" ||
-      rsLower === "terminated" ||
-      rsLower === "down");
-  const showResourcePause = hasResourceConfig && (rsLower === "running" || rsLower === "starting");
-  const showResourceConnect = hasResourceConfig && !!onResourceConnect && rsLower === "running";
+  // Same rule the worktree menu's Runtime ▸ Environment section applies, so the
+  // inline controls and the menu can never disagree about whether this
+  // environment is resumable or pausable.
+  const lifecycle = resourceLifecycleVisibility(resourceStatus);
+  const showResourceResume = hasResourceConfig && lifecycle.showResume;
+  const showResourcePause = hasResourceConfig && lifecycle.showPause;
+  const showResourceConnect = hasResourceConfig && !!onResourceConnect && lifecycle.showConnect;
+
+  const isSidebar = variant === "sidebar";
+  const density = CARD_DENSITY[isSidebar ? "sidebar" : "grid"];
 
   return (
     <>
       <div
         id={detailsId}
-        className="mt-2 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset p-3"
+        className={cn(
+          // Both variants now: expanded Details is a well, exactly like
+          // sessions below it — once it has a body of its own to hold, it
+          // needs the contour that says the body belongs to it. Collapsed it
+          // is a single row, and a well around one row is a box around
+          // nothing.
+          //
+          // The grid used to keep the well in BOTH states, plus a rule under
+          // its own trigger. Stacked against the sessions well directly below
+          // it, that gave the card two identical bordered boxes and nothing
+          // saying which was git state and which was running work. The card is
+          // already the container; one closed contour inside it is the budget.
+          isExpanded ? density.well : isSidebar && "border border-transparent",
+          // The summary row must not move when it is clicked. The well brings
+          // its own top margin (6px sidebar, 8px grid) and, in the sidebar, a
+          // 1px border, so opening the section used to drop the line 3px in
+          // the sidebar and 2px in the grid — a visible twitch on the one
+          // element the click is aimed at.
+          //
+          // So the margin is pinned to the collapsed value in both states
+          // (it wins over the well's via `cn`'s tailwind-merge), and the
+          // border is reserved as transparent when it isn't drawn. Collapsed
+          // is the value to keep: the metadata cluster above is spaced
+          // against this row's 4px specifically — see the `pt-2` note in
+          // `WorktreeCard.tsx`. Reserving the border also puts the collapsed
+          // row's text on the same x as the sessions row below it, which
+          // always sits inside a well.
+          isSidebar ? "mt-1" : "mt-1.5"
+        )}
       >
         {isExpanded ? (
-          <div className="-m-3">
+          <div>
             <button
               onClick={onToggleExpand}
               aria-expanded={true}
               aria-controls={detailsPanelId}
-              className="worktree-section-button flex w-full items-center justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-2.5 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+              className={cn(
+                // Leading chevron, no fill, no rule under it: the trigger has
+                // to stay attached to the body it just revealed. A divider
+                // there cuts the two apart and they read as separate
+                // components.
+                "transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
+                density.row,
+                "gap-1.5"
+              )}
               id={`${detailsId}-button`}
             >
+              <ChevronRight className="h-3 w-3 shrink-0 rotate-90 text-text-secondary" />
               {isBeingDeleted && !deleteError ? (
-                <span
-                  className="flex items-center gap-1.5 text-xs font-medium text-text-secondary"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <Spinner size="xs" className="shrink-0" />
-                  <span>Deleting…</span>
+                <span className={SECTION_LABEL} role="status" aria-live="polite">
+                  <span className="flex items-center gap-1.5">
+                    <Spinner size="xs" className="shrink-0" />
+                    <span>Deleting…</span>
+                  </span>
                 </span>
               ) : (
-                <span className="text-xs font-medium text-text-muted">Details</span>
+                <span className={SECTION_LABEL}>Details</span>
               )}
-              <ChevronRight className="h-3 w-3 rotate-90 text-text-muted" />
             </button>
             <div
               id={detailsPanelId}
               role="region"
               aria-labelledby={`${detailsId}-button`}
-              className="p-3"
+              // Inside the well now, so it owns the well's padding. The
+              // trigger above it supplies the top inset.
+              className={cn(
+                isSidebar
+                  ? "px-2.5 pb-2"
+                  : // The grid caps the opened panel and scrolls inside it.
+                    // Grid rows share a height, so an unbounded panel is not
+                    // only this card's problem: one card expanded to 460px
+                    // took its three row-mates with it and left 250px of
+                    // nothing in each. Bounding it is the standard correction
+                    // for variable-height cards in a grid, and 208px still
+                    // shows the note plus the first several changed files.
+                    //
+                    // It does not fully solve the row: `items-stretch` still
+                    // propagates whatever height the open card ends up with,
+                    // so its row-mates grow with it. Moving Details out of
+                    // flow entirely — a side inspector or an anchored overlay
+                    // — is the only thing that would, and that is a change to
+                    // what the disclosure IS rather than to how it looks.
+                    "max-h-52 overflow-y-auto px-3 pb-2.5"
+              )}
             >
               <WorktreeDetails
+                variant={variant}
                 worktree={worktree}
                 homeDir={homeDir}
                 effectiveNote={effectiveNote}
@@ -237,15 +306,26 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
             </div>
           </div>
         ) : (
-          <div className="-m-3 flex flex-col">
+          <div className="flex flex-col">
             <div className="flex items-stretch">
               <div
                 onClick={onToggleExpand}
                 className={cn(
-                  "worktree-section-button relative flex min-w-0 flex-1 items-center justify-between px-3 py-2.5 text-left transition-colors",
-                  rightButtonGroupShown
-                    ? "rounded-l-[var(--radius-lg)]"
-                    : "rounded-[var(--radius-lg)]"
+                  "worktree-section-button relative flex min-w-0 flex-1 items-center justify-between text-left transition-colors",
+                  // Sidebar: a flat row on the card surface with a hover
+                  // backplate, not a permanent bordered well. Same hit area,
+                  // same content, one less container.
+                  // Shares the density's row box (it cannot use the row class
+                  // itself — this row is a flex-1 sibling of the right button
+                  // group, not a full-width row). The old -ml-1.5 chip put
+                  // this line's chevron 16px left of the session row's
+                  // directly beneath it.
+                  //
+                  // The grid used to spell this `px-3 py-2.5` inside a filled,
+                  // bordered well, which put its text 9px left of the card
+                  // title above it and gave a single line of metadata the
+                  // weight of a container.
+                  density.rowBox
                 )}
               >
                 <button
@@ -255,12 +335,17 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   id={`${detailsId}-button`}
                   aria-label="Show details"
                   className={cn(
-                    "absolute inset-0",
-                    rightButtonGroupShown
-                      ? "rounded-l-[var(--radius-lg)]"
-                      : "rounded-[var(--radius-lg)]",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+                    "absolute inset-0 rounded-[var(--radius-lg)]",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                   )}
+                />
+                {/* The closed half of the same disclosure vocabulary the
+                    expanded state uses. Flattening removed the well that used
+                    to say "this is a thing you open", so without a chevron the
+                    resting row is just a line of metadata. */}
+                <ChevronRight
+                  className="pointer-events-none relative z-10 mr-1.5 h-3 w-3 shrink-0 text-text-secondary"
+                  aria-hidden="true"
                 />
                 <span className="relative z-10 text-xs truncate min-w-0 flex-1 pointer-events-none">
                   {isBeingDeleted && !deleteError ? (
@@ -276,7 +361,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     <span className="flex items-center gap-1.5 text-text-secondary">
                       <span
                         aria-hidden="true"
-                        className="inline-block w-2 h-2 rounded-full bg-text-secondary animate-pulse-immediate shrink-0"
+                        className="status-mark inline-block w-2 h-2 rounded-full bg-text-secondary animate-pulse-immediate shrink-0"
                       />
                       <span className="truncate">{lifecycleLabel}</span>
                     </span>
@@ -337,19 +422,19 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       {showResourceResume && onResourceResume && (
                         <ContextMenuItem onClick={onResourceResume}>
                           <Play className="w-3.5 h-3.5 mr-2" />
-                          Resume
+                          Resume resource
                         </ContextMenuItem>
                       )}
                       {showResourcePause && onResourcePause && (
                         <ContextMenuItem onClick={onResourcePause}>
                           <Square className="w-3.5 h-3.5 mr-2" />
-                          Pause
+                          Pause resource
                         </ContextMenuItem>
                       )}
                       {showResourceConnect && (
                         <ContextMenuItem onClick={onResourceConnect}>
                           <Plug className="w-3.5 h-3.5 mr-2" />
-                          Connect
+                          Connect to resource
                         </ContextMenuItem>
                       )}
                       {(showResourceResume || showResourcePause || showResourceConnect) &&
@@ -357,7 +442,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       {onResourceStatus && (
                         <ContextMenuItem onClick={onResourceStatus}>
                           <Activity className="w-3.5 h-3.5 mr-2" />
-                          Check Status
+                          Check status
                         </ContextMenuItem>
                       )}
                       {onResourceTeardown && (
@@ -368,7 +453,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                             className="text-status-error"
                           >
                             <Trash2 className="w-3.5 h-3.5 mr-2" />
-                            Teardown
+                            Tear down resource
                           </ContextMenuItem>
                         </>
                       )}
@@ -387,13 +472,13 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 e.stopPropagation();
                                 onResourceResume();
                               }}
-                              className="shrink-0 p-1 rounded transition-colors text-status-success/70 hover:text-status-success hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                              aria-label="Resume Resource"
+                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-success hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              aria-label="Resume resource"
                             >
                               <Play className="w-3 h-3" />
                             </button>
                           </TooltipTrigger>
-                          <TooltipContent side="bottom">Resume Resource</TooltipContent>
+                          <TooltipContent side="bottom">Resume resource</TooltipContent>
                         </Tooltip>
                       )}
                       {showResourcePause && onResourcePause && (
@@ -404,13 +489,13 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 e.stopPropagation();
                                 onResourcePause();
                               }}
-                              className="shrink-0 p-1 rounded transition-colors text-status-error/70 hover:text-status-error hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                              aria-label="Pause Resource"
+                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-error hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              aria-label="Pause resource"
                             >
                               <Square className="w-3 h-3" />
                             </button>
                           </TooltipTrigger>
-                          <TooltipContent side="bottom">Pause Resource</TooltipContent>
+                          <TooltipContent side="bottom">Pause resource</TooltipContent>
                         </Tooltip>
                       )}
                       {showResourceConnect && (
@@ -421,13 +506,13 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 e.stopPropagation();
                                 onResourceConnect!();
                               }}
-                              className="shrink-0 p-1 rounded transition-colors text-status-info/70 hover:text-status-info hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                              aria-label="Connect to Resource"
+                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-info hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              aria-label="Connect to resource"
                             >
                               <Plug className="w-3 h-3" />
                             </button>
                           </TooltipTrigger>
-                          <TooltipContent side="bottom">Connect to Resource</TooltipContent>
+                          <TooltipContent side="bottom">Connect to resource</TooltipContent>
                         </Tooltip>
                       )}
                     </span>
@@ -448,10 +533,19 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     <button
                       onClick={onOpenReviewHub}
                       className={cn(
-                        "shrink-0 border-l border-border-default px-2 py-1 transition-colors",
-                        "text-[var(--color-state-active)]/70 hover:bg-[var(--color-state-active)]/10 hover:text-[var(--color-state-active)]",
-                        "rounded-r-[var(--radius-lg)]",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+                        "shrink-0 transition-colors",
+                        "text-[var(--color-state-active)] hover:bg-[var(--color-state-active)]/10",
+                        // Both variants: a trailing icon button in the same
+                        // row. The fenced right segment the grid used to draw
+                        // — a left border plus a right-rounded cap — made one
+                        // summary read as a split pill whose second half was
+                        // an unlabelled glyph nobody could name.
+                        //
+                        // `min-h-6 min-w-6` is the 24px target floor
+                        // (WCAG 2.2 SC 2.5.8): a 14px glyph in `px-1.5 py-1`
+                        // is 26x22, which fails on the short axis.
+                        "ml-0.5 flex min-h-6 min-w-6 items-center justify-center rounded-[var(--radius-md)] px-1.5",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                       )}
                       aria-label={`Open ${reviewHubButtonLabel}`}
                     >
@@ -464,7 +558,16 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
             </div>
 
             {lifecycleFailed && (
-              <div className="flex flex-col gap-2 border-t border-border-default px-3 py-2">
+              <div
+                className={cn(
+                  // No rule above it in either variant: this block follows
+                  // the collapsed summary row on the card's own surface, and
+                  // a full-width hairline there reads as another section
+                  // boundary rather than as this row's own continuation.
+                  "flex flex-col gap-2 py-1",
+                  isSidebar ? "mt-1" : "mt-1 pl-1.5 pr-2.5"
+                )}
+              >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs text-text-muted truncate">
                     Setup didn't finish. Re-run when you're ready.
@@ -474,10 +577,10 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     onClick={handleRetrySetup}
                     disabled={isRetryingSetup}
                     className={cn(
-                      "shrink-0 inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors",
+                      "shrink-0 inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2 py-1 text-xs font-medium transition-colors",
                       "text-status-error hover:bg-status-error/10",
                       "disabled:opacity-50 disabled:cursor-not-allowed",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                     )}
                     aria-label="Retry setup"
                   >
@@ -491,7 +594,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       <ChevronDown className="w-3 h-3" aria-hidden="true" />
                       Show details
                     </summary>
-                    <pre className="mt-1.5 max-h-32 overflow-auto rounded bg-status-error/5 p-2 font-mono text-[11px] text-text-secondary whitespace-pre-wrap break-all select-text">
+                    <pre className="mt-1.5 max-h-32 overflow-auto rounded-[var(--radius-md)] bg-status-error/5 p-2 font-mono text-2xs text-text-secondary whitespace-pre-wrap break-all select-text">
                       {[lifecycleError, lifecycleOutput].filter(Boolean).join("\n\n")}
                     </pre>
                   </details>
@@ -522,12 +625,33 @@ export function WorktreeDeleteErrorBanner({
   onRetry,
   onDismiss,
 }: WorktreeDeleteErrorBannerProps) {
+  // The card root selects the worktree on any click that reaches it, and
+  // `handleCardClick` has no interactive-target guard — the card's convention
+  // (documented on its `handleDoubleClick`, #10319) is that interactive
+  // children stop click propagation themselves, as `handleRetrySetup` above
+  // does. Without this, dismissing an error on a background card would also
+  // switch the active worktree (#12087).
+  const handleRetryClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onRetry?.();
+  };
+  const handleDismissClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onDismiss?.();
+  };
   return (
     <div
       role="alert"
       aria-live="assertive"
       data-testid="worktree-delete-error-banner"
-      className="mt-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-status-error/20 bg-status-error/10 p-3 text-xs"
+      // `relative z-10` is load-bearing, not decoration. Both banners mount as
+      // bare siblings of the card's `relative z-10` content column, inside a
+      // `relative isolate` root that also carries the sidebar's full-card select
+      // overlay at `absolute inset-0 z-0`. A static block paints in an earlier
+      // step than a positioned `z-0` sibling regardless of DOM order, so without
+      // this the overlay covered the banner and swallowed every click on Retry
+      // and Dismiss (#12087). Joins the tier the content column already uses.
+      className="relative z-10 mt-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-status-error/20 bg-status-error/10 p-3 text-xs"
     >
       <AlertTriangle className="w-4 h-4 shrink-0 text-status-error" aria-hidden="true" />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -539,9 +663,9 @@ export function WorktreeDeleteErrorBanner({
           {onRetry && (
             <button
               type="button"
-              onClick={onRetry}
+              onClick={handleRetryClick}
               data-testid="worktree-delete-retry"
-              className="rounded border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="rounded-[var(--radius-md)] border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Retry
             </button>
@@ -549,9 +673,9 @@ export function WorktreeDeleteErrorBanner({
           {onDismiss && (
             <button
               type="button"
-              onClick={onDismiss}
+              onClick={handleDismissClick}
               data-testid="worktree-delete-dismiss"
-              className="rounded px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="rounded-[var(--radius-md)] px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Dismiss
             </button>
@@ -582,12 +706,33 @@ export function WorktreeIssueErrorBanner({
   onDismiss,
 }: WorktreeIssueErrorBannerProps) {
   const title = mutationType === "attach-issue" ? "Couldn't attach issue" : "Couldn't detach issue";
+  // The card root selects the worktree on any click that reaches it, and
+  // `handleCardClick` has no interactive-target guard — the card's convention
+  // (documented on its `handleDoubleClick`, #10319) is that interactive
+  // children stop click propagation themselves, as `handleRetrySetup` above
+  // does. Without this, dismissing an error on a background card would also
+  // switch the active worktree (#12087).
+  const handleRetryClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onRetry?.();
+  };
+  const handleDismissClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onDismiss?.();
+  };
   return (
     <div
       role="alert"
       aria-live="assertive"
       data-testid="worktree-issue-error-banner"
-      className="mt-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-status-error/20 bg-status-error/10 p-3 text-xs"
+      // `relative z-10` is load-bearing, not decoration. Both banners mount as
+      // bare siblings of the card's `relative z-10` content column, inside a
+      // `relative isolate` root that also carries the sidebar's full-card select
+      // overlay at `absolute inset-0 z-0`. A static block paints in an earlier
+      // step than a positioned `z-0` sibling regardless of DOM order, so without
+      // this the overlay covered the banner and swallowed every click on Retry
+      // and Dismiss (#12087). Joins the tier the content column already uses.
+      className="relative z-10 mt-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-status-error/20 bg-status-error/10 p-3 text-xs"
     >
       <AlertTriangle className="w-4 h-4 shrink-0 text-status-error" aria-hidden="true" />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -599,9 +744,9 @@ export function WorktreeIssueErrorBanner({
           {onRetry && (
             <button
               type="button"
-              onClick={onRetry}
+              onClick={handleRetryClick}
               data-testid="worktree-issue-retry"
-              className="rounded border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="rounded-[var(--radius-md)] border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Retry
             </button>
@@ -609,9 +754,9 @@ export function WorktreeIssueErrorBanner({
           {onDismiss && (
             <button
               type="button"
-              onClick={onDismiss}
+              onClick={handleDismissClick}
               data-testid="worktree-issue-dismiss"
-              className="rounded px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="rounded-[var(--radius-md)] px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Dismiss
             </button>

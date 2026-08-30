@@ -385,7 +385,7 @@ describe("getThemeContrastWarnings", () => {
       const selectionFailures = warnings.filter((w) => w.message.includes("selection-outline"));
       expect(
         selectionFailures,
-        `${scheme.id}: selection-outline is the palette row's only non-text indicator and must hit 3:1`
+        `${scheme.id}: selection-outline is the palette row's only non-text indicator (a leading rail) and must hit 3:1`
       ).toHaveLength(0);
     }
   });
@@ -404,10 +404,10 @@ describe("getThemeContrastWarnings", () => {
     });
   }
 
-  it("fails an outline that clears the surrounding surface but not the row fill it encloses", () => {
-    // The row lifts towards the outline on dark, so the surface pair is the
-    // permissive one — an outline can pass it while vanishing into the fill it
-    // actually borders. #5A5A5A is 3.04:1 on black and 1.52:1 on #767676.
+  it("fails a rail that clears the surrounding surface but not the row fill it touches", () => {
+    // The row lifts towards the rail on dark, so the surface pair is the
+    // permissive one — a rail can pass it while vanishing into the fill it
+    // touches. #5A5A5A is 3.04:1 on black and 1.52:1 on #767676.
     const scheme = makeFlatDarkScheme({
       "overlay-raised": "#767676" as AppColorSchemeTokens["overlay-raised"],
       "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
@@ -416,6 +416,70 @@ describe("getThemeContrastWarnings", () => {
       .filter((w) => w.message.includes("selection-outline against"))
       .map((w) => w.message);
     expect(messages.some((m) => m.includes("the selected row fill"))).toBe(true);
+    expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(false);
+  });
+
+  it("fails a rail that clears both ordinary backdrops but not a destructive row's fill", () => {
+    // The item primitives draw this rail as an inset focus ring, and a
+    // destructive row swaps `overlay-raised` out for `status-danger/10`. A pale
+    // danger token lifts that fill towards the rail: #5A5A5A is 3.04:1 on the
+    // black surface and on a black raised fill, but only 2.68:1 on the 10%
+    // wash #F5B5B5 leaves behind. Scoring the first two pairs alone calls this
+    // compliant and loses the ring on exactly the row that most needs it.
+    const scheme = makeFlatDarkScheme({
+      "overlay-raised": "#000000" as AppColorSchemeTokens["overlay-raised"],
+      "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
+      "status-danger": "#F5B5B5" as AppColorSchemeTokens["status-danger"],
+    });
+    const messages = getThemeContrastWarnings(scheme)
+      .filter((w) => w.message.includes("selection-outline against"))
+      .map((w) => w.message);
+    expect(messages.some((m) => m.includes("a destructive menu row's fill"))).toBe(true);
+    expect(messages.some((m) => m.includes("the selected row fill"))).toBe(false);
+    expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(false);
+  });
+
+  it("still reports the ordinary rail pairs when the destructive fill is unevaluable", () => {
+    // An imported theme may spell `status-danger` in a syntax this math cannot read.
+    // The destructive pair is the newest and least important of the three: losing it
+    // is acceptable, but taking the two older ones down with it would send an author
+    // who fixes the unreadable token away believing the rail was fine.
+    const scheme = makeFlatDarkScheme({
+      "overlay-raised": "#767676" as AppColorSchemeTokens["overlay-raised"],
+      "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
+      "status-danger": "oklch(0.5 0.1 200)" as AppColorSchemeTokens["status-danger"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    expect(
+      warnings.some(
+        (w) => w.kind === "low-contrast" && w.message.includes("selection-outline against")
+      )
+    ).toBe(true);
+    expect(
+      warnings.some((w) => w.kind === "unevaluable" && w.message.includes("status-danger"))
+    ).toBe(true);
+  });
+
+  it("holds the rail to the surrounding surface on a destructive row too", () => {
+    // A translucent rail is not the same pixel over the danger wash as it is over the
+    // raised fill, and the ring's outer edge sits on the row's boundary — so the
+    // surface pair has to be scored from the composited destructive ink as well.
+    const scheme = makeFlatDarkScheme({
+      "surface-sidebar": "#5A5A5A" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-grid": "#5A5A5A" as AppColorSchemeTokens["surface-grid"],
+      "surface-canvas": "#5A5A5A" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel": "#5A5A5A" as AppColorSchemeTokens["surface-panel"],
+      "surface-panel-elevated": "#5A5A5A" as AppColorSchemeTokens["surface-panel-elevated"],
+      "overlay-raised": "#5A5A5A" as AppColorSchemeTokens["overlay-raised"],
+      "selection-outline": "rgba(252, 252, 252, 0.5)" as AppColorSchemeTokens["selection-outline"],
+      "status-danger": "#000000" as AppColorSchemeTokens["status-danger"],
+    });
+    const messages = getThemeContrastWarnings(scheme)
+      .filter((w) => w.message.includes("selection-outline against"))
+      .map((w) => w.message);
+    expect(messages.some((m) => m.includes("the surface behind a destructive row"))).toBe(true);
+    // Named separately from the ordinary pair on purpose: that one passes here, and
+    // pointing an author at a pair they can measure as compliant wastes the warning.
     expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(false);
   });
 
@@ -434,7 +498,7 @@ describe("getThemeContrastWarnings", () => {
     expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(true);
   });
 
-  it("composites an rgba outline over the row fill rather than reading its raw alpha", () => {
+  it("composites an rgba rail token over the row fill rather than reading its raw alpha", () => {
     // Opaque white would score 16.67:1 on this fill and sail through; at 10%
     // alpha the pixel that actually renders is #353535, which is 1.36:1.
     const scheme = makeFlatDarkScheme({
@@ -447,7 +511,7 @@ describe("getThemeContrastWarnings", () => {
     expect(failures).toHaveLength(1);
   });
 
-  it("composites an alpha-hex outline instead of reading it as opaque", () => {
+  it("composites an alpha-hex rail token instead of reading it as opaque", () => {
     // `#FFFFFF10` is 6% white. Read as opaque it would score 19.30:1 and pass;
     // the pixel that renders is #1D1D1D on this fill.
     const scheme = makeFlatDarkScheme({
@@ -460,7 +524,7 @@ describe("getThemeContrastWarnings", () => {
     expect(failures).toHaveLength(1);
   });
 
-  it("reports the palette selection check as unevaluable when the outline is not hex or rgba", () => {
+  it("reports the palette selection check as unevaluable when the rail token is not hex or rgba", () => {
     const scheme = makeScheme({
       "selection-outline":
         "color-mix(in oklab, #ffffff 42%, transparent)" as AppColorSchemeTokens["selection-outline"],
@@ -938,5 +1002,50 @@ describe("terminal/syntax validation", () => {
         (w.message.includes("terminal-red") || w.message.includes("terminal-bright-red"))
     );
     expect(unevaluable).toHaveLength(0);
+  });
+});
+
+// The high-contrast neutral CTA (`variant="contrast"`) is the standard dialog primary
+// action: it fills itself with the theme's body-text colour and paints its label in the
+// inverse. Every other text-primary pair puts that token on a *surface*, so nothing else
+// in the matrix notices when a theme collapses the fill against its own label.
+describe("contrast-CTA pair (text-inverse on text-primary)", () => {
+  const findWarning = (scheme: AppColorScheme) =>
+    getThemeContrastWarnings(scheme).find(
+      (w) => w.kind === "low-contrast" && w.message.startsWith("text-inverse on text-primary")
+    );
+
+  it("flags a theme whose inverse label collapses against the fill", () => {
+    const scheme = makeScheme({
+      "text-primary": "#767676" as AppColorSchemeTokens["text-primary"],
+      "text-inverse": "#8a8a8a" as AppColorSchemeTokens["text-inverse"],
+    });
+    const warning = findWarning(scheme);
+    expect(warning).toBeDefined();
+    // The message carries the measured ratio, so a regression says how far off it is.
+    expect(warning!.message).toMatch(/is \d+\.\d\d:1; target is 4\.5:1/);
+  });
+
+  it("flags a near-miss that still reads as two distinct colours", () => {
+    // ~4.3:1 — visibly different, but under the AA floor for a normal-sized label.
+    const scheme = makeScheme({
+      "text-primary": "#7a7a7a" as AppColorSchemeTokens["text-primary"],
+      "text-inverse": "#ffffff" as AppColorSchemeTokens["text-inverse"],
+    });
+    expect(contrastRatio("#ffffff", "#7a7a7a")).toBeLessThan(4.5);
+    expect(findWarning(scheme)).toBeDefined();
+  });
+
+  it("stays quiet for a legible inverse pair in either polarity", () => {
+    const dark = makeScheme({
+      "text-primary": "#e8e8e8" as AppColorSchemeTokens["text-primary"],
+      "text-inverse": "#141414" as AppColorSchemeTokens["text-inverse"],
+    });
+    const light = makeScheme({
+      "text-primary": "#141414" as AppColorSchemeTokens["text-primary"],
+      "text-inverse": "#e8e8e8" as AppColorSchemeTokens["text-inverse"],
+    });
+    expect(findWarning(dark)).toBeUndefined();
+    expect(findWarning(light)).toBeUndefined();
   });
 });

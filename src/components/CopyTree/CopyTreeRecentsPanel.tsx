@@ -45,7 +45,7 @@ export function formatRecentMeta(record: CopyTreeHistoryRecord, now?: number): s
 // left in place rather than replaced.
 const rowClass = cn(
   "w-full flex items-center gap-2.5 px-3 py-2 text-left",
-  "text-daintree-text hover:bg-overlay-raised focus-visible:bg-overlay-raised",
+  "text-text-primary hover:bg-overlay-raised focus-visible:bg-overlay-raised",
   "transition-colors"
 );
 
@@ -55,7 +55,7 @@ const rowClass = cn(
 // the focus ring it takes on open is the region's one emphasis signal.
 const primaryButtonClass = cn(
   "w-full flex items-center gap-2.5 rounded-[var(--radius-md)] px-3 py-2 text-left",
-  "border border-divider bg-overlay-subtle text-daintree-text hover:bg-overlay-raised",
+  "border border-divider bg-overlay-subtle text-text-primary hover:bg-overlay-raised",
   "transition-colors"
 );
 
@@ -115,7 +115,14 @@ export function CopyTreeRecentsPanel({
       data-copy-tree-panel=""
       role="dialog"
       aria-label="Copy context"
-      className="w-[320px] max-h-[420px] flex flex-col"
+      // Keeps its own 420px ceiling — this panel's proportions are not being
+      // redesigned here — but stops that ceiling exceeding the room actually
+      // left under the anchor, so a short window no longer runs the list off
+      // the bottom of the screen. The variable comes from FixedDropdown's
+      // positioning pass; the fallback preserves the previous behaviour if
+      // this ever renders outside that shell. Same mechanism the notification
+      // center adopted in #12061.
+      className="w-[320px] max-h-[min(420px,var(--fixed-dropdown-available-height,420px))] flex flex-col"
     >
       {/* No headings: the framed primary button IS the header, and everything
           under the divider is self-evidently the run history — each row names
@@ -173,7 +180,7 @@ export function CopyTreeRecentsPanel({
                   >
                     <span className="min-w-0 flex-1 flex flex-col gap-0.5">
                       <span className="truncate text-sm">{record.name}</span>
-                      <span className="truncate text-[11px] text-daintree-text/50">
+                      <span className="truncate text-2xs text-text-secondary">
                         {formatRecentMeta(record)}
                       </span>
                     </span>

@@ -8,6 +8,11 @@ export interface TypedNameConfirmInputProps {
   onMatchSubmit?: () => void;
   preamble?: React.ReactNode;
   instructions?: React.ReactNode;
+  /**
+   * Freeze the field while a destructive submit is already in flight, so the
+   * typed value cannot change out from under an awaiting dispatch.
+   */
+  disabled?: boolean;
   "data-testid"?: string;
 }
 
@@ -18,6 +23,7 @@ export function TypedNameConfirmInput({
   onMatchSubmit,
   preamble,
   instructions,
+  disabled = false,
   "data-testid": testId,
 }: TypedNameConfirmInputProps) {
   const instructionsId = useId();
@@ -28,7 +34,7 @@ export function TypedNameConfirmInput({
   const defaultInstructions = (
     <>
       Type{" "}
-      <code className="font-mono text-xs bg-daintree-bg px-1.5 py-0.5 rounded border border-border-strong">
+      <code className="font-mono text-xs bg-surface-canvas px-1.5 py-0.5 rounded border border-border-strong">
         {target}
       </code>{" "}
       to confirm.
@@ -38,17 +44,18 @@ export function TypedNameConfirmInput({
   return (
     <div className="space-y-2 p-3 bg-status-error/5 border border-status-error/20 rounded">
       {hasPreamble && (
-        <p id={preambleId} className="text-sm text-daintree-text">
+        <p id={preambleId} className="text-sm text-text-primary">
           {preamble}
         </p>
       )}
-      <p id={instructionsId} className="text-sm text-daintree-text">
+      <p id={instructionsId} className="text-sm text-text-primary">
         {instructions ?? defaultInstructions}
       </p>
       <input
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
         onKeyDown={(e) => {
           if (e.key === "Enter" && isMatched && onMatchSubmit) {
             e.preventDefault();
@@ -61,7 +68,7 @@ export function TypedNameConfirmInput({
         aria-invalid={value.length > 0 && !isMatched}
         autoComplete="off"
         spellCheck={false}
-        className="w-full px-3 py-2 text-sm font-mono bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] focus:outline-hidden focus:ring-2 focus:ring-status-error"
+        className="w-full px-3 py-2 text-sm font-mono bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] focus:outline-hidden focus:ring-2 focus:ring-status-error disabled:opacity-50"
         data-testid={testId}
       />
       <span className="sr-only" aria-live="polite">

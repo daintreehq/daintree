@@ -29,14 +29,14 @@ function ForgeSettingBlock({
   return (
     <div
       id={id}
-      className="rounded-[var(--radius-lg)] border border-daintree-border bg-daintree-bg/30 p-4 space-y-3 scroll-mt-12"
+      className="rounded-[var(--radius-lg)] border border-border-default bg-daintree-bg/30 p-4 space-y-3 scroll-mt-12"
     >
       <div>
-        <h5 className="text-sm font-medium text-daintree-text flex items-center gap-2">
+        <h5 className="text-sm font-medium text-text-primary flex items-center gap-2">
           <Icon className="w-4 h-4 text-daintree-text/70" aria-hidden="true" />
           {title}
         </h5>
-        <p className="text-xs text-daintree-text/50 mt-0.5 select-text">{description}</p>
+        <p className="text-xs text-text-secondary mt-0.5 select-text">{description}</p>
       </div>
       {children}
     </div>
@@ -182,7 +182,7 @@ export function GitHubSettingsTab() {
         description="Used for repository statistics, issue/PR detection, and linking worktrees to GitHub. Eliminates the need for the gh CLI."
       >
         {githubConfig?.hasToken && (
-          <div className="flex items-center gap-1 text-xs text-status-success">
+          <div className="flex items-center gap-1 text-xs text-text-secondary">
             <Check className="w-3 h-3" />
             GitHub connected
           </div>
@@ -198,7 +198,7 @@ export function GitHubSettingsTab() {
             }
             aria-label="GitHub personal access token"
             autoComplete="new-password"
-            className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
+            className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
             disabled={isValidating || isTesting}
           />
           <Button
@@ -208,7 +208,7 @@ export function GitHubSettingsTab() {
             variant="outline"
             size="sm"
             aria-label="Test token"
-            className="min-w-[70px] text-daintree-text border-daintree-border hover:bg-daintree-border"
+            className="min-w-[70px] text-text-primary border-border-default hover:bg-border-default"
           >
             <FlaskConical aria-hidden="true" />
             Test
@@ -229,7 +229,7 @@ export function GitHubSettingsTab() {
               variant="outline"
               size="sm"
               aria-label="Clear token"
-              className="text-status-error border-daintree-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+              className="text-status-error border-border-default hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
             >
               Clear token
             </Button>
@@ -271,20 +271,20 @@ export function GitHubSettingsTab() {
           onClick={openGitHubTokenPage}
           variant="outline"
           size="sm"
-          className="text-daintree-text border-daintree-border hover:bg-daintree-border"
+          className="text-text-primary border-border-default hover:bg-border-default"
         >
           <ExternalLink />
           Create token on GitHub
         </Button>
         <div className="space-y-1">
-          <p className="text-xs text-daintree-text/50">Required scopes:</p>
-          <ul className="text-xs text-daintree-text/50 list-disc list-inside space-y-0.5">
+          <p className="text-xs text-text-secondary">Required scopes:</p>
+          <ul className="text-xs text-text-secondary list-disc list-inside space-y-0.5">
             <li>
-              <code className="text-daintree-text/70 bg-daintree-bg px-1 rounded">repo</code> —
+              <code className="text-text-secondary bg-surface-canvas px-1 rounded">repo</code> —
               Access repository data
             </li>
             <li>
-              <code className="text-daintree-text/70 bg-daintree-bg px-1 rounded">read:org</code> —
+              <code className="text-text-secondary bg-surface-canvas px-1 rounded">read:org</code> —
               Read organization membership (for private repos)
             </li>
           </ul>

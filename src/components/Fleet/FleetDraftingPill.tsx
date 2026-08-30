@@ -67,7 +67,7 @@ export function FleetDraftingPill(): ReactElement | null {
               <span
                 data-testid="fleet-drafting-pill-divergence-dot"
                 aria-label={`${overridesCount + skippedCount} per-target edit${overridesCount + skippedCount === 1 ? "" : "s"} pending`}
-                className="ml-0.5 inline-block h-1.5 w-1.5 rounded-full bg-category-amber-border"
+                className="status-mark ml-0.5 inline-block h-1.5 w-1.5 rounded-full bg-category-amber-border"
               />
             )}
             {hasVariables && (
@@ -94,7 +94,7 @@ export function FleetDraftingPill(): ReactElement | null {
           data-testid="fleet-resolution-popover"
           className="max-h-[400px] w-[400px] overflow-y-auto p-1"
         >
-          <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-daintree-text/50">
+          <div className="px-2 py-1 text-3xs font-medium uppercase tracking-wide text-text-secondary">
             Fleet broadcast preview
           </div>
           {previews.length === 0 ? (
@@ -193,7 +193,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
         isSkipped && !excluded && "opacity-50"
       )}
     >
-      <div className="flex items-center gap-1.5 text-[11px] font-medium text-daintree-text/70">
+      <div className="flex items-center gap-1.5 text-2xs font-medium text-text-secondary">
         {!excluded && (
           <label className="inline-flex shrink-0 items-center">
             <input
@@ -202,30 +202,30 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
               onChange={(e) => setSkipped(terminalId, !e.target.checked)}
               data-testid="fleet-resolution-row-include"
               aria-label={`Include ${title} in broadcast`}
-              className="h-3 w-3 cursor-pointer rounded border-daintree-border transition-colors duration-150"
+              className="h-3 w-3 cursor-pointer rounded border-border-default transition-colors duration-150"
             />
           </label>
         )}
         <span className={cn("truncate", isSkipped && "line-through")}>{title}</span>
         {excluded && exclusionReason && (
-          <span className="inline-flex items-center gap-0.5 text-[10px] text-category-rose-text shrink-0">
+          <span className="inline-flex items-center gap-0.5 text-3xs text-category-rose-text shrink-0">
             <AlertTriangle className="h-2.5 w-2.5" aria-hidden="true" />
             {exclusionReason}
           </span>
         )}
         {isSkipped && !excluded && (
-          <span className="ml-auto shrink-0 text-[10px] text-daintree-text/50">Skipped</span>
+          <span className="ml-auto shrink-0 text-3xs text-text-secondary">Skipped</span>
         )}
         {showsOverride && (
           <span
-            className="ml-auto shrink-0 text-[10px] text-category-amber-text"
+            className="ml-auto shrink-0 text-3xs text-category-amber-text"
             data-testid="fleet-resolution-row-overridden"
           >
             Edited
           </span>
         )}
       </div>
-      <div className="mt-0.5 text-[11px] leading-relaxed text-daintree-text/60 break-all">
+      <div className="mt-0.5 text-2xs leading-relaxed text-text-secondary break-all">
         {parts.map((part, i) =>
           part.isVar ? (
             <span
@@ -242,7 +242,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
       {!excluded && (
         <div className="mt-1 border-t border-border-subtle pt-0.5">
           <div className="flex items-start gap-1.5">
-            <span className="text-[9px] uppercase tracking-wide text-daintree-text/40 mt-px shrink-0">
+            <span className="text-4xs uppercase tracking-wide text-text-secondary mt-px shrink-0">
               {isOverridden ? "edited" : "resolved"}
             </span>
             <textarea
@@ -256,7 +256,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
               data-testid="fleet-resolution-row-textarea"
               aria-label={`Override payload for ${title}`}
               className={cn(
-                "flex-1 resize-y bg-transparent text-[11px] leading-relaxed break-all text-daintree-text",
+                "flex-1 resize-y bg-transparent text-2xs leading-relaxed break-all text-text-primary",
                 "rounded-sm border border-transparent px-1 py-0.5 outline-hidden transition-colors duration-150",
                 "hover:border-border-subtle focus:border-border-subtle",
                 isSkipped && "cursor-not-allowed line-through",
@@ -270,7 +270,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
               {unresolvedVars.map((v) => (
                 <span
                   key={v}
-                  className="inline-flex items-center rounded-full px-1.5 py-px text-[9px] bg-category-rose-subtle text-category-rose-text"
+                  className="inline-flex items-center rounded-full px-1.5 py-px text-4xs bg-category-rose-subtle text-category-rose-text"
                 >
                   {`{{${v}}}`} unresolved
                 </span>

@@ -10,6 +10,14 @@ interface BulkActionBarProps {
   selectedIssues: Issue[];
   selectedPRs: PR[];
   selectedCount: number;
+  /**
+   * How many selected items the list is not currently showing. Selection
+   * survives the search, the state tab, the sort order and pagination, so a
+   * bar reading "5 selected" over a list showing two of them was quietly
+   * lying about what the action would touch. "Not shown" rather than "hidden
+   * by filters" because an unloaded page produces the same count.
+   */
+  hiddenCount?: number;
   onClear: () => void;
   onCloseDropdown?: () => void;
 }
@@ -19,6 +27,7 @@ export function BulkActionBar({
   selectedIssues,
   selectedPRs,
   selectedCount,
+  hiddenCount = 0,
   onClear,
   onCloseDropdown,
 }: BulkActionBarProps) {
@@ -49,36 +58,46 @@ export function BulkActionBar({
   // DOM with stale closures even after count flips to 0.
   if (count <= 0) return null;
 
+  const noun = mode === "pr" ? "pull request" : "issue";
+  const hiddenNote = hiddenCount > 0 ? ` · ${hiddenCount} not shown` : "";
+
   return (
+    /* This REPLACES the standard footer rather than stacking under it. The bar
+       used to float below a footer that stayed put, so starting a selection
+       gave the panel two bottom bands and stole a row's worth of list. Same
+       band, same height, different contents. */
     <div
-      role="toolbar"
+      /* `group`, not `toolbar`: a toolbar promises arrow-key navigation
+         between its controls, and these are two ordinary tab stops. */
+      role="group"
       aria-label="Bulk actions"
-      className="mx-2 mb-2 rounded-xl shadow-[var(--theme-shadow-floating)] bg-surface-panel ring-1 ring-border-default inset-shadow-[0_1px_0_var(--color-overlay-soft)] flex items-center gap-3 px-4 py-3"
+      className="px-2 py-1.5 border-t border-[var(--border-divider)] flex items-center gap-2 shrink-0"
     >
-      <span className="inline-flex items-center gap-1.5 text-xs text-daintree-text/70">
-        <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-status-info/15 text-status-info text-[10px] font-semibold tabular-nums">
-          {count}
-        </span>
-        selected
+      <span className="ps-2 text-xs text-text-secondary tabular-nums truncate">
+        {/* Neutral count. A `status-info` chip on a multi-select membership
+            total was reading as an alert about nothing. */}
+        <span className="font-medium text-text-primary">{count}</span>{" "}
+        {count === 1 ? noun : `${noun}s`} selected{hiddenNote}
       </span>
-      <Button
-        variant="default"
-        size="xs"
-        onClick={handleOpenDialog}
-        data-testid="bulk-action-create-worktrees-button"
-      >
-        <FolderGit2 className="w-3 h-3" />
-        Create Worktrees
-      </Button>
       <div className="flex-1" />
       <Button
         variant="ghost"
-        size="icon-xs"
+        size="sm"
+        onClick={handleOpenDialog}
+        className="gap-1.5"
+        data-testid="bulk-action-create-worktrees-button"
+      >
+        <FolderGit2 className="w-3.5 h-3.5" />
+        {count === 1 ? "Create worktree" : "Create worktrees"}
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
         onClick={onClear}
         aria-label="Clear selection"
-        className="text-daintree-text/40 hover:text-daintree-text"
+        className="text-text-secondary hover:text-text-primary"
       >
-        <X className="w-3 h-3" />
+        <X className="w-3.5 h-3.5" />
       </Button>
     </div>
   );

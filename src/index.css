@@ -387,6 +387,9 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  /* Every step Tailwind ships must be overridden here, or the ones we skip keep
+   * their stock constants and stop tracking --theme-radius-scale. Bare `rounded`
+   * and its directional forms resolve through --radius, so they scale too. */
   --radius-xs: calc(var(--radius) - 6px);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -394,20 +397,33 @@
   --radius-xl: calc(var(--radius) + 4px);
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
   --height-xs: 1.75rem;
   --height-sm: 2rem;
   --height-md: 2.5rem;
   --height-lg: 3rem;
+  /* Legacy aliases (#12031). Every solid call site now spells the semantic
+   * token directly; these five survive only because Tailwind v4 generates
+   * utilities on demand from this namespace, and the alpha-modified forms
+   * still in the tree would stop generating without them.
+   *
+   * Two things still need them. The non-text alpha composites — background,
+   * ring and border tints over these five aliases — are deliberate and
+   * unreviewed, left to #12029. (Naming one of those utilities literally here
+   * would trip the accent guard in `accentGuard.contract.test.ts`, which reads
+   * this file as text and cannot tell a comment from a declaration.)
+   * And what #12065 left of the `text-daintree-text/NN` hierarchy ramp: the
+   * prose is off it, but the icon affordances, decorative glyphs, disabled
+   * states and opacity composites are still dim on purpose, each one recorded
+   * in `scripts/baselines/text-ramp-manifest.json`. They go when those do. */
   --color-daintree-bg: var(--theme-surface-canvas);
   --color-daintree-sidebar: var(--theme-surface-sidebar);
   --color-daintree-border: var(--theme-border-default);
   --color-daintree-text: var(--theme-text-primary);
   --color-daintree-accent: var(--theme-accent-primary);
-  --color-daintree-accent-rgb: var(--theme-accent-rgb);
   --color-surface: var(--theme-surface-panel);
   --color-surface-highlight: var(--theme-surface-panel-elevated);
   --color-grid-bg: var(--panel-grid-bg, var(--terminal-grid-bg, var(--theme-surface-grid)));
-  --color-daintree-focus: var(--theme-focus-ring);
   --color-status-error: var(--theme-status-danger);
   --color-status-error-surface: var(--theme-status-danger-surface);
   --color-state-active: var(--theme-activity-active);
@@ -446,6 +462,29 @@
   unicode-range:
     U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
     U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* Type scale below Tailwind's floor. A lot of this chrome lives under 12px, and
+ * without names for those tiers every author picked a pixel value by eye.
+ * Emitted to :root (plain @theme, not inline) so plain CSS and CodeMirror/inline
+ * style consumers can reach the same steps via var().
+ *
+ * No paired --text-*--line-height: a size token without one emits font-size and
+ * nothing else, which is what the arbitrary values these replace did. Adding
+ * leading here would silently reflow every call site that inherits it today.
+ *
+ * These are fixed rem, deliberately NOT multiplied by a theme scalar the way
+ * --radius is by --theme-radius-scale. Radius scaling is theme aesthetics; text
+ * size is not something a colour scheme should decide. App-wide text scaling
+ * already exists as Chromium zoom (View ▸ Zoom In/Out), which scales rem and px
+ * alike. If a text scalar is ever wanted it has to cover the whole --text-*
+ * family at once — wiring it to these three steps alone would reproduce, for
+ * type, exactly the split-scale defect this scale exists to avoid.
+ */
+@theme {
+  --text-2xs: 0.6875rem;
+  --text-3xs: 0.625rem;
+  --text-4xs: 0.5625rem;
 }
 
 /* Motion token scale — single source of truth for durations and easings.
@@ -652,7 +691,7 @@ code.hljs {
   );
   --border-divider: var(--theme-border-divider);
 
-  --dock-bg: var(--color-daintree-sidebar);
+  --dock-bg: var(--color-surface-sidebar);
   --dock-border: var(--border-divider);
   --dock-shadow: 0 -2px 12px rgb(from var(--theme-shadow-color) r g b / 0.35);
   --dock-padding-x: 0.5rem;
@@ -806,10 +845,24 @@ code.hljs {
 
   /* Native checkboxes/radios tint to the theme accent instead of the OS
      cobalt — the only non-theme hue otherwise rendered in the app. The
-     AccentColor keyword keeps any context without the var on OS behavior. */
+     AccentColor keyword keeps any context without the var on OS behavior.
+
+     `--checkbox-accent` is an opt-out seam, not a new default: it resolves to
+     the same accent unless an ancestor sets it, so every existing surface is
+     byte-identical. It exists because accent restraint allows at most ONE
+     load-bearing accent per focus region, and a group of option checkboxes is
+     membership — precisely what the rule excludes. A surface with several
+     checked options in one focus trap (the worktree delete dialog) sets this
+     to a neutral token so the accent stays available for the thing that
+     actually needs it. */
   input[type="checkbox"],
   input[type="radio"] {
-    accent-color: var(--theme-accent-primary, AccentColor);
+    accent-color: var(--checkbox-accent, var(--theme-accent-primary, AccentColor));
+  }
+
+  /* Neutral option controls: membership, not emphasis. */
+  .checkbox-neutral {
+    --checkbox-accent: var(--color-text-primary);
   }
 
   *:focus-visible {
@@ -1154,7 +1207,7 @@ body,
   background: linear-gradient(
     90deg,
     transparent 0%,
-    color-mix(in oklab, var(--color-daintree-text) 8%, transparent) 50%,
+    color-mix(in oklab, var(--color-text-primary) 8%, transparent) 50%,
     transparent 100%
   );
   animation: skeleton-shimmer 1.8s ease-in-out infinite;
@@ -1976,6 +2029,22 @@ label:focus-within .brand-mark,
   color: var(--brand-mark-active);
 }
 
+/* Menu icon gutter, allocated only when an item in the SAME menu actually has
+   an icon. Items opt in by marking their icon `data-menu-icon`; a text-only
+   item in a mixed menu then aligns with them, and a menu whose icon-bearing
+   items are all filtered out at runtime collapses the gutter instead of
+   leaving its survivors indented against nothing. That is the NSMenu / WinUI
+   MenuFlyout / GtkPopoverMenu rule, and it is why this cannot be a static
+   class on the text-only item — the item cannot see its siblings.
+   2rem = the item's own px-2.5 plus a 3.5 icon and its mr-2. Submenus portal
+   into their own [role="menu"], so they are scored separately, which is what
+   we want: a submenu of plain durations keeps no gutter. Unlayered and (0,4,0),
+   so it outranks a caller's own `pl-*` utility — an item that needs to opt out
+   has to do it with an inline style. */
+[role="menu"]:has([data-menu-icon]) [role="menuitem"]:not(:has([data-menu-icon])) {
+  padding-left: 2rem;
+}
+
 /* Panel Agent State Borders — grid panel container state-driven styling */
 .panel-state-waiting {
   border-color: color-mix(in oklab, var(--color-activity-waiting) 75%, transparent);
@@ -2184,7 +2253,7 @@ label:focus-within .brand-mark,
   0% {
     /* Unselected appearance */
     background-color: var(--color-surface);
-    border-color: var(--color-daintree-border);
+    border-color: var(--color-border-default);
     box-shadow: none;
   }
   35% {
@@ -2297,7 +2366,7 @@ label:focus-within .brand-mark,
 }
 
 .forge-status-loading {
-  background: color-mix(in oklab, var(--color-daintree-accent) 20%, transparent);
+  background: color-mix(in oklab, var(--color-accent-primary) 20%, transparent);
 }
 
 .forge-status-loading::after {
@@ -2310,7 +2379,7 @@ label:focus-within .brand-mark,
   background: linear-gradient(
     90deg,
     transparent,
-    color-mix(in oklab, var(--color-daintree-accent) 80%, transparent),
+    color-mix(in oklab, var(--color-accent-primary) 80%, transparent),
     transparent
   );
   animation: forge-status-shimmer 1.5s ease-in-out infinite;
@@ -2334,7 +2403,7 @@ label:focus-within .brand-mark,
   right: 0;
   height: 1px;
   overflow: hidden;
-  background: color-mix(in oklab, var(--color-daintree-accent) 18%, transparent);
+  background: color-mix(in oklab, var(--color-accent-primary) 18%, transparent);
   pointer-events: none;
 }
 
@@ -2347,11 +2416,75 @@ label:focus-within .brand-mark,
   background: linear-gradient(
     90deg,
     transparent,
-    color-mix(in oklab, var(--color-daintree-accent) 85%, transparent),
+    color-mix(in oklab, var(--color-accent-primary) 85%, transparent),
     transparent
   );
   animation: palette-loading-sweep 1.5s ease-in-out infinite;
   will-change: transform;
+}
+
+/* The palette's selected-row mark.
+ *
+ * A leading rail rather than the 1px ring this used to be. The ring was never a
+ * free choice: `overlay-raised` clears about 1.1:1 against the palette surface,
+ * so the fill cannot be the WCAG 1.4.11 indicator and `selection-outline` has to
+ * be — and an indicator that must hold 3:1 against both the surface and the fill
+ * lands on a mid-grey stroke. Drawn around all four sides of a row that is not
+ * the DOM focus target, that reads as an empty form field: a strong edge with no
+ * body. No shipping palette does it (VS Code leaves `list.focusOutline` unset in
+ * quick pick; Linear, Raycast, Spotlight, Arc and Slack are fill-led).
+ *
+ * Making the fill carry 3:1 instead is not the way out — it needs roughly 33%
+ * white on these surfaces, a light-grey block far heavier than the ring it
+ * replaces. A rail keeps the same token and the same 3:1 pair while spending a
+ * fraction of the ink on it, which is what 1.4.11 allows: the indicator has to
+ * meet the ratio, not enclose the component.
+ *
+ * Inset and separately rounded rather than an inset box-shadow, which would
+ * follow the card's own radius and taper to a crescent at both ends.
+ *
+ * Not stated in `forced-colors`, where `background-color` is stripped: the
+ * system-outline fallback further down already marks the row there.
+ */
+.palette-row::before {
+  content: "";
+  position: absolute;
+  /* On the card's outer edge, not inside its padding. An absolutely positioned
+     child is offset from the padding box, so an inset here would have started
+     the rail past the reserved border and landed it about 2px from the status
+     mark — two small marks clustered in one gutter, which is the collision that
+     makes leading rails a bad idea on rows that already carry a status dot.
+     Pulled back onto the boundary, the rail belongs to the card and the dot
+     belongs to the content grid, with 6px of clear space between them.
+
+     Logical, not `left`: this is the leading edge, which flips under RTL. */
+  inset-inline-start: -1px;
+  inset-block: 6px;
+  width: 3px;
+  /* A pill, not a scale step: the rail is 3px wide, so any radius above 1.5px
+     is the same shape and the scale would only make it theme-dependent. */
+  border-radius: 9999px;
+  background: var(--color-selection-outline);
+  opacity: 0;
+  pointer-events: none;
+  /* The same slot the row's fill fades in on. Cross-fading one and popping the
+     other put the mark on the new row while the surface behind it was still
+     arriving. */
+  transition: opacity var(--duration-150) ease-out;
+}
+
+.palette-row[aria-selected="true"]::before {
+  opacity: 1;
+}
+
+/* Both triggers, and both signals. The bare media query would honour the OS
+   preference but not Daintree's own "Reduce UI animations" toggle, and dropping
+   only the rail's transition would leave the fill still fading under it. */
+@variant reduce-motion {
+  .palette-row,
+  .palette-row::before {
+    transition: none;
+  }
 }
 
 /* Success fade - scale in then fade out */
@@ -2401,7 +2534,7 @@ label:focus-within .brand-mark,
   }
 
   .forge-status-loading {
-    background: color-mix(in oklab, var(--color-daintree-accent) 60%, transparent);
+    background: color-mix(in oklab, var(--color-accent-primary) 60%, transparent);
   }
 
   .forge-status-success {
@@ -2418,7 +2551,7 @@ label:focus-within .brand-mark,
   .palette-loading-bar__sweep {
     animation: none;
     width: 100%;
-    background: color-mix(in oklab, var(--color-daintree-accent) 50%, transparent);
+    background: color-mix(in oklab, var(--color-accent-primary) 50%, transparent);
   }
 }
 
@@ -2428,13 +2561,13 @@ body[data-performance-mode="true"] .forge-status-loading::after {
 }
 
 body[data-performance-mode="true"] .forge-status-loading {
-  background: color-mix(in oklab, var(--color-daintree-accent) 60%, transparent) !important;
+  background: color-mix(in oklab, var(--color-accent-primary) 60%, transparent) !important;
 }
 
 body[data-performance-mode="true"] .palette-loading-bar__sweep {
   animation: none !important;
   width: 100% !important;
-  background: color-mix(in oklab, var(--color-daintree-accent) 50%, transparent) !important;
+  background: color-mix(in oklab, var(--color-accent-primary) 50%, transparent) !important;
 }
 
 body[data-performance-mode="true"] .forge-status-success {
@@ -2612,6 +2745,16 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     background-color: Canvas;
   }
 
+  /* Empty-state icons carry a 30%-opacity text colour, which the UA maps to a
+     near-Canvas value in forced-colors — measured at roughly 1.06:1 on white,
+     i.e. invisible. These states are often icon-plus-one-line, so losing the
+     icon removes half the state. Repaint with CanvasText and drop the opacity
+     mixing that caused it. */
+  [data-empty-state-icon] {
+    color: CanvasText !important;
+    opacity: 1 !important;
+  }
+
   .terminal-selected {
     outline: 2px solid Highlight;
     outline-offset: -2px;
@@ -2680,7 +2823,7 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     outline-offset: -2px;
   }
 
-  /* The palette selected row is a raised fill plus a neutral outline, both
+  /* The palette selected row is a raised fill plus a neutral leading rail, both
      stripped here, so it falls back to a system outline like the Radix rule
      above. Deliberately an outline and not a SelectedItem fill: these rows carry
      independently surfaced children (theme "Active" badges, action category
@@ -2691,9 +2834,80 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
      row. Scoped to the `.palette-row` marker rather than [role="option"], which
      the file pane, the settings selectors and the agent/forge dropdowns use
      too. */
+  /* The row's `border border-transparent` is a layout reservation — it holds
+     every row's content box on one column — but forced colors remaps border
+     colours from the system palette, so a border that paints nothing in every
+     theme painted a `CanvasText` box round every row here. A list of twenty rows
+     read as a stack of input fields, with the doubled rules between adjacent
+     borders competing with the band headings that actually organise it.
+     `Canvas` keeps the reservation and gives back the invisibility; the selected
+     row's own outline below is unaffected, and is what marks the row. */
+  .palette-row {
+    border-color: Canvas;
+  }
+
   .palette-row[aria-selected="true"] {
     outline: 2px solid SelectedItem;
     outline-offset: -2px;
+  }
+
+  /* The forge issue/PR rows draw the same leading rail, but from a `data-active`
+     attribute rather than `aria-selected` — that grid spends `aria-selected` on
+     bulk membership, so the two marks have to be keyed apart. The rail is a
+     `background-color`, stripped here like every other, and the `.palette-row`
+     rule above is deliberately scoped away from `[role="row"]`, so without this
+     the keyboard cursor vanishes entirely in Windows High Contrast. Highlight
+     rather than SelectedItem: this is the cursor, not the selection. */
+  .forge-row[aria-selected="true"] {
+    outline: 2px solid SelectedItem;
+    outline-offset: -2px;
+  }
+
+  /* Two independent states on one row — the keyboard cursor and bulk
+     membership — so they cannot both be an outline: the later rule would
+     simply overwrite the earlier one and a selected row under the cursor would
+     lose the cursor. Membership keeps the outline (above); the cursor keeps
+     its leading rail, redrawn here from a system colour because the
+     `background-color` it normally paints with is stripped in this mode. */
+  .forge-row[data-active="true"]::before {
+    background: Highlight;
+    forced-color-adjust: none;
+    opacity: 1;
+  }
+
+  /* The worktree overview grid has the same two states as the forge rows, and
+     both of its normal-mode marks are stripped here: membership paints a tint
+     plus a Tailwind `ring` (a box-shadow), and the keyboard cursor paints an
+     accent outline that the UA recolours. Split them the same way — membership
+     keeps the outline, the cursor moves to the cell's border, which is a
+     property nothing else on the cell is using. Giving both an outline would
+     let the later rule win and a selected cell under the cursor would lose the
+     cursor. */
+  [role="gridcell"][aria-selected="true"][data-worktree-overview-cell] {
+    outline: 2px solid SelectedItem;
+    outline-offset: -2px;
+  }
+
+  /* Scoped to the focused grid, matching the normal-mode rule. The cursor is
+     `aria-activedescendant`, so its id is deliberately retained after the grid
+     loses focus — but the mark is not meant to survive with it. Unscoped, a
+     user who tabbed back to the search field kept a Highlight-bordered card on
+     screen while the field drew its own focus ring. */
+  [role="grid"]:focus-visible [data-worktree-overview-cell][data-overview-cursor="true"] {
+    border-color: Highlight;
+    border-width: 2px;
+  }
+
+  /* The project switcher's command rows run full-bleed, so their border box
+     reaches the palette's own clipped edge. The blanket `outline-offset: 2px`
+     above would draw their focus ring outside that clip and lose its left and
+     right strokes entirely — the ring has to turn inward here. `!important`
+     because the rule it is answering carries one, and specificity alone does
+     not settle a contest between two important declarations. Same marker-class
+     approach as `.palette-row`, for the same reason: `button` is far too broad
+     a hook to hang this on. */
+  .palette-command-row:focus-visible {
+    outline-offset: -2px !important;
   }
 
   /* Macro-focus regions use a Tailwind ring (box-shadow) which is removed here.
@@ -2739,6 +2953,62 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border: 1px solid ButtonText;
   }
 
+  /* The launcher's teaching link is a control that must never read as one.
+     The blanket border above frames it into a pill sitting under the canvas
+     home's tip sentence, which is exactly the "another action module" the tip
+     is designed not to be — and the surface already carries a real primary
+     action four bands above it. Its permanent underline is the affordance in
+     every mode, so dropping the frame costs nothing.
+
+     Deliberately duplicated rather than shared with the `prefers-contrast`
+     block below: macOS fires only `prefers-contrast: more` and Windows swaps
+     in system colours, so the two blocks stay independent (see the rationale
+     at the top of each). */
+  .tip-action {
+    border: none;
+  }
+
+  /* A destructive button is distinguished only by its fill, and the UA replaces
+   * every fill with a system colour — so "Delete worktree" and "Cancel" render
+   * as the same white pill with the same border, and nothing marks which one
+   * destroys. Stroke WEIGHT is one of the few things the UA leaves alone, so
+   * the destructive action takes a heavier border. Deliberately not an outline:
+   * the focus ring above already owns `outline` and the later rule would win,
+   * erasing the distinction on the button the user is most likely focused on. */
+  button[data-variant="destructive"] {
+    border: 2px solid ButtonText;
+  }
+
+  /* …and the weight has to be re-asserted on everything else, or the signal
+   * above collapses. The `prefers-contrast: more` block later in this file sets
+   * `border-width: 2px` on bare `button` to anchor click targets, and Chromium
+   * reports `prefers-contrast: more` alongside `forced-colors: active` on a
+   * high-contrast Windows palette — so on the platform this block exists for,
+   * Cancel reached 2px, the destructive button was already 2px, and the two
+   * rendered identically. Pinning the others back to 1px rather than raising the
+   * destructive to 3px: the 1px/2px pair is the distinction that was designed,
+   * and the later block's own purpose — a visible border where Preflight left
+   * none — is already served by the 1px shorthand above.
+   *
+   * The specificity here is calibrated, not incidental, and it has to sit in a
+   * narrow band. `:where()` contributes nothing and `html` supplies the element,
+   * so the whole selector is (0,1,1):
+   *
+   *   - above the later generic `button` at (0,0,1), so it wins on rank rather
+   *     than on which block happens to come last in the file;
+   *   - BELOW `toolbar.css`'s armed/open rules at (0,2,0), which set their own
+   *     2px ButtonText border as the forced-colors fallback for a stripped tint
+   *     and inset ring. Spelling this out per-attribute instead — as
+   *     `[type="button"]:not(…)` — lands at (0,2,0), ties those, and wins on
+   *     source order, which silently flattens every pressed or open toolbar
+   *     control back to idle. */
+  html
+    :where(button, [role="button"], [type="button"], [type="submit"], [type="reset"]):not(
+      [data-variant="destructive"]
+    ) {
+    border-width: 1px;
+  }
+
   input,
   select,
   textarea {
@@ -2752,6 +3022,95 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
      this is the only place in this block that needs it. */
   [data-activity-active="true"] {
     background-color: CanvasText !important;
+  }
+
+  /* Inbox unread dot. Same problem, same fix: the dot is a solid background, so
+     forced colors pushes it to Canvas and it vanishes. It is load-bearing here
+     in a way it is not elsewhere — an unread inbox row deliberately carries no
+     border and no background tint (weight on the title is the only companion
+     signal), and an untitled row has no title to embolden, so losing the dot
+     leaves that row with no unread indication at all. CanvasText, not
+     Highlight: this block already spends Highlight on `*:focus-visible`, and a
+     row can be both unread and focused. */
+  [data-notification-unread="true"] {
+    background-color: CanvasText !important;
+    /* The dot badges the status icon now instead of sitting off in the row's
+       left gutter, and this block paints the icon CanvasText too — so the two
+       fuse into one malformed glyph without a cut-out between them. The ring
+       that separates them in the normal cascade is a box-shadow, and box
+       shadows are not painted here, so the cut-out has to be an outline.
+       Outlines follow border-radius, so it stays round. */
+    outline: 1.5px solid Canvas;
+  }
+
+  /* Inbox thread-count chip. The tint fill is forced to Canvas, which strips the
+     pill and leaves a bare numeral running on from the title — "Push rejected 3"
+     reads as the title rather than as a count of three grouped events. Borders
+     survive the override, so give it one. */
+  [data-notification-count="true"] {
+    border: 1px solid CanvasText;
+  }
+
+  /* Inbox thread rail. This used to be a `border-l-2`, which survived the
+     override on its own but pushed every threaded row 2px right of every solo
+     one. It is now an absolutely positioned background, and a background is
+     forced to Canvas here — so repaint it, or threaded rows lose their only
+     at-rest marker in the one mode that has no other way to show it. */
+  [data-notification-thread-rail="true"] {
+    background-color: CanvasText !important;
+  }
+
+  /* Inbox filter segments. Selection is carried by a fill, which the UA
+     flattens to Canvas, so all four chips arrive as the same outlined pill and
+     the panel stops saying which filter you are looking at — you cannot tell
+     Archived from All. Same shape of problem as the destructive button above,
+     and the same remedy: the selected one takes the heavier border. Not
+     Highlight — this block already spends Highlight on `*:focus-visible`, and a
+     chip can be both selected and focused. */
+  [data-notification-filter="true"][aria-pressed="true"] {
+    border: 2px solid ButtonText;
+  }
+
+  /* Inbox row actions. Primary is marked by a status-info fill and border; both
+     are flattened, leaving "Pull and rebase" and "Open review" identical, so the
+     recommended action loses its recommendation at exactly the moment the row is
+     reporting a failure. */
+  [data-notification-action="primary"] {
+    border: 2px solid ButtonText;
+  }
+
+  /* Shared hook for status marks painted as a background — the small discs and
+     the rotated anomaly diamond scattered across settings, panels, the toolbar
+     and the worktree surfaces (#12000). The UA forces every one of those fills
+     to Canvas, so the mark renders as nothing; `ring-*` is no rescue either
+     since it compiles to box-shadow, which is removed outright and cannot be
+     repainted. Repaint the fill instead.
+
+     One CanvasText fill for all of them on purpose: hue is gone here whatever
+     we do, so for a single mark this rule only owes that it is still THERE.
+     Marks whose severity is the signal do not lean on the fill for it — they
+     carry a glyph from `src/lib/statusSeverity.ts`, whose shape survives where
+     colour cannot.
+
+     A mark MAY still carry meaning under this hook by being more than one
+     element: `WorktreeStatusTick` puts the class on each of its 1-3 segments,
+     so what this rule flattens is three fills that were already the same
+     colour to a forced-colors reader, and the gaps between them — which are
+     real elements, not a background pattern — go on doing the telling apart.
+     Consolidating such a class onto its container would repaint the gaps too
+     and collapse every state into one bar. Put it on the pieces. */
+  .status-mark {
+    background-color: CanvasText !important;
+  }
+
+  /* Marks that live inside a control. The UA paints button surfaces ButtonFace,
+     and only ButtonText is guaranteed to contrast against it — Canvas and
+     ButtonFace happen to be the same colour in the stock high-contrast themes,
+     but a user's own palette is free to separate them. Same repaint, matched
+     pair. */
+  button .status-mark,
+  [role="button"] .status-mark {
+    background-color: ButtonText !important;
   }
 
   /* Project-switcher row marks. The solid states are a CSS background, which
@@ -2849,6 +3208,28 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-width: 2px;
   }
 
+  /* Inbox filter segments. This mode outlines the unselected chips but leaves
+     the selected one carrying only its fill, so the one chip that is different
+     is the one missing the silhouette its siblings share and the row reads as
+     three buttons plus a smudge. Give the selected chip the same ring, inset so
+     it sits inside the pill rather than growing it. Separate from the
+     forced-colors rule on purpose — author colours survive here, so the fill
+     still does its job and only the outline is missing. */
+  [data-notification-filter="true"][aria-pressed="true"] {
+    outline: 1px solid var(--color-border-strong);
+    outline-offset: -1px;
+  }
+
+  /* Overview grid membership: the neutral leading rail is deliberately quiet
+     at normal contrast (accent restraint reserves the loud mark for the
+     keyboard cursor), which leaves it thin here. Widen the rail rather than
+     recolour it or add a second mark — the same ink, the same geometry, just
+     no longer a hairline, so membership does not change identity between the
+     two contrast modes. */
+  [role="gridcell"][aria-selected="true"][data-worktree-overview-cell]::before {
+    width: 5px;
+  }
+
   /* Track the widened border so the cue's hairline stays inside it rather
      than painting on top of it. */
   .terminal-selected-quiet {
@@ -2886,13 +3267,36 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-width: 2px;
   }
 
+  /* Same exemption as the forced-colors block, and deliberately restated here
+     rather than merged: the launcher's teaching link must not be framed into a
+     button. Its underline carries the affordance. */
+  .tip-action {
+    border-width: 0;
+  }
+
   /* Tailwind v4 emits `text-daintree-text/N` with a literal slash in the
    * class attribute and bakes the alpha into `color-mix()` on the color
    * property — `opacity: 1` cannot recover the lost contrast. Forcing the
    * solid token restores it. !important is required because the Tailwind
-   * utility rule has equal specificity (0,1,0) and wins on source order. */
+   * utility rule has equal specificity (0,1,0) and wins on source order.
+   *
+   * #12065 narrowed this rule by emptying it, not by editing it. What it used
+   * to catch was 1,906 sites, most of them prose expressing a hierarchy through
+   * alpha; those now spell a solid text token and this selector no longer
+   * reaches them. What is left inside it is the reviewed carve-out set — icon
+   * affordances, decorative glyphs, deliberate disabled states, text already
+   * composited by an ancestor's opacity — and flattening exactly those under
+   * Increase Contrast is the right behaviour rather than the bug the rule was
+   * once accused of. Every survivor is named in
+   * `scripts/baselines/text-ramp-manifest.json`.
+   *
+   * Deliberately still keyed on the legacy namespace. Repointing it at
+   * `[class*="text-text-primary/"]` would force-flatten the fifteen semantic
+   * slash-alpha sites that have nothing to do with the ramp — among them two
+   * drag handles resting at `/25` that darken to `/40` on hover, whose whole
+   * affordance is that they stay faint until you reach for them. */
   [class*="text-daintree-text/"] {
-    color: var(--color-daintree-text) !important;
+    color: var(--color-text-primary) !important;
   }
 
   /* Project Pulse heatmap (issue #9819). On macOS Increase Contrast the theme
@@ -2902,7 +3306,7 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   .pulse-heat-cell {
     border-width: 1px;
     border-style: solid;
-    border-color: var(--color-daintree-text);
+    border-color: var(--color-text-primary);
   }
 
   /* File-browser type icons (issue #11596). Entry icons paint in the secondary
@@ -2922,7 +3326,7 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
    * already forces `color` to a system keyword, so the flattening happens on
    * its own with no rule at all. */
   .file-tree-entry-icon {
-    color: var(--color-daintree-text) !important;
+    color: var(--color-text-primary) !important;
   }
 
   /* Diff-viewer increased-contrast rules live in src/components/Worktree/DiffViewer.css
@@ -2953,6 +3357,20 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   .light .surface-overlay {
     --scroll-shadow-color: var(--color-surface-panel-elevated);
     background-color: var(--color-surface-panel-elevated);
+  }
+
+  /* Solid stand-in for the frosted overlay background, for marks that have to
+     punch a hole in their own backdrop — the inbox unread badge sitting on the
+     corner of a status icon. The surface is 94% + backdrop-blur on dark and no
+     flat colour reproduces that, but at ring width the missing 6% is invisible,
+     whereas mixing in transparency would tint the ring with whatever the
+     popover happens to be floating over. */
+  .surface-overlay {
+    --overlay-surface-solid: var(--color-surface-sidebar);
+  }
+
+  .light .surface-overlay {
+    --overlay-surface-solid: var(--color-surface-panel-elevated);
   }
 
   /* Cmd+K command HUD — a distinct dark-glass "spotlight" surface. Deeper and

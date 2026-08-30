@@ -198,7 +198,6 @@ export const theme: BuiltInThemeSource = {
     "toolbar-control-hover-fg": "#272119",
     "toolbar-control-hover-shadow": "none",
     "toolbar-divider": "rgba(212,203,189,0.7)",
-    "toolbar-pill-radius": "0.5rem",
     // Pills sit lighter than the chrome strip (raised, like all content).
     "toolbar-project-bg":
       "linear-gradient(180deg, rgba(178,80,36,0.06), rgba(39,33,25,0.02)), #FBF7F0",

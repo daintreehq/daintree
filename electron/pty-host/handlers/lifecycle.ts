@@ -231,6 +231,10 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
       ptyManager.updateTitle(msg.id, msg.title, msg.titleMode);
     },
 
+    "update-worktree-id": (msg) => {
+      ptyManager.updateWorktreeId(msg.id, msg.worktreeId, msg.expectedProjectId);
+    },
+
     "transition-state": (msg) => {
       const success = ptyManager.transitionState(
         msg.id,

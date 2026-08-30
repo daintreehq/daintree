@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, expectTypeOf, vi } from "vitest";
 import { mapTerminalInfo, narrowDetectedAgentId } from "../terminalInfo.js";
 import type { HostContext } from "../types.js";
+import type { PtyHostTerminalInfo } from "../../../../shared/types/pty-host.js";
 
 function createCtx(overrides: Partial<HostContext> = {}): HostContext {
   const ptyManager = {
@@ -68,6 +69,7 @@ function makeTerminal(overrides: Record<string, unknown> = {}) {
     agentSessionId: undefined,
     agentLaunchFlags: undefined,
     agentModelId: undefined,
+    worktreeId: undefined,
     agentPresetId: undefined,
     agentPresetColor: undefined,
     originalAgentPresetId: undefined,
@@ -152,6 +154,35 @@ describe("mapTerminalInfo", () => {
     const result = mapTerminalInfo(makeTerminal({ lastInputTime: 111, lastOutputTime: 222 }), ctx);
     expect(result.lastInputTime).toBe(111);
     expect(result.lastOutputTime).toBe(222);
+  });
+
+  it("forwards worktreeId so fleet rows keep their worktree attribution (#12078)", () => {
+    // FleetSnapshotService copies worktreeId onto every FleetRunRow and the
+    // palette groups on it; a dropped field files every agent under the single
+    // "No worktree" heading no matter which worktree it actually runs in.
+    const ctx = createCtx();
+    const t = makeTerminal({ worktreeId: "/repo/.worktrees/feature" });
+
+    expect(mapTerminalInfo(t, ctx).worktreeId).toBe(t.worktreeId);
+  });
+
+  it("leaves a worktree-less terminal unattributed rather than guessing from cwd", () => {
+    const ctx = createCtx();
+    const result = mapTerminalInfo(makeTerminal({ cwd: "/repo" }), ctx);
+
+    expect(result.worktreeId).toBeUndefined();
+  });
+
+  it("emits exactly the field set the host response type declares", () => {
+    // Compile-time only. Nearly every field on PtyHostTerminalInfo is optional,
+    // so dropping one from the mapper still type-checks at all four call sites
+    // — which is how #12078 shipped. Equality (not a subset check) is the point:
+    // it also catches the mapper growing a field the wire type never declared,
+    // which is how `lastObservedTitle` rode across undeclared for as long as it
+    // did.
+    expectTypeOf<keyof ReturnType<typeof mapTerminalInfo>>().toEqualTypeOf<
+      keyof PtyHostTerminalInfo
+    >();
   });
 
   it("reports the pty handle's live grid so restore can rebuild on it (#11718)", () => {

@@ -9,6 +9,6 @@ import type { CSSProperties } from "react";
  */
 export const TRANSPARENCY_CHECKERBOARD_STYLE: CSSProperties = {
   backgroundImage:
-    "repeating-conic-gradient(color-mix(in oklab, var(--color-daintree-border) 45%, transparent) 0% 25%, transparent 0% 50%)",
+    "repeating-conic-gradient(color-mix(in oklab, var(--color-border-default) 45%, transparent) 0% 25%, transparent 0% 50%)",
   backgroundSize: "16px 16px",
 };

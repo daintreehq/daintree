@@ -88,3 +88,28 @@ describe("isWindows", () => {
     expect(isWindows()).toBe(false);
   });
 });
+
+describe("fileManagerRevealLabel", () => {
+  it("names Finder on macOS", async () => {
+    stubNavigator("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", "MacIntel");
+    const { fileManagerRevealLabel } = await import("../platform");
+    expect(fileManagerRevealLabel()).toBe("Show in Finder");
+  });
+
+  it("names Explorer on Windows", async () => {
+    stubNavigator("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Win32");
+    const { fileManagerRevealLabel } = await import("../platform");
+    expect(fileManagerRevealLabel()).toBe("Show in Explorer");
+  });
+
+  it("falls back to a generic name on Linux and anything unrecognised", async () => {
+    stubNavigator("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36", "Linux x86_64");
+    const { fileManagerRevealLabel } = await import("../platform");
+    expect(fileManagerRevealLabel()).toBe("Show in file manager");
+
+    stubNavigator("Mozilla/5.0 (Unknown)", "SomethingElse");
+    vi.resetModules();
+    const reloaded = await import("../platform");
+    expect(reloaded.fileManagerRevealLabel()).toBe("Show in file manager");
+  });
+});

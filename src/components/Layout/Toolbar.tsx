@@ -21,6 +21,7 @@ import {
   Ellipsis,
   GitBranch,
   FileText,
+  Pencil,
   Pin,
   PinOff,
   Clipboard,
@@ -148,7 +149,7 @@ const LazyCopyTreeRecentsPanel = lazy(() =>
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
+const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
 
 // These controls are project-only visually, but their no-drag rectangles must
 // exist on first paint so secondary windows don't cache them as titlebar drag.
@@ -165,7 +166,7 @@ const NO_PINNED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
 
 function ForgeStatsPlaceholder() {
   return (
-    <div className="toolbar-stats app-no-drag relative mr-2 flex h-8 w-[13rem] shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,0.5rem)] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))] opacity-0 pointer-events-none">
+    <div className="toolbar-stats app-no-drag relative mr-2 flex h-8 w-[13rem] shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))] opacity-0 pointer-events-none">
       <div className="h-8 flex-1" />
       <div className="h-8 flex-1" />
       <div className="h-8 flex-1" />
@@ -548,7 +549,7 @@ function AgentOverflowItem({
           <span
             aria-hidden="true"
             className={cn(
-              "absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-bg",
+              "status-mark absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-surface-canvas",
               dotColor
             )}
           />
@@ -1294,7 +1295,7 @@ export function Toolbar({
                       aria-disabled={isCopyingTree || !activeWorktree || undefined}
                       className={cn(
                         "toolbar-icon-button relative",
-                        "text-daintree-text",
+                        "text-text-primary",
                         isCopyingTree && "cursor-wait opacity-70",
                         "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                       )}
@@ -1310,7 +1311,7 @@ export function Toolbar({
                     {copyTreeNotice ? (
                       <span className="flex flex-col gap-0.5">
                         <span>{copyTreeNotice.title}</span>
-                        <span className="font-normal text-daintree-text/60">
+                        <span className="font-normal text-text-secondary">
                           {copyTreeNotice.message}
                         </span>
                       </span>
@@ -1927,12 +1928,67 @@ export function Toolbar({
     void projectSwitcher.togglePinProject(currentProject.id);
   }, [currentProject, projectSwitcher]);
 
+  // Which project's identity editor is open, rather than a bare boolean: a flag
+  // would outlive the project it belongs to and reopen the popover over
+  // whichever project came next.
+  const [identityEditorProjectId, setIdentityEditorProjectId] = useState<string | null>(null);
+  // Dropped rather than merely ignored when the project underneath it goes:
+  // a controlled Radix popover is not told its `open` prop fell to false, so a
+  // stale id would sit here and raise the editor again the next time that
+  // project came back. Adjusted during render for the same reason the editor's
+  // own draft re-seed is — an effect would opt this component out of the
+  // React Compiler.
+  if (identityEditorProjectId !== null && identityEditorProjectId !== currentProject?.id) {
+    setIdentityEditorProjectId(null);
+  }
+  const isIdentityEditorOpen = identityEditorProjectId !== null;
+  // Selecting the item records the intent; the menu's own close hook spends it.
+  // Opening straight from `onSelect` would raise the popover inside the menu's
+  // teardown, where Radix still holds the focus trap and the outside-pointer
+  // lock — so the release that closed the menu can dismiss the popover it just
+  // opened. `onCloseAutoFocus` fires once the menu is actually gone.
+  // Carries WHICH project was right-clicked, not just that something was: the
+  // intent outlives the menu by an exit animation, and the project can change
+  // underneath it in that time.
+  const pendingIdentityEditRef = useRef<string | null>(null);
+  const handleEditProjectIdentity = useCallback(() => {
+    pendingIdentityEditRef.current = currentProject?.id ?? null;
+  }, [currentProject?.id]);
+  // Radix keeps the content mounted through its 120ms exit, so a menu reopened
+  // inside that window never unmounts and never reaches the close hook below.
+  // Dropping the intent on every open means the worst case is one edit request
+  // the user has visibly superseded, rather than a popover that springs open on
+  // some later, unrelated close.
+  const handlePillContextMenuOpenChange = useCallback((open: boolean) => {
+    if (open) pendingIdentityEditRef.current = null;
+  }, []);
+  const handlePillContextMenuCloseAutoFocus = useCallback(
+    (event: Event) => {
+      suppressPillTooltipForFocusRestore();
+      event.preventDefault();
+      const pendingProjectId = pendingIdentityEditRef.current;
+      pendingIdentityEditRef.current = null;
+      // A project swapped in during the exit animation is a different project
+      // than the one the user right-clicked; drop the request rather than
+      // opening the editor over it.
+      if (pendingProjectId === null || pendingProjectId !== currentProject?.id) return;
+      setIdentityEditorProjectId(pendingProjectId);
+    },
+    [currentProject?.id, suppressPillTooltipForFocusRestore]
+  );
+  const handleIdentityEditorOpenChange = useCallback(
+    (next: boolean) => {
+      setIdentityEditorProjectId(next ? (currentProject?.id ?? null) : null);
+    },
+    [currentProject?.id]
+  );
+
   const projectSwitcherTrigger = (
     <ContextMenuTrigger asChild>
       <TooltipTrigger asChild>
         <button
           data-toolbar-item=""
-          className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           data-testid="project-switcher-trigger"
           aria-label={workspaceIdentity.ariaLabel}
           role={workspaceIdentity.kind !== "none" ? "combobox" : undefined}
@@ -1957,7 +2013,7 @@ export function Toolbar({
           )}
           <span
             className={cn(
-              "min-w-0 truncate text-xs tracking-wide text-daintree-text",
+              "min-w-0 truncate text-xs tracking-wide text-text-primary",
               workspaceIdentity.kind !== "none" ? "font-semibold" : "font-medium"
             )}
           >
@@ -2045,15 +2101,22 @@ export function Toolbar({
             aria-label="Project"
             className="app-no-drag relative flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
           >
-            {/* Sibling of the pill, not a child — see ProjectIdentityEditor. */}
-            {currentProject && <ProjectIdentityEditor project={currentProject} />}
+            {/* Anchor-only sibling of the pill — see ProjectIdentityEditor. */}
+            {currentProject && (
+              <ProjectIdentityEditor
+                project={currentProject}
+                open={isIdentityEditorOpen}
+                onOpenChange={handleIdentityEditorOpenChange}
+                onCloseAutoFocus={suppressPillTooltipForFocusRestore}
+              />
+            )}
             <Tooltip
               open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
               onOpenChange={
                 workspaceIdentity.kind !== "none" ? handlePillTooltipOpenChange : undefined
               }
             >
-              <ContextMenu>
+              <ContextMenu onOpenChange={handlePillContextMenuOpenChange}>
                 {shouldMountProjectSwitcherDropdown ? (
                   <Suspense fallback={projectSwitcherTrigger}>
                     <LazyProjectSwitcherPalette
@@ -2061,6 +2124,7 @@ export function Toolbar({
                       isOpen={isDropdownOpen}
                       query={projectSwitcher.query}
                       results={projectSwitcher.results}
+                      browseBands={projectSwitcher.browseBands}
                       selectedIndex={projectSwitcher.selectedIndex}
                       onQueryChange={projectSwitcher.setQuery}
                       onSelectPrevious={projectSwitcher.selectPrevious}
@@ -2129,11 +2193,15 @@ export function Toolbar({
                 {currentProject && (
                   <ContextMenuContent
                     className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
-                    onCloseAutoFocus={(e) => {
-                      suppressPillTooltipForFocusRestore();
-                      e.preventDefault();
-                    }}
+                    onCloseAutoFocus={handlePillContextMenuCloseAutoFocus}
                   >
+                    {/* The display name and emoji. Distinct from the switcher
+                        row's "Move or rename project…", which relocates the
+                        folder on disk. */}
+                    <ContextMenuItem onSelect={handleEditProjectIdentity}>
+                      <Pencil className="mr-2 h-3.5 w-3.5" />
+                      Edit name and icon…
+                    </ContextMenuItem>
                     <ContextMenuItem onSelect={handlePillTogglePin}>
                       {activeSearchableProject?.isPinned ? (
                         <>
@@ -2178,7 +2246,7 @@ export function Toolbar({
                       {currentProject.name}
                       {branchName ? ` · ${branchName}` : ""}
                     </div>
-                    <div className="text-text-muted font-mono text-[11px] truncate">
+                    <div className="text-text-muted font-mono text-2xs truncate">
                       {currentProject.path}
                     </div>
                   </div>
@@ -2188,7 +2256,7 @@ export function Toolbar({
                 <TooltipContent side="bottom" className="max-w-[28rem]">
                   <div className="flex flex-col gap-0.5">
                     <div className="text-xs font-medium">{currentScratch.name}</div>
-                    <div className="text-text-muted text-[11px]">Scratch workspace</div>
+                    <div className="text-text-muted text-2xs">Scratch workspace</div>
                   </div>
                 </TooltipContent>
               )}

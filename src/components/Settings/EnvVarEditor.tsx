@@ -248,7 +248,7 @@ function EnvVarKeyCell({
             }}
             type="text"
             className={cn(
-              "w-full h-full bg-transparent border-0 outline-hidden py-2 font-mono text-[12px]",
+              "w-full h-full bg-transparent border-0 outline-hidden py-2 font-mono text-xs leading-[inherit]",
               "focus:ring-2 focus:ring-inset focus:ring-daintree-accent/40",
               "disabled:cursor-default",
               showChevron ? "pl-2.5 pr-8" : "px-2.5",
@@ -258,7 +258,7 @@ function EnvVarKeyCell({
                   ? "text-status-error"
                   : isDuplicate
                     ? "text-status-warning"
-                    : "text-daintree-text/80"
+                    : "text-text-primary"
             )}
             value={value}
             placeholder="KEY"
@@ -359,9 +359,9 @@ function EnvVarKeyCell({
                 )}
                 data-testid="env-editor-key-suggestion"
               >
-                <span className="font-mono text-xs text-daintree-text/80 shrink-0">{s.key}</span>
+                <span className="font-mono text-xs text-text-primary shrink-0">{s.key}</span>
                 {s.hint && (
-                  <span className="text-[11px] text-daintree-text/50 leading-snug">{s.hint}</span>
+                  <span className="text-2xs text-text-secondary leading-snug">{s.hint}</span>
                 )}
               </div>
             ))}
@@ -371,7 +371,7 @@ function EnvVarKeyCell({
       {(isEmptyKey || isDuplicate) && (
         <p
           className={cn(
-            "absolute left-2.5 bottom-0.5 text-[9px] leading-none pointer-events-none",
+            "absolute left-2.5 bottom-0.5 text-4xs leading-none pointer-events-none",
             isEmptyKey ? "text-status-error" : "text-status-warning"
           )}
           data-testid={isEmptyKey ? "env-editor-error-empty" : "env-editor-error-duplicate"}
@@ -690,11 +690,11 @@ export function EnvVarEditor({
 
   return (
     <div
-      className="rounded-[var(--radius-md)] border border-daintree-border overflow-hidden bg-daintree-bg/30"
+      className="rounded-[var(--radius-md)] border border-border-default overflow-hidden bg-daintree-bg/30"
       data-testid={dataTestId}
     >
       {/* Header */}
-      <div className="grid grid-cols-[2fr_3fr_auto] text-[10px] uppercase tracking-wide text-daintree-text/50 bg-daintree-bg/40 border-b border-daintree-border">
+      <div className="grid grid-cols-[2fr_3fr_auto] text-3xs uppercase tracking-wide text-text-secondary bg-daintree-bg/40 border-b border-border-default">
         <div className="px-2.5 py-1.5">Key</div>
         <div className="px-2.5 py-1.5 border-l border-daintree-border/60">Value</div>
         <div className="px-2.5 py-1.5 w-9" aria-hidden="true" />
@@ -705,7 +705,7 @@ export function EnvVarEditor({
           <button
             type="button"
             onClick={handleAdd}
-            className="w-full flex items-center justify-center gap-1.5 py-4 text-[12px] text-daintree-text/50 hover:text-daintree-text hover:bg-daintree-bg/50 transition-colors border border-dashed border-daintree-border/60 rounded-[var(--radius-sm)]"
+            className="w-full flex items-center justify-center gap-1.5 py-4 text-xs leading-[inherit] text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors border border-dashed border-daintree-border/60 rounded-[var(--radius-sm)]"
             data-testid="env-editor-add"
           >
             <Plus size={12} aria-hidden="true" />
@@ -714,7 +714,7 @@ export function EnvVarEditor({
           <button
             type="button"
             onClick={() => setIsImportOpen(true)}
-            className="w-full flex items-center justify-center gap-1.5 py-2 text-[11px] text-daintree-text/50 hover:text-daintree-text hover:bg-daintree-bg/50 transition-colors rounded-[var(--radius-sm)]"
+            className="w-full flex items-center justify-center gap-1.5 py-2 text-2xs text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors rounded-[var(--radius-sm)]"
             data-testid="env-editor-import"
           >
             <Upload size={12} aria-hidden="true" />
@@ -722,7 +722,7 @@ export function EnvVarEditor({
           </button>
         </div>
       ) : (
-        <div className="divide-y divide-daintree-border">
+        <div className="divide-y divide-border-default">
           {rows.map((row) => {
             const trimmedKey = row.key.trim();
             const touched = !!touchedKeys[row.rowId];
@@ -740,7 +740,7 @@ export function EnvVarEditor({
               : isDuplicate || hasSecretWarning
                 ? "before:bg-status-warning/70"
                 : isOverride
-                  ? "before:bg-daintree-accent"
+                  ? "before:bg-accent-primary"
                   : "before:bg-transparent";
             // Keys taken by *other* editable rows — used to filter the
             // suggestion popover so a single key can't be picked twice.
@@ -782,7 +782,7 @@ export function EnvVarEditor({
                   <input
                     type={valueInputType}
                     className={cn(
-                      "w-full h-full bg-transparent border-0 outline-hidden py-2 font-mono text-[12px]",
+                      "w-full h-full bg-transparent border-0 outline-hidden py-2 font-mono text-xs leading-[inherit]",
                       "focus:ring-2 focus:ring-inset focus:ring-daintree-accent/40",
                       "disabled:cursor-default",
                       isSecret ? "pl-2.5 pr-8" : "px-2.5",
@@ -840,7 +840,7 @@ export function EnvVarEditor({
                   )}
                   {hasSecretWarning && (
                     <p
-                      className="absolute left-2.5 bottom-0.5 text-[9px] leading-none text-status-warning pointer-events-none"
+                      className="absolute left-2.5 bottom-0.5 text-4xs leading-none text-status-warning pointer-events-none"
                       data-testid="env-editor-warning-secret"
                       title="Looks like a secret. Prefer a ${ENV_VAR} reference to your shell environment."
                     >
@@ -849,7 +849,7 @@ export function EnvVarEditor({
                   )}
                   {!hasSecretWarning && normalizedRows.has(row.rowId) && (
                     <p
-                      className="absolute left-2.5 bottom-0.5 text-[9px] leading-none text-status-info pointer-events-none"
+                      className="absolute left-2.5 bottom-0.5 text-4xs leading-none text-status-info pointer-events-none"
                       data-testid="env-editor-normalized"
                     >
                       Pasted text normalized
@@ -861,7 +861,7 @@ export function EnvVarEditor({
                   {row.isInherited ? (
                     <button
                       type="button"
-                      className="p-1 rounded text-daintree-text/40 hover:text-daintree-text hover:bg-daintree-bg/60 transition-colors"
+                      className="p-1 rounded text-daintree-text/40 hover:text-text-primary hover:bg-daintree-bg/60 transition-colors"
                       aria-label={`Override ${trimmedKey} in this preset`}
                       onClick={() => handleOverride(row.rowId)}
                       data-testid="env-editor-override"
@@ -872,7 +872,7 @@ export function EnvVarEditor({
                   ) : isOverride ? (
                     <button
                       type="button"
-                      className="p-1 rounded text-daintree-text/40 hover:text-daintree-text hover:bg-daintree-bg/60 transition-colors"
+                      className="p-1 rounded text-daintree-text/40 hover:text-text-primary hover:bg-daintree-bg/60 transition-colors"
                       aria-label={`Revert ${trimmedKey} to inherited value`}
                       onClick={() => handleRevert(row.rowId)}
                       data-testid="env-editor-revert"
@@ -899,11 +899,11 @@ export function EnvVarEditor({
       )}
       {/* Add row (only when non-empty — empty state has its own affordance) */}
       {!isEmpty && (
-        <div className="grid grid-cols-2 divide-x divide-daintree-border border-t border-daintree-border">
+        <div className="grid grid-cols-2 divide-x divide-border-default border-t border-border-default">
           <button
             type="button"
             onClick={handleAdd}
-            className="flex items-center justify-center gap-1.5 py-2 text-[11px] text-daintree-text/50 hover:text-daintree-text hover:bg-daintree-bg/50 transition-colors"
+            className="flex items-center justify-center gap-1.5 py-2 text-2xs text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors"
             data-testid="env-editor-add"
           >
             <Plus size={12} aria-hidden="true" />
@@ -912,7 +912,7 @@ export function EnvVarEditor({
           <button
             type="button"
             onClick={() => setIsImportOpen(true)}
-            className="flex items-center justify-center gap-1.5 py-2 text-[11px] text-daintree-text/50 hover:text-daintree-text hover:bg-daintree-bg/50 transition-colors"
+            className="flex items-center justify-center gap-1.5 py-2 text-2xs text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors"
             data-testid="env-editor-import"
           >
             <Upload size={12} aria-hidden="true" />

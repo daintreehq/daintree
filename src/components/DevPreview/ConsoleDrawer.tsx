@@ -49,7 +49,7 @@ const STATUS_LABEL: Record<
 > = {
   stopped: {
     label: "Stopped",
-    textClass: "text-daintree-text/50",
+    textClass: "text-text-secondary",
     dotClass: "bg-daintree-text/40",
   },
   starting: {
@@ -79,7 +79,7 @@ const STATUS_LABEL: Record<
   },
   "restored-stopped": {
     label: "Stopped",
-    textClass: "text-daintree-text/50",
+    textClass: "text-text-secondary",
     dotClass: "bg-daintree-text/40",
   },
 };
@@ -115,9 +115,9 @@ function DrawerTabButton({
       aria-controls={controlsId}
       className={cn(
         "relative px-3 py-1.5 text-xs font-medium rounded transition-colors",
-        "hover:text-daintree-text hover:bg-overlay-soft",
+        "hover:text-text-primary hover:bg-overlay-soft",
         "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-info",
-        isActive ? "text-daintree-text" : "text-daintree-text/65"
+        isActive ? "text-text-primary" : "text-text-secondary"
       )}
     >
       {label}
@@ -245,7 +245,7 @@ export function ConsoleDrawer({
       status === "stopping");
   const stopDisabled = isRestarting || status === "stopping";
   const statusClass = cn(
-    "inline-flex min-h-8 items-center px-3 text-[10px] font-semibold uppercase tracking-wide",
+    "inline-flex min-h-8 items-center px-3 text-3xs font-semibold uppercase tracking-wide",
     (hasRestartControls || stopVisible) && "border-r border-overlay/70",
     statusLabel.textClass
   );
@@ -261,7 +261,7 @@ export function ConsoleDrawer({
         <button
           type="button"
           onClick={toggleDrawer}
-          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 border-r border-overlay/70 px-3 py-1.5 text-xs font-semibold text-daintree-text/80 transition-colors hover:bg-overlay-medium focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-info"
+          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 border-r border-overlay/70 px-3 py-1.5 text-xs font-semibold text-text-primary transition-colors hover:bg-overlay-medium focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-info"
           aria-expanded={isOpen}
           aria-controls={drawerRegionId}
           aria-label="Toggle output drawer"
@@ -274,7 +274,12 @@ export function ConsoleDrawer({
         </button>
 
         <div className={statusClass} role="status" aria-live="polite">
-          <span className={cn("mr-2 h-1.5 w-1.5 shrink-0 rounded-full", statusLabel.dotClass)} />
+          <span
+            className={cn(
+              "status-mark mr-2 h-1.5 w-1.5 shrink-0 rounded-full",
+              statusLabel.dotClass
+            )}
+          />
           {statusLabel.label}
         </div>
 

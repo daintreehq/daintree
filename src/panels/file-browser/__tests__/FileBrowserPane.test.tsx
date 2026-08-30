@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { render, act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type React from "react";
 
 // FileBrowserPane hosts the tree column beside the viewer. #11328 adds a
 // collapse toggle (in the viewer's header) that unmounts the tree column and a
@@ -8,6 +9,62 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // the pane with the heavy tree/viewer leaves stubbed, but keep the REAL
 // FileBrowserViewer so the toggle and the shared toolbar `Root` actually render
 // — that's what makes the aria-controls and header-alignment invariants real.
+
+// The real DropdownMenu lazy-loads Radix and renders its content as null until
+// that resolves, so the view-options menu — which now carries Refresh — would be
+// unreachable here. Rendered inline and always open: these tests are about which
+// layout OWNS the control, not about Radix's open/close machinery.
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) =>
+    asChild ? <>{children}</> : <button type="button">{children}</button>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div role="menu">{children}</div>
+  ),
+  DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuSeparator: () => <hr />,
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    "data-testid": testId,
+  }: {
+    children: React.ReactNode;
+    onSelect?: () => void;
+    "data-testid"?: string;
+  }) => (
+    <button type="button" role="menuitem" data-testid={testId} onClick={onSelect}>
+      {children}
+    </button>
+  ),
+  DropdownMenuRadioGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuRadioItem: ({ children }: { children: React.ReactNode }) => (
+    <div role="menuitemradio">{children}</div>
+  ),
+  DropdownMenuCheckboxItem: ({
+    children,
+    checked,
+    onCheckedChange,
+    "data-testid": testId,
+  }: {
+    children: React.ReactNode;
+    checked: boolean;
+    onCheckedChange: (checked: boolean) => void;
+    "data-testid"?: string;
+  }) => (
+    <button
+      type="button"
+      role="menuitemcheckbox"
+      aria-checked={checked}
+      data-state={checked ? "checked" : "unchecked"}
+      data-testid={testId}
+      onClick={() => {
+        onCheckedChange(!checked);
+      }}
+    >
+      {children}
+    </button>
+  ),
+}));
 
 const {
   setFileBrowserViewMock,
@@ -47,6 +104,7 @@ const {
       isInitialLoading: false,
       rootError: null as string | null,
       hasHiddenDotfiles: false,
+      hiddenCounts: { dotfiles: 0, alwaysHidden: 0 },
       ensureLoaded: vi.fn(),
       refresh: vi.fn(),
       isRefreshing: false,
@@ -615,7 +673,7 @@ describe("FileBrowserPane collapsible sidebar (#11328)", () => {
 
     const vPad = (el: Element) => classToken(el, (c) => /^py-/.test(c));
     const borderColor = (el: Element) =>
-      classToken(el, (c) => c === "border-overlay" || c === "border-daintree-border");
+      classToken(el, (c) => c === "border-overlay" || c === "border-border-default");
     const iconSize = (el: Element) => classToken(el.querySelector("svg")!, (c) => /^h-/.test(c));
 
     // Guard against a vacuous undefined === undefined pass.
@@ -626,7 +684,7 @@ describe("FileBrowserPane collapsible sidebar (#11328)", () => {
 
     // Relational invariant: whatever the shared toolbar uses, the sidebar header
     // matches it — so the line under the two bars reads continuous. A regression
-    // that reverts one side (py-1 / border-daintree-border / h-3.5 icons) fails
+    // that reverts one side (py-1 / border-border-default / h-3.5 icons) fails
     // here. Icon height is the row's tallest child, so it drives the height parity.
     expect(vPad(sidebarHeader)).toBe(vPad(toolbarRoot));
     expect(borderColor(sidebarHeader)).toBe(borderColor(toolbarRoot));
@@ -2074,10 +2132,12 @@ describe("FileBrowserPane row activation (#11496)", () => {
   });
 });
 
-describe("FileBrowserPane Refresh reachability and media wiring (#11586)", () => {
-  // Refresh used to live only in the tree header, which unmounts with the tree
+describe("FileBrowserPane Refresh reachability and media wiring (#11586, #11938)", () => {
+  // Refresh once lived only in the tree header, which unmounts with the tree
   // column — so the viewer-only layout had no way to refresh at all. The viewer
-  // now grows its own, gated so exactly one is reachable in every layout.
+  // grows its own for exactly that layout. What decides which one is on screen
+  // is whether the tree is mounted, and nothing else: selection used to move it
+  // too, which is what made it read as missing at panel width (#11938).
   const AUDIO_ROW = {
     path: "media/track.mp3",
     name: "track.mp3",
@@ -2087,8 +2147,11 @@ describe("FileBrowserPane Refresh reachability and media wiring (#11586)", () =>
     isLoading: false,
   };
 
+  // Refresh is a menu item now, not a header button. The invariant is unchanged
+  // — exactly one must be REACHABLE in every layout — so this counts the item
+  // wherever it lives rather than asserting a particular chrome slot.
   function refreshButtons(): HTMLElement[] {
-    return screen.queryAllByRole("button", { name: "Refresh" });
+    return screen.queryAllByTestId("file-browser-refresh");
   }
 
   it("keeps exactly one Refresh reachable in each of the three layouts", () => {
@@ -2116,30 +2179,44 @@ describe("FileBrowserPane Refresh reachability and media wiring (#11586)", () =>
     expect(refreshButtons()).toHaveLength(1);
   });
 
-  it("hands its Refresh to the viewer while a file is open, rather than showing two", () => {
-    // The one layout where both headers are on screen at once. The viewer's
-    // copy sits beside that file's own actions and takes the slot the sort menu
-    // holds in the list layouts; the tree header stands down so the panel never
-    // offers two buttons named "Refresh" wired to the same handler.
+  it("keeps Refresh in the tree header while a file is open, without showing two", async () => {
+    // The one layout where both headers are on screen at once, and the one this
+    // suite used to assert the other way round: opening a file handed Refresh
+    // to the viewer, putting it at the far edge of a grid-width panel. It stays
+    // in the tree header now, and the viewer must not add a second button named
+    // "Refresh" wired to the same handler beside it.
     mockPanel.browserSelectedPath = "src/app.ts";
     renderPane();
+
+    // Wait for the file to actually be on screen. Asserting placement while the
+    // selection is still unresolved would pass for the wrong reason — the tree
+    // header owns Refresh with nothing open too.
+    await screen.findByTestId("code-viewer");
 
     const treeColumn = document.getElementById(
       screen.getByTestId("file-browser-sidebar-toggle").getAttribute("aria-controls")!
     )!;
     expect(refreshButtons()).toHaveLength(1);
-    expect(treeColumn.contains(refreshButtons()[0]!)).toBe(false);
+    expect(treeColumn.contains(refreshButtons()[0]!)).toBe(true);
+
+    // And it works from here. Every other Refresh press in this file collapses
+    // the sidebar first, so without this the layout Refresh now lives in by
+    // default could go inert — visible, unwired — with the suite still green.
+    act(() => {
+      fireEvent.click(refreshButtons()[0]!);
+    });
+    expect(treeState.refresh).toHaveBeenCalledWith({ manual: true });
   });
 
-  it("keeps the tree's Refresh when the viewer that would own it is collapsed", () => {
-    // A file is selected, but there is no viewer toolbar to hand it to — the
-    // handoff above must not strand the layout with no Refresh at all.
+  it("keeps the tree's Refresh when a selected file's viewer is collapsed", () => {
+    // A file is selected and the viewer that would once have owned Refresh is
+    // gone. The tree header is mounted, so it owns it — the same answer as the
+    // layout above, reached from the other direction.
     mockPanel.browserSelectedPath = "src/app.ts";
     mockPanel.browserViewerCollapsed = true;
     renderPane();
 
     // The viewer column is unmounted — its tree toggle is the tell — so the
-    // toolbar that would own Refresh for the open file doesn't exist, and the
     // tree column is the only place the remaining one can be.
     expect(screen.queryByTestId("file-browser-sidebar-toggle")).toBeNull();
     expect(screen.getByTestId("file-tree-view")).toBeTruthy();
@@ -2148,15 +2225,15 @@ describe("FileBrowserPane Refresh reachability and media wiring (#11586)", () =>
 
   it("runs the pane's manual refresh from the viewer with nothing selected", () => {
     // Nothing selected is not a dead layout: Refresh re-reads the tree, and a
-    // browser whose source reports no change tick (a workspace root, #11482)
-    // has no other freshness signal at all.
+    // browser whose source has no worktree tick (a workspace root) is left with
+    // just the polled reconcile (#11590) until someone asks.
     mockPanel.browserSidebarCollapsed = true;
     renderPane();
 
     // getByRole, not the plural helper: this must be the one and only Refresh,
     // and a missing button should fail here rather than inside fireEvent.
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      fireEvent.click(screen.getByTestId("file-browser-refresh"));
     });
 
     expect(treeState.refresh).toHaveBeenCalledTimes(1);
@@ -2197,7 +2274,7 @@ describe("FileBrowserPane Refresh reachability and media wiring (#11586)", () =>
       expect(String(fetchMock.mock.calls[0]?.[0])).toContain("v=0");
 
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+        fireEvent.click(screen.getByTestId("file-browser-refresh"));
       });
 
       // The tree refreshes and the preview re-requests — one gesture, both
@@ -2241,7 +2318,7 @@ describe("FileBrowserPane refresh signal reaches both viewer paths (#11586)", ()
     await waitFor(() => expect(readMock).toHaveBeenCalledTimes(1));
 
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      fireEvent.click(screen.getByTestId("file-browser-refresh"));
     });
 
     // Drop the nonce from `viewerRevision` and this never moves: the tree
@@ -2289,7 +2366,7 @@ describe("FileBrowserPane refresh signal reaches both viewer paths (#11586)", ()
       expect(container.querySelector("audio")).toBeNull();
 
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+        fireEvent.click(screen.getByTestId("file-browser-refresh"));
       });
 
       await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());

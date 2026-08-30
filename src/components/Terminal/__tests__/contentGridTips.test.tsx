@@ -48,6 +48,16 @@ function makeAvailability(state: "ready" | "missing") {
   } as never;
 }
 
+/**
+ * The label the tip catalog gives an action. These tests are about which tip
+ * gets SELECTED, so they resolve the expected text from `TIPS` rather than
+ * restating it — a copy change should not fail a selection test, and a literal
+ * here would have to be edited in lockstep with the source it is checking.
+ */
+function labelFor(actionId: string): string | undefined {
+  return TIPS.find((tip) => (tip.shortcutActionId ?? tip.actionId) === actionId)?.actionLabel;
+}
+
 describe("RotatingTip — count-biased selection (#6756)", () => {
   beforeEach(() => {
     setUnhydrated();
@@ -115,7 +125,7 @@ describe("RotatingTip — count-biased selection (#6756)", () => {
     }
     const { container } = render(<RotatingTip />);
     setHydrated(counts);
-    expect(container.querySelector("button")?.textContent).toBe("Inject Context");
+    expect(container.querySelector("button")?.textContent).toBe(labelFor("terminal.inject"));
   });
 
   it("excludes shortcut-dependent tips whose binding has been removed", () => {
@@ -156,7 +166,7 @@ describe("RotatingTip — count-biased selection (#6756)", () => {
     const { container } = render(<RotatingTip />);
     setHydrated(counts);
     // quick-switcher has by far the largest count; it must NOT be the chosen tip.
-    expect(container.querySelector("button")?.textContent).not.toBe("Open Quick Switcher");
+    expect(container.querySelector("button")?.textContent).not.toBe(labelFor("nav.quickSwitcher"));
   });
 
   it("freezes the chosen tip — count updates after mount do not swap it", () => {
@@ -170,7 +180,7 @@ describe("RotatingTip — count-biased selection (#6756)", () => {
     const { container } = render(<RotatingTip />);
     setHydrated(counts);
     const before = container.querySelector("button")?.textContent;
-    expect(before).toBe("Open Quick Switcher");
+    expect(before).toBe(labelFor("nav.quickSwitcher"));
 
     // Simulate the user invoking some other shortcut after the tip mounted.
     act(() => {
@@ -230,7 +240,7 @@ describe("RotatingTip — count-biased selection (#6756)", () => {
     }
     const { container } = render(<RotatingTip />);
     setHydrated(counts);
-    expect(container.querySelector("button")?.textContent).toBe("Open Quick Switcher");
+    expect(container.querySelector("button")?.textContent).toBe(labelFor("nav.quickSwitcher"));
   });
 
   it("clicking the action label dispatches the tip's actionId", () => {

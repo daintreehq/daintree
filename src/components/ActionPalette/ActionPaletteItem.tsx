@@ -137,8 +137,8 @@ function ActionPaletteItemInner({
       className={cn(
         PALETTE_ROW_CLASS,
         "group w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)]",
-        "text-daintree-text/70",
-        "hover:bg-overlay-subtle hover:text-daintree-text",
+        "text-text-secondary",
+        "hover:bg-overlay-subtle hover:text-text-primary",
         !item.enabled && "opacity-50"
       )}
       id={`action-option-${item.id}`}
@@ -186,7 +186,7 @@ function ActionPaletteItemInner({
             className={cn(
               // Natural width inside the fixed column, not stretched to fill it:
               // a 3-letter category in an 80px pill reads as a stretched button.
-              "inline-block max-w-full truncate rounded px-1.5 py-0.5 text-[10px] font-medium leading-tight",
+              "inline-block max-w-full truncate rounded px-1.5 py-0.5 text-3xs font-medium leading-tight",
               categoryColor
             )}
           >
@@ -197,26 +197,26 @@ function ActionPaletteItemInner({
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium truncate">{displayTitle}</div>
           {item.description && (
-            <div className="text-xs leading-snug text-daintree-text/50 truncate">
+            <div className="text-xs leading-snug text-text-secondary truncate">
               {item.description}
             </div>
           )}
           {!item.enabled && item.disabledReason && (
-            <div className="text-[10px] leading-snug text-daintree-text/50 italic truncate">
+            <div className="text-3xs leading-snug text-text-secondary italic truncate">
               {item.disabledReason}
             </div>
           )}
           {hasRationale && (
             <div
               id={rationaleId}
-              className="hidden group-aria-selected:block text-xs leading-snug text-daintree-text/50 italic truncate"
+              className="hidden group-aria-selected:block text-xs leading-snug text-text-secondary italic truncate"
             >
               {item.dangerRationale}
             </div>
           )}
           {pinRejected && (
             <div
-              className="text-[10px] leading-snug text-status-error mt-0.5 truncate"
+              className="text-3xs leading-snug text-status-error mt-0.5 truncate"
               role="status"
               aria-live="polite"
             >
@@ -243,7 +243,7 @@ function ActionPaletteItemInner({
             className={cn(
               "inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-sm)] bg-transparent border-0",
               "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100",
-              "hover:bg-overlay-soft hover:text-daintree-text transition-colors",
+              "hover:bg-overlay-soft hover:text-text-primary transition-colors",
               "focus-visible:opacity-100"
             )}
           >
@@ -264,7 +264,7 @@ function ActionPaletteItemInner({
               isPinned
                 ? "text-daintree-text/70 opacity-100"
                 : "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100",
-              "hover:text-daintree-text focus-visible:opacity-100"
+              "hover:text-text-primary focus-visible:opacity-100"
             )}
           >
             {isPinned ? (
@@ -276,7 +276,7 @@ function ActionPaletteItemInner({
         )}
 
         {item.keybinding && (
-          <span className="text-[11px] font-mono text-daintree-text/50 transition-colors group-aria-selected:text-daintree-text/70">
+          <span className="text-2xs font-mono text-text-secondary transition-colors group-aria-selected:text-text-primary">
             {item.keybinding}
           </span>
         )}

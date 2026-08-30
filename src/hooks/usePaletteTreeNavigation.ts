@@ -107,6 +107,16 @@ export interface UsePaletteTreeNavigationOptions<TGroup, TItem> {
    * highlight somewhere down the new ranking rather than on its best match.
    */
   selectionScopeKey?: string | number | null;
+  /**
+   * The row the highlight starts on, before the user has moved it.
+   *
+   * Falls back to the first navigable row when absent or when the id names
+   * nothing currently rendered, which is what every palette without an opinion
+   * gets. It is deliberately only a STARTING point: once the user arrows, their
+   * selection wins until the scope key changes, so a list whose preferred row
+   * moves around underneath them cannot drag the cursor with it.
+   */
+  preferredInitialRowId?: string | null;
   onActivate: (row: NavigablePaletteTreeRow<TGroup, TItem>) => void;
   /**
    * Whether a caret exists that the structural keys must stand down for.
@@ -169,6 +179,7 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
   groups,
   isActive,
   selectionScopeKey = null,
+  preferredInitialRowId = null,
   onActivate,
   shouldPreserveInputCaretKey,
 }: UsePaletteTreeNavigationOptions<TGroup, TItem>): UsePaletteTreeNavigationResult<TGroup, TItem> {
@@ -213,14 +224,21 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
    */
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
 
-  /** Unmoved, the highlight sits on the first row the arrows can reach. */
+  /**
+   * Unmoved, the highlight sits on the caller's preferred row, or on the first
+   * row the arrows can reach when there isn't one.
+   */
   const selectedNavigableIndex = useMemo(() => {
     if (navigableRows.length === 0) return -1;
     const index = selectedRowId
       ? navigableRows.findIndex((row) => row.rowId === selectedRowId)
       : -1;
-    return index >= 0 ? index : 0;
-  }, [navigableRows, selectedRowId]);
+    if (index >= 0) return index;
+    const preferred = preferredInitialRowId
+      ? navigableRows.findIndex((row) => row.rowId === preferredInitialRowId)
+      : -1;
+    return preferred >= 0 ? preferred : 0;
+  }, [navigableRows, selectedRowId, preferredInitialRowId]);
 
   const selectedRow =
     selectedNavigableIndex >= 0 ? (navigableRows[selectedNavigableIndex] ?? null) : null;
@@ -255,16 +273,35 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
     document.getElementById(activeDescendantId)?.scrollIntoView({ block: "nearest" });
   }, [isActive, activeDescendantId, selectedRowPosition]);
 
+  /**
+   * Where a movement key starts counting from.
+   *
+   * The stored id when the user has moved, and otherwise the SAME row
+   * `selectedNavigableIndex` is drawing as selected — which is the preferred
+   * row when the caller named one. Falling back to 0 here instead was a real
+   * bug: the highlight sat on the fleet's blocked run and the first ArrowDown
+   * jumped to row two of the list, because the two answers to "what is
+   * selected" disagreed for exactly as long as the user had not yet moved.
+   */
+  const originOf = useCallback(
+    (previousId: string | null): number => {
+      const current = previousId ? navigableRows.findIndex((row) => row.rowId === previousId) : -1;
+      if (current >= 0) return current;
+      const preferred = preferredInitialRowId
+        ? navigableRows.findIndex((row) => row.rowId === preferredInitialRowId)
+        : -1;
+      return preferred >= 0 ? preferred : 0;
+    },
+    [navigableRows, preferredInitialRowId]
+  );
+
   const step = useCallback(
     (delta: number) => {
       if (navigableRows.length === 0) return;
       // Resolve the current row from the id inside the updater so two calls
       // batched into one tick compose instead of collapsing into one.
       setSelectedRowId((previousId) => {
-        const current = previousId
-          ? navigableRows.findIndex((row) => row.rowId === previousId)
-          : -1;
-        const from = current >= 0 ? current : 0;
+        const from = originOf(previousId);
         // Normalised both ways: a single `+ length` only rescues a delta of -1,
         // and this is a shared API that may be handed a page-sized jump.
         const size = navigableRows.length;
@@ -272,7 +309,7 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
         return navigableRows[next]!.rowId;
       });
     },
-    [navigableRows]
+    [navigableRows, originOf]
   );
 
   /**
@@ -288,15 +325,12 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
     (delta: number) => {
       if (navigableRows.length === 0) return;
       setSelectedRowId((previousId) => {
-        const current = previousId
-          ? navigableRows.findIndex((row) => row.rowId === previousId)
-          : -1;
-        const from = current >= 0 ? current : 0;
+        const from = originOf(previousId);
         const next = Math.min(navigableRows.length - 1, Math.max(0, from + delta));
         return navigableRows[next]!.rowId;
       });
     },
-    [navigableRows]
+    [navigableRows, originOf]
   );
 
   const selectRow = useCallback((rowId: string) => setSelectedRowId(rowId), []);

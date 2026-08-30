@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach, beforeEach } from "vitest";
 import { render, screen, within, fireEvent, act, cleanup } from "@testing-library/react";
 
 const originalScrollIntoView = Element.prototype.scrollIntoView;
@@ -100,7 +100,7 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
 
   return {
     AppPaletteDialog: Dialog,
-    KBD_CLASS: "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60",
+    KBD_CLASS: "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-border-default text-text-secondary",
     PALETTE_SURFACE_WIDTHS: {
       // Sentinel values, not the production pixels: this mock only has to satisfy
       // the real AppPalettePopover's width lookup, and copying the shipped
@@ -144,6 +144,7 @@ vi.mock("@/utils/timeAgo", () => ({
 }));
 
 import type {
+  ProjectSwitcherBrowseBand,
   ProjectSwitcherProjectRow,
   ProjectSwitcherScratchRow,
   SearchableProject,
@@ -153,6 +154,15 @@ import { SCRATCH_CLEANUP_TTL_MS } from "@shared/config/scratchCleanup";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 
 const { ProjectSwitcherPalette } = await import("../ProjectSwitcherPalette");
+const { usePreferencesStore } = await import("@/store/preferencesStore");
+
+// Band collapse is a persisted, app-global preference now (#11943), so a test
+// that folds one hands the fold to every test after it. Reset rather than mock
+// the store: these suites exercise the real fold, and a mock would only prove
+// the mock folds.
+beforeEach(() => {
+  usePreferencesStore.setState({ projectSwitcherCollapsedBands: {} });
+});
 
 function makeProject(overrides: Partial<SearchableProject> = {}): ProjectSwitcherProjectRow {
   // Deliberately dumb: `section` defaults to "other" and must be stated
@@ -790,7 +800,7 @@ describe("ProjectSwitcherPalette clone repo button", () => {
       <ProjectSwitcherPalette {...baseProps} onCloneRepo={vi.fn()} results={[makeProject()]} />
     );
     expect(screen.getByTestId("project-clone-button")).toBeTruthy();
-    expect(screen.getByText("Clone Repository…")).toBeTruthy();
+    expect(screen.getByText("Clone repository…")).toBeTruthy();
   });
 
   it("calls onCloneRepo when Clone Repository button is clicked", () => {
@@ -1018,23 +1028,23 @@ describe("ProjectSwitcherPalette modal mode", () => {
 
   it("names an action the surface it is rendered in can actually perform", () => {
     // The modal mounts without the add/clone callbacks, so an empty state that
-    // pointed at "Add Project…" would name a button that isn't there.
+    // pointed at "Add project…" would name a button that isn't there.
     const { unmount } = render(<ProjectSwitcherPalette {...modalProps} results={[]} />);
     const modalCopy = screen.getByTestId("project-empty-state").textContent;
-    expect(screen.queryByText("Add Project…")).toBeNull();
+    expect(screen.queryByText("Add project…")).toBeNull();
     unmount();
 
     render(<ProjectSwitcherPalette {...dropdownProps} results={[]} />);
-    expect(screen.getByText("Add Project…")).toBeTruthy();
+    expect(screen.getByText("Add project…")).toBeTruthy();
     expect(screen.getByTestId("project-empty-state").textContent).not.toBe(modalCopy);
   });
 
   it("does not show management action buttons in modal mode", () => {
     render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
-    expect(screen.queryByText("Project Settings…")).toBeNull();
-    expect(screen.queryByText("Add Project…")).toBeNull();
-    expect(screen.queryByText("Clone Repository…")).toBeNull();
-    expect(screen.queryByText("Create New Folder…")).toBeNull();
+    expect(screen.queryByText("Project settings…")).toBeNull();
+    expect(screen.queryByText("Add project…")).toBeNull();
+    expect(screen.queryByText("Clone repository…")).toBeNull();
+    expect(screen.queryByText("Create new folder…")).toBeNull();
   });
 
   it("shows Right-click hint but not Remove shortcut in modal mode footer", () => {
@@ -1982,5 +1992,412 @@ describe("ProjectSwitcherPalette scratch resumable-agent dot", () => {
     const unmarked = screen.getByRole("option", { name: /Unmarked/ });
     expect(marked.querySelector("[data-testid='workspace-resume-dot']")).toBeTruthy();
     expect(unmarked.querySelector("[data-testid='workspace-resume-dot']")).toBeNull();
+  });
+});
+
+/**
+ * Folding a band (#11943). The component is handed `results` and `browseBands`
+ * separately — the hook filters the first and declares the second — so these
+ * drive both by hand the way the real hosts do.
+ */
+describe("ProjectSwitcherPalette band collapse", () => {
+  const banded = [
+    makeProject({ id: "active", name: "Active Project", isActive: true, section: "current" }),
+    makeProject({ id: "run-1", name: "Running One", section: "running" }),
+    makeProject({ id: "other-1", name: "Other One", section: "other" }),
+  ];
+
+  function bandsFor(collapsedKeys: string[] = []): ProjectSwitcherBrowseBand[] {
+    const bands: ProjectSwitcherBrowseBand[] = [
+      { key: "current", label: "Current project", itemCount: 1, collapsed: false },
+      { key: "running", label: "Running", itemCount: 1, collapsed: false },
+      { key: "other", label: "Other projects", itemCount: 1, collapsed: false },
+    ];
+    return bands.map((band) => ({ ...band, collapsed: collapsedKeys.includes(band.key) }));
+  }
+
+  function toggleFor(key: string): HTMLElement {
+    return screen.getByTestId(`band-collapse-toggle-${key}`);
+  }
+
+  function makeScratchRow(id: string, name: string): ProjectSwitcherScratchRow {
+    return {
+      kind: "scratch",
+      id,
+      name,
+      path: `/userData/scratch/${id}`,
+      createdAt: 0,
+      lastOpened: 0,
+      isActive: false,
+      processCount: 0,
+      activeAgentCount: 0,
+      waitingAgentCount: 0,
+      blockedAgentCount: 0,
+      completedAgentCount: 0,
+      unacknowledgedCompletedAgentCount: 0,
+      snoozedAgentCount: 0,
+    };
+  }
+
+  it("gives every band the affordance that used to be Scratch's alone", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={banded} browseBands={bandsFor()} />);
+
+    // Named by band rather than counted, so this still fails if the chevron
+    // lands on some bands and not others.
+    for (const key of ["current", "running", "other"]) {
+      expect(toggleFor(key).getAttribute("aria-expanded")).toBe("true");
+    }
+  });
+
+  it("points each toggle at the rows it actually controls", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={banded} browseBands={bandsFor()} />);
+
+    // Resolving to *something* is not enough — three toggles all naming the
+    // same element would pass that. Each target has to hold its own band's row
+    // and none of a neighbour's.
+    const rowNames: Record<string, string> = {
+      current: "Active Project",
+      running: "Running One",
+      other: "Other One",
+    };
+    for (const [key, ownRow] of Object.entries(rowNames)) {
+      const controls = toggleFor(key).getAttribute("aria-controls");
+      const target = controls ? document.getElementById(controls) : null;
+      expect(target).toBeTruthy();
+      const rendered = within(target!)
+        .getAllByRole("option")
+        .map((option) => option.textContent ?? "");
+      expect(rendered).toHaveLength(1);
+      expect(rendered[0]).toContain(ownRow);
+    }
+  });
+
+  it("refuses the pointer focus that would take the keyboard off the search box", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={banded} browseBands={bandsFor()} />);
+
+    // `tabIndex={-1}` keeps the chevron out of the tab order but does not stop a
+    // press from focusing it, and the header outlives the fold — so a click
+    // would otherwise leave typing, arrow-stepping and Enter all pointed at a
+    // chevron instead of the palette. `fireEvent` returns false when the
+    // handler cancelled the event.
+    expect(fireEvent.mouseDown(toggleFor("running"))).toBe(false);
+
+    // The veto must not cost the click itself.
+    fireEvent.click(toggleFor("running"));
+    expect(usePreferencesStore.getState().projectSwitcherCollapsedBands).toEqual({
+      running: true,
+    });
+  });
+
+  it("keeps arrow-key order when a band's rows arrive in two separate runs", () => {
+    // The map from key to run keeps only the last run, so honouring this
+    // metadata would render the first `current` row nowhere while the arrow
+    // keys could still reach it.
+    const split = [
+      makeProject({ id: "a", name: "First Current", section: "current" }),
+      makeProject({ id: "b", name: "Middle Running", section: "running" }),
+      makeProject({ id: "c", name: "Second Current", section: "current" }),
+    ];
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={split}
+        browseBands={[
+          { key: "current", label: "Current project", itemCount: 2, collapsed: false },
+          { key: "running", label: "Running", itemCount: 1, collapsed: false },
+        ]}
+      />
+    );
+
+    const rendered = screen.getAllByRole("option").map((option) => option.textContent ?? "");
+    expect(rendered).toHaveLength(3);
+    expect(rendered[0]).toContain("First Current");
+    expect(rendered[1]).toContain("Middle Running");
+    expect(rendered[2]).toContain("Second Current");
+  });
+
+  it("keeps arrow-key order when the declared bands are ordered differently", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={banded}
+        browseBands={[
+          { key: "other", label: "Other projects", itemCount: 1, collapsed: false },
+          { key: "current", label: "Current project", itemCount: 1, collapsed: false },
+          { key: "running", label: "Running", itemCount: 1, collapsed: false },
+        ]}
+      />
+    );
+
+    const rendered = screen.getAllByRole("option").map((option) => option.textContent ?? "");
+    expect(rendered[0]).toContain("Active Project");
+    expect(rendered[1]).toContain("Running One");
+    expect(rendered[2]).toContain("Other One");
+  });
+
+  it("refuses a duplicated band key rather than colliding on its ids", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={banded}
+        browseBands={[
+          { key: "current", label: "Current project", itemCount: 1, collapsed: false },
+          { key: "current", label: "Current project", itemCount: 1, collapsed: false },
+          { key: "running", label: "Running", itemCount: 1, collapsed: false },
+          { key: "other", label: "Other projects", itemCount: 1, collapsed: false },
+        ]}
+      />
+    );
+
+    // One id per band or `aria-labelledby` and `aria-controls` both go
+    // ambiguous, so the whole band layout stands down.
+    expect(document.querySelectorAll("#project-section-current")).toHaveLength(0);
+    expect(screen.getAllByRole("option")).toHaveLength(3);
+  });
+
+  it("records the fold in the preference the palette reads back on reopen", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={banded} browseBands={bandsFor()} />);
+
+    fireEvent.click(toggleFor("running"));
+
+    // The store, not local state: the point of the issue is that reopening the
+    // palette finds the band the way the user left it.
+    expect(usePreferencesStore.getState().projectSwitcherCollapsedBands).toEqual({
+      running: true,
+    });
+  });
+
+  it("unfolds a folded band on a second click rather than folding it harder", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={banded.filter((p) => p.section !== "running")}
+        browseBands={bandsFor(["running"])}
+      />
+    );
+
+    expect(toggleFor("running").getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggleFor("running"));
+
+    expect(usePreferencesStore.getState().projectSwitcherCollapsedBands).toEqual({
+      running: false,
+    });
+  });
+
+  it("keeps a folded band's named group and header with none of its rows", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={banded.filter((p) => p.section !== "running")}
+        browseBands={bandsFor(["running"])}
+      />
+    );
+
+    // The group has to survive: it is the only thing left to click to get the
+    // rows back, and an unnamed or absent one strands them.
+    const band = screen.getByRole("group", { name: "Running" });
+    expect(within(band).queryAllByRole("option")).toHaveLength(0);
+    expect(screen.queryByRole("option", { name: /Running One/ })).toBeNull();
+    // Its neighbours are untouched.
+    expect(screen.getByRole("option", { name: /Other One/ })).toBeTruthy();
+  });
+
+  it("says how much a folded band is holding, and stays quiet when it is open", () => {
+    const { rerender } = render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={banded.filter((p) => p.section !== "other")}
+        browseBands={[
+          { key: "current", label: "Current project", itemCount: 1, collapsed: false },
+          { key: "running", label: "Running", itemCount: 1, collapsed: false },
+          { key: "other", label: "Other projects", itemCount: 7, collapsed: true },
+        ]}
+      />
+    );
+
+    // Folded, the count is the only thing left that reports the band's size.
+    expect(
+      within(screen.getByRole("group", { name: "Other projects" })).getByText("7")
+    ).toBeTruthy();
+
+    rerender(<ProjectSwitcherPalette {...modalProps} results={banded} browseBands={bandsFor()} />);
+    expect(
+      within(screen.getByRole("group", { name: "Other projects" })).queryByText("7")
+    ).toBeNull();
+  });
+
+  it("does not lend the chevron's label to the band's accessible name", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={banded} browseBands={bandsFor()} />);
+
+    // The `id` has to stay on a leaf holding only the label text, or the count
+    // and the chevron would join the name the group announces.
+    expect(screen.getByRole("group", { name: "Running" })).toBeTruthy();
+  });
+
+  it("shows the bands rather than the no-projects empty state when all of them fold", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={[]}
+        browseBands={bandsFor(["current", "running", "other"])}
+      />
+    );
+
+    // "Add a project to get started" here would be a lie the user cannot argue
+    // with — and it would take away the headers that are the only way back.
+    expect(screen.queryByTestId("project-empty-state")).toBeNull();
+    expect(screen.getByRole("group", { name: "Running" })).toBeTruthy();
+    expect(toggleFor("other").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("offers no fold control on a surface that declares no bands", () => {
+    // Without declared bands the component reads them off `results`, where a
+    // fold would have to drop rows the arrow keys can still reach. Better no
+    // affordance than one that writes a preference nothing honours.
+    render(<ProjectSwitcherPalette {...modalProps} results={banded} />);
+
+    expect(screen.queryByTestId("band-collapse-toggle-running")).toBeNull();
+    // The headers themselves still name their bands.
+    expect(screen.getByRole("group", { name: "Running" })).toBeTruthy();
+  });
+
+  it("still names an empty project list when there are genuinely no projects", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={[]} browseBands={[]} />);
+    expect(screen.getByTestId("project-empty-state")).toBeTruthy();
+  });
+
+  it("renders a row the metadata claims is folded rather than hiding it", () => {
+    // Contradictory props: `running` says folded while its row is still in
+    // `results`. Honouring the metadata would strand that row — on screen
+    // nowhere, yet still reachable by arrow keys and committable by Enter.
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={banded}
+        browseBands={bandsFor(["running"])}
+      />
+    );
+
+    expect(screen.getByRole("option", { name: /Running One/ })).toBeTruthy();
+  });
+
+  it("keeps results in their arrow-key order when the metadata is incomplete", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={banded}
+        browseBands={[{ key: "current", label: "Current project", itemCount: 1, collapsed: false }]}
+      />
+    );
+
+    // Reordering rows to match a partial band list would make Arrow Down jump
+    // around the screen. Rendering flat keeps DOM order and key order equal.
+    const rendered = screen.getAllByRole("option").map((option) => option.textContent ?? "");
+    expect(rendered).toHaveLength(3);
+    expect(rendered[0]).toContain("Active Project");
+    expect(rendered[1]).toContain("Running One");
+    expect(rendered[2]).toContain("Other One");
+  });
+
+  it("renders every result even if the declared bands do not account for it", () => {
+    // Defensive: a row that renders nowhere is bug #11071 again — the highlight
+    // would address it while nothing on screen carried it.
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={banded}
+        browseBands={[{ key: "current", label: "Current project", itemCount: 1, collapsed: false }]}
+      />
+    );
+
+    expect(screen.getByRole("option", { name: /Running One/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /Other One/ })).toBeTruthy();
+  });
+
+  it("keeps the Scratch fold across a full unmount, which local state never did", () => {
+    const scratch = makeScratchRow("scratch-1", "Spike");
+    const props = { ...modalProps, results: banded, scratchResults: [scratch] };
+
+    const { unmount } = render(<ProjectSwitcherPalette {...props} />);
+    const header = screen.getByRole("button", { name: /Scratch/ });
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(header);
+
+    // Closing the palette really does unmount it, which is exactly what used to
+    // reseed the local `collapsed` from the scratch count.
+    unmount();
+    render(<ProjectSwitcherPalette {...props} />);
+
+    expect(screen.getByRole("button", { name: /Scratch/ }).getAttribute("aria-expanded")).toBe(
+      "false"
+    );
+  });
+
+  it("holds an empty Scratch open once the user says so, against its own default", () => {
+    // The default is "folded while empty", so an expand here is the case a
+    // delete-on-default setter would silently undo.
+    const props = { ...modalProps, results: banded, scratchResults: [], onCreateScratch: vi.fn() };
+
+    const { unmount } = render(<ProjectSwitcherPalette {...props} />);
+    const header = screen.getByRole("button", { name: /Scratch/ });
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(header);
+
+    unmount();
+    render(<ProjectSwitcherPalette {...props} />);
+
+    expect(screen.getByRole("button", { name: /Scratch/ }).getAttribute("aria-expanded")).toBe(
+      "true"
+    );
+  });
+
+  it("keeps Scratch folded through its first entry once the user has folded it", () => {
+    // The mirror of the test below: the derived default replaced an effect that
+    // forced the section open on 0 -> 1, and it must not do that over a fold the
+    // user chose.
+    const props = { ...modalProps, results: banded, onCreateScratch: vi.fn() };
+    const { rerender } = render(<ProjectSwitcherPalette {...props} scratchResults={[]} />);
+    fireEvent.click(screen.getByRole("button", { name: /Scratch/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Scratch/ }));
+    expect(screen.getByRole("button", { name: /Scratch/ }).getAttribute("aria-expanded")).toBe(
+      "false"
+    );
+
+    rerender(
+      <ProjectSwitcherPalette {...props} scratchResults={[makeScratchRow("scratch-1", "Spike")]} />
+    );
+
+    expect(screen.getByRole("button", { name: /Scratch/ }).getAttribute("aria-expanded")).toBe(
+      "false"
+    );
+  });
+
+  it("opens Scratch on its first entry without a stored preference", () => {
+    // The derived default replaces the effect that used to force this open, so
+    // it has to keep tracking the count on its own.
+    const scratch = makeScratchRow("scratch-1", "Spike");
+    const { rerender } = render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={banded}
+        scratchResults={[]}
+        onCreateScratch={vi.fn()}
+      />
+    );
+    expect(screen.getByRole("button", { name: /Scratch/ }).getAttribute("aria-expanded")).toBe(
+      "false"
+    );
+
+    rerender(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={banded}
+        scratchResults={[scratch]}
+        onCreateScratch={vi.fn()}
+      />
+    );
+    expect(screen.getByRole("button", { name: /Scratch/ }).getAttribute("aria-expanded")).toBe(
+      "true"
+    );
   });
 });

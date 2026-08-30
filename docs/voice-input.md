@@ -2,7 +2,7 @@
 
 Daintree can dictate directly into a terminal (or the Daintree Assistant) input: real-time streaming transcription, client-side voice-activity detection (VAD), push-to-talk, a pause state, target-follows-focus routing, and an optional whole-passage AI cleanup pass. The feature spans both processes — microphone capture and editor injection live in the renderer, while WebSocket transport, segmentation, and the OpenAI/Deepgram backends live in the main process. This doc captures how the pieces fit so the flow doesn't have to be reverse-engineered from ~2,500 LOC across the two sides.
 
-For how these IPC channels are registered and dispatched, see [ipc-services.md](./ipc-services.md).
+For how these IPC channels are registered and dispatched, see [ipc-services.md](./architecture/ipc-services.md).
 
 ## Mental model
 

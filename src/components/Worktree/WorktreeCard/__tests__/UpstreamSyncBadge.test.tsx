@@ -275,3 +275,203 @@ describe("UpstreamSyncBadge — value-change flash", () => {
     }
   });
 });
+
+describe("UpstreamSyncBadge — resting base relationship", () => {
+  const restingProps = {
+    aheadCount: undefined,
+    behindCount: undefined,
+    baseBranchName: "develop",
+    baseAheadCount: 0,
+    baseBehindCount: 0,
+    baseMatchesUpstream: false,
+  } as const;
+
+  it("names the base branch when the counts are zero, where it used to render nothing at all", () => {
+    renderBadge(restingProps);
+    const base = screen.getByTestId("upstream-sync-base");
+    expect(base.textContent).toContain("develop");
+    expect(base.textContent).toContain("≡");
+    expect(base.textContent).not.toContain("Δ");
+  });
+
+  it("swaps the resting glyph for the drift one and adds the counts once the branch diverges", () => {
+    const { rerender } = renderBadge(restingProps);
+    expect(screen.getByTestId("upstream-sync-indicator").textContent).not.toContain("↑");
+
+    rerender(
+      <TooltipProvider>
+        <UpstreamSyncBadge {...baseProps} {...restingProps} baseAheadCount={3} />
+      </TooltipProvider>
+    );
+    const base = screen.getByTestId("upstream-sync-base");
+    expect(base.textContent).toContain("Δ");
+    expect(base.textContent).not.toContain("≡");
+    expect(screen.getByTestId("upstream-sync-indicator").textContent).toContain("↑3");
+  });
+
+  it("returns to the resting form instead of unmounting when the drift is merged away", () => {
+    const { rerender } = renderBadge({ ...restingProps, baseBehindCount: 12 });
+    expect(screen.getByTestId("upstream-sync-indicator").textContent).toContain("↓12");
+
+    rerender(
+      <TooltipProvider>
+        <UpstreamSyncBadge {...baseProps} {...restingProps} />
+      </TooltipProvider>
+    );
+    const base = screen.getByTestId("upstream-sync-base");
+    expect(base.textContent).toContain("≡");
+    expect(screen.getByTestId("upstream-sync-indicator").textContent).not.toContain("↓");
+  });
+
+  it("does not claim equality when the base counts were never measured", () => {
+    renderBadge({ ...restingProps, baseAheadCount: null, baseBehindCount: null });
+    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
+  });
+
+  it("stands the equality claim down rather than contradicting the same measurement", () => {
+    // baseMatchesUpstream says the two refs are one commit, so ↓3 beside
+    // ≡ develop would have the halves disagreeing about a single number.
+    renderBadge({
+      ...restingProps,
+      aheadCount: 0,
+      behindCount: 3,
+      baseMatchesUpstream: true,
+    });
+    const line = screen.getByTestId("upstream-sync-indicator").textContent ?? "";
+    expect(line).toContain("↓3");
+    expect(line).not.toContain("≡");
+  });
+
+  it("keeps the resting form beside upstream drift when the two refs really differ", () => {
+    renderBadge({ ...restingProps, aheadCount: 3, behindCount: 0, baseMatchesUpstream: false });
+    const line = screen.getByTestId("upstream-sync-indicator").textContent ?? "";
+    expect(line).toContain("↑3");
+    expect(line).toContain("≡ develop");
+  });
+
+  it("marks a branch with no upstream and drops the marker once it has one", () => {
+    const { rerender } = renderBadge({ ...restingProps, hasNoUpstream: true });
+    expect(screen.getByTestId("upstream-sync-unpushed").textContent).toBe("· local");
+
+    rerender(
+      <TooltipProvider>
+        <UpstreamSyncBadge
+          {...baseProps}
+          {...restingProps}
+          aheadCount={0}
+          behindCount={0}
+          hasNoUpstream={false}
+        />
+      </TooltipProvider>
+    );
+    expect(screen.queryByTestId("upstream-sync-unpushed")).toBeNull();
+    expect(screen.getByTestId("upstream-sync-base").textContent).toContain("develop");
+  });
+
+  it("keeps the marker on a branch that has drifted from its base as well as its remote", () => {
+    renderBadge({ ...restingProps, baseAheadCount: 3, hasNoUpstream: true });
+    expect(screen.getByTestId("upstream-sync-base").textContent).toContain("Δ");
+    expect(screen.queryByTestId("upstream-sync-unpushed")).not.toBeNull();
+  });
+
+  it("renders nothing when there is no base branch and no upstream delta", () => {
+    renderBadge({ aheadCount: 0, behindCount: 0, hasNoUpstream: true });
+    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
+  });
+
+  it("gives the auth-failed variant the same relationship line rather than the em-dash", () => {
+    vi.stubGlobal("electron", { worktree: { retryAuthFetch: vi.fn() } });
+    renderBadge({
+      ...restingProps,
+      aheadCount: 0,
+      behindCount: 0,
+      fetchAuthFailed: true,
+      hasAuthFailedSignIn: true,
+      hasNoUpstream: true,
+    });
+    const button = screen.getByRole("button", { name: /Forge authentication failed/ });
+    expect(button.textContent).toContain("develop");
+    expect(button.textContent).not.toContain("—");
+    expect(screen.queryByTestId("upstream-sync-unpushed")).not.toBeNull();
+  });
+});
+
+describe("UpstreamSyncBadge — a base branch longer than the card (#12074)", () => {
+  const longBase = "feature/stacked-worktree-base-branch-name-that-keeps-going";
+
+  // Distinct numbers per pair: identical ones would let a whole pair go
+  // missing without any assertion noticing.
+  const crowded: Partial<Props> = {
+    aheadCount: 12,
+    behindCount: 3,
+    baseBranchName: longBase,
+    baseMatchesUpstream: false,
+    hasNoUpstream: true,
+  };
+
+  /**
+   * jsdom computes no widths, so the ellipsis itself is not observable. What is
+   * observable is the layout priority the fix installs: of the tokens the row
+   * happens to hold, exactly one may give up width, it is the base label, and
+   * it is the same element that clips. Read off the rendered row rather than
+   * hardcoded per variant, so it holds for both and for tokens added later.
+   *
+   * It is still spelled in Tailwind's utilities, so an equivalent restyle would
+   * have to update it — the trade for having any coverage at all here, since
+   * mocking layout would only test the mock.
+   */
+  function assertOnlyTheNameYields(glyph: string, tokens: string[]) {
+    const label = screen.getByTestId("upstream-sync-base");
+    const row = label.parentElement!;
+    const children = Array.from(row.children);
+    expect(children.length).toBe(tokens.length + 1);
+
+    const shrinkable = children.filter((el) => !el.classList.contains("shrink-0"));
+    expect(shrinkable).toHaveLength(1);
+    expect(shrinkable[0]).toBe(label);
+
+    const clipping = children.filter((el) => el.classList.contains("truncate"));
+    expect(clipping).toHaveLength(1);
+    expect(clipping[0]).toBe(label);
+
+    // The row itself has to be able to give up width, or the label inside it
+    // never gets narrow enough to yield. In the auth-failed variant the row is
+    // a flex item of the button above it and needs its own floor removed; in
+    // the normal variant the row is the badge root, stretched across the card,
+    // and there is nothing in between.
+    const root = screen.getByTestId("upstream-sync-indicator");
+    for (let el = row; el !== root; el = el.parentElement!) {
+      expect(el.classList.contains("min-w-0")).toBe(true);
+    }
+
+    // The counts and the marker are the state the line exists to carry, so
+    // they are what has to survive beside the name that yielded.
+    const rendered = children.filter((el) => el !== label).map((el) => el.textContent);
+    expect(rendered).toEqual(tokens);
+
+    // Nothing caps the name on the way in — this is presentation-only, so the
+    // full ref stays in the DOM for the tooltip to reveal.
+    expect(label.textContent).toBe(`${glyph} ${longBase}`);
+  }
+
+  it("yields the name and keeps every count on the normal badge", () => {
+    renderBadge({ ...crowded, baseAheadCount: 7, baseBehindCount: 5 });
+    assertOnlyTheNameYields("Δ", ["↑12", "↓3", "↑7", "↓5", "· local"]);
+  });
+
+  it("yields the name and keeps every count on the auth-failed badge too", () => {
+    renderBadge({
+      ...crowded,
+      baseAheadCount: 7,
+      baseBehindCount: 5,
+      fetchAuthFailed: true,
+      hasAuthFailedSignIn: true,
+    });
+    assertOnlyTheNameYields("Δ", ["↑12", "↓3", "↑7", "↓5", "· local"]);
+  });
+
+  it("yields a long name on the resting line too, where there are no base counts", () => {
+    renderBadge({ ...crowded, baseAheadCount: 0, baseBehindCount: 0 });
+    assertOnlyTheNameYields("≡", ["↑12", "↓3", "· local"]);
+  });
+});

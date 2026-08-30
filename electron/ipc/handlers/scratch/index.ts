@@ -17,6 +17,7 @@ import { defineIpcNamespace, op } from "../../define.js";
 import { SCRATCH_METHOD_CHANNELS } from "./preload.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
+import { scheduleOpenWindowsSave } from "../../../window/openWindowsTracker.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
@@ -131,15 +132,24 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
             activeView = result.view;
           }
 
-          // Record the project being left before the pointer is cleared. A
-          // scratch is not a project and can never be a history entry, so this
-          // is the only chance to capture where the window came from — without
-          // it, entering a scratch as the first move of a session leaves
-          // `Cmd+Alt+=` with an empty history and no way back to the project.
-          const departingProjectId = projectStore.getCurrentProjectId();
+          // Fold the completed switch into this window's history, outgoing
+          // first so the workspace being left sits directly behind the scratch
+          // and becomes the toggle target. Recorded after the swap has
+          // committed, matching `project:switch`: a switch that threw never
+          // happened and must not move the toggle.
+          //
+          // `ctx.projectId` is the sender view's own binding, captured at IPC
+          // entry — not `projectStore.getCurrentProjectId()`, which names
+          // whichever window switched most recently and is already null on the
+          // way from one scratch to another (#11936). The scratch itself is
+          // recorded too: it is a workspace like any other, so the way back
+          // into it is the same entry that leads back out.
+          const departingWorkspaceId = ctx.projectId;
           const scratchWindowId = senderWindow?.id ?? deps.mainWindow?.id;
-          if (scratchWindowId !== undefined && departingProjectId) {
-            getProjectHistory(scratchWindowId).record(departingProjectId);
+          if (scratchWindowId !== undefined) {
+            const history = getProjectHistory(scratchWindowId);
+            if (departingWorkspaceId) history.record(departingWorkspaceId);
+            history.record(scratchId);
           }
 
           // Now commit canonical pointers — scratch active, project cleared.
@@ -147,6 +157,19 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           // renderer's `getCurrentProject` does not race-restore the previous project.
           const updated = scratchStore.setCurrentScratch(scratchId);
           projectStore.clearCurrentProject();
+
+          // Re-persist which workspace each window is showing (#11492), the
+          // same call `project:switch` makes after its own commit. Placed after
+          // the PVM swap because the manifest is built from
+          // `getActiveProjectId()` across every window — it has to read the
+          // committed state, not the switch that is still landing.
+          //
+          // Best-effort for an abrupt exit, not a guarantee: the write is
+          // trailing-debounced, so a crash inside that window still relaunches
+          // into the workspace the user had left. A graceful quit is covered
+          // regardless — `freezeAndSnapshotOpenWindows()` captures whatever the
+          // pending debounce still owed (#11958).
+          scheduleOpenWindowsSave();
 
           // A scratch is not a project: the window's PVM now holds a scratch id
           // with no project row, so the File-menu project gates must drop.

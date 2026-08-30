@@ -9,8 +9,7 @@ import { T_SHORT, T_LONG } from "../../helpers/timeouts";
  * declares one context-menu item (label "Rich sample action", location
  * `worktree`) bound to the plugin's own `daintree.rich.ready` action. This
  * asserts the declared item reaches the main-process context-menu registry —
- * the runtime source the renderer's `PluginContextMenuSection` reads when
- * building a worktree menu.
+ * the runtime source the renderer reads when building a worktree menu.
  */
 test.describe.serial("Core: Plugin context menus contribution", () => {
   let ctx: AppContext;
@@ -44,14 +43,23 @@ test.describe.serial("Core: Plugin context menus contribution", () => {
   });
 
   // A worktree card exposes the same item list through two surfaces, so a
-  // contributed item has to reach both. It reached only the right-click menu
-  // until the section moved inside the shared item list.
+  // contributed item has to reach the Extensions submenu in both.
   test("surfaces the contributed item in both worktree menus", async () => {
     const { window } = ctx;
     const card = window.locator(SEL.worktree.mainCard);
     await expect(card).toBeVisible({ timeout: T_LONG });
 
     const pluginItem = window.getByRole("menuitem", { name: "Rich sample action" });
+    const expectPluginItem = async () => {
+      const extensionsTrigger = window.getByRole("menuitem", {
+        name: "Extensions",
+        exact: true,
+      });
+      await expect(extensionsTrigger).toBeVisible({ timeout: T_SHORT });
+      // Hover doesn't reliably open Radix submenus on Linux CI.
+      await extensionsTrigger.click();
+      await expect(pluginItem).toBeVisible({ timeout: T_SHORT });
+    };
     const closeMenu = async () => {
       await window.keyboard.press("Escape");
       await expect(window.locator('[role="menu"]')).toHaveCount(0, { timeout: T_SHORT });
@@ -59,13 +67,13 @@ test.describe.serial("Core: Plugin context menus contribution", () => {
 
     await test.step("Actions dropdown lists the plugin item", async () => {
       await card.locator(SEL.worktree.actionsMenu).click();
-      await expect(pluginItem).toBeVisible({ timeout: T_SHORT });
+      await expectPluginItem();
       await closeMenu();
     });
 
     await test.step("Right-click menu lists the plugin item", async () => {
       await card.click({ button: "right", position: { x: 40, y: 12 } });
-      await expect(pluginItem).toBeVisible({ timeout: T_SHORT });
+      await expectPluginItem();
       await closeMenu();
     });
   });

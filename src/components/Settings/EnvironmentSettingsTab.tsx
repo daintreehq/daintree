@@ -248,7 +248,7 @@ export function EnvironmentSettingsTab() {
       <div className="contents">
         <div className="space-y-2">
           {envRows.length === 0 ? (
-            <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+            <div className="text-sm text-text-secondary text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
               No environment variables configured yet
             </div>
           ) : (
@@ -263,8 +263,8 @@ export function EnvironmentSettingsTab() {
                 <div key={envVar.id}>
                   <div
                     className={cn(
-                      "flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-daintree-bg border",
-                      error ? "border-status-error/40" : "border-daintree-border"
+                      "flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-surface-canvas border",
+                      error ? "border-status-error/40" : "border-border-default"
                     )}
                   >
                     <input
@@ -273,7 +273,7 @@ export function EnvironmentSettingsTab() {
                       onChange={(e) => updateRow(index, "key", e.target.value)}
                       spellCheck={false}
                       autoCapitalize="none"
-                      className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                      className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                       placeholder="VARIABLE_NAME"
                       aria-label="Environment variable name"
                       aria-invalid={!!error || undefined}
@@ -289,7 +289,7 @@ export function EnvironmentSettingsTab() {
                         autoCapitalize="none"
                         autoComplete={isSensitive ? "new-password" : "off"}
                         className={cn(
-                          "w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30",
+                          "w-full bg-surface-sidebar border border-border-strong rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30",
                           isSensitive && "pr-8"
                         )}
                         placeholder="e.g. /usr/local/bin"
@@ -322,7 +322,7 @@ export function EnvironmentSettingsTab() {
                     </button>
                   </div>
                   {error && (
-                    <p id={errorId} className="text-[11px] text-status-error mt-1 ml-1">
+                    <p id={errorId} className="text-2xs text-status-error mt-1 ml-1">
                       {error}
                     </p>
                   )}

@@ -79,7 +79,7 @@ describe("ContentDock regression test", () => {
   it("uses a neutral ring on dock isOver state (no accent)", () => {
     const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
 
-    expect(content).not.toContain("ring-daintree-accent");
+    expect(content).not.toContain("ring-accent-primary");
     expect(content).toMatch(/isOver\s*&&\s*[^]*?ring-border-default/);
   });
 

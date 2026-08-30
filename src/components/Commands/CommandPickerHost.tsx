@@ -116,7 +116,7 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
           <AppDialog.Body>
             <div className="flex flex-col items-center justify-center py-8 space-y-4">
               <Spinner size="2xl" className="text-daintree-text/40" />
-              <p className="text-sm text-daintree-text/70">Loading command configuration…</p>
+              <p className="text-sm text-text-secondary">Loading command configuration…</p>
             </div>
           </AppDialog.Body>
         </AppDialog>
@@ -132,13 +132,15 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
             <div className="flex flex-col items-center justify-center py-8 space-y-4">
               <AlertCircle className="h-12 w-12 text-status-error" />
               <div className="text-center">
-                <h3 className="text-lg font-medium text-daintree-text">Failed to Load Command</h3>
-                <p className="text-sm text-daintree-text/70 mt-1">{builderLoadError}</p>
+                <h3 className="text-lg font-medium text-text-primary">Failed to Load Command</h3>
+                <p className="text-sm text-text-secondary mt-1">{builderLoadError}</p>
               </div>
             </div>
           </AppDialog.Body>
           <AppDialog.Footer>
-            <Button onClick={handleBuilderCancel}>Close</Button>
+            <Button variant="contrast" onClick={handleBuilderCancel}>
+              Close
+            </Button>
           </AppDialog.Footer>
         </AppDialog>
       )}

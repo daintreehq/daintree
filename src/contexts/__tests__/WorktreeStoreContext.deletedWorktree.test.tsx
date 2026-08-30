@@ -132,8 +132,12 @@ async function renderProvider() {
   return { store: rendered.result.current, unmount: rendered.unmount };
 }
 
-function removeEvent(worktreeId: string) {
-  return { type: "worktree-removed", worktreeId, ...nextV() };
+function removeEvent(worktreeId: string, generation?: number) {
+  return { type: "worktree-removed", worktreeId, generation, ...nextV() };
+}
+
+function updateEvent(worktree: WorktreeSnapshot) {
+  return { type: "worktree-update", worktree, ...nextV() };
 }
 
 describe("WorktreeStoreProvider — surviving terminals on worktree removal", () => {
@@ -764,5 +768,89 @@ describe("WorktreeStoreProvider — worktrees dropped without a removal event (#
     // A deleted id resolves to nothing after a restart, so it must not persist
     // as the restore point even while its ghost row is still on screen.
     expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBeNull();
+  });
+});
+
+describe("WorktreeStoreProvider — same-path re-creation (#11994)", () => {
+  // Re-creating a worktree at a deleted one's path reuses its id and lands
+  // inside the removal tombstone's window. The monitor incarnation is what
+  // separates the real creation from a buffered update for the dead monitor.
+  it("retires the ghost row and resolves the placeholder for the re-created worktree", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1", { generation: 4 })], nextV());
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-1" }]);
+    act(() => {
+      emit("worktree-removed", removeEvent("wt-1", 4));
+    });
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(true);
+
+    act(() => {
+      useWorktreeSelectionStore.getState().addPendingCreation("wt-1", { branch: "branch-wt-1" });
+      useWorktreeSelectionStore.getState().setPendingWorktree("wt-1");
+    });
+    expect(useWorktreeSelectionStore.getState().pendingCreations.has("wt-1")).toBe(true);
+
+    act(() => {
+      emit("worktree-update", updateEvent(makeWorktree("wt-1", { generation: 5 })));
+    });
+
+    expect(store.getState().worktrees.has("wt-1")).toBe(true);
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(false);
+    expect(useWorktreeSelectionStore.getState().pendingCreations.has("wt-1")).toBe(false);
+    expect(useWorktreeSelectionStore.getState().pendingWorktreeId).toBeNull();
+    expect(usePanelStore.getState().panelsById["agent-a"]).toBeDefined();
+  });
+
+  it("forwards the removal event's own generation to the tombstone", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-other")], nextV());
+    });
+
+    // No row for this id, so the outgoing-row fallback has nothing to read —
+    // only the event's stamp can seed the fence.
+    act(() => {
+      emit("worktree-removed", removeEvent("wt-1", 4));
+    });
+
+    act(() => {
+      emit("worktree-update", updateEvent(makeWorktree("wt-1", { generation: 4 })));
+    });
+    expect(store.getState().worktrees.has("wt-1")).toBe(false);
+
+    act(() => {
+      emit("worktree-update", updateEvent(makeWorktree("wt-1", { generation: 5 })));
+    });
+    expect(store.getState().worktrees.has("wt-1")).toBe(true);
+  });
+
+  it("leaves the placeholder standing when the update is rejected as stale", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1", { generation: 4 })], nextV());
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-1" }]);
+    act(() => {
+      emit("worktree-removed", removeEvent("wt-1", 4));
+    });
+
+    act(() => {
+      useWorktreeSelectionStore.getState().addPendingCreation("wt-1", { branch: "branch-wt-1" });
+      useWorktreeSelectionStore.getState().setPendingWorktree("wt-1");
+    });
+
+    act(() => {
+      // The dead monitor's buffered poll — same incarnation, so the tombstone
+      // still suppresses it. Clearing the placeholder here is what made the
+      // swallowed creation silent: no row, no skeleton, no error.
+      emit("worktree-update", updateEvent(makeWorktree("wt-1", { generation: 4 })));
+    });
+
+    expect(store.getState().worktrees.has("wt-1")).toBe(false);
+    expect(useWorktreeSelectionStore.getState().pendingCreations.has("wt-1")).toBe(true);
+    expect(useWorktreeSelectionStore.getState().pendingWorktreeId).toBe("wt-1");
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(true);
   });
 });

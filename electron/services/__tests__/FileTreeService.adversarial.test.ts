@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Stats } from "node:fs";
+import * as path from "node:path";
 import { FileTreeService, _resetBaseRealpathCacheForTests } from "../FileTreeService.js";
 
 const shared = vi.hoisted(() => ({
@@ -7,6 +8,7 @@ const shared = vi.hoisted(() => ({
   stat: vi.fn(),
   readdir: vi.fn(),
   lstat: vi.fn(),
+  readlink: vi.fn(),
   spawn: vi.fn(() => {
     throw new Error("a raw listing must not spawn a subprocess");
   }),
@@ -17,6 +19,7 @@ vi.mock("fs/promises", () => ({
   stat: shared.stat,
   readdir: shared.readdir,
   lstat: shared.lstat,
+  readlink: shared.readlink,
 }));
 
 // Poisoned so reintroducing a subprocess to this listing fails loudly rather
@@ -85,6 +88,7 @@ describe("FileTreeService adversarial", () => {
     shared.stat.mockResolvedValue(createStats({ isDirectory: true }));
     shared.readdir.mockResolvedValue([]);
     shared.lstat.mockResolvedValue(createStats({ size: 0 }));
+    shared.readlink.mockResolvedValue("./target");
   });
 
   it("READDIR_EACCES_WRAPPED_CLEANLY", async () => {
@@ -114,12 +118,72 @@ describe("FileTreeService adversarial", () => {
     ]);
   });
 
-  it("SYMLINK_OMITTED_WITHOUT_FOLLOW", async () => {
+  it("SYMLINK_LISTED_WITH_ITS_TARGET", async () => {
+    // Was SYMLINK_OMITTED_WITHOUT_FOLLOW, which pinned the bug in #11939: a
+    // link used to be dropped before it was ever stat'd, so the file browser
+    // showed nothing and said nothing.
     shared.readdir.mockResolvedValueOnce([d("link", { symlink: true })]);
+    shared.lstat.mockImplementation(async (target: string) =>
+      createStats({ isSymbolicLink: target.endsWith("link"), size: 11 })
+    );
+    shared.readlink.mockResolvedValue("./target");
 
-    await expect(service.getFileTree("/repo")).resolves.toEqual([]);
-    expect(shared.stat).toHaveBeenCalledTimes(1);
-    expect(shared.lstat).not.toHaveBeenCalled();
+    await expect(service.getFileTree("/repo")).resolves.toEqual([
+      {
+        isDirectory: false,
+        name: "link",
+        path: "link",
+        size: 11,
+        symlink: { target: path.resolve("/repo", "target"), targetKind: "file" },
+      },
+    ]);
+  });
+
+  it("OUT_OF_ROOT_LINK_IS_NOT_DEREFERENCED", async () => {
+    // The syscall-level half of the no-probe rule, which a real-filesystem
+    // test cannot express: a link naming an outside path must be classified
+    // from `readlink` ALONE. Any `realpath` or `lstat` aimed at that target
+    // would be the external existence probe (and the dead-mount stall) the
+    // lexical gate exists to avoid, so their absence is the assertion.
+    shared.readdir.mockResolvedValueOnce([d("outward", { symlink: true })]);
+    shared.lstat.mockResolvedValue(createStats({ isSymbolicLink: true, size: 15 }));
+    shared.readlink.mockResolvedValue("/elsewhere/secret");
+
+    const nodes = await service.getFileTree("/repo");
+
+    expect(nodes).toEqual([
+      {
+        isDirectory: false,
+        name: "outward",
+        path: "outward",
+        // No size: a link's own `lstat.size` is its target string's length.
+        symlink: { target: path.resolve("/elsewhere/secret"), targetKind: "external" },
+      },
+    ]);
+    expect(shared.readlink).toHaveBeenCalledWith(path.resolve("/repo", "outward"));
+    // Only the entry's own `lstat` — never one aimed at the target.
+    expect(shared.lstat.mock.calls.map(([target]) => target)).toEqual([
+      path.resolve("/repo", "outward"),
+    ]);
+    // The two directory-level realpaths only; none for the link.
+    expect(shared.realpath.mock.calls.map(([target]) => target)).toEqual([
+      path.resolve("/repo"),
+      path.resolve("/repo"),
+    ]);
+  });
+
+  it("LINK_READ_FAILURE_DROPS_ONE_ENTRY_NOT_THE_LISTING", async () => {
+    // A link deleted between `readdir` and `readlink` is an ordinary race, and
+    // it must cost exactly that one row.
+    shared.readdir.mockResolvedValueOnce([d("gone", { symlink: true }), d("good.txt")]);
+    shared.lstat.mockImplementation(async (target: string) =>
+      createStats({ isSymbolicLink: target.endsWith("gone"), size: 4 })
+    );
+    shared.readlink.mockRejectedValue(eacces("ENOENT: no such file"));
+
+    const nodes = await service.getFileTree("/repo");
+
+    expect(nodes.map((node) => node.name)).toEqual(["good.txt"]);
   });
 
   it("NO_SUBPROCESS_FOR_A_LISTING", async () => {

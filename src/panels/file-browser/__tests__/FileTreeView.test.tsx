@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
-import { StrictMode, forwardRef, useImperativeHandle } from "react";
+import { StrictMode, forwardRef, useEffect, useImperativeHandle } from "react";
 import type { ForwardedRef, ReactNode } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
@@ -15,6 +15,13 @@ import { FILE_TREE_ICON_CLASS, FILE_TREE_ICON_COLOR_CLASS } from "../fileTypeIco
 // `isMac` reads navigator.platform, which jsdom reports as neither — drive it
 // explicitly so both modifier branches of the insert shortcut are covered.
 const { isMacMock } = vi.hoisted(() => ({ isMacMock: vi.fn<() => boolean>(() => true) }));
+
+/**
+ * Lets a test pin the window the Virtuoso stub reports, so the mounted-range
+ * gate can be exercised without a real scroller. Null means "everything is
+ * mounted", which is what the stub actually renders.
+ */
+let rangeOverride: { startIndex: number; endIndex: number } | null = null;
 vi.mock("@/lib/platform", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/platform")>()),
   isMac: isMacMock,
@@ -51,10 +58,20 @@ vi.mock("react-virtuoso", async (importOriginal) => ({
       data: FlatTreeRow[];
       context: unknown;
       itemContent: (index: number, row: FlatTreeRow, context: unknown) => ReactNode;
+      rangeChanged?: (range: { startIndex: number; endIndex: number }) => void;
     },
     ref: ForwardedRef<Pick<VirtuosoHandle, "scrollIntoView">>
   ) {
     useImperativeHandle(ref, () => ({ scrollIntoView: scrollIntoViewMock }), []);
+    // The stub mounts every row, so it must SAY so. Rendering all of them while
+    // reporting no range is a combination the real component cannot produce,
+    // and it would leave anything gated on the mounted range — as
+    // `aria-activedescendant` now is — permanently switched off under test.
+    const { rangeChanged, data } = props;
+    const lastIndex = data.length - 1;
+    useEffect(() => {
+      rangeChanged?.(rangeOverride ?? { startIndex: 0, endIndex: lastIndex });
+    }, [rangeChanged, lastIndex]);
     return (
       <div>
         {props.data.map((row, index) => (
@@ -65,7 +82,7 @@ vi.mock("react-virtuoso", async (importOriginal) => ({
   }),
 }));
 
-function row(path: string, isDirectory = false): FlatTreeRow {
+function row(path: string, isDirectory = false, posInSet = 1, setSize = 1): FlatTreeRow {
   return {
     path,
     name: path.split("/").pop()!,
@@ -73,10 +90,12 @@ function row(path: string, isDirectory = false): FlatTreeRow {
     depth: 0,
     isExpanded: false,
     isLoading: false,
+    posInSet,
+    setSize,
   };
 }
 
-const ROWS = [row("src", true), row("README.md")];
+const ROWS = [row("src", true, 1, 2), row("README.md", false, 2, 2)];
 
 /** Absolute root the rows hang off, so a drag can name a real file. */
 const BASE_PATH = "/repo";
@@ -105,6 +124,78 @@ function renderTree(overrides: Partial<Parameters<typeof FileTreeView>[0]> = {})
   );
   return { onSelect, ...utils };
 }
+
+describe("FileTreeView symlink rows (#11939)", () => {
+  function symlinkRow(overrides: Partial<NonNullable<FlatTreeRow["symlink"]>> = {}): FlatTreeRow {
+    return {
+      ...row("aliased", true),
+      symlink: { target: "/repo/real", targetKind: "directory", ...overrides },
+    };
+  }
+
+  /** The row's own accessible description text, resolved through the id list. */
+  function describedText(container: HTMLElement, name: string): string {
+    const treeitem = container.querySelector<HTMLElement>(
+      `[role="treeitem"][aria-label="${name}"]`
+    );
+    const ids = treeitem?.getAttribute("aria-describedby")?.split(" ") ?? [];
+    // `getElementById`, not a `#id` selector: row ids are built from file
+    // paths, so they routinely carry characters a CSS selector would have to
+    // escape.
+    return ids
+      .map((id) => container.ownerDocument.getElementById(id)?.textContent ?? "")
+      .join(" ")
+      .trim();
+  }
+
+  it("names the target so a link is not just another folder row", () => {
+    // The bug was that these rows did not exist at all; a row that renders but
+    // says nothing about where it points would only half-fix that.
+    const { container } = renderTree({ rows: [symlinkRow()] });
+
+    expect(describedText(container, "aliased")).toBe("Symlink to /repo/real");
+  });
+
+  it("says a link points outside the folder, since that is why it is inert", () => {
+    const { container } = renderTree({
+      rows: [symlinkRow({ targetKind: "external" })],
+    });
+
+    expect(describedText(container, "aliased")).toBe("Symlink to /repo/real, outside this folder");
+  });
+
+  it("calls a dangling link broken rather than merely external", () => {
+    // Broken outranks the containment wording: the target not existing is the
+    // more specific answer, and both states are non-actionable.
+    const { container } = renderTree({
+      rows: [symlinkRow({ targetKind: "broken" })],
+    });
+
+    expect(describedText(container, "aliased")).toBe("Broken symlink to /repo/real");
+  });
+
+  it("refuses to guess where an unreadable link points", () => {
+    // A loop or a permission error tells us nothing about location, so the
+    // copy must not borrow the external wording — that would state as fact
+    // something the listing deliberately never established.
+    const { container } = renderTree({ rows: [symlinkRow({ targetKind: "unknown" })] });
+
+    expect(describedText(container, "aliased")).toBe("Symlink to /repo/real, unreadable");
+  });
+
+  it("describes an ordinary row with no link wording at all", () => {
+    // Guards the whole feature against becoming unconditional: a plain row
+    // must gain no description from this change.
+    const { container } = renderTree({ rows: [row("README.md")] });
+
+    // The row has to exist first — `describedText` also returns "" for a row
+    // that never rendered, which would pass for entirely the wrong reason.
+    const treeitem = container.querySelector('[role="treeitem"][aria-label="README.md"]');
+    expect(treeitem).toBeTruthy();
+    expect(treeitem?.hasAttribute("aria-describedby")).toBe(false);
+    expect(describedText(container, "README.md")).toBe("");
+  });
+});
 
 describe("FileTreeView context-menu interactions", () => {
   it("opens the menu on the right-clicked row without moving the selection", async () => {
@@ -1080,5 +1171,35 @@ describe("FileTreeView cursor reveal", () => {
     );
 
     expect(revealedPaths(COLLAPSED)).toEqual(["README.md"]);
+  });
+});
+
+describe("FileTreeView aria-activedescendant against the virtualized window", () => {
+  afterEach(() => {
+    rangeOverride = null;
+  });
+
+  it("names the cursor row while it is mounted, and names a real element", () => {
+    // The contract is not "produces a string" — it is "points at something that
+    // is in the document".
+    const { container } = renderTree({ cursorPath: "README.md" });
+    const active = container.querySelector('[role="tree"]')?.getAttribute("aria-activedescendant");
+    expect(active).toBeTruthy();
+    // `getElementById`, not a selector: row ids contain slashes and dots, which
+    // would need escaping to survive `querySelector`.
+    expect(active && document.getElementById(active)).toBeTruthy();
+  });
+
+  it("names nothing once the cursor row scrolls out of the mounted window", () => {
+    // Virtuoso mounts a window, so a cursor with an index in `rows` can have no
+    // DOM node at all. Pointing at an id that is not in the document violates
+    // the active-descendant contract, and it happened on any scroll that took
+    // the cursor row off screen — `cursorIndex >= 0` only proves membership in
+    // the data array.
+    rangeOverride = { startIndex: 0, endIndex: 0 };
+    const { container } = renderTree({ cursorPath: "README.md" });
+    expect(
+      container.querySelector('[role="tree"]')?.getAttribute("aria-activedescendant")
+    ).toBeNull();
   });
 });

@@ -433,7 +433,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           <div className="relative flex-1 min-w-0">
             {/* Left Scroll Chevron - Overlay */}
             {canScrollLeft && (
-              <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-r from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pr-4">
+              <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-r from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pr-4 contrast-more:bg-none contrast-more:bg-[var(--dock-bg)]">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -442,9 +442,9 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                       tabIndex={-1}
                       aria-hidden="true"
                       className={cn(
-                        "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
+                        "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-text-primary",
                         "rounded-[var(--radius-md)] transition-colors",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                       )}
                       aria-label="Scroll left"
                     >
@@ -523,7 +523,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
             {/* Right Scroll Chevron - Overlay */}
             {canScrollRight && (
-              <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-l from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pl-4">
+              <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-l from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pl-4 contrast-more:bg-none contrast-more:bg-[var(--dock-bg)]">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -532,9 +532,9 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                       tabIndex={-1}
                       aria-hidden="true"
                       className={cn(
-                        "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
+                        "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-text-primary",
                         "rounded-[var(--radius-md)] transition-colors",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                       )}
                       aria-label="Scroll right"
                     >

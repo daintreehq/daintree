@@ -113,8 +113,8 @@ function ToolbarButtonCard({
   return (
     <div
       className={cn(
-        "flex items-center gap-2 px-2.5 py-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 transition-colors",
-        isOverlay && "shadow-md bg-daintree-bg cursor-grabbing"
+        "flex items-center gap-2 px-2.5 py-2 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30 transition-colors",
+        isOverlay && "shadow-md bg-surface-canvas cursor-grabbing"
       )}
     >
       {/* When draggable, gripProps carries dnd-kit's role/tabIndex/describedby —
@@ -134,10 +134,10 @@ function ToolbarButtonCard({
           className={cn("h-4 w-4", draggable ? "text-daintree-text/50" : "text-daintree-text/20")}
         />
       </div>
-      <div className="text-daintree-text shrink-0">
+      <div className="text-text-primary shrink-0">
         <Icon className="h-4 w-4" />
       </div>
-      <span className="text-sm font-medium text-daintree-text truncate min-w-0 flex-1">
+      <span className="text-sm font-medium text-text-primary truncate min-w-0 flex-1">
         {metadata.label}
       </span>
       <SettingsSwitch
@@ -214,15 +214,15 @@ function TrayButtonRow({ buttonId, isVisible, onToggle, metadata }: TrayButtonRo
   return (
     <div
       style={{ opacity: isVisible ? 1 : 0.5 }}
-      className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30"
+      className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
     >
       <div className="flex items-center gap-2 flex-1 min-w-0">
-        <div className="text-daintree-text shrink-0">
+        <div className="text-text-primary shrink-0">
           <Icon className="h-4 w-4" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-daintree-text truncate">{metadata.label}</div>
-          <div className="text-xs text-daintree-text/50 select-text truncate">
+          <div className="text-sm font-medium text-text-primary truncate">{metadata.label}</div>
+          <div className="text-xs text-text-secondary select-text truncate">
             {metadata.description}
           </div>
         </div>
@@ -263,10 +263,10 @@ function ToolbarSideColumn({
   return (
     <div className="flex-1 min-w-0">
       <div className="mb-2 flex items-baseline justify-between gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-daintree-text/60">
+        <span className="text-xs font-medium uppercase tracking-wide text-text-secondary">
           {label}
         </span>
-        <span className="text-xs text-daintree-text/40 tabular-nums">
+        <span className="text-xs text-text-secondary tabular-nums">
           {visibleCount}/{buttonIds.length}
         </span>
       </div>
@@ -275,11 +275,11 @@ function ToolbarSideColumn({
           ref={setNodeRef}
           className={cn(
             "flex flex-wrap content-start gap-2 rounded-[var(--radius-md)] bg-overlay-subtle p-2 min-h-[4rem] transition-colors",
-            isOver && "ring-1 ring-inset ring-daintree-border"
+            isOver && "ring-1 ring-inset ring-border-default"
           )}
         >
           {buttonIds.length === 0 ? (
-            <div className="flex w-full items-center justify-center py-3 text-xs text-daintree-text/30">
+            <div className="flex w-full items-center justify-center py-3 text-xs text-text-placeholder">
               Drop a button here
             </div>
           ) : (
@@ -739,9 +739,7 @@ export function ToolbarSettingsTab() {
           />
 
           <div className="space-y-2">
-            <label className="text-sm font-medium text-daintree-text block">
-              Default selection
-            </label>
+            <label className="text-sm font-medium text-text-primary block">Default selection</label>
             <select
               value={launcher.defaultSelection ?? ""}
               onChange={(e) =>
@@ -749,7 +747,7 @@ export function ToolbarSettingsTab() {
                   e.target.value ? (e.target.value as typeof launcher.defaultSelection) : undefined
                 )
               }
-              className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
+              className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
             >
               <option value="">None (first available)</option>
               <option value="terminal">Terminal</option>
@@ -761,7 +759,7 @@ export function ToolbarSettingsTab() {
               <option value="browser">Browser</option>
               <option value="dev-server">Dev Preview</option>
             </select>
-            <p className="text-xs text-daintree-text/40 select-text">
+            <p className="text-xs text-text-secondary select-text">
               Default option to highlight when opening the launcher palette
             </p>
           </div>
@@ -772,8 +770,8 @@ export function ToolbarSettingsTab() {
         <button
           onClick={reset}
           className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-daintree-border",
-            "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/5 transition-colors"
+            "flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-default",
+            "text-text-secondary hover:text-text-primary hover:bg-tint/5 transition-colors"
           )}
         >
           <RotateCcw className="w-3.5 h-3.5" />

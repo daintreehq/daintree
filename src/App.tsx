@@ -416,8 +416,8 @@ function AppInner() {
 
   if (!isElectronAvailable()) {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-daintree-bg">
-        <div className="text-daintree-text/60 text-sm">
+      <div className="h-screen w-screen flex items-center justify-center bg-surface-canvas">
+        <div className="text-text-secondary text-sm">
           Electron API not available - please run in Electron
         </div>
       </div>
@@ -426,7 +426,7 @@ function AppInner() {
 
   if (crashState.status === "pending" || crashState.status === "failed") {
     return (
-      <div className="h-screen w-screen bg-daintree-bg">
+      <div className="h-screen w-screen bg-surface-canvas">
         <Suspense fallback={null}>
           <LazyCrashRecoveryDialog
             crash={crashState.crash}

@@ -32,6 +32,7 @@ import {
   isLocalhostUrl,
   isDevPreviewProxyUrl,
   isSafeNavigationUrl,
+  formatDialogOrigin,
 } from "../../shared/utils/urlUtils.js";
 import { isBrowserPartition } from "../../shared/utils/partitionUtils.js";
 import { stripPluginViewGeneration } from "../../shared/utils/pluginViewUrl.js";
@@ -1629,7 +1630,7 @@ export function setupWebviewCSP(): void {
         "js-dialog",
         (
           event: unknown,
-          _url: unknown,
+          url: unknown,
           message: unknown,
           dialogType: unknown,
           defaultValue: unknown,
@@ -1640,6 +1641,11 @@ export function setupWebviewCSP(): void {
           const type = dialogType as string;
           const defVal = (defaultValue as string) ?? "";
           const cb = callback as (success: boolean, response?: string) => void;
+          // Chromium hands us the origin of the frame that raised the dialog. It is the
+          // only trustworthy attribution available — the address bar reflects the
+          // top-level document, which is not necessarily who is speaking. Chromium names
+          // its own dialogs the same way ("<origin> says").
+          const origin = formatDialogOrigin(typeof url === "string" ? url : null);
 
           const dialogService = getWebviewDialogService();
           const dialogId = crypto.randomUUID();
@@ -1658,6 +1664,7 @@ export function setupWebviewCSP(): void {
               type,
               message: msg,
               defaultValue: defVal,
+              origin,
             });
           } else {
             dialogService.resolveDialog(dialogId, type === "alert");

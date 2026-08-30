@@ -363,7 +363,7 @@ export function CommitPanel({
 
   const blockerTooltip = (
     <div>
-      <div className="text-[11px] font-semibold text-daintree-text/60 mb-2">Cannot commit</div>
+      <div className="text-2xs font-semibold text-text-secondary mb-2">Cannot commit</div>
       <ul className="flex flex-col gap-1.5 text-xs">
         {blockers.map((b) => (
           <li key={b.key} className="flex items-center gap-2">
@@ -372,9 +372,7 @@ export function CommitPanel({
             ) : (
               <Check className="w-3 h-3 text-status-success shrink-0" />
             )}
-            <span
-              className={b.active ? "text-daintree-text" : "text-daintree-text/40 line-through"}
-            >
+            <span className={b.active ? "text-text-primary" : "text-daintree-text/40 line-through"}>
               {b.label}
             </span>
           </li>
@@ -423,37 +421,34 @@ export function CommitPanel({
         }
         className={cn(
           // Fallback keeps themes without --review-commit-input-bg byte-identical.
-          "w-full resize-none rounded-md border border-divider bg-[var(--review-commit-input-bg,var(--color-daintree-bg))] px-3 py-2 text-xs font-mono",
+          "w-full resize-none rounded-md border border-divider bg-[var(--review-commit-input-bg,var(--color-surface-canvas))] px-3 py-2 text-xs font-mono",
           "min-h-[calc(2lh+1rem)] max-h-[calc(6lh+1rem)] overflow-y-auto",
-          "placeholder:text-text-placeholder text-daintree-text",
+          "placeholder:text-text-placeholder text-text-primary",
           "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 focus:border-transparent",
           "disabled:opacity-50 disabled:cursor-not-allowed"
         )}
       />
       <div
         className={cn(
-          "flex justify-end text-[10px] tabular-nums -mt-1",
-          hasLineOverflow ? "text-status-warning" : "text-daintree-text/40"
+          "flex justify-end text-3xs tabular-nums -mt-1",
+          hasLineOverflow ? "text-status-warning" : "text-text-secondary"
         )}
       >
         {subjectLine.length}/{MAX_SUBJECT_LENGTH}
       </div>
 
       {isPushing && pushTargetBranch && (
-        <div className="text-[10px] text-daintree-text/50 truncate">
-          Pushing to <span className="text-daintree-text/70 font-mono">{pushTargetBranch}</span>
+        <div className="text-3xs text-text-secondary truncate">
+          Pushing to <span className="text-text-secondary font-mono">{pushTargetBranch}</span>
         </div>
       )}
 
       {isPushing && hasProgress && (
         <div className="space-y-1">
           {progressEntries.map((e) => (
-            <div
-              key={e.stage}
-              className="flex items-center gap-2 text-[10px] text-daintree-text/70"
-            >
+            <div key={e.stage} className="flex items-center gap-2 text-3xs text-text-secondary">
               <span className="w-20 truncate capitalize">{e.stage}</span>
-              <div className="flex-1 h-1 bg-daintree-bg rounded-full overflow-hidden">
+              <div className="flex-1 h-1 bg-surface-canvas rounded-full overflow-hidden">
                 <div
                   className="h-full bg-primary rounded-full transition-[width] duration-300 ease-out"
                   style={{ width: `${Math.min(100, Math.max(0, e.progress ?? 0))}%` }}
@@ -470,7 +465,12 @@ export function CommitPanel({
       <ConfirmDialog
         isOpen={pushConfirmOpen}
         onClose={handleClosePushConfirm}
-        title={`Push to '${destinationLabel ?? currentBranch ?? ""}'?`}
+        // Fixed, matching `GitPushConfirmDialog` (#11979/#11980). It used to
+        // interpolate `destinationLabel ?? currentBranch ?? ""`, which asked
+        // `Push to ''?` before the destination resolved and silently changed the
+        // quoted string from naming a REMOTE ref to naming a LOCAL branch between
+        // states. The destination belongs in the body, which can say "not resolved".
+        title="Push commits?"
         description={
           isProtected ? (
             <span>
@@ -490,7 +490,7 @@ export function CommitPanel({
         <div className="flex flex-col gap-2">
           {pushDestination === null && (
             <div
-              className="rounded border border-status-error/30 bg-status-error/10 px-2 py-1.5 text-[11px] text-status-error"
+              className="rounded border border-status-error/30 bg-status-error/10 px-2 py-1.5 text-2xs text-status-error"
               data-testid="commit-panel-push-no-destination"
             >
               No push destination is configured for this branch. Set an upstream, or configure a
@@ -500,7 +500,7 @@ export function CommitPanel({
           <div>
             <span
               data-testid="commit-panel-push-confirm-branch"
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] font-mono text-daintree-text"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs font-mono text-text-primary"
             >
               {destinationLabel ?? currentBranch ?? ""}
             </span>
@@ -509,18 +509,18 @@ export function CommitPanel({
             data-testid="commit-panel-push-confirm-message"
             className={cn(
               "max-h-40 overflow-y-auto rounded-[var(--radius-md)] border border-divider",
-              "bg-surface-inset px-3 py-2 text-xs font-mono whitespace-pre-wrap break-words text-daintree-text"
+              "bg-surface-inset px-3 py-2 text-xs font-mono whitespace-pre-wrap break-words text-text-primary"
             )}
           >
             {commitMessage}
           </pre>
-          <label className="flex items-center gap-2 text-xs text-daintree-text/60 select-none">
+          <label className="flex items-center gap-2 text-xs text-text-secondary select-none">
             <input
               type="checkbox"
               data-testid="commit-panel-push-confirm-dont-ask"
               checked={dontAskChecked}
               onChange={(e) => setDontAskChecked(e.target.checked)}
-              className="accent-daintree-accent"
+              className="accent-accent-primary"
             />
             Don't ask again for this worktree
           </label>

@@ -542,7 +542,7 @@ describe("BrowserPane webview lifecycle regression", () => {
 
   describe("back/forward navigation guard (#9942)", () => {
     function getLoadingOverlay(container: HTMLElement): Element | null {
-      return container.querySelector(".bg-daintree-bg.z-10");
+      return container.querySelector(".bg-surface-canvas.z-10");
     }
 
     function settleLoaded(webview: MockWebviewElement) {

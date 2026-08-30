@@ -10,7 +10,17 @@ import {
   LayoutGrid,
   RefreshCw,
 } from "lucide-react";
+import { useId } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  RadioChoiceGroup,
+  RadioChoiceRow,
+  CHOICE_SHELL,
+  CHOICE_PAD,
+  CHOICE_SELECTED,
+  CHOICE_UNSELECTED,
+  CHOICE_LABEL_INSET,
+} from "@/components/ui/RadioChoice";
 import { cn } from "@/lib/utils";
 import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
 import { validatePathPattern, previewPathPattern } from "@shared/utils/pathPattern";
@@ -83,6 +93,7 @@ export function AutomationTab({
   onDefaultWorktreeModeChange,
   isOpen,
 }: AutomationTabProps) {
+  const branchPrefixFieldId = useId();
   const trimmedWorktreePathPattern = worktreePathPattern.trim();
   const hasPathPatternError =
     trimmedWorktreePathPattern.length > 0 && !validatePathPattern(trimmedWorktreePathPattern).valid;
@@ -90,25 +101,25 @@ export function AutomationTab({
 
   return (
     <>
-      <div id="project-run-commands" className="mb-6 pb-6 border-b border-daintree-border">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+      <div id="project-run-commands" className="mb-6 pb-6 border-b border-border-default">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <SquareTerminal className="h-4 w-4" />
           Run Commands
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Quick access to common project tasks (build, test, deploy).
         </p>
 
         <div className="space-y-3">
           {runCommands.length === 0 ? (
-            <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+            <div className="text-sm text-text-secondary text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
               No run commands configured yet
             </div>
           ) : (
             runCommands.map((cmd, index) => (
               <div
                 key={cmd.id}
-                className="p-3 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border"
+                className="p-3 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default"
               >
                 <div className="flex items-start gap-3">
                   <div className="flex-1 min-w-0">
@@ -121,7 +132,7 @@ export function AutomationTab({
                           updated[index] = { ...cmd, name: e.target.value };
                           onRunCommandsChange(updated);
                         }}
-                        className="flex-1 bg-transparent border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                        className="flex-1 bg-transparent border border-border-default rounded px-2 py-1 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                         placeholder="Command name"
                         aria-label="Run command name"
                       />
@@ -135,12 +146,12 @@ export function AutomationTab({
                         updated[index] = { ...cmd, command: e.target.value };
                         onRunCommandsChange(updated);
                       }}
-                      className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-xs text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                      className="w-full bg-surface-sidebar border border-border-default rounded px-2 py-1 text-xs text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                       placeholder="npm run build"
                       aria-label="Run command"
                     />
                     {cmd.description && (
-                      <p className="text-xs text-daintree-text/60 mt-1">{cmd.description}</p>
+                      <p className="text-xs text-text-secondary mt-1">{cmd.description}</p>
                     )}
                     <div className="flex items-center gap-3 mt-2">
                       <button
@@ -157,8 +168,8 @@ export function AutomationTab({
                         className={cn(
                           "flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors",
                           cmd.preferredLocation === "dock"
-                            ? "bg-tint/[0.12] text-daintree-text"
-                            : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/30"
+                            ? "bg-tint/[0.12] text-text-primary"
+                            : "text-text-secondary hover:text-text-primary hover:bg-daintree-border/30"
                         )}
                       >
                         {cmd.preferredLocation === "dock" ? (
@@ -181,8 +192,8 @@ export function AutomationTab({
                         className={cn(
                           "flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors",
                           cmd.preferredAutoRestart
-                            ? "bg-tint/[0.12] text-daintree-text"
-                            : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/30"
+                            ? "bg-tint/[0.12] text-text-primary"
+                            : "text-text-secondary hover:text-text-primary hover:bg-daintree-border/30"
                         )}
                       >
                         <RefreshCw className="h-3 w-3" />
@@ -263,15 +274,15 @@ export function AutomationTab({
       </div>
 
       <div id="project-branch-prefix" className="pt-2">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <GitBranch className="h-4 w-4" />
           Branch Prefix
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Automatically prefix new branch names when creating worktrees.
         </p>
 
-        <div className="space-y-2">
+        <RadioChoiceGroup legend="Branch prefix" legendHidden>
           {(
             [
               { value: "none", label: "None", description: "No prefix added" },
@@ -286,43 +297,64 @@ export function AutomationTab({
                 description: "Use a custom prefix string",
               },
             ] as const
-          ).map(({ value, label, description }) => (
-            <label
-              key={value}
-              className="flex items-start gap-3 p-2.5 rounded-[var(--radius-md)] border border-daintree-border cursor-pointer hover:bg-daintree-border/30 transition-colors"
-            >
-              <input
-                type="radio"
+          ).map(({ value, label, description }) =>
+            value === "custom" ? (
+              // The custom prefix field belongs to this option, so it renders
+              // inside the card and outside the label — nesting is what carries
+              // the dependency once forced-colors has flattened fills.
+              <div
+                key={value}
+                className={cn(
+                  CHOICE_SHELL,
+                  branchPrefixMode === value ? CHOICE_SELECTED : CHOICE_UNSELECTED
+                )}
+              >
+                <RadioChoiceRow
+                  name="branchPrefixMode"
+                  value={value}
+                  checked={branchPrefixMode === value}
+                  onChange={() => onBranchPrefixModeChange(value)}
+                  label={label}
+                  description={description}
+                  bare
+                />
+                {branchPrefixMode === "custom" && (
+                  <div className={cn(CHOICE_PAD, "pt-0 space-y-1.5", CHOICE_LABEL_INSET)}>
+                    <label
+                      htmlFor={branchPrefixFieldId}
+                      className="block text-xs font-medium text-text-secondary"
+                    >
+                      Prefix
+                    </label>
+                    <input
+                      id={branchPrefixFieldId}
+                      type="text"
+                      value={branchPrefixCustom}
+                      onChange={(e) => onBranchPrefixCustomChange(e.target.value)}
+                      placeholder="e.g. feature/ or myteam/"
+                      className="w-full px-3 py-1.5 bg-surface-input border border-border-strong rounded-[var(--radius-md)] text-sm text-text-primary font-mono transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <RadioChoiceRow
+                key={value}
                 name="branchPrefixMode"
                 value={value}
                 checked={branchPrefixMode === value}
                 onChange={() => onBranchPrefixModeChange(value)}
-                className="mt-0.5 accent-daintree-accent"
+                label={label}
+                description={description}
               />
-              <div>
-                <span className="text-sm font-medium text-daintree-text">{label}</span>
-                <p className="text-xs text-daintree-text/50">{description}</p>
-              </div>
-            </label>
-          ))}
-        </div>
-
-        {branchPrefixMode === "custom" && (
-          <div className="mt-3">
-            <input
-              type="text"
-              value={branchPrefixCustom}
-              onChange={(e) => onBranchPrefixCustomChange(e.target.value)}
-              placeholder="e.g. feature/ or myteam/"
-              className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
-            />
-          </div>
-        )}
+            )
+          )}
+        </RadioChoiceGroup>
 
         {branchPrefixMode !== "none" && (
-          <div className="mt-3 p-3 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-daintree-border">
-            <span className="block text-xs font-medium text-daintree-text/70 mb-1">Preview:</span>
-            <code className="text-xs text-daintree-text">
+          <div className="mt-3 p-3 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-border-default">
+            <span className="block text-xs font-medium text-text-secondary mb-1">Preview:</span>
+            <code className="text-xs text-text-primary">
               {branchPrefixMode === "username"
                 ? "alice/fix-bug"
                 : branchPrefixCustom.trim()
@@ -330,7 +362,7 @@ export function AutomationTab({
                   : "fix-bug"}
             </code>
             {branchPrefixMode === "username" && (
-              <p className="text-xs text-daintree-text/40 mt-1">
+              <p className="text-xs text-text-secondary mt-1">
                 Username is read from git config user.name at worktree creation time.
               </p>
             )}
@@ -339,11 +371,11 @@ export function AutomationTab({
       </div>
 
       <div className="pt-2">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <Folders className="h-4 w-4" />
           Worktree Path Pattern
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Override the global worktree path pattern for this project. Leave empty to use the global
           default.
         </p>
@@ -353,7 +385,7 @@ export function AutomationTab({
           value={worktreePathPattern}
           onChange={(e) => onWorktreePathPatternChange(e.target.value)}
           placeholder="e.g. {parent-dir}/{base-folder}-worktrees/{branch-slug}"
-          className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
+          className="w-full px-3 py-2 bg-surface-canvas border border-border-default rounded-[var(--radius-md)] text-sm text-text-primary font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
         />
 
         {worktreePathPattern.trim() &&
@@ -365,11 +397,9 @@ export function AutomationTab({
             const rootPath = currentProject?.path ?? "/Users/name/Projects/my-project";
             const preview = previewPathPattern(worktreePathPattern.trim(), rootPath);
             return (
-              <div className="mt-2 p-3 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-daintree-border">
-                <span className="block text-xs font-medium text-daintree-text/70 mb-1">
-                  Preview:
-                </span>
-                <code className="text-xs text-daintree-text break-all">{preview}</code>
+              <div className="mt-2 p-3 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-border-default">
+                <span className="block text-xs font-medium text-text-secondary mb-1">Preview:</span>
+                <code className="text-xs text-text-primary break-all">{preview}</code>
               </div>
             );
           })()}
@@ -383,21 +413,21 @@ export function AutomationTab({
           ].map(({ var: v, desc }) => (
             <div
               key={v}
-              className="text-xs p-2 rounded-[var(--radius-md)] bg-daintree-bg/30 border border-daintree-border"
+              className="text-xs p-2 rounded-[var(--radius-md)] bg-daintree-bg/30 border border-border-default"
             >
               <code className="text-text-secondary">{v}</code>
-              <span className="text-daintree-text/50 ml-1">{desc}</span>
+              <span className="text-text-secondary ml-1">{desc}</span>
             </div>
           ))}
         </div>
       </div>
 
-      <div id="project-terminal-settings" className="mt-6 pt-6 border-t border-daintree-border">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+      <div id="project-terminal-settings" className="mt-6 pt-6 border-t border-border-default">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <SquareTerminal className="h-4 w-4" />
           Terminal Defaults
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Fields without an override inherit the app default. Type to override; click "Reset to
           global" to clear. Applies to new terminals only.
         </p>
@@ -474,7 +504,7 @@ export function AutomationTab({
       {onResourceEnvironmentsChange &&
         onActiveResourceEnvironmentChange &&
         onDefaultWorktreeModeChange && (
-          <div className="mt-6 pt-6 border-t border-daintree-border">
+          <div className="mt-6 pt-6 border-t border-border-default">
             <ResourceEnvironmentsSection
               resourceEnvironments={resourceEnvironments}
               onResourceEnvironmentsChange={onResourceEnvironmentsChange}

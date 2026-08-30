@@ -154,20 +154,20 @@ export function createFileDropChipTooltip() {
         dom.className = "px-2 py-1 text-xs";
         dom.style.cssText = `
           background: var(--theme-surface-panel-elevated);
-          border-radius: 4px;
+          border-radius: var(--radius-xs);
           box-shadow: 0 2px 8px var(--theme-scrim-soft);
         `;
 
         const pathEl = document.createElement("p");
         pathEl.style.cssText =
-          "font-size: 10px; color: var(--theme-text-secondary); word-break: break-all; max-width: 300px; font-family: var(--font-mono, monospace);";
+          "font-size: var(--text-3xs); color: var(--theme-text-secondary); word-break: break-all; max-width: 300px; font-family: var(--font-mono, monospace);";
         pathEl.textContent = entry.filePath;
         dom.appendChild(pathEl);
 
         if (entry.fileSize != null) {
           const sizeEl = document.createElement("p");
           sizeEl.style.cssText =
-            "font-size: 10px; color: var(--theme-text-muted); margin-top: 2px;";
+            "font-size: var(--text-3xs); color: var(--theme-text-muted); margin-top: 2px;";
           sizeEl.textContent = formatFileSize(entry.fileSize);
           dom.appendChild(sizeEl);
         }

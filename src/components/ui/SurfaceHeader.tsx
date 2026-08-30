@@ -60,8 +60,14 @@ const SurfaceHeaderTitle = React.forwardRef<HTMLHeadingElement, SurfaceHeaderTit
       // default min-width:auto floor is its longest unbroken word — a hostile
       // run would push the close button off-canvas and clip. Shrink permission
       // only; titles that fit render identically.
+      //
+      // break-words completes that intent. min-w-0 lets the box shrink, but a
+      // single unbreakable token (a 60-character MCP tool name, a long branch
+      // or file name) still overhangs the shrunk box and paints through the
+      // close button. `overflow-wrap: break-word` only ever acts on a word that
+      // cannot fit on a line by itself, so a title that fits is untouched.
       className={cn(
-        "text-lg font-semibold text-daintree-text flex items-center gap-2 min-w-0",
+        "text-lg font-semibold text-text-primary flex items-center gap-2 min-w-0 break-words",
         className
       )}
       {...props}
@@ -87,8 +93,8 @@ const SurfaceHeaderCloseButton = React.forwardRef<HTMLButtonElement, SurfaceHead
     <button
       ref={ref}
       className={cn(
-        "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-raised transition-colors p-1 rounded",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+        "shrink-0 text-daintree-text/60 hover:text-text-primary hover:bg-overlay-raised transition-colors p-1 rounded",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
         className
       )}
       {...props}

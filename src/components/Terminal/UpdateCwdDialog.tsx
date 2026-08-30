@@ -2,6 +2,8 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import type { KeyboardEvent } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { FIELD_INPUT, FormGrid, FormRow } from "@/components/Worktree/views";
+import { cn } from "@/lib/utils";
 import { FolderOpen, AlertCircle } from "lucide-react";
 import { logError } from "@/utils/logger";
 import { systemClient } from "@/clients/systemClient";
@@ -77,7 +79,9 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md">
       <AppDialog.Header>
-        <AppDialog.Title icon={<FolderOpen className="w-5 h-5 text-daintree-accent" />}>
+        {/* Neutral, not accent: the header glyph is decoration, and this focus
+            region's one load-bearing accent is the keyboard focus ring. */}
+        <AppDialog.Title icon={<FolderOpen className="w-5 h-5 text-text-secondary" />}>
           Update Working Directory
         </AppDialog.Title>
         <AppDialog.CloseButton />
@@ -89,23 +93,29 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
           terminal.
         </AppDialog.Description>
 
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-daintree-text/70 mb-1">
-              Current directory
-            </label>
+        <FormGrid>
+          <FormRow label="Current directory">
             <code className="block p-2 bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)] border border-status-error/30 rounded text-sm text-status-error font-mono truncate">
               {currentCwd}
             </code>
-          </div>
+          </FormRow>
 
-          <div>
-            <label
-              htmlFor="new-cwd-input"
-              className="block text-sm font-medium text-daintree-text/70 mb-1"
-            >
-              New directory
-            </label>
+          <FormRow
+            label="New directory"
+            htmlFor="new-cwd-input"
+            hint={
+              validationError && (
+                <div
+                  id="cwd-error"
+                  className="flex items-center gap-1 text-xs text-status-error"
+                  role="alert"
+                >
+                  <AlertCircle className="w-3.5 h-3.5" aria-hidden="true" />
+                  {validationError}
+                </div>
+              )
+            }
+          >
             <input
               ref={inputRef}
               id="new-cwd-input"
@@ -116,30 +126,20 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
                 setValidationError(undefined);
               }}
               onKeyDown={handleKeyDown}
-              className="w-full p-2 bg-daintree-bg border border-daintree-border rounded font-mono text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent/40"
+              className={cn(FIELD_INPUT, "font-mono")}
               placeholder="/path/to/directory"
               aria-invalid={!!validationError}
               aria-describedby={validationError ? "cwd-error" : undefined}
             />
-            {validationError && (
-              <div
-                id="cwd-error"
-                className="flex items-center gap-1 mt-1.5 text-sm text-status-error"
-                role="alert"
-              >
-                <AlertCircle className="w-3.5 h-3.5" aria-hidden="true" />
-                {validationError}
-              </div>
-            )}
-          </div>
-        </div>
+          </FormRow>
+        </FormGrid>
       </AppDialog.Body>
 
       <AppDialog.Footer>
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button onClick={handleUpdate} disabled={validating}>
+        <Button variant="contrast" onClick={handleUpdate} disabled={validating}>
           {validating ? "Updating…" : "Update and restart"}
         </Button>
       </AppDialog.Footer>

@@ -86,7 +86,7 @@ export function HelpPanelHeader({
   return (
     <div
       className={cn(
-        "flex items-center gap-1 px-3 py-2 border-b border-daintree-border shrink-0 transition-colors",
+        "flex items-center gap-1 px-3 py-2 border-b border-border-default shrink-0 transition-colors",
         // Title-bar lift owns the surface-highlight for the focused assistant
         // region. Uses `--color-surface-highlight` (= theme-aware
         // `surface-panel-elevated`) — the same token grid panels swap to via
@@ -94,14 +94,14 @@ export function HelpPanelHeader({
         // panel's title bar across every theme. Scoping the fill here (not
         // on the aside via `.assistant-focused`) keeps the launching
         // skeleton, empty state, and any future no-terminal content anchored
-        // to `bg-daintree-bg`. Neutral lift — no accent — per the
+        // to `bg-surface-canvas`. Neutral lift — no accent — per the
         // single-anchor-per-region rule.
         isFocused && "bg-[var(--color-surface-highlight)] border-b-[var(--border-overlay)]"
       )}
     >
       <div className="flex items-center min-w-0 flex-1">
         <DaintreeIcon className="w-4 h-4 text-daintree-text/50 shrink-0" />
-        <span className="ml-1.5 text-xs font-medium text-daintree-text/70 truncate">
+        <span className="ml-1.5 text-xs font-medium text-text-secondary truncate">
           Daintree Assistant
         </span>
         <AssistantHeaderStateIndicator agentState={agentState} />
@@ -110,7 +110,7 @@ export function HelpPanelHeader({
         <button
           type="button"
           onClick={onNewSession}
-          className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-daintree-text hover:bg-tint/8 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-text-primary hover:bg-tint/8 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           aria-label="Start new session"
         >
           <Plus className="w-3.5 h-3.5" />
@@ -123,7 +123,7 @@ export function HelpPanelHeader({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-daintree-text hover:bg-tint/8 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+            className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-text-primary hover:bg-tint/8 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             aria-label="More actions"
             aria-haspopup="menu"
             data-testid="assistant-header-more"
@@ -150,7 +150,7 @@ export function HelpPanelHeader({
       <button
         type="button"
         onClick={onClose}
-        className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-daintree-text hover:bg-tint/8 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+        className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-text-primary hover:bg-tint/8 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         aria-label="Hide Daintree Assistant"
       >
         <ChevronRight className="w-3.5 h-3.5" />

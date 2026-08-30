@@ -1211,6 +1211,23 @@ export class TerminalProcess {
     this.terminalInfo.titleMode = titleMode;
   }
 
+  /**
+   * Mirror a renderer-side worktree move onto the authoritative record, so the
+   * fleet projection files the run under the worktree it is actually in rather
+   * than the one it launched in (#12060).
+   *
+   * `null` deletes the field rather than storing a blank: an absent worktree is
+   * a real state the fleet palette renders on its own terms, and an empty
+   * string would read as a worktree whose id is "".
+   */
+  setWorktreeId(worktreeId: string | null): void {
+    if (worktreeId === null) {
+      delete this.terminalInfo.worktreeId;
+      return;
+    }
+    this.terminalInfo.worktreeId = worktreeId;
+  }
+
   acknowledgeData(_byteCount: number): void {
     // No-op: SAB-based backpressure in pty-host.ts handles all flow control
   }

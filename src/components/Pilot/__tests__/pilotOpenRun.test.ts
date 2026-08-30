@@ -16,6 +16,12 @@ vi.mock("@/store/viewWorkspaceId", () => ({
 const suppressPaletteFocusRestore = vi.hoisted(() => vi.fn());
 vi.mock("@/components/ui/paletteFocusRestore", () => ({ suppressPaletteFocusRestore }));
 
+const notifyMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/notify")>("@/lib/notify");
+  return { ...actual, notify: notifyMock };
+});
+
 import { registerProjectActions } from "../../../services/actions/definitions/projectActions";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -69,6 +75,21 @@ function openRun(args: { runId: string; workspaceId: string }): Promise<unknown>
   const actions: ActionRegistry = new Map();
   registerProjectActions(actions, NO_CALLBACKS);
   return actions.get("pilot.openRun")!().run(args, NO_CTX);
+}
+
+/**
+ * The same call, for the paths that are SUPPOSED to fail.
+ *
+ * A run that cannot be opened rejects rather than resolving: `ActionService`
+ * turns that into `{ok:false}`, which is the only honest answer to give an MCP
+ * client or an automation asking whether the run opened. Swallowing it here
+ * would let the assertions below pass against an action that reported success.
+ */
+async function openRunExpectingFailure(args: {
+  runId: string;
+  workspaceId: string;
+}): Promise<void> {
+  await expect(openRun(args)).rejects.toThrow();
 }
 
 beforeEach(() => {
@@ -161,7 +182,7 @@ describe("pilot.openRun", () => {
     // setting it here would leak into an unrelated palette's next close.
     dispatchMock.mockResolvedValue({ ok: false });
 
-    await openRun({ runId: "gone", workspaceId: PROJECT_HERE });
+    await openRunExpectingFailure({ runId: "gone", workspaceId: PROJECT_HERE });
 
     expect(suppressPaletteFocusRestore).not.toHaveBeenCalled();
   });
@@ -172,7 +193,7 @@ describe("pilot.openRun", () => {
     // gone and nothing explaining why.
     dispatchMock.mockResolvedValue({ ok: false });
 
-    await openRun({ runId: "gone", workspaceId: PROJECT_HERE });
+    await openRunExpectingFailure({ runId: "gone", workspaceId: PROJECT_HERE });
 
     expect(usePilotStore.getState().isOpen).toBe(true);
   });
@@ -184,6 +205,56 @@ describe("pilot.openRun", () => {
 
     expect(switchProject).toHaveBeenCalledWith(PROJECT_ELSEWHERE, {
       focusIntent: { intent: "focus-panel", panelId: "t1" },
+    });
+  });
+
+  describe("when the run cannot be opened", () => {
+    it("says so instead of leaving the click unanswered", async () => {
+      // The rows come from the PTY host's terminal list, not from this view's
+      // panels, so a listed run can be unfocusable from here. Silently doing
+      // nothing made that indistinguishable from a row that ignores clicks.
+      dispatchMock.mockResolvedValue({ ok: false });
+
+      await openRunExpectingFailure({ runId: "gone", workspaceId: PROJECT_HERE });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock.mock.calls[0]![0]).toMatchObject({ type: "error" });
+    });
+
+    it("says nothing on the path that worked", async () => {
+      await openRun({ runId: "t1", workspaceId: PROJECT_HERE });
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("reports a switch that rejects to it, which closed the dialog first", async () => {
+      // The overview is already gone by the time a switch settles, so a
+      // rejection reaching this action must not go unhandled.
+      //
+      // What production's `switchProject` does with a FAILED IPC is report it
+      // itself — it is fire-and-forget by design, because the main process
+      // swaps this renderer's view out on success, so it cannot await its own
+      // call. This covers the rejections that do reach here: a synchronous
+      // throw out of the store, and the scratch switch below, which awaits its
+      // client and has no reporting of its own.
+      switchProject.mockRejectedValueOnce(new Error("no such project"));
+
+      await openRunExpectingFailure({ runId: "t9", workspaceId: PROJECT_ELSEWHERE });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock.mock.calls[0]![0]).toMatchObject({ type: "error" });
+    });
+
+    it("reports a rejected scratch switch on the same terms", async () => {
+      seedScratches([SCRATCH_B]);
+      switchScratch.mockRejectedValueOnce(new Error("no such scratch"));
+
+      await openRunExpectingFailure({ runId: "t7", workspaceId: SCRATCH_B });
+
+      // The one switch that actually rejects to this action. `switchProject` is
+      // fire-and-forget and reports its own failure; `switchScratch` awaits its
+      // client, so without this catch the rejection went unhandled.
+      expect(notifyMock).toHaveBeenCalledTimes(1);
     });
   });
 });

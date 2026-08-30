@@ -52,11 +52,11 @@ function QuarantinedPanelRow({ panel }: QuarantinedPanelRowProps) {
   return (
     <li className="flex items-start justify-between gap-3 py-1.5">
       <div className="min-w-0 flex-1">
-        <p className="truncate text-daintree-text" title={displayTitle}>
+        <p className="truncate text-text-primary" title={displayTitle}>
           {displayTitle}
         </p>
         {subtitle && (
-          <p className="truncate text-[10px] text-daintree-text/50" title={subtitle}>
+          <p className="truncate text-3xs text-text-secondary" title={subtitle}>
             {subtitle}
           </p>
         )}
@@ -65,22 +65,22 @@ function QuarantinedPanelRow({ panel }: QuarantinedPanelRowProps) {
         <button
           type="button"
           onClick={handleRestore}
-          className="shrink-0 rounded border border-[var(--color-status-warning)]/30 px-2 py-0.5 text-[10px] transition-colors hover:bg-[var(--color-status-warning)]/10"
+          className="shrink-0 rounded border border-[var(--color-status-warning)]/30 px-2 py-0.5 text-3xs transition-colors hover:bg-[var(--color-status-warning)]/10"
         >
           Restore panel
         </button>
       )}
       {state === "clearing" && (
-        <span className="shrink-0 text-[10px] text-daintree-text/60">Clearing…</span>
+        <span className="shrink-0 text-3xs text-text-secondary">Clearing…</span>
       )}
       {state === "cleared" && (
-        <span className="shrink-0 text-[10px] text-daintree-text/60">Restoring on next launch</span>
+        <span className="shrink-0 text-3xs text-text-secondary">Restoring on next launch</span>
       )}
       {state === "failed" && (
         <button
           type="button"
           onClick={handleRestore}
-          className="shrink-0 rounded border border-[var(--color-status-warning)]/30 px-2 py-0.5 text-[10px] transition-colors hover:bg-[var(--color-status-warning)]/10"
+          className="shrink-0 rounded border border-[var(--color-status-warning)]/30 px-2 py-0.5 text-3xs transition-colors hover:bg-[var(--color-status-warning)]/10"
         >
           Retry
         </button>
@@ -149,19 +149,19 @@ export function SafeModeBanner() {
       <PopoverContent
         align="end"
         sideOffset={8}
-        className="p-3 text-xs max-w-xs space-y-2 text-daintree-text"
+        className="p-3 text-xs max-w-xs space-y-2 text-text-primary"
       >
         {crashMetaText && <p className="font-medium">{crashMetaText}</p>}
         {hasQuarantineList ? (
           <>
-            <p className="text-daintree-text/70">
+            <p className="text-text-secondary">
               {quarantined.length === 1
                 ? "1 panel was quarantined because it appeared to trigger repeated crashes."
                 : `${quarantined.length} panels were quarantined because they appeared to trigger repeated crashes.`}
             </p>
             <ul
               role="list"
-              className="-mx-1 max-h-64 overflow-y-auto divide-y divide-daintree-text/10 text-[11px]"
+              className="-mx-1 max-h-64 overflow-y-auto divide-y divide-daintree-text/10 text-2xs"
             >
               {quarantined.map((panel) => (
                 <QuarantinedPanelRow key={panel.id} panel={panel} />
@@ -170,7 +170,7 @@ export function SafeModeBanner() {
           </>
         ) : (
           skipped > 0 && (
-            <p className="text-daintree-text/70">
+            <p className="text-text-secondary">
               {skipped} {skipped === 1 ? "panel was" : "panels were"} skipped so you can recover the
               app. Restart normally to reload them.
             </p>
@@ -215,7 +215,7 @@ export function SafeModeBanner() {
           onClick={() => {
             void actionService.dispatch("logs.openFile", undefined, { source: "user" });
           }}
-          className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline decoration-daintree-text/30 underline-offset-2"
+          className="text-xs text-text-secondary hover:text-text-primary transition-colors underline decoration-daintree-text/30 underline-offset-2"
         >
           View logs
         </button>

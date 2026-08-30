@@ -30,7 +30,7 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
         <Check className="w-5 h-5 text-status-success shrink-0 mt-px" />
         <div>
           <p className="text-sm font-medium">CLI is now available</p>
-          <p className="text-xs text-daintree-text/60 mt-1">
+          <p className="text-xs text-text-secondary mt-1">
             The agent binary was detected. Re-check to continue the launch.
           </p>
         </div>
@@ -44,11 +44,11 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
   // sends the user hunting through endpoint security for a sign-in prompt.
   if (state === "unauthenticated") {
     return (
-      <div className="flex items-start gap-3 px-4 py-3 rounded-[var(--radius-md)] border border-status-success/20 bg-status-success/5">
-        <KeyRound className="w-5 h-5 text-status-success shrink-0 mt-px" />
+      <div className="flex items-start gap-3 px-4 py-3 rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle">
+        <KeyRound className="w-5 h-5 text-daintree-text/60 shrink-0 mt-px" />
         <div>
           <p className="text-sm font-medium">Sign-in not detected</p>
-          <p className="text-xs text-daintree-text/60 mt-1">
+          <p className="text-xs text-text-secondary mt-1">
             The CLI is available but no signed-in session was found. Re-check to continue — the CLI
             prompts for sign-in on its first run.
           </p>
@@ -63,11 +63,11 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
         <AlertTriangle className="w-5 h-5 text-status-warning shrink-0 mt-px" />
         <div>
           <p className="text-sm font-medium">CLI binary not found</p>
-          <p className="text-xs text-daintree-text/60 mt-1">
+          <p className="text-xs text-text-secondary mt-1">
             {detail.message ?? "The agent executable was not detected on your system."}
           </p>
           {detail.resolvedPath && (
-            <p className="text-xs text-daintree-text/40 mt-1 font-mono select-text">
+            <p className="text-xs text-text-secondary mt-1 font-mono select-text">
               Last known path: {detail.resolvedPath}
             </p>
           )}
@@ -85,7 +85,7 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
           <p className="text-sm font-medium">
             {isWsl ? "Detected in WSL" : "CLI installed but not directly launchable"}
           </p>
-          <p className="text-xs text-daintree-text/60 mt-1">
+          <p className="text-xs text-text-secondary mt-1">
             {isWsl
               ? `Found in WSL (${detail.wslDistro ?? "unknown distro"}) — only host binaries can be launched directly. Install a native binary or use "Run anyway" if you have a wrapper.`
               : (detail.message ?? "The binary is installed but can't be launched directly.")}
@@ -101,10 +101,10 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
       <AlertTriangle className="w-5 h-5 text-status-error shrink-0 mt-px" />
       <div>
         <p className="text-sm font-medium">Blocked by security software</p>
-        <p className="text-xs text-daintree-text/60 mt-1">
+        <p className="text-xs text-text-secondary mt-1">
           {detail.message ?? "The binary exists but execution was denied."}
         </p>
-        <p className="text-xs text-daintree-text/40 mt-1">
+        <p className="text-xs text-text-secondary mt-1">
           Check your endpoint security settings or add an allowlist entry.
         </p>
       </div>
@@ -118,12 +118,12 @@ function InstallCommands({ blocks }: { blocks: AgentInstallBlock[] }) {
       {blocks.map((block, i) => (
         <div key={i}>
           {block.label && (
-            <p className="text-xs font-medium text-daintree-text/50 mb-1.5">{block.label}</p>
+            <p className="text-xs font-medium text-text-secondary mb-1.5">{block.label}</p>
           )}
           {block.steps && (
             <ol className="list-decimal list-inside space-y-1 mb-2">
               {block.steps.map((step, j) => (
-                <li key={j} className="text-xs text-daintree-text/60">
+                <li key={j} className="text-xs text-text-secondary">
                   {step}
                 </li>
               ))}
@@ -139,7 +139,7 @@ function InstallCommands({ blocks }: { blocks: AgentInstallBlock[] }) {
           {block.notes && (
             <div className="mt-2 space-y-0.5">
               {block.notes.map((note, j) => (
-                <p key={j} className="text-xs text-daintree-text/40">
+                <p key={j} className="text-xs text-text-secondary">
                   {note}
                 </p>
               ))}
@@ -227,15 +227,21 @@ export function MissingCliGate({
   const docsUrl = agentConfig?.install?.docsUrl;
 
   return (
-    <div className="flex-1 min-h-0 bg-daintree-bg flex flex-col items-center justify-center overflow-auto">
-      <div className="w-full max-w-lg space-y-4 px-6 py-8">
+    // `my-auto` on the child rather than `justify-center` on the scrollport:
+    // `justify-content: center` distributes overflow to BOTH ends, so once the
+    // install blocks and troubleshooting list outgrow a short pane the agent
+    // name and "Setup required" spill above the scroll origin and cannot be
+    // scrolled back to. Auto margins collapse to zero when there is no free
+    // space, so the same centring degrades to top alignment instead.
+    <div className="flex-1 min-h-0 bg-surface-canvas flex flex-col items-center overflow-auto">
+      <div className="my-auto w-full max-w-lg space-y-4 px-6 py-8">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border flex items-center justify-center">
+          <div className="w-8 h-8 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default flex items-center justify-center">
             <Terminal className="w-4 h-4 text-daintree-text/40" />
           </div>
           <div>
             <h2 className="text-sm font-semibold">{agentName}</h2>
-            <p className="text-xs text-daintree-text/40">
+            <p className="text-xs text-text-secondary">
               {isAgentLaunchable(state)
                 ? "Ready to continue launch"
                 : "Setup required before launch"}
@@ -247,17 +253,17 @@ export function MissingCliGate({
 
         {state === "missing" && installBlocks && installBlocks.length > 0 && (
           <div className="space-y-2">
-            <p className="text-xs font-medium text-daintree-text/50">Install on {getOsLabel()}</p>
+            <p className="text-xs font-medium text-text-secondary">Install on {getOsLabel()}</p>
             <InstallCommands blocks={installBlocks} />
           </div>
         )}
 
         {state === "missing" && troubleshooting && troubleshooting.length > 0 && (
           <div className="space-y-1.5">
-            <p className="text-xs font-medium text-daintree-text/50">Troubleshooting</p>
+            <p className="text-xs font-medium text-text-secondary">Troubleshooting</p>
             <ul className="list-disc list-inside space-y-0.5">
               {troubleshooting.map((tip, i) => (
-                <li key={i} className="text-xs text-daintree-text/40">
+                <li key={i} className="text-xs text-text-secondary">
                   {tip}
                 </li>
               ))}

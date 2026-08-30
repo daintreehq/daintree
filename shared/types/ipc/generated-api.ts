@@ -38,6 +38,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["app:get-version-info"]["args"]
     ): Promise<IpcInvokeMap["app:get-version-info"]["result"]>;
   };
+  claude: {
+    listSubagents(
+      ...args: IpcInvokeMap["claude:list-subagents"]["args"]
+    ): Promise<IpcInvokeMap["claude:list-subagents"]["result"]>;
+    readSubagentTranscript(
+      ...args: IpcInvokeMap["claude:read-subagent-transcript"]["args"]
+    ): Promise<IpcInvokeMap["claude:read-subagent-transcript"]["result"]>;
+  };
   cli: {
     getStatus(
       ...args: IpcInvokeMap["cli:get-status"]["args"]
@@ -65,6 +73,14 @@ export interface GeneratedElectronAPI {
     writeText(
       ...args: IpcInvokeMap["clipboard:write-text"]["args"]
     ): Promise<IpcInvokeMap["clipboard:write-text"]["result"]>;
+  };
+  codex: {
+    listSubagents(
+      ...args: IpcInvokeMap["codex:list-subagents"]["args"]
+    ): Promise<IpcInvokeMap["codex:list-subagents"]["result"]>;
+    readSubagentTranscript(
+      ...args: IpcInvokeMap["codex:read-subagent-transcript"]["args"]
+    ): Promise<IpcInvokeMap["codex:read-subagent-transcript"]["result"]>;
   };
   commands: {
     execute(

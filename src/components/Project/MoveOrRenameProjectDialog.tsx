@@ -66,7 +66,7 @@ const CONTINUITY_PRESENTATION: Record<
   },
   unverified: {
     icon: HelpCircle,
-    className: "text-daintree-text/50",
+    className: "text-text-secondary",
     label: "Resume after move unverified",
     detailFallback: "Resuming this conversation after a move isn't confirmed",
   },
@@ -294,7 +294,7 @@ function MoveOrRenameProjectDialogInner({
             <div className="space-y-1.5">
               <span className={FIELD_LABEL_CLASS}>Original location</span>
               <p
-                className="text-xs font-mono text-daintree-text/50 break-all"
+                className="text-xs font-mono text-text-secondary break-all"
                 title={pending.oldPath}
               >
                 {pending.oldPath}
@@ -423,7 +423,7 @@ function RelocationPreviewSection({
   if (preview === null) {
     return showLoading ? (
       <div
-        className="flex items-center gap-2 text-xs text-daintree-text/60"
+        className="flex items-center gap-2 text-xs text-text-secondary"
         data-testid="relocate-preview-loading"
       >
         <Spinner className="h-3.5 w-3.5" />
@@ -434,13 +434,13 @@ function RelocationPreviewSection({
 
   return (
     <div
-      className="space-y-3 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg px-3 py-3"
+      className="space-y-3 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-3 py-3"
       data-testid="relocate-preview"
     >
       <div className="space-y-1">
-        <span className="text-xs font-medium text-daintree-text/60">Folder</span>
-        <p className="text-xs font-mono text-daintree-text/50 break-all">{oldPath}</p>
-        <p className="text-xs font-mono text-daintree-text break-all">→ {preview.newPath}</p>
+        <span className="text-xs font-medium text-text-secondary">Folder</span>
+        <p className="text-xs font-mono text-text-secondary break-all">{oldPath}</p>
+        <p className="text-xs font-mono text-text-primary break-all">→ {preview.newPath}</p>
       </div>
 
       {preview.blockers.length > 0 ? (
@@ -456,18 +456,20 @@ function RelocationPreviewSection({
           ))}
         </div>
       ) : (
-        <ul className="space-y-1 text-xs text-daintree-text/70">
+        <ul className="space-y-1 text-xs text-text-secondary">
           {preview.runningTerminalCount > 0 && (
             <li>
-              {preview.runningTerminalCount === 1
-                ? "1 terminal will be gracefully stopped"
-                : `${preview.runningTerminalCount} terminals will be gracefully stopped`}{" "}
-              <span className="text-daintree-text/40">— they restart at the new location</span>
+              <span className="font-medium text-text-primary">
+                {preview.runningTerminalCount === 1
+                  ? "1 terminal will be gracefully stopped"
+                  : `${preview.runningTerminalCount} terminals will be gracefully stopped`}
+              </span>
+              <span className="ml-1 text-text-secondary"> They restart at the new location</span>
             </li>
           )}
           {preview.agentContinuity.length > 0 && (
             <li data-testid="relocate-continuity">
-              <span className="text-daintree-text/70">Agent conversations</span>
+              <span className="text-text-secondary">Agent conversations</span>
               <ul className="mt-1 space-y-1.5 pl-3">
                 {preview.agentContinuity.map((agent) => {
                   // Defense in depth: no plugin or user-registry agent can carry
@@ -489,13 +491,14 @@ function RelocationPreviewSection({
                       />
                       <div className="space-y-0.5">
                         <div>
-                          {agent.count === 1
-                            ? agent.agentName
-                            : `${agent.agentName} (${agent.count})`}{" "}
-                          <span className="text-daintree-text/40">—</span>{" "}
-                          <span className={p.className}>{p.label}</span>
+                          <span className="font-medium text-text-primary">
+                            {agent.count === 1
+                              ? agent.agentName
+                              : `${agent.agentName} (${agent.count})`}
+                          </span>
+                          <span className={`ml-1 ${p.className}`}> {p.label}</span>
                         </div>
-                        <div className="text-daintree-text/40">
+                        <div className="text-text-secondary">
                           {agent.detail ?? p.detailFallback}
                         </div>
                       </div>
@@ -514,7 +517,7 @@ function RelocationPreviewSection({
               </span>
               <ul className="mt-1 space-y-0.5 pl-3">
                 {preview.linkedWorktrees.map((wt) => (
-                  <li key={wt} className="font-mono text-daintree-text/50 break-all">
+                  <li key={wt} className="font-mono text-text-secondary break-all">
                     {wt}
                   </li>
                 ))}
@@ -531,7 +534,7 @@ function RelocationPreviewSection({
           {preview.runningTerminalCount === 0 &&
             preview.linkedWorktrees.length === 0 &&
             preview.affectedPanelCount === 0 && (
-              <li className="text-daintree-text/40">
+              <li className="text-text-secondary">
                 No running terminals, worktrees, or panels affected
               </li>
             )}

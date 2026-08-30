@@ -185,8 +185,8 @@ export const theme: BuiltInThemeSource = {
     // Composited settings-sidebar-bg over the shell.
     "settings-sidebar-scroll-fade": "#1b1918",
     "sidebar-action-hover-bg": "rgba(255,255,255,0.05)",
-    "sidebar-active-bg": "rgba(255,255,255,0.05)",
-    "sidebar-hover-bg": "rgba(255,255,255,0.03)",
+    "sidebar-active-bg": "rgba(255,255,255,0.065)",
+    "sidebar-hover-bg": "rgba(255,255,255,0.048)",
     // No panel-focus overrides: the default theme keeps the app's stock focus
     // chrome by design.
     "toolbar-agent-hover-bg": "rgba(255,255,255,0.06)",

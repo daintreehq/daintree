@@ -13,7 +13,7 @@ export const DIFF_STATUS_CONFIG: Record<GitStatus, { label: string; color: strin
   untracked: { label: "?", color: "text-status-success" },
   renamed: { label: "R", color: "text-status-info" },
   copied: { label: "C", color: "text-status-info" },
-  ignored: { label: "I", color: "text-daintree-text/40" },
+  ignored: { label: "I", color: "text-text-secondary" },
   conflicted: { label: "!", color: "text-status-error" },
 };
 

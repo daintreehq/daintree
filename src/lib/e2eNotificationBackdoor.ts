@@ -13,7 +13,10 @@ import {
   type NotificationPriority,
   type NotificationPlacement,
 } from "@/store/notificationStore";
-import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import {
+  useNotificationHistoryStore,
+  type NotificationHistoryEntry,
+} from "@/store/slices/notificationHistorySlice";
 import {
   _setQuietUntil,
   _resetRateLimitBuckets,
@@ -55,6 +58,12 @@ export interface E2EHistoryInput {
   seenAsToast?: boolean;
 }
 
+export interface E2ESeedHistoryInput {
+  entries: NotificationHistoryEntry[];
+  /** `correlationId` → expiry epoch-ms. Defaults to no snoozed threads. */
+  snoozedThreads?: Record<string, number>;
+}
+
 export interface NotificationsE2EApi {
   readonly MAX_VISIBLE_TOASTS: number;
   readonly GRID_BAR_DWELL_FLOOR_MS: number;
@@ -63,6 +72,14 @@ export interface NotificationsE2EApi {
   backdateNotification: (id: string, firstShownAt: number) => void;
   resetToasts: () => void;
   addHistoryEntry: (input: E2EHistoryInput) => string;
+  /**
+   * Replaces the whole history store contents in one write. Unlike
+   * `addHistoryEntry` this accepts the full persisted entry shape —
+   * timestamps, actions, context, archived/snoozed state — so a capture or
+   * regression fixture can pin states that `addEntry` derives from the clock
+   * (relative-time labels) or never sets at all (row actions, panel context).
+   */
+  seedHistory: (input: E2ESeedHistoryInput) => void;
   archiveHistoryEntry: (id: string) => void;
   snoozeThread: (correlationId: string, snoozedUntil: number) => void;
   clearHistory: () => void;
@@ -114,6 +131,16 @@ function buildApi(): NotificationsE2EApi {
         correlationId: input.correlationId,
         seenAsToast: input.seenAsToast ?? false,
       }),
+    seedHistory: ({ entries, snoozedThreads = {} }) => {
+      const unreadCount = entries.filter(
+        (e) =>
+          !e.seenAsToast &&
+          e.countable !== false &&
+          !e.archivedAt &&
+          !(e.correlationId && (snoozedThreads[e.correlationId] ?? 0) > Date.now())
+      ).length;
+      useNotificationHistoryStore.setState({ entries, snoozedThreads, unreadCount });
+    },
     archiveHistoryEntry: (id) => useNotificationHistoryStore.getState().archiveEntry(id),
     snoozeThread: (correlationId, snoozedUntil) =>
       useNotificationHistoryStore.getState().snoozeThread(correlationId, snoozedUntil),

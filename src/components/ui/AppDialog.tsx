@@ -1,6 +1,8 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
+  useState,
   useCallback,
   useId,
   createContext,
@@ -22,11 +24,13 @@ import {
   markBackstopConsumedEscape,
   ESCAPE_BACKSTOP_DIALOG_ATTR,
 } from "@/lib/dialogEscapeBackstop";
+import { APP_DIALOG_SURFACE_ATTR } from "@/lib/appDialogSurface";
 import { useDockPopoverOpen } from "@/lib/dockPopoverLayer";
 import { usePortalStore } from "@/store";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
+import { DialogDismissSurface } from "./DialogDismissSurface";
 import {
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
@@ -143,6 +147,9 @@ export function AppDialog({
     initialFocus ?? (variant === "destructive" ? "cancel" : "first");
   const previousActiveElement = useRef<HTMLElement | null>(null);
   const backdropPointerRef = useRef<number | null>(null);
+  // State, not a ref: `DialogDismissSurface` has to re-render once the node
+  // exists, and a ref would leave it registering `null` forever.
+  const [backdropNode, setBackdropNode] = useState<HTMLDivElement | null>(null);
   const closeInFlightRef = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -401,6 +408,7 @@ export function AppDialog({
           transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
           transitionTimingFunction: UI_SCRIM_EASING,
         }}
+        ref={setBackdropNode}
         onPointerDown={handleBackdropPointerDown}
         onPointerUp={handleBackdropPointerUp}
         onPointerCancel={resetBackdropPointer}
@@ -413,6 +421,9 @@ export function AppDialog({
         // (`isOpen && dismissible`), not merely being mounted: a dialog mid-exit
         // has already unregistered and could not take the keypress.
         {...(isOpen && dismissible ? { [ESCAPE_BACKSTOP_DIALOG_ATTR]: "" } : {})}
+        // Unconditional, unlike the Escape backstop above: `handleDockInteractOutside`
+        // needs to recognise this surface whether or not the dialog is dismissible.
+        {...{ [APP_DIALOG_SURFACE_ATTR]: "" }}
         data-testid={dataTestId}
       >
         <div
@@ -446,6 +457,10 @@ export function AppDialog({
           onClick={(e) => e.stopPropagation()}
         >
           {children}
+          {/* A click anywhere on this surface dismisses a popover the dialog
+              hosts — see `DialogDismissSurface`. Registered on the backdrop so
+              the scrim counts too. */}
+          <DialogDismissSurface node={backdropNode} />
           {/* Co-located live region: VoiceOver suppresses announcements made
               from `aria-live` regions outside the focused `aria-modal` subtree
               when `document.ariaNotify` is unavailable (Chromium 354736464). */}
@@ -460,12 +475,52 @@ export function AppDialog({
 interface AppDialogHeaderProps {
   children: React.ReactNode;
   className?: string;
+  /** This dialog pads its own body rather than using `AppDialog.Body` — see {@link CHROME_INSET}. */
+  plainBody?: boolean;
 }
 
-AppDialog.Header = function AppDialogHeader({ children, className }: AppDialogHeaderProps) {
+/**
+ * Header and footer sit outside the body's scroll box, so a bare `px-6` leaves
+ * them 11px short of it: `AppDialog.Body` reserves a scrollbar gutter on both
+ * edges, which pushes every field in the form that much further in. Padding the
+ * chrome by the same gutter puts the title, the fields and the buttons on one
+ * column instead of three that nearly agree.
+ *
+ * The 11px is the same figure `AppDialog.Body` reserves — `scrollbar-width:
+ * thin` in `index.css`. It has to be a literal: Tailwind only sees class names
+ * it can find in the source, so this cannot be built from a shared constant.
+ *
+ * Dialogs that pad their own body instead (`AppDialog.BodyScroll`, a custom
+ * scroller) have no gutter to line up with and pass `plainBody` — for them this
+ * inset would be the misalignment rather than the fix.
+ */
+const CHROME_INSET = "px-[calc(1.5rem+11px)]";
+const PLAIN_INSET = "px-6";
+
+// Footer actions announce unavailability with `aria-disabled`, never the native
+// attribute — a natively-disabled button leaves the tab order and refuses focus,
+// so the initial-focus pass above (which resolves Cancel/Confirm by
+// `data-confirm-role` and calls `.focus()` on the match) would silently strand
+// focus outside the dialog. The attribute is advisory, so each action vetoes its
+// own activation in JS; these classes stand in for the `disabled:` variants that
+// stop matching. Applied only when the action itself is disabled: `Button` also
+// synthesises `aria-disabled` while `loading`, and dimming there would fade the
+// spinner it overlays. No `aria-disabled:pointer-events-none` — that would
+// suppress hover and put the control back out of reach.
+const DISABLED_ACTION_CLASSES = "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed";
+
+AppDialog.Header = function AppDialogHeader({
+  children,
+  className,
+  plainBody,
+}: AppDialogHeaderProps) {
   // `density` is deliberately not forwarded: every dialog header is comfortable,
   // and exposing it would widen AppDialog's public surface for no caller.
-  return <SurfaceHeader className={className}>{children}</SurfaceHeader>;
+  return (
+    <SurfaceHeader className={cn(plainBody ? PLAIN_INSET : CHROME_INSET, className)}>
+      {children}
+    </SurfaceHeader>
+  );
 };
 
 interface AppDialogTitleProps {
@@ -506,16 +561,54 @@ AppDialog.CloseButton = function AppDialogCloseButton({
 interface AppDialogBodyProps {
   children: React.ReactNode;
   className?: string;
+  /**
+   * Scrolls the body back to the top whenever this value changes. For a
+   * queue-driven singleton dialog, one request is promoted into the same
+   * mounted dialog as the last one resolves — so without this the next request
+   * opens at the previous request's scroll offset, showing a freshly promoted
+   * tool's body already scrolled past the part that identifies it. Keying the
+   * caller's own content resets that content's state but not this scroller,
+   * which is the element that actually holds the offset.
+   *
+   * Omit it and nothing changes.
+   */
+  resetScrollKey?: string | number;
 }
 
-AppDialog.Body = function AppDialogBody({ children, className }: AppDialogBodyProps) {
+AppDialog.Body = function AppDialogBody({
+  children,
+  className,
+  resetScrollKey,
+}: AppDialogBodyProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Layout effect, not passive: the reset has to land before paint, or the
+  // promoted request is briefly visible at the old offset.
+  useLayoutEffect(() => {
+    if (resetScrollKey === undefined) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = 0;
+  }, [resetScrollKey]);
+
   return (
     // `className` belongs on the padded scroll box, not on ScrollShadow's outer
     // wrapper — the wrapper's children are the two absolute edge overlays plus
     // the scroll box, so a caller's `space-y-*` there styled the overlays and
     // hung a stray margin off the scroll box while the actual fields got no
     // spacing at all. Matches where `BodyScroll` puts it.
-    <ScrollShadow className="flex-1 min-h-0" scrollClassName={cn("p-6", className)}>
+    //
+    // The gutter is reserved, and on both edges. The app's scrollbar is 11px of
+    // real layout (`scrollbar-width: thin` in `index.css`, which outranks the
+    // 6px `::-webkit-scrollbar` rule), so without this every control in a
+    // dialog resizes by 11px the moment its body crosses the overflow
+    // threshold — a hint row appearing, a validation banner clearing, a form
+    // swapping sections. `both-edges` keeps the padding symmetric; reserving
+    // one side only trades a jump for a permanent lopsided inset.
+    <ScrollShadow
+      ref={scrollRef}
+      className="flex-1 min-h-0"
+      scrollClassName={cn("p-6 [scrollbar-gutter:stable_both-edges]", className)}
+    >
       {children}
     </ScrollShadow>
   );
@@ -530,12 +623,22 @@ AppDialog.BodyScroll = function AppDialogBodyScroll({
   children,
   className,
 }: AppDialogBodyScrollProps) {
+  // Deliberately NOT carrying `Body`'s reserved gutter. This variant is the
+  // escape hatch for callers that own their own scrolling and padding, and
+  // `scrollbar-gutter` reserves its space on an `overflow: hidden` box too — so
+  // it would put 22px of dead inset inside `PanelDialogHost`'s edge-to-edge
+  // panel host, which sets `overflow-hidden p-0` precisely to fill the dialog.
   return <div className={cn("flex-1 overflow-auto min-h-0 p-6", className)}>{children}</div>;
 };
 
 export interface DialogAction {
   label: string;
   onClick: () => void;
+  /**
+   * The action is unavailable. Rendered as `aria-disabled` — the button stays
+   * focusable and keeps its place in the tab order, and the footer vetoes the
+   * activation in JS rather than relying on the attribute to block it.
+   */
   disabled?: boolean;
   loading?: boolean;
   intent?: "default" | "destructive";
@@ -547,6 +650,8 @@ interface AppDialogFooterProps {
   primaryAction?: DialogAction;
   secondaryAction?: DialogAction;
   hint?: React.ReactNode;
+  /** This dialog pads its own body rather than using `AppDialog.Body` — see {@link CHROME_INSET}. */
+  plainBody?: boolean;
 }
 
 AppDialog.Footer = function AppDialogFooter({
@@ -555,37 +660,66 @@ AppDialog.Footer = function AppDialogFooter({
   primaryAction,
   secondaryAction,
   hint,
+  plainBody,
 }: AppDialogFooterProps) {
   const context = useContext(AppDialogContext);
   const dialogVariant = context?.variant ?? "default";
 
+  // The standard dialog primary action is the high-contrast neutral button, not the
+  // accent fill: its fill is the theme's own body-text colour, so it resolves near-white
+  // on dark themes and near-black on light ones and stays legible whatever the accent is
+  // (a bright accent made the old CTA label hard to read). `intent` stays a semantic
+  // danger flag — destructive wins first and is unaffected.
   const getPrimaryVariant = () => {
     if (primaryAction?.intent === "destructive" || dialogVariant === "destructive") {
       return "destructive";
     }
-    return "default";
+    return "contrast";
   };
 
   return (
     <div
       className={cn(
-        "px-6 py-4 border-t border-border-strong bg-surface-panel flex items-center gap-3 shrink-0",
+        plainBody ? PLAIN_INSET : CHROME_INSET,
+        "py-4 border-t border-border-strong bg-surface-panel flex items-center gap-3 shrink-0",
         hint ? "justify-between" : "justify-end",
         className
       )}
     >
+      {/* min-w-0 so a long hint can shrink and truncate rather than squeezing the
+          action row: as a flex child its default min-width:auto floor is its own
+          content, so without this it pushes the buttons past the card edge and
+          the primary label gets clipped. The actions never yield — a hint is
+          explanatory, an action is how the dialog is answered. flex-1 pins the
+          hint's width to the dialog rather than to its own text, which is what
+          lets a hint measure its own box and crop to it. */}
       {hint && (
-        <div className="text-[12px] text-daintree-text/55 flex items-center gap-1">{hint}</div>
+        <div
+          className="text-xs leading-[inherit] text-text-secondary flex min-w-0 flex-1 items-center gap-1"
+          data-testid="app-dialog-hint"
+        >
+          {hint}
+        </div>
       )}
       {children}
       {!children && (
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3">
           {secondaryAction && (
             <Button
               variant="ghost"
-              onClick={secondaryAction.onClick}
-              disabled={secondaryAction.disabled}
-              className="text-daintree-text/70 hover:text-daintree-text"
+              onClick={(event) => {
+                if (secondaryAction.disabled) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  return;
+                }
+                secondaryAction.onClick();
+              }}
+              aria-disabled={secondaryAction.disabled || undefined}
+              className={cn(
+                "text-text-secondary hover:text-text-primary",
+                secondaryAction.disabled && DISABLED_ACTION_CLASSES
+              )}
               data-confirm-role="cancel"
             >
               {secondaryAction.label}
@@ -594,9 +728,17 @@ AppDialog.Footer = function AppDialogFooter({
           {primaryAction && (
             <Button
               variant={getPrimaryVariant()}
-              onClick={primaryAction.onClick}
-              disabled={primaryAction.disabled}
+              onClick={(event) => {
+                if (primaryAction.disabled) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  return;
+                }
+                primaryAction.onClick();
+              }}
+              aria-disabled={primaryAction.disabled || undefined}
               loading={primaryAction.loading}
+              className={primaryAction.disabled ? DISABLED_ACTION_CLASSES : undefined}
               data-confirm-role="confirm"
             >
               {primaryAction.label}
@@ -619,7 +761,7 @@ AppDialog.Description = function AppDialogDescription({
 }: AppDialogDescriptionProps) {
   const context = useContext(AppDialogContext);
   return (
-    <p id={context?.descriptionId} className={cn("text-sm text-daintree-text/70", className)}>
+    <p id={context?.descriptionId} className={cn("text-sm text-text-secondary", className)}>
       {children}
     </p>
   );

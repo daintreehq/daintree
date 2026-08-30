@@ -1,25 +1,15 @@
-import * as Switch from "@radix-ui/react-switch";
-import { cn } from "@/lib/utils";
+import { Switch } from "@/components/ui/switch";
 
-const COLOR_SCHEMES = {
-  accent: {
-    track: "bg-daintree-border data-[state=checked]:bg-daintree-text",
-    thumb: "bg-daintree-text data-[state=checked]:bg-text-inverse",
-    focus: "focus-visible:outline-daintree-accent",
-  },
-  amber: {
-    track: "bg-daintree-border data-[state=checked]:bg-status-warning",
-    thumb: "bg-daintree-text data-[state=checked]:bg-text-inverse",
-    focus: "focus-visible:outline-status-warning",
-  },
-  danger: {
-    track: "bg-daintree-border data-[state=checked]:bg-status-error",
-    thumb: "bg-daintree-text data-[state=checked]:bg-text-inverse",
-    focus: "focus-visible:outline-status-error",
-  },
+// The settings layer named these after colours; the primitive names them after
+// what they mean. Mapping here keeps every existing call site untouched rather
+// than pushing colour vocabulary into the shared UI surface.
+const TONE_BY_COLOR_SCHEME = {
+  accent: "neutral",
+  amber: "warning",
+  danger: "danger",
 } as const;
 
-type ColorScheme = keyof typeof COLOR_SCHEMES;
+type ColorScheme = keyof typeof TONE_BY_COLOR_SCHEME;
 
 interface SettingsSwitchProps {
   checked: boolean;
@@ -48,10 +38,8 @@ export function SettingsSwitch({
   colorScheme = "accent",
   className,
 }: SettingsSwitchProps) {
-  const scheme = COLOR_SCHEMES[colorScheme];
-
   return (
-    <Switch.Root
+    <Switch
       id={id}
       name={name}
       checked={checked}
@@ -61,23 +49,8 @@ export function SettingsSwitch({
       aria-labelledby={ariaLabelledby}
       aria-describedby={ariaDescribedby}
       data-testid={dataTestId}
-      className={cn(
-        "relative inline-flex items-center shrink-0 rounded-full transition-colors duration-200 ease-out",
-        "w-11 h-6",
-        scheme.track,
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
-        scheme.focus,
-        disabled && "opacity-50 cursor-not-allowed",
-        className
-      )}
-    >
-      <Switch.Thumb
-        className={cn(
-          "block rounded-full shadow-sm transition-transform duration-100 ease-[var(--ease-out-expo)]",
-          "w-4 h-4 translate-x-1 data-[state=checked]:translate-x-6",
-          scheme.thumb
-        )}
-      />
-    </Switch.Root>
+      tone={TONE_BY_COLOR_SCHEME[colorScheme]}
+      className={className}
+    />
   );
 }

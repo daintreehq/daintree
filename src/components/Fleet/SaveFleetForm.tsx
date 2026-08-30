@@ -45,11 +45,11 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
       className="flex flex-col items-stretch gap-1.5 py-2"
       data-testid="fleet-save-form"
     >
-      <div className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-daintree-text/50">
+      <div className="flex items-center gap-1 text-3xs font-medium uppercase tracking-wide text-text-secondary">
         <Save className="h-3 w-3" />
         <span>Save current as…</span>
       </div>
-      <div className="flex gap-1 text-[11px]" role="radiogroup" aria-label="Save fleet flavor">
+      <div className="flex gap-1 text-2xs" role="radiogroup" aria-label="Save fleet flavor">
         <button
           type="button"
           role="radio"
@@ -62,8 +62,8 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
           className={cn(
             "flex-1 rounded px-2 py-1 transition-colors",
             kind === "snapshot"
-              ? "bg-tint/[0.14] text-daintree-text"
-              : "bg-tint/[0.04] text-daintree-text/70 hover:bg-tint/[0.08]"
+              ? "bg-tint/[0.14] text-text-primary"
+              : "bg-tint/[0.04] text-text-secondary hover:bg-tint/[0.08]"
           )}
         >
           Snapshot
@@ -80,15 +80,15 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
           className={cn(
             "flex-1 rounded px-2 py-1 transition-colors",
             kind === "predicate"
-              ? "bg-tint/[0.14] text-daintree-text"
-              : "bg-tint/[0.04] text-daintree-text/70 hover:bg-tint/[0.08]"
+              ? "bg-tint/[0.14] text-text-primary"
+              : "bg-tint/[0.04] text-text-secondary hover:bg-tint/[0.08]"
           )}
         >
           Live rule
         </button>
       </div>
       {kind === "predicate" ? (
-        <div className="flex gap-1 text-[11px]">
+        <div className="flex gap-1 text-2xs">
           <select
             aria-label="Predicate scope"
             value={predicateScope}
@@ -98,7 +98,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
             }}
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
-            className="flex-1 rounded bg-tint/[0.08] px-1.5 py-1 text-daintree-text"
+            className="flex-1 rounded bg-tint/[0.08] px-1.5 py-1 text-text-primary"
           >
             <option value="current">This worktree</option>
             <option value="all">All worktrees</option>
@@ -114,7 +114,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
             }}
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
-            className="flex-1 rounded bg-tint/[0.08] px-1.5 py-1 text-daintree-text"
+            className="flex-1 rounded bg-tint/[0.08] px-1.5 py-1 text-text-primary"
           >
             <option value="all">All</option>
             <option value="waiting">Waiting</option>
@@ -146,7 +146,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
                 : "Arm panes first…"
               : "Name…"
           }
-          className="flex-1 rounded bg-tint/[0.08] px-2 py-1 text-[11px] text-daintree-text placeholder:text-text-placeholder outline-hidden focus:bg-tint/[0.14]"
+          className="flex-1 rounded bg-tint/[0.08] px-2 py-1 text-2xs text-text-primary placeholder:text-text-placeholder outline-hidden focus:bg-tint/[0.14]"
           data-testid="fleet-save-form-name"
         />
         <button
@@ -158,7 +158,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
           onPointerDown={(e) => e.stopPropagation()}
           disabled={!canSave}
           data-testid="fleet-save-form-submit"
-          className="rounded bg-category-amber-subtle border border-category-amber-border px-2 py-1 text-[11px] text-category-amber-text transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded bg-category-amber-subtle border border-category-amber-border px-2 py-1 text-2xs text-category-amber-text transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Save
         </button>

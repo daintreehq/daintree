@@ -72,21 +72,19 @@ function DevServerRow({
   return (
     <li className="flex items-center gap-2 px-3 py-1.5 hover:bg-overlay-subtle transition-colors">
       <span
-        className={cn("flex-shrink-0 w-1.5 h-1.5 rounded-full", presentation.dotClass)}
+        className={cn("status-mark flex-shrink-0 w-1.5 h-1.5 rounded-full", presentation.dotClass)}
         aria-hidden="true"
       />
       <div className="flex flex-col min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="truncate text-xs font-medium text-daintree-text">{worktreeName}</span>
+          <span className="truncate text-xs font-medium text-text-primary">{worktreeName}</span>
           {port && (
-            <span className="flex-shrink-0 text-xs tabular-nums text-daintree-text/50">
-              :{port}
-            </span>
+            <span className="flex-shrink-0 text-xs tabular-nums text-text-secondary">:{port}</span>
           )}
-          <span className="flex-shrink-0 text-xs text-daintree-text/40">{presentation.label}</span>
+          <span className="flex-shrink-0 text-xs text-text-secondary">{presentation.label}</span>
         </div>
         {session.lastOutput && (
-          <span className="truncate text-xs text-daintree-text/45">{session.lastOutput}</span>
+          <span className="truncate text-xs text-text-secondary">{session.lastOutput}</span>
         )}
       </div>
       <div className="flex items-center gap-0.5 flex-shrink-0">
@@ -96,7 +94,7 @@ function DevServerRow({
           disabled={!worktreeId}
           aria-label={`Restart dev server for ${worktreeName}`}
           title="Restart"
-          className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+          className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
         >
           <RotateCw className="w-3.5 h-3.5" />
         </button>
@@ -106,7 +104,7 @@ function DevServerRow({
           disabled={!canStop}
           aria-label={`Stop dev server for ${worktreeName}`}
           title="Stop"
-          className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+          className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
         >
           <Square className="w-3.5 h-3.5" />
         </button>
@@ -140,13 +138,13 @@ export function DevServerDashboard() {
   return (
     <section
       aria-label="Dev servers"
-      className="flex-shrink-0 border-t border-daintree-border bg-daintree-bg"
+      className="flex-shrink-0 border-t border-border-default bg-surface-canvas"
     >
-      <header className="px-3 pt-2 pb-1 text-xs font-medium uppercase tracking-wide text-daintree-text/55">
+      <header className="px-3 pt-2 pb-1 text-xs font-medium uppercase tracking-wide text-text-secondary">
         Dev servers
       </header>
       {!hydrated ? null : visibleSessions.length === 0 ? (
-        <p className="px-3 pb-3 text-xs text-daintree-text/50">
+        <p className="px-3 pb-3 text-xs text-text-secondary">
           {fetchError ? "Couldn't load dev servers" : "No active dev servers"}
         </p>
       ) : (

@@ -250,15 +250,15 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
   return (
     <div className="space-y-2">
       <div className="mb-4">
-        <h3 className="text-sm font-medium text-daintree-text mb-2">Command Overrides</h3>
-        <p className="text-xs text-daintree-text/50 select-text">
+        <h3 className="text-sm font-medium text-text-primary mb-2">Command Overrides</h3>
+        <p className="text-xs text-text-secondary select-text">
           Customize command behavior for this project. Set default argument values, define custom
           prompts, or disable commands entirely.
         </p>
       </div>
 
       {/* Summary */}
-      <div className="text-xs text-daintree-text/60 mb-2">
+      <div className="text-xs text-text-secondary mb-2">
         {overriddenCount} overridden, {disabledCount} disabled
       </div>
 
@@ -272,7 +272,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             disabled={isLoading}
-            className="w-full pl-9 pr-3 py-2 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 disabled:opacity-60 disabled:cursor-not-allowed"
+            className="w-full pl-9 pr-3 py-2 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 disabled:opacity-60 disabled:cursor-not-allowed"
             aria-label="Search commands"
           />
         </div>
@@ -285,8 +285,8 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
               className={cn(
                 "px-3 py-1.5 text-xs font-medium rounded transition-colors capitalize border",
                 filterMode === mode
-                  ? "border-border-strong bg-overlay-medium text-daintree-text"
-                  : "border-transparent bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border",
+                  ? "border-border-strong bg-overlay-medium text-text-primary"
+                  : "border-transparent bg-surface-sidebar text-text-secondary hover:bg-border-default",
                 "disabled:opacity-60 disabled:cursor-not-allowed"
               )}
             >
@@ -323,7 +323,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                   "rounded-[var(--radius-md)] border transition-colors",
                   hasOverride(command.id)
                     ? "border-border-strong bg-overlay-subtle"
-                    : "border-daintree-border bg-daintree-bg"
+                    : "border-border-default bg-surface-canvas"
                 )}
               >
                 <div className="flex items-center gap-2 p-3">
@@ -349,13 +349,13 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                       <span
                         className={cn(
                           "text-sm font-medium font-mono",
-                          isDisabled ? "text-daintree-text/40 line-through" : "text-daintree-text"
+                          isDisabled ? "text-daintree-text/40 line-through" : "text-text-primary"
                         )}
                       >
                         {command.id}
                       </span>
                       {hasOverride(command.id) && (
-                        <span className="text-[11px] text-daintree-text/70 bg-overlay-medium px-1.5 py-0.5 rounded font-medium">
+                        <span className="text-2xs text-text-secondary bg-overlay-medium px-1.5 py-0.5 rounded font-medium">
                           {override?.prompt ? "Custom Prompt" : "Modified"}
                         </span>
                       )}
@@ -363,7 +363,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                     <p
                       className={cn(
                         "text-xs mt-0.5 select-text",
-                        isDisabled ? "text-daintree-text/30" : "text-daintree-text/60"
+                        isDisabled ? "text-text-placeholder" : "text-text-secondary"
                       )}
                     >
                       {command.description}
@@ -395,7 +395,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                             "p-1.5 rounded transition-colors",
                             isDisabled
                               ? "text-status-error hover:bg-status-error/10"
-                              : "text-status-success hover:bg-status-success/10"
+                              : "text-daintree-text/60 hover:bg-overlay-hover"
                           )}
                           aria-label={
                             isDisabled ? "Command disabled for this project" : "Command enabled"
@@ -426,8 +426,8 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                             className={cn(
                               "px-3 py-1.5 text-xs font-medium rounded-md transition-colors border",
                               currentMode === "defaults"
-                                ? "border-border-strong bg-overlay-medium text-daintree-text"
-                                : "border-transparent bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
+                                ? "border-border-strong bg-overlay-medium text-text-primary"
+                                : "border-transparent bg-surface-sidebar text-text-secondary hover:bg-border-default"
                             )}
                           >
                             Default Values
@@ -438,8 +438,8 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                           className={cn(
                             "px-3 py-1.5 text-xs font-medium rounded-md transition-colors border",
                             currentMode === "prompt"
-                              ? "border-border-strong bg-overlay-medium text-daintree-text"
-                              : "border-transparent bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border"
+                              ? "border-border-strong bg-overlay-medium text-text-primary"
+                              : "border-transparent bg-surface-sidebar text-text-secondary hover:bg-border-default"
                           )}
                         >
                           Custom Prompt
@@ -449,7 +449,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                       {/* Default Values Mode */}
                       {currentMode === "defaults" && hasArgs && (
                         <div className="space-y-3">
-                          <p className="text-xs text-daintree-text/60 select-text">
+                          <p className="text-xs text-text-secondary select-text">
                             Set default values for command arguments. These values will be used when
                             the argument is not provided.
                           </p>
@@ -463,7 +463,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                 <div className="flex items-center gap-2">
                                   <label
                                     htmlFor={`${command.id}-${arg.name}`}
-                                    className="text-xs font-medium text-daintree-text/80"
+                                    className="text-xs font-medium text-text-primary"
                                   >
                                     {arg.name}
                                     {arg.required && (
@@ -471,7 +471,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                     )}
                                   </label>
                                   {hasDefaultValue && (
-                                    <span className="text-[10px] text-daintree-text/70 bg-overlay-medium px-1.5 py-0.5 rounded">
+                                    <span className="text-3xs text-text-secondary bg-overlay-medium px-1.5 py-0.5 rounded">
                                       Custom
                                     </span>
                                   )}
@@ -483,13 +483,13 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                   onChange={(e) =>
                                     updateDefault(command.id, arg.name, e.target.value)
                                   }
-                                  className="w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1.5 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                                  className="w-full bg-surface-sidebar border border-border-strong rounded px-2 py-1.5 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                                   placeholder={
                                     arg.default ? `Default: ${arg.default}` : `Enter ${arg.name}`
                                   }
                                 />
                                 {arg.description && (
-                                  <p className="text-xs text-daintree-text/50 select-text">
+                                  <p className="text-xs text-text-secondary select-text">
                                     {arg.description}
                                   </p>
                                 )}
@@ -543,7 +543,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
   return (
     <div className="space-y-3">
       <div>
-        <p className="text-xs text-daintree-text/60 mb-2 select-text">
+        <p className="text-xs text-text-secondary mb-2 select-text">
           Define a custom prompt to send to the agent instead of executing the default command
           behavior. Use template variables like{" "}
           <code className="text-text-secondary">
@@ -554,7 +554,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
 
         {args.length > 0 && (
           <div className="mb-3">
-            <p className="text-xs font-medium text-daintree-text/70 mb-1.5">Available variables:</p>
+            <p className="text-xs font-medium text-text-secondary mb-1.5">Available variables:</p>
             <div className="flex flex-wrap gap-1.5">
               {args.map((arg) => (
                 <Tooltip key={arg.name}>
@@ -562,10 +562,10 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
                     <button
                       onClick={() => onChange(value + `{${arg.name}}`)}
                       className={cn(
-                        "text-[11px] px-2 py-0.5 rounded font-mono transition-colors",
+                        "text-2xs px-2 py-0.5 rounded font-mono transition-colors",
                         usedVariables.includes(arg.name)
-                          ? "bg-overlay-medium text-daintree-text/70 border border-border-strong"
-                          : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border border border-daintree-border"
+                          ? "bg-overlay-medium text-text-secondary border border-border-strong"
+                          : "bg-surface-sidebar text-text-secondary hover:bg-border-default border border-border-default"
                       )}
                     >
                       {"{"}
@@ -584,10 +584,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
       </div>
 
       <div className="space-y-1.5">
-        <label
-          htmlFor={`${commandId}-prompt`}
-          className="text-xs font-medium text-daintree-text/80"
-        >
+        <label htmlFor={`${commandId}-prompt`} className="text-xs font-medium text-text-primary">
           Custom Prompt
         </label>
         <textarea
@@ -595,7 +592,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className={cn(
-            "w-full bg-daintree-sidebar border rounded px-2 py-1.5 text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-1 min-h-[120px] resize-y",
+            "w-full bg-surface-sidebar border rounded px-2 py-1.5 text-sm text-text-primary font-mono focus:outline-hidden focus:ring-1 min-h-[120px] resize-y",
             validation && !validation.valid
               ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
               : "border-border-strong focus:border-daintree-accent/40 focus:ring-daintree-accent/30"
@@ -612,7 +609,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
       )}
 
       {value.trim() && (
-        <p className="text-xs text-daintree-text/50 select-text">
+        <p className="text-xs text-text-secondary select-text">
           When this command is executed, the custom prompt will be sent to the agent instead of
           running the default command logic.
         </p>

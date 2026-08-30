@@ -30,7 +30,7 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
           // with it; takes the selected treatment from the family now.
           PALETTE_ROW_CLASS,
           "group w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5",
-          "bg-daintree-bg hover:bg-surface"
+          "bg-surface-canvas hover:bg-surface"
         )}
         aria-selected={isSelected}
         role="option"
@@ -38,13 +38,13 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
         <div className="flex items-center justify-between gap-2 text-sm">
           {/* Both sides truncate: branch names have no length worth trusting,
               so no tier is wide enough to make this unnecessary. */}
-          <span className="font-medium text-daintree-text truncate">{worktree.name}</span>
-          <div className="flex items-center gap-2 min-w-0 text-xs text-daintree-text/60">
+          <span className="font-medium text-text-primary truncate">{worktree.name}</span>
+          <div className="flex items-center gap-2 min-w-0 text-xs text-text-secondary">
             {worktree.branch && (
-              <span className="font-mono text-daintree-text/70 truncate">{worktree.branch}</span>
+              <span className="font-mono text-text-secondary truncate">{worktree.branch}</span>
             )}
             {isActive && (
-              <span className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-[var(--color-state-active)]/15 text-[var(--color-state-active)] text-[11px] font-semibold">
+              <span className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-[var(--color-state-active)]/15 text-[var(--color-state-active)] text-2xs font-semibold">
                 Active
               </span>
             )}
@@ -52,7 +52,7 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
         </div>
         <div
           ref={ref}
-          className="text-[11px] text-daintree-text/50 truncate transition-colors group-aria-selected:text-daintree-text/60"
+          className="text-2xs text-text-secondary truncate transition-colors group-aria-selected:text-text-primary"
         >
           {worktree.path}
         </div>
@@ -131,7 +131,7 @@ export function WorktreePalette({
       emptyMessage="No worktrees yet"
       totalResults={totalResults}
       emptyContent={
-        <p className="mt-2 text-xs text-daintree-text/40">
+        <p className="mt-2 text-xs text-text-secondary">
           {createWorktreeShortcut ? (
             <>
               Press <kbd className={KBD_CLASS}>{createWorktreeShortcut}</kbd> to create a worktree.

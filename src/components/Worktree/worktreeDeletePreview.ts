@@ -1,5 +1,6 @@
 import { worktreeClient } from "@/clients";
 import type { FileChangeDetail, WorktreeChanges } from "@shared/types/git";
+import { MCP_PREVIEW_CAUTION_PREFIX } from "@/lib/mcpPreviewLines";
 
 /**
  * Canonical fresh preview for the worktree-delete confirm surfaces (#11343).
@@ -25,6 +26,15 @@ export interface WorktreeChangeSummary {
 /** A fresh delete preview: the change summary plus the raw file list. */
 export interface WorktreeDeletePreview extends WorktreeChangeSummary {
   changes: FileChangeDetail[];
+  /**
+   * Absolute worktree root, carried so previews can render each file relative
+   * to it. `FileChangeDetail.path` arrives ABSOLUTE from the only producer
+   * (`electron/utils/git.ts` resolves every entry against the git root), which
+   * is why the rest of the renderer derives a `relativePath` before display —
+   * see `src/lib/workingTreeDiff.ts`. Without the root, a preview repeats the
+   * whole worktree path on every row and buries the filename.
+   */
+  rootPath: string;
 }
 
 /**
@@ -64,11 +74,27 @@ export async function buildWorktreeDeletePreview(
   const fresh: WorktreeChanges | null = await worktreeClient.getFreshChanges(worktreeId);
   if (!fresh) return null;
   const changes = fresh.changes ?? [];
-  return { ...summarizeWorktreeChanges(changes), changes };
+  return { ...summarizeWorktreeChanges(changes), changes, rootPath: fresh.rootPath };
 }
 
 /** Max file rows shown in a compact preview before collapsing the tail. */
 export const PREVIEW_FILE_LIMIT = 12;
+
+/**
+ * Spoken form of each status. The visible column is a single glyph, which is
+ * right for scanning and useless to a screen reader — without this a listener
+ * hears a list of paths with no way to tell a deletion from an addition.
+ */
+export const STATUS_LABEL: Record<FileChangeDetail["status"], string> = {
+  modified: "Modified",
+  added: "Added",
+  deleted: "Deleted",
+  renamed: "Renamed",
+  copied: "Copied",
+  conflicted: "Conflicted",
+  untracked: "Untracked",
+  ignored: "Ignored",
+};
 
 const STATUS_GLYPH: Record<FileChangeDetail["status"], string> = {
   modified: "M",
@@ -82,19 +108,95 @@ const STATUS_GLYPH: Record<FileChangeDetail["status"], string> = {
 };
 
 /**
+ * Strip the worktree root off an absolute change path.
+ *
+ * `FileChangeDetail.path` is absolute (see {@link WorktreeDeletePreview.rootPath}),
+ * so a preview that renders it raw repeats the entire worktree path on every
+ * row and pushes the only distinguishing part — the filename — past the wrap.
+ * Mirrors `getRelativePath` in `src/lib/workingTreeDiff.ts`; a path that
+ * escapes the root (or a root we weren't given) is left alone rather than
+ * mangled, because showing a wrong path here is worse than showing a long one.
+ */
+function toDisplayPath(filePath: string, rootPath: string | undefined): string {
+  if (!rootPath) return filePath;
+  // Both separators: Daintree runs on Windows, where the producer emits
+  // backslash paths. A `/`-only check left every Windows row absolute — the
+  // exact defect this function exists to prevent, just on the other platform.
+  const trimmed = rootPath.replace(/[/\\]+$/, "");
+  for (const sep of ["/", "\\"]) {
+    const root = trimmed + sep;
+    if (filePath.startsWith(root)) return filePath.slice(root.length);
+  }
+  return filePath;
+}
+
+/**
  * Render a change set as capped, glyph-prefixed file rows (`  M src/app.ts`),
  * shared by the local delete dialog and the MCP preview so both show the same
  * actual content (the D2 "a count is insufficient" rule). Ignored files are
  * dropped — they're not part of what a delete discards.
+ *
+ * Pass `rootPath` to get worktree-relative rows; without it the raw (absolute)
+ * paths are rendered, which is the legacy behaviour.
  */
 export function formatWorktreeChangeRows(
   changes: FileChangeDetail[],
-  limit: number = PREVIEW_FILE_LIMIT
+  limit: number = PREVIEW_FILE_LIMIT,
+  rootPath?: string
 ): string[] {
   const shown = changes.filter((c) => c.status !== "ignored");
-  const rows = shown.slice(0, limit).map((c) => `  ${STATUS_GLYPH[c.status] ?? "?"} ${c.path}`);
+  const rows = shown
+    .slice(0, limit)
+    .map((c) => `  ${STATUS_GLYPH[c.status] ?? "?"} ${toDisplayPath(c.path, rootPath)}`);
   if (shown.length > limit) {
     rows.push(`  …and ${shown.length - limit} more`);
+  }
+  return rows;
+}
+
+/** One row of the rendered change preview, split so the UI can lay it out. */
+export interface WorktreeChangeRow {
+  /** Status glyph (`M`, `D`, `?`…) or `null` for the overflow tail row. */
+  glyph: string | null;
+  /** Spoken status ("Modified"), for assistive tech. `null` on the tail row. */
+  statusLabel: string | null;
+  /** Worktree-relative path, or the "…and N more" text on the tail row. */
+  label: string;
+  /** True for the synthesised overflow row, which is not a file. */
+  isOverflow: boolean;
+}
+
+/**
+ * The same capped, relativised preview as {@link formatWorktreeChangeRows},
+ * but structured rather than pre-joined.
+ *
+ * The string form has to stay for the MCP confirm surface, which renders plain
+ * text. A UI rendering those strings in a wrapping `<pre>` loses the row
+ * boundary the moment a path is longer than the box: the continuation line
+ * starts at the left edge, under the status column, so two long paths read as
+ * four files and the glyph detaches from the name it belongs to. Structured
+ * rows let the surface pin the glyph in its own column and hang the wrap under
+ * the path (#11977).
+ */
+export function buildWorktreeChangeRows(
+  changes: FileChangeDetail[],
+  limit: number = PREVIEW_FILE_LIMIT,
+  rootPath?: string
+): WorktreeChangeRow[] {
+  const shown = changes.filter((c) => c.status !== "ignored");
+  const rows: WorktreeChangeRow[] = shown.slice(0, limit).map((c) => ({
+    glyph: STATUS_GLYPH[c.status] ?? "?",
+    statusLabel: STATUS_LABEL[c.status] ?? "Changed",
+    label: toDisplayPath(c.path, rootPath),
+    isOverflow: false,
+  }));
+  if (shown.length > limit) {
+    rows.push({
+      glyph: null,
+      statusLabel: null,
+      label: `…and ${shown.length - limit} more`,
+      isOverflow: true,
+    });
   }
   return rows;
 }
@@ -109,9 +211,11 @@ export function formatWorktreeChangeRows(
  */
 export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview | null): string[] {
   if (preview === null) {
-    return ["⚠ Could not verify current changes — proceed with caution."];
+    return [
+      `${MCP_PREVIEW_CAUTION_PREFIX}Could not verify current changes — proceed with caution.`,
+    ];
   }
-  const { trackedChangeCount, untrackedFileCount, changes } = preview;
+  const { trackedChangeCount, untrackedFileCount, changes, rootPath } = preview;
   if (changes.length === 0) {
     return ["No uncommitted changes."];
   }
@@ -124,5 +228,8 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
   if (untrackedFileCount > 0) {
     parts.push(`${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`);
   }
-  return [`${parts.join(" and ")}:`, ...formatWorktreeChangeRows(changes)];
+  return [
+    `${parts.join(" and ")}:`,
+    ...formatWorktreeChangeRows(changes, PREVIEW_FILE_LIMIT, rootPath),
+  ];
 }

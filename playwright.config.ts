@@ -131,9 +131,15 @@ export default defineConfig({
       retries: isCI ? 2 : 0,
     },
     {
+      // Real agent CLIs read and write runner-global configuration under the
+      // user's home directory. Concurrent online specs can overlap app
+      // shutdown with the next CLI launch and leave that shared state unusable
+      // for the rest of the job, so keep the release-gating online surface
+      // serial on every platform.
       name: "online",
       testDir: "./e2e/online",
       timeout: onlineTimeout,
+      workers: 1,
       retries: isCI ? 1 : 0,
     },
     {

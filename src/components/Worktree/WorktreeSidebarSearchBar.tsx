@@ -7,6 +7,12 @@ import type { ChipCounts } from "@/lib/worktreeFilters";
 
 interface WorktreeSidebarSearchBarProps {
   inputRef?: React.Ref<HTMLInputElement>;
+  /**
+   * ArrowDown from the field hands keyboard control to the results this bar
+   * filters. Callers that have no navigable results below the field omit it
+   * and ArrowDown does nothing, as before.
+   */
+  onArrowIntoResults?: () => void;
   chipCounts?: ChipCounts;
   /**
    * Where the bar is mounted. The sidebar variant carries the optional
@@ -15,6 +21,13 @@ interface WorktreeSidebarSearchBarProps {
    * onto the elevated overview dialog.
    */
   variant?: "sidebar" | "modal";
+  /**
+   * Controls rendered on the trailing edge of the field row, after the facet
+   * button. For callers whose view-scope controls belong with the filters
+   * rather than in their own band — the overview passes its main-worktree
+   * switch here so the whole working toolbar stays one line.
+   */
+  trailing?: React.ReactNode;
   /**
    * Filter scope / sort status ("1 of 2 worktrees · Sorting disabled while
    * searching") rendered under the field, sharing a row with "Clear all".
@@ -38,9 +51,11 @@ function assignForwardedRef<T>(ref: React.Ref<T> | undefined, value: T | null): 
 
 export function WorktreeSidebarSearchBar({
   inputRef,
+  onArrowIntoResults,
   chipCounts,
   variant = "sidebar",
   statusText,
+  trailing,
 }: WorktreeSidebarSearchBarProps) {
   const query = useWorktreeFilterStore((state) => state.query);
   const liveQuery = useWorktreeFilterStore((state) => state.liveQuery);
@@ -142,6 +157,24 @@ export function WorktreeSidebarSearchBar({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // ArrowDown hands off to the results below. The field takes initial
+      // focus on this surface, so "type a query, arrow to the match" is the
+      // first thing anyone does — and without this it did nothing, because
+      // the arrow keys belong to the grid and the grid did not have focus.
+      //
+      // Focus MOVES rather than the field keeping it and driving the grid by
+      // `aria-activedescendant`. That is the combobox architecture, and it is
+      // wrong here twice over: this grid is permanently visible and
+      // multi-selectable, which is not what a combobox popup is, and Space
+      // would have to be either a space character or the selection toggle and
+      // cannot be both. GitHub, Gmail, Linear, VS Code's search view and
+      // Finder all move focus for exactly that reason.
+      if (e.key === "ArrowDown" && onArrowIntoResults && !isPopoverOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        onArrowIntoResults();
+        return;
+      }
       if (e.key !== "Escape") return;
       // ARIA APG combobox sequence: close popup → clear text → blur.
       if (isPopoverOpen) {
@@ -156,7 +189,7 @@ export function WorktreeSidebarSearchBar({
       }
       internalRef.current?.blur();
     },
-    [isPopoverOpen, liveQuery, handleClearSearch]
+    [isPopoverOpen, liveQuery, handleClearSearch, onArrowIntoResults]
   );
 
   const setRefs = useCallback(
@@ -175,7 +208,20 @@ export function WorktreeSidebarSearchBar({
   return (
     <div
       className={cn(
-        "px-3 py-2 border-b border-divider shrink-0",
+        // px-3 matches the header above and the status line below, so the whole
+        // control zone sits on one 12px inset instead of three (#11991).
+        // No top padding in the sidebar: the header's py-3 already sets the
+        // 12px above the field. pb-3 matches it below, so the rule under the
+        // rail lands on the same rhythm the title sits on. The modal's header
+        // has no such trailing padding — it ends on its own border — so that
+        // variant supplies the inset itself rather than sitting flush against
+        // the rule above it.
+        "px-3 pb-3 border-b border-divider shrink-0",
+        // In the dialog the horizontal neighbours are different too: the header,
+        // the footer and the rows below all sit on AppDialog's chrome inset
+        // (24px plus the 11px scrollbar gutter `AppDialog.Body` reserves), so
+        // the bar carries that one instead of the rail's 12px.
+        variant === "modal" && "pt-3 px-[calc(1.5rem+11px)]",
         variant === "sidebar" && "worktree-filter-bar"
       )}
     >
@@ -183,9 +229,12 @@ export function WorktreeSidebarSearchBar({
         <div
           role="search"
           className={cn(
-            "flex flex-1 min-w-0 items-center gap-1.5 px-2.5 py-2 rounded-[var(--radius-md)]",
+            // h-7: 28px is the app's compact control height and the desktop-IDE
+            // norm; the field used to be 34px, which gave the rail more visual
+            // mass than the title above it.
+            "flex h-7 flex-1 min-w-0 items-center gap-1.5 px-2 rounded-[var(--radius-md)]",
             // Fallback keeps themes without --worktree-search-input-bg byte-identical.
-            "bg-[var(--worktree-search-input-bg,var(--color-daintree-bg))] border border-daintree-border",
+            "bg-[var(--worktree-search-input-bg,var(--color-surface-canvas))] border border-border-default",
             "focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20"
           )}
         >
@@ -199,15 +248,19 @@ export function WorktreeSidebarSearchBar({
             value={liveQuery}
             onChange={(e) => handleQueryChange(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Search worktrees..."
+            // Short on purpose: at the 200px minimum "Search worktrees..." clips
+            // to "Search worktree", which reads as a typo rather than as
+            // truncation. The noun is already the heading directly above, and
+            // the full phrase stays the accessible name.
+            placeholder="Search…"
             aria-label="Search worktrees"
-            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder-daintree-text/40 focus:outline-hidden"
+            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder-daintree-text/40 focus:outline-hidden"
           />
           {showClear && (
             <button
               type="button"
               onClick={handleClearSearch}
-              className="flex shrink-0 items-center justify-center w-5 h-5 rounded text-daintree-text/40 hover:text-daintree-text"
+              className="flex shrink-0 items-center justify-center w-5 h-5 rounded text-daintree-text/40 transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary"
               aria-label="Clear search"
             >
               <X className="w-3 h-3" />
@@ -224,11 +277,15 @@ export function WorktreeSidebarSearchBar({
           open={isPopoverOpen}
           onOpenChange={setIsPopoverOpen}
         />
+        {trailing}
       </div>
       {(statusText || showClearAll) && (
-        <div className="flex items-center gap-2 pt-1">
+        // pt-2, not pt-1: the rail's own bottom padding is 12px, so a 4px gap
+        // above this line left it crowding the field it describes while
+        // floating clear of the rule below.
+        <div className="flex items-center gap-2 pt-2">
           {statusText && (
-            <span className="min-w-0 flex-1 truncate text-[11px] text-daintree-text/50">
+            <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary">
               {statusText}
             </span>
           )}
@@ -236,7 +293,7 @@ export function WorktreeSidebarSearchBar({
             <button
               type="button"
               onClick={handleClearAll}
-              className="ml-auto shrink-0 text-[11px] text-daintree-text/50 hover:text-daintree-text transition-colors"
+              className="ml-auto shrink-0 rounded text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
             >
               Clear all
             </button>

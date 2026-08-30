@@ -193,7 +193,7 @@ export function FleetPickerFooterHint({
   // dynamic copy left in the hint row.
   const driftNotice =
     driftCount > 0 ? (
-      <span role="status" className="text-daintree-text/45 tabular-nums">
+      <span role="status" className="text-text-secondary tabular-nums">
         {driftCount} became ineligible
       </span>
     ) : null;
@@ -232,7 +232,7 @@ function ShortcutsPopover(): ReactElement {
           aria-label="More keyboard shortcuts"
           className={cn(
             "p-0.5 rounded transition-colors text-daintree-text/40 hover:text-daintree-text/70 cursor-pointer",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
           )}
         >
           <CircleHelp className="w-3.5 h-3.5" />
@@ -244,7 +244,7 @@ function ShortcutsPopover(): ReactElement {
         className="w-auto p-3"
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
-        <div className="flex flex-col gap-1.5 text-[12px] text-daintree-text/60">
+        <div className="flex flex-col gap-1.5 text-xs leading-[inherit] text-text-secondary">
           <span className="inline-flex items-center gap-1">
             <Kbd>{isMac() ? "⌘A" : "Ctrl+A"}</Kbd>
             <span>Select all</span>
@@ -326,10 +326,10 @@ function WorktreeGroupSection({
           <button
             type="button"
             onClick={() => onToggleGroup(group)}
-            className="flex flex-1 items-center justify-between gap-2 text-left text-[12px] font-medium text-daintree-text/80 hover:text-daintree-text"
+            className="flex flex-1 items-center justify-between gap-2 text-left text-xs leading-[inherit] font-medium text-daintree-text/80 hover:text-text-primary"
           >
             <span className="truncate">{group.worktreeName}</span>
-            <span className="shrink-0 tabular-nums text-[11px] text-daintree-text/55">
+            <span className="shrink-0 tabular-nums text-2xs text-text-secondary">
               {selectedInGroup} / {group.terminals.length}
             </span>
           </button>
@@ -387,9 +387,9 @@ function TerminalRow({
         role="option"
         aria-selected={checked}
         className={cn(
-          "flex flex-1 items-start gap-2 pl-5 pr-2 py-1.5 rounded text-[13px] text-daintree-text cursor-pointer outline-hidden",
+          "flex flex-1 items-start gap-2 pl-5 pr-2 py-1.5 rounded text-sm leading-[inherit] text-text-primary cursor-pointer outline-hidden",
           "hover:bg-tint/[0.06]",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+          "focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
         )}
         onClick={handleClick}
         data-testid={`${testIdPrefix}-row-${terminal.id}`}
@@ -436,11 +436,11 @@ function SnippetLine({
   const after = line.slice(end);
   return (
     <p
-      className="font-mono text-[11px] text-daintree-text/40 truncate mt-0.5"
+      className="font-mono text-2xs text-text-secondary truncate mt-0.5"
       data-testid={`${testIdPrefix}-snippet`}
     >
       {before}
-      <mark className="bg-transparent text-daintree-text/85 font-medium">{match}</mark>
+      <mark className="bg-transparent text-text-primary font-medium">{match}</mark>
       {after}
     </p>
   );
@@ -452,8 +452,8 @@ function renderStateBadge(agentState: AgentState | undefined): ReactElement | nu
   return (
     <span
       className={cn(
-        "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium tabular-nums",
-        "bg-tint/[0.08] text-daintree-text/70"
+        "shrink-0 rounded-full px-1.5 py-0.5 text-3xs font-medium tabular-nums",
+        "bg-tint/[0.08] text-text-secondary"
       )}
     >
       {label}
@@ -491,10 +491,10 @@ function PickerCheckbox({
       }}
       className={cn(
         "relative flex shrink-0 w-4 h-4 rounded border transition-colors duration-150",
-        "bg-daintree-bg border-border-strong",
-        "data-[state=checked]:bg-daintree-text data-[state=checked]:border-daintree-text",
-        "data-[state=indeterminate]:bg-daintree-text data-[state=indeterminate]:border-daintree-text",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent"
+        "bg-surface-canvas border-border-strong",
+        "data-[state=checked]:bg-text-primary data-[state=checked]:border-text-primary",
+        "data-[state=indeterminate]:bg-text-primary data-[state=indeterminate]:border-text-primary",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
       )}
     >
       <Checkbox.Indicator className="flex items-center justify-center w-full h-full text-text-inverse">

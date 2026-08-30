@@ -590,6 +590,25 @@ describe("FleetSnapshotService", () => {
     service.stop();
   });
 
+  it("recomputes on a cross-worktree move, which moves no agent state either", async () => {
+    // The palette groups by `worktreeId`; without this subscription a drag would
+    // keep the run under its old heading until the next aligned poll (#12060).
+    const client = makePtyClient([terminal({ worktreeId: "/repo" })]);
+    const service = new FleetSnapshotService(client as never);
+    service.start();
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    broadcastMock.mockClear();
+
+    client.setFleet([terminal({ worktreeId: "/repo/.worktrees/feature" })]);
+    eventEmitter.emit("terminal:worktree-changed", { id: "t1", timestamp: NOW });
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+    expect(lastSnapshot().runs[0]?.worktreeId).toBe("/repo/.worktrees/feature");
+    service.stop();
+  });
+
   it("recomputes on agent state transitions after the debounce", async () => {
     const client = makePtyClient([terminal({ agentState: "working" })]);
     const service = new FleetSnapshotService(client as never);

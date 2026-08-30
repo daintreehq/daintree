@@ -114,6 +114,14 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
+  "claude:list-subagents": {
+    args: [__0: { terminalId: string }];
+    result: import("./agentSubagents.js").AgentSubagentsResult;
+  };
+  "claude:read-subagent-transcript": {
+    args: [__0: { terminalId: string; subagentId: string }];
+    result: import("./agentSubagents.js").AgentSubagentTranscriptResult;
+  };
   "cli:get-status": {
     args: [];
     result: import("./system.js").CliInstallStatus;
@@ -145,6 +153,14 @@ export interface GeneratedIpcInvokeMap {
   "clipboard:write-text": {
     args: [text: string];
     result: void;
+  };
+  "codex:list-subagents": {
+    args: [__0: { terminalId: string }];
+    result: import("./agentSubagents.js").AgentSubagentsResult;
+  };
+  "codex:read-subagent-transcript": {
+    args: [__0: { terminalId: string; subagentId: string }];
+    result: import("./agentSubagents.js").AgentSubagentTranscriptResult;
   };
   "commands:execute": {
     args: [payload: import("../commands.js").CommandExecutePayload];
@@ -631,6 +647,14 @@ export interface GeneratedIpcInvokeMap {
   "gemini:get-status": {
     args: [];
     result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
+  };
+  "git:list-push-commits": {
+    args: [payload: { cwd: string; branchName: string; limit?: number | undefined }];
+    result: import("../git.js").GitPushCommitPreview;
+  };
+  "git:list-rebase-commits": {
+    args: [payload: { cwd: string; branchName: string; limit?: number | undefined }];
+    result: import("../git.js").GitRebaseCommitPreview;
   };
   "global-env:get": {
     args: [];

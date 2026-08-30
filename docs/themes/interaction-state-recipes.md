@@ -5,8 +5,8 @@ This document maps each interactive component role to its canonical Tailwind cla
 ## Critical Rules
 
 - **Never use `transition-all`** — forces Chromium to interpolate every computed property on every frame. Use specific transitions: `transition-colors`, `transition-opacity`, `transition-transform`, or explicit property lists like `transition-[width,height]`. (See lesson #4738)
-- **Never use `text-text-inverse` for hover states** — renders invisible in dark themes. Use theme-aware text colors like `text-daintree-text` instead. (See lesson #4630)
-- **Prefer `outline` for focus rings** — `outline` is transparent and supports Windows High Contrast Mode. `ring` (box-shadow-based) is acceptable for active/dock states (e.g., `ring-1 ring-daintree-accent/30`), but for keyboard focus, always use `focus-visible:outline-*`.
+- **Never use `text-text-inverse` for hover states** — renders invisible in dark themes. Use theme-aware text colors like `text-text-primary` instead. (See lesson #4630)
+- **Prefer `outline` for focus rings** — `outline` is transparent and supports Windows High Contrast Mode. `ring` (box-shadow-based) is acceptable for active/dock states (e.g., `ring-1 ring-accent-primary/30`), but for keyboard focus, always use `focus-visible:outline-*`.
 - **Always use `:focus-visible`** — `:focus` shows rings on mouse clicks; `:focus-visible` only shows for keyboard navigation.
 - **Never use accent color as default hover** — it's a scarce resource reserved for one load-bearing signal per component.
 
@@ -19,7 +19,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 **Role:** Secondary toolbar buttons, icon-only buttons where minimal visual weight needed.
 
 ```tsx
-"hover:bg-overlay-soft hover:text-daintree-text focus-visible:text-daintree-text";
+"hover:bg-overlay-soft hover:text-text-primary focus-visible:text-text-primary";
 ```
 
 **Usage:** Combine with `transition-colors` for smooth transitions. Add `focus-visible:` variant for keyboard parity. Used in `button.tsx` `ghost` variant.
@@ -31,7 +31,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 **Role:** File trees, quick switcher items, settings lists. Entire row highlights with subtle background tint.
 
 ```tsx
-"hover:bg-overlay-subtle hover:text-daintree-text";
+"hover:bg-overlay-subtle hover:text-text-primary";
 ```
 
 **Usage:** For selected state, use the shared `PALETTE_ROW_CLASS` (`src/components/ui/paletteRowStyles.ts`) rather than respelling it — see [Selected State (List Item)](#selected-state-list-item). The raised token follows the `bondi.ts` "elevate-to-select for menu/palette rows" rationale (#9727) — `overlay-soft` is sub-threshold on near-white surfaces. Used in `QuickSwitcherItem.tsx`.
@@ -55,10 +55,10 @@ This document maps each interactive component role to its canonical Tailwind cla
 **Role:** Active tab in settings subtabs, navigation bars with bottom-border indicators.
 
 ```tsx
-"border-b-2 border-daintree-accent text-daintree-text";
+"border-b-2 border-accent-primary text-text-primary";
 ```
 
-**Usage:** Hover state: `hover:border-daintree-border hover:text-daintree-text`. Always use `border-b-2` for consistent 2px active indicator height. Used in `SettingsSubtabBar.tsx`.
+**Usage:** Hover state: `hover:border-border-default hover:text-text-primary`. Always use `border-b-2` for consistent 2px active indicator height. Used in `SettingsSubtabBar.tsx`.
 
 ---
 
@@ -72,19 +72,23 @@ This document maps each interactive component role to its canonical Tailwind cla
 
 ### Selected State (List Item)
 
-**Role:** Selected list item in a picker. A raised neutral fill plus a neutral hairline — no accent, no rail.
+**Role:** Selected list item in a picker. A raised neutral fill plus a neutral leading rail — no accent.
 
 ```tsx
-"palette-row border border-transparent transition-colors aria-selected:bg-overlay-raised aria-selected:border-selection-outline aria-selected:text-daintree-text";
+"palette-row relative border border-transparent transition-colors aria-selected:bg-overlay-raised aria-selected:text-text-primary";
 ```
 
-**Usage:** Do not respell this — import `PALETTE_ROW_CLASS` from `src/components/ui/paletteRowStyles.ts`, which 16 palette surfaces already share. Selected items do not add hover overlay; unselected items get `hover:bg-overlay-subtle`.
+**Usage:** Do not respell this — import `PALETTE_ROW_CLASS` from `src/components/ui/paletteRowStyles.ts`, which 15 production component files and 17 rendered row definitions already share. Selected items do not add hover overlay; unselected items get `hover:bg-overlay-subtle`.
 
-`selection-outline` is its own semantic token, not a member of the resting border ladder, because it is the row's only non-text indicator and so carries WCAG 1.4.11 alone: `overlay-raised` clears only ~1.1-1.2:1 against the palette surface, far short of 3:1. It is derived from each theme's `text-primary` (42% dark / 53% light) and gated at 3:1 against _both_ the selected fill and the surrounding surface by `getThemeContrastWarnings`. The fill is the binding pair — on dark the row lifts toward the outline, so an outline that looks safe against the surface can still vanish into the row it encloses.
+`selection-outline` is its own semantic token, not a member of the resting border ladder, because it is the row's only non-text indicator and so carries WCAG 1.4.11 alone: `overlay-raised` clears only ~1.1-1.2:1 against the palette surface, far short of 3:1. It is derived from each theme's `text-primary` (42% dark / 53% light) and gated at 3:1 against _both_ the selected fill and the surrounding surface by `getThemeContrastWarnings`. The fill is the binding pair — on dark the row lifts toward the rail, so a rail that looks safe against the surface can still vanish into the row it marks.
 
-The accent border and the 2px accent rail this recipe used to prescribe were removed in #11686: they put accent on the row, its rail and the focused input at once, breaking the one-load-bearing-signal rule. The palette input's focus lift draws the same `selection-outline` (ring at half strength), so the field and the selected row stay one treatment — change them together.
+The token paints a **leading rail**, drawn as `.palette-row::before` in `src/index.css`: 3px wide, `inset-block: 6px`, `inset-inline-start: -1px` so it sits on the card's outer boundary rather than inside its padding. Anything further in lands about 2px from the status mark these rows carry, and the two read as one cluttered gutter. It fades on the same 150ms slot as the fill — cross-fading one and popping the other put the mark on the new row while the surface behind it was still arriving — and `@variant reduce-motion` drops both together, covering the OS preference and Daintree's own toggle.
 
-`palette-row` is a forced-colors hook, not styling. Under `forced-colors: active` both the fill and the outline are stripped, so `src/index.css` falls back to a 2px `SelectedItem` outline. Deliberately an outline rather than a `SelectedItem` fill: these rows carry independently surfaced children (theme "Active" badges, action category chips, panel-kind icons with inline colour) that the engine maps to the forced palette on their own, and a fill would leave them painting `CanvasText` on `SelectedItem` — a pair with no contrast guarantee. The marker scopes the rule to palette rows, since `[role="option"]` is also used by the file pane, the settings selectors and the agent/forge dropdowns.
+Not four sides. The token has to hold 3:1 against both its neighbours, which lands it on a mid-grey stroke; drawn all the way round a row that is _not_ the DOM focus target, that reads as an empty form field. No shipping palette does it — VS Code leaves `list.focusOutline` unset in Quick Open, and Linear, Raycast, Spotlight, Arc and Slack are all fill-led. Making the fill carry 3:1 instead and dropping the mark entirely is not the escape: it needs ~33% white on these surfaces, far heavier than the stroke it replaces. WCAG 1.4.11 sets a ratio, not an area, so spending the same token on a rail is the cheaper way to buy the same guarantee. The reserved transparent border stays — it holds the row's content box on the palette's shared column, and the forced-colors fallback still draws an outline there.
+
+The accent border and the 2px **accent** rail this recipe used to prescribe were removed in #11686: they put accent on the row, its rail and the focused input at once, breaking the one-load-bearing-signal rule. The rail is back, but neutral — accent stays on the focused input alone. The palette input's focus lift draws the same `selection-outline` (ring at half strength), so the field and the selected row stay one treatment — change them together.
+
+`palette-row` is a forced-colors hook, not styling. Under `forced-colors: active` both the fill and the rail are stripped, so `src/index.css` falls back to a 2px `SelectedItem` outline. Deliberately an outline rather than a `SelectedItem` fill: these rows carry independently surfaced children (theme "Active" badges, action category chips, panel-kind icons with inline colour) that the engine maps to the forced palette on their own, and a fill would leave them painting `CanvasText` on `SelectedItem` — a pair with no contrast guarantee. The marker scopes the rule to palette rows, since `[role="option"]` is also used by the file pane, the settings selectors and the agent/forge dropdowns.
 
 ---
 
@@ -118,10 +122,10 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 **Role:** Standard focus indicator for buttons, cards, form controls.
 
 ```tsx
-"focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2";
+"focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 ```
 
-**Usage:** 2px outline with 2px offset satisfies WCAG 2.2 SC 2.4.13 (3:1 contrast ratio and size requirements). Requires `focus-visible:outline` base class to enable outline rendering. Used in `SettingsInput.tsx` (`INPUT_CLASSES`).
+**Usage:** 2px outline with 2px offset satisfies WCAG 2.2 SC 2.4.13 (3:1 contrast ratio and size requirements). Requires `focus-visible:outline` base class to enable outline rendering. Used in `src/components/ui/input.tsx` (`inputVariants`).
 
 ---
 
@@ -130,10 +134,12 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 **Role:** Flush list items, tree nodes, or elements with no gaps where outline shouldn't overlap adjacent items.
 
 ```tsx
-"focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]";
+"focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]";
 ```
 
 **Usage:** Negative offset keeps indicator inside element bounds. Use when elements are packed tightly (e.g., list items, file tree rows) where default offset would bleed into neighbors.
+
+**Radix row exception (menu, context-menu, select items):** these use `focus-visible:outline-selection-outline`, not accent, and add `focus-visible:outline-solid`. Both are deliberate, so a consistency pass should not "correct" them. `selection-outline` is the only ink `getPaletteSelectionWarnings` in `shared/theme/contrast.ts` holds to 3:1 against the raised `data-[highlighted]` fill, a destructive row's `status-danger/10` fill, and the `.surface-overlay` behind them — the three colours this ring actually touches; accent is scored against the display surfaces only. `outline-solid` is load-bearing wherever the element also carries `outline-hidden`, which these rows keep so `forced-colors` can still recolour the outline: `outline-hidden` sets `--tw-outline-style: none` on the element and the width utility reads that same variable back, so the ring paints nothing without it. `focusRingFallback.contract.test.ts` enforces the ring's presence, effective width, offset, style and that its ink paints something — but not that the ink is this particular token, which is why this note exists.
 
 ---
 
@@ -142,10 +148,10 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 **Role:** Text inputs, textareas. Pre-allocate border width; only change color to avoid layout shifts.
 
 ```tsx
-"focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2";
+"focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 ```
 
-**Usage:** Base state includes `border-border-strong`. On focus, outline is added — do NOT change `border-width`. Changing width causes layout jitter. Used in `SettingsInput.tsx` and `SettingsTextarea.tsx`.
+**Usage:** Base state includes `border-border-strong`. On focus, outline is added — do NOT change `border-width`. Changing width causes layout jitter. Used in `src/components/ui/input.tsx` (`inputVariants`) and `src/components/ui/textarea.tsx` (`textareaVariants`); the settings wrappers `SettingsInput.tsx` and `SettingsTextarea.tsx` compose those rather than restating the recipe.
 
 ---
 
@@ -154,10 +160,10 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 **Role:** Standard form inputs where outline treatment is not desired. Shifts border color on focus without adding extra ring.
 
 ```tsx
-"border border-border-strong focus:border-daintree-accent focus:outline-hidden transition-colors";
+"border border-border-strong focus:border-accent-primary focus:outline-hidden transition-colors";
 ```
 
-**Usage:** Border-shift is the lighter-weight alternative to outline-based focus. Base state must always have a visible border (`border-border-strong` or equivalent). On focus, only the border color changes — no outline or ring is added. Suitable for simple text inputs within constrained UIs. Used in `GitHubSettingsTab.tsx` and `NotificationSettingsTab.tsx` (several inputs share the same `focus:border-daintree-accent focus:outline-hidden` string).
+**Usage:** Border-shift is the lighter-weight alternative to outline-based focus. Base state must always have a visible border (`border-border-strong` or equivalent). On focus, only the border color changes — no outline or ring is added. Suitable for simple text inputs within constrained UIs. Used in `GitHubSettingsTab.tsx` and `NotificationSettingsTab.tsx` (several inputs share the same `focus:border-accent-primary focus:outline-hidden` string).
 
 ---
 
@@ -166,7 +172,7 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 **Role:** Active segment in a mutually exclusive toggle group (e.g., filter chips, tab-style selectors). Active state uses neutral overlay lift — never accent.
 
 ```tsx
-"bg-overlay-medium text-daintree-text border-border-strong aria-selected:bg-overlay-medium aria-selected:text-daintree-text";
+"bg-overlay-medium text-text-primary border-border-strong aria-selected:bg-overlay-medium aria-selected:text-text-primary";
 ```
 
 **Usage:** Combine with `transition-colors` for smooth toggle transitions. The active segment gets a neutral background fill and text emphasis; the border distinguishes it from inactive peers. Accent must NOT appear on any toggle segment. The canonical target is `overlay-medium` for the active fill.
@@ -178,10 +184,10 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 **Role:** Settings row containing a toggle switch. The row styling stays neutral regardless of switch state; accent is confined to the switch widget's track.
 
 ```tsx
-"border-daintree-border text-daintree-text";
+"border-border-default text-text-primary";
 ```
 
-**Usage:** The row card always uses neutral border and text. A 2px left rail (`bg-state-modified`) on the row signals modified state — semantic info hue, not accent. In the default `accent` color scheme (`SettingsSwitch.tsx` `COLOR_SCHEMES`), the switch track uses `bg-daintree-border` in OFF state and `data-[state=checked]:bg-daintree-text` in ON state — the ON fill is neutral text color, not accent. Accent on this widget is confined to the focus outline (`focus-visible:outline-daintree-accent`), never the track fill, the row card, or the modified-state rail. Apply `focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2` to the switch Root for keyboard focus. Used in `SettingsSwitchCard.tsx` + `SettingsSwitch.tsx`.
+**Usage:** The row card always uses neutral border and text. A 2px left rail (`bg-state-modified`) on the row signals modified state — semantic info hue, not accent. In the default `neutral` tone (`src/components/ui/switch.tsx` `switchVariants`), the track is `bg-surface-input` with an inset `ring-border-strong` in OFF state and `data-[state=checked]:bg-text-primary` in ON state — the ON fill is neutral text color, not accent. Accent on this widget is confined to the focus outline (`focus-visible:outline-accent-primary`), never the track fill, the row card, or the modified-state rail. The Root already carries `focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2` for keyboard focus. Used in `SettingsSwitchCard.tsx` + `src/components/ui/switch.tsx`, with `SettingsSwitch.tsx` mapping the settings layer's color-scheme names onto the primitive's tones.
 
 ---
 
@@ -202,7 +208,7 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 **Role:** Inline text input for renaming (e.g., tab labels, file names). Neutral, non-accent border.
 
 ```tsx
-"text-xs bg-overlay-soft border border-transparent text-daintree-text focus:outline-hidden transition-colors";
+"text-xs bg-overlay-soft border border-transparent text-text-primary focus:outline-hidden transition-colors";
 ```
 
 **Usage:** The base border is neutral — `border-transparent` over an `bg-overlay-soft` fill, swapping to `border-status-error` on validation error. Use `text-xs` for compact inline inputs. The current implementation in `TabButton.tsx` (rename input) has converged on this neutral pattern and no longer uses any accent-tinged border. Note it uses `focus:outline-hidden` rather than the accent focus outline — the overlay fill plus the surrounding tab chrome already signal the edit state.
@@ -245,16 +251,16 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 
 | Component | File | Key Pattern |
 | --- | --- | --- |
-| Quick Switcher Item | `QuickSwitcherItem.tsx` | Selected state with accent rail via `before:` |
-| Settings Input | `SettingsInput.tsx` | Input focus with outline ring |
-| Settings Textarea | `SettingsTextarea.tsx` | Input focus with outline ring |
+| Quick Switcher Item | `QuickSwitcherItem.tsx` | Selected state with neutral rail via `PALETTE_ROW_CLASS` |
+| Text Input | `ui/input.tsx` (`inputVariants`) | Input focus with outline ring |
+| Textarea | `ui/textarea.tsx` (`textareaVariants`) | Input focus with outline ring |
 | Button Ghost | `button.tsx` (`ghost` variant) | Ghost button hover with overlay-soft |
 | Dock Launch Button | `DockLaunchButton.tsx` (`pill` variant) | Neutral lift, no accent active state |
 | Settings Subtab | `SettingsSubtabBar.tsx` | Active tab with bottom border accent |
 | Worktree Card | `WorktreeCard.tsx` | Card hover with neutral overlay + ambient elevation |
 | GitHub Settings Tab | `GitHubSettingsTab.tsx` | Input focus with border-shift (no outline) |
 | Notification Settings | `NotificationSettingsTab.tsx` | Input focus with border-shift (no outline) |
-| Settings Switch Row | `SettingsSwitchCard.tsx` | Neutral row, neutral switch track (accent only on focus) |
+| Settings Switch Row | `SettingsSwitchCard.tsx` + `ui/switch.tsx` | Neutral row, neutral switch track (accent only on focus) |
 | Portal Drag Handle | `PortalToolbar.tsx` (`isDragging`) | Drag state with elevation + scale, no accent |
 | Inline Rename Input | `TabButton.tsx` (rename input) | Neutral `bg-overlay-soft`, transparent border |
 
@@ -264,13 +270,13 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 
 Accent color is a scarce resource, not a default. These are the only contexts where accent is permitted:
 
-- **Focus rings** — Every interactive element. `focus-visible:outline-daintree-accent` on buttons, inputs, list items, tree nodes.
+- **Focus rings** — Every interactive element. `focus-visible:outline-accent-primary` on buttons, inputs, list items, tree nodes.
 - **Primary view anchor** — The single load-bearing signal per active focus region: armed terminal, focused worktree card, primary CTA button.
 - **Editor caret** — The terminal cursor is a singleton position anchor. (`--color-terminal-cursor-accent` in `src/index.css`.)
 - **Theme mockup chrome** — Swatches and preview strips that display a theme's accent color are data, not interactive chrome (e.g., `PaletteStrip.tsx`, `AppThemePicker.tsx`).
-- **Status-tone routing** — Where `accent` is one option among `success`/`warning`/`danger` for mapping a semantic state to a color (e.g., `SettingsSwitch.tsx` `COLOR_SCHEMES`).
+- **Status-tone routing** — Where `accent` is one option among `success`/`warning`/`danger` for mapping a semantic state to a color (e.g., `SettingsSwitchCard.tsx` `COLOR_SCHEMES`, where `accent` tints the row's leading icon).
 
-For everything else, use the neutral overlay ladder (`bg-overlay-*`, `border-overlay`) or structural tokens (`border-border-strong`, `text-daintree-text`).
+For everything else, use the neutral overlay ladder (`bg-overlay-*`, `border-overlay`) or structural tokens (`border-border-strong`, `text-text-primary`).
 
 ---
 

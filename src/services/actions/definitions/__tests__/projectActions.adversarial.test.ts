@@ -62,9 +62,9 @@ beforeEach(() => {
 
 describe("projectActions adversarial", () => {
   describe("history navigation", () => {
-    // Destination selection belongs to the main-process history service; this
-    // action only has to reach it and stay dispatchable from the command
-    // palette.
+    // Destination selection — and whether it is a project or a scratch —
+    // belongs to the main-process history service; this action only has to
+    // reach it and stay dispatchable from the command palette.
     function mockHistory() {
       const peek = vi.fn().mockResolvedValue(null);
       // Node environment: no jsdom window, so the bridge is stubbed on globalThis.
@@ -74,7 +74,7 @@ describe("projectActions adversarial", () => {
       return peek;
     }
 
-    it("project.mruCycleOlder asks main for the last project", async () => {
+    it("project.mruCycleOlder asks main for the previous workspace", async () => {
       const peek = mockHistory();
       const { run } = setupActions();
 

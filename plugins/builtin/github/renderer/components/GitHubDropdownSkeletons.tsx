@@ -1,8 +1,15 @@
-import { Search, ExternalLink, Plus, Filter } from "lucide-react";
+import { Search, ExternalLink, Plus, ArrowUpDown, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 
-export const RESOURCE_ITEM_HEIGHT_PX = 68;
+/**
+ * The virtualized row height, in px, and the only definition of it. This used
+ * to be 68 against markup that measured about 58 — Virtuoso laid rows out on
+ * the constant while the fill and hit area drew to the shorter box, leaving a
+ * 10px strip between rows that belonged to no row at all. `GitHubListItem`
+ * now sets its own height from this constant, so the two cannot drift.
+ */
+export const RESOURCE_ITEM_HEIGHT_PX = 64;
 export const COMMIT_ITEM_HEIGHT_PX = 64;
 export const MAX_SKELETON_ITEMS = 6;
 
@@ -27,7 +34,6 @@ export function GitHubResourceListSkeleton({
 }: ResourceListSkeletonProps) {
   const renderCount = normalizeCount(count);
   const showImmediate = useSkeletonGate(Boolean(immediate));
-  const pulseClass = showImmediate ? "animate-pulse-immediate" : "animate-pulse-delayed";
 
   const stateTabs =
     type === "pr"
@@ -52,24 +58,29 @@ export function GitHubResourceListSkeleton({
       <span className="sr-only">Loading GitHub results</span>
 
       {/* Header — matches GitHubResourceList */}
-      <div className="p-3 border-b border-[var(--border-divider)] space-y-3 shrink-0">
+      <div className="p-3 border-b border-[var(--border-divider)] space-y-2 shrink-0">
         <div className="flex items-center gap-2">
           <div
             className={cn(
-              "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)] flex-1 min-w-0",
+              "flex items-center gap-1.5 px-2.5 h-8 rounded-[var(--radius-md)] flex-1 min-w-0",
               "bg-overlay-soft border border-[var(--border-overlay)]"
             )}
           >
             <Search
-              className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none"
+              className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none"
               aria-hidden="true"
             />
-            <span className="flex-1 min-w-0 text-sm text-muted-foreground select-none">
-              Search {type === "issue" ? "issues" : "pull requests"}...
+            <span className="flex-1 min-w-0 text-sm text-text-secondary select-none">
+              Search {type === "issue" ? "issues" : "pull requests"}…
             </span>
           </div>
-          <div className="flex items-center justify-center w-7 h-7 rounded shrink-0 text-daintree-text/60">
-            <Filter className="w-3.5 h-3.5" />
+          {/* Both icon slots, or the search field jumps narrower the moment
+              real content replaces this. */}
+          <div className="flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0 text-text-secondary">
+            <RefreshCw className="w-3.5 h-3.5" />
+          </div>
+          <div className="flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0 text-text-secondary">
+            <ArrowUpDown className="w-3.5 h-3.5" />
           </div>
         </div>
 
@@ -82,7 +93,7 @@ export function GitHubResourceListSkeleton({
               key={tab.id}
               className={cn(
                 "flex-1 px-3 py-1 text-xs font-medium rounded text-center",
-                tab.id === "open" ? "bg-overlay-medium text-daintree-text" : "text-muted-foreground"
+                tab.id === "open" ? "bg-overlay-medium text-text-primary" : "text-text-secondary"
               )}
             >
               {tab.label}
@@ -92,38 +103,25 @@ export function GitHubResourceListSkeleton({
       </div>
 
       {/* List skeleton rows */}
-      <div className="overflow-y-auto flex-1 min-h-0">
-        <div aria-hidden="true" className="divide-y divide-[var(--border-divider)]">
-          {Array.from({ length: renderCount }).map((_, i) => (
-            <div
-              key={i}
-              className={`${pulseClass} box-border`}
-              style={{ height: `${RESOURCE_ITEM_HEIGHT_PX}px` }}
-            >
-              <div className="flex items-center gap-2 px-3 pt-2.5">
-                <div className="w-4 h-4 rounded-full bg-muted shrink-0" />
-                <div className="h-4 bg-muted rounded flex-1" />
-                <div className="h-4 bg-muted rounded w-8 shrink-0" />
-              </div>
-              <div className="flex items-center gap-1.5 px-3 mt-1.5 pb-2.5">
-                <div className="h-3 bg-muted rounded w-16" />
-                <div className="h-3 bg-muted rounded w-14" />
-              </div>
-            </div>
-          ))}
-        </div>
+      <div className="relative overflow-hidden flex-1 min-h-0">
+        <GitHubResourceRowsSkeleton count={renderCount} immediate={showImmediate} />
+        {/* Same fade the loaded list uses, so a skeleton row cut by the panel
+            edge dissolves instead of being guillotined. */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-8 bg-gradient-to-t from-[var(--scroll-shadow-color)] to-transparent"
+        />
       </div>
 
       {/* Footer — matches GitHubResourceList */}
-      <div className="p-3 border-t border-[var(--border-divider)] grid grid-cols-[1fr_auto_1fr] items-center shrink-0">
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground justify-self-start">
+      <div className="px-2 py-1.5 border-t border-[var(--border-divider)] flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-1.5 px-3 h-7 text-xs text-text-secondary">
           <ExternalLink className="h-3.5 w-3.5" />
-          GitHub
+          View on GitHub
         </div>
-        <span aria-hidden="true" />
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground justify-self-end">
+        <div className="flex items-center gap-1.5 px-3 h-7 text-xs text-text-secondary">
           <Plus className="h-3.5 w-3.5" />
-          New
+          {type === "issue" ? "New issue" : "New pull request"}
         </div>
       </div>
     </div>
@@ -135,21 +133,26 @@ export function GitHubResourceRowsSkeleton({ count, immediate }: SkeletonProps) 
   const pulseClass = immediate ? "animate-pulse-immediate" : "animate-pulse-delayed";
 
   return (
-    <div aria-hidden="true" className="divide-y divide-[var(--border-divider)]">
+    <div aria-hidden="true">
       {Array.from({ length: renderCount }).map((_, i) => (
         <div
           key={i}
-          className={`${pulseClass} box-border`}
+          className={`${pulseClass} box-border px-3 py-2.5 flex items-start gap-2.5`}
           style={{ height: `${RESOURCE_ITEM_HEIGHT_PX}px` }}
         >
-          <div className="flex items-center gap-2 px-3 pt-2.5">
-            <div className="w-4 h-4 rounded-full bg-muted shrink-0" />
-            <div className="h-4 bg-muted rounded flex-1" />
-            <div className="h-4 bg-muted rounded w-8 shrink-0" />
-          </div>
-          <div className="flex items-center gap-1.5 px-3 mt-1.5 pb-2.5">
-            <div className="h-3 bg-muted rounded w-16" />
-            <div className="h-3 bg-muted rounded w-14" />
+          <div className="w-4 h-4 rounded-full bg-muted shrink-0 mt-px" />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 h-6">
+              <div className="h-4 bg-muted rounded flex-1" />
+              {/* The loaded row's persistent 24×24 actions slot — reserve the
+                  same box or the title bar shrinks the moment data lands. */}
+              <div className="h-6 w-6 -me-1 bg-muted rounded shrink-0" />
+            </div>
+            <div className="flex items-center gap-1.5 mt-1 h-4">
+              <div className="h-3 bg-muted rounded w-12" />
+              <div className="h-3 bg-muted rounded w-16" />
+              <div className="h-3 bg-muted rounded w-10" />
+            </div>
           </div>
         </div>
       ))}

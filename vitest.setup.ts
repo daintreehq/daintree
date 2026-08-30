@@ -85,6 +85,31 @@ if (typeof globalThis.cancelAnimationFrame !== "function") {
   vi.stubGlobal("cancelAnimationFrame", () => {});
 }
 
+// jsdom does not implement ResizeObserver, which every scroll-shadow surface
+// constructs (`useVerticalScrollShadows`). Files that render one used to be
+// spared only because the hook silently failed to attach; now that it attaches
+// correctly, a missing global throws during commit. Same `vi.stubGlobal`
+// rationale as rAF above — tests that assert on resize behaviour override it.
+if (typeof globalThis.ResizeObserver !== "function") {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class ResizeObserverStub {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  );
+}
+
+// jsdom does not implement `scrollIntoView`, which every roving-cursor listbox
+// calls to keep the active row in view (`useListboxCursor`, `useBranchPicker`).
+// Same rationale as the two stubs above: an unimplemented DOM method throws
+// during commit and takes the whole render down, which reads as a broken
+// component rather than a missing jsdom feature.
+if (typeof Element !== "undefined" && typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = function scrollIntoViewStub() {};
+}
+
 // Node 25 exposes a broken native `localStorage` stub on `globalThis` (no
 // `clear`/`getItem`/etc) that shadows JSDOM's Storage and leaks the warning
 // `--localstorage-file was provided without a valid path`. JSDOM's env setup

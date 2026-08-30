@@ -67,7 +67,29 @@ export function NonMainSecondaryRow({
     worktree.linked?.pr &&
     worktree.linked.pr.state !== "closed" &&
     worktree.linked.pr.state !== "declined";
-  const showUpstreamBadge = hasUpstreamDelta || hasAuthFailedSignIn;
+  // The base relationship is not an alarm, so it does not wait for a non-zero
+  // count: a branch renders the line as soon as we know what it is measured
+  // against. `hasUpstreamDelta` still matters for the ordering below, where
+  // the question genuinely is which alarm outranks which.
+  //
+  // Detached HEAD is excluded because the relationship is a claim about a
+  // branch and there is no branch: on detach `readCurrentBranch` returns
+  // undefined and the producer's branch-change guard declines to clear the
+  // previous name, so `baseBranchName` survives the detach and would describe
+  // a bare commit as a branch sitting on its base. A detached worktree that
+  // has genuinely drifted still shows the counts — that path mounts on
+  // `hasUpstreamDelta` and is unchanged.
+  const isDetached = Boolean(worktree.isDetached);
+  const showUpstreamBadge =
+    hasUpstreamDelta || hasAuthFailedSignIn || (worktree.baseBranchName != null && !isDetached);
+
+  // `tracking` is normalised to a string or null on every status pass, so a
+  // null one with a snapshot present is a positive "no upstream configured",
+  // not a not-yet. It says nothing about whether a remote branch exists —
+  // `git push origin topic` without `-u` leaves one behind with no tracking
+  // config — which is why neither the marker nor its tooltip claims one.
+  const hasNoUpstream =
+    !isDetached && worktree.worktreeChanges != null && !worktree.worktreeChanges.tracking;
 
   const prTier = showPRBadge
     ? computeAlarmTier({ ciState: worktree.linked?.pr?.ciStatus?.state }).tier
@@ -75,6 +97,7 @@ export function NonMainSecondaryRow({
   const upstreamTier = computeAlarmTier({
     authFailed: hasAuthFailedSignIn,
     behindCount: worktree.behindCount,
+    baseBehindCount: worktree.baseBehindCount,
   }).tier;
   const upstreamFirst = upstreamTier > prTier;
 
@@ -108,12 +131,27 @@ export function NonMainSecondaryRow({
       baseBehindCount={worktree.baseBehindCount}
       baseMatchesUpstream={worktree.baseMatchesUpstream}
       baseCompareRef={worktree.baseCompareRef}
+      hasNoUpstream={hasNoUpstream}
       fetchIntervalMs={fetchIntervalMs}
     />
   ) : null;
 
   return (
-    <div className="flex flex-col gap-0.5 mt-1.5">
+    // gap-0.5 inside, mt-2.5 outside. These lines are one thing — branch,
+    // linked PR, upstream drift — and they read fine at 2px apart; what made
+    // the card feel oppressive was that the block sat only 6px under the
+    // headline, inside the 5-7px zone where the eye cannot tell whether a line
+    // belongs to the block above it or starts a new one. 10px puts it clearly
+    // outside, and holds the 2:1-to-3:1 outer-to-inner ratio the grouping
+    // convention asks for.
+    // px-1: the block used to sit flush against the content column while the
+    // disclosure rows below it carry a 7px leading inset, so the one part of
+    // the card with no inset at all was the part with the most lines in it —
+    // it read as pushed left and crowded against both edges. Four is half the
+    // wells' inset on purpose: headline flush, its supporting lines stepped in
+    // slightly, wells stepped in further. A progression down the card, rather
+    // than one tier that missed the memo.
+    <div className="flex flex-col gap-0.5 mt-2.5 px-1">
       {worktree.issueNumber && (isPrOriginated || !hasDisplayTitle) && (
         <IssueBadge
           issueNumber={worktree.issueNumber}
@@ -124,8 +162,11 @@ export function NonMainSecondaryRow({
           underlineOnHover={underlineOnHover}
         />
       )}
-      {upstreamFirst ? upstreamBadge : prBadge}
-      {upstreamFirst ? prBadge : upstreamBadge}
+      {/* Branch before upstream delta: the branch is identity, the delta is
+          state, and the card answers "which worktree is this?" before "how far
+          has it drifted?". The upstream/PR pair still swaps between itself by
+          alarm tier — that ordering is about which alarm outranks which, not
+          about outranking the branch name. */}
       {hasDisplayTitle && (
         <BranchLabel
           label={branchLabel}
@@ -134,6 +175,8 @@ export function NonMainSecondaryRow({
           isMainWorktree={false}
         />
       )}
+      {upstreamFirst ? upstreamBadge : prBadge}
+      {upstreamFirst ? prBadge : upstreamBadge}
       {hasPlanFile && badges.onOpenPlan && (
         <button
           type="button"
@@ -141,7 +184,7 @@ export function NonMainSecondaryRow({
             if (isActive) badges.onOpenPlan?.();
           }}
           data-no-dnd
-          className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors text-daintree-text/70 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+          className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors text-text-secondary hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
           aria-disabled={!isActive || undefined}
           aria-label="View agent plan file"
         >

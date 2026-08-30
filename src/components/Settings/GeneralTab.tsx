@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import {
   ChevronRight,
   Moon,
-  CheckCircle,
+  ShieldBan,
+  KeyRound,
   Wrench,
   LayoutGrid,
   PanelBottom,
@@ -700,18 +701,18 @@ export function GeneralTab({
         <>
           <div
             id="general-about"
-            className="settings-card flex items-start gap-4 p-4 rounded-[var(--radius-md)] border border-daintree-border"
+            className="settings-card flex items-start gap-4 p-4 rounded-[var(--radius-md)] border border-border-default"
           >
             <div className="h-12 w-12 rounded-xl flex items-center justify-center shrink-0 bg-surface-panel-elevated">
-              <DaintreeIcon size={28} className="shrink-0 text-daintree-text" />
+              <DaintreeIcon size={28} className="shrink-0 text-text-primary" />
             </div>
             <div className="flex-1 min-w-0 space-y-1">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-daintree-text">Daintree</span>
+                <span className="text-sm font-semibold text-text-primary">Daintree</span>
                 {buildChannelLabel && (
                   <span
                     data-testid="about-build-channel"
-                    className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info leading-none"
+                    className="text-3xs font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info leading-none"
                   >
                     {buildChannelLabel}
                   </span>
@@ -735,7 +736,7 @@ export function GeneralTab({
                     { source: "user" }
                   )
                 }
-                className="flex items-center gap-1.5 text-xs text-text-muted hover:text-daintree-text transition-colors pt-1"
+                className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary transition-colors pt-1"
               >
                 <ExternalLink className="w-3 h-3" />
                 daintree.org
@@ -768,7 +769,7 @@ export function GeneralTab({
                       <div className="flex items-center gap-3">
                         <button
                           type="button"
-                          className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline"
+                          className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline"
                           onClick={() =>
                             window.dispatchEvent(
                               new CustomEvent("daintree:open-agent-setup-wizard")
@@ -780,7 +781,7 @@ export function GeneralTab({
                         {onNavigateToAgents && (
                           <button
                             type="button"
-                            className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline"
+                            className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline"
                             onClick={() => onNavigateToAgents?.()}
                           >
                             Browse available agents
@@ -799,38 +800,38 @@ export function GeneralTab({
                       const ready = isAgentReady(cliAvailability[id]);
                       const unauthenticated = isAgentUnauthenticated(cliAvailability[id]);
                       const blocked = isAgentBlocked(cliAvailability[id]);
-                      // A blocked agent is installed but can't run — show it
-                      // distinctly from the authentication-needed case so the
-                      // user doesn't waste time re-authenticating a binary
-                      // that an endpoint security tool is blocking.
-                      const statusLabel = blocked
-                        ? "Blocked"
+                      // Ready is the expected state, so it gets no chrome at
+                      // all — only states needing the user's attention are
+                      // labelled. Each carries its own glyph: a blocked agent
+                      // is installed but can't run, and reads distinctly from
+                      // the authentication-needed case so the user doesn't
+                      // waste time re-authenticating a binary that an endpoint
+                      // security tool is blocking. Attention states are tested
+                      // before `ready` so a probe that ever reports both still
+                      // surfaces the problem rather than falling silent.
+                      const status = blocked
+                        ? { label: "Blocked", Icon: ShieldBan }
                         : unauthenticated
-                          ? "Login required"
+                          ? { label: "Login required", Icon: KeyRound }
                           : ready
-                            ? "Ready"
-                            : "Needs setup";
-                      const statusClass = blocked
-                        ? "text-status-warning"
-                        : unauthenticated
-                          ? "text-status-warning"
-                          : ready
-                            ? "text-status-success"
-                            : "text-status-warning";
+                            ? null
+                            : { label: "Needs setup", Icon: Wrench };
 
                       return (
                         <button
                           type="button"
                           key={id}
-                          className="settings-list-item border-daintree-border hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))] flex items-center justify-between text-sm px-3 py-2 rounded-[var(--radius-md)] border w-full text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-                          aria-label={`Go to ${name} agent settings`}
+                          className="settings-list-item border-border-default hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))] flex items-center justify-between text-sm px-3 py-2 rounded-[var(--radius-md)] border w-full text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                          aria-label={`Go to ${name} agent settings${status ? ` — ${status.label}` : ""}`}
                           onClick={() => onNavigateToAgents?.(id)}
                         >
                           <span className="text-text-secondary">{name}</span>
-                          <span className="flex items-center gap-2">
-                            <CheckCircle className={cn("w-3.5 h-3.5", statusClass)} />
-                            <span className={cn("text-xs", statusClass)}>{statusLabel}</span>
-                          </span>
+                          {status && (
+                            <span className="flex items-center gap-2 text-status-warning">
+                              <status.Icon className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span className="text-xs">{status.label}</span>
+                            </span>
+                          )}
                         </button>
                       );
                     })}
@@ -839,7 +840,7 @@ export function GeneralTab({
                       <button
                         type="button"
                         onClick={() => onNavigateToAgents?.()}
-                        className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline"
+                        className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline"
                       >
                         {`Daintree supports ${hiddenCount} more ${hiddenCount === 1 ? "agent" : "agents"} →`}
                       </button>
@@ -890,8 +891,8 @@ export function GeneralTab({
                         className={cn(
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors capitalize",
                           updateChannel === ch
-                            ? "bg-overlay-selected border border-border-strong text-daintree-text font-medium"
-                            : "border border-daintree-border hover:bg-tint/5 text-daintree-text/70"
+                            ? "bg-overlay-selected border border-border-strong text-text-primary font-medium"
+                            : "border border-border-default hover:bg-tint/5 text-text-secondary"
                         )}
                       >
                         {ch}
@@ -924,7 +925,7 @@ export function GeneralTab({
               onClick={() => setIsShortcutsOpen(!isShortcutsOpen)}
               aria-expanded={isShortcutsOpen}
               aria-controls="keyboard-shortcuts-content"
-              className="flex items-center gap-2 text-sm text-daintree-text/60 hover:text-daintree-text transition-colors"
+              className="flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors"
             >
               <ChevronRight
                 data-animated-chevron
@@ -940,7 +941,7 @@ export function GeneralTab({
               <div id="keyboard-shortcuts-content" className="space-y-4">
                 {shortcuts.map((category) => (
                   <div key={category.category} className="space-y-2">
-                    <h5 className="text-xs font-semibold text-daintree-text/60 uppercase tracking-wider">
+                    <h5 className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
                       {category.category}
                     </h5>
                     <dl className="space-y-1">
@@ -949,9 +950,9 @@ export function GeneralTab({
                           key={shortcut.actionId}
                           className="flex items-center justify-between text-sm py-1"
                         >
-                          <dt className="text-daintree-text">{shortcut.description}</dt>
+                          <dt className="text-text-primary">{shortcut.description}</dt>
                           <dd>
-                            <kbd className="settings-kbd px-2 py-1 rounded border text-xs font-mono text-daintree-text">
+                            <kbd className="settings-kbd px-2 py-1 rounded border text-xs font-mono text-text-primary">
                               {shortcut.key}
                             </kbd>
                           </dd>
@@ -986,7 +987,7 @@ export function GeneralTab({
 
               {idleNotifyConfig.enabled && (
                 <div id="general-idle-terminal-threshold" className="space-y-2 scroll-mt-12">
-                  <label className="text-sm text-daintree-text/70">Idle Threshold</label>
+                  <label className="text-sm text-text-secondary">Idle Threshold</label>
                   <div className="flex gap-2">
                     {IDLE_TERMINAL_THRESHOLD_PRESETS.map(({ value, label }) => (
                       <button
@@ -995,15 +996,15 @@ export function GeneralTab({
                         className={cn(
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                           idleNotifyConfig.thresholdMinutes === value
-                            ? "bg-overlay-selected border border-border-strong text-daintree-text font-medium"
-                            : "border border-daintree-border hover:bg-tint/5 text-daintree-text/70"
+                            ? "bg-overlay-selected border border-border-strong text-text-primary font-medium"
+                            : "border border-border-default hover:bg-tint/5 text-text-secondary"
                         )}
                       >
                         {label}
                       </button>
                     ))}
                   </div>
-                  <p className="text-xs text-daintree-text/40">
+                  <p className="text-xs text-text-secondary">
                     A toast appears when background project terminals have been quiet this long,
                     with options to close them or dismiss the reminder.
                   </p>
@@ -1029,7 +1030,7 @@ export function GeneralTab({
 
               {idleAutoCloseConfig.enabled && (
                 <div id="general-idle-background-threshold" className="space-y-2 scroll-mt-12">
-                  <label className="text-sm text-daintree-text/70">Idle Threshold</label>
+                  <label className="text-sm text-text-secondary">Idle Threshold</label>
                   <div className="flex gap-2">
                     {IDLE_BACKGROUND_THRESHOLD_PRESETS.map(({ value, label }) => (
                       <button
@@ -1038,15 +1039,15 @@ export function GeneralTab({
                         className={cn(
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                           idleAutoCloseConfig.thresholdMinutes === value
-                            ? "bg-overlay-selected border border-border-strong text-daintree-text font-medium"
-                            : "border border-daintree-border hover:bg-tint/5 text-daintree-text/70"
+                            ? "bg-overlay-selected border border-border-strong text-text-primary font-medium"
+                            : "border border-border-default hover:bg-tint/5 text-text-secondary"
                         )}
                       >
                         {label}
                       </button>
                     ))}
                   </div>
-                  <p className="text-xs text-daintree-text/40">
+                  <p className="text-xs text-text-secondary">
                     Only projects with no terminals are auto-closed. The active project is never
                     touched, and reopening a project restores its panels.
                   </p>
@@ -1078,7 +1079,7 @@ export function GeneralTab({
 
               {hibernationConfig.enabled && (
                 <div id="general-hibernation-threshold" className="space-y-2 scroll-mt-12">
-                  <label className="text-sm text-daintree-text/70">Inactivity Threshold</label>
+                  <label className="text-sm text-text-secondary">Inactivity Threshold</label>
                   <div className="flex gap-2">
                     {THRESHOLD_PRESETS.map(({ value, label }) => (
                       <button
@@ -1087,22 +1088,22 @@ export function GeneralTab({
                         className={cn(
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                           hibernationConfig.inactiveThresholdHours === value
-                            ? "bg-overlay-selected border border-border-strong text-daintree-text font-medium"
-                            : "border border-daintree-border hover:bg-tint/5 text-daintree-text/70"
+                            ? "bg-overlay-selected border border-border-strong text-text-primary font-medium"
+                            : "border border-border-default hover:bg-tint/5 text-text-secondary"
                         )}
                       >
                         {label}
                       </button>
                     ))}
                   </div>
-                  <p className="text-xs text-daintree-text/40">
+                  <p className="text-xs text-text-secondary">
                     Projects idle longer than this will have their processes stopped automatically.
                   </p>
                 </div>
               )}
             </SettingsSection>
           ) : (
-            <div className="text-sm text-daintree-text/40">Loading hibernation settings...</div>
+            <div className="text-sm text-text-secondary">Loading hibernation settings...</div>
           )}
         </>
       )}

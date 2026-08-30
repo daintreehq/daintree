@@ -273,6 +273,20 @@ export type PtyHostRequest =
   | { type: "mark-checked"; id: string }
   | { type: "update-observed-title"; id: string; title: string }
   | { type: "update-title"; id: string; title: string; titleMode: PanelTitleMode }
+  // `null` is an explicit clear, not "unchanged". A panel really can leave a
+  // worktree for none — undoing a dock->grid move deletes the adopted id
+  // (`layoutUndoStore`) — and an optional field could not tell that apart from
+  // a caller that simply forgot to send one (#12060).
+  | {
+      type: "update-worktree-id";
+      id: string;
+      worktreeId: string | null;
+      // The sender's own project, resolved in main. The host checks it against
+      // the record before writing: the fleet snapshot hands every view every
+      // run's id, so without this any project's renderer could re-file another
+      // project's terminal. Null is an identity, not a wildcard (#11100).
+      expectedProjectId: string | null;
+    }
   | {
       type: "transition-state";
       id: string;
@@ -819,10 +833,15 @@ export interface PtyHostTerminalInfo {
   launchAgentId?: AgentId;
   title?: string;
   titleMode?: PanelTitleMode;
+  /** Last non-useless OSC title observed from the agent — preferred over `title` for resume-record labels. */
+  lastObservedTitle?: string;
   cwd: string;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /** Activity timestamps idle detection runs on; absent means "unknown activity", not "idle". */
+  lastInputTime?: number;
+  lastOutputTime?: number;
   spawnedAt: number;
   isTrashed?: boolean;
   trashExpiresAt?: number;

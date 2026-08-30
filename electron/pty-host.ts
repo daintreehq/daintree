@@ -864,8 +864,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   // pin this gate off so a stray "background" tier from any other path can never
   // suppress the live visual byte stream. The isSuspended (backpressure) gate and
   // the project-routing filter below are unchanged; analysis/headless buffer
-  // writes and agent-state detection still run. See
-  // docs/HIBERNATION-REMOVAL-EXPERIMENT.md.
+  // writes and agent-state detection still run. Landed in `eb9cd64a7`.
   const isBackgrounded = false;
   // PRIORITY 1: MESSAGEPORT (Per-Window Routed Path)
   // Send data directly to renderer windows via MessagePort with per-window project filtering.

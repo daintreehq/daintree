@@ -82,7 +82,9 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
 
   const { rows: displayRows, overflowCount: displayOverflowCount } = content;
   const hasUrgent = displayRows.some((r) => r.worstType === "error" || r.worstType === "warning");
-  const accentClass = hasUrgent ? "border-l-status-warning" : "border-l-status-success";
+  // Only the excursion gets a hue. A green rule here would just be saying no
+  // entry was urgent, which is the good case already implied by the rows (#12002).
+  const accentClass = hasUrgent ? "border-l-status-warning" : "border-l-border-default";
 
   const handleOpenNotifications = () => {
     useUIStore.getState().openNotificationCenter();
@@ -107,7 +109,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
           "rounded-[var(--radius-sm)] border-l-[3px] border border-tint/[0.08]",
           "bg-surface-panel/85 backdrop-blur-xl",
           "px-3 py-2.5 pr-2",
-          "text-sm text-daintree-text",
+          "text-sm text-text-primary",
           "shadow-[var(--theme-shadow-floating)]",
           "ring-1 ring-inset ring-tint/[0.05]",
           // Tailwind v4 translate-* emits the individual `translate` property,
@@ -137,7 +139,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
         onMouseLeave={() => setIsPaused(false)}
       >
         <div className="flex items-start justify-between gap-2">
-          <h4 className="font-medium leading-tight tracking-tight text-xs text-daintree-text">
+          <h4 className="font-medium leading-tight tracking-tight text-xs text-text-primary">
             While you were away
           </h4>
           <div className="flex items-center gap-0.5">
@@ -151,7 +153,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
                 "h-6 w-6 flex items-center justify-center",
                 "text-daintree-text/40 transition-colors duration-150",
                 "hover:text-daintree-text/80 hover:bg-tint/10",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                 isPinned && "text-daintree-text/80"
               )}
             >
@@ -166,7 +168,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
                 "h-6 w-6 flex items-center justify-center",
                 "text-daintree-text/40 transition-colors duration-150",
                 "hover:text-daintree-text/80 hover:bg-tint/10",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
               )}
             >
               <X className="h-3.5 w-3.5" />
@@ -186,17 +188,15 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
                     "flex items-center gap-1.5 w-full text-left text-xs",
                     "rounded-[var(--radius-xs)] px-0.5 py-0.5 -mx-0.5",
                     "hover:bg-tint/5 transition-colors duration-150",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                     row.worstType === "error" || row.worstType === "warning"
-                      ? "text-daintree-text"
-                      : "text-daintree-text/70"
+                      ? "text-text-primary"
+                      : "text-text-secondary"
                   )}
                 >
                   <Icon className={cn("h-3.5 w-3.5 shrink-0", SEVERITY_CLASS[row.worstType])} />
                   <span className="font-medium truncate min-w-0">{row.worktreeName}</span>
-                  <span className="text-daintree-text/50 truncate min-w-0">
-                    {row.highlightTitle}
-                  </span>
+                  <span className="text-text-secondary truncate min-w-0">{row.highlightTitle}</span>
                 </button>
               </li>
             );
@@ -207,7 +207,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
                 type="button"
                 onClick={handleOpenNotifications}
                 className={cn(
-                  "text-xs text-daintree-text/50 hover:text-daintree-text/70",
+                  "text-xs text-text-secondary hover:text-text-primary",
                   "px-0.5 py-0.5 transition-colors duration-150"
                 )}
               >
@@ -226,7 +226,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
               "text-xs font-medium",
               "bg-status-info/10 text-status-info",
               "hover:bg-status-info/20 transition-colors",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             )}
           >
             Open Notifications

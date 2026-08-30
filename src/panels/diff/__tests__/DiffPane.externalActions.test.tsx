@@ -311,6 +311,20 @@ describe("DiffPane toolbar — action routing", () => {
 
     expect(dispatchCall(0)[2]).toEqual({ source: "user" });
   });
+
+  // The out-of-root reveal opt-in belongs to the file viewer alone (#11934):
+  // its read root falls back to the file's own parent, so it displays files no
+  // project owns. A diff always has a worktree behind it, so relaxing
+  // containment here would widen the boundary for nothing.
+  it("reveals without the out-of-root opt-in the file viewer carries", async () => {
+    seedPanel("src/index.ts");
+    renderPane();
+
+    await click(revealButton());
+
+    expect(dispatchCall(0)[0]).toBe("file.showItemInFolder");
+    expect(dispatchCall(0)[1]).not.toHaveProperty("allowOutsideRoots");
+  });
 });
 
 describe("DiffPane toolbar — platform naming", () => {

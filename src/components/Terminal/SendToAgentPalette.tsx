@@ -47,7 +47,7 @@ function SendToAgentItemRow({
           ? "opacity-50 cursor-not-allowed border border-transparent"
           : [
               PALETTE_ROW_CLASS,
-              "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text",
+              "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
             ]
       )}
       onClick={() => !item.isInputLocked && onSelect(item)}
@@ -61,9 +61,9 @@ function SendToAgentItemRow({
       </span>
 
       <div className="flex-1 min-w-0 overflow-hidden">
-        <span className="text-sm font-medium text-daintree-text truncate block">{item.title}</span>
+        <span className="text-sm font-medium text-text-primary truncate block">{item.title}</span>
         {item.subtitle && (
-          <span className="text-xs text-daintree-text/50 truncate block">{item.subtitle}</span>
+          <span className="text-xs text-text-secondary truncate block">{item.subtitle}</span>
         )}
       </div>
 
@@ -129,7 +129,7 @@ export function SendToAgentPalette({
       emptyMessage="No other terminals available"
       totalResults={totalResults}
       emptyContent={
-        <p className="mt-2 text-xs text-daintree-text/40">
+        <p className="mt-2 text-xs text-text-secondary">
           {newTerminalShortcut ? (
             <>
               Press <kbd className={KBD_CLASS}>{newTerminalShortcut}</kbd> to create a new terminal.

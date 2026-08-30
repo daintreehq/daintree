@@ -314,7 +314,7 @@ export function VoiceInputSettingsTab() {
               role="note"
               className="rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3"
             >
-              <p className="text-xs text-daintree-text/60 select-text">
+              <p className="text-xs text-text-secondary select-text">
                 {settings.transcriptionProvider === "deepgram"
                   ? "Microphone audio is streamed over an encrypted connection to Deepgram for transcription using your API key. Deepgram does not retain streaming audio or transcripts by default."
                   : "Microphone audio is streamed over an encrypted connection to OpenAI for transcription using your API key. Audio is not used for model training. OpenAI may retain audio in abuse-monitoring logs for up to 30 days."}
@@ -359,7 +359,7 @@ export function VoiceInputSettingsTab() {
                 />
 
                 {settings.deepgramApiKey && (
-                  <p className="text-xs text-daintree-text/50 mt-1">
+                  <p className="text-xs text-text-secondary mt-1">
                     Your API key is stored locally in plain text. Set usage limits on your Deepgram
                     account to cap exposure.
                   </p>
@@ -378,14 +378,14 @@ export function VoiceInputSettingsTab() {
                 />
 
                 {(!settings.openaiApiKey || !settings.openaiApiKey.startsWith("sk-proj-")) && (
-                  <p className="text-xs text-daintree-text/50">
+                  <p className="text-xs text-text-secondary">
                     Use a Project API key (starts with <code className="font-mono">sk-proj-</code>)
                     for the best security
                   </p>
                 )}
 
                 {settings.openaiApiKey && (
-                  <p className="text-xs text-daintree-text/50 mt-1">
+                  <p className="text-xs text-text-secondary mt-1">
                     Your API key is stored locally in plain text. Set billing limits on your OpenAI
                     account to cap exposure.
                   </p>
@@ -467,7 +467,7 @@ export function VoiceInputSettingsTab() {
 
               <CorePromptViewer />
 
-              <p className="text-xs text-daintree-text/40">
+              <p className="text-xs text-text-secondary">
                 Your project name and custom dictionary are included automatically. Prompt caching
                 keeps costs minimal.
               </p>
@@ -556,26 +556,19 @@ function ApiKeyRow({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <label className="text-sm text-daintree-text/70 flex items-center gap-2">
+        <label className="text-sm text-text-secondary flex items-center gap-2">
           <Key className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
           {label}
         </label>
-        <div className="flex items-center gap-2">
-          {value ? (
-            <span className="flex items-center gap-1 text-xs text-status-success">
-              <Check className="w-3 h-3" />
-              Configured
-            </span>
-          ) : (
-            <button
-              onClick={() => window.electron?.system?.openExternal(helpUrl)}
-              className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline flex items-center gap-1"
-            >
-              {helpLabel}
-              <ExternalLink className="w-3 h-3" />
-            </button>
-          )}
-        </div>
+        {!value && (
+          <button
+            onClick={() => window.electron?.system?.openExternal(helpUrl)}
+            className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline flex items-center gap-1"
+          >
+            {helpLabel}
+            <ExternalLink className="w-3 h-3" />
+          </button>
+        )}
       </div>
 
       <div className="flex gap-2">
@@ -597,7 +590,7 @@ function ApiKeyRow({
               }
             }}
             placeholder={value ? "Enter new key to replace" : placeholder}
-            className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
+            className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
             autoComplete="new-password"
             spellCheck={false}
             disabled={validation === "testing"}
@@ -617,7 +610,7 @@ function ApiKeyRow({
           loading={validation === "testing"}
           size="sm"
           variant="outline"
-          className="text-daintree-text border-daintree-border hover:bg-daintree-border"
+          className="text-text-primary border-border-default hover:bg-border-default"
         >
           Save
         </Button>
@@ -626,7 +619,7 @@ function ApiKeyRow({
             onClick={handleClear}
             variant="outline"
             size="sm"
-            className="text-daintree-text/50 border-daintree-border hover:text-status-error hover:border-status-error/30"
+            className="text-text-secondary border-border-default hover:text-status-error hover:border-status-error/30"
           >
             Clear
           </Button>
@@ -666,7 +659,7 @@ function AdvancedSection({
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-1.5 text-xs text-daintree-text/40 hover:text-daintree-text/60 transition-colors"
+        className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
       >
         <ChevronRight
           data-animated-chevron
@@ -676,11 +669,11 @@ function AdvancedSection({
       </button>
       {expanded && (
         <div className="space-y-3">
-          <p className="text-xs text-daintree-text/40">
+          <p className="text-xs text-text-secondary">
             Only needed for legacy user keys (starts with <code className="font-mono">sk-</code>).
           </p>
           <div className="space-y-1.5">
-            <label className="text-sm text-daintree-text/70 flex items-center gap-2">
+            <label className="text-sm text-text-secondary flex items-center gap-2">
               <Shield className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
               Organization ID
             </label>
@@ -691,13 +684,13 @@ function AdvancedSection({
               onBlur={(e) => update({ organizationId: e.target.value.trim() })}
               placeholder={isLegacyKey ? "org-..." : ""}
               disabled={!isLegacyKey}
-              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors disabled:opacity-50"
+              className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors disabled:opacity-50"
               autoComplete="off"
               spellCheck={false}
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm text-daintree-text/70 flex items-center gap-2">
+            <label className="text-sm text-text-secondary flex items-center gap-2">
               <Shield className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
               Project ID
             </label>
@@ -708,7 +701,7 @@ function AdvancedSection({
               onBlur={(e) => update({ projectId: e.target.value.trim() })}
               placeholder={isLegacyKey ? "proj_..." : ""}
               disabled={!isLegacyKey}
-              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors disabled:opacity-50"
+              className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors disabled:opacity-50"
               autoComplete="off"
               spellCheck={false}
             />
@@ -750,7 +743,7 @@ function MicPermissionRow({
           actions: (
             <button
               onClick={onRefresh}
-              className="text-xs text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
+              className="text-xs text-text-secondary hover:text-text-primary transition-colors"
             >
               Re-check
             </button>
@@ -776,14 +769,14 @@ function MicPermissionRow({
             <div className="flex gap-2">
               <button
                 onClick={onOpenSettings}
-                className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline flex items-center gap-1"
+                className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline flex items-center gap-1"
               >
                 Open {settingsLabel}
                 <ExternalLink className="w-3 h-3" />
               </button>
               <button
                 onClick={onRefresh}
-                className="text-xs text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
+                className="text-xs text-text-secondary hover:text-text-primary transition-colors"
               >
                 Re-check
               </button>
@@ -803,7 +796,7 @@ function MicPermissionRow({
                   variant="outline"
                   onClick={onRequest}
                   loading={isRequesting}
-                  className="text-daintree-text border-daintree-border hover:bg-daintree-border"
+                  className="text-text-primary border-border-default hover:bg-border-default"
                 >
                   <Mic className="w-3.5 h-3.5" />
                   Request
@@ -820,7 +813,7 @@ function MicPermissionRow({
           actions: (
             <button
               onClick={onRefresh}
-              className="text-xs text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
+              className="text-xs text-text-secondary hover:text-text-primary transition-colors"
             >
               Re-check
             </button>
@@ -834,14 +827,14 @@ function MicPermissionRow({
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2">
           <Shield className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
-          <span className="text-sm text-daintree-text/70">Microphone</span>
+          <span className="text-sm text-text-secondary">Microphone</span>
           <span className={cn("w-2 h-2 rounded-full shrink-0", statusDisplay.dot)} />
-          <span className="text-xs text-daintree-text/50">{statusDisplay.text}</span>
+          <span className="text-xs text-text-secondary">{statusDisplay.text}</span>
         </div>
         {statusDisplay.actions}
       </div>
       {statusDisplay.description && (
-        <p className="text-xs text-daintree-text/40 ml-[22px]">{statusDisplay.description}</p>
+        <p className="text-xs text-text-secondary ml-[22px]">{statusDisplay.description}</p>
       )}
     </div>
   );
@@ -937,10 +930,10 @@ function DictionarySection({
 }) {
   return (
     <div className="space-y-2">
-      <label className="text-sm text-daintree-text/70 flex items-center gap-2">
+      <label className="text-sm text-text-secondary flex items-center gap-2">
         <BookText className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
         Custom Dictionary
-        <span className="text-xs tabular-nums text-daintree-text/30">
+        <span className="text-xs tabular-nums text-text-placeholder">
           {words.length > 0 && `${words.length}/100`}
         </span>
       </label>
@@ -956,19 +949,19 @@ function DictionarySection({
 
       {suggestedWords.length > 0 && (
         <div className="space-y-1.5">
-          <p className="text-xs text-daintree-text/50">Suggested from corrections</p>
+          <p className="text-xs text-text-secondary">Suggested from corrections</p>
           <div className="flex flex-wrap gap-1.5">
             {suggestedWords.map((entry) => (
               <span
                 key={entry.word}
-                className="inline-flex items-center gap-1.5 rounded-full border border-daintree-border bg-overlay-subtle px-2 py-0.5 text-xs text-daintree-text"
+                className="inline-flex items-center gap-1.5 rounded-full border border-border-default bg-overlay-subtle px-2 py-0.5 text-xs text-text-primary"
                 title={entry.utterance ? `Heard as "${entry.utterance}"` : undefined}
               >
                 {entry.word}
                 <button
                   type="button"
                   onClick={() => onAcceptSuggestion(entry.word)}
-                  className="inline-flex items-center gap-0.5 text-daintree-text/50 hover:text-daintree-text transition-colors"
+                  className="inline-flex items-center gap-0.5 text-text-secondary hover:text-text-primary transition-colors"
                   aria-label={`Add ${entry.word} to dictionary`}
                 >
                   <Plus className="h-3 w-3" />
@@ -1001,14 +994,14 @@ function DictionarySection({
             }
           }}
           placeholder="Add term…"
-          className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
+          className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
         />
         <Button
           onClick={onAdd}
           disabled={!newWord.trim()}
           size="sm"
           variant="outline"
-          className="text-daintree-text border-daintree-border hover:bg-daintree-border"
+          className="text-text-primary border-border-default hover:bg-border-default"
         >
           <Plus className="h-3.5 w-3.5" />
           Add
@@ -1020,7 +1013,7 @@ function DictionarySection({
           {words.map((word) => (
             <span
               key={word}
-              className="inline-flex items-center gap-1 rounded-full border border-daintree-border bg-daintree-bg px-2.5 py-0.5 text-xs text-daintree-text"
+              className="inline-flex items-center gap-1 rounded-full border border-border-default bg-surface-canvas px-2.5 py-0.5 text-xs text-text-primary"
             >
               {word}
               <button
@@ -1035,7 +1028,7 @@ function DictionarySection({
           ))}
         </div>
       ) : (
-        <p className="text-xs text-daintree-text/40 select-text">
+        <p className="text-xs text-text-secondary select-text">
           Domain-specific terms sent to the transcription service to boost recognition accuracy.
         </p>
       )}
@@ -1075,7 +1068,7 @@ function CorePromptViewer() {
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-1.5 text-xs text-daintree-text/40 hover:text-daintree-text/60 transition-colors"
+        className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
       >
         <ChevronRight
           data-animated-chevron
@@ -1084,7 +1077,7 @@ function CorePromptViewer() {
         Inspect core prompt
       </button>
       {expanded && (
-        <pre className="bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-daintree-text/50 whitespace-pre-wrap overflow-y-auto max-h-48 select-text">
+        <pre className="bg-surface-canvas border border-border-default rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-text-secondary whitespace-pre-wrap overflow-y-auto max-h-48 select-text">
           {CORE_CORRECTION_PROMPT}
         </pre>
       )}

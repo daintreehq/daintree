@@ -42,10 +42,12 @@ function IssueOptionRow({ issue, isSelected, isCurrentlyAttached, onClick }: Iss
         onClick={onClick}
         className={cn(
           "w-full text-left px-3 py-2.5 rounded-[var(--radius-md)] transition-colors flex items-start gap-3",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
           isSelected
             ? "bg-overlay-soft border border-border-strong"
-            : "hover:bg-tint/5 border border-transparent",
-          isCurrentlyAttached && "ring-1 ring-status-success/30"
+            : isCurrentlyAttached
+              ? "hover:bg-tint/5 border border-border-default"
+              : "hover:bg-tint/5 border border-transparent"
         )}
       >
         {issue.state === "open" ? (
@@ -55,16 +57,16 @@ function IssueOptionRow({ issue, isSelected, isCurrentlyAttached, onClick }: Iss
         )}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span ref={ref} className="text-sm text-daintree-text truncate">
+            <span ref={ref} className="text-sm text-text-primary truncate">
               {issue.title}
             </span>
             {isCurrentlyAttached && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-success/10 text-status-success shrink-0">
+              <span className="text-3xs px-1.5 py-0.5 rounded border border-border-default bg-overlay-subtle text-text-secondary shrink-0">
                 attached
               </span>
             )}
           </div>
-          <span className="text-xs text-daintree-text/50 font-mono">#{issue.number}</span>
+          <span className="text-xs text-text-secondary font-mono">#{issue.number}</span>
         </div>
       </button>
     </TruncatedTooltip>
@@ -192,7 +194,7 @@ export function IssuePickerDialog({
 
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" maxHeight="max-h-[70vh]">
-      <AppDialog.Header>
+      <AppDialog.Header plainBody>
         <AppDialog.Title icon={<Link className="w-5 h-5 text-pr-open" />}>
           Attach Issue
         </AppDialog.Title>
@@ -209,7 +211,7 @@ export function IssuePickerDialog({
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Search issues by title or number..."
-            className="w-full pl-10 pr-4 py-2 bg-tint/5 border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40"
+            className="w-full pl-10 pr-4 py-2 bg-tint/5 border border-border-default rounded-[var(--radius-md)] text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40"
           />
         </div>
 
@@ -221,8 +223,8 @@ export function IssuePickerDialog({
               className={cn(
                 "px-3 py-1 text-xs rounded-full transition-colors capitalize",
                 stateFilter === state
-                  ? "bg-filter-selected-bg-strong text-daintree-text border border-transparent"
-                  : "border border-transparent text-daintree-text/50 hover:text-daintree-text/80 hover:bg-tint/5"
+                  ? "bg-filter-selected-bg-strong text-text-primary border border-transparent"
+                  : "border border-transparent text-text-secondary hover:text-text-primary hover:bg-tint/5"
               )}
             >
               {state}
@@ -259,7 +261,7 @@ export function IssuePickerDialog({
                 <button
                   type="button"
                   onClick={() => setSearch("")}
-                  className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
+                  className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
                 >
                   Clear search
                 </button>
@@ -290,8 +292,8 @@ export function IssuePickerDialog({
       </div>
 
       {currentIssueNumber && (
-        <AppDialog.Footer>
-          <Button variant="ghost" onClick={handleDetach} className="text-daintree-text/70 mr-auto">
+        <AppDialog.Footer plainBody>
+          <Button variant="ghost" onClick={handleDetach} className="text-text-secondary mr-auto">
             <Unlink className="w-4 h-4 mr-2" />
             Detach Issue
           </Button>

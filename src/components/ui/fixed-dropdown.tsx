@@ -26,6 +26,12 @@ const OVERLAY_RACE_GRACE_MS = 300;
 // caused by portaled overlay content escaping Activity's `display:none`
 // (issue #8001). Default `true` keeps non-keepMounted dropdowns and any
 // tooltip rendered outside a FixedDropdown unaffected.
+/**
+ * Whether the dropdown this subtree belongs to is OPEN — not whether it is
+ * still painted. Under `keepMounted` the two diverge for the exit animation;
+ * consumers that need to close something of their own want the intent, which
+ * is `open`. See the provider below.
+ */
 export const FixedDropdownVisibleContext = React.createContext<boolean>(true);
 
 interface FixedDropdownProps {
@@ -55,13 +61,21 @@ export function FixedDropdown({
   keepMounted = false,
 }: FixedDropdownProps) {
   const [mounted, setMounted] = useState(false);
-  const [position, setPosition] = useState<{ top: number; right: string } | null>(null);
+  const [position, setPosition] = useState<{
+    top: number;
+    right: string;
+    availableHeight: number;
+  } | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   // rAF-coalesce scroll/resize re-positions: a single in-flight frame, latest
   // wins, and `lastPositionRef` diff-gates so an unchanged anchor never fires a
   // redundant React commit (issue #9580). Mirrors `useVerticalScrollShadows`.
   const positionRafRef = useRef<number | null>(null);
-  const lastPositionRef = useRef<{ top: number; right: string } | null>(null);
+  const lastPositionRef = useRef<{
+    top: number;
+    right: string;
+    availableHeight: number;
+  } | null>(null);
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen: open,
     animationDuration: getUiTransitionDuration("exit"),
@@ -109,12 +123,26 @@ export function FixedDropdown({
     if (!anchorRef.current || typeof window === "undefined") return;
     const rect = anchorRef.current.getBoundingClientRect();
     const buttonRightGap = Math.max(window.innerWidth - rect.right, 8);
+    const top = rect.bottom + sideOffset;
     const next = {
-      top: rect.bottom + sideOffset,
+      top,
       right: `max(${buttonRightGap}px, calc(var(--portal-right-offset, 0px) + 8px))`,
+      // The room left between the anchor and the bottom of the viewport, minus
+      // the same gutter used on the other edges. Published as a custom property
+      // so content can cap itself against the space it actually has instead of
+      // a constant — the convention every Radix overlay family in this app
+      // already follows via `--radix-*-content-available-height`. Floored so a
+      // cramped viewport yields a small panel rather than a negative one.
+      availableHeight: Math.max(Math.round(window.innerHeight - top - 8), 120),
     };
     const last = lastPositionRef.current;
-    if (last && last.top === next.top && last.right === next.right) return;
+    if (
+      last &&
+      last.top === next.top &&
+      last.right === next.right &&
+      last.availableHeight === next.availableHeight
+    )
+      return;
     lastPositionRef.current = next;
     setPosition(next);
   }, [anchorRef, sideOffset]);
@@ -217,7 +245,7 @@ export function FixedDropdown({
     <div
       ref={contentRef}
       className={cn(
-        "absolute pointer-events-auto overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-daintree-text",
+        "absolute pointer-events-auto overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-text-primary",
         // Tailwind v4 translate-*/scale-* emit the individual `translate` and
         // `scale` properties, which `transform` in a transition list does NOT
         // cover — list them explicitly or the rise/zoom snaps.
@@ -228,12 +256,15 @@ export function FixedDropdown({
           : "opacity-0 -translate-y-0.5 scale-[0.99]",
         className
       )}
-      style={{
-        top: position.top,
-        right: position.right,
-        transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
-        transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
-      }}
+      style={
+        {
+          top: position.top,
+          right: position.right,
+          "--fixed-dropdown-available-height": `${position.availableHeight}px`,
+          transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+          transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+        } as React.CSSProperties
+      }
     >
       {children}
     </div>
@@ -243,7 +274,16 @@ export function FixedDropdown({
     <div className="fixed inset-0 z-[var(--z-popover)] pointer-events-none">
       {keepMounted ? (
         <Activity mode={shouldRender ? "visible" : "hidden"}>
-          <FixedDropdownVisibleContext.Provider value={shouldRender}>
+          {/* The context carries `open`, NOT `shouldRender`.
+              `shouldRender` stays true for the whole 120ms exit so the
+              close can animate — which is exactly the window in which a
+              descendant needs to have already torn its portaled overlays
+              down. A consumer told "still visible" during the exit either
+              leaves a menu stranded on `document.body`, or races the
+              same-commit flip to hidden, where `<Activity>` defers effect
+              cleanups and the teardown never runs at all. `open` is the
+              intent, and it changes one frame earlier than the presence. */}
+          <FixedDropdownVisibleContext.Provider value={open}>
             {inner}
           </FixedDropdownVisibleContext.Provider>
         </Activity>

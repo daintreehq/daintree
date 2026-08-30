@@ -146,7 +146,7 @@ export function EditorIntegrationTab() {
 
   if (!activeProjectId) {
     return (
-      <div className="p-4 text-sm text-daintree-text/50">
+      <div className="p-4 text-sm text-text-secondary">
         Open a project to configure its editor preference.
       </div>
     );
@@ -161,7 +161,7 @@ export function EditorIntegrationTab() {
       >
         <div className="contents">
           <div className="space-y-1">
-            <label htmlFor={editorId} className="text-xs text-daintree-text/60">
+            <label htmlFor={editorId} className="text-xs text-text-secondary">
               Editor
             </label>
             <div className="flex items-center gap-2">
@@ -169,7 +169,7 @@ export function EditorIntegrationTab() {
                 id={editorId}
                 value={selectedId}
                 onChange={(e) => setSelectedId(e.target.value as KnownEditorId)}
-                className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
+                className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
               >
                 {ORDERED_KNOWN_IDS.map((id) => {
                   const disc = availabilityMap.get(id);
@@ -188,7 +188,7 @@ export function EditorIntegrationTab() {
                     onClick={handleRescan}
                     disabled={isRescanning}
                     aria-label="Re-scan for installed editors"
-                    className="p-2 rounded-[var(--radius-md)] border border-daintree-border hover:bg-tint/5 text-daintree-text/60 hover:text-daintree-text transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                    className="p-2 rounded-[var(--radius-md)] border border-border-default hover:bg-tint/5 text-daintree-text/60 hover:text-text-primary transition-colors disabled:opacity-40 disabled:pointer-events-none"
                   >
                     <SpinningIcon icon={RefreshCw} active={isRescanning} className="w-4 h-4" />
                   </button>
@@ -200,22 +200,20 @@ export function EditorIntegrationTab() {
 
           {selectedId !== "custom" && (
             <div className="space-y-1">
-              <p className="text-xs text-daintree-text/50 select-text">Detected editors:</p>
+              <p className="text-xs text-text-secondary select-text">Detected editors:</p>
               <div className="space-y-1">
                 {discoveredEditors.map((d) => (
-                  <div key={d.id} className="flex items-center gap-2 text-xs text-daintree-text/60">
+                  <div key={d.id} className="flex items-center gap-2 text-xs text-text-secondary">
                     {d.available ? (
-                      <CheckCircle className="w-3.5 h-3.5 text-status-success shrink-0" />
+                      <CheckCircle className="w-3.5 h-3.5 text-daintree-text/60 shrink-0" />
                     ) : (
                       <AlertCircle className="w-3.5 h-3.5 text-daintree-text/30 shrink-0" />
                     )}
-                    <span
-                      className={d.available ? "text-daintree-text/80" : "text-daintree-text/30"}
-                    >
+                    <span className={d.available ? "text-text-primary" : "text-text-placeholder"}>
                       {EDITOR_LABELS[d.id]}
                     </span>
                     {d.executablePath && (
-                      <span className="font-mono text-daintree-text/30 truncate">
+                      <span className="font-mono text-text-placeholder truncate">
                         {d.executablePath}
                       </span>
                     )}
@@ -228,7 +226,7 @@ export function EditorIntegrationTab() {
           {selectedId === "custom" && (
             <div className="space-y-3">
               <div className="space-y-1">
-                <label htmlFor={commandId} className="text-xs text-daintree-text/60">
+                <label htmlFor={commandId} className="text-xs text-text-secondary">
                   Command
                 </label>
                 <input
@@ -237,11 +235,11 @@ export function EditorIntegrationTab() {
                   value={customCommand}
                   onChange={(e) => setCustomCommand(e.target.value)}
                   placeholder="e.g. code, nvim, subl"
-                  className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent/40 transition-colors font-mono"
+                  className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 transition-colors font-mono"
                 />
               </div>
               <div className="space-y-1">
-                <label htmlFor={argsId} className="text-xs text-daintree-text/60">
+                <label htmlFor={argsId} className="text-xs text-text-secondary">
                   Arguments template
                 </label>
                 <input
@@ -250,9 +248,9 @@ export function EditorIntegrationTab() {
                   value={customTemplate}
                   onChange={(e) => setCustomTemplate(e.target.value)}
                   placeholder="{file}:{line}:{col}"
-                  className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent/40 transition-colors font-mono"
+                  className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 transition-colors font-mono"
                 />
-                <p className="text-xs text-daintree-text/40 select-text">
+                <p className="text-xs text-text-secondary select-text">
                   Use <code className="font-mono">{"{file}"}</code>,{" "}
                   <code className="font-mono">{"{line}"}</code>,{" "}
                   <code className="font-mono">{"{col}"}</code> as placeholders.
@@ -265,7 +263,7 @@ export function EditorIntegrationTab() {
             <button
               onClick={handleSave}
               disabled={isSaving || !activeProjectId}
-              className="px-4 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-accent-primary-foreground text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
+              className="px-4 py-2 rounded-[var(--radius-md)] bg-accent-primary text-accent-primary-foreground text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
             >
               {isSaving ? "Saving…" : "Save"}
             </button>
@@ -273,7 +271,7 @@ export function EditorIntegrationTab() {
             <button
               onClick={handleTest}
               disabled={isTesting}
-              className="px-4 py-2 rounded-[var(--radius-md)] border border-daintree-border text-sm text-daintree-text/70 hover:text-daintree-text hover:bg-tint/5 disabled:opacity-50 disabled:pointer-events-none transition-colors flex items-center gap-1.5"
+              className="px-4 py-2 rounded-[var(--radius-md)] border border-border-default text-sm text-text-secondary hover:text-text-primary hover:bg-tint/5 disabled:opacity-50 disabled:pointer-events-none transition-colors flex items-center gap-1.5"
             >
               <ExternalLink className="w-3.5 h-3.5" />
               {isTesting ? "Testing…" : "Test"}
@@ -294,7 +292,7 @@ export function EditorIntegrationTab() {
           {saveError && <p className="text-xs text-status-error">{saveError}</p>}
 
           {preferredEditor && (
-            <p className="text-xs text-daintree-text/40">
+            <p className="text-xs text-text-secondary">
               Saved: <span className="font-medium">{EDITOR_LABELS[preferredEditor.id]}</span>
             </p>
           )}

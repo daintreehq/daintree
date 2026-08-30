@@ -400,7 +400,7 @@ describe("system path-allowlist: tracked worktree roots", () => {
     cleanup();
   });
 
-  it("opens a worktree root that git reports (Reveal in Finder on worktree card)", async () => {
+  it("opens a worktree root that git reports (the worktree card menu's Open ▸ Show in Finder/Explorer/file manager)", async () => {
     gitServiceMock.listWorktrees.mockResolvedValue([
       worktreeRecord(PROJECT_ROOT, { isMainWorktree: true, branch: "develop" }),
       worktreeRecord(UNPREDICTED_WORKTREE),

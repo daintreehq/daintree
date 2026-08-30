@@ -216,7 +216,7 @@ export function useWorktreeActions({
       createElement(
         "span",
         {
-          className: "text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60",
+          className: "text-2xs font-semibold uppercase tracking-wider text-text-secondary",
         },
         hasCommands ? "Commands that will run" : "Teardown commands"
       ),
@@ -224,17 +224,17 @@ export function useWorktreeActions({
         "pre",
         {
           className:
-            "text-xs text-daintree-text/80 bg-daintree-bg/50 p-3 rounded border border-daintree-border font-mono whitespace-pre-wrap break-all",
+            "text-xs text-text-primary bg-daintree-bg/50 p-3 rounded border border-border-default font-mono whitespace-pre-wrap break-all",
         },
         hasCommands ? teardownCommands.join("\n") : "No teardown commands found."
       )
     );
     setConfirmDialog({
       isOpen: true,
-      title: `Teardown resource for '${label}'?`,
+      title: `Tear down resource for '${label}'?`,
       description:
         "This runs the project's resource-teardown commands for this worktree. Tearing down a remote or shared environment may require manual steps to recreate.",
-      confirmLabel: "Teardown resource",
+      confirmLabel: "Tear down resource",
       variant: "destructive",
       children: preview,
       onConfirm: () => {

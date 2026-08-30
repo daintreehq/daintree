@@ -134,7 +134,9 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" dismissible={!isCreating}>
       <AppDialog.Header>
-        <AppDialog.Title icon={<FolderPlus className="h-5 w-5 text-daintree-accent" />}>
+        {/* Neutral, not accent: the header glyph is decoration, and this focus
+            region's one load-bearing accent is the keyboard focus ring. */}
+        <AppDialog.Title icon={<FolderPlus className="h-5 w-5 text-text-secondary" />}>
           Create project folder
         </AppDialog.Title>
         {!isCreating && <AppDialog.CloseButton />}
@@ -214,7 +216,11 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
         <Button variant="outline" onClick={onClose} disabled={isCreating}>
           Cancel
         </Button>
-        <Button onClick={handleCreate} disabled={isCreating || !parentPath || !folderName.trim()}>
+        <Button
+          variant="contrast"
+          onClick={handleCreate}
+          disabled={isCreating || !parentPath || !folderName.trim()}
+        >
           {isCreating ? "Creating…" : "Create folder"}
         </Button>
       </AppDialog.Footer>

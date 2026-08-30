@@ -21,18 +21,18 @@ export function getPatchStats(content: string): { additions: number; deletions: 
 
 export function patchLineClass(line: string): string {
   if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@")) {
-    return "text-daintree-text/40";
+    return "text-text-secondary";
   }
   if (line.startsWith("+")) return "text-status-success bg-status-success/10";
   if (line.startsWith("-")) return "text-status-error bg-status-error/10";
-  return "text-daintree-text/80";
+  return "text-text-primary";
 }
 
 function PatchDiffLines({ content, className }: { content: string; className?: string }) {
   return (
     <pre
       className={cn(
-        "font-mono text-[11px] leading-4 overflow-y-auto overflow-x-auto select-text",
+        "font-mono text-2xs leading-4 overflow-y-auto overflow-x-auto select-text",
         className
       )}
     >
@@ -49,7 +49,7 @@ function PatchDiffPreview({ content }: { content: string }) {
   return (
     <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
       <div className="px-3 py-2 border-b border-tint/[0.08]">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+        <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
           Patch contents
         </span>
       </div>
@@ -67,12 +67,11 @@ interface ArtifactOverlayProps {
 
 const ARTIFACT_TYPE_COLORS: Record<string, string> = {
   code: "border-status-info bg-[color-mix(in_oklab,var(--color-status-info)_10%,transparent)] text-status-info",
-  patch:
-    "border-status-success bg-[color-mix(in_oklab,var(--color-status-success)_10%,transparent)] text-status-success",
+  patch: "border-border-default bg-overlay-subtle text-text-secondary",
   file: "border-state-working bg-[color-mix(in_oklab,var(--color-state-working)_10%,transparent)] text-state-working",
   summary:
     "border-status-warning bg-[color-mix(in_oklab,var(--color-status-warning)_10%,transparent)] text-status-warning",
-  other: "border-daintree-border bg-daintree-sidebar/10 text-daintree-text/60",
+  other: "border-border-default bg-daintree-sidebar/10 text-text-secondary",
 };
 
 const ARTIFACT_TYPE_ICONS: Record<string, string> = {
@@ -166,29 +165,29 @@ function ArtifactItem({
       >
         <div className="flex items-center gap-2 min-w-0">
           <span className={cn("font-mono text-xs shrink-0", colorClass.split(" ")[2])}>{icon}</span>
-          <span className="text-sm text-daintree-text font-medium truncate">{title}</span>
+          <span className="text-sm text-text-primary font-medium truncate">{title}</span>
           {artifact.language && artifact.language !== artifact.type && (
-            <span className="text-xs text-daintree-text/40 shrink-0">{artifact.language}</span>
+            <span className="text-xs text-text-secondary shrink-0">{artifact.language}</span>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className="text-xs text-daintree-text/40">
+          <span className="text-xs text-text-secondary">
             {lineCount} line{lineCount !== 1 ? "s" : ""}
           </span>
-          <span className="text-daintree-text/60">{isExpanded ? "▼" : "▶"}</span>
+          <span className="text-text-secondary">{isExpanded ? "▼" : "▶"}</span>
         </div>
       </button>
 
       {isExpanded && (
         <div className="bg-daintree-bg/50">
           <pre className="font-mono text-xs p-3 overflow-x-auto max-h-32 overflow-y-auto select-text">
-            <code className="text-daintree-text">
+            <code className="text-text-primary">
               {previewLines.join("\n")}
-              {hasMore && <span className="text-daintree-text/40">{"\n"}...</span>}
+              {hasMore && <span className="text-text-secondary">{"\n"}...</span>}
             </code>
           </pre>
 
-          <div className="flex items-center gap-2 px-3 py-2 bg-daintree-sidebar/50 border-t border-daintree-border">
+          <div className="flex items-center gap-2 px-3 py-2 bg-daintree-sidebar/50 border-t border-border-default">
             <button
               onClick={handleCopy}
               disabled={isProcessing}
@@ -205,7 +204,7 @@ function ArtifactItem({
               disabled={isProcessing}
               className={cn(
                 "px-3 py-1 text-xs rounded transition-colors",
-                "bg-daintree-border hover:bg-[color-mix(in_oklab,var(--color-daintree-border)_100%,white_20%)] text-daintree-text",
+                "bg-border-default hover:bg-[color-mix(in_oklab,var(--color-border-default)_100%,white_20%)] text-text-primary",
                 "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
               )}
             >
@@ -220,7 +219,7 @@ function ArtifactItem({
                       disabled={isProcessing || !canApplyPatch}
                       className={cn(
                         "px-3 py-1 text-xs rounded transition-colors",
-                        "bg-status-success hover:brightness-110 text-daintree-bg",
+                        "bg-status-success hover:brightness-110 text-surface-canvas",
                         "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                       )}
                     >
@@ -429,7 +428,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         <button
           onClick={() => setIsExpanded(true)}
           className={cn(
-            "px-3 py-2 rounded-[var(--radius-md)] bg-daintree-bg shadow-[var(--theme-shadow-floating)]",
+            "px-3 py-2 rounded-[var(--radius-md)] bg-surface-canvas shadow-[var(--theme-shadow-floating)]",
             "border border-status-info/30 text-status-info hover:bg-status-info/10",
             "text-sm font-medium transition-colors",
             "flex items-center gap-2"
@@ -443,15 +442,15 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
       ) : (
         <div
           className={cn(
-            "bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-lg)] shadow-[var(--theme-shadow-floating)]",
+            "bg-surface-sidebar border border-border-default rounded-[var(--radius-lg)] shadow-[var(--theme-shadow-floating)]",
             "w-96 max-h-96 flex flex-col overflow-hidden"
           )}
         >
-          <div className="bg-daintree-bg border-b border-daintree-border">
+          <div className="bg-surface-canvas border-b border-border-default">
             <div className="flex items-center justify-between px-4 py-3">
               <div className="flex items-center gap-2">
                 <span className="font-mono text-status-info">{"{ }"}</span>
-                <span className="text-sm font-medium tabular-nums text-daintree-text">
+                <span className="text-sm font-medium tabular-nums text-text-primary">
                   {artifacts.length} Artifact{artifacts.length !== 1 ? "s" : ""}
                 </span>
               </div>
@@ -460,7 +459,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   type="button"
                   onClick={clearArtifacts}
                   disabled={isBulkActionRunning}
-                  className="text-xs text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
+                  className="text-xs text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                   aria-label="Clear all artifacts"
                 >
                   Clear
@@ -473,7 +472,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     setIsExpanded(false);
                   }}
                   disabled={isBulkActionRunning}
-                  className="text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
+                  className="text-daintree-text/40 hover:text-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                   aria-label="Close artifact overlay"
                 >
                   ×
@@ -507,8 +506,8 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                             className={cn(
                               "px-2 py-1 text-xs rounded transition-colors",
                               includeAllTypes
-                                ? "bg-daintree-border text-daintree-text"
-                                : "bg-daintree-sidebar text-daintree-text/60",
+                                ? "bg-border-default text-text-primary"
+                                : "bg-surface-sidebar text-text-secondary",
                               "hover:brightness-110",
                               "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                             )}
@@ -530,7 +529,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     disabled={isBulkActionRunning}
                     className={cn(
                       "px-3 py-1 text-xs rounded transition-colors",
-                      "bg-daintree-border hover:bg-[color-mix(in_oklab,var(--color-daintree-border)_100%,white_20%)] text-daintree-text",
+                      "bg-border-default hover:bg-[color-mix(in_oklab,var(--color-border-default)_100%,white_20%)] text-text-primary",
                       "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                     )}
                   >
@@ -547,7 +546,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                           disabled={isBulkActionRunning || !canApplyAll}
                           className={cn(
                             "px-3 py-1 text-xs rounded transition-colors",
-                            "bg-status-success hover:brightness-110 text-daintree-bg",
+                            "bg-status-success hover:brightness-110 text-surface-canvas",
                             "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                           )}
                         >
@@ -561,7 +560,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   </Tooltip>
                 )}
                 {bulkProgress && (
-                  <span className="text-xs tabular-nums text-daintree-text/60 ml-auto">
+                  <span className="text-xs tabular-nums text-text-secondary ml-auto">
                     {bulkProgress.action === "copy" && "Copying…"}
                     {bulkProgress.action === "save" &&
                       `Saving ${bulkProgress.current}/${bulkProgress.total}…`}
@@ -637,7 +636,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         {pendingBulkPatches && (
           <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
             <div className="px-3 py-2 border-b border-tint/[0.08]">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+              <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
                 Patches to apply
               </span>
             </div>
@@ -649,16 +648,16 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   // open by default; the toggle only tames very long bulk sets.
                   <details key={patch.id} open className="group">
                     <summary className="flex items-baseline gap-2 px-3 py-2 cursor-pointer list-none">
-                      <span className="text-daintree-text/40 text-[10px] shrink-0 group-open:hidden">
+                      <span className="text-daintree-text/40 text-3xs shrink-0 group-open:hidden">
                         ▶
                       </span>
-                      <span className="text-daintree-text/40 text-[10px] shrink-0 hidden group-open:inline">
+                      <span className="text-daintree-text/40 text-3xs shrink-0 hidden group-open:inline">
                         ▼
                       </span>
-                      <span className="text-daintree-text/80 truncate min-w-0">
+                      <span className="text-text-primary truncate min-w-0">
                         {patch.filename || patch.language || "patch"}
                       </span>
-                      <span className="font-mono text-[10px] shrink-0 ml-auto tabular-nums">
+                      <span className="font-mono text-3xs shrink-0 ml-auto tabular-nums">
                         <span className="text-status-success">+{stats.additions}</span>{" "}
                         <span className="text-status-error">-{stats.deletions}</span>
                       </span>

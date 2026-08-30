@@ -61,6 +61,7 @@ interface WorktreeRemovedEvent {
   worktreeId: string;
   epoch: string;
   seq: number;
+  generation?: number;
 }
 
 interface PRDetectedEvent {
@@ -357,8 +358,17 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // anything the restart's seq reset would otherwise have hidden.
         // prevEpoch === "" is the pre-hydration baseline, not a restart.
         const epochChanged = event.epoch !== prevEpoch && prevEpoch !== "";
-        store.getState().applyUpdate(event.worktree, { epoch: event.epoch, seq: event.seq });
+        const applied = store
+          .getState()
+          .applyUpdate(event.worktree, { epoch: event.epoch, seq: event.seq });
         if (epochChanged) fetchInitialState();
+
+        // A rejected event describes a worktree that is NOT in the map — a
+        // stale stamp, a superseded monitor incarnation, or an active removal
+        // tombstone. Resolving the placeholder and running the pending
+        // selection policy anyway is what made the swallowed create silent:
+        // the "Creating…" row vanished with no worktree and no error (#11994).
+        if (!applied) return;
 
         // Side effect: sync pending worktree selection
         const selectionStore = useWorktreeSelectionStore.getState();
@@ -392,7 +402,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        store.getState().applyRemove(event.worktreeId, { epoch: event.epoch, seq: event.seq });
+        store
+          .getState()
+          .applyRemove(event.worktreeId, { epoch: event.epoch, seq: event.seq }, event.generation);
         if (epochChanged) fetchInitialState();
 
         // applyRemove version-gates internally but returns void: a stale

@@ -1,8 +1,9 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { IssueSelector } from "../components/IssueSelector";
 import type { Issue } from "@shared/types/forge";
 
@@ -33,6 +34,24 @@ const mockIssue = (overrides: Partial<Issue> = {}): Issue => ({
   updatedAt: 0,
   rawData: null,
   ...overrides,
+});
+
+// `InlineStatusBanner` (the load-failure banner) reads the reduced-motion query,
+// which jsdom does not implement.
+beforeAll(() => {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
 });
 
 describe("IssueSelector", () => {
@@ -105,7 +124,7 @@ describe("IssueSelector", () => {
     });
 
     // Type to trigger refetch
-    const input = screen.getByPlaceholderText("Search issues...");
+    const input = screen.getByPlaceholderText("Search issues");
     fireEvent.change(input, { target: { value: "bug" } });
 
     // Rows should still be visible, now with palette-results-stale
@@ -154,7 +173,7 @@ describe("IssueSelector", () => {
     await waitFor(() => expect(mockListIssues).toHaveBeenCalledTimes(1));
 
     // Type to trigger second fetch (first hasn't resolved)
-    const input = screen.getByPlaceholderText("Search issues...");
+    const input = screen.getByPlaceholderText("Search issues");
     fireEvent.change(input, { target: { value: "x" } });
 
     // Second fetch is now in-flight. Resolve it first.
@@ -196,7 +215,7 @@ describe("IssueSelector", () => {
     });
 
     // Trigger refetch that will fail
-    const input = screen.getByPlaceholderText("Search issues...");
+    const input = screen.getByPlaceholderText("Search issues");
     fireEvent.change(input, { target: { value: "bug" } });
 
     await act(async () => rejectSecond(new Error("Network error")));
@@ -317,13 +336,13 @@ describe("IssueSelector", () => {
     });
 
     // Type query that returns empty
-    const input = screen.getByPlaceholderText("Search issues...");
+    const input = screen.getByPlaceholderText("Search issues");
     fireEvent.change(input, { target: { value: "nonexistent" } });
 
     await act(async () => resolveSecond({ items: [] }));
 
     await waitFor(() => {
-      expect(screen.getByText("No issues found")).toBeDefined();
+      expect(screen.getByText('No matches for "nonexistent"')).toBeDefined();
     });
   });
 
@@ -371,5 +390,180 @@ describe("IssueSelector", () => {
     await waitFor(() => {
       expect(screen.getByText("No open issues")).toBeDefined();
     });
+  });
+  it("focuses the search field on open, so typing lands in it", async () => {
+    mockListIssues.mockResolvedValue({ items: [] });
+
+    render(<IssueSelector {...defaultProps} />);
+    fireEvent.click(screen.getByRole("combobox"));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByPlaceholderText("Search issues"));
+    });
+  });
+
+  it("moves a cursor with the arrow keys and commits the cursor row on Enter", async () => {
+    const onSelect = vi.fn();
+    mockListIssues.mockResolvedValue({
+      items: [mockIssue({ number: 1, title: "First" }), mockIssue({ number: 2, title: "Second" })],
+    });
+
+    render(<IssueSelector {...defaultProps} onSelect={onSelect} />);
+    fireEvent.click(screen.getByRole("combobox"));
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(2));
+
+    const input = screen.getByPlaceholderText("Search issues");
+    expect(screen.getAllByRole("option")[0]?.getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    await waitFor(() => {
+      expect(screen.getAllByRole("option")[1]?.getAttribute("aria-selected")).toBe("true");
+    });
+    expect(input.getAttribute("aria-activedescendant")).toBe("issue-option-1");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ number: 2 }));
+  });
+
+  it("wraps the cursor rather than stopping at the ends", async () => {
+    mockListIssues.mockResolvedValue({
+      items: [mockIssue({ number: 1 }), mockIssue({ number: 2 }), mockIssue({ number: 3 })],
+    });
+
+    render(<IssueSelector {...defaultProps} />);
+    fireEvent.click(screen.getByRole("combobox"));
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3));
+
+    const input = screen.getByPlaceholderText("Search issues");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    await waitFor(() => {
+      expect(screen.getAllByRole("option")[2]?.getAttribute("aria-selected")).toBe("true");
+    });
+  });
+
+  it("keeps the clear affordance out of the trigger button", async () => {
+    render(
+      <TooltipProvider>
+        <IssueSelector {...defaultProps} selectedIssue={mockIssue({ number: 7 })} />
+      </TooltipProvider>
+    );
+
+    const clear = screen.getByRole("button", { name: "Clear the linked issue" });
+    expect(screen.getByRole("combobox").contains(clear)).toBe(false);
+
+    fireEvent.click(clear);
+    expect(defaultProps.onSelect).toHaveBeenCalledWith(null);
+  });
+  it("says the load failed instead of claiming the repo has no open issues", async () => {
+    let rejectFirst!: (reason: Error) => void;
+    mockListIssues.mockReturnValueOnce(
+      new Promise((_, reject) => {
+        rejectFirst = reject;
+      })
+    );
+
+    render(<IssueSelector {...defaultProps} />);
+    fireEvent.click(screen.getByRole("combobox"));
+
+    await act(async () => rejectFirst(new Error("Network error")));
+
+    await waitFor(() => {
+      expect(screen.getByText("Couldn't load issues")).toBeDefined();
+    });
+    expect(screen.queryByText("No open issues")).toBeNull();
+
+    // And Retry actually refetches rather than only clearing the banner.
+    let resolveRetry!: (value: { items: Issue[] }) => void;
+    mockListIssues.mockReturnValueOnce(
+      new Promise((r) => {
+        resolveRetry = r;
+      })
+    );
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    await act(async () => resolveRetry({ items: [mockIssue({ title: "Back online" })] }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /Back online/i })).toBeDefined();
+    });
+    expect(screen.queryByText("Couldn't load issues")).toBeNull();
+  });
+
+  it("flags a failed refetch rather than leaving the previous rows looking current", async () => {
+    let resolveFirst!: (value: { items: Issue[] }) => void;
+    let rejectSecond!: (reason: Error) => void;
+    mockListIssues
+      .mockReturnValueOnce(
+        new Promise((r) => {
+          resolveFirst = r;
+        })
+      )
+      .mockReturnValueOnce(
+        new Promise((_, reject) => {
+          rejectSecond = reject;
+        })
+      );
+
+    render(<IssueSelector {...defaultProps} />);
+    fireEvent.click(screen.getByRole("combobox"));
+    await act(async () => resolveFirst({ items: [mockIssue({ title: "Loaded earlier" })] }));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: /Loaded earlier/i })).toBeDefined()
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Search issues"), { target: { value: "bug" } });
+    await act(async () => rejectSecond(new Error("Network error")));
+
+    await waitFor(() => {
+      expect(screen.getByText("Couldn't load issues")).toBeDefined();
+    });
+    // The rows that did load stay — they are real issues — but the panel no
+    // longer presents them as the answer to the query just typed.
+    expect(screen.getByRole("option", { name: /Loaded earlier/i })).toBeDefined();
+  });
+
+  it("rewinds the cursor when a new query replaces the result set", async () => {
+    mockListIssues.mockResolvedValueOnce({
+      items: [1, 2, 3, 4, 5].map((n) => mockIssue({ number: n, title: `Issue ${n}` })),
+    });
+
+    render(<IssueSelector {...defaultProps} />);
+    fireEvent.click(screen.getByRole("combobox"));
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(5));
+
+    const input = screen.getByPlaceholderText("Search issues");
+    fireEvent.keyDown(input, { key: "End" });
+    await waitFor(() => {
+      expect(screen.getAllByRole("option")[4]?.getAttribute("aria-selected")).toBe("true");
+    });
+
+    // One match, then the same five back. A cursor that was only clamped rather
+    // than rewound would resurface on issue 5 instead of returning to the top.
+    mockListIssues.mockResolvedValueOnce({ items: [mockIssue({ number: 9, title: "Only hit" })] });
+    fireEvent.change(input, { target: { value: "only" } });
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(1));
+
+    mockListIssues.mockResolvedValueOnce({
+      items: [1, 2, 3, 4, 5].map((n) => mockIssue({ number: n, title: `Issue ${n}` })),
+    });
+    fireEvent.change(input, { target: { value: "" } });
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(5));
+
+    expect(screen.getAllByRole("option")[0]?.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("leaves a modified Enter to the dialog's submit shortcut", async () => {
+    const onSelect = vi.fn();
+    mockListIssues.mockResolvedValue({ items: [mockIssue({ number: 1 })] });
+
+    render(<IssueSelector {...defaultProps} onSelect={onSelect} />);
+    fireEvent.click(screen.getByRole("combobox"));
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByPlaceholderText("Search issues"), {
+      key: "Enter",
+      metaKey: true,
+    });
+
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

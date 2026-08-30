@@ -36,7 +36,13 @@ export const OPEN_WINDOWS_MANIFEST_VERSION = 1;
 export const MAX_RESTORED_WINDOWS = 8;
 
 export interface OpenWindowRecord {
-  /** Stable project id, or null for a window on the project picker. */
+  /**
+   * Stable workspace id — a project id or a scratch id — or null for a window
+   * on the project picker. The two kinds are disjoint id spaces, so one opaque
+   * field carries both and the shape tells the reader which table to validate
+   * it against (#11958). The wire key stays `projectId`: renaming it would make
+   * every stored manifest unreadable for a purely cosmetic gain.
+   */
   projectId: string | null;
 }
 
@@ -133,17 +139,20 @@ export function serializeOpenWindowsManifest(records: OpenWindowRecord[]): strin
 }
 
 /**
- * Drop records whose project no longer exists, keeping picker windows.
+ * Drop records whose workspace no longer exists, keeping picker windows.
  *
  * Skipping is deliberate and matches VS Code: a deleted project must never be
  * silently replaced by a different one, and it must not stop the surviving
  * windows from restoring.
+ *
+ * `existingWorkspaceIds` spans both kinds — live projects and live scratches.
+ * A set built from `projects` alone reads every scratch as deleted (#11958).
  */
 export function filterRestorableWindows(
   records: OpenWindowRecord[],
-  existingProjectIds: ReadonlySet<string>
+  existingWorkspaceIds: ReadonlySet<string>
 ): OpenWindowRecord[] {
   return records.filter(
-    (record) => record.projectId === null || existingProjectIds.has(record.projectId)
+    (record) => record.projectId === null || existingWorkspaceIds.has(record.projectId)
   );
 }

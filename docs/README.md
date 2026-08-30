@@ -2,7 +2,7 @@
 
 Human-facing reference for the Daintree IDE's internals. This is the entry point for `docs/`.
 
-For the day-to-day agent rules (accent restraint, motion timing, destructive-action tiers, notify() usage), see the root [`CLAUDE.md`](../CLAUDE.md). That file is the working contract Claude operates under; `docs/` is the long-form reference a human reads. Where `CLAUDE.md` carries an abbreviated ladder, the matching `docs/` file owns the full rationale and the per-item audit — when the two drift, the code wins and `CLAUDE.md` should be corrected.
+The agent-facing working contract is the root [`CLAUDE.md`](../CLAUDE.md) plus the path-scoped rules in `.claude/rules/`, which load when an agent touches matching files — the day-to-day design rules (accent restraint, motion timing, destructive-action tiers, notify() usage) live in `.claude/rules/design-system.md` and `.claude/rules/user-signals.md`. `docs/` is the long-form reference a human reads. Where an agent rule carries an abbreviated ladder, the matching `docs/` file owns the full rationale and the per-item audit — when the two drift, the code wins and the agent rule should be corrected.
 
 ## Start here
 
@@ -11,7 +11,7 @@ New contributor reading order:
 1. [vision.md](./vision.md) — what Daintree is and the workflow it serves.
 2. [development.md](./development.md) — commands, IPC pattern, debugging, the two-box on-ramp.
 3. [architecture/process-and-window-model.md](./architecture/process-and-window-model.md) — the real multi-process topology behind that on-ramp.
-4. [architecture/state-management.md](./architecture/state-management.md) — how the renderer's ~100 stores fit together.
+4. [architecture/state-management.md](./architecture/state-management.md) — how the renderer's ~110 stores fit together.
 5. [architecture/action-system.md](./architecture/action-system.md) — the central dispatch layer most features touch.
 
 From there, follow the architecture doc nearest the surface you're changing. Each doc cross-links its neighbours.
@@ -36,6 +36,7 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 | [action-system.md](./architecture/action-system.md) | Central typed dispatch for menus, keybindings, context menus, and agent automation. |
 | [mcp-server.md](./architecture/mcp-server.md) | The local MCP HTTP server that lets agents drive the IDE via built-in actions — including how to connect an external client. |
 | [mcp-context-condensation.md](./architecture/mcp-context-condensation.md) | Authoring standard and CI budgets for the prose and schemas the MCP surface sends a model every turn. |
+| [assistant-native-host.md](./architecture/assistant-native-host.md) | The structured `utilityProcess` boundary for the Daintree Assistant runtime — contract defined, runtime deferred. |
 | [notification-system.md](./architecture/notification-system.md) | How a runtime signal reaches the user — the five-surface taxonomy and routing machinery. |
 | [destructive-action-safeguards.md](./architecture/destructive-action-safeguards.md) | Living per-action audit and rubric for destructive UI surfaces. |
 | [dev-preview-event-routing.md](./architecture/dev-preview-event-routing.md) | Per-event routing audit for dev-preview lifecycle signals. |
@@ -67,6 +68,8 @@ The plugin sub-index links onward to getting-started, manifest reference, contri
 | [themes/theme-tokens.md](./themes/theme-tokens.md) | Complete semantic token reference; every theme must provide all tokens. |
 | [themes/visual-guide.md](./themes/visual-guide.md) | Maps tokens to what the user sees, surface by surface — evaluate themes without running the app. |
 | [themes/interaction-state-recipes.md](./themes/interaction-state-recipes.md) | Canonical Tailwind class strings per interactive component role. |
+| [themes/component-contract.md](./themes/component-contract.md) | Which primitive, which colour vocabulary, which scale — and the rules enforcing each. |
+| [themes/status-success-policy.md](./themes/status-success-policy.md) | When green is allowed to stand, when it goes neutral, and the occurrence-level guard holding the line. |
 
 ## Distribution
 
@@ -82,7 +85,6 @@ The plugin sub-index links onward to getting-started, manifest reference, contri
 | --- | --- |
 | [e2e-testing.md](./e2e-testing.md) | Playwright E2E setup, buckets, and how to run a single spec. |
 | [activity-testing.md](./activity-testing.md) | Manual verification process for agent activity (working/waiting) accuracy. |
-| [testing-gap-backlog.md](./testing-gap-backlog.md) | Prioritized files still needing heavier adversarial testing. |
 
 ## Brand & vision
 

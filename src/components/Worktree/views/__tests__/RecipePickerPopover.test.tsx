@@ -33,18 +33,17 @@ function renderPicker(recipes: TerminalRecipe[], props?: { defaultRecipeId?: str
       onOpenChange={vi.fn()}
       onSelectRecipe={vi.fn()}
       onMarkTouched={vi.fn()}
-      label="Starting layout"
       listId="recipe-list"
       {...props}
     />
   );
 }
 
-/** The rows for real recipes, minus the fixed "Clone current layout" / "Empty" entries. */
+/** The rows for real recipes, minus the fixed "Clone current layout" / "No recipe" entries. */
 function recipeRows() {
   return within(screen.getByRole("listbox"))
     .getAllByRole("option")
-    .filter((row) => !/Clone current layout|^Empty$/.test(row.textContent ?? ""));
+    .filter((row) => row.getAttribute("data-option-kind") === "recipe");
 }
 
 afterEach(cleanup);
@@ -91,7 +90,6 @@ describe("RecipePickerPopover — scope indicator (#11510)", () => {
         onOpenChange={vi.fn()}
         onSelectRecipe={onSelectRecipe}
         onMarkTouched={vi.fn()}
-        label="Starting layout"
         listId="recipe-list"
       />
     );
@@ -115,5 +113,118 @@ describe("RecipePickerPopover — scope indicator (#11510)", () => {
     const labels = recipeRows().map((row) => row.textContent ?? "");
     expect(labels.filter((t) => t.includes("(default)"))).toHaveLength(1);
     expect(labels[1]).toContain("(default)");
+  });
+});
+
+describe("RecipePickerPopover — keyboard", () => {
+  function renderOpen(overrides: Partial<React.ComponentProps<typeof RecipePickerPopover>> = {}) {
+    const props = {
+      recipes: [makeRecipe({ id: "a", name: "Alpha" }), makeRecipe({ id: "b", name: "Beta" })],
+      selectedRecipeId: null,
+      selectedRecipe: undefined,
+      open: true,
+      onOpenChange: vi.fn(),
+      onSelectRecipe: vi.fn(),
+      onMarkTouched: vi.fn(),
+      listId: "recipe-list",
+      ...overrides,
+    };
+    render(<RecipePickerPopover {...props} />);
+    return props;
+  }
+
+  /** The one row the cursor is on. Fails loudly if the list ever lights two. */
+  function cursorRow() {
+    const lit = within(screen.getByRole("listbox"))
+      .getAllByRole("option")
+      .filter((row) => row.getAttribute("aria-selected") === "true");
+    expect(lit).toHaveLength(1);
+    return lit[0]!;
+  }
+
+  /** The cursor row's position among all rows — the fact the assertions care about. */
+  function cursorIndex() {
+    const rows = within(screen.getByRole("listbox")).getAllByRole("option");
+    return rows.indexOf(cursorRow());
+  }
+
+  it("drives the list from the trigger rather than making every row a tab stop", () => {
+    renderOpen();
+
+    const rows = within(screen.getByRole("listbox")).getAllByRole("option");
+    expect(rows.some((row) => row.hasAttribute("tabindex"))).toBe(false);
+    // The announcement and the highlight are one fact, whatever the id scheme.
+    expect(screen.getByRole("combobox").getAttribute("aria-activedescendant")).toBe(cursorRow().id);
+  });
+
+  it("moves the cursor with the arrow keys and commits it on Enter", () => {
+    const props = renderOpen();
+    const trigger = screen.getByRole("combobox");
+
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(cursorIndex()).toBe(2);
+    expect(trigger.getAttribute("aria-activedescendant")).toBe(cursorRow().id);
+
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    // Row 2 is the first real recipe — the two fixed rows lead the list.
+    expect(props.onSelectRecipe).toHaveBeenCalledWith("a");
+    expect(props.onMarkTouched).toHaveBeenCalled();
+  });
+
+  it("jumps to the ends with Home and End", () => {
+    renderOpen();
+    const trigger = screen.getByRole("combobox");
+    const rowCount = within(screen.getByRole("listbox")).getAllByRole("option").length;
+
+    fireEvent.keyDown(trigger, { key: "End" });
+    expect(cursorIndex()).toBe(rowCount - 1);
+
+    fireEvent.keyDown(trigger, { key: "Home" });
+    expect(cursorIndex()).toBe(0);
+  });
+
+  it("leaves a modified Enter to the dialog's submit shortcut", () => {
+    const props = renderOpen();
+
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", metaKey: true });
+
+    expect(props.onSelectRecipe).not.toHaveBeenCalled();
+    expect(props.onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("closes on Escape without letting it reach the dialog behind the popover", () => {
+    const props = renderOpen();
+    const trigger = screen.getByRole("combobox");
+
+    // The popover portals out of the dialog that logically contains it, so an
+    // Escape left to bubble would dismiss the dialog as well as the list.
+    const reachedDocument = vi.fn();
+    document.addEventListener("keydown", reachedDocument);
+    try {
+      fireEvent.keyDown(trigger, { key: "Escape" });
+    } finally {
+      document.removeEventListener("keydown", reachedDocument);
+    }
+
+    expect(props.onOpenChange).toHaveBeenCalledWith(false);
+    expect(reachedDocument).not.toHaveBeenCalled();
+  });
+
+  it("opens on ArrowDown when closed", () => {
+    const props = renderOpen({ open: false });
+
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+    expect(props.onOpenChange).toHaveBeenCalledWith(true);
+  });
+
+  it("marks the committed recipe with aria-current, leaving aria-selected to the cursor", () => {
+    renderOpen({ selectedRecipeId: "b" });
+
+    const rows = within(screen.getByRole("listbox")).getAllByRole("option");
+    const current = rows.filter((row) => row.getAttribute("aria-current") === "true");
+    expect(current).toHaveLength(1);
+    expect(current[0]?.textContent).toContain("Beta");
+    expect(rows.filter((row) => row.getAttribute("aria-selected") === "true")).toHaveLength(1);
   });
 });

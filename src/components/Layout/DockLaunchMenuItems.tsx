@@ -129,7 +129,7 @@ export function DockLaunchMenuItems({
     >
       <Workflow className="w-3.5 h-3.5 mr-2 shrink-0" />
       <span className="truncate">{item.name}</span>
-      <span className="ml-auto pl-2 text-[11px] text-text-muted shrink-0">
+      <span className="ml-auto pl-2 text-2xs text-text-muted shrink-0">
         {item.isShadowed ? `${item.scopeLabel} · Overridden by Team` : item.scopeLabel}
       </span>
     </C.Item>

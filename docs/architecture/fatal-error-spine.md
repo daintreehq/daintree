@@ -65,7 +65,7 @@ The `BrowserWindow.on("session-end")` event maps to Win32's `WM_ENDSESSION` and 
 
 Registered in `registerGlobalErrorHandlers` (`electron/setup/globalErrorHandlers.ts`).
 
-**`uncaughtException`** (`globalErrorHandlers.ts:56-121`) — the process is about to die:
+**`uncaughtException`** (`globalErrorHandlers.ts`) — the process is about to die:
 
 1. `emergencyLogMainFatal()` writes a synchronous crash dump to disk (best-effort).
 2. `CrashRecoveryService.recordCrash(error)` writes the marker _with_ crash metadata so the next launch can show details.
@@ -76,7 +76,7 @@ Registered in `registerGlobalErrorHandlers` (`electron/setup/globalErrorHandlers
 
 A re-entrant fatal (a second crash during the first crash handler) skips the telemetry drain and exits synchronously — a second crash mid-flush should not wait another 2 seconds.
 
-**`unhandledRejection`** (`globalErrorHandlers.ts:123-150`) — the app **keeps running**:
+**`unhandledRejection`** (`globalErrorHandlers.ts`) — the app **keeps running**:
 
 - Logs, persists the error, and notifies the renderer.
 - Deliberately does **NOT** call `recordCrash()`. Writing a marker here would poison every subsequent clean `Cmd-Q` on the next launch into looking like a crash. Only `uncaughtException` — which terminates the process — marks the crash.

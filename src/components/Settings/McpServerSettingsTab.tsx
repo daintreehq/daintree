@@ -3,7 +3,6 @@ import {
   Copy,
   Check,
   AlertCircle,
-  Key,
   Hash,
   Shield,
   Eye,
@@ -606,7 +605,7 @@ export function McpServerSettingsTab() {
       />
 
       {!status.enabled && !loading && !error && (
-        <div className="border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+        <div className="border border-dashed border-border-default rounded-[var(--radius-md)]">
           <EmptyState
             variant="zero-data"
             scale="canvas"
@@ -632,12 +631,12 @@ export function McpServerSettingsTab() {
           >
             {loading ? (
               showInlineLoading ? (
-                <p className="text-xs text-daintree-text/50">Loading…</p>
+                <p className="text-xs text-text-secondary">Loading…</p>
               ) : null
             ) : runtimeSnapshot.state === "starting" ? (
               <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-daintree-text/30 shrink-0" />
-                <span className="text-xs text-daintree-text/60">Server is starting…</span>
+                <div className="status-mark w-2 h-2 rounded-full bg-daintree-text/30 shrink-0" />
+                <span className="text-xs text-text-secondary">Server is starting…</span>
               </div>
             ) : runtimeSnapshot.state === "failed" ? (
               <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
@@ -650,11 +649,11 @@ export function McpServerSettingsTab() {
             ) : (
               <div className="contents">
                 <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-status-success shrink-0" />
-                  <span className="text-xs text-daintree-text/60">Running on port {boundPort}</span>
+                  <div className="status-mark w-2 h-2 rounded-full bg-activity-working shrink-0" />
+                  <span className="text-xs text-text-secondary">Running on port {boundPort}</span>
                 </div>
 
-                <div className="flex items-center gap-2 p-2.5 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border font-mono text-xs text-daintree-text/80 select-all">
+                <div className="flex items-center gap-2 p-2.5 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default font-mono text-xs text-text-primary select-all">
                   {clientConfig.url}
                 </div>
 
@@ -676,10 +675,10 @@ export function McpServerSettingsTab() {
                     onClick={handleCopyConfig}
                     className={cn(
                       "flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
-                      "border border-daintree-border hover:bg-overlay-soft",
+                      "border border-border-default hover:bg-overlay-soft",
                       copiedTarget === "plain"
                         ? "text-status-success border-status-success/30"
-                        : "text-daintree-text/70 hover:text-daintree-text"
+                        : "text-text-secondary hover:text-text-primary"
                     )}
                   >
                     {copiedTarget === "plain" ? (
@@ -695,10 +694,10 @@ export function McpServerSettingsTab() {
                       onClick={handleCopyScopedConfig}
                       className={cn(
                         "flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
-                        "border border-daintree-border hover:bg-overlay-soft",
+                        "border border-border-default hover:bg-overlay-soft",
                         copiedTarget === "scoped"
                           ? "text-status-success border-status-success/30"
-                          : "text-daintree-text/70 hover:text-daintree-text"
+                          : "text-text-secondary hover:text-text-primary"
                       )}
                     >
                       {copiedTarget === "scoped" ? (
@@ -712,7 +711,7 @@ export function McpServerSettingsTab() {
                 </div>
 
                 {viewWorkspaceId ? (
-                  <p className="text-xs text-daintree-text/50 leading-relaxed select-text">
+                  <p className="text-xs text-text-secondary leading-relaxed select-text">
                     A project-scoped config pins that client to this project, so its calls keep
                     landing here whichever window you're looking at. The plain config follows
                     whichever Daintree window you focused last.
@@ -720,19 +719,19 @@ export function McpServerSettingsTab() {
                 ) : null}
 
                 {status.apiKey ? (
-                  <p className="text-xs text-daintree-text/50 leading-relaxed select-text">
+                  <p className="text-xs text-text-secondary leading-relaxed select-text">
                     The copied config carries your API key, so treat it like a password — rotating
                     the key below cuts off any client still holding an older copy.
                   </p>
                 ) : null}
 
                 {activeBearers.length > 0 && (
-                  <div className="rounded-[var(--radius-md)] border border-daintree-border overflow-hidden">
+                  <div className="rounded-[var(--radius-md)] border border-border-default overflow-hidden">
                     <button
                       type="button"
                       onClick={() => setBearersExpanded((v) => !v)}
                       aria-expanded={bearersExpanded}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+                      className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
                     >
                       <ChevronRight
                         data-animated-chevron
@@ -746,14 +745,14 @@ export function McpServerSettingsTab() {
                     </button>
 
                     {bearersExpanded && (
-                      <ul className="border-t border-daintree-border divide-y divide-daintree-border">
+                      <ul className="border-t border-border-default divide-y divide-border-default">
                         {activeBearers.map((bearer) => (
                           <li key={bearer.tokenHash} className="flex items-center gap-3 px-3 py-2">
                             <div className="min-w-0 flex-1">
-                              <div className="truncate text-xs text-daintree-text/80">
+                              <div className="truncate text-xs text-text-primary">
                                 {bearer.userAgent}
                               </div>
-                              <div className="text-[11px] text-daintree-text/50">
+                              <div className="text-2xs text-text-secondary">
                                 <span className="font-mono">…{bearer.token4LastChars}</span>
                                 {" · "}
                                 {bearer.requestsSinceLaunch}{" "}
@@ -766,7 +765,7 @@ export function McpServerSettingsTab() {
                               type="button"
                               onClick={() => void handleDisconnectBearer(bearer.tokenHash)}
                               disabled={disconnectingHash !== null}
-                              className="shrink-0 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                              className="shrink-0 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                             >
                               {disconnectingHash === bearer.tokenHash
                                 ? "Disconnecting…"
@@ -780,12 +779,12 @@ export function McpServerSettingsTab() {
                 )}
 
                 {helpSessionBearers.length > 0 && (
-                  <div className="rounded-[var(--radius-md)] border border-daintree-border overflow-hidden">
+                  <div className="rounded-[var(--radius-md)] border border-border-default overflow-hidden">
                     <button
                       type="button"
                       onClick={() => setHelpBearersExpanded((v) => !v)}
                       aria-expanded={helpBearersExpanded}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+                      className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
                     >
                       <ChevronRight
                         data-animated-chevron
@@ -799,17 +798,17 @@ export function McpServerSettingsTab() {
                     </button>
 
                     {helpBearersExpanded && (
-                      <ul className="border-t border-daintree-border divide-y divide-daintree-border">
+                      <ul className="border-t border-border-default divide-y divide-border-default">
                         {helpSessionBearers.map((bearer, i) => (
                           <li
                             key={`${bearer.userAgent}-${i}`}
                             className="flex items-center gap-3 px-3 py-2"
                           >
                             <div className="min-w-0 flex-1">
-                              <div className="truncate text-xs text-daintree-text/80">
+                              <div className="truncate text-xs text-text-primary">
                                 {bearer.userAgent}
                               </div>
-                              <div className="text-[11px] text-daintree-text/50">
+                              <div className="text-2xs text-text-secondary">
                                 {bearer.sessionCount}{" "}
                                 {bearer.sessionCount === 1 ? "session" : "sessions"}
                                 {" · "}
@@ -850,7 +849,7 @@ export function McpServerSettingsTab() {
                 }}
                 placeholder="45454"
                 aria-label="MCP server port"
-                className="w-40 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-sm text-daintree-text placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                className="w-40 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-sm text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
               />
               <button
                 onClick={handlePortSave}
@@ -858,10 +857,10 @@ export function McpServerSettingsTab() {
                 aria-label="Apply port"
                 className={cn(
                   "px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] transition-colors",
-                  "border border-daintree-border",
+                  "border border-border-default",
                   portInput.trim() === (status.configuredPort?.toString() ?? "")
-                    ? "text-daintree-text/30 cursor-not-allowed"
-                    : "text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+                    ? "text-text-placeholder cursor-not-allowed"
+                    : "text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
                 )}
               >
                 Apply
@@ -882,13 +881,8 @@ export function McpServerSettingsTab() {
           >
             {status.apiKey ? (
               <div className="contents">
-                <div className="flex items-center gap-1.5 text-xs text-status-success">
-                  <Key className="w-3 h-3" />
-                  API key active — clients must send an Authorization header
-                </div>
-
                 <div className="flex items-center gap-2">
-                  <div className="flex-1 flex items-center gap-2 rounded-[var(--radius-md)] bg-surface-disabled border border-daintree-border px-3 py-2 font-mono text-xs text-daintree-text/80 select-all">
+                  <div className="flex-1 flex items-center gap-2 rounded-[var(--radius-md)] bg-surface-disabled border border-border-default px-3 py-2 font-mono text-xs text-text-primary select-all">
                     <span className="flex-1 truncate">
                       {showApiKey ? status.apiKey : MASKED_KEY}
                     </span>
@@ -910,10 +904,10 @@ export function McpServerSettingsTab() {
                     onClick={handleCopyApiKey}
                     className={cn(
                       "flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] transition-colors",
-                      "border border-daintree-border hover:bg-overlay-soft",
+                      "border border-border-default hover:bg-overlay-soft",
                       copiedKey
                         ? "text-status-success border-status-success/30"
-                        : "text-daintree-text/70 hover:text-daintree-text"
+                        : "text-text-secondary hover:text-text-primary"
                     )}
                     aria-label="Copy API key"
                   >
@@ -927,7 +921,7 @@ export function McpServerSettingsTab() {
                   <button
                     onClick={() => setShowRotateConfirm(true)}
                     disabled={!apiKeySuffix}
-                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-daintree-text/70"
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-text-secondary"
                     title={apiKeySuffix ? "Rotate API key" : "Waiting for the MCP key to load…"}
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
@@ -937,9 +931,9 @@ export function McpServerSettingsTab() {
               </div>
             ) : (
               <div className="contents">
-                <div className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border">
-                  <div className="w-2 h-2 rounded-full bg-daintree-text/30" />
-                  <span className="text-xs text-daintree-text/60">
+                <div className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default">
+                  <div className="status-mark w-2 h-2 rounded-full bg-daintree-text/30" />
+                  <span className="text-xs text-text-secondary">
                     Key will be generated when the server starts.
                   </span>
                 </div>
@@ -966,7 +960,7 @@ export function McpServerSettingsTab() {
               />
 
               <div className="flex flex-wrap items-center gap-2">
-                <label htmlFor="mcp-audit-max-records" className="text-xs text-daintree-text/60">
+                <label htmlFor="mcp-audit-max-records" className="text-xs text-text-secondary">
                   Max records
                 </label>
                 <input
@@ -980,7 +974,7 @@ export function McpServerSettingsTab() {
                     if (e.key === "Enter") void handleMaxRecordsSave();
                   }}
                   placeholder={MCP_AUDIT_DEFAULT_MAX_RECORDS.toString()}
-                  className="w-24 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  className="w-24 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 />
                 <button
                   type="button"
@@ -989,15 +983,15 @@ export function McpServerSettingsTab() {
                   aria-label="Apply max records"
                   className={cn(
                     "px-3 py-1 text-xs font-medium rounded-[var(--radius-md)] transition-colors",
-                    "border border-daintree-border",
+                    "border border-border-default",
                     maxRecordsInput === auditMaxRecords.toString()
-                      ? "text-daintree-text/30 cursor-not-allowed"
-                      : "text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+                      ? "text-text-placeholder cursor-not-allowed"
+                      : "text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
                   )}
                 >
                   Apply
                 </button>
-                <span className="text-xs text-daintree-text/40">
+                <span className="text-xs text-text-secondary">
                   Range {MCP_AUDIT_MIN_RECORDS}–{MCP_AUDIT_MAX_RECORDS}
                 </span>
               </div>
@@ -1057,12 +1051,12 @@ export function McpServerSettingsTab() {
           {disableClients.map((client) => (
             <li
               key={client.sessionId}
-              className="flex items-center justify-between gap-3 p-2 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border"
+              className="flex items-center justify-between gap-3 p-2 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default"
             >
-              <span className="text-xs text-daintree-text/80 truncate">
+              <span className="text-xs text-text-primary truncate">
                 {client.userAgent ?? "Unknown client"}
               </span>
-              <span className="text-[11px] text-daintree-text/50 shrink-0">
+              <span className="text-2xs text-text-secondary shrink-0">
                 connected {formatRelativeTime(client.connectedAtMs)}
               </span>
             </li>

@@ -45,7 +45,7 @@ const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string
   ignored: {
     label: "I",
     bg: "bg-tint/[0.06]",
-    text: "text-daintree-text/40",
+    text: "text-text-secondary",
   },
   conflicted: {
     label: "!",
@@ -162,7 +162,7 @@ function FileStageRowComponent({
       className={cn(
         "relative group/stagerow flex items-center text-xs rounded px-1.5 transition-colors",
         density === "compact" ? "py-0.5" : "py-1.5",
-        isStaged ? "bg-status-success/[0.06] hover:bg-status-success/[0.10]" : "hover:bg-tint/5",
+        isStaged ? "bg-overlay-subtle hover:bg-overlay-medium" : "hover:bg-tint/5",
         // The row whose menu is open lifts to a neutral raised tier — a
         // distinct level from the selection's subtle fill, so it reads as
         // "the menu targets this row" rather than as a second selection.
@@ -198,14 +198,14 @@ function FileStageRowComponent({
           aria-label={`View diff: ${file.path}`}
           className={cn(
             "relative flex min-w-0 flex-1 items-baseline rounded text-left",
-            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
           )}
         >
           <span
             aria-hidden="true"
             className={cn(
               "inline-flex items-center justify-center rounded-sm px-1 mr-2 shrink-0",
-              "text-[10px] font-medium leading-4 h-4 min-w-[16px]",
+              "text-3xs font-medium leading-4 h-4 min-w-[16px]",
               config.bg,
               config.text
             )}
@@ -216,10 +216,10 @@ function FileStageRowComponent({
             <span
               data-testid="file-stage-row-dir"
               className={cn(
-                "shrink truncate font-mono text-[11px] transition-colors",
+                "shrink truncate font-mono text-2xs transition-colors",
                 generated
-                  ? "text-daintree-text/30"
-                  : "text-daintree-text/50 group-hover/stagerow:text-daintree-text/70"
+                  ? "text-text-placeholder"
+                  : "text-text-secondary group-hover/stagerow:text-text-primary"
               )}
             >
               {dir}/
@@ -228,10 +228,10 @@ function FileStageRowComponent({
           <span
             data-testid="file-stage-row-base"
             className={cn(
-              "shrink truncate font-medium font-mono text-[11px] transition-colors",
+              "shrink truncate font-medium font-mono text-2xs transition-colors",
               generated
                 ? "text-daintree-text/40"
-                : "text-daintree-text group-hover/stagerow:text-daintree-text"
+                : "text-text-primary group-hover/stagerow:text-text-primary"
             )}
           >
             {base}
@@ -243,7 +243,7 @@ function FileStageRowComponent({
         <div
           data-testid="file-stage-row-churn"
           className={cn(
-            "ml-2 flex items-center gap-1 shrink-0 text-[10px] tabular-nums",
+            "ml-2 flex items-center gap-1 shrink-0 text-3xs tabular-nums",
             generated && "opacity-60"
           )}
         >
@@ -259,10 +259,8 @@ function FileStageRowComponent({
               onClick={handleViewedClick}
               className={cn(
                 "flex items-center gap-1 ml-2 shrink-0 cursor-pointer select-none rounded px-1.5 py-0.5",
-                "text-[10px] font-medium uppercase tracking-wider transition-colors",
-                viewed
-                  ? "text-daintree-text/60"
-                  : "text-daintree-text/30 hover:text-daintree-text/60"
+                "text-3xs font-medium uppercase tracking-wider transition-colors",
+                viewed ? "text-text-secondary" : "text-text-placeholder hover:text-text-secondary"
               )}
             >
               <input
@@ -274,7 +272,7 @@ function FileStageRowComponent({
                 }
                 className={cn(
                   "w-3 h-3 rounded cursor-pointer accent-status-success",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 )}
               />
               <span>Viewed</span>
@@ -293,7 +291,7 @@ function FileStageRowComponent({
             onClick={handleToggle}
             className={cn(
               "w-5 h-5 flex items-center justify-center rounded shrink-0 ml-2 transition-colors",
-              "hover:bg-tint/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+              "hover:bg-tint/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             )}
             aria-label={isStaged ? `Unstage ${file.path}` : `Stage ${file.path}`}
           >

@@ -23,7 +23,7 @@ function FullSkeleton({
   const showSpinner = useDohertyGate(isLoading);
 
   return (
-    <div className="relative flex flex-col items-center justify-center h-full bg-daintree-bg px-6">
+    <div className="relative flex flex-col items-center justify-center h-full bg-surface-canvas px-6">
       <div
         className="flex max-w-[28ch] flex-col items-center gap-3 text-center"
         role="status"
@@ -39,7 +39,7 @@ function FullSkeleton({
         {showSpinner && (
           <>
             <Spinner size="xl" className="text-daintree-text/45" />
-            <p aria-hidden="true" className="text-sm text-daintree-text/60 break-words">
+            <p aria-hidden="true" className="text-sm text-text-secondary break-words">
               {phaseLabel}
             </p>
           </>
@@ -69,7 +69,7 @@ function OverlaySkeleton({
   if (!showOverlay) return null;
 
   return (
-    <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-daintree-bg">
+    <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-surface-canvas">
       <div
         className="flex max-w-[28ch] flex-col items-center gap-3 text-center"
         role="status"
@@ -81,7 +81,7 @@ function OverlaySkeleton({
         {/* Visible caption only (aria-hidden) — the wrapper owns the AT
             announcement; the phase also flows through the hint. */}
         <Spinner size="xl" className="text-daintree-text/45" />
-        <p aria-hidden="true" className="text-sm text-daintree-text/60 break-words">
+        <p aria-hidden="true" className="text-sm text-text-secondary break-words">
           {phaseLabel}
         </p>
       </div>

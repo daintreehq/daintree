@@ -51,7 +51,7 @@ export function HelpLaunchingState({ phase, isLoading, onCancel }: HelpLaunching
           <SkeletonBone className="h-2.5 w-full" />
           <SkeletonBone className="h-2.5 w-4/5" />
         </div>
-        <p aria-hidden="true" className="text-xs text-daintree-text/60">
+        <p aria-hidden="true" className="text-xs text-text-secondary">
           {label}
         </p>
       </Skeleton>

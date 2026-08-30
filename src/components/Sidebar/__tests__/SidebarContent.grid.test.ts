@@ -67,8 +67,8 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
     });
 
     it("does not paint a duplicate accent focus ring on the inner button — card-level :has(> button:focus-visible) ring is canonical (#8094)", () => {
-      expect(source).not.toContain("focus-visible:outline-daintree-accent");
-      expect(source).not.toContain("focus-visible:ring-daintree-accent");
+      expect(source).not.toContain("focus-visible:outline-accent-primary");
+      expect(source).not.toContain("focus-visible:ring-accent-primary");
     });
   });
 
@@ -102,14 +102,38 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
     });
 
     it("uses group-hover/card for mouse row-level reveal (not self-scoped hover)", async () => {
+      // Discoverability is row-scoped: hovering anywhere on the card has to
+      // surface the grip, or nobody finds it. The grip rests at opacity 0, so
+      // the row-level reveal is the fade — not a colour change on something
+      // already painted.
       const cardSource = await fs.readFile(WORKTREE_CARD_PATH, "utf-8");
-      expect(cardSource).toContain("group-hover/card:text-text-primary/40");
-      expect(cardSource).toContain("group-hover/card:bg-overlay-soft");
+      expect(cardSource).toContain("group-hover/card:opacity-100");
     });
 
-    it("keeps motion-reduce:transition-none on the drag handle for WCAG reduced-motion", async () => {
+    it("keeps the grip's backplate self-scoped so row hover does not paint a bar", async () => {
+      // The grip is a full-height column. When its backplate came up on row
+      // hover it painted a bar down the whole card and became the most
+      // prominent thing on a row whose subject is the worktree — for a control
+      // most hovers never wanted. Brightening the glyph is the row-level
+      // affordance; the plate waits for the pointer to reach the grip.
       const cardSource = await fs.readFile(WORKTREE_CARD_PATH, "utf-8");
-      expect(cardSource).toContain("motion-reduce:transition-none");
+      expect(cardSource).not.toContain("group-hover/card:bg-overlay-soft");
+      expect(cardSource).toContain("hover:bg-overlay-soft");
+    });
+
+    it("kills the drag handle's transition under reduced motion", async () => {
+      // Asserted against the CSS, not a `motion-reduce:transition-none`
+      // utility on the card. The grip's transition lives in the unlayered
+      // `[data-worktree-row-drag-handle]` rule below, which beats any layered
+      // utility on the same element no matter its specificity — so a test
+      // looking for that class would pass while the transition still ran. The
+      // `@variant reduce-motion` block in the same file is the real guarantee.
+      const cssSource = await fs.readFile(SIDEBAR_CSS_PATH, "utf-8");
+      const block = cssSource.match(
+        /@variant reduce-motion\s*{\s*\[data-worktree-row-drag-handle\]\s*{([^}]*)}/
+      );
+      expect(block, "no reduce-motion block for [data-worktree-row-drag-handle]").toBeTruthy();
+      expect(block![1]).toMatch(/transition:\s*none/);
     });
   });
 

@@ -3,12 +3,14 @@ import type { FleetBand, FleetBandCounts } from "@/lib/fleetAttention";
 import {
   bandForRun,
   bandLabel,
+  bandTimestamp,
   compareWithinBand,
   emptyBandCounts,
   FLEET_BANDS,
+  isAttentionBand,
   isDemandBand,
 } from "@/lib/fleetAttention";
-import { formatWaitAge } from "@/lib/projectRowStatus";
+import { agoPhrase, formatWaitAge } from "@/lib/projectRowStatus";
 import { isFilterMatch } from "@/lib/projectSwitcherSearch";
 import { composeTitledPanel } from "@/utils/terminalTitleDisplay";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -40,8 +42,36 @@ export interface PilotRow {
    * to find a run is useful whether or not the label is on screen.
    */
   worktreeLabel: string | null;
-  /** Compact age of the current state, or null when the run never recorded one. */
+  /**
+   * The row's ONE clock, compact, for the right-hand column.
+   *
+   * Which duration it measures depends on the band, because the useful
+   * question does: a parked row is dated from the park, a quiet row from the
+   * silence, everything else from its last transition. Null when the run
+   * recorded nothing to measure.
+   *
+   * A quiet row used to draw two clocks — a mid-row `quiet 12m` chip and a
+   * right-hand `47m` — with only the chip labelled, so the reader had to work
+   * out which of the two the surface wanted them to act on. One column, one
+   * number, and {@link ageLabel} names it where naming is what disambiguates.
+   */
   age: string | null;
+  /**
+   * The word the age column wears in front of the number, or null when the
+   * number needs no qualifier. Only `quiet` takes one: it is the one band
+   * whose clock measures something other than "how long has it been like
+   * this", and an unlabelled 12m beside a working glyph is the ambiguity the
+   * chip was invented to solve in the first place.
+   */
+  ageLabel: string | null;
+  /**
+   * The age as a sentence, for the row's accessible name.
+   *
+   * Spelled out per band rather than left as a bare "2m ago": "waiting for 38
+   * minutes" and "finished 38 minutes ago" are different facts, and a screen
+   * reader given only the second half has to infer which one it just heard.
+   */
+  agePhrase: string | null;
   /**
    * The park's note, drawn on the row: a parked run's one line of intent is
    * the whole reason to look at it. Null for everything unparked, and also on
@@ -50,35 +80,100 @@ export interface PilotRow {
    */
   parkNote: string | null;
   /**
-   * How long a working run has been silent, once main judged the silence
-   * worth reporting. Null for a healthy busy agent — so the row only ever
-   * says "quiet 12m" when there is genuinely something to look at.
+   * How long the run has been WORKING, on a row whose clock is measuring
+   * something else. Only a quiet row has one, and it exists purely for the
+   * accessible name: the column can hold one number, and the silence is the
+   * one worth drawing, but "quiet for 12 minutes, working for 47" is the whole
+   * fact and a screen reader has room for it.
    */
-  quietFor: string | null;
+  secondaryPhrase: string | null;
 }
 
 export type PilotWorkspaceKind = "project" | "scratch" | "unknown";
 
-export interface PilotProjectGroup {
+/**
+ * What every group has, whichever axis it was cut on.
+ *
+ * The narrowing pipeline — query, band filter, counts, summary — works on this
+ * and nothing else, so both axes inherit one set of invariants rather than
+ * growing a second, drifting copy. `axis` discriminates the two only where a
+ * header is drawn.
+ */
+export interface PilotGroupCore {
+  /**
+   * Identity within one tree: DOM ids, React keys, and the pointer order-hold
+   * all key on it.
+   *
+   * Deliberately NOT a workspace id. A worktree group's id names a worktree, so
+   * anything that needs the workspace a run belongs to has to read it off the
+   * RUN — which is where it has always been true.
+   */
+  groupId: string;
+  axis: "workspace" | "worktree";
+  name: string;
+  /**
+   * A second name a query may match to admit the whole group.
+   *
+   * The worktree axis needs one. Drilling in replaces the project heading with
+   * worktree labels, so a query matching the PROJECT — which is how the user
+   * found the project to drill into in the first place — would suddenly match
+   * nothing and empty the very list the drill just opened.
+   */
+  parentName?: string;
+  rows: PilotRow[];
+  /** Runs in this group that constitute a demand on the user. */
+  demandCount: number;
+  /**
+   * Per-band counts for the bands worth pointing at, worst first and empty
+   * bands omitted.
+   *
+   * The header used to draw the WORST band's glyph beside the TOTAL demand
+   * count, which reads as a claim about every run it counts: a project holding
+   * one blocked run and one waiting one rendered as a red prohibition sign
+   * beside "2", and the only honest reading of that is "2 blocked". Counting
+   * each band separately is the only version of this chip that cannot lie.
+   */
+  attention: readonly { band: FleetBand; count: number }[];
+  /**
+   * Worst band among the rows below, recomputed rather than inherited whenever
+   * the group is narrowed. A derived summary of the group's contents only —
+   * group ORDER is never severity, and the header draws identity, not severity.
+   */
+  topBand: FleetBand;
+}
+
+export interface PilotProjectGroup extends PilotGroupCore {
+  axis: "workspace";
   workspaceId: string;
   kind: PilotWorkspaceKind;
-  name: string;
   emoji: string | null;
   /** Project tile colour, so the header carries the same identity as the switcher's rows. */
   color: string | null;
   /** True for the workspace this view already owns — opening its runs costs no switch. */
   isCurrent: boolean;
-  rows: PilotRow[];
-  /** Runs in this project that constitute a demand on the user. */
-  demandCount: number;
-  /**
-   * Worst band among the rows below, recomputed rather than inherited whenever
-   * the group is narrowed. A derived summary of the group's contents only —
-   * group ORDER is workspace recency, and the header draws identity, not
-   * severity.
-   */
-  topBand: FleetBand;
 }
+
+export interface PilotWorktreeGroup extends PilotGroupCore {
+  axis: "worktree";
+  /**
+   * The run's normalized worktree path, or null for the bucket holding runs the
+   * snapshot files under no worktree at all.
+   *
+   * Opaque to everything that derives display from it: a grouping key and a
+   * source of basename, never resolved through a worktree store for a label, a
+   * path or a branch. The id has two mint sites that can spell the same
+   * worktree differently, and the store that would answer only exists for the
+   * one project a renderer view owns.
+   *
+   * {@link buildPilotWorktreeGroups} is the single exception, and only for
+   * ORDER: it may be matched against a `mainWorktreeId` the caller took from
+   * that view's own store, where a mismatch costs nothing but the lead position.
+   * See its docblock for the three conditions that keep that safe.
+   */
+  worktreeId: string | null;
+}
+
+export type PilotDisplayGroup = PilotProjectGroup | PilotWorktreeGroup;
 
 function directoryLabel(cwd: string): string | null {
   const cleaned = cwd.replace(/[/\\]+$/, "");
@@ -185,12 +280,15 @@ export function composePilotRunTitle(run: FleetRunRow, chrome?: TerminalChromeDe
  * guaranteed to be the worst one present. Inheriting either field would put a
  * group's derived facts at odds with the rows directly underneath it.
  */
-function narrowGroup(group: PilotProjectGroup, rows: PilotRow[]): PilotProjectGroup {
+function summarizeRows(
+  rows: readonly PilotRow[]
+): Pick<PilotGroupCore, "demandCount" | "topBand" | "attention"> {
   let topBand: FleetBand = "idle";
   // Annotated: `FLEET_BANDS` is a const tuple, so its `length` narrows to a
   // literal and the accumulator would refuse every rank assigned below it.
   let best: number = FLEET_BANDS.length;
   let demandCount = 0;
+  const perBand = new Map<FleetBand, number>();
   for (const row of rows) {
     const rowRank = rank(row.band);
     if (rowRank < best) {
@@ -198,8 +296,22 @@ function narrowGroup(group: PilotProjectGroup, rows: PilotRow[]): PilotProjectGr
       topBand = row.band;
     }
     if (isDemandBand(row.band)) demandCount++;
+    if (isAttentionBand(row.band)) perBand.set(row.band, (perBand.get(row.band) ?? 0) + 1);
   }
-  return { ...group, rows, demandCount, topBand };
+  // Worst first, which is the order the rows themselves are in, so the chip
+  // reads left-to-right as the same ranking the list below it uses.
+  const attention = FLEET_BANDS.filter((band) => perBand.has(band)).map((band) => ({
+    band,
+    count: perBand.get(band) ?? 0,
+  }));
+  return { demandCount, topBand, attention };
+}
+
+function narrowGroup<T extends PilotGroupCore>(group: T, rows: PilotRow[]): T {
+  // `Object.assign` rather than a spread: spreading a generic widens it to an
+  // intersection the return type will not accept, and the alternative is a cast
+  // that would stop the compiler from checking this at all.
+  return Object.assign({}, group, { rows }, summarizeRows(rows));
 }
 
 /**
@@ -241,6 +353,68 @@ function openedAt(value: number | undefined): number {
  * first, then oldest `since`. A project's demands still surface at the top of
  * its own rows — they just no longer move the project itself.
  */
+/**
+ * The row's clock, in every form the row needs it: the number, the word in
+ * front of it, and the sentence a screen reader gets.
+ *
+ * One function because the three must agree. They were three expressions in
+ * three places, which is how the drawn row came to say `47m` while the
+ * accessible name said "quiet for 12m" about the same run.
+ *
+ * A parked row is dated from the PARK, not from `since`. Dating it from the
+ * state read "Parked · 3h" the moment a three-hour-old waiting run was parked,
+ * which answers "how long has it waited" when the row is now about "how long
+ * ago did I shelve this". A quiet row is dated from the silence for the same
+ * reason: the silence is the thing that might need a hand.
+ */
+function ageOf(
+  run: FleetRunRow,
+  band: FleetBand,
+  nowMs: number
+): Pick<PilotRow, "age" | "ageLabel" | "agePhrase" | "secondaryPhrase"> {
+  const at = bandTimestamp(run, band);
+  if (at === undefined) {
+    return { age: null, ageLabel: null, agePhrase: null, secondaryPhrase: null };
+  }
+  const age = formatWaitAge(at, nowMs);
+
+  // The one band whose column needs a word: its clock is measuring something
+  // other than "how long has it been like this", and an unlabelled 12m beside
+  // a run that is nominally working is exactly the ambiguity this exists to
+  // remove. The working duration goes to the accessible name, which has room.
+  if (band === "quiet") {
+    return {
+      age,
+      ageLabel: "quiet",
+      agePhrase: `quiet for ${age}`,
+      secondaryPhrase:
+        run.since === undefined ? null : `working for ${formatWaitAge(run.since, nowMs)}`,
+    };
+  }
+
+  return { age, ageLabel: null, agePhrase: AGE_VERB[band](age), secondaryPhrase: null };
+}
+
+/**
+ * How each band says its own age.
+ *
+ * The verb is what makes the duration mean something: a demand's age is how
+ * long it has been left, a completion's is how long ago it landed, and a
+ * running agent's is how long it has been at it. `agoPhrase` keeps "just now"
+ * from becoming "just now ago".
+ */
+const AGE_VERB: Record<FleetBand, (age: string) => string> = {
+  blocked: (age) => `blocked for ${age}`,
+  "needs-you": (age) => `waiting for ${age}`,
+  quiet: (age) => `quiet for ${age}`,
+  review: (age) => `finished ${agoPhrase(age)}`,
+  running: (age) => `working for ${age}`,
+  done: (age) => `finished ${agoPhrase(age)}`,
+  parked: (age) => `parked ${agoPhrase(age)}`,
+  snoozed: (age) => `snoozed ${agoPhrase(age)}`,
+  idle: (age) => agoPhrase(age),
+};
+
 export function buildPilotGroups(
   runs: readonly FleetRunRow[],
   ctx: PilotRowContext
@@ -264,14 +438,11 @@ export function buildPilotGroups(
       const bandA = bandForRun(a, acknowledgedAt);
       const byBand = rank(bandA) - rank(bandForRun(b, acknowledgedAt));
       if (byBand !== 0) return byBand;
-      // Parked rows order on the park, not the underlying state: `since` is
-      // whenever the agent last transitioned, which predates the decision the
-      // band is actually about. Oldest park first, same anti-starvation rule.
-      if (bandA === "parked" && a.park !== undefined && b.park !== undefined) {
-        if (a.park.parkedAt !== b.park.parkedAt) return a.park.parkedAt - b.park.parkedAt;
-        return a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0;
-      }
-      return compareWithinBand(a, b);
+      // Same band, so one clock governs the pair — and which clock that is
+      // belongs to the band, not to this call site. `bandTimestamp` is what the
+      // row's own age reads too, so a list ordered oldest-first can't put a
+      // smaller number above a larger one.
+      return compareWithinBand(a, b, bandA);
     });
 
     const rows: PilotRow[] = sorted.map((run) => {
@@ -287,25 +458,16 @@ export function buildPilotGroups(
         presetColor: run.agentPresetColor,
         statusLabel: bandLabel(band, run),
         worktreeLabel: disambiguatingLabel(directoryLabel(run.cwd), name),
-        // A parked row's age is the age of the PARK. Dating it from `since`
-        // read "Parked · 3h" the moment a three-hour-old waiting run was
-        // parked, which answers "how long has it waited" when the row is now
-        // about "how long ago did I shelve this".
-        age:
-          band === "parked" && run.park !== undefined
-            ? formatWaitAge(run.park.parkedAt, ctx.nowMs)
-            : run.since !== undefined
-              ? formatWaitAge(run.since, ctx.nowMs)
-              : null,
+        ...ageOf(run, band, ctx.nowMs),
         parkNote: run.park?.note ?? null,
-        quietFor:
-          band === "running" && run.quietSince !== undefined
-            ? formatWaitAge(run.quietSince, ctx.nowMs)
-            : null,
       };
     });
 
     groups.push({
+      // The project's own id doubles as the group id on this axis, which is
+      // what keeps every existing group DOM id unchanged.
+      groupId: workspaceId,
+      axis: "workspace",
       workspaceId,
       kind: meta?.kind ?? "unknown",
       name,
@@ -313,8 +475,7 @@ export function buildPilotGroups(
       color: meta?.color ?? null,
       isCurrent: workspaceId === ctx.currentWorkspaceId,
       rows,
-      demandCount: rows.filter((r) => isDemandBand(r.band)).length,
-      topBand: rows[0]?.band ?? "idle",
+      ...summarizeRows(rows),
       lastOpened: openedAt(meta?.lastOpened),
     });
   }
@@ -340,6 +501,271 @@ export function buildPilotGroups(
 }
 
 /**
+ * The bucket for runs the snapshot files under no worktree at all.
+ *
+ * Not "project root", which would be a claim the data cannot support: a run
+ * loses its `worktreeId` both when it was launched with no worktree target
+ * (a project-root launch, and every scratch run) and when the pty-host
+ * positively proves the worktree belongs to another project. The two are
+ * indistinguishable here, so the label states only what is known.
+ */
+const NO_WORKTREE_GROUP_ID = "wt:none";
+const NO_WORKTREE_LABEL = "No worktree";
+
+/**
+ * A worktree's group id.
+ *
+ * Encoded rather than raw: the id is an absolute path, so it can carry spaces
+ * and separators, and this string becomes a DOM id. `encodeURIComponent` is
+ * reversible, which keeps two different worktrees from ever colliding into one
+ * group the way a lossy sanitiser would.
+ *
+ * Namespaced under `path:` so a real id can never spell the sentinel above. The
+ * wire type is a bare `string` — nothing on the way in enforces the
+ * absolute-path convention — and a worktree literally called `none` sharing an
+ * id with the absent bucket would collide their DOM ids, React keys and
+ * order-hold entries into one.
+ */
+function worktreeGroupId(worktreeId: string): string {
+  return `wt:path:${escapeForId(worktreeId)}`;
+}
+
+/**
+ * A string reduced to characters a DOM id can hold, injectively.
+ *
+ * Not `encodeURIComponent`, which THROWS a `URIError` on an unpaired surrogate:
+ * one malformed row would take the whole palette down on the way into a scope,
+ * and this is a display path with no business rejecting data. Escaping per code
+ * unit cannot throw on any string, and the marker escapes itself.
+ *
+ * The width is FIXED at four hex digits, which is what actually makes this
+ * injective. Variable-width does not: `~` + `2f` is `/`, but it is equally
+ * `U+0002` followed by a literal `f`, so two different paths encode to one id
+ * and their sections collapse into each other. Four digits is every code unit.
+ */
+function escapeForId(value: string): string {
+  return value.replace(
+    /[^A-Za-z0-9._-]/g,
+    (ch) => `~${ch.charCodeAt(0).toString(16).padStart(4, "0")}`
+  );
+}
+
+/**
+ * The bucket a run belongs to on the worktree axis.
+ *
+ * An empty id folds in with the absent one. It identifies no worktree, and the
+ * wire type does not stop one arriving — bucketing it on its own would draw a
+ * section under a blank heading, which is worse than filing it with the runs
+ * whose worktree is equally unknown.
+ */
+function worktreeKey(run: Pick<FleetRunRow, "worktreeId">): string | null {
+  const id = run.worktreeId;
+  return id !== undefined && id.trim() !== "" ? id : null;
+}
+
+function pathSegments(id: string): string[] {
+  return id.split(/[/\\]+/).filter((segment) => segment.length > 0);
+}
+
+function trailingSegments(segments: readonly string[], depth: number): string {
+  return segments.slice(Math.max(0, segments.length - depth)).join("/");
+}
+
+/**
+ * The shortest trailing path fragment that tells each worktree from the others.
+ *
+ * A basename alone is the label worth reading — "feature-auth", not four levels
+ * of checkout directory — but two worktrees in one project sharing a basename
+ * is ordinary (`repos/a/feature-x` beside `repos/b/feature-x`), and two headers
+ * reading the same word file their agents under a distinction the user cannot
+ * see. Each colliding id grows one segment at a time until it stands alone, so
+ * only the ids that actually collide pay for the disambiguation.
+ *
+ * Collisions are detected case-insensitively because the case-preserving
+ * filesystems this runs on treat those paths as the same name to read, even
+ * where they are distinct paths to open. Anything still ambiguous at full depth
+ * differs only in case or above its own root, and falls back to the whole id —
+ * the one string guaranteed to be unique, since the ids were map keys.
+ */
+function worktreeLabels(ids: readonly string[]): Map<string, string> {
+  const segments = new Map(ids.map((id) => [id, pathSegments(id)]));
+  const labels = new Map<string, string>();
+  const unresolved = new Set(ids);
+
+  let maxDepth = 1;
+  for (const parts of segments.values()) maxDepth = Math.max(maxDepth, parts.length);
+
+  for (let depth = 1; depth <= maxDepth && unresolved.size > 0; depth++) {
+    const byLabel = new Map<string, string[]>();
+    for (const id of unresolved) {
+      const label = trailingSegments(segments.get(id) ?? [], depth) || id;
+      const bucket = byLabel.get(label.toLowerCase());
+      if (bucket) bucket.push(id);
+      else byLabel.set(label.toLowerCase(), [id]);
+    }
+    for (const contenders of byLabel.values()) {
+      const only = contenders.length === 1 ? contenders[0] : undefined;
+      if (only === undefined) continue;
+      labels.set(only, trailingSegments(segments.get(only) ?? [], depth) || only);
+      unresolved.delete(only);
+    }
+  }
+
+  for (const id of unresolved) labels.set(id, id);
+  return labels;
+}
+
+/**
+ * How many worktrees one project's runs are spread across, counting the runs
+ * that have no worktree as a bucket of their own.
+ */
+function countWorktreeBuckets(runs: readonly Pick<FleetRunRow, "worktreeId">[]): number {
+  const seen = new Set<string | null>();
+  // Through the same key function the grouping uses, or the gate would promise
+  // an axis the regrouping then declines to cut.
+  for (const run of runs) seen.add(worktreeKey(run));
+  return seen.size;
+}
+
+/**
+ * Whether regrouping this project's runs by worktree would say anything new.
+ *
+ * The one rule behind both ways in: the header only offers the drill when this
+ * is true, and the scoped shortcut falls back to the whole fleet when it is
+ * false — so the affordance and the chord can never disagree about whether a
+ * project has a worktree axis.
+ *
+ * Two is the floor on either count, because one worktree regroups a project
+ * into a single section holding the rows it already had.
+ *
+ * `knownWorktreeCount` is how many worktrees the project ACTUALLY has, which
+ * the runs cannot answer (#11957). A fleet row exists only for a terminal
+ * `classifyRun` calls an agent, so a plain shell, a dev-preview pane, a trashed
+ * panel and the help terminal all contribute no bucket — and a worktree nobody
+ * has opened a terminal in contributes none either. Deriving the axis from runs
+ * alone therefore tracked where agents happened to be sitting rather than
+ * whether the project has an axis at all: a project with three worktrees whose
+ * agents share one of them failed, and closing an agent could take the chord
+ * away. Callers pass it ONLY for the workspace their own view owns, because the
+ * store that answers exists for that project and for no other.
+ *
+ * The two counts are OR'd and never joined. Comparing individual ids — a run's
+ * `worktreeId` against a worktree store key, or against the project's own path
+ * — puts two independently minted spellings of one directory beside each other
+ * (`realpath` at creation, `pathResolve` over porcelain at enumeration), and
+ * the app has been bitten by that before. Aggregates cannot diverge that way.
+ *
+ * Omitting the count leaves the pre-#11957 behavior exactly: a scratch
+ * workspace, a project with no runs, and a project the store cannot describe
+ * all fall back rather than opening a list that tells the user nothing.
+ */
+export function hasWorktreeAxis(
+  runs: readonly Pick<FleetRunRow, "worktreeId">[],
+  knownWorktreeCount?: number
+): boolean {
+  return countWorktreeBuckets(runs) >= 2 || (knownWorktreeCount ?? 0) >= 2;
+}
+
+/**
+ * One project's runs, re-cut along the worktree axis.
+ *
+ * Takes the built project group rather than the raw rows, so every derivation
+ * the rows already carry — the acknowledgement-aware band, the composed title,
+ * the chrome, the park-aware age — is reused rather than repeated. Bucketing
+ * preserves array order, so each worktree's rows keep the ranking the project
+ * gave them: worst band first, then oldest `since`, parked rows on their park.
+ *
+ * Group ORDER is severity-independent, exactly as it is across projects
+ * (#11678). A worktree whose agent blocks does not climb over the others; it
+ * turns its own header's chip on and stays where it was. Position is the main
+ * worktree first, then the no-worktree bucket, then the disambiguated label,
+ * then the full id so the comparator is a true total order.
+ *
+ * `mainWorktreeId` is the project's root checkout, and it leads because root
+ * work is the most likely to be what is being worked right now — burying it
+ * under thirty alphabetically-sorted branch checkouts hides it. The no-worktree
+ * bucket used to carry that job on the premise that a root run has no worktree
+ * id; it does (#11957 measured one whose id is the project root path), so that
+ * bucket is now what it says it is — runs the snapshot files under no worktree
+ * at all — and it stays high because a live agent with no worktree is an
+ * anomaly worth seeing, not because it holds the root.
+ *
+ * This is the one place a `worktreeId` is matched against a worktree store, and
+ * it is safe for exactly three reasons, all of which have to hold: the caller
+ * passes an id only for the project its OWN view owns (the store answers for no
+ * other), the id it passes is one the store positively tagged `isMainWorktree`
+ * rather than a path matched against the project root (#2251), and a miss just
+ * means no group leads. So when the two mint sites spell one directory
+ * differently — `realpath` at creation against `pathResolve` over porcelain at
+ * enumeration — the order falls back to the label/id total order below rather
+ * than promoting the wrong worktree.
+ */
+export function buildPilotWorktreeGroups(
+  project: PilotProjectGroup,
+  mainWorktreeId?: string | null
+): PilotWorktreeGroup[] {
+  const byWorktree = new Map<string | null, PilotRow[]>();
+  for (const row of project.rows) {
+    const key = worktreeKey(row.run);
+    const bucket = byWorktree.get(key);
+    if (bucket) bucket.push(row);
+    else byWorktree.set(key, [row]);
+  }
+
+  const labels = worktreeLabels(
+    [...byWorktree.keys()].filter((key): key is string => key !== null)
+  );
+
+  const groups: PilotWorktreeGroup[] = [];
+  for (const [worktreeId, rows] of byWorktree) {
+    groups.push(
+      // Through `narrowGroup` rather than counting inline, so a worktree
+      // header's demand chip is computed by the one function that already
+      // recomputes rather than inherits — the discipline every narrowing pass
+      // downstream relies on.
+      narrowGroup<PilotWorktreeGroup>(
+        {
+          groupId: worktreeId === null ? NO_WORKTREE_GROUP_ID : worktreeGroupId(worktreeId),
+          axis: "worktree",
+          name: worktreeId === null ? NO_WORKTREE_LABEL : (labels.get(worktreeId) ?? worktreeId),
+          // The project this was cut out of, so a query naming it still admits
+          // these rows once its own heading is gone from the list.
+          parentName: project.name,
+          worktreeId,
+          rows,
+          demandCount: 0,
+          topBand: "idle",
+          attention: [],
+        },
+        rows
+      )
+    );
+  }
+
+  // A null id would match every bucket that has no worktree, so the leader is
+  // only ever a real id the caller vouched for.
+  const leadId = mainWorktreeId != null && mainWorktreeId !== "" ? mainWorktreeId : null;
+
+  groups.sort((a, b) => {
+    const aLeads = leadId !== null && a.worktreeId === leadId;
+    const bLeads = leadId !== null && b.worktreeId === leadId;
+    if (aLeads !== bLeads) return aLeads ? -1 : 1;
+    if ((a.worktreeId === null) !== (b.worktreeId === null)) return a.worktreeId === null ? -1 : 1;
+    const byName = a.name.localeCompare(b.name);
+    if (byName !== 0) return byName;
+    // Two worktrees can share a display label only when the disambiguator ran
+    // out of path to distinguish them, so the id settles it — and settles it
+    // the same way every time, which is what "the same fleet opens in the same
+    // order" needs.
+    const idA = a.worktreeId ?? "";
+    const idB = b.worktreeId ?? "";
+    return idA < idB ? -1 : idA > idB ? 1 : 0;
+  });
+
+  return groups;
+}
+
+/**
  * Filter groups to rows matching a query, dropping groups left with nothing.
  *
  * Matching stays grouped rather than flattening to a ranked list: a run's
@@ -354,25 +780,32 @@ export function buildPilotGroups(
  * IS the answer — demoting a blocked agent because a fresher one matched the
  * query better would defeat the surface.
  *
+ * A hit on the group's own name — or on the project a worktree group was cut
+ * out of — admits every row under it. The second half is what stops a query
+ * that named the PROJECT from emptying the list the moment the user drills into
+ * it, which is how they found that project to begin with.
+ *
  * That is exactly why the fields are gated on {@link isFilterMatch} rather than
  * a bare subsequence test. Keeping band order means a weak match is not sorted
  * away from a strong one, it is interleaved with it, so match quality has to be
  * settled here or not at all — and a loose hit on `group.name` is worse still,
  * since it admits every row in the project (#11625).
  */
-export function filterPilotGroups(
-  groups: readonly PilotProjectGroup[],
+export function filterPilotGroups<T extends PilotGroupCore>(
+  groups: readonly T[],
   query: string
-): PilotProjectGroup[] {
+): T[] {
   const needle = query.trim();
   if (!needle) return [...groups];
 
-  const out: PilotProjectGroup[] = [];
+  const out: T[] = [];
   for (const group of groups) {
-    const projectMatches = isFilterMatch(needle, group.name);
+    const groupMatches =
+      isFilterMatch(needle, group.name) ||
+      (group.parentName !== undefined && isFilterMatch(needle, group.parentName));
     const rows = group.rows.filter(
       (row) =>
-        projectMatches ||
+        groupMatches ||
         isFilterMatch(needle, row.title) ||
         (row.worktreeLabel !== null && isFilterMatch(needle, row.worktreeLabel)) ||
         // The agent's name is on the row as an icon rather than as text, but
@@ -395,16 +828,19 @@ export function filterPilotGroups(
  * The state filter's vocabulary, declared beside the bands so a segment and the
  * count under it can never drift apart.
  */
-export type PilotBandFilter = "all" | "needs-you" | "working" | "finished" | "parked";
+export type PilotBandFilter =
+  "all" | "needs-you" | "quiet" | "working" | "finished" | "parked" | "other";
 
 /**
  * Which bands each segment admits.
  *
- * `idle` is deliberately in no bucket but All: an exited terminal isn't
- * working, isn't finished, and isn't asking for anything, so putting it
- * anywhere else would make that segment lie about what it holds.
+ * The narrowing segments PARTITION the fleet: every band is in exactly one, so
+ * their counts sum to All. That is not decoration — a bar reading "All 12"
+ * over segments totalling ten invites the reader to work out which two runs
+ * the surface is not telling them about, and there is no answer they can reach
+ * from the bar.
  *
- * "Needs you" is `blocked` + `needs-you` and NOT `review`, even though
+ * "Attention" is `blocked` + `needs-you` and NOT `review`, even though
  * `isDemandBand` counts review as a demand. Review is a hand-back, not a
  * block — folding it in would make the footer's demand count promise more
  * agents than applying the filter actually reveals.
@@ -416,17 +852,32 @@ export type PilotBandFilter = "all" | "needs-you" | "working" | "finished" | "pa
  */
 const BAND_FILTER_SETS: Record<Exclude<PilotBandFilter, "all">, ReadonlySet<FleetBand>> = {
   "needs-you": new Set<FleetBand>(["blocked", "needs-you"]),
+  // Its own segment rather than a corner of Working, and the segments stay
+  // disjoint so the four counts still add up under All. "Which of my agents
+  // has gone silent" is the second question this surface answers, and before
+  // this it had no control, no count and no summary — only an annotation on
+  // whichever row you happened to scroll past.
+  quiet: new Set<FleetBand>(["quiet"]),
   working: new Set<FleetBand>(["running"]),
   finished: new Set<FleetBand>(["review", "done"]),
   parked: new Set<FleetBand>(["parked"]),
+  // The remainder, and the only reason it exists: `snoozed` and `idle` are the
+  // two bands that belong to none of the questions above. An exited shell is
+  // not working, not finished and not asking; a snooze is the user's own
+  // silence and must not read as a demand. Named for what it is rather than
+  // given a state's name it would then misapply to the other member, and given
+  // no glyph and no hue, because nothing in it is news.
+  other: new Set<FleetBand>(["snoozed", "idle"]),
 };
 
 /** The narrowing segments, in the order the bar renders them after All. */
 export const PILOT_BAND_FILTERS: readonly Exclude<PilotBandFilter, "all">[] = [
   "needs-you",
+  "quiet",
   "working",
   "finished",
   "parked",
+  "other",
 ];
 
 /**
@@ -434,16 +885,33 @@ export const PILOT_BAND_FILTERS: readonly Exclude<PilotBandFilter, "all">[] = [
  * say it: the segment itself, and the empty state that has to name which filter
  * produced no rows.
  *
- * "Waiting", not "Needs you", so the four segments read the same here as they
- * do in the sidebar's `QuickStateFilterBar`. The key stays `needs-you` — it
- * names the band set, which has not changed.
+ * "Attention", not "Waiting". This bucket holds `blocked` as well as `needs-you`,
+ * and calling the pair by the name of one of its members made the segment
+ * contradict itself the moment it drew the blocked glyph: a red prohibition
+ * sign beside the word "Waiting" is two different claims about the same two
+ * runs. The sidebar's `QuickStateFilterBar` bucket is the same union — it
+ * filters on `agentState === "waiting"`, which is where an errored agent lives
+ * too — so it carries the same word rather than being left to drift. The ROW
+ * still says "Blocked" or "Waiting"; only the bucket that holds both takes a
+ * name wide enough to cover them.
+ *
+ * One word, and a calm one. "Stuck" was tried first and reads as a fault: an
+ * agent holding for your approval is not broken, and a bucket that says it is
+ * teaches the reader to flinch at the ordinary case. "Attention" says what the
+ * bucket wants — a look — without claiming anything about why, which is the
+ * only thing true of both an errored run and a polite question.
  */
 export const PILOT_BAND_FILTER_LABEL: Record<PilotBandFilter, string> = {
   all: "All",
-  "needs-you": "Waiting",
+  "needs-you": "Attention",
+  // Observed, not inferred. The fleet knows the agent has said nothing for
+  // twelve minutes; it does not know the agent is stuck, and a segment called
+  // "Stalled" would be the surface guessing on the user's behalf.
+  quiet: "Quiet",
   working: "Working",
   finished: "Finished",
   parked: "Parked",
+  other: "Other",
 };
 
 export type PilotBandFilterCounts = Record<PilotBandFilter, number>;
@@ -457,13 +925,15 @@ export type PilotBandFilterCounts = Record<PilotBandFilter, number>;
  * always the length of the list already on screen and therefore tells the user
  * nothing they can't see.
  */
-export function countPilotBands(groups: readonly PilotProjectGroup[]): PilotBandFilterCounts {
+export function countPilotBands(groups: readonly PilotGroupCore[]): PilotBandFilterCounts {
   const counts: PilotBandFilterCounts = {
     all: 0,
     "needs-you": 0,
+    quiet: 0,
     working: 0,
     finished: 0,
     parked: 0,
+    other: 0,
   };
   for (const group of groups) {
     for (const row of group.rows) {
@@ -483,7 +953,7 @@ export function countPilotBands(groups: readonly PilotProjectGroup[]): PilotBand
  * alongside `done`, which is not. Colouring the segment on membership alone
  * would paint a project whose every completion has been acknowledged in the
  * hue reserved for work still waiting to be looked at — putting back one of the
- * false signals this surface exists to remove. "Needs you" holds only demands,
+ * false signals this surface exists to remove. "Attention" holds only demands,
  * so it is hued whenever it holds anything at all, which this returns for free.
  */
 export function bandFilterHasDemand(
@@ -506,14 +976,14 @@ export function bandFilterHasDemand(
  * preserved: ordering is decided once, upstream, and a filter that re-sorted
  * would move rows under the cursor.
  */
-export function filterPilotBands(
-  groups: readonly PilotProjectGroup[],
+export function filterPilotBands<T extends PilotGroupCore>(
+  groups: readonly T[],
   filter: PilotBandFilter
-): PilotProjectGroup[] {
+): T[] {
   if (filter === "all") return [...groups];
 
   const bands = BAND_FILTER_SETS[filter];
-  const out: PilotProjectGroup[] = [];
+  const out: T[] = [];
   for (const group of groups) {
     const rows = group.rows.filter((row) => bands.has(row.band));
     if (rows.length === 0) continue;
@@ -537,7 +1007,7 @@ export interface PilotSummary {
  * report. Passing the band-filtered groups instead would make the footer
  * describe only what the current segment already shows.
  */
-export function summarizePilotGroups(groups: readonly PilotProjectGroup[]): PilotSummary {
+export function summarizePilotGroups(groups: readonly PilotGroupCore[]): PilotSummary {
   const bands = emptyBandCounts();
   let total = 0;
   let demand = 0;

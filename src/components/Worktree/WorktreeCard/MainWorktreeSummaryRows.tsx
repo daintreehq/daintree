@@ -52,7 +52,7 @@ export function MainWorktreeSummaryRows({ health }: MainWorktreeSummaryRowsProps
       <Tooltip>
         <TooltipTrigger asChild>
           <div
-            className="flex items-center gap-2 text-[10px] text-daintree-text/60"
+            className="flex items-center gap-2 text-3xs text-text-secondary"
             data-testid="github-pulse-row"
           >
             <span className="flex items-center gap-0.5">

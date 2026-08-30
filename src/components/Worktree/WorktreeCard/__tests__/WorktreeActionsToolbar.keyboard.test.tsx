@@ -35,6 +35,7 @@ const baseMenu = {
   onCopyContextFull: noop,
   onCopyContextModified: noop,
   onCopyPath: noop,
+  onCopyBranchName: noop,
   onOpenEditor: noop,
   onRevealInFinder: noop,
   onRunRecipe: noop,

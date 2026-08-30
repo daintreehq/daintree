@@ -13,6 +13,16 @@ import type { FleetRunRow } from "@shared/types/ipc/fleet";
  * disagreeing about which agent is most urgent is worse than either ordering
  * being individually wrong.
  *
+ * `quiet` sits directly under `needs-you`. A run that is nominally working but
+ * has been silent past main's stall threshold is the second question this
+ * surface exists to answer, and while it is not a demand — nobody is asking
+ * the user for anything — it outranks finished work, because a stall that goes
+ * unseen costs the rest of the morning and a hand-back costs a minute. It sat
+ * inside `running` until #11957, where the only trace of it was an annotation
+ * on one row: the fleet counts, the filter bar and the group summaries all
+ * reported it as ordinary work in flight, so the one run worth finding was the
+ * one nothing pointed at.
+ *
  * `parked` sits between `done` and `idle`: the user has explicitly shelved the
  * run, so it must never read as a demand — but unlike an idle shell it carries
  * intent (a note, maybe a gate) worth finding above the dead rows.
@@ -27,6 +37,7 @@ import type { FleetRunRow } from "@shared/types/ipc/fleet";
 export const FLEET_BANDS = [
   "blocked",
   "needs-you",
+  "quiet",
   "review",
   "running",
   "done",
@@ -37,11 +48,27 @@ export const FLEET_BANDS = [
 
 export type FleetBand = (typeof FLEET_BANDS)[number];
 
-/** Bands that constitute a demand on the user — the ones a quiet fleet has none of. */
+/** Bands that constitute a demand on the user — the ones an idle fleet has none of. */
 const DEMAND_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["blocked", "needs-you", "review"]);
 
 export function isDemandBand(band: FleetBand): boolean {
   return DEMAND_BANDS.has(band);
+}
+
+/**
+ * Bands worth pointing at, which is a wider set than the demands.
+ *
+ * `quiet` is deliberately NOT a demand: nothing is asking the user for
+ * anything, and folding it into the demand count would make "3 agents need
+ * you" promise three conversations and deliver two — the exact overstatement
+ * the acknowledged-completion watermark exists to prevent. It is still the
+ * thing a group header has to be able to point at, so the chip and the summary
+ * read this set rather than the demand one.
+ */
+const ATTENTION_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>([...DEMAND_BANDS, "quiet"]);
+
+export function isAttentionBand(band: FleetBand): boolean {
+  return ATTENTION_BANDS.has(band);
 }
 
 /**
@@ -80,7 +107,10 @@ export function bandForRun(run: FleetRunRow, acknowledgedAt?: number): FleetBand
         : "review";
     case "working":
     case "directing":
-      return "running";
+      // Presence alone, like the park and snooze records above: main only puts
+      // `quietSince` on the wire once the silence has crossed its stall
+      // threshold, so this needs no clock and no threshold of its own.
+      return run.quietSince !== undefined ? "quiet" : "running";
     default:
       return "idle";
   }
@@ -95,11 +125,12 @@ export function bandForRun(run: FleetRunRow, acknowledgedAt?: number): FleetBand
  * `running` and `idle` split on state because they each cover two situations
  * the user can tell apart and would want to.
  *
- * "Waiting" rather than "Needs you" for the same reason the filter segment says
- * it: the sidebar has called this state waiting since it shipped, and one state
- * with two names across two surfaces is a vocabulary the user has to learn
- * twice. The prose sentences elsewhere ("2 agents need you") are sentences, not
- * state labels, and keep their own phrasing.
+ * These are STATE names, and they stay narrow. The filter segment above them
+ * says "Attention", which is a BUCKET name and deliberately wider: it holds
+ * `blocked` and `needs-you` together, so it cannot borrow either one's word
+ * without making a claim about the other. A row is never ambiguous, so it gets
+ * to be exact. The prose sentences elsewhere ("2 agents need you") are
+ * sentences, not state labels, and keep their own phrasing again.
  */
 export function bandLabel(band: FleetBand, run: FleetRunRow): string {
   switch (band) {
@@ -111,6 +142,8 @@ export function bandLabel(band: FleetBand, run: FleetRunRow): string {
       return "Ready for review";
     case "running":
       return run.agentState === "directing" ? "Directing" : "Working";
+    case "quiet":
+      return "Quiet";
     case "done":
       return "Finished";
     case "parked":
@@ -128,6 +161,34 @@ export function bandLabel(band: FleetBand, run: FleetRunRow): string {
 }
 
 /**
+ * The moment a band is actually about.
+ *
+ * `since` is when the agent last changed STATE, which is the right clock for
+ * most bands and the wrong one for the three whose band was decided by
+ * something else entirely. A park is dated from the park, a snooze from the
+ * snooze, and a silence from the silence — otherwise a run parked ten seconds
+ * ago reads as three hours old because that is how long it waited first, and
+ * two silent agents rank by how long they have been WORKING rather than by how
+ * long they have said nothing.
+ *
+ * One function, read by the row's clock, by the within-band ordering and by
+ * the initial cursor, so the number on screen, the position in the list and
+ * the row Enter opens can never be measuring three different things.
+ */
+export function bandTimestamp(run: FleetRunRow, band: FleetBand): number | undefined {
+  switch (band) {
+    case "parked":
+      return run.park?.parkedAt ?? run.since;
+    case "snoozed":
+      return run.snooze?.snoozedAt ?? run.since;
+    case "quiet":
+      return run.quietSince ?? run.since;
+    default:
+      return run.since;
+  }
+}
+
+/**
  * Sort key within a band: oldest demand first.
  *
  * Oldest-first rather than newest-first is the anti-starvation choice. A stream
@@ -135,13 +196,17 @@ export function bandLabel(band: FleetBand, run: FleetRunRow): string {
  * minutes — that is the exact failure that teaches a user to stop trusting the
  * top of the list.
  *
- * A run with no `since` sorts last within its band rather than first: an
+ * A run with no timestamp sorts last within its band rather than first: an
  * unknown age is not evidence of urgency, and treating it as infinitely old
  * would let a pre-detection boot window outrank a genuine forty-minute block.
+ *
+ * `band` is required rather than re-derived: callers have already computed it
+ * to decide that these two belong in the same bucket, and computing it twice
+ * is a second chance for the ordering to disagree with the band it is ordering.
  */
-export function compareWithinBand(a: FleetRunRow, b: FleetRunRow): number {
-  const aSince = a.since;
-  const bSince = b.since;
+export function compareWithinBand(a: FleetRunRow, b: FleetRunRow, band: FleetBand): number {
+  const aSince = bandTimestamp(a, band);
+  const bSince = bandTimestamp(b, band);
   if (aSince !== undefined && bSince !== undefined && aSince !== bSince) return aSince - bSince;
   // An unknown age sorts after a known one, and two unknowns fall through to
   // the id tiebreak — so the comparator stays a total order rather than
@@ -166,6 +231,7 @@ export function emptyBandCounts(): FleetBandCounts {
   return {
     blocked: 0,
     "needs-you": 0,
+    quiet: 0,
     review: 0,
     running: 0,
     done: 0,

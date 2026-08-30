@@ -55,17 +55,21 @@ test.describe.serial("Core: Worktree Session Bulk", () => {
       .toContain(`${count}active`);
   }
 
-  async function expectSessionsItemCount(name: string | RegExp, count: number) {
+  // Two assertions because there are two channels: the count reaches assistive
+  // tech through the item's accessible name, and a sighted user through the
+  // aria-hidden trailing slot. `exact` is load-bearing — Playwright string
+  // names match as substrings, so a bare ", 3" would also accept ", 30".
+  async function expectSessionsItemCount(label: string, count: number) {
     const { window } = ctx;
-    const item = window.getByRole("menuitem", { name });
-    await expect(item).toBeVisible({ timeout: T_SHORT });
-    await expect(item).toContainText(`(${count})`, { timeout: T_LONG });
+    const item = window.getByRole("menuitem", { name: `${label}, ${count}`, exact: true });
+    await expect(item).toBeVisible({ timeout: T_LONG });
     await expect(item).not.toHaveAttribute("aria-disabled", "true", { timeout: T_LONG });
+    await expect(item).toContainText(String(count));
   }
 
-  async function clickSessionsItem(name: string | RegExp) {
+  async function clickSessionsItem(name: string) {
     const { window } = ctx;
-    const item = window.getByRole("menuitem", { name });
+    const item = window.getByRole("menuitem", { name, exact: true });
     await expect(item).toBeVisible({ timeout: T_SHORT });
     await expect(item).not.toHaveAttribute("aria-disabled", "true", { timeout: T_LONG });
     await item.click();
@@ -96,23 +100,23 @@ test.describe.serial("Core: Worktree Session Bulk", () => {
 
     await expectWorktreeSessionSummary(3);
     await openSessionsSubmenu();
-    await expectSessionsItemCount(/Dock All/, 3);
-    await clickSessionsItem(/Dock All/);
+    await expectSessionsItemCount("Dock all panels", 3);
+    await clickSessionsItem("Dock all panels, 3");
 
     await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(0);
     await expect.poll(() => getDockPanelCount(window), { timeout: T_LONG }).toBe(3);
     await expectWorktreeSessionSummary(3);
   });
 
-  test("maximize all sessions", async () => {
+  test("move all sessions back to the grid", async () => {
     const { window } = ctx;
 
     await window.waitForTimeout(T_SETTLE);
 
     await expectWorktreeSessionSummary(3);
     await openSessionsSubmenu();
-    await expectSessionsItemCount(/Maximize All/, 3);
-    await clickSessionsItem(/Maximize All/);
+    await expectSessionsItemCount("Move all to grid", 3);
+    await clickSessionsItem("Move all to grid, 3");
 
     await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(3);
     await expect.poll(() => getDockPanelCount(window), { timeout: T_LONG }).toBe(0);

@@ -1,145 +1,129 @@
+// Tests the severity split both compiler commands depend on, against the real
+// export rather than a copy of it.
+//
+// The previous version of this file tested a locally re-implemented normalizer
+// and modelled a `CompilerDiagnostic` shape the installed compiler does not
+// expose, so it could not have caught either the throwing-getter hazard or the
+// wrong-line attribution that this suite now pins.
+
 import { describe, it, expect } from "vitest";
+import { LintRules } from "babel-plugin-react-compiler";
+import { bucketCompileError } from "./lib/compiler-scan.mjs";
 
-// Tests the severity filter logic extracted from find-critical-compiler-errors.mjs.
-// The filter normalizes CompileError events (which may carry a single
-// CompilerErrorDetail or a CompilerDiagnostic with multiple .details entries)
-// into a flat array of Error-severity items. Each Error-severity detail
-// produces a { line, reason } entry; non-Error severities are skipped.
+const HINT_CATEGORY = LintRules.find((r) => r.severity === "Hint")?.category;
+const ERROR_CATEGORY = LintRules.find((r) => r.severity === "Error")?.category;
+const WARNING_CATEGORY = LintRules.find((r) => r.severity === "Warning")?.category;
 
-/**
- * Mirrors the logger.logEvent severity filter in
- * scripts/find-critical-compiler-errors.mjs. Returns an array of { line,
- * reason } for every Error-severity diagnostic within the event.
- */
-function extractCriticalErrorDetails(event) {
-  if (!event || event.kind !== "CompileError") return [];
-  const detail = event.detail;
-  if (!detail) return [];
-  const details = Array.isArray(detail.details) ? detail.details : [detail];
-  const results = [];
-  for (const d of details) {
-    if (!d || d.severity !== "Error") continue;
-    const loc = d.loc ?? event.fnLoc;
-    const line = loc?.start?.line ?? "?";
-    const reason = d.reason ?? d.description ?? detail.reason ?? detail.description ?? "(unknown)";
-    results.push({ line, reason });
-  }
-  return results;
-}
-
-describe("extractCriticalErrorDetails", () => {
-  it("returns empty array for non-CompileError events", () => {
-    expect(extractCriticalErrorDetails({ kind: "CompileSuccess" })).toEqual([]);
-    expect(extractCriticalErrorDetails(null)).toEqual([]);
-    expect(extractCriticalErrorDetails(undefined)).toEqual([]);
+describe("bucketCompileError", () => {
+  it("counts a Hint-severity category as cosmetic noise, not debt", () => {
+    const { hints, strict } = bucketCompileError({
+      kind: "CompileError",
+      detail: { category: HINT_CATEGORY, reason: "some todo" },
+    });
+    expect(hints).toBe(1);
+    expect(strict).toEqual([]);
   });
 
-  it("returns empty array when detail is missing", () => {
-    expect(extractCriticalErrorDetails({ kind: "CompileError" })).toEqual([]);
-    expect(extractCriticalErrorDetails({ kind: "CompileError", detail: null })).toEqual([]);
-  });
-
-  it("returns empty array when no detail has Error severity", () => {
-    expect(
-      extractCriticalErrorDetails({
+  it("counts Error and Warning categories as strict bailouts", () => {
+    for (const category of [ERROR_CATEGORY, WARNING_CATEGORY]) {
+      const { hints, strict } = bucketCompileError({
         kind: "CompileError",
-        detail: { severity: "Todo", reason: "Handle Import expressions" },
-      })
-    ).toEqual([]);
+        detail: { category, reason: "boom" },
+      });
+      expect(hints, category).toBe(0);
+      expect(strict, category).toHaveLength(1);
+      expect(strict[0].category, category).toBe(category);
+    }
   });
 
-  it("extracts a single CompilerErrorDetail with Error severity", () => {
-    const result = extractCriticalErrorDetails({
+  // A category the installed plugin does not know about must fail loud rather
+  // than be written off as cosmetic — otherwise an upstream taxonomy change
+  // silently retires real debt.
+  it("treats an unrecognised category as strict", () => {
+    const { hints, strict } = bucketCompileError({
       kind: "CompileError",
-      detail: { severity: "Error", reason: "Mutating a ref", loc: { start: { line: 42 } } },
+      detail: { category: "SomeFutureCategory", reason: "new rule" },
     });
-    expect(result).toEqual([{ line: 42, reason: "Mutating a ref" }]);
+    expect(hints).toBe(0);
+    expect(strict[0].severity).toBe("Error");
   });
 
-  it("extracts only Error-severity entries from a CompilerDiagnostic", () => {
-    const result = extractCriticalErrorDetails({
+  it("never reads detail.severity, which throws for unknown categories", () => {
+    const detail = {
+      category: "SomeFutureCategory",
+      reason: "new rule",
+      get severity() {
+        throw new Error("Unsupported category SomeFutureCategory");
+      },
+    };
+    expect(() => bucketCompileError({ kind: "CompileError", detail })).not.toThrow();
+  });
+
+  it("records a malformed event strictly rather than dropping it", () => {
+    const { hints, strict } = bucketCompileError({ kind: "CompileError" });
+    expect(hints).toBe(0);
+    expect(strict).toHaveLength(1);
+    expect(strict[0].reason).toMatch(/malformed/i);
+  });
+
+  // `CompilerDiagnostic` keeps its children under `options.details`, not
+  // `details`. Reading the public-looking property alone collapses a
+  // multi-location diagnostic to a single entry.
+  it("expands the children a CompilerDiagnostic keeps under options.details", () => {
+    const { strict } = bucketCompileError({
       kind: "CompileError",
       detail: {
-        details: [
-          { severity: "Todo", reason: "Handle Import expressions", loc: { start: { line: 10 } } },
-          { severity: "Error", reason: "Mutating a ref", loc: { start: { line: 42 } } },
-          { severity: "Hint", reason: "Consider memoizing", loc: { start: { line: 50 } } },
-        ],
+        category: ERROR_CATEGORY,
+        reason: "parent",
+        options: {
+          details: [
+            { category: ERROR_CATEGORY, reason: "first", loc: { start: { line: 12 } } },
+            { category: ERROR_CATEGORY, reason: "second", loc: { start: { line: 34 } } },
+          ],
+        },
       },
     });
-    expect(result).toEqual([{ line: 42, reason: "Mutating a ref" }]);
+    expect(strict.map((b) => b.line)).toEqual([12, 34]);
   });
 
-  it("extracts multiple Error-severity entries from a CompilerDiagnostic", () => {
-    const result = extractCriticalErrorDetails({
+  it("prefers primaryLocation() over the enclosing function's line", () => {
+    const { strict } = bucketCompileError({
+      kind: "CompileError",
+      fnLoc: { start: { line: 3 } },
+      detail: {
+        category: ERROR_CATEGORY,
+        reason: "ref read",
+        primaryLocation: () => ({ start: { line: 52 } }),
+      },
+    });
+    expect(strict[0].line).toBe(52);
+  });
+
+  it("falls back to the function location when nothing more precise exists", () => {
+    const { strict } = bucketCompileError({
+      kind: "CompileError",
+      fnLoc: { start: { line: 7 } },
+      detail: { category: ERROR_CATEGORY, reason: "no location" },
+    });
+    expect(strict[0].line).toBe(7);
+  });
+
+  it("splits a mixed diagnostic across both buckets", () => {
+    const { hints, strict } = bucketCompileError({
       kind: "CompileError",
       detail: {
-        details: [
-          { severity: "Error", reason: "First error", loc: { start: { line: 10 } } },
-          { severity: "Error", reason: "Second error", loc: { start: { line: 20 } } },
-        ],
+        category: ERROR_CATEGORY,
+        reason: "parent",
+        options: {
+          details: [
+            { category: HINT_CATEGORY, reason: "cosmetic" },
+            { category: ERROR_CATEGORY, reason: "real" },
+          ],
+        },
       },
     });
-    expect(result).toEqual([
-      { line: 10, reason: "First error" },
-      { line: 20, reason: "Second error" },
-    ]);
-  });
-
-  it("falls back to fnLoc when detail has no loc", () => {
-    const result = extractCriticalErrorDetails({
-      kind: "CompileError",
-      detail: { severity: "Error", reason: "No specific loc" },
-      fnLoc: { start: { line: 99 } },
-    });
-    expect(result).toEqual([{ line: 99, reason: "No specific loc" }]);
-  });
-
-  it("falls back to '?' when no loc is available at all", () => {
-    const result = extractCriticalErrorDetails({
-      kind: "CompileError",
-      detail: { severity: "Error", reason: "Nowhere" },
-    });
-    expect(result).toEqual([{ line: "?", reason: "Nowhere" }]);
-  });
-
-  it("prefers description over reason when reason is absent (CompilerDiagnostic shape)", () => {
-    const result = extractCriticalErrorDetails({
-      kind: "CompileError",
-      detail: {
-        details: [
-          { severity: "Error", description: "From description field", loc: { start: { line: 5 } } },
-        ],
-      },
-    });
-    expect(result).toEqual([{ line: 5, reason: "From description field" }]);
-  });
-
-  it("falls back to parent detail.reason for entries missing their own reason", () => {
-    const result = extractCriticalErrorDetails({
-      kind: "CompileError",
-      detail: {
-        reason: "Parent reason",
-        details: [{ severity: "Error", loc: { start: { line: 3 } } }],
-      },
-    });
-    expect(result).toEqual([{ line: 3, reason: "Parent reason" }]);
-  });
-
-  it("handles mixed missing loc references in multiple entries", () => {
-    const result = extractCriticalErrorDetails({
-      kind: "CompileError",
-      detail: {
-        details: [
-          { severity: "Error", reason: "Has loc", loc: { start: { line: 12 } } },
-          { severity: "Error", reason: "No loc" },
-        ],
-      },
-      fnLoc: { start: { line: 77 } },
-    });
-    expect(result).toEqual([
-      { line: 12, reason: "Has loc" },
-      { line: 77, reason: "No loc" },
-    ]);
+    expect(hints).toBe(1);
+    expect(strict).toHaveLength(1);
+    expect(strict[0].reason).toBe("real");
   });
 });

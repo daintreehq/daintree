@@ -146,6 +146,16 @@ export const PROJECT_SECTION_ORDER = [
 export type ProjectSectionKey = (typeof PROJECT_SECTION_ORDER)[number];
 
 /**
+ * The Scratch band's key in the persisted collapse map. Scratch is not a
+ * `ProjectSectionKey` — it renders outside `results` entirely — but it folds
+ * away on the same affordance, so it shares the one preference record.
+ */
+export const PROJECT_SWITCHER_SCRATCH_BAND_KEY = "scratch";
+
+/** Every band the switcher can fold away, project bands plus Scratch (#11943). */
+export type ProjectSwitcherBandKey = ProjectSectionKey | typeof PROJECT_SWITCHER_SCRATCH_BAND_KEY;
+
+/**
  * Header text per band.
  *
  * `current` went unlabelled while the keyboard cursor was the loudest thing on
@@ -239,15 +249,39 @@ function toProjectRow(project: SearchableProject): ProjectSwitcherProjectRow {
   return { kind: "project", ...project };
 }
 
+/**
+ * One browse band, WITHOUT its rows.
+ *
+ * A collapsed band contributes nothing to {@link UseProjectSwitcherPaletteReturn.results},
+ * so its header would vanish along with its rows and leave no way to unfold it
+ * again. This carries the header's facts — which bands exist, and how many
+ * projects each is holding — separately from the array the arrow keys walk, so
+ * bands stay a *view* over `results` rather than a second, wider list (#11071).
+ */
+export interface ProjectSwitcherBrowseBand {
+  key: ProjectSectionKey;
+  label: string;
+  /** Projects in the band, collapsed or not — what the header's count reports. */
+  itemCount: number;
+  collapsed: boolean;
+}
+
 export interface UseProjectSwitcherPaletteReturn {
   isOpen: boolean;
   mode: ProjectSwitcherMode;
   query: string;
   /**
    * The rows the palette renders, in render order — and the only array
-   * `selectedIndex` may be read against. Every mode lists every registered
-   * project: browse is section-ordered (see {@link PROJECT_SECTION_ORDER}) and
-   * search is rank-ordered, but neither is scoped or capped.
+   * `selectedIndex` may be read against. Browse is section-ordered (see
+   * {@link PROJECT_SECTION_ORDER}) and search is rank-ordered; neither is
+   * capped.
+   *
+   * Browse omits the rows of bands the user has folded away, which is what
+   * keeps every entry a RENDERED row: the highlight, `aria-activedescendant`
+   * and Enter all address this array, and none of them may name a row that is
+   * not on screen (#11071). Collapsed bands keep their headers via
+   * {@link browseBands}. Search never applies the collapse — a query that
+   * silently skipped its own matches would be worse than a band unfolding.
    *
    * Browse rows are all projects; the scratches belong to the pinned section
    * below the list. Search rows are mixed, so a scratch is reachable by name
@@ -255,6 +289,13 @@ export interface UseProjectSwitcherPaletteReturn {
    * scratch doesn't have.
    */
   results: ProjectSwitcherRow[];
+  /**
+   * Every browse band in render order, including ones holding no visible rows
+   * because the user collapsed them. Always describes the BROWSE layout — a
+   * surface rendering the ranked search list ignores it, since search has no
+   * bands. See {@link ProjectSwitcherBrowseBand}.
+   */
+  browseBands: ProjectSwitcherBrowseBand[];
   /** True while `deferredQuery` has not yet caught up to `query` — the results shown are from the previous query. */
   isFiltering: boolean;
   /**
@@ -744,18 +785,29 @@ function compareWithinSection(
  * by within each tier of name-match quality. Browse ignores it: its own freeze
  * already holds that order.
  */
+/**
+ * `visibleBrowseRows` omits the bands the user folded away; `allBrowseRows`
+ * does not. Searching uses the unfolded list on BOTH its paths — not just the
+ * ranked one. The ranking runs on the deferred query, so a non-empty box spends
+ * a commit with no ranked rows yet, and serving the filtered browse list for
+ * that frame would blink a matching project out of existence on the way in.
+ */
 function buildResults(
-  browseRows: ProjectSwitcherRow[],
+  visibleBrowseRows: ProjectSwitcherRow[],
+  allBrowseRows: ProjectSwitcherRow[],
   browseOrdered: SearchableProject[],
   scratches: SearchableScratch[],
   rankQuery: string,
   isSearching: boolean,
   activityKeys: ReadonlyMap<string, SearchActivityKey> | null
 ): ProjectSwitcherRow[] {
-  if (isSearching && rankQuery.trim()) {
-    return rankSwitcherMatches(rankQuery, browseOrdered, scratches, activityKeys);
+  if (isSearching) {
+    if (rankQuery.trim()) {
+      return rankSwitcherMatches(rankQuery, browseOrdered, scratches, activityKeys);
+    }
+    return allBrowseRows;
   }
-  return browseRows;
+  return visibleBrowseRows;
 }
 
 /**
@@ -1024,6 +1076,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   }, [searchableProjects]);
 
   const otherProjectsSortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
+  const collapsedBands = usePreferencesStore((state) => state.projectSwitcherCollapsedBands);
 
   const liveBrowseOrder = useMemo<SearchableProject[]>(() => {
     return [...searchableProjects].sort((a, b) => {
@@ -1393,6 +1446,38 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     [browseOrdered]
   );
 
+  // Derived from the COMPLETE ordered list, before any collapse filtering — a
+  // folded band still has to say it exists and how much it is holding.
+  const browseBands = useMemo<ProjectSwitcherBrowseBand[]>(() => {
+    const bands: ProjectSwitcherBrowseBand[] = [];
+    for (const project of browseOrdered) {
+      const last = bands.at(-1);
+      if (last && last.key === project.section) {
+        last.itemCount += 1;
+        continue;
+      }
+      bands.push({
+        key: project.section,
+        label: PROJECT_SECTION_LABELS[project.section],
+        itemCount: 1,
+        collapsed: collapsedBands[project.section] === true,
+      });
+    }
+    return bands;
+  }, [browseOrdered, collapsedBands]);
+
+  // Held apart from `browseRows` so an all-expanded switcher — the default, and
+  // the common case — keeps browse's array identity stable rather than minting
+  // a filtered copy on every unrelated re-render.
+  const hasCollapsedBand = useMemo(() => browseBands.some((band) => band.collapsed), [browseBands]);
+
+  const visibleBrowseRows = useMemo<ProjectSwitcherRow[]>(() => {
+    if (!hasCollapsedBand) return browseRows;
+    return browseRows.filter(
+      (row) => row.kind !== "project" || collapsedBands[row.section] !== true
+    );
+  }, [browseRows, hasCollapsedBand, collapsedBands]);
+
   // True exactly when `results` is the ranked, scratch-carrying list — which is
   // one commit behind `isSearching`, since the ranking runs on the deferred
   // query. The pinned scratch section hides on THIS, never on the live query:
@@ -1402,6 +1487,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const results = useMemo<ProjectSwitcherRow[]>(
     () =>
       buildResults(
+        visibleBrowseRows,
         browseRows,
         browseOrdered,
         scratchResults,
@@ -1409,7 +1495,15 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         isSearching,
         frozenSearchActivity?.keys ?? null
       ),
-    [browseRows, browseOrdered, scratchResults, resultsQuery, isSearching, frozenSearchActivity]
+    [
+      visibleBrowseRows,
+      browseRows,
+      browseOrdered,
+      scratchResults,
+      resultsQuery,
+      isSearching,
+      frozenSearchActivity,
+    ]
   );
 
   // The selected ROW is the state; its index is derived. Tracking an index
@@ -1507,10 +1601,19 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       // no active row, so it lands on row 1 rather than skipping past it
       // (#11085); an all-missing list still preselects something rather than
       // nothing.
+      //
+      // Folded bands are not candidates: their rows are absent from `results`,
+      // so preselecting one would leave the highlight addressing a row nobody
+      // can see. With every band folded there is nothing to preselect, and
+      // `null` is the honest answer — arrows and Enter both no-op on an empty
+      // list rather than committing something offscreen.
+      const selectable = liveBrowseOrder.filter(
+        (project) => collapsedBands[project.section] !== true
+      );
       const initial =
-        liveBrowseOrder.find((project) => !project.isActive && !project.isMissing) ??
-        liveBrowseOrder.find((project) => !project.isActive) ??
-        liveBrowseOrder[0];
+        selectable.find((project) => !project.isActive && !project.isMissing) ??
+        selectable.find((project) => !project.isActive) ??
+        selectable[0];
       setSelectedRowId(initial?.id ?? null);
     },
     [
@@ -1520,6 +1623,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       captureSearchActivity,
       searchableProjects,
       scratchResults,
+      collapsedBands,
     ]
   );
 
@@ -2315,6 +2419,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     mode,
     query,
     results,
+    browseBands,
     isFiltering,
     isRankedSearch,
     activeProject,

@@ -230,7 +230,7 @@ Between the sidebar and content grid, there's a draggable resize handle:
 | (drag handle: 3px wide, visible on hover as a 2px rounded bar)
 ```
 
-The handle is nearly invisible by default (`text-daintree-text/20`), brightens on hover (`/35`), and turns accent-colored when actively dragging.
+The handle is nearly invisible by default (`bg-daintree-text/20`), brightens on hover (`/35`) and again while dragging (`/50`), and turns accent-colored only on keyboard focus. These are background composites, not the retired text ramp — they belong to the alpha-modified `daintree-*` set left to #12029.
 
 ---
 
@@ -359,7 +359,7 @@ The dock sits at the very bottom of the window. It's a horizontal bar showing mi
 ```
 
 ```css
-background: var(--dock-bg, var(--color-daintree-sidebar));
+background: var(--dock-bg, var(--color-surface-sidebar));
 border-top: 1px solid var(--dock-border);
 box-shadow: var(--dock-shadow);
 ```
@@ -471,7 +471,7 @@ The settings dialog is split into two panes:
 |--------|                                  |
 | Panel  |  Each card uses:                 |
 | Wktree |  bg: settings-card-bg            |
-| Toolbar|  border: 1px daintree-border       |
+| Toolbar|  border: 1px border-default      |
 | Environ|  rounded corners                 |
 |--------|                                  |
 | CLI    |                                  |
@@ -543,10 +543,10 @@ Within some settings sections (e.g., General has Overview/Hibernation/Display), 
 The active subtab shows a 2px `accent-primary` colored line along the bottom:
 
 ```css
-isactive?"border-b-2 border-daintree-accent text-daintree-text": "border-b-2 border-transparent text-text-secondary";
+isactive?"border-b-2 border-accent-primary text-text-primary": "border-b-2 border-transparent text-text-secondary";
 ```
 
-Inactive tabs have a transparent bottom border (same 2px so layout doesn't shift) and use `text-secondary`. On hover, inactive tabs show `border-daintree-border` (a subtle gray line).
+Inactive tabs have a transparent bottom border (same 2px so layout doesn't shift) and use `text-secondary`. On hover, inactive tabs show `border-border-default` (a subtle gray line).
 
 ### Settings Cards
 
@@ -764,12 +764,12 @@ Some themes have a **secondary accent** — a second color lane:
 
 Four fixed hue families, each theme tunes brightness/saturation:
 
-| Token            | Hue   | Usage                                                |
-| ---------------- | ----- | ---------------------------------------------------- |
-| `status-success` | Green | Completed states, positive outcomes, git additions   |
-| `status-warning` | Amber | Caution states, pending items                        |
-| `status-danger`  | Red   | Errors, failures, destructive actions, git deletions |
-| `status-info`    | Blue  | Neutral information, help text                       |
+| Token | Hue | Usage |
+| --- | --- | --- |
+| `status-success` | Green | Transient confirmations, named outcomes, finite checklist marks, git additions. Live processes use `activity-working`; standing health chrome uses neither — see [status-success-policy.md](./status-success-policy.md) |
+| `status-warning` | Amber | Caution states, pending items |
+| `status-danger` | Red | Errors, failures, destructive actions, git deletions |
+| `status-info` | Blue | Neutral information, help text |
 
 These are used in badges, toast notifications, diff viewer gutters, and terminal ANSI color fallbacks.
 

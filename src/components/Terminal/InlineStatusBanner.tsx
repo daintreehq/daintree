@@ -39,7 +39,6 @@ interface BaseInlineStatusBannerProps {
   className?: string;
   role?: "alert" | "status";
   ariaLive?: "off" | "polite" | "assertive";
-  onClose?: () => void;
   /** Accessible label for the dismiss button. Defaults to "Dismiss". */
   closeAriaLabel?: string;
   /**
@@ -57,12 +56,36 @@ interface BaseInlineStatusBannerProps {
    * this forces the multi-line layout even without a `description`.
    */
   descriptionExtras?: React.ReactNode;
+}
+
+/**
+ * The dismissal surface, in the shape every severity but `success` gets:
+ * both halves optional, because a persistent banner is a legitimate thing
+ * for an error or a warning to be.
+ */
+interface OptionalDismissProps {
+  onClose?: () => void;
   /**
    * Fire `onClose` automatically after this many milliseconds. The timer
-   * clears on unmount and resets if the value or `onClose` changes. Pass
-   * `undefined` to disable (callers gate their own conditions this way).
+   * clears on unmount and restarts when this value changes; a new `onClose`
+   * is picked up through a ref without restarting it. Pass `undefined` to
+   * disable (callers gate their own conditions this way).
    */
   autoDismissAfter?: number;
+}
+
+/**
+ * `severity="success"` is pinned to transient confirmation by construction
+ * (#12002): green is only allowed to say "this just happened", never "things
+ * are fine", so a success banner has to state how it leaves. Requiring the
+ * timer and the handler it fires makes that structural rather than advisory
+ * — there is no way to spell a success banner that stands. Completion that
+ * genuinely needs to persist is `severity="neutral"`, which is what
+ * `AgentCompletionBanner` already uses.
+ */
+interface RequiredDismissProps {
+  onClose: () => void;
+  autoDismissAfter: number;
 }
 
 /**
@@ -91,8 +114,12 @@ interface NonErrorActionProps {
 
 export type InlineStatusBannerProps = BaseInlineStatusBannerProps &
   (
-    | ({ severity: "error" } & ErrorActionProps)
-    | ({ severity: Exclude<InlineStatusBannerSeverity, "error"> } & NonErrorActionProps)
+    | ({ severity: "error" } & ErrorActionProps & OptionalDismissProps)
+    | ({ severity: "success" } & NonErrorActionProps & RequiredDismissProps)
+    | ({
+        severity: Exclude<InlineStatusBannerSeverity, "error" | "success">;
+      } & NonErrorActionProps &
+        OptionalDismissProps)
   );
 
 const SEVERITY_VAR: Record<Exclude<InlineStatusBannerSeverity, "neutral">, string> = {
@@ -105,11 +132,11 @@ const SEVERITY_VAR: Record<Exclude<InlineStatusBannerSeverity, "neutral">, strin
 function getButtonClasses(variant: ButtonVariant): string {
   switch (variant) {
     case "primary":
-      return "bg-daintree-border text-daintree-text hover:bg-daintree-border/80";
+      return "bg-border-default text-text-primary hover:bg-daintree-border/80";
     case "accent":
       return "bg-status-info/10 text-status-info hover:bg-status-info/20";
     case "dismiss":
-      return "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50";
+      return "text-text-secondary hover:text-text-primary hover:bg-daintree-border/50";
     case "danger":
     case "dangerFilled":
       return "rounded transition-colors";
@@ -154,7 +181,14 @@ export function InlineStatusBanner({
 }: InlineStatusBannerProps) {
   const prefersReducedMotion =
     typeof window !== "undefined" &&
-    (window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+    // `matchMedia` is guarded separately from `window`: the SSR check above only
+    // covers `window` being absent entirely, but a jsdom environment has a
+    // `window` with no `matchMedia` implementation. Calling it there threw and
+    // took the whole banner subtree down with it — which, for a component this
+    // widely mounted, turns one missing test-env stub into an unrelated-looking
+    // render failure somewhere else on the page.
+    ((typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches) ||
       (typeof document !== "undefined" &&
         (document.body.getAttribute("data-reduce-animations") === "true" ||
           document.body.getAttribute("data-performance-mode") === "true")));
@@ -192,10 +226,17 @@ export function InlineStatusBanner({
   }, [onClose]);
 
   useEffect(() => {
-    if (!autoDismissAfter || !onCloseRef.current) return;
+    if (import.meta.env.DEV && severity === "success" && !(autoDismissAfter! > 0)) {
+      console.warn(
+        'InlineStatusBanner: severity="success" needs a positive autoDismissAfter. ' +
+          `Got ${String(autoDismissAfter)}, so this banner will stand — which is the one ` +
+          'thing a success banner may not do. Use severity="neutral" for persistent completion.'
+      );
+    }
+    if (!(autoDismissAfter! > 0) || !onCloseRef.current) return;
     const timer = setTimeout(() => onCloseRef.current?.(), autoDismissAfter);
     return () => clearTimeout(timer);
-  }, [autoDismissAfter]);
+  }, [autoDismissAfter, severity]);
 
   useEffect(() => {
     if (!shouldAnimate) return;
@@ -226,7 +267,7 @@ export function InlineStatusBanner({
       }}
       aria-label={closeAriaLabel}
       className={cn(
-        "p-1 rounded text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent shrink-0",
+        "p-1 rounded text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary shrink-0",
         isTitleBarSurface && "app-no-drag"
       )}
     >
@@ -242,7 +283,11 @@ export function InlineStatusBanner({
         hasDescription
           ? "flex flex-col gap-2 px-3 py-2 shrink-0"
           : "flex items-center justify-between gap-3 px-3 py-2 shrink-0",
-        shouldAnimate && "transition duration-250",
+        // Scoped, not bare: `transition` carries box-shadow, every colour
+        // property and filter along with it, and this banner's entry is an
+        // opacity-and-slide. 250ms is BANNER_ENTER_DURATION from the motion
+        // scale, which is what generates this utility.
+        shouldAnimate && "transition-[opacity,translate] duration-250",
         shouldAnimate && (isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2"),
         isNeutral && "bg-overlay-subtle",
         // The native caption strip is a fixed 48px tall. A shorter banner would
@@ -279,7 +324,7 @@ export function InlineStatusBanner({
           <div className="flex-1 min-w-0">
             <div className="flex justify-between items-start gap-2">
               <span
-                className={cn("text-sm font-medium", isNeutral && "text-daintree-text")}
+                className={cn("text-sm font-medium", isNeutral && "text-text-primary")}
                 style={isNeutral ? undefined : { color: `var(${colorVar})` }}
               >
                 {title}
@@ -288,7 +333,7 @@ export function InlineStatusBanner({
             </div>
             {description && (
               <p
-                className={cn("text-xs mt-0.5 break-words", isNeutral && "text-daintree-text/70")}
+                className={cn("text-xs mt-0.5 break-words", isNeutral && "text-text-secondary")}
                 style={
                   isNeutral
                     ? undefined
@@ -302,7 +347,7 @@ export function InlineStatusBanner({
               <p
                 className={cn(
                   "text-xs font-mono mt-1 truncate",
-                  isNeutral && "text-daintree-text/60"
+                  isNeutral && "text-text-secondary"
                 )}
                 style={
                   isNeutral
@@ -322,7 +367,7 @@ export function InlineStatusBanner({
           </div>
         ) : (
           <span
-            className={cn("text-sm", isNeutral && "text-daintree-text")}
+            className={cn("text-sm", isNeutral && "text-text-primary")}
             style={isNeutral ? undefined : { color: `var(${colorVar})` }}
           >
             {title}
@@ -364,7 +409,7 @@ export function InlineStatusBanner({
                   action.iconOnly
                     ? "p-1"
                     : "flex items-center gap-1.5 px-2 py-1 text-xs font-medium",
-                  "transition-colors outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
+                  "transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
                   variantClasses,
                   (variant === "danger" || variant === "dangerFilled") &&
                     "hover:[color:var(--hover-color)] hover:[background:var(--hover-bg)]",

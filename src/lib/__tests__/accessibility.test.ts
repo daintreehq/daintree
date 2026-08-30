@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { closeAndAnnounce, restoreFocusTo } from "../accessibility";
+import { closeAndAnnounce, restoreFocusTo, TABBABLE_SELECTOR } from "../accessibility";
 import {
   useAnnouncerStore,
   _resetAnnouncerDeliveryForTests,
@@ -184,5 +184,57 @@ describe("restoreFocusTo", () => {
 
     expect(() => restoreFocusTo(removed)).not.toThrow();
     expect(document.activeElement).toBe(document.body);
+  });
+});
+
+describe("TABBABLE_SELECTOR excludes roving-tabindex members", () => {
+  /**
+   * The rule: an element with tabindex="-1" is not in the tab order, whatever its tag.
+   * Roving-tabindex widgets (tablist, radiogroup, listbox) mark their inactive members
+   * -1 for exactly that reason, and a dialog that treats one as its first tabbable
+   * element focuses the wrong thing on open.
+   */
+  function tabbablesOf(html: string): string[] {
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    document.body.appendChild(host);
+    try {
+      return Array.from(host.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)).map(
+        (el) => el.dataset.id ?? el.tagName
+      );
+    } finally {
+      host.remove();
+    }
+  }
+
+  it("skips a native control that opted out of the tab order", () => {
+    expect(
+      tabbablesOf(`
+        <button data-id="rovingInactive" tabindex="-1">Global</button>
+        <button data-id="rovingActive" tabindex="0">Project</button>
+      `)
+    ).toEqual(["rovingActive"]);
+  });
+
+  it("applies the rule across tag types, not just to bare [tabindex]", () => {
+    const html = `
+      <a data-id="a" href="#" tabindex="-1">a</a>
+      <input data-id="input" tabindex="-1" />
+      <select data-id="select" tabindex="-1"></select>
+      <textarea data-id="textarea" tabindex="-1"></textarea>
+      <button data-id="button" tabindex="-1"></button>
+      <div data-id="div" tabindex="-1"></div>
+    `;
+    expect(tabbablesOf(html)).toEqual([]);
+  });
+
+  it("still returns ordinary controls that never opted out", () => {
+    expect(
+      tabbablesOf(`
+        <a data-id="link" href="#">link</a>
+        <input data-id="field" />
+        <button data-id="action"></button>
+      `)
+    ).toEqual(["link", "field", "action"]);
   });
 });

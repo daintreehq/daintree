@@ -124,24 +124,25 @@ export function ThemeSelector<T extends { id: string }>({
       onBlur={handlePreviewLeave}
       className={cn(
         "flex flex-col gap-1.5 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
         "[&>*]:pointer-events-none",
         item.id === selectedId
           ? "border-border-strong bg-overlay-selected"
-          : "border-daintree-border bg-daintree-bg hover:border-daintree-text/30"
+          : "border-border-default bg-surface-canvas hover:border-daintree-text/30"
       )}
     >
       {renderPreview(item)}
       {renderMeta ? (
         renderMeta(item)
       ) : (
-        <span className="text-xs text-daintree-text truncate">{getName(item)}</span>
+        <span className="text-xs text-text-primary truncate">{getName(item)}</span>
       )}
     </button>
   );
 
   return (
     <div className={cn("space-y-2", className)}>
-      <div className="sticky top-0 z-20 bg-daintree-bg py-1">
+      <div className="sticky top-0 z-20 bg-surface-canvas py-1">
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-daintree-text/40" />
           <input
@@ -156,20 +157,18 @@ export function ThemeSelector<T extends { id: string }>({
             }}
             placeholder="Filter themes..."
             aria-label="Filter themes"
-            className="w-full pl-7 pr-2 py-1.5 text-xs rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40"
+            className="w-full pl-7 pr-2 py-1.5 text-xs rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40"
           />
         </div>
       </div>
 
       {isEmpty ? (
-        <p className="text-xs text-daintree-text/50 text-center py-4">
-          No themes match your search.
-        </p>
+        <p className="text-xs text-text-secondary text-center py-4">No themes match your search.</p>
       ) : filteredGroups ? (
         <div role="listbox" id={id} aria-label="Theme list" className="space-y-2">
           {filteredGroups.map((group) => (
             <div key={group.label} role="group" aria-label={group.label}>
-              <p className="text-[10px] font-medium uppercase tracking-wider text-daintree-text/40 select-none px-1 mb-1">
+              <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary select-none px-1 mb-1">
                 {group.label}
               </p>
               <div className={cn("grid gap-2", colsClass)}>{group.items.map(renderCard)}</div>

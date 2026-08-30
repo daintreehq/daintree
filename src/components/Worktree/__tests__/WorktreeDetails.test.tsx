@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import type { WorktreeState } from "@/types";
 import type { WorktreeChanges } from "@shared/types/git";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -220,5 +220,65 @@ describe("WorktreeDetails — open changes button (#11041)", () => {
   it("hides the button when the change list is empty", () => {
     renderDetails({ worktree: baseWorktree, hasChanges: true });
     expect(screen.queryByRole("button", { name: "Open changes" })).toBeNull();
+  });
+});
+
+describe("WorktreeDetails error overflow", () => {
+  const errors = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `err-${i}`,
+      timestamp: TEST_NOW + i,
+      type: "git" as const,
+      message: `Worktree failure ${i}`,
+      retryability: "none" as const,
+      dismissed: false,
+    }));
+
+  it("shows every error inline while the stack fits", () => {
+    renderDetails({ worktreeErrors: errors(3) });
+    expect(screen.getByText("Worktree failure 2")).toBeDefined();
+    expect(screen.queryByTestId("compact-error-overflow")).toBeNull();
+  });
+
+  it("moves the fourth error onwards behind a real disclosure (#12001)", () => {
+    // It used to be "+N more errors" as static text, next to retry and dismiss
+    // handlers the hidden rows never got to use.
+    renderDetails({ worktreeErrors: errors(6) });
+    expect(screen.getByText("Worktree failure 2")).toBeDefined();
+    expect(screen.queryByText("Worktree failure 3")).toBeNull();
+
+    const trigger = screen.getByTestId("compact-error-overflow");
+    expect(trigger.textContent).toContain("3");
+
+    fireEvent.click(trigger);
+    expect(screen.getByText("Worktree failure 5")).toBeDefined();
+  });
+
+  it("opens the disclosure without triggering the card behind it", () => {
+    // WorktreeDetails renders inside a click-to-select card; from the overview
+    // modal that selection unmounts the card, so an unstopped click would open
+    // the disclosure and destroy it in the same gesture.
+    const onParentClick = vi.fn();
+    render(
+      <TooltipProvider>
+        <div onClick={onParentClick}>
+          <WorktreeDetails {...baseProps} worktreeErrors={errors(6)} />
+        </div>
+      </TooltipProvider>
+    );
+
+    fireEvent.click(screen.getByTestId("compact-error-overflow"));
+    expect(onParentClick).not.toHaveBeenCalled();
+    expect(screen.getByText("Worktree failure 5")).toBeDefined();
+  });
+
+  it("routes a hidden error's dismissal back to the surface's own handler", () => {
+    const onDismissError = vi.fn();
+    renderDetails({ worktreeErrors: errors(5), onDismissError });
+
+    fireEvent.click(screen.getByTestId("compact-error-overflow"));
+    const row = screen.getByText("Worktree failure 4").closest("div")!;
+    fireEvent.click(within(row.parentElement ?? row).getAllByLabelText(/dismiss/i)[0]!);
+    expect(onDismissError).toHaveBeenCalledWith("err-4");
   });
 });

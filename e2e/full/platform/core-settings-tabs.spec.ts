@@ -5,7 +5,7 @@ import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
 
-import { openSettings } from "../../helpers/panels";
+import { openSettings, selectSettingsScope } from "../../helpers/panels";
 
 test.describe.serial("Core: Settings Tabs Coverage", () => {
   let ctx: AppContext;
@@ -341,12 +341,12 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(fullButton).toBeVisible({ timeout: T_SHORT });
 
     // Click "Errors Only" and verify it becomes the selected option. The
-    // selected option renders a filled radio dot (the inner bg-daintree-text
+    // selected option renders a filled radio dot (the inner bg-text-primary
     // div only exists when checked) and that selection is mutually exclusive,
     // so assert the observable selection moved to "Errors Only" and left "Off".
     await errorsButton.click();
-    await expect(errorsButton.locator("div.bg-daintree-text")).toBeVisible({ timeout: T_SHORT });
-    await expect(offButton.locator("div.bg-daintree-text")).toHaveCount(0, { timeout: T_SHORT });
+    await expect(errorsButton.locator("div.bg-text-primary")).toBeVisible({ timeout: T_SHORT });
+    await expect(offButton.locator("div.bg-text-primary")).toHaveCount(0, { timeout: T_SHORT });
 
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
@@ -428,8 +428,8 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await searchInput.fill("font size");
     await window.waitForTimeout(T_SETTLE);
 
-    // h3 switches to "Search Results"
-    await expect(window.locator("h3", { hasText: "Search Results" })).toBeVisible({
+    // h3 switches to "Search results"
+    await expect(window.locator("h3", { hasText: "Search results" })).toBeVisible({
       timeout: T_SHORT,
     });
 
@@ -447,7 +447,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     // Clear search and verify we return to normal tab view
     await searchInput.fill("");
     await window.waitForTimeout(T_SETTLE);
-    await expect(window.locator("h3", { hasText: "Search Results" })).not.toBeVisible({
+    await expect(window.locator("h3", { hasText: "Search results" })).not.toBeVisible({
       timeout: T_SHORT,
     });
 
@@ -465,8 +465,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     // Switch to Project scope (Radix Select)
-    await window.locator('[aria-label="Settings scope"]').click();
-    await window.locator('[role="option"]', { hasText: "Project" }).click();
+    await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
     // Navigate to Resources tab — scope everything to this panel
@@ -554,8 +553,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
-    await window.locator('[aria-label="Settings scope"]').click();
-    await window.locator('[role="option"]', { hasText: "Project" }).click();
+    await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
     await window
@@ -578,7 +576,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
   });
 
-  // ── Project Resources Tab: Default Worktree Mode ──────────
+  // ── Project Resources Tab: Default worktree mode ──────────
 
   test("Project Resources tab: toggle default worktree mode", async () => {
     const { window } = ctx;
@@ -586,8 +584,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     // Switch to Project scope
-    await window.locator('[aria-label="Settings scope"]').click();
-    await window.locator('[role="option"]', { hasText: "Project" }).click();
+    await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
     await window
@@ -615,8 +612,8 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     // rest of the test — gate on it rather than continuing against a broken state.
     await expect(selectorBar).toBeVisible({ timeout: T_MEDIUM });
 
-    // Default Worktree Mode should be visible
-    await expect(panel.locator("text=Default Worktree Mode")).toBeVisible({ timeout: T_SHORT });
+    // Default worktree mode should be visible
+    await expect(panel.locator("text=Default worktree mode")).toBeVisible({ timeout: T_SHORT });
 
     // Scope radios to the worktreeMode group — AutomationTab also renders a
     // branchPrefixMode radio group in this panel, so an unscoped lookup would
@@ -654,8 +651,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     // Switch to Project scope
-    await window.locator('[aria-label="Settings scope"]').click();
-    await window.locator('[role="option"]', { hasText: "Project" }).click();
+    await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
     await window
@@ -722,8 +718,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     // Switch to Project scope
-    await window.locator('[aria-label="Settings scope"]').click();
-    await window.locator('[role="option"]', { hasText: "Project" }).click();
+    await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
     // Navigate to Variables tab
@@ -773,8 +768,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     // Switch to Project scope
-    await window.locator('[aria-label="Settings scope"]').click();
-    await window.locator('[role="option"]', { hasText: "Project" }).click();
+    await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Variables" }).click();
@@ -792,7 +786,9 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
     // Two filled rows make the form dirty, so the Save button must render.
     // Clicking it runs validate(), which flags the duplicate key.
-    const saveButton = window.locator("button", { hasText: "Save" }).first();
+    const saveButton = window
+      .getByRole("tabpanel", { name: "Variables" })
+      .getByRole("button", { name: "Save", exact: true });
     await expect(saveButton).toBeVisible({ timeout: T_SHORT });
     await saveButton.click();
 

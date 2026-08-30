@@ -250,3 +250,56 @@ export async function getGridBarDwellFloorMs(page: Page): Promise<number> {
     return a.GRID_BAR_DWELL_FLOOR_MS;
   });
 }
+
+export interface SeedHistoryEntry {
+  id: string;
+  type: NotificationType;
+  message: string;
+  timestamp: number;
+  title?: string;
+  correlationId?: string;
+  seenAsToast?: boolean;
+  countable?: boolean;
+  archivedAt?: number | null;
+  context?: {
+    projectId?: string;
+    worktreeId?: string;
+    panelId?: string;
+    eventKind?: string;
+  };
+  actions?: { label: string; actionId: string; variant?: "primary" | "secondary" }[];
+}
+
+/**
+ * Replaces the entire notification history in one write, with full control over
+ * timestamps, actions, context, and archived/snoozed state — the axes
+ * `injectHistoryEntry` can't reach because `addEntry` derives them.
+ */
+export async function seedNotificationHistory(
+  page: Page,
+  entries: SeedHistoryEntry[],
+  snoozedThreads: Record<string, number> = {}
+): Promise<void> {
+  await waitForNotificationsBackdoor(page);
+  await page.evaluate(
+    ({ entries, snoozedThreads }) => {
+      const a = (
+        window as unknown as {
+          __daintreeNotificationsE2E?: { seedHistory: (input: unknown) => void };
+        }
+      ).__daintreeNotificationsE2E;
+      if (!a) throw new Error("__daintreeNotificationsE2E backdoor not attached");
+      a.seedHistory({
+        entries: entries.map((e) => ({
+          summarized: false,
+          seenAsToast: false,
+          countable: true,
+          archivedAt: null,
+          ...e,
+        })),
+        snoozedThreads,
+      });
+    },
+    { entries, snoozedThreads }
+  );
+}

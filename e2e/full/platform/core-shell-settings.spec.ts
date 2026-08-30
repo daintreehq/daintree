@@ -365,7 +365,7 @@ test.describe.serial("Core: Shell & Settings", () => {
         const palette = window.locator(SEL.projectSwitcher.palette);
         await expect(palette).toBeVisible({ timeout: T_MEDIUM });
 
-        const settingsBtn = palette.locator("button", { hasText: /Project Settings/ });
+        const settingsBtn = palette.getByRole("button", { name: /Project settings/ });
         await expect(settingsBtn).toBeVisible({ timeout: T_SHORT });
         await settingsBtn.click();
       });
@@ -376,8 +376,12 @@ test.describe.serial("Core: Shell & Settings", () => {
         await expect(heading).toBeVisible({ timeout: T_MEDIUM });
 
         // Verify project scope is selected
-        const scopeTrigger = window.locator('[aria-label="Settings scope"]');
-        await expect(scopeTrigger).toContainText("Project", { timeout: T_SHORT });
+        // The radiogroup renders both labels, so containText would pass either way.
+        // Assert the Project segment is the checked one.
+        const projectSegment = window.locator(SEL.settings.scopeOption("Project"));
+        await expect(projectSegment).toHaveAttribute("aria-checked", "true", {
+          timeout: T_SHORT,
+        });
       });
     });
 

@@ -143,9 +143,11 @@ describe("ReviewHub stale visual", () => {
     capturedUpdateCallback = null;
     debounceCancelSpy.mockReset();
 
-    // Default disclosure to expanded for tests (defaults to collapsed in
-    // production per issue #7886).
-    useUIStore.getState().setReviewHubFileListExpanded(WORKTREE_PATH, true);
+    // Clear the file-list disclosure map rather than force-expanding it: the
+    // disclosure now defaults to expanded, so an unset entry is what production
+    // renders, and clearing also stops a test that collapses it from leaking
+    // into the next one.
+    useUIStore.setState({ reviewHubFileListExpanded: {} });
 
     worktreeStoreData.current = new Map([
       [
@@ -304,5 +306,39 @@ describe("ReviewHub stale visual", () => {
       expect(scroll.classList.contains("surface-stale")).toBe(false);
       expect(scroll.getAttribute("aria-busy")).toBeNull();
     });
+  });
+
+  it("keeps the scroller shrinkable in the dialog host and puts the height floor on the content", async () => {
+    render(
+      <ReviewHubContent
+        isOpen={true}
+        location="dialog"
+        worktreePath={WORKTREE_PATH}
+        onClose={vi.fn()}
+      />
+    );
+    await waitFor(() => screen.getByText("index.ts"));
+
+    // A `min-h-*` floor on the scrollport is not additive: tailwind-merge keeps
+    // the last class in the group, so it silently replaces `min-h-0` and the
+    // scroller can no longer shrink inside the dialog body's capped, clipped
+    // box — pushing the commit button out of view on short windows. The floor
+    // belongs to the content, which grows the dialog while there is room and
+    // scrolls once there isn't.
+    const scroll = findScrollContainer();
+    expect(scroll.classList.contains("min-h-0")).toBe(true);
+    expect([...scroll.classList].some((c) => /^min-h-(?!0$)/.test(c))).toBe(false);
+
+    const reservation = screen.getByTestId("review-hub-body-reservation");
+    expect(scroll.contains(reservation)).toBe(true);
+    expect([...reservation.classList].some((c) => /^min-h-(?!0$)/.test(c))).toBe(true);
+  });
+
+  it("reserves nothing in the grid host, where the tile owns its height", async () => {
+    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    await waitFor(() => screen.getByText("index.ts"));
+
+    const reservation = screen.getByTestId("review-hub-body-reservation");
+    expect([...reservation.classList].some((c) => /^min-h-/.test(c))).toBe(false);
   });
 });

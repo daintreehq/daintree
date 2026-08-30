@@ -89,10 +89,10 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
         onClick={handleExport}
         disabled={isLoading}
         className={cn(
-          "flex items-center gap-1.5 px-3 py-2 text-sm border border-daintree-border rounded transition-colors",
+          "flex items-center gap-1.5 px-3 py-2 text-sm border border-border-default rounded transition-colors",
           isLoading
             ? "opacity-50 cursor-not-allowed text-daintree-text/40"
-            : "text-daintree-text/60 hover:text-daintree-text hover:border-daintree-border"
+            : "text-text-secondary hover:text-text-primary hover:border-border-default"
         )}
       >
         <Download className="w-3.5 h-3.5" />
@@ -102,10 +102,10 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
         onClick={handleImport}
         disabled={isLoading}
         className={cn(
-          "flex items-center gap-1.5 px-3 py-2 text-sm border border-daintree-border rounded transition-colors",
+          "flex items-center gap-1.5 px-3 py-2 text-sm border border-border-default rounded transition-colors",
           isLoading
             ? "opacity-50 cursor-not-allowed text-daintree-text/40"
-            : "text-daintree-text/60 hover:text-daintree-text hover:border-daintree-border"
+            : "text-text-secondary hover:text-text-primary hover:border-border-default"
         )}
       >
         <Upload className="w-3.5 h-3.5" />

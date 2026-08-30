@@ -115,7 +115,7 @@ function PanelDialogFrame({
       zIndex={isNested ? "nested" : "modal"}
       data-testid="panel-dialog"
     >
-      <AppDialog.Header>
+      <AppDialog.Header plainBody>
         <AppDialog.Title>{panel.title}</AppDialog.Title>
         <div className="flex items-center gap-1">
           {/* Promotion always targets the topmost dialog, so it is only offered

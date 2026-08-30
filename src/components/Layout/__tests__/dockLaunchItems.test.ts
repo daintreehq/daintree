@@ -391,14 +391,23 @@ describe("buildDockLaunchModel — browse rows", () => {
     expect(bands.map((row) => row.band)).toEqual(["pinned", "other"]);
   });
 
-  it("collapses the panel bands when every panel shares one destination", () => {
-    const model = build({ surface: "grid" });
-    const panelBands = new Set(
-      model.browseRows
-        .filter((row) => getDockLaunchRowItem(row)?.category === "panel")
-        .map((row) => row.band)
-    );
-    expect([...panelBands]).toEqual(["panels"]);
+  it("bands panels by destination even when every panel shares one", () => {
+    // The generic "Launch panel" band used to be the single-destination
+    // fallback, which left every row to say where it lands — six rows ending in
+    // the word "Grid" under a heading that could have said it once. The heading
+    // is now always the one that names the destination, so no row has to.
+    const gridOnly = build({ surface: "grid" });
+    const bandsOf = (model: ReturnType<typeof build>) => [
+      ...new Set(
+        model.browseRows
+          .filter((row) => getDockLaunchRowItem(row)?.category === "panel")
+          .map((row) => row.band)
+      ),
+    ];
+
+    expect(bandsOf(gridOnly)).toEqual(["grid-panels"]);
+    // And the split case is unchanged: two destinations, two bands.
+    expect(bandsOf(build({ surface: "dock" }))).toEqual(["dock-panels", "grid-panels"]);
   });
 
   it("carries the create-recipe cue as an item-less row when there are none", () => {

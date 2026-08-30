@@ -60,14 +60,14 @@ export function EnvironmentPopover({
     isLifecycleRunning
       ? "animate-pulse text-activity-working"
       : resourceStatusColor === "green"
-        ? "text-terminal-bright-green"
+        ? "text-text-secondary"
         : resourceStatusColor === "yellow"
           ? "text-status-warning"
           : resourceStatusColor === "red"
             ? "text-status-error"
             : resourceStatusColor === "neutral" || resourceStatusLabel
               ? "text-status-info/70"
-              : "text-daintree-text/30"
+              : "text-text-placeholder"
   );
 
   const hasDetails =
@@ -93,7 +93,7 @@ export function EnvironmentPopover({
         <button
           type="button"
           data-no-dnd
-          className="shrink-0 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+          className="shrink-0 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
           aria-label={`${worktreeMode ?? "Remote"} environment status`}
         >
           <EnvironmentIcon className={cn(iconClass, className)} />
@@ -106,7 +106,7 @@ export function EnvironmentPopover({
             <span
               className={cn(
                 "font-medium",
-                resourceStatusColor === "green" && "text-status-success",
+                resourceStatusColor === "green" && "text-text-secondary",
                 resourceStatusColor === "yellow" && "text-status-warning",
                 resourceStatusColor === "red" && "text-status-error",
                 (!resourceStatusColor || resourceStatusColor === "neutral") && "text-text-muted"
@@ -117,12 +117,12 @@ export function EnvironmentPopover({
           )}
         </div>
         {resourceEndpoint && (
-          <div className="mb-2 font-mono text-[11px] text-text-secondary break-all">
+          <div className="mb-2 font-mono text-2xs text-text-secondary break-all">
             {resourceEndpoint}
           </div>
         )}
         {resourceLastOutput && (
-          <pre className="mb-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-all rounded bg-surface-panel-elevated p-2 font-mono text-[11px] text-text-secondary">
+          <pre className="mb-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-all rounded bg-surface-panel-elevated p-2 font-mono text-2xs text-text-secondary">
             {resourceLastOutput.trim()}
           </pre>
         )}

@@ -1,6 +1,6 @@
 # IPC, services & clients reference
 
-This document maps the backend and bridge surface that connects the Renderer to the Main process: ~130 top-level services in `electron/services/`, ~105 top-level IPC handler files in `electron/ipc/handlers/`, ~71 namespaces exposed across the `window.electron` bridge in `electron/preload.cts`, and ~32 typed client wrappers in `src/clients/`. The goal is to make the conventions durable so a feature author knows which layer to touch and why.
+This document maps the backend and bridge surface that connects the Renderer to the Main process: ~165 top-level services in `electron/services/`, ~90 top-level IPC handler files in `electron/ipc/handlers/` (each paired with a `.preload.ts`), ~88 namespaces exposed across the `window.electron` bridge in `electron/preload.cts`, and ~40 typed client wrappers in `src/clients/`. The goal is to make the conventions durable so a feature author knows which layer to touch and why.
 
 For the mechanical "add a channel" recipe, see the [IPC pattern checklist in development.md](../development.md#ipc-pattern). This doc documents the layering, the wire mechanics, error propagation, and where the major service clusters live — it does not duplicate the five-step recipe.
 
@@ -25,7 +25,7 @@ The canonical data path is **Service → IPC → Store → UI** (and the reverse
 
 ### When a feature needs a service vs an inline handler
 
-- **Inline handler** (`electron/ipc/handlers/<domain>.ts`) — when the operation is a thin, stateless bridge: read a value, call one library function, return. The handler body _is_ the logic. Most of the ~105 handler files are this thin.
+- **Inline handler** (`electron/ipc/handlers/<domain>.ts`) — when the operation is a thin, stateless bridge: read a value, call one library function, return. The handler body _is_ the logic. Most of the ~90 handler files are this thin.
 - **Service** (`electron/services/<x>.ts` or a cluster directory) — when there is durable state, a process/resource to own (a node-pty host, a poll loop, a cache), cross-handler reuse, or lifecycle (init/dispose) to manage. Handlers then become thin adapters that call the service. Examples: `CopyTreeService`, `GitService`, `DevPreviewSessionService`, `HibernationService`.
 
 Rule of thumb: if two handlers would need the same logic, or the logic outlives a single IPC call, it belongs in a service.
@@ -80,7 +80,7 @@ Structural validation lives at the IPC boundary. `opValidated` / `typedHandle*Va
 
 ## The client layer (`src/clients/`)
 
-~32 typed wrappers (barrel: `src/clients/index.ts`) sit between stores/components and `window.electron`. Each is a plain `const xClient = { ... } as const` of typed methods that forward to `window.electron.<namespace>`.
+~40 typed wrappers (barrel: `src/clients/index.ts`) sit between stores/components and `window.electron`. Each is a plain `const xClient = { ... } as const` of typed methods that forward to `window.electron.<namespace>`.
 
 **When a feature warrants a client:** when the renderer touches a namespace from more than one place, when the call needs renderer-side shaping the raw bridge doesn't provide (caching with invalidation — `projectClient`'s `invalidateCurrentCache`, `globalEnvClient`'s `invalidateGlobalEnvCache`), or when one logical operation routes across multiple bridge methods. `worktreeClient` is the canonical example: `getAll`/`refresh` forward straight through, but `delete`, `resourceAction`, and `retrySetup` route through `window.electron.worktreePort.request(...)` (the dedicated worktree MessagePort) so a host crash mid-call rejects immediately and `mutationId` dedupes outbox replays — a detail no caller should have to know.
 
@@ -113,10 +113,10 @@ These hosts keep expensive/risky work off the Main thread; a host crash is isola
 
 Top-level files live directly in `electron/services/`; cohesive subsystems get a subdirectory with its own `index.ts`. Where to look:
 
-- **`pty/`** (~58 files) — agent terminal brain. `PtyClient` (host transport + correlation), `AgentStateService` / `AgentStateMachine`, `AgentPatternDetector`, `CompletionDetector`/`CompletionTimer`, `BootDetector`, `agentSessionHistory`, `PtyEventRouter`/`PtyEventsBridge`/`PtyEventBuffer`. This is where output heuristics turn raw PTY bytes into idle/working/waiting/completed state.
+- **`pty/`** (~76 files) — agent terminal brain. `PtyClient` (host transport + correlation), `AgentStateService` / `AgentStateMachine`, `AgentPatternDetector`, `CompletionDetector`/`CompletionTimer`, `BootDetector`, `agentSessionHistory`, `PtyEventRouter`/`PtyEventsBridge`/`PtyEventBuffer`. This is where output heuristics turn raw PTY bytes into idle/working/waiting/completed state.
 - **`git/`** + top-level `GitService.ts` / `GitServiceCache.ts` — simple-git operations, porcelain conflict parsing (`porcelainConflicts.ts`, `conflictMarkerScan.ts`), repo operation state.
 - **`worktree/`** + `workspace-client/` — worktree polling strategy, mood/notes readers; the `workspace-client/` shims that talk to the workspace host.
-- **DevPreview (`DevPreview*.ts`, 7 top-level files)** — `DevPreviewSessionService`, `DevPreviewProxyService`, `DevPreviewPortAllocator`, `DevPreviewReadinessProbe`, `DevPreviewManifestService`, `DevPreviewCommandNormalizer`, `DevPreviewRequestValidators`. Event routing for this cluster has its own doc: [dev-preview-event-routing.md](./dev-preview-event-routing.md).
+- **DevPreview (`DevPreview*.ts`, 12 top-level files)** — `DevPreviewSessionService`, `DevPreviewProxyService`, `DevPreviewPortAllocator`, `DevPreviewReadinessProbe`, `DevPreviewManifestService`, `DevPreviewCommandNormalizer`, `DevPreviewRequestValidators`, `DevPreviewTerminalController`, `DevPreviewOutputProcessor`, `DevPreviewCrashLoopGuard`, `DevPreviewDiagnosticsRing`, `DevPreviewDiskUsage`. Event routing for this cluster has its own doc: [dev-preview-event-routing.md](./dev-preview-event-routing.md).
 - **`connectivity/`** — `ServiceConnectivityRegistry` (aggregates GitHub token health and MCP server runtime state into one snapshot; derived from work the app already does, never speculative traffic).
 - **`commands/`** — higher-level orchestrations invoked as commands (`githubCreateIssue`, `githubWorkIssue`).
 - **`events.ts`** — the Main-process `EventEmitter` hub with `EVENT_META` categorizing every event type; the bridge between service-internal events and the renderer event bus.

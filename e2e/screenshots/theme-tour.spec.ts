@@ -470,7 +470,7 @@ const SCENES: TourScene[] = [
   {
     id: "action-palette",
     label: "Action palette",
-    note: "Selected row = raised fill + selection-outline, no accent. Is the selected row unambiguous?",
+    note: "Selected row = raised fill + neutral leading rail (`selection-outline`), no accent. Is the selected row unambiguous?",
     run: async (page) => {
       const dialog = page.locator(SEL.actionPalette.dialog);
       // Double-Shift is the only route to THIS palette. The Cmd/Ctrl+K fallback
@@ -544,10 +544,10 @@ const SCENES: TourScene[] = [
         .waitFor({ state: "visible", timeout: 15_000 })
         .catch(() => {});
       await settle(page, 1200);
-      // The file list starts collapsed behind "Show files (n)". Gate on the
-      // toggle's own `aria-expanded` rather than on whether the diff button
-      // happens to be visible yet — during the list's first paint the button is
-      // absent while the list is already open, and clicking then COLLAPSES it.
+      // The file list is expanded on open, but gate on the toggle's own
+      // `aria-expanded` rather than on whether the diff button happens to be
+      // visible yet — during the list's first paint the button is absent while
+      // the list is already open, and clicking then COLLAPSES it.
       const toggle = page.locator(SEL.reviewHub.fileListToggle).first();
       if ((await toggle.getAttribute("aria-expanded").catch(() => null)) !== "true") {
         await toggle.click().catch(() => {});

@@ -43,13 +43,13 @@ export function OverrideField({
   return (
     <div className={cn("group", className)}>
       <div className="flex items-center gap-2 mb-1 min-h-[1.25rem]">
-        <label htmlFor={id} className="block text-xs font-medium text-daintree-text/60">
+        <label htmlFor={id} className="block text-xs font-medium text-text-secondary">
           {label}
           {hint && <span className="ml-1 text-daintree-text/40">{hint}</span>}
         </label>
         {isOverriding && (
           <span
-            className="w-1.5 h-1.5 rounded-full bg-status-info"
+            className="status-mark w-1.5 h-1.5 rounded-full bg-status-info"
             aria-hidden="true"
             data-testid="override-indicator"
           />
@@ -60,9 +60,9 @@ export function OverrideField({
             aria-label="Reset to global"
             onClick={onReset}
             className={cn(
-              "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[11px] text-text-muted hover:text-daintree-text hover:bg-overlay-subtle",
+              "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-2xs text-text-muted hover:text-text-primary hover:bg-overlay-subtle",
               "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
               "transition-colors"
             )}
           >
@@ -88,10 +88,10 @@ export function OverrideField({
         aria-describedby={describedBy}
         aria-invalid={error ? true : undefined}
         className={cn(
-          "w-full bg-daintree-bg border rounded px-3 py-2 text-sm text-daintree-text font-mono",
+          "w-full bg-surface-canvas border rounded px-3 py-2 text-sm text-text-primary font-mono",
           "focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30",
           "transition-colors placeholder:text-text-placeholder disabled:opacity-50 disabled:cursor-not-allowed",
-          isOverriding ? "border-status-info/40" : "border-daintree-border",
+          isOverriding ? "border-status-info/40" : "border-border-default",
           error && "border-status-error",
           inputClassName
         )}
@@ -101,7 +101,7 @@ export function OverrideField({
         id={descriptionId}
         className={cn(
           "mt-1 text-xs",
-          isOverriding ? "text-text-muted" : "text-daintree-text/40 italic"
+          isOverriding ? "text-text-muted" : "text-text-secondary italic"
         )}
       >
         {isOverriding ? overrideDescription : inheritDescription}

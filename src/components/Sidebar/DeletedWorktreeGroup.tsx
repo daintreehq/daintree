@@ -168,7 +168,7 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
           type="button"
           onClick={toggleExpanded}
           aria-expanded={isExpanded}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-left outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-left outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         >
           <ChevronRight
             data-animated-chevron
@@ -183,7 +183,7 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
             strokeWidth={2.5}
             aria-hidden="true"
           />
-          <span className="truncate text-[11px] font-medium text-text-muted">
+          <span className="truncate text-2xs font-medium text-text-muted">
             {members.length} {worktreeNoun}
             <span aria-hidden="true"> · </span>
             <span className="sr-only">, </span>
@@ -193,7 +193,7 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
         <div className="flex shrink-0 items-center gap-2">
           {hasCountdown && (
             <span
-              className="font-mono text-[11px] tabular-nums text-text-muted"
+              className="font-mono text-2xs tabular-nums text-text-muted"
               title={`Next cleanup in ${remainingSeconds}s`}
               data-testid="deleted-worktree-group-countdown"
             >
@@ -205,7 +205,7 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
               <button
                 type="button"
                 onClick={handleClearAll}
-                className="sidebar-action-button shrink-0 rounded p-1.5 -my-1.5 text-status-error/70 transition-colors hover:text-status-error focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                className="sidebar-action-button shrink-0 rounded p-1.5 -my-1.5 text-status-error/70 transition-colors hover:text-status-error focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 aria-label={clearLabel}
               >
                 <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
@@ -281,7 +281,7 @@ function DeletedWorktreeTerminalChip({
         ref={dragHandle?.setActivatorNodeRef}
         type="button"
         data-drag-handle
-        className="cursor-grab rounded text-text-primary/25 transition-colors group-hover/chip:text-text-primary/40 hover:text-text-secondary focus-visible:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-daintree-accent active:cursor-grabbing"
+        className="cursor-grab rounded text-text-primary/25 transition-colors group-hover/chip:text-text-primary/40 hover:text-text-secondary focus-visible:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary active:cursor-grabbing"
         aria-label={`Drag to rescue ${label}`}
         {...(dragHandle?.listeners as React.HTMLAttributes<HTMLElement> | undefined)}
       >
@@ -290,11 +290,11 @@ function DeletedWorktreeTerminalChip({
       <button
         type="button"
         onClick={() => onSelect(terminal)}
-        className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-daintree-accent"
+        className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary"
         aria-label={label}
       >
         <TerminalIcon chrome={chrome} className="w-3 h-3 shrink-0" />
-        <span className="truncate text-[11px] text-text-muted">{terminal.title}</span>
+        <span className="truncate text-2xs text-text-muted">{terminal.title}</span>
       </button>
     </div>
   );

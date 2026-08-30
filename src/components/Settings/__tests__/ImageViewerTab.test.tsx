@@ -120,15 +120,18 @@ describe("ImageViewerTab", () => {
 
     render(<ImageViewerTab />);
 
-    const saveButton = (await waitFor(() => {
-      const btn = screen.getByRole("button", { name: /save/i }) as HTMLButtonElement;
-      expect(btn.disabled).toBe(true);
-      return btn;
-    })) as HTMLButtonElement;
+    // Wait on the error, not on the button. Save is disabled while `isLoading` is
+    // still true, so waiting for `disabled` returns on the very first render — before
+    // the rejection has flushed and setLoadError has run. That raced green locally and
+    // failed on a slower runner.
+    await screen.findByText(/ipc blew up|Couldn't load image viewer settings/i);
 
-    // Section chrome stays visible; an error message surfaces.
+    const saveButton = screen.getByRole("button", {
+      name: /save/i,
+    }) as HTMLButtonElement;
+
+    // Section chrome stays visible.
     expect(screen.getByText("Image viewer")).toBeTruthy();
-    expect(screen.getByText(/ipc blew up|Couldn't load image viewer settings/i)).toBeTruthy();
 
     // Radios remain disabled — load failed, the persisted value is unknown.
     const osRadio = screen.getByRole("radio", { name: /Use OS default/i }) as HTMLInputElement;

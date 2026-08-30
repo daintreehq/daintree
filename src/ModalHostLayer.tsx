@@ -461,6 +461,7 @@ export function ModalHostLayer({
               isOpen={isProjectSwitcherModalOpen}
               query={projectSwitcherPalette.query}
               results={projectSwitcherPalette.results}
+              browseBands={projectSwitcherPalette.browseBands}
               selectedIndex={projectSwitcherPalette.selectedIndex}
               onQueryChange={projectSwitcherPalette.setQuery}
               onSelectPrevious={projectSwitcherPalette.selectPrevious}

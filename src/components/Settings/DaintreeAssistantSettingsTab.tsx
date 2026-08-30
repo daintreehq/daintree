@@ -792,11 +792,11 @@ export function DaintreeAssistantSettingsTab() {
 
   return (
     <div className="space-y-6" id="settings-panel-assistant-content">
-      <header className="flex items-start gap-3 pb-4 border-b border-daintree-border">
-        <DaintreeIcon className="w-6 h-6 text-daintree-text shrink-0 mt-0.5" size={24} />
+      <header className="flex items-start gap-3 pb-4 border-b border-border-default">
+        <DaintreeIcon className="w-6 h-6 text-text-primary shrink-0 mt-0.5" size={24} />
         <div>
-          <h3 className="text-sm font-medium text-daintree-text">Daintree Assistant</h3>
-          <p className="text-xs text-daintree-text/50 mt-1 select-text">
+          <h3 className="text-sm font-medium text-text-primary">Daintree Assistant</h3>
+          <p className="text-xs text-text-secondary mt-1 select-text">
             Controls the help assistant launched from the dock — the tools it can call and how its
             activity is recorded. Changes apply to new help sessions.
           </p>
@@ -842,11 +842,11 @@ export function DaintreeAssistantSettingsTab() {
               aria-hidden="true"
             />
             <div className="flex-1 text-xs leading-relaxed select-text">
-              <p className="font-medium text-daintree-text">
+              <p className="font-medium text-text-primary">
                 {getAgentConfig(droppedPreferredAgentId)?.name ?? droppedPreferredAgentId} is no
                 longer available
               </p>
-              <p className="mt-0.5 text-daintree-text/70">
+              <p className="mt-0.5 text-text-secondary">
                 The agent was removed or is no longer supported as an assistant backend. Choose
                 another agent above.
               </p>
@@ -855,7 +855,7 @@ export function DaintreeAssistantSettingsTab() {
               type="button"
               onClick={clearDroppedPreferredAgent}
               aria-label="Dismiss"
-              className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -875,10 +875,10 @@ export function DaintreeAssistantSettingsTab() {
               aria-hidden="true"
             />
             <div className="flex-1 text-xs leading-relaxed select-text">
-              <p className="font-medium text-daintree-text">
+              <p className="font-medium text-text-primary">
                 {versionWarning.agentName} needs an update
               </p>
-              <p className="mt-0.5 text-daintree-text/70">
+              <p className="mt-0.5 text-text-secondary">
                 Version {versionWarning.required} or later is required, but{" "}
                 {versionWarning.installed} is installed. Update the CLI to avoid a blocked or
                 degraded session.
@@ -886,7 +886,7 @@ export function DaintreeAssistantSettingsTab() {
               <button
                 type="button"
                 onClick={handleGoToAgentSettings}
-                className="mt-1 text-daintree-text/70 hover:text-daintree-text underline underline-offset-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                className="mt-1 text-text-secondary hover:text-text-primary underline underline-offset-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
               >
                 Open agent settings
               </button>
@@ -898,8 +898,8 @@ export function DaintreeAssistantSettingsTab() {
           description={
             <>
               Advanced — whitespace-separated flags appended to the launch command. Use the Model
-              picker above for the model; a <code className="font-mono text-[11px]">--model</code>{" "}
-              flag here overrides it. Applies to new assistant sessions.
+              picker above for the model; a <code className="font-mono text-2xs">--model</code> flag
+              here overrides it. Applies to new assistant sessions.
             </>
           }
           type="text"
@@ -956,10 +956,10 @@ export function DaintreeAssistantSettingsTab() {
           <div
             className={cn(
               "flex items-start gap-2 p-3 rounded-[var(--radius-md)]",
-              "bg-overlay-subtle border border-daintree-border"
+              "bg-overlay-subtle border border-border-default"
             )}
           >
-            <div className="text-xs text-daintree-text/70 leading-relaxed select-text">
+            <div className="text-xs text-text-secondary leading-relaxed select-text">
               Enabling this starts a local HTTP server on 127.0.0.1 so the assistant can call
               Daintree actions. The MCP server tab has the connection details and API key.
             </div>
@@ -974,22 +974,22 @@ export function DaintreeAssistantSettingsTab() {
         description="Add your own commands and skills to every assistant session."
       >
         <div className="flex items-start gap-3">
-          <div className="flex-1 text-xs text-daintree-text/70 leading-relaxed select-text">
-            Files in <code className="font-mono text-[11px]">~/.daintree/assistant</code> are copied
+          <div className="flex-1 text-xs text-text-secondary leading-relaxed select-text">
+            Files in <code className="font-mono text-2xs">~/.daintree/assistant</code> are copied
             into each new assistant session. Claude Code picks up{" "}
-            <code className="font-mono text-[11px]">.claude/commands</code> and{" "}
-            <code className="font-mono text-[11px]">.claude/skills</code>; Codex picks up{" "}
-            <code className="font-mono text-[11px]">.agents/skills</code> and{" "}
-            <code className="font-mono text-[11px]">.codex/skills</code>; Copilot reads both skill
+            <code className="font-mono text-2xs">.claude/commands</code> and{" "}
+            <code className="font-mono text-2xs">.claude/skills</code>; Codex picks up{" "}
+            <code className="font-mono text-2xs">.agents/skills</code> and{" "}
+            <code className="font-mono text-2xs">.codex/skills</code>; Copilot reads both skill
             trees. A per-project variant in{" "}
-            <code className="font-mono text-[11px]">&lt;project&gt;/.daintree/assistant</code> takes
+            <code className="font-mono text-2xs">&lt;project&gt;/.daintree/assistant</code> takes
             precedence and can be committed to git.
           </div>
           <Button
             variant="outline"
             size="sm"
             onClick={handleOpenCommandsFolder}
-            className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text shrink-0"
+            className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary shrink-0"
           >
             <FolderOpen className="w-4 h-4" />
             Open folder
@@ -1056,11 +1056,11 @@ export function DaintreeAssistantSettingsTab() {
           <div
             className={cn(
               "flex items-start gap-2 p-3 rounded-[var(--radius-md)]",
-              "bg-overlay-subtle border border-daintree-border"
+              "bg-overlay-subtle border border-border-default"
             )}
           >
             <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-0.5" />
-            <div className="text-xs text-daintree-text/70 leading-relaxed select-text">
+            <div className="text-xs text-text-secondary leading-relaxed select-text">
               {bypassCopy.warning}
             </div>
           </div>
@@ -1095,14 +1095,14 @@ export function DaintreeAssistantSettingsTab() {
           options={RETENTION_OPTIONS}
           disabled={loading}
         />
-        <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle/40">
+        <div className="rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle/40">
           <button
             type="button"
             onClick={() => setAdvancedDiagnosticsOpen((v) => !v)}
             aria-expanded={advancedDiagnosticsOpen}
             className={cn(
               "w-full flex items-center gap-2 px-3 py-2 text-xs",
-              "text-daintree-text/80 hover:text-daintree-text transition-colors"
+              "text-daintree-text/80 hover:text-text-primary transition-colors"
             )}
           >
             <ChevronRight
@@ -1141,8 +1141,8 @@ export function DaintreeAssistantSettingsTab() {
                 onRefresh={refreshAuditRecords}
               />
               {auditStats && auditStats.auth401Count > 0 && (
-                <p className="text-xs text-daintree-text/60 select-text">
-                  <span className="font-mono text-daintree-text/80">{auditStats.auth401Count}</span>{" "}
+                <p className="text-xs text-text-secondary select-text">
+                  <span className="font-mono text-text-primary">{auditStats.auth401Count}</span>{" "}
                   bearer rejection{auditStats.auth401Count === 1 ? "" : "s"} since last launch — an
                   external client is connecting with a stale or missing API key.
                 </p>
@@ -1160,18 +1160,18 @@ export function DaintreeAssistantSettingsTab() {
       >
         {loading ? (
           showInlineLoading ? (
-            <p className="text-xs text-daintree-text/50">Loading…</p>
+            <p className="text-xs text-text-secondary">Loading…</p>
           ) : null
         ) : runtimeSnapshot.state === "disabled" ? (
           <div className="space-y-2">
-            <p className="text-xs text-daintree-text/60 select-text">
+            <p className="text-xs text-text-secondary select-text">
               MCP server is off. Turn it on to share the connection with external clients.
             </p>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={handleGoToMcpSettings}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
               >
                 Open MCP server settings
               </button>
@@ -1179,8 +1179,8 @@ export function DaintreeAssistantSettingsTab() {
           </div>
         ) : runtimeSnapshot.state === "starting" ? (
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-daintree-text/30 shrink-0" />
-            <span className="text-xs text-daintree-text/60">Server is starting…</span>
+            <div className="status-mark w-2 h-2 rounded-full bg-daintree-text/30 shrink-0" />
+            <span className="text-xs text-text-secondary">Server is starting…</span>
           </div>
         ) : runtimeSnapshot.state === "failed" ? (
           <div className="space-y-2">
@@ -1195,19 +1195,19 @@ export function DaintreeAssistantSettingsTab() {
               <button
                 type="button"
                 onClick={handleGoToMcpSettings}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
               >
                 Open MCP server settings
               </button>
             </div>
           </div>
         ) : !mcpStatus ? (
-          <p className="text-xs text-daintree-text/50">Couldn't load MCP status.</p>
+          <p className="text-xs text-text-secondary">Couldn't load MCP status.</p>
         ) : (
           <div className="contents">
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-status-success shrink-0" />
-              <span className="text-xs text-daintree-text/60">
+              <div className="status-mark w-2 h-2 rounded-full bg-activity-working shrink-0" />
+              <span className="text-xs text-text-secondary">
                 {runtimeSnapshot.port ? `Running on port ${runtimeSnapshot.port}` : "Running"}
               </span>
             </div>
@@ -1218,10 +1218,10 @@ export function DaintreeAssistantSettingsTab() {
                 onClick={handleCopyConfig}
                 className={cn(
                   "flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
-                  "border border-daintree-border hover:bg-overlay-soft",
+                  "border border-border-default hover:bg-overlay-soft",
                   copied
                     ? "text-status-success border-status-success/30"
-                    : "text-daintree-text/70 hover:text-daintree-text"
+                    : "text-text-secondary hover:text-text-primary"
                 )}
               >
                 {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -1232,14 +1232,14 @@ export function DaintreeAssistantSettingsTab() {
                 onClick={() => setShowRotateConfirm(true)}
                 disabled={!apiKeySuffix}
                 title={apiKeySuffix ? undefined : "Waiting for the MCP key to load…"}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-daintree-text/70"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-text-secondary"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 Rotate MCP key
               </button>
             </div>
 
-            <p className="text-xs text-daintree-text/50 leading-relaxed select-text">
+            <p className="text-xs text-text-secondary leading-relaxed select-text">
               Paste the copied config into an external MCP client (e.g. Claude Code, Cursor).
               Regenerating the key invalidates existing client connections.
             </p>
@@ -1307,14 +1307,14 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
   }, [tier]);
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle/40">
+    <div className="rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle/40">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={isOpen}
         className={cn(
           "w-full flex items-center justify-between gap-3 px-3 py-2 text-xs",
-          "text-daintree-text/80 hover:text-daintree-text transition-colors"
+          "text-daintree-text/80 hover:text-text-primary transition-colors"
         )}
       >
         <span className="flex items-center gap-2">
@@ -1328,7 +1328,7 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
           <span>
             {totalCount} actions allowed without prompting
             {tier !== "workbench" && (
-              <span className="text-daintree-text/50"> ({newAtTier} new at this tier)</span>
+              <span className="text-text-secondary"> ({newAtTier} new at this tier)</span>
             )}
           </span>
         </span>
@@ -1337,17 +1337,17 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
         <div className="px-3 pb-3 pt-1 space-y-2">
           {groups.map(([ns, tools]) => (
             <div key={ns} className="space-y-1">
-              <div className="text-[10px] uppercase tracking-wide text-daintree-text/50 font-mono">
+              <div className="text-3xs uppercase tracking-wide text-text-secondary font-mono">
                 {ns}
-                <span className="ml-1 text-daintree-text/30">({tools.length})</span>
+                <span className="ml-1 text-text-placeholder">({tools.length})</span>
               </div>
               <div className="flex flex-wrap gap-1">
                 {tools.map((tool) => (
                   <span
                     key={tool}
                     className={cn(
-                      "px-1.5 py-0.5 rounded text-[10px] font-mono",
-                      "bg-daintree-bg border border-daintree-border text-daintree-text/70"
+                      "px-1.5 py-0.5 rounded text-3xs font-mono",
+                      "bg-surface-canvas border border-border-default text-text-secondary"
                     )}
                   >
                     {tool}
@@ -1373,7 +1373,7 @@ function GrantCountdown({ expiresAt }: { expiresAt: number }) {
   useVisibilityAwareInterval(() => setNow(Date.now()), 1000);
   const remainingMs = expiresAt - now;
   return (
-    <span className="font-mono text-daintree-text/50 tabular-nums shrink-0">
+    <span className="font-mono text-text-secondary tabular-nums shrink-0">
       {remainingMs <= 0 ? "expiring" : `expires in ${formatGrantRemaining(remainingMs / 1000)}`}
     </span>
   );
@@ -1442,7 +1442,7 @@ function NativeGrantsSection({
 
   return (
     <div className="space-y-2 pt-1">
-      <div className="text-[10px] uppercase tracking-wide text-daintree-text/50 font-mono">
+      <div className="text-3xs uppercase tracking-wide text-text-secondary font-mono">
         Automation grants{grants.length > 0 ? ` (${grants.length})` : ""}
       </div>
       {grants.length > 0 ? (
@@ -1450,21 +1450,21 @@ function NativeGrantsSection({
           {grants.map((grant) => (
             <div
               key={grant.grantId}
-              className="rounded-[var(--radius-sm)] border border-daintree-border bg-daintree-bg/40 px-2 py-1.5 space-y-1"
+              className="rounded-[var(--radius-sm)] border border-border-default bg-daintree-bg/40 px-2 py-1.5 space-y-1"
             >
-              <div className="flex items-center justify-between gap-2 text-[11px]">
-                <span className="font-mono text-daintree-text/70 truncate">
+              <div className="flex items-center justify-between gap-2 text-2xs">
+                <span className="font-mono text-text-secondary truncate">
                   {(grant.allowedTools ?? []).join(", ") || "no tools"}
                 </span>
                 <button
                   type="button"
                   onClick={() => grant.grantId && revoke(grant.grantId)}
-                  className="shrink-0 text-[10px] text-daintree-text/60 hover:text-status-danger transition-colors"
+                  className="shrink-0 text-3xs text-text-secondary hover:text-status-danger transition-colors"
                 >
                   Revoke
                 </button>
               </div>
-              <div className="flex items-center justify-between gap-2 text-[10px] text-daintree-text/50">
+              <div className="flex items-center justify-between gap-2 text-3xs text-text-secondary">
                 <span className="tabular-nums">
                   {grant.remainingUses ?? 0} of {grant.maxUses ?? 0} uses left
                 </span>
@@ -1474,7 +1474,7 @@ function NativeGrantsSection({
           ))}
         </div>
       ) : (
-        <div className="text-[11px] text-daintree-text/50">No automation grants active</div>
+        <div className="text-2xs text-text-secondary">No automation grants active</div>
       )}
 
       <div className="flex items-end gap-1.5 pt-0.5">
@@ -1483,7 +1483,7 @@ function NativeGrantsSection({
           value={toolsInput}
           onChange={(e) => setToolsInput(e.target.value)}
           placeholder="git.commit terminal.new"
-          className="flex-1 min-w-0 rounded-[var(--radius-sm)] border border-daintree-border bg-daintree-bg px-2 py-1 text-[11px] font-mono text-daintree-text placeholder:text-daintree-text/30 focus-visible:outline-2 focus-visible:outline-daintree-accent"
+          className="flex-1 min-w-0 rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-2 py-1 text-2xs font-mono text-text-primary placeholder:text-daintree-text/30 focus-visible:outline-2 focus-visible:outline-accent-primary"
         />
         <input
           type="number"
@@ -1492,18 +1492,18 @@ function NativeGrantsSection({
           value={usesInput}
           onChange={(e) => setUsesInput(e.target.value)}
           aria-label="Maximum uses"
-          className="w-12 rounded-[var(--radius-sm)] border border-daintree-border bg-daintree-bg px-1.5 py-1 text-[11px] tabular-nums text-daintree-text focus-visible:outline-2 focus-visible:outline-daintree-accent"
+          className="w-12 rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-1.5 py-1 text-2xs tabular-nums text-text-primary focus-visible:outline-2 focus-visible:outline-accent-primary"
         />
         <button
           type="button"
           onClick={approve}
           disabled={issuing}
-          className="shrink-0 rounded-[var(--radius-sm)] border border-daintree-border bg-overlay-subtle px-2 py-1 text-[11px] text-daintree-text/80 hover:text-daintree-text disabled:opacity-50 transition-colors"
+          className="shrink-0 rounded-[var(--radius-sm)] border border-border-default bg-overlay-subtle px-2 py-1 text-2xs text-daintree-text/80 hover:text-text-primary disabled:opacity-50 transition-colors"
         >
           Approve grant
         </button>
       </div>
-      {issueError && <div className="text-[10px] text-status-danger">{issueError}</div>}
+      {issueError && <div className="text-3xs text-status-danger">{issueError}</div>}
     </div>
   );
 }
@@ -1537,22 +1537,22 @@ function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
         : " — matches the configured default";
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle/40 px-3 py-2.5 space-y-2">
+    <div className="rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle/40 px-3 py-2.5 space-y-2">
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-2">
           <span
             className={cn(
-              "w-1.5 h-1.5 rounded-full shrink-0",
-              connected ? "bg-status-success" : "bg-daintree-text/30"
+              "status-mark w-1.5 h-1.5 rounded-full shrink-0",
+              connected ? "bg-activity-working" : "bg-daintree-text/30"
             )}
             aria-hidden="true"
           />
-          <span className="text-xs text-daintree-text/80">
+          <span className="text-xs text-text-primary">
             {connected ? "Live session" : "No live session"}
           </span>
         </span>
         {connected && (
-          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-daintree-bg border border-daintree-border text-daintree-text/70">
+          <span className="px-1.5 py-0.5 rounded text-3xs font-mono bg-surface-canvas border border-border-default text-text-secondary">
             {TIER_SHORT_LABEL[tier]}
           </span>
         )}
@@ -1560,35 +1560,35 @@ function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
 
       {connected ? (
         <>
-          <div className="text-xs text-daintree-text/70 leading-relaxed">
+          <div className="text-xs text-text-secondary leading-relaxed">
             Running at{" "}
-            <span className="text-daintree-text">{TIER_SHORT_LABEL[tier].toLowerCase()}</span>
+            <span className="text-text-primary">{TIER_SHORT_LABEL[tier].toLowerCase()}</span>
             {tierComparisonCopy}
           </div>
           {perToolGrants.length > 0 ? (
             <div className="space-y-1">
-              <div className="text-[10px] uppercase tracking-wide text-daintree-text/50 font-mono">
+              <div className="text-3xs uppercase tracking-wide text-text-secondary font-mono">
                 Active grants ({perToolGrants.length})
               </div>
               <div className="space-y-1">
                 {perToolGrants.map((grant) => (
                   <div
                     key={grant.toolId}
-                    className="flex items-center justify-between gap-2 text-[11px]"
+                    className="flex items-center justify-between gap-2 text-2xs"
                   >
-                    <span className="font-mono text-daintree-text/70 truncate">{grant.toolId}</span>
+                    <span className="font-mono text-text-secondary truncate">{grant.toolId}</span>
                     <GrantCountdown expiresAt={grant.expiresAt} />
                   </div>
                 ))}
               </div>
             </div>
           ) : (
-            <div className="text-[11px] text-daintree-text/50">No per-tool grants active</div>
+            <div className="text-2xs text-text-secondary">No per-tool grants active</div>
           )}
           {sessionId && <NativeGrantsSection helpSessionId={sessionId} grants={nativeGrants} />}
         </>
       ) : (
-        <div className="text-xs text-daintree-text/60 leading-relaxed">
+        <div className="text-xs text-text-secondary leading-relaxed">
           Open the assistant to start a session — its live tier and any active per-tool grants show
           here
         </div>

@@ -1269,7 +1269,7 @@ export function HelpPanel({
       }}
       className={cn(
         "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
-        "bg-daintree-bg border-l border-daintree-border transition-[border-left-color,box-shadow] duration-150",
+        "bg-surface-canvas border-l border-border-default transition-[border-left-color,box-shadow] duration-150",
         isHighlighted && "assistant-focused",
         !isVisible && "pointer-events-none"
       )}
@@ -1288,7 +1288,7 @@ export function HelpPanel({
         className={cn(
           "absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10",
           "hover:bg-overlay-soft active:bg-overlay-medium transition-colors",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
           isResizing && "bg-overlay-medium"
         )}
         onMouseDown={handleResizeStart}
@@ -1415,7 +1415,7 @@ export function HelpPanel({
                   "flex items-start gap-2 px-3 py-2.5 mx-3 mt-3 mb-1",
                   "rounded-[var(--radius-md)]",
                   "bg-status-warning/10 border border-status-warning/20",
-                  "text-xs text-daintree-text/85"
+                  "text-xs text-text-primary"
                 )}
                 data-testid="help-dropped-agent-banner"
               >
@@ -1424,17 +1424,17 @@ export function HelpPanel({
                   aria-hidden="true"
                 />
                 <div className="flex-1 select-text">
-                  <p className="font-medium text-daintree-text">
+                  <p className="font-medium text-text-primary">
                     {getAgentConfig(droppedPreferredAgentId)?.name ?? droppedPreferredAgentId} is no
                     longer available
                   </p>
-                  <p className="mt-0.5 text-daintree-text/70">
+                  <p className="mt-0.5 text-text-secondary">
                     The agent was removed or is no longer supported as an assistant backend
                   </p>
                   <button
                     type="button"
                     onClick={handleOpenSettings}
-                    className="mt-1 text-daintree-text/70 hover:text-daintree-text underline underline-offset-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                    className="mt-1 text-text-secondary hover:text-text-primary underline underline-offset-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                   >
                     Open assistant settings
                   </button>
@@ -1443,14 +1443,14 @@ export function HelpPanel({
                   type="button"
                   onClick={clearDroppedPreferredAgent}
                   aria-label="Dismiss agent unavailable notice"
-                  className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 >
                   <X className="w-3 h-3" />
                 </button>
               </div>
             )}
             <div className="flex-1 flex flex-col items-center justify-center gap-6 p-8 text-center">
-              <p className="text-sm text-daintree-text/70 max-w-[30ch]">
+              <p className="text-sm text-text-secondary max-w-[30ch]">
                 {resumableAgentId
                   ? "Your last assistant session is paused"
                   : "Use Daintree Assistant to configure and navigate Daintree."}
@@ -1486,13 +1486,13 @@ export function HelpPanel({
                   </Button>
                   {!hasEverLaunchedAgent && (
                     <div className="flex flex-col gap-1.5 w-full">
-                      <p className="text-[11px] text-daintree-text/60">Or start with a question</p>
+                      <p className="text-2xs text-text-secondary">Or start with a question</p>
                       {STARTER_PROMPTS.map((prompt) => (
                         <button
                           key={prompt}
                           type="button"
                           onClick={() => handleStartAssistant(prompt)}
-                          className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/80 hover:text-daintree-text hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                          className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs rounded-[var(--radius-md)] border border-border-default text-daintree-text/80 hover:text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                         >
                           <MessageCircle className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
                           <span>{prompt}</span>
@@ -1502,7 +1502,7 @@ export function HelpPanel({
                   )}
                 </div>
               ) : (
-                <p className="text-xs text-daintree-text/70 max-w-[32ch]">
+                <p className="text-xs text-text-secondary max-w-[32ch]">
                   Configure an assistant agent in settings to get started.
                 </p>
               )}
@@ -1510,7 +1510,7 @@ export function HelpPanel({
                 <button
                   type="button"
                   onClick={handleOpenSettings}
-                  className="flex items-center gap-1 text-[11px] text-daintree-text/70 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  className="flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 >
                   <Settings2 className="w-3.5 h-3.5" />
                   Assistant settings
@@ -1518,7 +1518,7 @@ export function HelpPanel({
                 <button
                   type="button"
                   onClick={handleOpenAssistantDocs}
-                  className="flex items-center gap-1 text-[11px] text-daintree-text/70 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  className="flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   Daintree Assistant guide
@@ -1535,7 +1535,7 @@ export function HelpPanel({
           edge. Raw args, the elapsed ticker, and the marketing link live in
           the popover / hover titles / header docs button now. */}
       {showTerminal && agentConfig && !isMissingCli && (
-        <div className="flex items-center justify-between gap-3 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-daintree-text/40">
+        <div className="flex items-center justify-between gap-3 border-t border-border-default shrink-0 px-3 py-1.5 text-2xs text-text-secondary">
           <span className="flex items-center gap-2 min-w-0">
             <McpActivityStrip sessionId={sessionId} activity={session.mcpActivity} />
             <TurnOutcomePip outcome={session.outcomeAlert} onDismiss={dismissOutcomeAlert} />
@@ -1558,16 +1558,16 @@ export function HelpPanel({
                     }
                   }}
                   className={cn(
-                    "flex items-center gap-1.5 min-w-0 p-0 bg-transparent border-none text-[11px]",
+                    "flex items-center gap-1.5 min-w-0 p-0 bg-transparent border-none text-2xs",
                     "text-status-warning hover:text-status-warning/80 transition-colors duration-150",
                     "rounded-[var(--radius-sm)]",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                   )}
                   title="Switch to the worktree this assistant is pinned to"
                 >
                   <span
                     aria-hidden
-                    className="w-1.5 h-1.5 rounded-full shrink-0 bg-status-warning"
+                    className="status-mark w-1.5 h-1.5 rounded-full shrink-0 bg-status-warning"
                   />
                   <span className="truncate">
                     {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
@@ -1582,7 +1582,7 @@ export function HelpPanel({
                 >
                   <span
                     aria-hidden
-                    className="w-1.5 h-1.5 rounded-full shrink-0 bg-daintree-text/30"
+                    className="status-mark w-1.5 h-1.5 rounded-full shrink-0 bg-daintree-text/30"
                   />
                   <span className="truncate">
                     {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
@@ -1607,7 +1607,7 @@ export function HelpPanel({
                 <DaintreeIcon className="w-3.5 h-3.5" />
                 Assistant
                 {launchedModelLabel && (
-                  <span className="text-daintree-text/50">· {launchedModelLabel}</span>
+                  <span className="text-text-secondary">· {launchedModelLabel}</span>
                 )}
               </span>
             ) : (
@@ -1622,7 +1622,7 @@ export function HelpPanel({
                 <agentConfig.icon className="w-3.5 h-3.5" />
                 {agentConfig.name}
                 {launchedModelLabel && (
-                  <span className="text-daintree-text/50">· {launchedModelLabel}</span>
+                  <span className="text-text-secondary">· {launchedModelLabel}</span>
                 )}
               </span>
             )}

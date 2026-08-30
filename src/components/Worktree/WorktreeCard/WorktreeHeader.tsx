@@ -145,7 +145,7 @@ function GitStatusFreshnessPill({
         <span
           className={cn(
             "text-xs tabular-nums shrink-0 transition-colors duration-150",
-            isWarning ? "text-text-muted" : "text-text-muted/60"
+            isWarning ? "text-text-secondary" : "text-text-muted"
           )}
         >
           {formatGitAge(age)}
@@ -207,15 +207,31 @@ export function WorktreeHeader({
   const hasFreshnessPill = !!(lastGitStatusCheckedAt && lastGitStatusCheckedAt > 0);
   const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
   const underlineOnHover = variant !== "sidebar" || isActive;
+  // `hasBaseName` is the whole mount rule for the base line: the workspace-host
+  // sets it only for a non-main worktree on a branch whose base it resolved, so
+  // it is exactly "this is a branch, and we know what it is measured against".
+  // The line renders at rest too (`≡ develop`), because a worktree sitting on
+  // its base with no upstream yet — the state every worktree is created in
+  // since `87dc51fa9` stopped pointing new branches at their base — otherwise
+  // said nothing at all about where it came from.
+  //
+  // `hasUpstreamDelta` is now only the alarm question, and keeps both rules it
+  // was given. No `!baseMatchesUpstream` term: when the two agree the badge
+  // renders the labelled base form rather than nothing, so gating on the
+  // disagreement would hide the very line that names what the counts mean. And
+  // the base terms require `baseBranchName`, because that is what the badge
+  // requires to draw them.
+  const hasBaseName = worktree.baseBranchName != null;
+  // Detached HEAD keeps the pre-detach branch name in the producer, so the base
+  // name outlives the branch it described. The relationship row is a claim
+  // about a branch, so it does not mount without one; the drift row still does,
+  // via `hasUpstreamDelta`.
+  const hasBaseRelationship = hasBaseName && !worktree.isDetached;
   const hasUpstreamDelta =
-    (worktree.aheadCount !== undefined && worktree.aheadCount > 0) ||
-    (worktree.behindCount !== undefined && worktree.behindCount > 0) ||
-    (worktree.baseAheadCount != null &&
-      worktree.baseAheadCount > 0 &&
-      !worktree.baseMatchesUpstream) ||
-    (worktree.baseBehindCount != null &&
-      worktree.baseBehindCount > 0 &&
-      !worktree.baseMatchesUpstream);
+    (worktree.aheadCount ?? 0) > 0 ||
+    (worktree.behindCount ?? 0) > 0 ||
+    (hasBaseName && (worktree.baseAheadCount ?? 0) > 0) ||
+    (hasBaseName && (worktree.baseBehindCount ?? 0) > 0);
   const hasAuthFailedSignIn = Boolean(
     worktree.fetchAuthFailed &&
     (worktree.matchedForgeProviderId != null || worktree.linked?.providerId != null)
@@ -232,8 +248,9 @@ export function WorktreeHeader({
         ciState,
         authFailed: hasAuthFailedSignIn,
         behindCount: worktree.behindCount,
+        baseBehindCount: worktree.baseBehindCount,
       }),
-    [ciState, hasAuthFailedSignIn, worktree.behindCount]
+    [ciState, hasAuthFailedSignIn, worktree.behindCount, worktree.baseBehindCount]
   );
 
   const { visibleStates, sessionAriaLabel } = useMemo(() => {
@@ -255,7 +272,7 @@ export function WorktreeHeader({
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isMainWorktree && (
             <Sprout
-              className="w-3.5 h-3.5 text-daintree-text/60 shrink-0 pointer-events-none"
+              className="w-3.5 h-3.5 text-text-secondary shrink-0 pointer-events-none"
               aria-hidden="true"
             />
           )}
@@ -288,12 +305,17 @@ export function WorktreeHeader({
             <TruncatedTooltip content={worktree.name}>
               <span
                 className={cn(
-                  "truncate text-[13px] font-medium transition-colors duration-150",
+                  "truncate text-sm leading-[inherit] transition-colors duration-150",
                   isActive
-                    ? "text-text-primary/90"
+                    ? "text-text-primary font-medium"
                     : isMuted
-                      ? "text-text-muted"
-                      : "text-text-secondary"
+                      ? // Muted, not unreadable. This is the card's headline —
+                        // the only thing naming which worktree it is — and
+                        // `text-text-muted` has no dark contrast floor in this
+                        // cohort (2.22:1 on namib). The de-emphasis comes off
+                        // the weight instead, which costs nothing legible.
+                        "text-text-secondary font-normal"
+                      : "text-text-secondary font-medium"
                 )}
                 data-testid="primary-worktree-project-name"
               >
@@ -333,7 +355,7 @@ export function WorktreeHeader({
           <div className="flex items-center gap-2 shrink-0">
             {isPinned && !isMainWorktree && (
               <Pin
-                className="w-3.5 h-3.5 text-daintree-text/40 shrink-0 pointer-events-none"
+                className="w-3.5 h-3.5 text-text-muted shrink-0 pointer-events-none"
                 aria-label="Pinned"
               />
             )}
@@ -345,23 +367,18 @@ export function WorktreeHeader({
                     aria-label={`External worktree at ${worktree.path}`}
                     className="shrink-0 leading-none"
                   >
-                    <FolderOutput
-                      className="w-3.5 h-3.5 text-daintree-text/40"
-                      aria-hidden="true"
-                    />
+                    <FolderOutput className="w-3.5 h-3.5 text-text-muted" aria-hidden="true" />
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-xs">
                   <span className="block">Outside the project directory</span>
-                  <span className="mt-0.5 block font-mono text-[11px] break-all">
-                    {worktree.path}
-                  </span>
+                  <span className="mt-0.5 block font-mono text-2xs break-all">{worktree.path}</span>
                 </TooltipContent>
               </Tooltip>
             )}
             {isProjectNotificationsMuted && (
               <BellOff
-                className="w-3.5 h-3.5 text-daintree-text/40 shrink-0 pointer-events-none"
+                className="w-3.5 h-3.5 text-text-muted shrink-0 pointer-events-none"
                 aria-label="Notifications muted for this project"
               />
             )}
@@ -382,7 +399,7 @@ export function WorktreeHeader({
                 resourceEndpoint={resourceEndpoint}
                 resourceLastCheckedAt={resourceLastCheckedAt}
                 onCheckResourceStatus={onCheckResourceStatus}
-                className="w-3.5 h-3.5 text-daintree-text/40"
+                className="w-3.5 h-3.5 text-text-muted"
               />
             )}
             <DevServerIndicator session={devServerSession} />
@@ -435,6 +452,7 @@ export function WorktreeHeader({
             worktree.linked.pr.state !== "closed" &&
             worktree.linked.pr.state !== "declined") ||
           hasUpstreamDelta ||
+          hasBaseRelationship ||
           hasAuthFailedSignIn ||
           hasPlanFile) && (
           <NonMainSecondaryRow

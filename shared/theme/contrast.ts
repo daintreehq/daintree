@@ -56,13 +56,20 @@ const CONTRAST_PAIRS: Array<{
   { foreground: "text-primary", background: "surface-canvas", minimum: 4.5 },
   { foreground: "text-primary", background: "surface-panel", minimum: 4.5 },
   { foreground: "text-primary", background: "surface-panel-elevated", minimum: 4.5 },
-  { foreground: "text-secondary", background: "surface-grid", minimum: 3.0 },
-  { foreground: "text-secondary", background: "surface-sidebar", minimum: 3.0 },
-  { foreground: "text-secondary", background: "surface-canvas", minimum: 3.0 },
-  { foreground: "text-secondary", background: "surface-panel", minimum: 3.0 },
-  { foreground: "text-secondary", background: "surface-panel-elevated", minimum: 3.0 },
-  // text-muted is the de-emphasized label tier. A 3.0 floor (matching text-secondary)
-  // is too permissive — muted text routinely drained below legibility on the light
+  // Raised from 3.0 to AA by #12065. `text-secondary` used to be a de-emphasis
+  // tier that a 3.0 floor described honestly; retiring the `text-daintree-text/NN`
+  // ramp moved roughly 1,100 normal-size labels onto it, so it is now where most
+  // of the app's secondary prose is actually read. A theme shipping 3.1:1
+  // secondary text would have passed validation and dropped every one of those
+  // labels under AA. All fifteen built-ins clear this today; the tightest is
+  // redwoods' elevated panel at 4.96:1 (`npm run theme:text-ramp -- --themes`).
+  { foreground: "text-secondary", background: "surface-grid", minimum: 4.5 },
+  { foreground: "text-secondary", background: "surface-sidebar", minimum: 4.5 },
+  { foreground: "text-secondary", background: "surface-canvas", minimum: 4.5 },
+  { foreground: "text-secondary", background: "surface-panel", minimum: 4.5 },
+  { foreground: "text-secondary", background: "surface-panel-elevated", minimum: 4.5 },
+  // text-muted is the de-emphasized label tier. A 3.0 floor (what text-secondary
+  // carried before #12065) is too permissive — muted text routinely drained below legibility on the light
   // palettes while still clearing 3.0. A floor of 3.5 keeps it honest as
   // readable-but-quiet (RC-8). Light-only: dark muted runs an intentionally lower,
   // sanctioned calibration (visual-guide.md sanctions sub-AA muted; daintree itself
@@ -106,6 +113,23 @@ const CONTRAST_PAIRS: Array<{
   { foreground: "status-info", background: "surface-canvas", minimum: 3.0 },
   { foreground: "status-info", background: "surface-panel-elevated", minimum: 3.0 },
   ACCENT_CONTRAST_PAIR,
+  // The high-contrast neutral CTA — the standard dialog primary action (#11963) — fills
+  // itself with the theme's own body-text colour and paints its label in the inverse.
+  // That is the one pair where those two roles meet as foreground and background, and no
+  // other entry covers it: every other text-primary pair puts it on a surface. Both
+  // polarities, because the button renders in both and its label is normal-sized text,
+  // so AA 4.5:1 is the right floor. The built-ins clear it by a wide margin (weakest
+  // ~12:1); a theme that fails here cannot carry a legible primary button.
+  //
+  // LIMIT: this checks the resting fill only. The variant's hover and active states mix
+  // the fill 90%/82% toward the label (`color-mix(in oklab, ...)` in button.tsx), so a
+  // theme sitting just over this floor at rest can dip under it while pressed — e.g.
+  // #767676/#ffffff is 4.54:1 at rest, ~3.8:1 hovered, ~3.3:1 pressed. Modelling that
+  // exactly needs an OKLab round-trip, which means either hand-rolling one here or
+  // pulling culori (a devDependency) into code the main process loads. Not worth it yet:
+  // every built-in is ~3x clear of the floor (weakest interaction state ~8:1), and the
+  // consequence for a custom theme is an advisory warning, never a rejected import.
+  { foreground: "text-inverse", background: "text-primary", minimum: 4.5 },
   { foreground: "search-highlight-text", background: "search-highlight-background", minimum: 3.0 },
 ];
 
@@ -570,7 +594,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
     }
   }
 
-  // Palette selected-row indicator (#11686) — the outline is the whole non-text
+  // Palette selected-row indicator (#11686) — the rail is the whole non-text
   // signal there, so it carries 1.4.11 on its own.
   warnings.push(...getPaletteSelectionWarnings(scheme));
   warnings.push(...getRecentActivityDotWarnings(scheme));
@@ -601,7 +625,7 @@ const ACCENT_OUTLINE_MIN_CONTRAST = 3.0;
 // sidebar is the flattering end of the range, not the conservative one. The
 // backdrop isn't knowable here, so we score against all of them and keep the
 // worst: a lighter backdrop lifts the surface and the fill together and closes
-// the gap the outline has to hold.
+// the gap the rail has to hold.
 const DARK_PALETTE_BACKDROPS: AppThemeTokenKey[] = [
   "surface-grid",
   "surface-canvas",
@@ -628,9 +652,16 @@ function resolvePaletteSurfaces(scheme: AppColorScheme): string[] | null {
   ];
 }
 
-const SELECTION_OUTLINE_MIN_CONTRAST = 3.0;
+const SELECTION_RAIL_MIN_CONTRAST = 3.0;
 
-/** WCAG 1.4.11's non-text floor, same basis as the selection outline above. */
+// A destructive menu row replaces the raised fill with `status-danger/10`
+// (`data-[highlighted]:bg-status-danger/10` in the item primitives, which
+// tailwind-merge resolves in favour of the later class). The rail has to hold
+// its floor on that backdrop too, so the alpha is pinned here rather than left
+// implicit in the class string.
+const DESTRUCTIVE_ROW_FILL_OPACITY = 0.1;
+
+/** WCAG 1.4.11's non-text floor, same basis as the selection rail above. */
 const RECENT_ACTIVITY_DOT_MIN_CONTRAST = 3.0;
 
 // The pixel a token actually paints when it lands on `backdrop`. Tokens reach us
@@ -674,9 +705,11 @@ function splitHexAlpha(hex: string): { hex: string; opacity: number } | null {
 // WCAG 1.4.11 for the palette selected row. The raised fill clears barely
 // 1.1-1.2:1 against the surface in every built-in theme, so it cannot be the
 // indicator; `selection-outline` is, and it has to hold 3:1 against BOTH
-// neighbours it touches. The fill is the binding one — on dark the row lifts
-// *towards* the outline, so the pair that looks safe against the surrounding
-// surface can still fail against the row it encloses.
+// neighbours it touches. The token paints a leading rail sitting on the row's
+// boundary, so it really does touch both: the fill on one side, the surrounding
+// surface on the other. The fill is the binding one — on dark the row lifts
+// *towards* the rail, so the pair that looks safe against the surrounding
+// surface can still fail against the row it marks.
 /**
  * The switcher's "agents will resume" dot is a filled `text-secondary` disc
  * drawn in the project row's status slot (#11791, re-pointed by #11801).
@@ -756,8 +789,9 @@ function getRecentActivityDotWarnings(scheme: AppColorScheme): AppThemeValidatio
 
 function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
   const warnings: AppThemeValidationWarning[] = [];
-  const outlineToken = scheme.tokens["selection-outline"];
+  const railToken = scheme.tokens["selection-outline"];
   const fillToken = scheme.tokens["overlay-raised"];
+  const dangerToken = scheme.tokens["status-danger"];
 
   const surfaces = resolvePaletteSurfaces(scheme);
   if (surfaces === null) {
@@ -774,6 +808,8 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
   // against the surface" are separate faults, and reporting only the worse one
   // would send an author to fix half the problem.
   const worstByLabel = new Map<string, number>();
+  // Reported after the loop so it never pre-empts the ordinary pairs.
+  let unevaluableDanger: string | null = null;
 
   for (const surface of surfaces) {
     const fill = resolveOverBackdrop(fillToken, surface);
@@ -785,32 +821,68 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
       return warnings;
     }
 
-    const outline = resolveOverBackdrop(outlineToken, fill);
-    if (outline === null) {
+    const rail = resolveOverBackdrop(railToken, fill);
+    if (rail === null) {
       warnings.push({
         kind: "unevaluable",
-        message: `Cannot evaluate palette selection contrast: selection-outline="${outlineToken}" is neither hex nor rgba()`,
+        message: `Cannot evaluate palette selection contrast: selection-outline="${railToken}" is neither hex nor rgba()`,
       });
       return warnings;
     }
 
-    for (const [label, against] of [
-      ["the selected row fill", fill],
-      ["the surrounding palette surface", surface],
-    ] as const) {
-      const ratio = contrastRatio(outline, against);
+    const record = (label: string, ink: string, against: string): void => {
+      const ratio = contrastRatio(ink, against);
       const seen = worstByLabel.get(label);
       if (seen === undefined || ratio < seen) worstByLabel.set(label, ratio);
+    };
+
+    // Score the ordinary row before anything optional runs. These two pairs
+    // predate the destructive one and must not be lost to it: a theme whose
+    // `status-danger` this math cannot read would otherwise report only that,
+    // and an author fixing the unreadable token would never learn the rail was
+    // also failing the row it marks.
+    record("the selected row fill", rail, fill);
+    record("the surrounding palette surface", rail, surface);
+
+    // The menu, context-menu and select item primitives draw this same token as
+    // an inset focus ring, on the same raised fill over the same
+    // `.surface-overlay` the palette floats on — so the pair above already
+    // covers the ordinary row. A destructive item is the one row that swaps the
+    // fill out, and a ring that vanishes only on "Delete" is the worst place to
+    // lose it.
+    const dangerBase = resolveOverBackdrop(dangerToken, surface);
+    if (dangerBase === null) {
+      unevaluableDanger ??= `Cannot evaluate palette selection contrast: status-danger="${dangerToken}" is neither hex nor rgba()`;
+      continue;
     }
+    const dangerFill = blendOverBackground(dangerBase, surface, DESTRUCTIVE_ROW_FILL_OPACITY);
+    const dangerRail = resolveOverBackdrop(railToken, dangerFill);
+    if (dangerRail === null) {
+      unevaluableDanger ??= `Cannot evaluate palette selection contrast: selection-outline="${railToken}" is neither hex nor rgba()`;
+      continue;
+    }
+
+    record("a destructive menu row's fill", dangerRail, dangerFill);
+    // The ring is inset by its own width, so its outer edge sits on the row's
+    // boundary and its ink still meets the surface — and a translucent rail
+    // composited over the danger wash is not the same pixel as one composited
+    // over the raised fill. Its own label, not the ordinary surface pair's: an
+    // author sent to a pair that measures 3:1 on the row they are looking at has
+    // been sent to the wrong row.
+    record("the surface behind a destructive row", dangerRail, surface);
   }
 
   for (const [label, ratio] of worstByLabel) {
-    if (ratio < SELECTION_OUTLINE_MIN_CONTRAST) {
+    if (ratio < SELECTION_RAIL_MIN_CONTRAST) {
       warnings.push({
         kind: "low-contrast",
-        message: `selection-outline against ${label} is ${ratio.toFixed(2)}:1; target is ${SELECTION_OUTLINE_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
+        message: `selection-outline against ${label} is ${ratio.toFixed(2)}:1; target is ${SELECTION_RAIL_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
       });
     }
+  }
+
+  if (unevaluableDanger !== null) {
+    warnings.push({ kind: "unevaluable", message: unevaluableDanger });
   }
 
   return warnings;

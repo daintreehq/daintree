@@ -280,6 +280,18 @@ export function isExternalWorktree(worktree: Worktree | WorktreeState): boolean 
   return worktree.isExternal === true;
 }
 
+/**
+ * The branch name a worktree can offer to copy, or null when it has none to
+ * give. `isDetached` has to count alongside `branch`: the status pass only
+ * overwrites `branch` when it reads a new one, so a worktree that detaches
+ * keeps its pre-detach branch on the snapshot — a name it no longer has
+ * checked out. Same pairing `getWorktreeType` uses to classify "detached".
+ */
+export function copyableBranchName(worktree: Worktree | WorktreeState): string | null {
+  if (worktree.isDetached || !worktree.branch) return null;
+  return worktree.branch;
+}
+
 export function sortWorktrees<T extends Worktree | WorktreeState>(
   worktrees: T[],
   orderBy: OrderBy,

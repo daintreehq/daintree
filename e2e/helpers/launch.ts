@@ -74,17 +74,36 @@ function cleanupWindowsElectronProcesses(): void {
   }
 }
 
+/**
+ * Every user-data-dir THIS worker has launched Electron with.
+ *
+ * The reap below matches on these and nothing else. It used to match the
+ * literal string `daintree-e2e`, which is on the command line of every
+ * e2e-launched Electron ever — `--daintree-e2e-mode` is unshifted onto the
+ * args of all of them — so a pre-launch reap on macOS local dev SIGKILLed
+ * every other worker's app as well as its own leftovers. One machine running
+ * two specs at once (two agents in two worktrees is the ordinary case here)
+ * had each launch killing the other's app, which surfaces as "the Daintree
+ * application can't start" in whichever one loses the race.
+ *
+ * Recording the dirs keeps the original intent — reap what this worker left
+ * behind, including prior specs' processes, which no single dir would cover —
+ * without the pattern reaching processes this worker never started.
+ */
+const launchedUserDataDirs = new Set<string>();
+
 function cleanupMacElectronE2eProcesses(): void {
   if (process.platform !== "darwin") return;
-  try {
-    // Kill only e2e-launched Electron processes (matched on `daintree-e2e`
-    // user-data-dir). Production Daintree.app and dev sessions are untouched.
-    // The -f full-command-line match catches every helper type (GPU, Renderer,
-    // network-service utility, crashpad_handler) since they all inherit the
-    // --user-data-dir argument.
-    execSync('pkill -f "node_modules/electron.*daintree-e2e"', { stdio: "ignore" });
-  } catch {
-    // Ignore "no matching process" errors.
+  for (const dir of launchedUserDataDirs) {
+    try {
+      // The -f full-command-line match catches every helper type (GPU,
+      // Renderer, network-service utility, crashpad_handler) since they all
+      // inherit the --user-data-dir argument. Production Daintree.app, dev
+      // sessions and other workers' e2e apps are all untouched.
+      execSync(`pkill -f ${JSON.stringify(`node_modules/electron.*${dir}`)}`, { stdio: "ignore" });
+    } catch {
+      // Ignore "no matching process" errors.
+    }
   }
 }
 
@@ -261,6 +280,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     beginAttempt(attempt, maxAttempts);
     const userDataDir = options.userDataDir ?? mkdtempSync(path.join(tmpdir(), "daintree-e2e-"));
+    launchedUserDataDirs.add(userDataDir);
     const args = [`--user-data-dir=${userDataDir}`, ROOT];
     args.unshift(E2E_MODE_ARG);
     if (options.env?.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS !== "0") {

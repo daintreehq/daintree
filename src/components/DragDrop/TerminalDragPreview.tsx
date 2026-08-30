@@ -35,8 +35,8 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
       style={{
         width: TERMINAL_DRAG_PREVIEW_WIDTH,
         height: TERMINAL_DRAG_PREVIEW_HEIGHT,
-        backgroundColor: "var(--color-daintree-sidebar)",
-        border: "1px solid var(--color-daintree-border)",
+        backgroundColor: "var(--color-surface-sidebar)",
+        border: "1px solid var(--color-border-default)",
         borderRadius: "var(--radius-lg)",
         boxShadow: "var(--theme-shadow-floating)",
         overflow: "visible",
@@ -52,11 +52,11 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
             position: "absolute",
             top: -8,
             right: -8,
-            backgroundColor: "var(--color-daintree-text)",
-            color: "var(--color-daintree-bg)",
+            backgroundColor: "var(--color-text-primary)",
+            color: "var(--color-surface-canvas)",
             borderRadius: "9999px",
             padding: "2px 6px",
-            fontSize: 10,
+            fontSize: "var(--text-3xs)",
             fontWeight: 600,
             display: "flex",
             alignItems: "center",
@@ -75,7 +75,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
         style={{
           height: 24,
           padding: "0 8px",
-          backgroundColor: "var(--color-daintree-border)",
+          backgroundColor: "var(--color-border-default)",
           borderBottom: "1px solid var(--color-surface-highlight)",
           display: "flex",
           alignItems: "center",
@@ -89,7 +89,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
             width: 8,
             height: 8,
             borderRadius: "50%",
-            backgroundColor: brandColor || "var(--color-daintree-text)",
+            backgroundColor: brandColor || "var(--color-text-primary)",
             flexShrink: 0,
           }}
         />
@@ -98,9 +98,9 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
         <span
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 11,
+            fontSize: "var(--text-2xs)",
             fontWeight: 500,
-            color: "var(--color-daintree-text)",
+            color: "var(--color-text-primary)",
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",

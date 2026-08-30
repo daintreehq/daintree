@@ -127,12 +127,12 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
                 data-dock-item=""
                 className={cn(
                   "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
-                  "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-daintree-text/70",
-                  "hover:text-daintree-text hover:bg-[var(--dock-item-bg-hover)]",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
+                  "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-text-secondary",
+                  "hover:text-text-primary hover:bg-[var(--dock-item-bg-hover)]",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
                   "cursor-grab active:cursor-grabbing",
                   isOpen &&
-                    "bg-[var(--dock-item-bg-active)] text-daintree-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-daintree-accent/30"
+                    "bg-[var(--dock-item-bg-active)] text-text-primary border-[var(--dock-item-border-active)] ring-1 ring-inset ring-daintree-accent/30"
                 )}
                 onClick={(e) => {
                   e.preventDefault();

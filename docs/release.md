@@ -124,8 +124,8 @@ Notarization is enabled. All CI builds are signed and submitted to Apple's notar
 
 ### Key technical details
 
-- electron-builder 26.8.1. Notarization is **not** driven by electron-builder's built-in `@electron/notarize` integration (that package is only a transitive dep now). Instead a custom `afterSign` hook runs — `scripts/notarize-macos.cjs`, wired at `electron-builder.config.cjs:97` (`afterSign`).
-- `mac.notarize` is set to `false` in `electron-builder.config.cjs` (line 103); the custom `afterSign` hook performs notarization itself, so the built-in path is intentionally disabled.
+- electron-builder 26.8.1. Notarization is **not** driven by electron-builder's built-in `@electron/notarize` integration (that package is only a transitive dep now). Instead a custom `afterSign` hook runs — `scripts/notarize-macos.cjs`, wired via the `afterSign` key in `electron-builder.config.cjs`.
+- `mac.notarize` is set to `false` in `electron-builder.config.cjs`; the custom `afterSign` hook performs notarization itself, so the built-in path is intentionally disabled.
 - `APPLE_API_KEY` env var = **file path** to .p8 (not content, not Key ID)
 - `APPLE_API_KEY_ID` = 10-character Key ID
 - `APPLE_API_ISSUER` = Issuer UUID
@@ -135,8 +135,8 @@ Notarization is enabled. All CI builds are signed and submitted to Apple's notar
 
 There are two skip paths:
 
-- The `skip_notarization` workflow input (manual dispatch). `release-macos.yml:193-195` sets `EXTRA_ARGS="-c.mac.notarize=false"` for electron-builder when it's true — though `notarize` is already `false` in `electron-builder.config.cjs`, so this is belt-and-suspenders.
-- The actual `afterSign` hook is gated by the `DAINTREE_SKIP_NOTARIZATION=true` env var (`scripts/notarize-macos.cjs:52`); when set, the hook returns immediately without submitting.
+- The `skip_notarization` workflow input (manual dispatch). `release-macos.yml` sets `EXTRA_ARGS="-c.mac.notarize=false"` for electron-builder when it's true — though `notarize` is already `false` in `electron-builder.config.cjs`, so this is belt-and-suspenders.
+- The actual `afterSign` hook is gated by the `DAINTREE_SKIP_NOTARIZATION=true` env var (`scripts/notarize-macos.cjs`); when set, the hook returns immediately without submitting.
 
 ### Debug logging
 
@@ -162,7 +162,7 @@ Artifacts are uploaded to Cloudflare R2 via AWS CLI:
 
 The hardened runtime entitlements are in `build/entitlements.mac.plist`:
 
-- `com.apple.security.cs.allow-jit` — required for V8 JIT in Electron 41 (no longer requires `allow-unsigned-executable-memory`, dropped in Electron 12)
+- `com.apple.security.cs.allow-jit` — required for V8 JIT in Electron 42 (no longer requires `allow-unsigned-executable-memory`, dropped in Electron 12)
 - `com.apple.security.cs.disable-library-validation` — allows loading native .node modules at runtime (pty.node, better_sqlite3.node). Retained until the CI TeamIdentifier audit (`scripts/ci/verify-team-identifier.sh`) confirms every Mach-O in the bundle shares the expected Team ID
 - `com.apple.security.device.audio-input` (`true`) — microphone access for the voice dictation feature. `com.apple.security.device.camera` is explicitly `false`.
 

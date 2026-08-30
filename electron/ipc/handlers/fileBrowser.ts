@@ -274,23 +274,48 @@ export function buildFileBrowserNamespace(deps: HandlerDependencies) {
     // an error: the caller is asking "which of these tokens are real?", and a
     // throw for one bad token would discard the whole batch's answer.
     //
-    // Realpath equality, not a bare stat: stat follows symlinks — including
+    // Realpath containment, not a bare stat: stat follows symlinks — including
     // INTERMEDIATE ones — so `escape/etc` through an in-root `escape → /`
     // symlink would report the target's kind, an existence probe beyond the
-    // root that FileTreeService's realpath containment otherwise keeps shut.
-    // Requiring `realpath(root + candidate) === realpath(root) + candidate`
-    // rejects any symlink component, which also matches what the tree can
-    // actually render (it omits symlink entries).
+    // root. Resolving first and requiring the CANONICAL result to stay under
+    // the canonical root keeps that shut: `/etc` is not under the root, so it
+    // still comes back null.
+    //
+    // This used to demand exact equality — `realpath(root + candidate) ===
+    // realpath(root) + candidate` — which rejected every symlink component and
+    // was justified by the tree omitting symlink entries. The tree lists them
+    // now (#11939), so a reference in terminal output pointing through an
+    // in-root link has to resolve rather than read as a non-existent file.
+    //
+    // Note this is final-target containment only: a chain that leaves the root
+    // and comes back inside is accepted here. `FileTreeService` is slightly
+    // stricter — it also rejects a target that NAMES an outside path before
+    // resolving it — so an exotic leave-and-return link can resolve as a
+    // reference here while the browser row for it reads external. Both answers
+    // are safe (neither reports anything out of root); they differ because the
+    // listing has a second job this handler doesn't: classifying thousands of
+    // entries per directory without dereferencing each one. Unifying them
+    // wants a shared resolve-beneath primitive that doesn't exist yet.
+    //
+    // `path.relative` rather than a string prefix so a sibling root like
+    // `/workspace-other` can't pass.
     const rootRealPath = await fs.realpath(root.path).catch(() => null);
     if (rootRealPath === null) {
       return payload.paths.map(() => null);
     }
 
+    const isContained = (candidateRealPath: string): boolean => {
+      const rel = path.relative(rootRealPath, candidateRealPath);
+      if (rel === "") return true;
+      if (rel === ".." || rel.startsWith(`..${path.sep}`)) return false;
+      return !path.isAbsolute(rel);
+    };
+
     return Promise.all(
       payload.paths.map(async (candidate): Promise<"file" | "directory" | null> => {
         try {
           const realPath = await fs.realpath(path.join(root.path, candidate));
-          if (realPath !== path.join(rootRealPath, candidate)) return null;
+          if (!isContained(realPath)) return null;
           const stats = await fs.stat(realPath);
           if (stats.isDirectory()) return "directory";
           if (stats.isFile()) return "file";

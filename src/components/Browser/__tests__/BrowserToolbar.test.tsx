@@ -609,7 +609,7 @@ describe("BrowserToolbar address-bar scheme icon and input", () => {
     // A focus-visible indicator must be present (the accent ring is the address bar's
     // sole accent signal per CLAUDE.md) and outline-hidden must be preserved so the
     // transparent forced-colors outline survives (lesson #6185 — never outline-none).
-    expect(input.className).toContain("focus-visible:outline-daintree-accent");
+    expect(input.className).toContain("focus-visible:outline-accent-primary");
     expect(input.className).toContain("focus:outline-hidden");
     expect(input.className).not.toContain("outline-none");
   });

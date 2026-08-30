@@ -29,11 +29,13 @@ export function WorkspaceRootSidebar({
 }) {
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center px-4 py-2 border-b border-divider shrink-0">
+      <div className="flex h-8 items-center px-3 border-b border-divider shrink-0">
         {/* Not "Worktrees": this workspace has none, and naming the slot after
             a concept it can't hold is what made the header wrong for two of the
             three workspace kinds. */}
-        <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Workspace</h2>
+        <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
+          Workspace
+        </h2>
       </div>
 
       {/* Plain container, not a `role="grid"`: the worktree list is a grid
@@ -60,7 +62,7 @@ export function WorkspaceRootSidebar({
           >
             Initialize repository
           </Button>
-          <span className="text-xs text-daintree-text/50">
+          <span className="text-xs text-text-secondary">
             Terminals, agents, and recipes work without one
           </span>
         </div>

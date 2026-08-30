@@ -90,9 +90,26 @@ function renderPicker(
  * satisfies it directly — no cast, and the compiler flags any field the handler
  * starts depending on.
  */
-function keyEvent(key: string, nativeEvent: { isComposing?: boolean; keyCode?: number } = {}) {
+function keyEvent(
+  key: string,
+  {
+    metaKey = false,
+    ctrlKey = false,
+    altKey = false,
+    ...nativeEvent
+  }: {
+    isComposing?: boolean;
+    keyCode?: number;
+    metaKey?: boolean;
+    ctrlKey?: boolean;
+    altKey?: boolean;
+  } = {}
+) {
   return {
     key,
+    metaKey,
+    ctrlKey,
+    altKey,
     nativeEvent: { isComposing: false, keyCode: 0, ...nativeEvent },
     preventDefault: vi.fn(),
     stopPropagation: vi.fn(),
@@ -454,5 +471,18 @@ describe("useBranchPicker selection", () => {
 
     expect(handle.current.matchedTotal).toBe(2);
     expect(handle.current.selectableRows).toHaveLength(2);
+  });
+  it("leaves a modified Enter to the dialog's submit shortcut", () => {
+    const onSelect = vi.fn();
+    const { handle } = renderPicker({ onSelect });
+
+    const chord = keyEvent("Enter", { metaKey: true });
+    act(() => {
+      handle.current.handleKeyDown(chord);
+    });
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(chord.preventDefault).not.toHaveBeenCalled();
+    expect(chord.stopPropagation).not.toHaveBeenCalled();
   });
 });

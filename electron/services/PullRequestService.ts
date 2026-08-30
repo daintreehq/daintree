@@ -655,10 +655,20 @@ class PullRequestService {
             : new Error(`CI status for PR #${prNumber} omitted from getCIStatuses batch`)
         );
       }
-      // CI status is best-effort: a transient failure resolves to null rather
-      // than rejecting, so it never invalidates an already-detected PR.
+      // Same contract on the fallback: a resolved value (null included) is a
+      // confirmed answer, a thrown one is a transient miss and rejects. Landing
+      // a failure here as `null` would read downstream as "no checks" and clear
+      // a status the provider never actually contradicted — and a cleared entry
+      // is neither pending nor terminal, so nothing re-polls it afterwards.
       return Promise.all(
-        list.map((prNumber) => bridge.getCIStatus(providerId, repo, prNumber).catch(() => null))
+        list.map((prNumber) =>
+          bridge
+            .getCIStatus(providerId, repo, prNumber)
+            .catch(
+              (cause: unknown) =>
+                new Error(`CI status lookup failed for PR #${prNumber}`, { cause })
+            )
+        )
       );
     });
   }
@@ -1518,6 +1528,15 @@ class PullRequestService {
             detectedPR.title !== pr.title ||
             detectedPR.url !== pr.url;
 
+          // The probe's fresh REST markers, read before the emit rather than
+          // after: a title edit and a push can land in the same tick, and the
+          // rollup we hold describes the head we last saw, not the new one.
+          const snap = changedSnapshotByNumber.get(prNumber);
+          const headMoved =
+            snap?.headSha != null &&
+            detectedPR.headSha !== undefined &&
+            snap.headSha !== detectedPR.headSha;
+
           if (prChanged) {
             const oldState = detectedPR.state;
             detectedPR.state = newState;
@@ -1538,7 +1557,17 @@ class PullRequestService {
               prNumber: pr.number,
               prUrl: pr.url,
               prState: newState,
-              prCiStatus: detectedPR.ciStatus,
+              // Both CI fields or neither. The host rebuilds `linked.pr` from
+              // the rich `ciStatus` on every detection event and full-replaces
+              // it, so an emit carrying only the flat rollup blanks the mark
+              // every badge actually reads until the enrichment below lands a
+              // round trip later — the blink this branch used to produce on any
+              // title or state edit. A metadata change on the same head says
+              // nothing about CI, so the last known status rides along; a change
+              // that came with a new head says the opposite, and holding the old
+              // head's green over the new one would be worse than a blank.
+              prCiStatus: headMoved ? undefined : detectedPR.ciStatus,
+              ciStatus: headMoved ? undefined : detectedPR._ciStatus,
               prTitle: pr.title,
               issueNumber: this.candidates.get(worktreeId)?.issueNumber,
               branchName: lookupBranchByWorktreeId.get(worktreeId),
@@ -1556,7 +1585,6 @@ class PullRequestService {
           // does not), so seeding from anywhere else is impossible. This runs on
           // the success path only — a transient error skips it above, leaving
           // the stale snapshot so the next probe re-flags the PR (self-healing).
-          const snap = changedSnapshotByNumber.get(prNumber);
           if (snap) {
             detectedPR.headSha = snap.headSha ?? undefined;
             detectedPR.updatedAt = snap.updatedAt ?? undefined;
@@ -2073,13 +2101,12 @@ class PullRequestService {
             ? ciStatus.state
             : undefined;
         pr._ciStatus = ciStatus ?? undefined;
-        // Only a positive result settles the blur-sweep backfill debt. A `null`
-        // is not trustworthy here: when the batch call itself fails, the
-        // loader's per-PR fallback converts a transient error into a resolved
-        // `null`, so clearing on null would strand a swept badge on a network
-        // blip — and a swept entry was `pending`, so it demonstrably had checks.
-        // Worst case we retry it once per tick until the provider answers or a
-        // re-detection replaces the entry.
+        // Only a positive result settles the blur-sweep backfill debt. A swept
+        // entry was `pending`, so it demonstrably had checks — a `null` says
+        // they have since vanished, which happens, but rarely enough that
+        // holding the debt and asking again is the cheaper mistake than
+        // stranding the badge. Worst case we retry it once per tick until the
+        // provider answers or a re-detection replaces the entry.
         if (ciStatus) {
           pr.needsCiBackfill = undefined;
         }
@@ -2090,6 +2117,13 @@ class PullRequestService {
         // confirmed "no checks" case so a preserved phase-1 dot is cleared.
         for (const [worktreeId, detected] of this.detectedPRs) {
           if (detected.number === pr.number) {
+            // Sibling worktrees on the same branch share one entry, but two
+            // worktrees can also hold distinct entries for the same PR. Only
+            // one of them is enriched per tick, so carry the result onto the
+            // others too — otherwise a later metadata emit from an unenriched
+            // entry re-publishes the rollup this one just replaced.
+            detected.ciStatus = pr.ciStatus;
+            detected._ciStatus = pr._ciStatus;
             events.emit("sys:pr:detected", {
               worktreeId,
               prNumber: pr.number,

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
-import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { TypedNameConfirmInput } from "@/components/ui/TypedNameConfirmInput";
+import { TitleEntity } from "@/components/ui/TitleEntity";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
@@ -9,8 +9,9 @@ import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm"
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
 import {
   buildWorktreeDeletePreview,
-  formatWorktreeChangeRows,
+  buildWorktreeChangeRows,
   summarizeWorktreeChanges,
+  PREVIEW_FILE_LIMIT,
   type WorktreeDeletePreview,
 } from "@/components/Worktree/worktreeDeletePreview";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -18,6 +19,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import type { WorktreeState } from "@/types";
 import { cn } from "@/lib/utils";
 import { isProtectedBranch as isProtectedBranchName } from "@shared/utils/gitConstants";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 
 interface WorktreeDeleteDialogProps {
   isOpen: boolean;
@@ -47,6 +49,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // (an ABA race a plain boolean flag would miss). `mountedRef` covers unmount.
   const sessionRef = useRef(0);
   const mountedRef = useRef(true);
+  const gateRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     // Set on SETUP as well as clearing on cleanup — under React StrictMode the
     // mount effect runs setup → cleanup → setup, so a setup that only cleared
@@ -79,9 +82,14 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
 
   // Actual file list a force-delete would discard — a D2 preview must show
   // real content, not just a count (#11343). Prefer the fresh fetch's changes,
-  // fall back to the prop snapshot before it resolves.
-  const previewChangeRows = formatWorktreeChangeRows(
-    freshPreview?.changes ?? worktree.worktreeChanges?.changes ?? []
+  // fall back to the prop snapshot before it resolves. Paths arrive absolute
+  // from the producer, so the root is passed to render them worktree-relative:
+  // repeating the full path on every row buries the filename past the wrap,
+  // which is the one part of a row that distinguishes it (#11977).
+  const previewChangeRows = buildWorktreeChangeRows(
+    freshPreview?.changes ?? worktree.worktreeChanges?.changes ?? [],
+    PREVIEW_FILE_LIMIT,
+    freshPreview?.rootPath ?? worktree.worktreeChanges?.rootPath ?? worktree.path
   );
 
   const isProtectedBranch = isProtectedBranchName(worktree.branch?.toLowerCase());
@@ -102,7 +110,14 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       hasTrackedChanges,
     }) === "D3";
   const isConfirmMatched = confirmInput === confirmTarget;
-  const canSubmit = (!isHighTier || isConfirmMatched) && !isDeleting;
+  // A standard (non-force) delete on a tree we KNOW is dirty is rejected by
+  // the backend, so offering it as the primary action ships a button whose
+  // only outcome is a toast and a reopened dialog. Gate it — but only when the
+  // dirtiness is verified: after a failed verification the safe non-force
+  // attempt is still the right first move, and disabling it would coerce the
+  // user into force on the very state we could not check.
+  const blockedByDirtyTree = hasChanges && !force && !verifyFailed;
+  const canSubmit = (!isHighTier || isConfirmMatched) && !isDeleting && !blockedByDirtyTree;
 
   useEffect(() => {
     if (isOpen) {
@@ -166,6 +181,21 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       setConfirmInput("");
     }
   }, [force]);
+
+  // An escalation the user cannot see is not an escalation. On a tall state
+  // (long path, many changed files) the D3 gate renders below the body's
+  // scroll fold, so the footer would report a disabled action whose cause was
+  // off-screen. Bring the gate into view when the tier escalates — the user
+  // did not scroll away from it, it appeared somewhere they were not looking.
+  useEffect(() => {
+    if (!isHighTier) return;
+    const node = gateRef.current;
+    if (!node) return;
+    node.scrollIntoView({
+      block: "nearest",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+  }, [isHighTier]);
 
   useEffect(() => {
     if (!canDeleteBranch && deleteBranch) {
@@ -237,80 +267,139 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     void revalidateThenDelete();
   };
 
-  const deleteButtonLabel = !force
-    ? "Delete worktree"
-    : isHighTier
-      ? `Force delete '${confirmTarget}'`
-      : "Force delete worktree";
+  // Verb-noun, and deliberately free of the branch name: interpolating an
+  // untruncated identifier here overflowed the footer and pushed Cancel out of
+  // the dialog entirely on long branches (#11977). The title and the
+  // typed-name gate both already name the target.
+  const deleteButtonLabel = force ? "Force delete worktree" : "Delete worktree";
 
-  let advisoryBanner: React.ReactNode = null;
-  if (verifyFailed) {
-    // Fresh-status fetch failed: we can't confirm what's in the tree, so we
-    // fail closed (the tier is already escalated via `hasTrackedChanges`) and
-    // say so plainly rather than implying a clean/known state.
-    advisoryBanner = (
-      <div
-        role="alert"
-        className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded text-status-error text-xs"
-      >
-        <AlertTriangle className="w-4 h-4 shrink-0" />
-        <p>
-          Couldn't verify this worktree's current changes. Force delete may discard uncommitted work
-          — proceed only if you're sure. This is irreversible.
-        </p>
-      </div>
-    );
-  } else if (hasChanges) {
-    if (!force) {
-      advisoryBanner = (
-        <div
-          role="alert"
-          className="flex items-start gap-2 p-3 bg-status-warning/10 border border-status-warning/20 rounded text-status-warning text-xs"
-        >
-          <AlertTriangle className="w-4 h-4 shrink-0" />
-          <p>
-            This worktree has{" "}
-            {hasTrackedChanges && hasUntrackedFiles
-              ? `${trackedChangeCount} uncommitted file${trackedChangeCount === 1 ? "" : "s"} and ${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`
-              : hasTrackedChanges
-                ? `${trackedChangeCount} uncommitted file${trackedChangeCount === 1 ? "" : "s"}`
-                : `${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`}
-            . Standard deletion will fail.
-          </p>
-        </div>
-      );
-    } else if (hasTrackedChanges) {
-      advisoryBanner = (
-        <div
-          role="alert"
-          className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded text-status-error text-xs"
-        >
-          <AlertTriangle className="w-4 h-4 shrink-0" />
-          <p>
-            Force delete will discard {trackedChangeCount} uncommitted tracked file
-            {trackedChangeCount === 1 ? "" : "s"}
-            {hasUntrackedFiles
-              ? ` and ${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`
-              : ""}
-            . This is irreversible.
-          </p>
-        </div>
-      );
-    } else {
-      advisoryBanner = (
-        <div
-          role="alert"
-          className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded text-status-error text-xs"
-        >
-          <AlertTriangle className="w-4 h-4 shrink-0" />
-          <p>
-            Force delete will permanently remove {untrackedFileCount} untracked file
-            {untrackedFileCount === 1 ? "" : "s"}.
-          </p>
-        </div>
-      );
-    }
+  const trackedLabel = `${trackedChangeCount} uncommitted file${trackedChangeCount === 1 ? "" : "s"}`;
+  const untrackedLabel = `${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`;
+  /**
+   * Never state a count we could not verify.
+   *
+   * `hasTrackedChanges` is forced true when the fresh status fetch fails, so
+   * the tier fails closed — but the counts still come from the (possibly
+   * clean, possibly stale) prop seed. Interpolating them anyway produced
+   * "0 uncommitted files will be permanently lost" in exactly the state where
+   * the dialog knows least, which reads as false precision at the worst
+   * possible moment. When unverified, say so instead of inventing a number.
+   */
+  const changeSummaryLabel = verifyFailed
+    ? "unverified uncommitted work"
+    : hasTrackedChanges && hasUntrackedFiles
+      ? `${trackedLabel} and ${untrackedLabel}`
+      : hasTrackedChanges
+        ? trackedLabel
+        : untrackedLabel;
+
+  /**
+   * The consequences that will ACTUALLY occur under the current options.
+   *
+   * Previously every possible outcome was rendered and the inapplicable ones
+   * were dimmed + struck through, so a clean delete showed five rows of which
+   * four were non-events and the user had to subtract them at the exact moment
+   * the dialog should be minimising interpretation (#11977). Strikethrough was
+   * also the ONLY signal — it carries no meaning to assistive tech, and it
+   * collapses entirely under forced-colors, where the dim tier disappears.
+   * Now a row exists only when it is true.
+   */
+  const consequences: { key: string; tone: "neutral" | "danger"; content: React.ReactNode }[] = [];
+  consequences.push({
+    key: "directory",
+    tone: "neutral",
+    content: "Worktree directory will be deleted from disk",
+  });
+  if (closeTerminals && hasTerminals) {
+    consequences.push({
+      key: "terminals",
+      tone: "neutral",
+      content: (
+        <>
+          {/* Weight ranks the outcome above the detail that qualifies it, in
+              place of the em dash that read as one run of prose. It is also
+              the half that holds under `forced-colors: active`, where every
+              author colour resolves to the same ink. The danger row below is
+              still marked by its glyph and by carrying weight across the whole
+              row, so ranking a neutral row's first half does not blunt it.
+              Rows with no detail stay unweighted: there is no pair to rank. */}
+          <span className={cn(runningAgentCount > 0 && "font-medium")}>
+            {terminalCounts.total} terminal{terminalCounts.total === 1 ? "" : "s"} will be closed
+          </span>
+          {runningAgentCount > 0 && (
+            <span className="ml-1 text-text-secondary">
+              {" "}
+              {terminalCounts.total === 1
+                ? "running an agent"
+                : `${runningAgentCount} of them running an agent`}
+            </span>
+          )}
+        </>
+      ),
+    });
   }
+  if (hasDevPreview) {
+    consequences.push({ key: "dev", tone: "neutral", content: "Dev server will be stopped" });
+  }
+  if (force && hasChanges) {
+    // The one irreversible outcome, stated once and specifically. This row
+    // replaces the old generic "Uncommitted changes will be lost" line, the
+    // separate red banner that repeated the same counts, and the standalone
+    // "This cannot be undone." — three assertions of one fact.
+    consequences.push({
+      key: "loss",
+      tone: "danger",
+      // Hedged only when the status fetch failed: that state is the one the
+      // dialog knows least about, and the banner above already says the loss
+      // is possible rather than certain. Where the changes ARE listed, the
+      // outcome is stated flatly.
+      content: `${changeSummaryLabel} ${verifyFailed ? "may be" : "will be"} permanently lost`,
+    });
+  }
+  if (deleteBranch && canDeleteBranch) {
+    consequences.push({
+      key: "branch",
+      tone: "neutral",
+      content: (
+        <>
+          <span className="font-medium">
+            Branch <span className="font-mono break-all">{worktree.branch}</span> will be deleted
+          </span>
+          <span className="ml-1 text-text-secondary"> Fails if it has unmerged changes</span>
+        </>
+      ),
+    });
+  }
+
+  // Fail-closed disclosure only. The option-driven consequences live in the
+  // list above and announce through a polite live region instead: `role="alert"`
+  // is assertive and would re-interrupt the user on every checkbox toggle.
+  const verifyFailedBanner = verifyFailed ? (
+    <div
+      role="alert"
+      className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] text-status-error text-xs"
+    >
+      <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />
+      <p>
+        Couldn't check this worktree for uncommitted work. Force delete may discard changes that
+        aren't listed here.
+      </p>
+    </div>
+  ) : null;
+
+  // Standard (non-force) deletion is rejected by the backend when the tree is
+  // dirty, so the primary action would fail. Say so where the decision is made
+  // rather than letting the user find out from a toast.
+  const blockedHint = !hasChanges
+    ? null
+    : force
+      ? null
+      : verifyFailed
+        ? "Couldn't verify this worktree — standard delete may fail"
+        : `Select Force delete to continue — ${changeSummaryLabel} present`;
+
+  const changesHeadingId = "worktree-delete-changes-heading";
+  const consequencesHeadingId = "worktree-delete-consequences-heading";
 
   return (
     <AppDialog
@@ -318,182 +407,267 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       onClose={onClose}
       size="md"
       variant="destructive"
+      // The body lists what will happen and, when the worktree is dirty, the
+      // files that will be lost — structured evidence, so a dialog rather than
+      // an alertdialog, which APG reserves for a brief message read out whole.
+      hasPreview
       data-testid="delete-worktree-dialog"
     >
+      <AppDialog.Header>
+        <AppDialog.Title icon={<Trash2 className="w-4 h-4 shrink-0 text-status-error" />}>
+          <TitleEntity action="Delete" name={confirmTarget} />
+        </AppDialog.Title>
+        <AppDialog.CloseButton />
+      </AppDialog.Header>
+
       <AppDialog.Body>
-        <div className="flex items-center gap-3 mb-4 text-status-error">
-          <div className="p-2 bg-status-error/10 rounded-full">
-            <Trash2 className="w-6 h-6" />
-          </div>
-          <AppDialog.Title>Delete '{confirmTarget}'?</AppDialog.Title>
-        </div>
+        {/* Static, concise, and the target of the dialog's `aria-describedby`.
+            Deliberately not the dynamic consequence list: pointing the
+            description at live content makes a screen reader read the whole
+            payload before the focused control every time it changes. */}
+        <AppDialog.Description className="sr-only">
+          Deletes this worktree's directory from disk. The options below can also close its
+          terminals, discard uncommitted work, and delete its branch.
+        </AppDialog.Description>
 
-        <div className="space-y-4">
-          <div>
-            <span
-              role="heading"
-              aria-level={3}
-              className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60"
-            >
-              What will happen
-            </span>
-            <ul className="mt-2 space-y-1">
-              <li className="text-sm text-daintree-text">Worktree directory will be deleted</li>
-              <li
-                className={cn(
-                  "text-sm",
-                  closeTerminals && hasTerminals
-                    ? "text-daintree-text"
-                    : "text-daintree-text/40 line-through"
-                )}
-              >
-                {terminalCounts.total} terminal{terminalCounts.total === 1 ? "" : "s"} will be
-                closed
-                {runningAgentCount > 0 ? ` (${runningAgentCount} running an agent)` : ""}
-              </li>
-              <li
-                className={cn(
-                  "text-sm",
-                  hasDevPreview ? "text-daintree-text" : "text-daintree-text/40 line-through"
-                )}
-              >
-                Dev server will be stopped
-              </li>
-              <li
-                className={cn(
-                  "text-sm",
-                  force && hasChanges ? "text-status-error" : "text-daintree-text/40 line-through"
-                )}
-              >
-                Uncommitted changes will be lost
-              </li>
-              <li
-                className={cn(
-                  "text-sm",
-                  deleteBranch && canDeleteBranch && force
-                    ? "text-status-warning"
-                    : deleteBranch && canDeleteBranch
-                      ? "text-daintree-text"
-                      : "text-daintree-text/40 line-through"
-                )}
-              >
-                {worktree.branch ? (
-                  <>
-                    Branch <span className="font-mono break-all">{worktree.branch}</span> will be
-                    deleted
-                  </>
-                ) : (
-                  "Branch will be deleted"
-                )}
-              </li>
-            </ul>
-          </div>
-          <p className="text-xs text-daintree-text/50">This cannot be undone.</p>
+        <div className="space-y-5">
+          {/* 1. WHAT — the entity, named once, concretely. */}
+          <dl className="rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-2.5 text-xs">
+            {worktree.branch && (
+              <div className="flex gap-2">
+                <dt className="w-14 shrink-0 text-text-secondary">Branch</dt>
+                <dd className="font-mono text-text-primary [overflow-wrap:anywhere]">
+                  {worktree.branch}
+                </dd>
+              </div>
+            )}
+            <div className={cn("flex gap-2", worktree.branch && "mt-1.5")}>
+              <dt className="w-14 shrink-0 text-text-secondary">Path</dt>
+              <dd className="font-mono text-text-secondary [overflow-wrap:anywhere]">
+                {worktree.path}
+              </dd>
+            </div>
+          </dl>
 
-          <div className="text-xs text-daintree-text/60 bg-daintree-bg p-3 rounded border border-border-strong font-mono break-all">
-            {worktree.path}
-          </div>
+          {verifyFailedBanner}
 
-          {advisoryBanner}
-
-          {force && !verifyFailed && previewChangeRows.length > 0 && (
+          {/* 2. WHAT'S IN THERE — the actual content, shown whenever the tree
+              is dirty, not only once force is on. A D2 confirm owes a preview
+              of real content; a count alone is insufficient, and the user
+              needs the list to decide whether forcing is safe. */}
+          {hasChanges && !verifyFailed && previewChangeRows.length > 0 && (
             <div>
-              <span
-                role="heading"
-                aria-level={3}
-                className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60"
-              >
-                Files that will be lost
-              </span>
-              <pre
+              <div className="flex items-baseline justify-between gap-2">
+                <span
+                  id={changesHeadingId}
+                  role="heading"
+                  aria-level={3}
+                  className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
+                >
+                  Uncommitted work
+                </span>
+                <span className="text-2xs tabular-nums text-text-secondary">
+                  {changeSummaryLabel}
+                </span>
+              </div>
+              {/* Rows, not a wrapping <pre> of joined strings. A path longer
+                  than the box used to continue at the left edge, under the
+                  status column, so two long paths read as four files and the
+                  glyph detached from the name it belonged to. The glyph now
+                  sits in its own fixed column and the wrap hangs under the
+                  path. */}
+              <ul
                 data-testid="delete-worktree-file-list"
-                className="mt-2 max-h-32 overflow-auto text-xs text-daintree-text/70 bg-daintree-bg p-3 rounded border border-border-strong font-mono whitespace-pre-wrap break-all"
+                aria-labelledby={changesHeadingId}
+                tabIndex={0}
+                className="mt-2 max-h-32 overflow-auto text-xs text-text-secondary bg-surface-canvas p-3 rounded-[var(--radius-md)] border border-border-strong font-mono space-y-0.5"
               >
-                {previewChangeRows.join("\n")}
-              </pre>
+                {previewChangeRows.map((row) => (
+                  <li
+                    key={row.isOverflow ? "__overflow" : `${row.glyph}:${row.label}`}
+                    className={cn("flex gap-2", row.isOverflow && "text-text-secondary italic")}
+                  >
+                    {!row.isOverflow && (
+                      <>
+                        <span aria-hidden="true" className="w-3 shrink-0 text-text-secondary">
+                          {row.glyph}
+                        </span>
+                        {/* The glyph column is right for scanning and useless
+                            to a screen reader, which would otherwise hear a
+                            list of paths with no way to tell a deletion from
+                            an addition. */}
+                        <span className="sr-only">{row.statusLabel}: </span>
+                      </>
+                    )}
+                    <span className="[overflow-wrap:anywhere]">{row.label}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={force}
-              onChange={(e) => setForce(e.target.checked)}
-              className="rounded border-border-strong bg-daintree-bg text-status-error focus:ring-status-error"
-            />
-            <span className="text-sm text-daintree-text">
-              {hasTrackedChanges && hasUntrackedFiles
-                ? "Force delete (lose uncommitted changes and untracked files)"
-                : hasUntrackedFiles
-                  ? "Force delete (remove untracked files)"
-                  : "Force delete (lose uncommitted changes)"}
-            </span>
-          </label>
+          {/* 3. THE CAUSE — every optional operation, grouped, above the
+              consequences they rewrite. Checking a box below content it
+              changes is the "upstream state mutation" failure: the reader has
+              already passed the text that just moved. */}
+          {/* `disabled` on the fieldset would also trap focus oddly, so the
+              controls carry it individually. Frozen during the submit-time
+              revalidation: that await can outlive a toggle, and the closure
+              would then dispatch the values the user had BEFORE they changed
+              their mind. Cancel and Escape stay live throughout. */}
+          <fieldset className="space-y-3">
+            <legend className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
+              Options
+            </legend>
 
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={closeTerminals}
-              onChange={(e) => setCloseTerminals(e.target.checked)}
-              className="rounded border-border-strong bg-daintree-bg text-daintree-accent focus:ring-daintree-accent/30"
-            />
-            <span className="text-sm text-daintree-text">
-              Close all terminals{hasTerminals ? ` (${terminalCounts.total})` : ""}
-            </span>
-          </label>
-
-          {canDeleteBranch && (
             <label className="flex items-start gap-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={deleteBranch}
-                onChange={(e) => setDeleteBranch(e.target.checked)}
-                className="mt-0.5 rounded border-border-strong bg-daintree-bg text-status-error focus:ring-status-error"
+                checked={force}
+                onChange={(e) => setForce(e.target.checked)}
+                disabled={isDeleting}
+                className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
               />
-              <span className="text-sm text-daintree-text">
-                <span className="flex items-center gap-1.5">
-                  <FolderGit2 className="w-3.5 h-3.5" />
-                  Delete branch{" "}
-                  <code className="text-xs bg-daintree-bg px-1.5 py-0.5 rounded border border-border-strong">
-                    {worktree.branch}
-                  </code>
-                </span>
-                {deleteBranch && (
-                  <span className="block text-xs text-daintree-text/60 mt-1">
-                    Safe delete — fails if branch has unmerged changes
+              <span className="text-sm text-text-primary">
+                {/* Constant by rule — a toggle label never changes with state
+                    (house microcopy), and this one used to swap between three
+                    wordings. It also has to stay the same verb as the primary
+                    button ("Force delete worktree"), so checking the box and
+                    reading the button describe one action, not two. What
+                    actually varies is the consequence, stated below and in the
+                    "What will happen" list. */}
+                Force delete
+                {hasChanges && (
+                  <span className="block text-xs text-text-secondary mt-0.5">
+                    {verifyFailed
+                      ? "Required because this worktree's status couldn't be verified"
+                      : `Required to delete this worktree — ${changeSummaryLabel} present`}
                   </span>
                 )}
               </span>
             </label>
-          )}
+
+            {hasTerminals && (
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={closeTerminals}
+                  onChange={(e) => setCloseTerminals(e.target.checked)}
+                  disabled={isDeleting}
+                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
+                />
+                <span className="text-sm text-text-primary">
+                  Close all terminals
+                  <span className="ml-1 tabular-nums text-text-secondary">
+                    ({terminalCounts.total})
+                  </span>
+                </span>
+              </label>
+            )}
+
+            {canDeleteBranch && (
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={deleteBranch}
+                  onChange={(e) => setDeleteBranch(e.target.checked)}
+                  disabled={isDeleting}
+                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
+                />
+                <span className="flex items-center gap-1.5 text-sm text-text-primary">
+                  <FolderGit2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                  {/* No branch chip: the entity summary directly above names
+                      the branch, and so does the title. A third copy bought
+                      nothing and, on a long branch, forced this label to wrap
+                      while the chip took the whole remaining width. */}
+                  Delete branch
+                </span>
+              </label>
+            )}
+          </fieldset>
+
+          {/* 4. THE EFFECT — computed from the options directly above. Only
+              outcomes that will actually occur are listed. */}
+          <div>
+            <span
+              id={consequencesHeadingId}
+              role="heading"
+              aria-level={3}
+              className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
+            >
+              What will happen
+            </span>
+            {/* The list IS the live region. Mirroring it into a second sr-only
+                node duplicated every string in the DOM, so assistive tech read
+                each consequence twice. `polite` (not `alert`) because these
+                change on every checkbox toggle and must not interrupt. */}
+            <ul
+              data-testid="delete-worktree-consequences"
+              aria-labelledby={consequencesHeadingId}
+              aria-live="polite"
+              aria-relevant="all"
+              className="mt-2 space-y-1"
+            >
+              {consequences.map((row) => (
+                <li
+                  key={row.key}
+                  data-tone={row.tone}
+                  className={cn(
+                    "text-sm flex items-start gap-1.5",
+                    row.tone === "danger" ? "text-status-error font-medium" : "text-text-primary"
+                  )}
+                >
+                  {row.tone === "danger" && (
+                    <>
+                      {/* The irreversible row must not be distinguished by
+                          colour alone. Under `forced-colors: active` every
+                          status colour resolves to the same system ink, so a
+                          red row and a neutral row become identical — the glyph
+                          and the weight are what survive. */}
+                      <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" aria-hidden="true" />
+                      <span className="sr-only">Irreversible: </span>
+                    </>
+                  )}
+                  <span>{row.content}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
 
           {isHighTier && (
-            <TypedNameConfirmInput
-              target={confirmTarget}
-              value={confirmInput}
-              onChange={setConfirmInput}
-              onMatchSubmit={handleDelete}
-              preamble={highTierPreamble}
-              data-testid="delete-worktree-confirm-input"
-            />
+            <div ref={gateRef}>
+              <TypedNameConfirmInput
+                target={confirmTarget}
+                value={confirmInput}
+                onChange={setConfirmInput}
+                onMatchSubmit={handleDelete}
+                preamble={highTierPreamble}
+                disabled={isDeleting}
+                data-testid="delete-worktree-confirm-input"
+              />
+            </div>
           )}
         </div>
       </AppDialog.Body>
 
-      <AppDialog.Footer>
-        <Button variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button
-          variant="destructive"
-          onClick={handleDelete}
-          disabled={!canSubmit}
-          aria-live="polite"
-          data-testid="delete-worktree-confirm"
-        >
-          {deleteButtonLabel}
-        </Button>
-      </AppDialog.Footer>
+      <AppDialog.Footer
+        hint={
+          // No identifier interpolated here. The gate directly above already
+          // shows the exact string to type, and putting an untruncated branch
+          // name in the footer is what broke this footer in the first place —
+          // it just moves the overflow from the button to the hint.
+          isHighTier && !isConfirmMatched
+            ? "Confirm the name above to enable"
+            : (blockedHint ?? undefined)
+        }
+        secondaryAction={{ label: "Cancel", onClick: onClose }}
+        primaryAction={{
+          label: deleteButtonLabel,
+          onClick: handleDelete,
+          disabled: !canSubmit,
+          intent: "destructive",
+        }}
+      />
     </AppDialog>
   );
 }

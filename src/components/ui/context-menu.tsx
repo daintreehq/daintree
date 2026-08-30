@@ -7,14 +7,20 @@ import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { MenuActionSourceContext, useMenuActionSource } from "./menu-source";
+import {
+  OverlayFocusRestoreContext,
+  useOverlayFocusRestore,
+  useOverlayFocusRestoreValue,
+} from "./overlay-focus-restore";
 import { actionService } from "@/services/ActionService";
 import { useAriaKeyshortcuts } from "@/hooks";
 import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
 
 type ContextMenuRootProps = React.ComponentProps<typeof ContextMenuPrimitiveType.Root>;
 
-const ContextMenu = ({ children, ...rest }: ContextMenuRootProps) => {
+const ContextMenu = ({ children, onOpenChange, ...rest }: ContextMenuRootProps) => {
   const radix = useRadixPrimitives();
+  const focusRestore = useOverlayFocusRestoreValue({ restoreFocusOnPointerClose: true });
   if (!radix)
     return (
       <MenuActionSourceContext.Provider value="context-menu">
@@ -24,7 +30,27 @@ const ContextMenu = ({ children, ...rest }: ContextMenuRootProps) => {
   const Root = radix.ContextMenuPrimitive.Root;
   return (
     <MenuActionSourceContext.Provider value="context-menu">
-      <Root {...rest}>{children}</Root>
+      <OverlayFocusRestoreContext.Provider value={focusRestore}>
+        <Root
+          onOpenChange={(next) => {
+            if (next) {
+              focusRestore.resetForOpen();
+              // A context menu has no focusable trigger of its own — Radix's
+              // focus scope restores whatever was focused before it opened, so
+              // that element is the one a pointer selection has to hand focus
+              // back to. Chromium focuses a button on right-press, so this is
+              // usually the control that was right-clicked.
+              focusRestore.setRestoreTarget(
+                document.activeElement instanceof HTMLElement ? document.activeElement : null
+              );
+            }
+            onOpenChange?.(next);
+          }}
+          {...rest}
+        >
+          {children}
+        </Root>
+      </OverlayFocusRestoreContext.Provider>
     </MenuActionSourceContext.Provider>
   );
 };
@@ -149,6 +175,11 @@ type ContextMenuSubTriggerProps = React.ComponentPropsWithoutRef<
   inset?: boolean;
 };
 
+/* Same highlighted-row focus ring as the dropdown-menu primitives: Radix's
+ * `data-[highlighted]` fill is too low-contrast to be the indicator, so keyboard
+ * focus draws an inset `selection-outline` ring. `outline-solid` is load-bearing —
+ * `outline-hidden` sets `--tw-outline-style: none` and `outline-2` reads it back.
+ */
 const ContextMenuSubTrigger = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitiveType.SubTrigger>,
   ContextMenuSubTriggerProps
@@ -160,7 +191,7 @@ const ContextMenuSubTrigger = React.forwardRef<
     <SubTrigger
       ref={ref}
       className={cn(
-        "flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised data-[state=open]:bg-overlay-raised",
+        "flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[state=open]:bg-overlay-raised",
         inset && "pl-8",
         className
       )}
@@ -195,7 +226,7 @@ const ContextMenuSubContent = React.forwardRef<
         collisionPadding={collisionPadding}
         style={{ transformOrigin: "var(--radix-context-menu-content-transform-origin)", ...style }}
         className={cn(
-          "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-daintree-text",
+          "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
           "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
           className
         )}
@@ -218,34 +249,94 @@ type ContextMenuContentProps = React.ComponentPropsWithoutRef<
 const ContextMenuContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitiveType.Content>,
   ContextMenuContentProps
->(({ className, collisionPadding = 8, children, style, ...props }, ref) => {
-  const radix = useRadixPrimitives();
-  const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
-  const isDockPopoverChild = useIsDockPopoverChild();
-  if (!radix) return null;
-  const Portal = radix.ContextMenuPrimitive.Portal;
-  const Content = radix.ContextMenuPrimitive.Content;
-  return (
-    <Portal>
-      <Content
-        ref={shadowRef}
-        collisionPadding={collisionPadding}
-        style={{ transformOrigin: "var(--radix-context-menu-content-transform-origin)", ...style }}
-        className={cn(
-          "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-daintree-text",
-          "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
-          className
-        )}
-        {...props}
-        data-dock-popover-child={isDockPopoverChild ? "" : undefined}
-      >
-        {topShadow}
-        {children}
-        {bottomShadow}
-      </Content>
-    </Portal>
-  );
-});
+>(
+  (
+    {
+      className,
+      collisionPadding = 8,
+      children,
+      style,
+      onPointerDown,
+      onPointerDownOutside,
+      onInteractOutside,
+      onKeyDown,
+      onClick,
+      onCloseAutoFocus,
+      ...props
+    },
+    ref
+  ) => {
+    const radix = useRadixPrimitives();
+    const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
+    const isDockPopoverChild = useIsDockPopoverChild();
+    const focusRestore = useOverlayFocusRestore();
+
+    // Shared close-time focus policy (see `overlay-focus-restore.ts`).
+    const handlePointerDown: React.PointerEventHandler<HTMLDivElement> = (event) => {
+      onPointerDown?.(event);
+      focusRestore?.onContentPointerDown();
+    };
+    const handlePointerDownOutside: NonNullable<ContextMenuContentProps["onPointerDownOutside"]> = (
+      event
+    ) => {
+      onPointerDownOutside?.(event);
+      focusRestore?.onContentPointerDownOutside();
+    };
+    const handleInteractOutside: NonNullable<ContextMenuContentProps["onInteractOutside"]> = (
+      event
+    ) => {
+      onInteractOutside?.(event);
+      focusRestore?.onContentInteractOutside(event);
+    };
+    const handleKeyDown: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
+      onKeyDown?.(event);
+      focusRestore?.onContentKeyDown();
+    };
+    const handleClick: React.MouseEventHandler<HTMLDivElement> = (event) => {
+      onClick?.(event);
+      focusRestore?.onContentClick(event);
+    };
+    const handleCloseAutoFocus: NonNullable<ContextMenuContentProps["onCloseAutoFocus"]> = (
+      event
+    ) => {
+      onCloseAutoFocus?.(event);
+      focusRestore?.onContentCloseAutoFocus(event);
+    };
+
+    if (!radix) return null;
+    const Portal = radix.ContextMenuPrimitive.Portal;
+    const Content = radix.ContextMenuPrimitive.Content;
+    return (
+      <Portal>
+        <Content
+          ref={shadowRef}
+          collisionPadding={collisionPadding}
+          style={{
+            transformOrigin: "var(--radix-context-menu-content-transform-origin)",
+            ...style,
+          }}
+          className={cn(
+            "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
+            "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
+            className
+          )}
+          {...props}
+          onPointerDown={handlePointerDown}
+          onPointerDownOutside={handlePointerDownOutside}
+          onInteractOutside={handleInteractOutside}
+          onKeyDown={handleKeyDown}
+          onClick={handleClick}
+          onCloseAutoFocus={handleCloseAutoFocus}
+          data-dock-popover-child={isDockPopoverChild ? "" : undefined}
+        >
+          {topShadow}
+          {children}
+          {bottomShadow}
+        </Content>
+      </Portal>
+    );
+  }
+);
 ContextMenuContent.displayName = "ContextMenuContent";
 
 type ContextMenuItemProps = React.ComponentPropsWithoutRef<typeof ContextMenuPrimitiveType.Item> & {
@@ -264,7 +355,7 @@ const ContextMenuItem = React.forwardRef<
     <Item
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         inset && "pl-8",
         destructive &&
           "text-status-danger data-[highlighted]:text-status-danger data-[highlighted]:bg-status-danger/10",
@@ -347,7 +438,7 @@ const ContextMenuLabel = React.forwardRef<
     <Label
       ref={ref}
       className={cn(
-        "px-2.5 py-1.5 text-[11px] font-bold tracking-wider uppercase text-daintree-text/50",
+        "px-2.5 py-1.5 text-2xs font-bold tracking-wider uppercase text-text-secondary",
         inset && "pl-8",
         className
       )}
@@ -360,12 +451,28 @@ ContextMenuLabel.displayName = "ContextMenuLabel";
 const ContextMenuShortcut = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
   return (
     <span
-      className={cn("ml-auto pl-2 text-[11px] font-mono text-daintree-text/50", className)}
+      className={cn("ml-auto pl-2 text-2xs font-mono text-text-secondary", className)}
       {...props}
     />
   );
 };
 ContextMenuShortcut.displayName = "ContextMenuShortcut";
+
+/* Trailing muted slot for item METADATA — a count, a state, a reason an item is
+ * disabled. Deliberately not `ContextMenuShortcut`: a count is not a keybinding,
+ * and rendering it in the shortcut's mono face reads as one. Non-mono, and
+ * `aria-hidden` by default because the number belongs in the item's accessible
+ * name (callers pass one), not as a second stray string after it. */
+const ContextMenuMeta = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn("ml-auto pl-2 text-2xs text-text-secondary tabular-nums", className)}
+      {...props}
+    />
+  );
+};
+ContextMenuMeta.displayName = "ContextMenuMeta";
 
 type ContextMenuCheckboxItemProps = React.ComponentPropsWithoutRef<
   typeof ContextMenuPrimitiveType.CheckboxItem
@@ -383,7 +490,7 @@ const ContextMenuCheckboxItem = React.forwardRef<
     <CheckboxItem
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
       checked={checked}
@@ -428,7 +535,7 @@ const ContextMenuRadioItem = React.forwardRef<
     <RadioItem
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
       {...props}
@@ -456,6 +563,7 @@ export {
   ContextMenuSeparator,
   ContextMenuLabel,
   ContextMenuShortcut,
+  ContextMenuMeta,
   ContextMenuGroup,
   ContextMenuPortal,
   ContextMenuSub,

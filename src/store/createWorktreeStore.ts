@@ -23,6 +23,49 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 const TOMBSTONE_TTL_MS = 30_000;
 
 /**
+ * A removed worktree's suppression record. `generation` is the torn-down
+ * monitor's incarnation stamp; an update carrying a strictly higher one is a
+ * genuine re-creation at the same path and must be let through, while a late
+ * buffered update from the removed monitor carries the same stamp and stays
+ * suppressed (#11994). `removedAt` remains the fallback for unstamped events.
+ */
+interface WorktreeTombstone {
+  removedAt: number;
+  generation?: number;
+}
+
+/**
+ * How long a *stamped* tombstone is kept. Unlike {@link TOMBSTONE_TTL_MS} this
+ * is not a correctness window — the incarnation comparison decides those cases
+ * algebraically — it only stops fences accumulating for the life of an epoch.
+ * The bound worth clearing is the longest a torn-down monitor can still emit:
+ * a queued git-status pass is capped at 60s by the host's own poll-queue
+ * timeout, so ten minutes is two orders of magnitude of headroom over the
+ * thing it has to outlive. Counting entries instead would be wrong — evicting
+ * by volume can drop a fence whose monitor has not gone quiet yet.
+ */
+const FENCE_TTL_MS = 10 * 60_000;
+
+/**
+ * Drop the tombstones a host snapshot has settled. An id the host still reports
+ * is alive by definition, and an unstamped tombstone has no incarnation to
+ * compare against so the snapshot is the last word on it. A stamped one for an
+ * id the host does NOT report stays: the removal it records is still in force,
+ * and dropping it would let a poll that outlived the removal resurrect the row
+ * (the pre-existing #8403 hole the incarnation stamp finally closes).
+ */
+function retainTombstoneFences(
+  tombstones: ReadonlyMap<string, WorktreeTombstone>,
+  liveIds: ReadonlySet<string>
+): Map<string, WorktreeTombstone> {
+  const next = new Map<string, WorktreeTombstone>();
+  for (const [id, tombstone] of tombstones) {
+    if (tombstone.generation !== undefined && !liveIds.has(id)) next.set(id, tombstone);
+  }
+  return next;
+}
+
+/**
  * Order two host-minted version stamps. A differing epoch means the events
  * came from different host runs — UUIDv4 epochs carry no ordering, so a new
  * epoch always wins (the renderer re-hydrates from the fresh host). Within an
@@ -241,11 +284,12 @@ export interface WorktreeViewState {
    */
   version: WorktreeEventVersion;
   /**
-   * `worktreeId → removedAt` (epoch ms) for recently removed worktrees, so a
-   * late same-epoch `worktree-update` can't resurrect a deleted row. Cleared
-   * on epoch transition; entries expire after {@link TOMBSTONE_TTL_MS}.
+   * `worktreeId → tombstone` for recently removed worktrees, so a late
+   * same-epoch `worktree-update` can't resurrect a deleted row. Cleared on
+   * epoch transition; entries expire after {@link TOMBSTONE_TTL_MS} or when a
+   * newer monitor incarnation claims the id.
    */
-  tombstones: Map<string, number>;
+  tombstones: Map<string, WorktreeTombstone>;
   /**
    * Worktrees with a delete currently in flight (renderer-local — no backend
    * lifecycle phase exists for delete). Drives the card's reduced-opacity
@@ -308,7 +352,14 @@ export interface WorktreeViewActions {
     version: WorktreeEventVersion,
     associations?: Record<string, ManualIssueAssociation>
   ): void;
-  applyUpdate(state: WorktreeSnapshot, version: WorktreeEventVersion): void;
+  /**
+   * Merge one host `worktree-update` into the map. Returns whether the event
+   * was accepted — a stale version, a superseded monitor incarnation or an
+   * active tombstone all reject it. Callers must gate any side effect that
+   * assumes the worktree is now present (clearing the "Creating…" placeholder,
+   * applying a pending selection) on a `true` return (#11994).
+   */
+  applyUpdate(state: WorktreeSnapshot, version: WorktreeEventVersion): boolean;
   /**
    * Clear forge-issue overlay without going through `mergeIssueState`, which
    * would restore the previous `issueTitle` whenever `issueNumber` is
@@ -318,7 +369,12 @@ export interface WorktreeViewActions {
    * fallback intact (#8851).
    */
   applyIssueNotFound(worktreeId: string, issueNumber: number): void;
-  applyRemove(worktreeId: string, version: WorktreeEventVersion): void;
+  /**
+   * `generation` is the removed monitor's incarnation stamp, recorded on the
+   * tombstone so a later update can be told apart from a re-creation at the
+   * same path (#11994).
+   */
+  applyRemove(worktreeId: string, version: WorktreeEventVersion, generation?: number): void;
   setManualAssociation(worktreeId: string, assoc: ManualIssueAssociation): void;
   clearManualAssociation(worktreeId: string): void;
   startDelete(worktreeId: string, options: WorktreeDeleteOptions): void;
@@ -403,10 +459,16 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     ) {
       const prev = get();
       if (compareVersion(version, prev.version) < 0) return;
-      // A snapshot is the host's authoritative state. Drop every tombstone:
-      // an epoch transition means the host rebuilt from scratch, and within
-      // the same epoch any id the host still reports is alive by definition.
-      const tombstonesChanged = prev.tombstones.size > 0;
+      // A snapshot is the host's authoritative state. An epoch transition means
+      // the host rebuilt from scratch, so nothing from the prior run survives;
+      // within the same epoch the snapshot settles every id it reports, but a
+      // stamped fence for an id it does NOT report still stands (see
+      // `retainTombstoneFences`).
+      const epochChanged = version.epoch !== prev.version.epoch;
+      const nextTombstones = epochChanged
+        ? new Map<string, WorktreeTombstone>()
+        : retainTombstoneFences(prev.tombstones, new Set(states.map((s) => s.id)));
+      const tombstonesChanged = nextTombstones.size !== prev.tombstones.size;
       // Atomically adopt the freshly-hydrated manual associations alongside
       // the snapshot (lesson #4958 — no separate slice update that could
       // render a half-merged state). When the caller doesn't pass them
@@ -480,7 +542,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           ...(workingTreeChangedAtChanged
             ? { workingTreeChangedAtById: nextWorkingTreeChangedAt }
             : {}),
-          ...(tombstonesChanged ? { tombstones: new Map() } : {}),
+          ...(tombstonesChanged ? { tombstones: nextTombstones } : {}),
           ...(associationsChanged ? { manualAssociations: manual } : {}),
         });
         return;
@@ -498,14 +560,14 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         ...(workingTreeChangedAtChanged
           ? { workingTreeChangedAtById: nextWorkingTreeChangedAt }
           : {}),
-        ...(tombstonesChanged ? { tombstones: new Map() } : {}),
+        ...(tombstonesChanged ? { tombstones: nextTombstones } : {}),
         ...(associationsChanged ? { manualAssociations: manual } : {}),
       });
     },
 
     applyUpdate(state: WorktreeSnapshot, version: WorktreeEventVersion) {
       const prevState = get();
-      if (compareVersion(version, prevState.version) < 0) return;
+      if (compareVersion(version, prevState.version) < 0) return false;
       const prev = prevState.worktrees;
       const existing = prev.get(state.id);
 
@@ -517,14 +579,41 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const epochChanged = version.epoch !== prevState.version.epoch;
       if (epochChanged) {
         if (tombstones.size > 0) tombstones = new Map();
-      } else if (!existing) {
-        const removedAt = tombstones.get(state.id);
-        if (removedAt !== undefined) {
-          if (Date.now() - removedAt < TOMBSTONE_TTL_MS) {
-            // Still within the suppression window — drop the late update but
-            // advance the version so a subsequent stale event stays rejected.
+      } else if (existing) {
+        // Incarnation fence for a row that is already live: once a re-created
+        // worktree has landed, a continuation still running against the
+        // torn-down monitor for the same path would otherwise clobber the new
+        // row with pre-delete data. Only a strictly older stamp is rejected, so
+        // the renderer's own overlay updates (which reuse the row's stamp) and
+        // unstamped events are unaffected. The version is deliberately NOT
+        // advanced: the fence lives on the row itself, so it keeps rejecting
+        // later stale events without borrowing the event counter to do it —
+        // and advancing here would make an in-flight snapshot look stale and
+        // strand the row (the snapshot is version-gated too).
+        if (
+          state.generation !== undefined &&
+          existing.generation !== undefined &&
+          state.generation < existing.generation
+        ) {
+          return false;
+        }
+      } else {
+        const tombstone = tombstones.get(state.id);
+        if (tombstone !== undefined) {
+          if (state.generation !== undefined && tombstone.generation !== undefined) {
+            // Both stamped, so the decision is algebraic and the wall clock
+            // plays no part: only a newer monitor incarnation may claim the id
+            // back. A strictly higher stamp is the host having built a new
+            // monitor for this path — a genuine re-creation (#11994) — while
+            // anything at or below it is the buffered update the tombstone
+            // exists to suppress, however long it took to arrive.
+            if (state.generation <= tombstone.generation) return false;
+          } else if (Date.now() - tombstone.removedAt < TOMBSTONE_TTL_MS) {
+            // One side is unstamped, so fall back to the suppression window:
+            // drop the late update but advance the version so a subsequent
+            // stale event stays rejected (#8403).
             set({ version });
-            return;
+            return false;
           }
           tombstones = new Map(tombstones);
           tombstones.delete(state.id);
@@ -569,7 +658,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           ...(workingTreeChangedAtChanged ? { workingTreeChangedAtById } : {}),
           ...(tombstonesChanged ? { tombstones } : {}),
         });
-        return;
+        return true;
       }
       const next = new Map(prev);
       next.set(state.id, merged);
@@ -580,6 +669,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         ...(workingTreeChangedAtChanged ? { workingTreeChangedAtById } : {}),
         ...(tombstonesChanged ? { tombstones } : {}),
       });
+      return true;
     },
 
     applyIssueNotFound(worktreeId: string, issueNumber: number) {
@@ -627,7 +717,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       set({ manualAssociations: nextAssoc });
     },
 
-    applyRemove(worktreeId: string, version: WorktreeEventVersion) {
+    applyRemove(worktreeId: string, version: WorktreeEventVersion, generation?: number) {
       const prevState = get();
       if (compareVersion(version, prevState.version) < 0) return;
 
@@ -636,13 +726,25 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       // set fresh — the prior run's removals don't apply to the new host.
       const now = Date.now();
       const epochChanged = version.epoch !== prevState.version.epoch;
-      const tombstones = epochChanged ? new Map<string, number>() : new Map(prevState.tombstones);
-      // Reap expired tombstones on write so ids that never receive a follow-up
-      // update can't accumulate unbounded over a long high-churn session.
-      for (const [id, removedAt] of tombstones) {
-        if (now - removedAt >= TOMBSTONE_TTL_MS) tombstones.delete(id);
+      const tombstones = epochChanged
+        ? new Map<string, WorktreeTombstone>()
+        : new Map(prevState.tombstones);
+      // Reap on write so ids that never receive a follow-up update can't
+      // accumulate over a long high-churn session. A stamped fence is durable —
+      // retired by a newer incarnation, an epoch change, or a snapshot that
+      // reports the id alive — so it expires on the far longer FENCE_TTL_MS
+      // rather than the suppression window.
+      for (const [id, tombstone] of tombstones) {
+        const ttl = tombstone.generation === undefined ? TOMBSTONE_TTL_MS : FENCE_TTL_MS;
+        if (now - tombstone.removedAt >= ttl) tombstones.delete(id);
       }
-      tombstones.set(worktreeId, now);
+      // Fall back to the outgoing row's stamp when the event didn't carry one,
+      // so the incarnation comparison still works for any path that removes a
+      // worktree the store had already hydrated from a snapshot.
+      tombstones.set(worktreeId, {
+        removedAt: now,
+        generation: generation ?? prevState.worktrees.get(worktreeId)?.generation,
+      });
 
       const hadWorktree = prevState.worktrees.has(worktreeId);
       const hadStatusCheckedAt = prevState.statusCheckedAt.has(worktreeId);
@@ -777,18 +879,10 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     },
 
     clearDeleteError(worktreeId: string) {
-      const prev = get();
-      const hadError = prev.deleteErrors.has(worktreeId);
-      const hadArgs = prev.deleteErrorArgs.has(worktreeId);
-      if (!hadError && !hadArgs) return;
-      const nextDeleteErrors = hadError ? new Map(prev.deleteErrors) : prev.deleteErrors;
-      if (hadError) nextDeleteErrors.delete(worktreeId);
-      const nextDeleteErrorArgs = hadArgs ? new Map(prev.deleteErrorArgs) : prev.deleteErrorArgs;
-      if (hadArgs) nextDeleteErrorArgs.delete(worktreeId);
-      set({
-        deleteErrors: nextDeleteErrors,
-        deleteErrorArgs: nextDeleteErrorArgs,
-      });
+      // Dismiss on the delete banner. Abandons the whole delete, not just its
+      // presentation — see `abandonDelete` for why the outbox entry and the
+      // closed terminals have to go with the banner (#12087).
+      abandonDelete(get, set, worktreeId);
     },
 
     startAttachIssue(payload: AttachIssuePayload) {
@@ -1000,6 +1094,18 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           ? new Map(prev.issueErrors)
           : prev.issueErrors;
         if (prev.issueErrors.has(entry.worktreeId)) nextIssueErrors.delete(entry.worktreeId);
+
+        // ...unless the mutation is still running. `replayOutboxAfterReconnect`
+        // flips entries to `in-flight` without clearing `issueErrors`, so a
+        // Dismiss can land on a live attach/detach. Pruning it would make
+        // `applyIssueMutationSuccess` discard a write the host had already
+        // committed, leaving the renderer's association permanently stale.
+        // Hide the banner; leave the entry and its guard to settle (#12087).
+        if (entry.status === "in-flight") {
+          set({ issueErrors: nextIssueErrors });
+          return;
+        }
+
         const nextIssueMutatingIds = prev.issueMutatingIds.has(entry.worktreeId)
           ? new Set(prev.issueMutatingIds)
           : prev.issueMutatingIds;
@@ -1013,19 +1119,9 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         return;
       }
 
-      const nextDeleteErrors = prev.deleteErrors.has(entry.worktreeId)
-        ? new Map(prev.deleteErrors)
-        : prev.deleteErrors;
-      if (prev.deleteErrors.has(entry.worktreeId)) nextDeleteErrors.delete(entry.worktreeId);
-      const nextDeleteErrorArgs = prev.deleteErrorArgs.has(entry.worktreeId)
-        ? new Map(prev.deleteErrorArgs)
-        : prev.deleteErrorArgs;
-      if (prev.deleteErrorArgs.has(entry.worktreeId)) nextDeleteErrorArgs.delete(entry.worktreeId);
-      set({
-        mutationOutbox: next,
-        deleteErrors: nextDeleteErrors,
-        deleteErrorArgs: nextDeleteErrorArgs,
-      });
+      // Same abandon as the banner's Dismiss — routed through one helper so the
+      // two paths can't drift apart (#12087).
+      abandonDelete(get, set, entry.worktreeId, mutationId);
     },
 
     replayOutboxAfterReconnect() {
@@ -1245,6 +1341,75 @@ function consumeTerminalRestore(worktreeId: string, mutationId: string): void {
     if (restoreInFlight.get(worktreeId) === done) restoreInFlight.delete(worktreeId);
   });
   restoreInFlight.set(worktreeId, done);
+}
+
+/** The delete entry parked in the outbox for a worktree, if any. A worktree has
+ *  at most one in flight — `startDelete` reuses the existing `mutationId`. */
+function findDeleteMutationId(
+  outbox: ReadonlyMap<string, MutationOutboxEntry>,
+  worktreeId: string
+): string | undefined {
+  for (const entry of outbox.values()) {
+    if (entry.type === "delete-worktree" && entry.worktreeId === worktreeId) {
+      return entry.mutationId;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Abandon a failed delete: the banner, the stored retry args and the outbox
+ * entry all go together.
+ *
+ * Clearing only the presentation state was a silent replay hazard (#12087). A
+ * failure that isn't permanent and hasn't hit the retry cap — "cannot remove a
+ * locked working tree", say — parks its entry at `pending`, and
+ * `replayOutboxAfterReconnect` skips only `failed`/`in-flight`. So a dismissed
+ * delete stayed queued and re-fired on the next reconnect.
+ *
+ * The terminals the delete closed are relaunched here for the same reason
+ * `handleDeleteFailure` relaunches them once an entry goes `failed`: the
+ * snapshot is held only while an automatic retry could still use it, and a
+ * dismissed delete is definitively abandoned.
+ */
+function abandonDelete(
+  get: () => WorktreeViewStore,
+  set: (
+    partial: Partial<WorktreeViewStore> | ((state: WorktreeViewStore) => Partial<WorktreeViewStore>)
+  ) => void,
+  worktreeId: string,
+  knownMutationId?: string
+): void {
+  const prev = get();
+  const mutationId = knownMutationId ?? findDeleteMutationId(prev.mutationOutbox, worktreeId);
+  const entry = mutationId === undefined ? undefined : prev.mutationOutbox.get(mutationId);
+  const hadError = prev.deleteErrors.has(worktreeId);
+  const hadArgs = prev.deleteErrorArgs.has(worktreeId);
+
+  // An `in-flight` entry still has a live `runDeleteAsync` behind it, and the
+  // banner can be showing over one: `replayOutboxAfterReconnect` flips entries
+  // to `in-flight` without clearing `deleteErrors`, so a Dismiss can land on a
+  // delete that is actively running. Pruning that entry would orphan a removal
+  // still on its way to the host, and relaunching its terminals would race the
+  // removal that is about to succeed. Drop the banner, leave the mutation to
+  // settle on its own — `handleDeleteFailure` re-surfaces it if it fails again.
+  const prunable = entry !== undefined && entry.status !== "in-flight";
+  if (!hadError && !hadArgs && !prunable) return;
+
+  const nextDeleteErrors = hadError ? new Map(prev.deleteErrors) : prev.deleteErrors;
+  if (hadError) nextDeleteErrors.delete(worktreeId);
+  const nextDeleteErrorArgs = hadArgs ? new Map(prev.deleteErrorArgs) : prev.deleteErrorArgs;
+  if (hadArgs) nextDeleteErrorArgs.delete(worktreeId);
+  const nextOutbox = prunable ? new Map(prev.mutationOutbox) : prev.mutationOutbox;
+  if (prunable && mutationId !== undefined) nextOutbox.delete(mutationId);
+
+  set({
+    deleteErrors: nextDeleteErrors,
+    deleteErrorArgs: nextDeleteErrorArgs,
+    mutationOutbox: nextOutbox,
+  });
+
+  if (prunable && mutationId !== undefined) consumeTerminalRestore(worktreeId, mutationId);
 }
 
 /** Drop any pending/in-flight restore bookkeeping for a worktree. Called when
@@ -1738,6 +1903,10 @@ function mergeIssueState(
 
 function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
   return (
+    // Compared so a new incarnation of the same path is never collapsed as
+    // value-equal — the row must adopt the newer stamp or the fence in
+    // `applyUpdate` would keep judging against the dead monitor's (#11994).
+    a.generation === b.generation &&
     a.branch === b.branch &&
     a.path === b.path &&
     a.name === b.name &&

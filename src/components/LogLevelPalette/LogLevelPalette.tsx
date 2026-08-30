@@ -159,14 +159,14 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
         emptyMessage="No modules registered"
         renderItem={(item, _index, isSelected) => (
           <div className="flex-1 min-w-0 flex items-center justify-between gap-3">
-            <span className="text-sm text-daintree-text font-mono truncate">{item.name}</span>
+            <span className="text-sm text-text-primary font-mono truncate">{item.name}</span>
             {item.current && (
               <span
                 className={cn(
-                  "text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded",
+                  "text-3xs uppercase tracking-wider px-1.5 py-0.5 rounded",
                   isSelected
-                    ? "bg-overlay-medium text-daintree-text/70"
-                    : "bg-daintree-border/60 text-daintree-text/70"
+                    ? "bg-overlay-medium text-text-secondary"
+                    : "bg-daintree-border/60 text-text-secondary"
                 )}
               >
                 {item.current}
@@ -199,8 +199,8 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
       emptyMessage="No levels available"
       renderItem={(item) => (
         <div className="flex-1 min-w-0">
-          <div className="text-sm text-daintree-text">{item.label}</div>
-          <div className="text-[11px] text-daintree-text/50">{item.hint}</div>
+          <div className="text-sm text-text-primary">{item.label}</div>
+          <div className="text-2xs text-text-secondary">{item.hint}</div>
         </div>
       )}
     />

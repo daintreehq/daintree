@@ -5,17 +5,21 @@ import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { CHANNELS } from "../channels.js";
+import { defineIpcNamespace, op } from "../define.js";
 import { checkRateLimit, typedHandle, typedHandleWithContext, sendToRenderer } from "../utils.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type { PushProgressEvent } from "../../../shared/types/ipc/gitPush.js";
 import type {
   ConflictedFileEntry,
+  GitPushCommitPreview,
+  GitRebaseCommitPreview,
   GitRemoteCommitPreview,
   GitStatus,
   RebaseSequence,
   RepoState,
   StagingStatus,
 } from "../../../shared/types/git.js";
+import { GIT_REMOTE_COMMIT_PREVIEW_MAX } from "../../../shared/types/git.js";
 import {
   validateCwd,
   createHardenedGit,
@@ -82,15 +86,20 @@ interface StagingFileEntry {
 }
 
 /**
- * `git rev-list --count <range>`. Falls back to 0 on unparseable output, which
+ * `git rev-list --count <rev spec>`. Falls back to 0 on unparseable output, which
  * renders as "no hidden tail" rather than a wrong count — the rows themselves
  * are still shown, so the preview degrades quietly instead of overstating.
+ *
+ * Takes the rev spec as an argument LIST rather than one range string: a push
+ * that creates a remote branch has no `a..b` range to measure and is expressed
+ * as `<branch> --not --remotes=<remote>` instead. Both forms have to reach
+ * `rev-list` unsplit, or a two-word spec would arrive as one bogus revision.
  */
 async function countCommitsInRange(
   git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
-  range: string
+  revArgs: readonly string[]
 ): Promise<number> {
-  const out = await git.raw(["rev-list", "--count", range]);
+  const out = await git.raw(["rev-list", "--count", ...revArgs]);
   const parsed = Number.parseInt(out.trim(), 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
@@ -128,6 +137,312 @@ async function requireRemoteTarget(
     { cwd, op, rawMessage: message, branchName }
   );
 }
+
+/**
+ * Does `ref` name a commit that exists in this repository right now?
+ *
+ * `rev-parse --verify --quiet` exits non-zero without writing to stderr when it
+ * does not, which simple-git surfaces as a rejection — so absence arrives here
+ * as a throw, not as an empty string. `^{commit}` peels an annotated tag rather
+ * than reporting the tag object as a usable range endpoint.
+ */
+async function refExists(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  ref: string
+): Promise<boolean> {
+  try {
+    const out = await git.raw(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Upper bound on the one network read the push preview is allowed to make. */
+const PUSH_PREVIEW_LS_REMOTE_TIMEOUT_MS = 4000;
+
+/**
+ * The destination branch's tip according to the REMOTE, or `undefined` when the
+ * remote could not be asked.
+ *
+ * `null` is a real answer — the remote replied and has no such branch — and is
+ * what lets the preview say a push creates a branch instead of guessing from the
+ * absence of a local ref. `undefined` is "no answer", which the caller must
+ * treat as unverified rather than as absence.
+ *
+ * Bounded and swallowed on purpose. This runs while a confirm dialog is waiting,
+ * so a slow or unreachable remote must degrade the preview's precision, never
+ * hold the dialog open — the local approximation is still shown, labelled.
+ */
+async function readRemoteBranchTip(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  remote: string,
+  branch: string
+): Promise<string | null | undefined> {
+  try {
+    const out = await Promise.race([
+      // `--` before the remote so a remote whose name survived the argv guard
+      // still cannot be read as an option, and the ref given in full.
+      git.raw(["ls-remote", "--heads", "--", remote, `refs/heads/${branch}`]),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("ls-remote timed out")),
+          PUSH_PREVIEW_LS_REMOTE_TIMEOUT_MS
+        )
+      ),
+    ]);
+    const line = out
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l.length > 0);
+    if (!line) return null;
+    const sha = line.split(/\s+/)[0] ?? "";
+    return /^[0-9a-f]{40,64}$/i.test(sha) ? sha : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The commits a remote operation would actually act on — publish, or replay.
+ *
+ * Both confirms used to preview `git log HEAD`, the branch's recent history,
+ * which is only the same set when nothing on the branch has ever been pushed. A
+ * branch level with its remote previewed commits that were already published, and
+ * a branch 2 ahead of 14 previewed 12 that mostly were. For safeguards whose
+ * whole job is "a preview of the ACTUAL content", that is the wrong set — the
+ * push side was corrected in #11979 and the rebase side in #11980.
+ *
+ * Both range from a remote-tracking ref up to the named local branch, and differ
+ * only in which ref that is: the PUSH DESTINATION for a publish, the UPSTREAM for
+ * a replay. Those are the same ref in the ordinary case and genuinely different in
+ * a triangular workflow. The branch is named explicitly rather than read as
+ * `HEAD`, because the two diverge the moment anything checks out another branch
+ * between opening the dialog and confirming it.
+ *
+ * Both fail CLOSED on an unresolvable ref, via the same `requireRemoteTarget`
+ * every remote-mutating path uses: returning an empty list would read as "nothing
+ * to do", which is the reassuring answer and the wrong one (#11746).
+ */
+const gitRemotePreviewNamespace = defineIpcNamespace({
+  name: "gitRemotePreview",
+  ops: {
+    listPushCommits: op(
+      CHANNELS.GIT_LIST_PUSH_COMMITS,
+      async (payload: {
+        cwd: string;
+        branchName: string;
+        limit?: number;
+      }): Promise<GitPushCommitPreview> => {
+        checkRateLimit(CHANNELS.GIT_LIST_PUSH_COMMITS, 10, 10_000);
+        validateCwd(payload?.cwd);
+        if (typeof payload.branchName !== "string" || !payload.branchName.trim()) {
+          throw new Error("Invalid branch name");
+        }
+        const branchName = payload.branchName.trim();
+        const limit = Math.max(1, Math.min(100, payload.limit ?? 20));
+
+        const git = await createHardenedGit(payload.cwd);
+        try {
+          const destination = await requireRemoteTarget(
+            git,
+            branchName,
+            payload.cwd,
+            "list-push-commits"
+          );
+
+          // Every ref is written out in full so a branch named like a flag cannot
+          // reach argv as one: `refs/heads/` and `refs/remotes/` prefixes make a
+          // leading `-` impossible. The remote name is already argv-guarded by
+          // `isSafeRemoteName` inside the resolver.
+          const localRef = `refs/heads/${branchName}`;
+          const hasRemoteRef = await refExists(git, destination.remoteTrackingRef);
+
+          // With no remote-tracking ref there is nothing to subtract locally, and
+          // `<missing>..<branch>` is a fatal argument rather than "everything".
+          //
+          // Ask the remote before guessing. A missing tracking ref does not mean
+          // a missing branch — it also happens when the branch was never
+          // fetched, was pruned, or is excluded by the fetch refspec — and the
+          // purely local fallback is wrong in BOTH directions: it overstates when
+          // the destination exists but is unfetched, and understates a commit
+          // that sits on another ref of the same remote yet not on the
+          // destination branch, which this push would add.
+          let rangeBasis: GitPushCommitPreview["rangeBasis"];
+          let revArgs: string[];
+          if (hasRemoteRef) {
+            rangeBasis = "tracked";
+            revArgs = [`${destination.remoteTrackingRef}..${localRef}`];
+          } else {
+            const remoteTip = await readRemoteBranchTip(
+              git,
+              destination.remote,
+              destination.branch
+            );
+            if (remoteTip === null) {
+              // The remote answered and has no such branch: the push creates it,
+              // and what it publishes is the branch's own history.
+              rangeBasis = "creates";
+              revArgs = [localRef];
+            } else if (remoteTip && (await refExists(git, remoteTip))) {
+              // The remote named a tip this repository already holds, so the
+              // delta is exact even without a tracking ref.
+              rangeBasis = "tracked";
+              revArgs = [`${remoteTip}..${localRef}`];
+            } else {
+              // No answer, or a tip we cannot resolve. Fall back to the local
+              // approximation and mark it as what it is.
+              rangeBasis = "unverified";
+              revArgs = [localRef, "--not", `--remotes=${destination.remote}`];
+            }
+          }
+
+          // No `--no-merges`: the "N more" tail is only honest while the listed
+          // rows and `total` describe the same set the push would write.
+          const log = await git.log([`--max-count=${limit}`, ...revArgs]);
+          const total = await countCommitsInRange(git, revArgs);
+
+          return {
+            destination: { remote: destination.remote, branch: destination.branch },
+            rangeBasis,
+            total,
+            commits: log.all.map((commit) => ({
+              hash: commit.hash,
+              date: commit.date,
+              message: commit.message,
+              author: commit.author_name,
+            })),
+          };
+        } catch (error) {
+          if (error instanceof GitOperationError) throw error;
+          const errorMessage = formatErrorMessage(error, "git log failed");
+          const gitReason = classifyGitFailure(error, errorMessage);
+          throw new GitOperationError(
+            gitReason,
+            encodeGitOperationErrorMessage(gitReason, errorMessage, { branchName }),
+            {
+              cwd: payload.cwd,
+              op: "list-push-commits",
+              cause: error instanceof Error ? error : undefined,
+              rawMessage: errorMessage,
+              branchName,
+            }
+          );
+        }
+      }
+    ),
+
+    listRebaseCommits: op(
+      CHANNELS.GIT_LIST_REBASE_COMMITS,
+      async (payload: {
+        cwd: string;
+        branchName: string;
+        limit?: number;
+      }): Promise<GitRebaseCommitPreview> => {
+        checkRateLimit(CHANNELS.GIT_LIST_REBASE_COMMITS, 10, 10_000);
+        validateCwd(payload?.cwd);
+        if (typeof payload.branchName !== "string" || !payload.branchName.trim()) {
+          throw new Error("Invalid branch name");
+        }
+        const branchName = payload.branchName.trim();
+        const limit = Math.max(1, Math.min(100, payload.limit ?? 20));
+
+        const git = await createHardenedGit(payload.cwd);
+        try {
+          // `"upstream"`, not the push target: `git pull --rebase` integrates
+          // from what the branch tracks, and in a triangular setup those are
+          // different repositories (#11746).
+          const upstream = await requireRemoteTarget(
+            git,
+            branchName,
+            payload.cwd,
+            "list-rebase-commits",
+            "upstream"
+          );
+
+          const localRef = `refs/heads/${branchName}`;
+
+          // Deliberately no `ls-remote` fallback, unlike the push preview.
+          // `git pull --rebase` fetches before it replays, and a rebase onto a
+          // MOVED upstream still replays this same set — anything the upstream
+          // absorbed in the meantime is dropped by rebase's own patch-id
+          // detection rather than added to the range. So the last-known tip is
+          // the correct base to measure against and no network read can improve
+          // the answer, which keeps a confirm dialog off the network entirely.
+          if (!(await refExists(git, upstream.remoteTrackingRef))) {
+            // Configured but never fetched here. `<missing>..<branch>` is a
+            // fatal argument, and the branch's own history is NOT the replay
+            // set — returning it is the exact misreport this preview exists to
+            // stop. Say the range is unmeasured instead.
+            return {
+              upstream: { remote: upstream.remote, branch: upstream.branch },
+              rangeBasis: "unfetched",
+              commits: [],
+              total: 0,
+              behind: 0,
+            };
+          }
+
+          // `git rebase`'s own selection, not a plain two-dot range. Rebase
+          // picks its todo list with `--no-merges --cherry-pick --right-only`
+          // over the symmetric difference, and each flag drops rows a two-dot
+          // range would have promised to rewrite:
+          //
+          //  - `--no-merges`, because a default rebase does not recreate merge
+          //    commits. Listing them claims a rewrite that never happens.
+          //    (The push preview deliberately keeps merges — a push publishes
+          //    them — which is why this is not shared with it.)
+          //  - `--cherry-pick --right-only` over `...`, because a commit the
+          //    upstream already carries as an equivalent patch is skipped by
+          //    rebase rather than replayed. Those are exactly the commits a
+          //    developer arriving from a rejected push is most likely to have.
+          const revArgs = [
+            "--no-merges",
+            "--cherry-pick",
+            "--right-only",
+            `${upstream.remoteTrackingRef}...${localRef}`,
+          ];
+          const log = await git.log([`--max-count=${limit}`, ...revArgs]);
+          const total = await countCommitsInRange(git, revArgs);
+          // Measured separately and in the other direction: an empty replay set
+          // is produced both by a branch level with its upstream and by one
+          // purely behind it, and only the second is moved by the rebase.
+          const behind = await countCommitsInRange(git, [
+            `${localRef}..${upstream.remoteTrackingRef}`,
+          ]);
+
+          return {
+            upstream: { remote: upstream.remote, branch: upstream.branch },
+            rangeBasis: "tracked",
+            total,
+            behind,
+            commits: log.all.map((commit) => ({
+              hash: commit.hash,
+              date: commit.date,
+              message: commit.message,
+              author: commit.author_name,
+            })),
+          };
+        } catch (error) {
+          if (error instanceof GitOperationError) throw error;
+          const errorMessage = formatErrorMessage(error, "git log failed");
+          const gitReason = classifyGitFailure(error, errorMessage);
+          throw new GitOperationError(
+            gitReason,
+            encodeGitOperationErrorMessage(gitReason, errorMessage, { branchName }),
+            {
+              cwd: payload.cwd,
+              op: "list-rebase-commits",
+              cause: error instanceof Error ? error : undefined,
+              rawMessage: errorMessage,
+              branchName,
+            }
+          );
+        }
+      }
+    ),
+  },
+});
 
 export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -334,7 +649,13 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       // push to `release/topic`.
       const refspec = `${branchName}:${destination.branch}`;
 
-      if (payload.setUpstream) {
+      // `requiresUpstreamRepair` forces the explicit form too. That branch's
+      // upstream names a different branch, so a plain `git push` fails on the
+      // name mismatch rather than on a missing upstream — the recovery in the
+      // catch below would never see the message it looks for. Pushing with
+      // `--set-upstream` to the destination the confirm already showed both
+      // completes the push and rewrites the tracking config that broke it.
+      if (payload.setUpstream || destination.requiresUpstreamRepair) {
         await authGit.push(["--set-upstream", destination.remote, refspec]);
       } else {
         try {
@@ -478,6 +799,12 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       await git.push(destination.remote, `${branchName}:${destination.branch}`, [
         `--force-with-lease=${destination.branch}:${payload.leaseSha}`,
         "--force-if-includes",
+        // A force-push is a normal way to reach this destination — the plain
+        // push is rejected as non-fast-forward, the lease is captured, and the
+        // user force-pushes. Without this the push lands but the tracking
+        // config that made the destination unresolvable in the first place
+        // survives the recovery, so the next push is broken again.
+        ...(destination.requiresUpstreamRepair ? ["--set-upstream"] : []),
       ]);
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("git-push");
@@ -519,7 +846,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("Invalid branch name");
     }
     const branchName = payload.branchName.trim();
-    const limit = Math.max(1, Math.min(100, payload.limit ?? 20));
+    const limit = Math.max(1, Math.min(GIT_REMOTE_COMMIT_PREVIEW_MAX, payload.limit ?? 20));
 
     const git = await createHardenedGit(payload.cwd);
     try {
@@ -546,7 +873,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       // against a different repository's ref: `behindCount` comes from upstream
       // status, which in a triangular workflow tracks the fetch remote while the
       // force-push targets the push remote.
-      const total = await countCommitsInRange(git, range);
+      const total = await countCommitsInRange(git, [range]);
 
       return {
         destination: { remote: destination.remote, branch: destination.branch },
@@ -576,6 +903,8 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     }
   };
   handlers.push(typedHandle(CHANNELS.GIT_LIST_REMOTE_COMMITS, handleListRemoteCommits));
+
+  handlers.push(gitRemotePreviewNamespace.register());
 
   const handleGetUsername = async (cwd: string): Promise<string | null> => {
     checkRateLimit(CHANNELS.GIT_GET_USERNAME, 20, 10_000);

@@ -64,6 +64,43 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuContent: ({ children }: { children: ReactNode }) => <div role="menu">{children}</div>,
   DropdownMenuLabel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    "data-testid": testId,
+  }: {
+    children: ReactNode;
+    onSelect?: () => void;
+    "data-testid"?: string;
+  }) => (
+    <button type="button" role="menuitem" data-testid={testId} onClick={onSelect}>
+      {children}
+    </button>
+  ),
+  DropdownMenuCheckboxItem: ({
+    children,
+    checked,
+    onCheckedChange,
+    "data-testid": testId,
+  }: {
+    children: ReactNode;
+    checked: boolean;
+    onCheckedChange: (checked: boolean) => void;
+    "data-testid"?: string;
+  }) => (
+    <button
+      type="button"
+      role="menuitemcheckbox"
+      aria-checked={checked}
+      data-state={checked ? "checked" : "unchecked"}
+      data-testid={testId}
+      onClick={() => {
+        onCheckedChange(!checked);
+      }}
+    >
+      {children}
+    </button>
+  ),
   DropdownMenuRadioGroup: ({
     children,
     value,
@@ -118,7 +155,13 @@ import { FileBrowserViewer } from "../FileBrowserViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { GitStatus } from "@shared/types/git";
 import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
-import type { FileBrowserSortOrder, FileEntryLike, FolderListingRow } from "../fileBrowserTree";
+import { NO_HIDDEN_ROWS } from "../fileBrowserTree";
+import type {
+  FileBrowserSortOrder,
+  FileEntryLike,
+  FolderListingRow,
+  HiddenRowCounts,
+} from "../fileBrowserTree";
 import type { FolderListingStatus } from "../useFileBrowserTree";
 
 interface ViewerOpts {
@@ -141,11 +184,17 @@ interface ViewerOpts {
   folderRows?: FolderListingRow[] | null;
   folderStatus?: FolderListingStatus;
   folderHasHiddenDotfiles?: boolean;
+  folderHiddenCounts?: HiddenRowCounts;
   onShowDotfiles?: () => void;
   onSelectEntry?: (path: string) => void;
   rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
   sort?: FileBrowserSortOrder;
   onSortChange?: (sort: FileBrowserSortOrder) => void;
+  hideDotfiles?: boolean;
+  onHideDotfilesChange?: (hide: boolean) => void;
+  hiddenCounts?: HiddenRowCounts;
+  onCollapseAll?: () => void;
+  canCollapseAll?: boolean;
 }
 
 function change(relativePath: string, status: GitStatus = "modified"): WorkingTreeFileChange {
@@ -183,12 +232,18 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         folderRows={opts.folderRows ?? null}
         folderStatus={opts.folderStatus ?? "ready"}
         folderHasHiddenDotfiles={opts.folderHasHiddenDotfiles ?? false}
+        folderHiddenCounts={opts.folderHiddenCounts ?? NO_HIDDEN_ROWS}
         onShowDotfiles={opts.onShowDotfiles ?? vi.fn()}
         onSelectEntry={opts.onSelectEntry ?? vi.fn()}
         {...(opts.rowContextMenu ? { rowContextMenu: opts.rowContextMenu } : {})}
         basePath="/repo"
         sort={opts.sort ?? { key: "name", direction: "asc" }}
         onSortChange={opts.onSortChange ?? vi.fn()}
+        hideDotfiles={opts.hideDotfiles ?? false}
+        onHideDotfilesChange={opts.onHideDotfilesChange ?? vi.fn()}
+        hiddenCounts={opts.hiddenCounts ?? NO_HIDDEN_ROWS}
+        onCollapseAll={opts.onCollapseAll ?? vi.fn()}
+        canCollapseAll={opts.canCollapseAll ?? false}
       />
     </TooltipProvider>
   );
@@ -610,28 +665,25 @@ describe("FileBrowserViewer PDF preview (#11427)", () => {
   });
 });
 
-describe("FileBrowserViewer Refresh control (#11586)", () => {
+describe("FileBrowserViewer Refresh control (#11586, #11938)", () => {
   it("leaves Refresh to the tree header while the tree column is mounted and nothing is open", () => {
     renderViewer(null, { sidebarCollapsed: false });
     // Two identical Refresh buttons in one panel would read as two different
     // actions; with no file on screen the tree header owns the only one.
-    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+    expect(screen.queryByTestId("file-browser-refresh")).toBeNull();
   });
 
-  it("offers Refresh beside the open file's actions even with the tree column mounted", async () => {
-    // With a file open this is the file's own re-read, sitting among the file's
-    // controls. The tree header hands it over for this layout (asserted from
-    // the pane, which is the only place both headers exist at once).
-    const onRefresh = vi.fn();
-    renderViewer("/repo/src/notes.txt", { sidebarCollapsed: false, onRefresh });
+  it("leaves Refresh to the tree header while the tree column is mounted and a file is open", async () => {
+    // Opening a file used to move Refresh into this toolbar. It doesn't any
+    // more, and this is the only place that can be checked from the viewer's
+    // own side: the case above would still pass if the `filePath` half of the
+    // old gate came back, since it renders nothing at all.
+    renderViewer("/repo/src/notes.txt", { sidebarCollapsed: false });
     await screen.findByTestId("code-viewer-mock");
 
-    await act(async () => {
-      screen
-        .getByRole("button", { name: "Refresh" })
-        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("file-browser-refresh")).toBeNull();
+    // The group doesn't go empty in exchange — the file keeps its own actions.
+    expect(screen.getByRole("button", { name: "Open in editor" })).toBeTruthy();
   });
 
   it("offers Refresh once the tree column is collapsed away, even with nothing selected", async () => {
@@ -639,9 +691,29 @@ describe("FileBrowserViewer Refresh control (#11586)", () => {
     renderViewer(null, { sidebarCollapsed: true, onRefresh });
 
     // Nothing selected still needs it: Refresh re-reads the tree too, and a
-    // workspace-rooted browser has no change tick to fall back on (#11482).
+    // workspace root has only the polled reconcile to fall back on (#11590).
     expect(screen.getByText("Nothing selected")).toBeTruthy();
-    const button = screen.getByRole("button", { name: "Refresh" });
+    const button = screen.getByTestId("file-browser-refresh");
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Refresh over a folder listing once the tree is collapsed away", async () => {
+    // The third selection state. Refresh re-reads the browser whatever the
+    // viewer happens to be showing, so a listing must not be the one surface
+    // that loses it — the sort menu beside it orders rows, it can't re-read.
+    const onRefresh = vi.fn();
+    renderViewer(null, {
+      sidebarCollapsed: true,
+      folderPath: "src",
+      folderRows: [],
+      folderStatus: "ready",
+      onRefresh,
+    });
+
+    const button = screen.getByTestId("file-browser-refresh");
     await act(async () => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
@@ -825,63 +897,29 @@ describe("folder-selected state (#11620)", () => {
   });
 });
 
-describe("sort menu (#11620)", () => {
-  it("stays available with no selection, since it also orders the tree", () => {
-    renderViewer(null);
-    expect(screen.getByTestId("file-browser-sort-menu")).toBeTruthy();
+describe("view options ownership (#11620, consolidated)", () => {
+  // The RULE, not the widget: exactly one view-options control exists in every
+  // layout, and this column owns it only while the tree header — which owns it
+  // the rest of the time — is collapsed away. Asserting "the menu is here"
+  // unconditionally is what let sort go missing from the collapsed-viewer and
+  // open-file layouts in the first place.
+  it("does not render view options while the tree header is mounted to own them", () => {
+    renderViewer(null, { sidebarCollapsed: false });
+    expect(screen.queryByTestId("file-browser-view-options")).toBeNull();
   });
 
-  it("stays available for a selected folder, whose listing it orders", () => {
-    renderViewer(null, { folderPath: "src", folderRows: [], folderStatus: "ready" });
-    expect(screen.getByRole("button", { name: /^Sort files \(/ })).toBeTruthy();
-    // The other half of the swap: no Refresh crowding it while the tree header
-    // still owns that one.
-    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+  it("takes ownership of view options once the tree column is collapsed away", () => {
+    renderViewer(null, { sidebarCollapsed: true });
+    expect(screen.getByTestId("file-browser-view-options")).toBeTruthy();
   });
 
-  it("gives its slot up once a file is open, having nothing left to order", async () => {
-    // A single document has no order, so the control that describes one would
-    // be describing the tree it can no longer be reached from — Refresh, the
-    // gesture a reader of an agent-rewritten file actually wants, takes it.
-    renderViewer("/repo/src/notes.txt");
+  it("keeps view options while a file is open, because sort still orders the tree", async () => {
+    // The old gate dropped the control the moment anything was selected. Sort
+    // governs the tree at every level, so with the tree column collapsed there
+    // would then be no control at all for a setting still reordering the rows
+    // on screen.
+    renderViewer("/repo/src/notes.txt", { sidebarCollapsed: true });
     await screen.findByTestId("code-viewer-mock");
-    expect(screen.queryByRole("button", { name: /^Sort files \(/ })).toBeNull();
-  });
-
-  it("names the current key and direction so the arrow icon isn't the only cue", () => {
-    // The arrow is aria-hidden, so the accessible name is the only place a
-    // screen reader can learn which way the list runs.
-    renderViewer(null, { sort: { key: "size", direction: "desc" } });
-    expect(screen.getByRole("button", { name: "Sort files (Size, descending)" })).toBeTruthy();
-  });
-
-  it("changes the key without disturbing the direction", () => {
-    const onSortChange = vi.fn();
-    renderViewer(null, { sort: { key: "name", direction: "desc" }, onSortChange });
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "Size" }));
-    expect(onSortChange).toHaveBeenCalledWith({ key: "size", direction: "desc" });
-  });
-
-  it("changes the direction without disturbing the key", () => {
-    const onSortChange = vi.fn();
-    renderViewer(null, { sort: { key: "modified", direction: "asc" }, onSortChange });
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "Descending" }));
-    expect(onSortChange).toHaveBeenCalledWith({ key: "modified", direction: "desc" });
-  });
-
-  it("can set a direction outright rather than only reversing the current one", () => {
-    // The reason this is a radio group and not a re-pick-to-flip gesture:
-    // choosing the direction already in effect is a no-op the user can rely on,
-    // not a silent reversal.
-    const onSortChange = vi.fn();
-    renderViewer(null, { sort: { key: "name", direction: "asc" }, onSortChange });
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "Ascending" }));
-    expect(onSortChange).toHaveBeenCalledWith({ key: "name", direction: "asc" });
-  });
-
-  it("offers the four documented keys and both directions", () => {
-    renderViewer(null);
-    const names = screen.getAllByRole("menuitemradio").map((i) => i.textContent?.trim());
-    expect(names).toEqual(["Name", "Modified", "Size", "Type", "Ascending", "Descending"]);
+    expect(screen.getByTestId("file-browser-view-options")).toBeTruthy();
   });
 });

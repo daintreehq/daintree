@@ -110,7 +110,7 @@ function createFileTooltipContent(token: AtFileToken): HTMLElement {
   container.className = "max-w-[300px]";
 
   const pathEl = document.createElement("p");
-  pathEl.className = "text-[11px] text-daintree-text/90 leading-snug font-mono break-all";
+  pathEl.className = "text-2xs text-text-primary leading-snug font-mono break-all";
   pathEl.textContent = token.path;
   container.appendChild(pathEl);
 
@@ -134,7 +134,7 @@ export function createFileChipTooltip() {
         dom.className = "px-2 py-1 text-xs";
         dom.style.cssText = `
           background: var(--theme-surface-panel-elevated);
-          border-radius: 4px;
+          border-radius: var(--radius-xs);
           box-shadow: 0 2px 8px var(--theme-scrim-soft);
         `;
 

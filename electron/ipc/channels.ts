@@ -62,6 +62,7 @@ export const CHANNELS = {
   TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
   TERMINAL_UPDATE_OBSERVED_TITLE: "terminal:update-observed-title",
   TERMINAL_UPDATE_TITLE: "terminal:update-title",
+  TERMINAL_UPDATE_WORKTREE_ID: "terminal:update-worktree-id",
   TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",
   TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
   TERMINAL_RESTART_SERVICE: "terminal:restart-service",
@@ -348,6 +349,8 @@ export const CHANNELS = {
   GIT_PULL_REBASE: "git:pull-rebase",
   GIT_FORCE_PUSH_WITH_LEASE: "git:force-push-with-lease",
   GIT_LIST_REMOTE_COMMITS: "git:list-remote-commits",
+  GIT_LIST_PUSH_COMMITS: "git:list-push-commits",
+  GIT_LIST_REBASE_COMMITS: "git:list-rebase-commits",
   GIT_PUSH_PROGRESS: "git:push-progress",
   GIT_GET_STAGING_STATUS: "git:get-staging-status",
   GIT_COMPARE_WORKTREES: "git:compare-worktrees",
@@ -497,6 +500,12 @@ export const CHANNELS = {
 
   GEMINI_GET_STATUS: "gemini:get-status",
   GEMINI_ENABLE_ALTERNATE_BUFFER: "gemini:enable-alternate-buffer",
+
+  CODEX_LIST_SUBAGENTS: "codex:list-subagents",
+  CODEX_READ_SUBAGENT_TRANSCRIPT: "codex:read-subagent-transcript",
+
+  CLAUDE_LIST_SUBAGENTS: "claude:list-subagents",
+  CLAUDE_READ_SUBAGENT_TRANSCRIPT: "claude:read-subagent-transcript",
 
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
   DEV_PREVIEW_RESTART: "dev-preview:restart",

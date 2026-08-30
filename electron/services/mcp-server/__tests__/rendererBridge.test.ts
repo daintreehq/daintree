@@ -67,6 +67,7 @@ import {
 import { unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
 import { WorkspaceViewLeaseRegistry } from "../workspaceViewLease.js";
 import type { PendingRequest, DispatchEnvelope } from "../shared.js";
+import { buildMcpErrorPayload, RETRIABLE_ERROR_CODES } from "../shared.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
 /**
@@ -1742,5 +1743,32 @@ describe("rendererBridge — thaw and eviction lease for routed operations (#117
     await promise;
 
     expect(leases.has(101)).toBe(false);
+  });
+});
+
+describe("binding error retriability (#12082)", () => {
+  it("cannot answer retriability from the code alone", () => {
+    // The premise the instance-level flag exists for. Both failures report the
+    // same code and need opposite answers, so anything keyed on the code —
+    // `RETRIABLE_ERROR_CODES` included — is structurally unable to tell them
+    // apart, and adding the code to that set would have made a destroyed pin
+    // retriable too.
+    expect(new WorkspaceBindingError("ws", "not-found").code).toBe(new SessionBindingError(7).code);
+    expect(RETRIABLE_ERROR_CODES.has(new SessionBindingError(7).code)).toBe(false);
+  });
+
+  it.each([
+    ["a workspace with no live view", () => new WorkspaceBindingError("ws", "not-found"), true],
+    ["a workspace open in two views", () => new WorkspaceBindingError("ws", "ambiguous"), true],
+    ["a destroyed pinned view", () => new SessionBindingError(7), false],
+  ])("reports %s on the wire", (_label, make, retriable) => {
+    // Asserted through `buildMcpErrorPayload` rather than off the class field:
+    // what matters is the value a client actually receives, and the payload
+    // builder is where a code-keyed default could still override it.
+    const err = make();
+    expect(
+      buildMcpErrorPayload({ code: err.code, message: err.message, retriable: err.retriable })
+        .retriable
+    ).toBe(retriable);
   });
 });

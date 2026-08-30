@@ -29,6 +29,7 @@ import {
   DOCK_TERM_HEIGHT,
   DOCK_PREWARM_WIDTH_PX,
   DOCK_PREWARM_HEIGHT_PX,
+  reconcileWorktreeAfterSpawn,
 } from "./helpers";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
@@ -942,6 +943,7 @@ export const createAddPanelActions = (
           markRendererPerformance("agentlaunch.env-ready", { id });
           const _p1 = get().panelsById[id];
           if (!_p1 || !isPtyPanel(_p1) || _p1.spawnStatus !== "spawning") return;
+          const spawnWorktreeId = _p1.worktreeId;
 
           const commandToExecute = options.skipCommandExecution ? undefined : options.command;
           // Spawn the PTY at the grid the renderer is actually showing. The
@@ -980,7 +982,10 @@ export const createAddPanelActions = (
             // the terminal record at spawn so a kill path that never runs a
             // capture (force quit, crash, SIGKILL) can't lose the conversation.
             agentSessionId: options.agentSessionId,
-            worktreeId: options.worktreeId,
+            // Live, for the same reason as `title` above: a move landing while
+            // the spawn was queued reaches a pty-host with no record yet and is
+            // dropped, so the spawn itself has to carry the current filing.
+            worktreeId: spawnWorktreeId,
             agentPresetId: options.agentPresetId,
             agentPresetColor: options.agentPresetColor,
             originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
@@ -1039,6 +1044,13 @@ export const createAddPanelActions = (
             });
           } else {
             if (mountedPanel) markRendererPerformance("agentlaunch.ready", { id });
+            // Recover the same race on the worktree axis: main awaits admission
+            // and settings before it reaches `PtyClient.spawn`, and that call
+            // overwrites the replay cache — so a move landing in that window
+            // reached a host with no record and was then clobbered. Placed past
+            // the incarnation gate, so a successor's filing is never re-stamped
+            // from this resolution (#12060).
+            reconcileWorktreeAfterSpawn(id, spawnWorktreeId, get().panelsById[id]);
             // Recover the attach-during-spawn race: a fit that ran while the
             // spawn IPC was in flight had its PTY resize dropped (no terminal
             // existed yet), which would strand the CLI at the spawn dims while

@@ -160,7 +160,7 @@ export function useDevPreviewCommandConfig({
               <button
                 type="button"
                 onPointerDown={(e) => e.stopPropagation()}
-                className="flex h-6 items-center gap-1 px-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors max-w-[180px]"
+                className="flex h-6 items-center gap-1 px-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-text-secondary hover:text-text-primary transition-colors max-w-[180px]"
                 aria-label="Switch dev script"
               >
                 <span className="min-w-0 text-xs truncate">{headerLabel}</span>
@@ -181,9 +181,7 @@ export function useDevPreviewCommandConfig({
                 aria-current={isActive ? "true" : undefined}
               >
                 <span className="text-xs font-medium">{c.name}</span>
-                <code className="text-[11px] text-daintree-text/50 truncate ml-auto">
-                  {c.command}
-                </code>
+                <code className="text-2xs text-text-secondary truncate ml-auto">{c.command}</code>
               </DropdownMenuItem>
             );
           })}

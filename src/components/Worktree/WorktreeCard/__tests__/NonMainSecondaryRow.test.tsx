@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { WorktreeState } from "@/types";
+import type { WorktreeChanges, WorktreeState } from "@/types";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -273,5 +273,86 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
     expect(prIdx).toBeGreaterThanOrEqual(0);
     expect(upIdx).toBeGreaterThanOrEqual(0);
     expect(upIdx).toBeLessThan(prIdx);
+  });
+});
+
+describe("NonMainSecondaryRow — base relationship without drift", () => {
+  function changesWith(tracking: string | null): WorktreeChanges {
+    return {
+      worktreeId: "wt-1",
+      rootPath: "/repo",
+      changes: [],
+      changedFileCount: 0,
+      tracking,
+      ahead: tracking ? 0 : undefined,
+      behind: tracking ? 0 : undefined,
+    };
+  }
+
+  function onBase(extra: Partial<WorktreeState> = {}): WorktreeState {
+    return {
+      ...baseWorktree,
+      baseBranchName: "develop",
+      baseAheadCount: 0,
+      baseBehindCount: 0,
+      worktreeChanges: changesWith(null),
+      ...extra,
+    } as WorktreeState;
+  }
+
+  beforeEach(() => {
+    upstreamBadgeProps.length = 0;
+  });
+
+  it("mounts the sync badge for an in-sync branch, on the base name alone", () => {
+    const { queryByTestId } = renderRow({ worktree: onBase(), hasUpstreamDelta: false });
+    expect(queryByTestId("upstream-sync-badge")).not.toBeNull();
+  });
+
+  it("leaves the badge unmounted when there is no base branch to name", () => {
+    const { queryByTestId } = renderRow({
+      worktree: onBase({ baseBranchName: null }),
+      hasUpstreamDelta: false,
+    });
+    expect(queryByTestId("upstream-sync-badge")).toBeNull();
+  });
+
+  it("derives the no-upstream marker from the tracking ref, not from absent counts", () => {
+    renderRow({ worktree: onBase() });
+    expect(upstreamBadgeProps.at(-1)?.hasNoUpstream).toBe(true);
+
+    upstreamBadgeProps.length = 0;
+    renderRow({ worktree: onBase({ worktreeChanges: changesWith("origin/feature/test") }) });
+    expect(upstreamBadgeProps.at(-1)?.hasNoUpstream).toBe(false);
+  });
+
+  it("does not describe a detached HEAD as a branch sitting on its base", () => {
+    const { queryByTestId } = renderRow({
+      worktree: onBase({ isDetached: true }),
+      hasUpstreamDelta: false,
+    });
+    expect(queryByTestId("upstream-sync-badge")).toBeNull();
+  });
+
+  it("still shows a detached HEAD's drift, without calling it an unpushed branch", () => {
+    const { queryByTestId } = renderRow({
+      worktree: onBase({ isDetached: true, baseAheadCount: 3 }),
+      hasUpstreamDelta: true,
+    });
+    expect(queryByTestId("upstream-sync-badge")).not.toBeNull();
+    expect(upstreamBadgeProps.at(-1)?.hasNoUpstream).toBe(false);
+  });
+
+  it("does not claim a missing upstream before any status snapshot has landed", () => {
+    renderRow({
+      worktree: {
+        ...baseWorktree,
+        worktreeChanges: null,
+        fetchAuthFailed: true,
+        matchedForgeProviderId: "daintree.github.github",
+      } as WorktreeState,
+      hasAuthFailedSignIn: true,
+    });
+    expect(upstreamBadgeProps.at(-1)?.hasNoUpstream).toBe(false);
   });
 });

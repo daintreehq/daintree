@@ -606,12 +606,12 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               data-dock-item=""
               className={cn(
                 "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
-                "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-daintree-text/70",
-                "hover:text-daintree-text hover:bg-[var(--dock-item-bg-hover)]",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
+                "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-text-secondary",
+                "hover:text-text-primary hover:bg-[var(--dock-item-bg-hover)]",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
                 "cursor-grab active:cursor-grabbing",
                 isOpen &&
-                  "bg-[var(--dock-item-bg-active)] text-daintree-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-daintree-accent/30",
+                  "bg-[var(--dock-item-bg-active)] text-text-primary border-[var(--dock-item-border-active)] ring-1 ring-inset ring-daintree-accent/30",
                 !isOpen &&
                   showDockAgentHighlights &&
                   blockedState === "waiting" &&
@@ -649,7 +649,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               </span>
 
               {/* Tab count indicator */}
-              <span className="text-[10px] text-daintree-text/40 tabular-nums shrink-0">
+              <span className="text-3xs text-text-secondary tabular-nums shrink-0">
                 ({panels.length})
               </span>
 
@@ -658,7 +658,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
                   <Tooltip open={commandTip.open} onOpenChange={commandTip.onOpenChange}>
                     <TooltipTrigger asChild onPointerEnter={commandTip.onPointerEnter}>
-                      <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
+                      <span className="truncate flex-1 min-w-0 text-2xs text-text-secondary font-mono">
                         {commandText}
                       </span>
                     </TooltipTrigger>
@@ -743,7 +743,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           >
             <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
               <LayoutGroup id={`dock-tabs-${group.id}`}>
-                <div className="group flex items-stretch border-b border-divider bg-daintree-sidebar shrink-0 pt-2">
+                <div className="group flex items-stretch border-b border-divider bg-surface-sidebar shrink-0 pt-2">
                   <div
                     ref={setTabListEl}
                     className="flex items-center min-w-0 flex-1 overflow-x-auto overscroll-x-none scrollbar-none"
@@ -830,7 +830,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                             handleAddTab();
                           }}
                           onPointerDown={(e) => e.stopPropagation()}
-                          className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                          className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
                           aria-label="Duplicate panel as new tab"
                           type="button"
                         >
@@ -848,7 +848,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                             <button
                               type="button"
                               onPointerDown={(e) => e.stopPropagation()}
-                              className="relative shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                              className="relative shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
                               aria-label={
                                 activeTabIsHidden
                                   ? `Show ${hiddenPanels.length} hidden tabs, including active`
@@ -860,7 +860,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                               <ChevronDown className="w-3 h-3" aria-hidden="true" />
                               {activeTabIsHidden && (
                                 <span
-                                  className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-daintree-text/70"
+                                  className="status-mark absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-daintree-text/70"
                                   aria-hidden="true"
                                 />
                               )}
@@ -893,7 +893,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                               aria-current={isActive ? "true" : undefined}
                               className={cn(
                                 isActive &&
-                                  "font-medium before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
+                                  "font-medium before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-accent-primary before:content-['']"
                               )}
                             >
                               <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">

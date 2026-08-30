@@ -129,7 +129,7 @@ export function PanelPalette({
         className={cn(
           PALETTE_ROW_CLASS,
           "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
-          "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text",
+          "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
           isUnavailable && "opacity-50"
         )}
         onClick={() => onSelect(kind)}
@@ -138,20 +138,18 @@ export function PanelPalette({
           <PanelKindIcon iconId={kind.iconId} color={kind.color} size={16} />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-daintree-text truncate">
+          <div className="text-sm font-medium text-text-primary truncate">
             <HighlightedText
               text={kind.name}
               indices={findMatchIndices(matchesById.get(kind.id), "name")}
             />
           </div>
           {kind.description && (
-            <div className="text-xs text-daintree-text/50 truncate">{kind.description}</div>
+            <div className="text-xs text-text-secondary truncate">{kind.description}</div>
           )}
         </div>
         {badgeLabel && (
-          <span className="shrink-0 text-[10px] font-medium text-daintree-text/40">
-            {badgeLabel}
-          </span>
+          <span className="shrink-0 text-3xs font-medium text-text-secondary">{badgeLabel}</span>
         )}
       </button>
     );

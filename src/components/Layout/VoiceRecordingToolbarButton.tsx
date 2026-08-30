@@ -242,7 +242,7 @@ export function VoiceRecordingToolbarButton({
                 void voiceRecordingService.focusActiveTarget();
               }}
               className={cn(
-                "toolbar-icon-button relative mr-0.5 text-daintree-text",
+                "toolbar-icon-button relative mr-0.5 text-text-primary",
                 "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
               )}
               aria-label={tooltipTitle}
@@ -318,7 +318,7 @@ export function VoiceRecordingToolbarButton({
                     />
                     <span
                       ref={dotCoreRef}
-                      className="absolute rounded-full bg-daintree-accent"
+                      className="absolute rounded-full bg-accent-primary"
                       style={{
                         width: "3.5px",
                         height: "3.5px",
@@ -334,9 +334,7 @@ export function VoiceRecordingToolbarButton({
           </TooltipTrigger>
           <TooltipContent side="bottom" className="text-center">
             <div className="font-medium">{tooltipTitle}</div>
-            {tooltipExtra && (
-              <div className="text-[11px] text-daintree-text/60">{tooltipExtra}</div>
-            )}
+            {tooltipExtra && <div className="text-2xs text-text-secondary">{tooltipExtra}</div>}
           </TooltipContent>
         </Tooltip>
       </ContextMenuTrigger>

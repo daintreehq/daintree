@@ -5,7 +5,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { openSettings } from "../../helpers/panels";
+import { openSettings, selectSettingsScope } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 import { ensureWindowFocused } from "../../helpers/focus";
@@ -85,8 +85,7 @@ function writeResourceConfig(repoDir: string) {
 async function navigateToResourcesTab(
   window: Awaited<ReturnType<typeof launchApp>>["window"]
 ): Promise<void> {
-  await window.locator('[aria-label="Settings scope"]').click();
-  await window.locator('[role="option"]', { hasText: "Project" }).click();
+  await selectSettingsScope(window, "Project");
 
   await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" }).click();
   const panel = window.locator("#settings-panel-project\\:automation");
@@ -202,7 +201,7 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
     const dialog = window.locator(SEL.worktree.newDialog);
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
-    const modeGroup = window.locator('[role="radiogroup"][aria-label="Worktree environment mode"]');
+    const modeGroup = window.locator(SEL.worktree.environmentGroup);
     await expect(modeGroup).toBeVisible({ timeout: T_MEDIUM });
 
     // Select "e2e-docker" environment
@@ -333,7 +332,7 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
 
     // Set default worktree mode to "e2e-docker"
     const panel = window.locator("#settings-panel-project\\:automation");
-    await expect(panel.locator("text=Default Worktree Mode")).toBeVisible({ timeout: T_SHORT });
+    await expect(panel.locator("text=Default worktree mode")).toBeVisible({ timeout: T_SHORT });
     const dockerRadio = panel.locator('input[type="radio"][value="e2e-docker"]');
     await dockerRadio.click();
     await expect(dockerRadio).toBeChecked({ timeout: T_SHORT });
@@ -348,7 +347,7 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
     const dialog = window.locator(SEL.worktree.newDialog);
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
-    const modeGroup = window.locator('[role="radiogroup"][aria-label="Worktree environment mode"]');
+    const modeGroup = window.locator(SEL.worktree.environmentGroup);
     await expect(modeGroup).toBeVisible({ timeout: T_MEDIUM });
 
     const dockerModeBtn = modeGroup.locator('[role="radio"]').filter({ hasText: "e2e-docker" });

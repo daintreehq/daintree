@@ -28,8 +28,9 @@ const { actionDispatchMock, keybindingServiceMock } = vi.hoisted(() => {
 
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
-// The nav module reads the project store to pick switch-vs-reopen; this suite
-// only cares that the keyboard reaches it.
+// The nav module reads both workspace stores — the project store to pick
+// switch-vs-reopen, the scratch store to know where the window is when it is in
+// a scratch. This suite only cares that the keyboard reaches it.
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: {
     getState: () => ({
@@ -37,6 +38,15 @@ vi.mock("@/store/projectStore", () => ({
       projects: [],
       switchProject: vi.fn().mockResolvedValue(undefined),
       reopenProject: vi.fn().mockResolvedValue(undefined),
+    }),
+  },
+}));
+
+vi.mock("@/store/scratchStore", () => ({
+  useScratchStore: {
+    getState: () => ({
+      currentScratch: null,
+      switchScratch: vi.fn().mockResolvedValue(undefined),
     }),
   },
 }));
@@ -264,7 +274,7 @@ describe("useProjectMruSwitcher", () => {
     expect(notifyMock).toHaveBeenCalledTimes(1);
     const call = notifyMock.mock.calls[0]![0] as { type: string; title: string };
     expect(call.type).toBe("error");
-    expect(call.title).toBe("Couldn't switch project");
+    expect(call.title).toBe("Couldn't switch workspace");
   });
 
   it("calls preventDefault and stopPropagation on handled keydowns", () => {

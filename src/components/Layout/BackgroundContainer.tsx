@@ -285,10 +285,10 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
               {compact && displayCount > 0 && (
                 <span
                   className={cn(
-                    "absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold tabular-nums shadow-sm",
+                    "absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-3xs font-bold tabular-nums shadow-sm",
                     waitingCount > 0
-                      ? "bg-state-waiting text-daintree-bg"
-                      : "bg-daintree-text/20 text-daintree-text"
+                      ? "bg-state-waiting text-surface-canvas"
+                      : "bg-daintree-text/20 text-text-primary"
                   )}
                 >
                   <AnimatedLabel label={displayCount > 9 ? "9+" : String(displayCount)} />
@@ -337,9 +337,9 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
         >
           <div className="flex flex-col">
             <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
-              <span className="text-xs font-medium text-daintree-text/70">Background panels</span>
+              <span className="text-xs font-medium text-text-secondary">Background panels</span>
               {waitingCount > 0 && (
-                <span className="text-[10px] font-medium text-state-waiting tabular-nums">
+                <span className="text-3xs font-medium text-state-waiting tabular-nums">
                   {waitingCount} waiting
                 </span>
               )}
@@ -443,8 +443,8 @@ function BackgroundSingleItem({
         <div className="flex items-center gap-1.5 min-w-0">
           <span
             className={cn(
-              "truncate font-medium text-daintree-text/80 group-hover:text-daintree-text transition-colors",
-              compact ? "text-[11px]" : "text-xs"
+              "truncate font-medium text-daintree-text/80 group-hover:text-text-primary transition-colors",
+              compact ? "text-2xs" : "text-xs"
             )}
           >
             {title}
@@ -452,11 +452,11 @@ function BackgroundSingleItem({
           {terminal.lastStateChange != null && (
             <LiveTimeAgo
               timestamp={terminal.lastStateChange}
-              className="text-[10px] text-daintree-text/40 shrink-0"
+              className="text-3xs text-text-secondary shrink-0"
             />
           )}
         </div>
-        <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-daintree-text/55">
+        <div className="flex items-center gap-1.5 mt-0.5 text-2xs text-text-secondary">
           {worktreeName && <span className="truncate">{worktreeName}</span>}
           {worktreeName && (stateLabel || terminal.activityHeadline) && (
             <span className="text-daintree-text/30">·</span>
@@ -470,7 +470,7 @@ function BackgroundSingleItem({
           {terminal.activityHeadline && (
             <>
               {(worktreeName || stateLabel) && <span className="text-daintree-text/30">·</span>}
-              <span className="truncate italic text-daintree-text/50">
+              <span className="truncate italic text-text-secondary">
                 {terminal.activityHeadline}
               </span>
             </>
@@ -593,10 +593,10 @@ function BackgroundGroupItem({
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-daintree-text/70 group-hover:text-daintree-text truncate transition-colors">
+          <div className="text-xs font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors">
             {groupName}
             {groupWaiting > 0 && (
-              <span className="ml-1.5 text-[10px] text-state-waiting font-normal tabular-nums">
+              <span className="ml-1.5 text-3xs text-state-waiting font-normal tabular-nums">
                 · {groupWaiting} waiting
               </span>
             )}
@@ -605,7 +605,7 @@ function BackgroundGroupItem({
 
         <button
           type="button"
-          className="text-[10px] text-daintree-text/40 shrink-0 hover:text-daintree-text transition-colors"
+          className="text-3xs text-text-secondary shrink-0 hover:text-text-primary transition-colors"
           onClick={() => onRestoreGroup(groupRestoreId, groupMetadata)}
         >
           Restore all

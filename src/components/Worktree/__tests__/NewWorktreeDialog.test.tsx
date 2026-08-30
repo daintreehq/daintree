@@ -227,6 +227,9 @@ vi.mock("@/components/ui/popover", () => ({
   PopoverTrigger: ({ children }: { children: React.ReactNode; asChild?: boolean }) => (
     <>{children}</>
   ),
+  PopoverAnchor: ({ children }: { children: React.ReactNode; asChild?: boolean }) => (
+    <>{children}</>
+  ),
   PopoverContent: ({
     children,
   }: {
@@ -377,6 +380,14 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     await advanceTimersGradually(500);
 
     expect(screen.queryByRole("radio", { name: /existing branch/i })).toBeNull();
+
+    // The PR number and its title are ranked by weight and colour. Only the
+    // visible pair loses the dash — the tooltip keeps it, since a screen reader
+    // speaks it fine.
+    const number = screen.getByText("#42");
+    const title = screen.getByText("Test PR");
+    expect(title.previousSibling).toBe(number);
+    expect(title.textContent).toMatch(/^\s/);
   });
 
   it("shows existing branch picker when mode is toggled to existing", async () => {
@@ -592,7 +603,7 @@ describe("NewWorktreeDialog — existing branch mode", () => {
       });
 
       expect(screen.getByTestId("existing-branch-picker").textContent).toContain(
-        "Select a local branch..."
+        "Select a local branch"
       );
     });
   });
@@ -1541,7 +1552,7 @@ describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
     const branchInput = await typeBranch("feature/terrain");
 
     expect(branchInput.value).toBe("feature/terrain");
-    expect(screen.getByText(/auto-incremented/i)).toBeDefined();
+    expect(screen.getByText(/renamed to avoid a conflict/i)).toBeDefined();
   });
 
   it("does not clobber characters typed past the conflicting prefix", async () => {
@@ -1554,7 +1565,7 @@ describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
     await typeBranch(`${branchInput.value}-shadows`);
 
     expect(branchInput.value).toBe("feature/terrain-shadows");
-    expect(screen.queryByText(/auto-incremented/i)).toBeNull();
+    expect(screen.queryByText(/renamed to avoid a conflict/i)).toBeNull();
   });
 
   it("applies the auto-incremented name on blur without re-checking or disabling Create", async () => {

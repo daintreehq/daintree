@@ -40,7 +40,7 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   // able to ship without an answer here — and because a surface with room for a
   // "running" sentence should draw it in this hue rather than inventing one.
   working: "text-activity-working",
-  running: "text-daintree-text/65",
+  running: "text-text-secondary",
   // Muted like the other settled states, and deliberately NOT the accent: a
   // snooze is the user telling this row to stop asking for them, so it must not
   // be the loudest thing in the list on the way out.
@@ -49,12 +49,12 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   // text on the row and the age is quieter still — at the same weight, "until
   // 3:45 PM" read as the headline and "1 snoozed" as its footnote, which is the
   // hierarchy upside down.
-  snoozed: "text-daintree-text/65",
-  muted: "text-daintree-text/65",
+  snoozed: "text-text-secondary",
+  muted: "text-text-secondary",
   // Machine-initiated work the user didn't launch, so it reads at the same
   // weight as the settled states rather than competing with the runs they
   // started (#11806).
-  assistant: "text-daintree-text/65",
+  assistant: "text-text-secondary",
   // An assistant that failed says so in the danger hue — the severity is real
   // — while its dot stays hollow, so it never reads as a worker run.
   "assistant-blocked": "text-status-danger/80",
@@ -96,7 +96,16 @@ export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
   // demand keeps its demand hue — so the pulse lands on the rows whose only
   // fact is that they are moving, and nowhere near twenty at once.
   working: "bg-activity-working animate-activity-pulse",
-  running: "bg-status-success",
+  // Same hue as `working` and for the same reason: this is a run in flight, not
+  // a run that succeeded. It sat on `status-success` until #12002, which reads
+  // as "finished well" in every palette that separates the two.
+  //
+  // That makes it identical to `working` wherever the pulse is off — reduced
+  // motion and performance mode both kill `animate-activity-pulse`. Deliberate:
+  // the legend above draws one filled green for "something is executing here",
+  // and these are its two spellings. Which one is executing is the row's line's
+  // job ("2 running" against "1 process running"), not the mark's.
+  running: "bg-activity-working",
   // Dashed rather than solid, because "snoozed" and "settled" are different
   // facts and the switcher's greys already carry the settled ones. Colour alone
   // could not separate them — a dashed ring reads as temporarily suspended at a
@@ -141,9 +150,9 @@ export const ROW_MARK_COLOR: Record<ProjectRowTone, string> = {
   waiting: "var(--color-status-warning)",
   review: "var(--color-activity-completed)",
   working: "var(--color-activity-working)",
-  running: "var(--color-status-success)",
-  snoozed: "rgb(from var(--color-daintree-text) r g b / 0.4)",
-  muted: "rgb(from var(--color-daintree-text) r g b / 0.2)",
+  running: "var(--color-activity-working)",
+  snoozed: "rgb(from var(--color-text-primary) r g b / 0.4)",
+  muted: "rgb(from var(--color-text-primary) r g b / 0.2)",
   assistant: "var(--color-status-warning)",
   "assistant-blocked": "var(--color-status-danger)",
 };

@@ -54,7 +54,7 @@ export function FindBar({ find }: FindBarProps) {
       : "No results";
 
   return (
-    <div className="absolute top-2 right-2 z-20 flex items-center gap-1 rounded-md bg-surface-panel-elevated border border-daintree-border shadow-[var(--theme-shadow-floating)] px-2 py-1">
+    <div className="absolute top-2 right-2 z-20 flex items-center gap-1 rounded-md bg-surface-panel-elevated border border-border-default shadow-[var(--theme-shadow-floating)] px-2 py-1">
       <input
         ref={inputRef}
         type="text"
@@ -72,15 +72,15 @@ export function FindBar({ find }: FindBarProps) {
         aria-label="Find in page"
         aria-describedby={counterId}
         data-testid="find-bar-input"
-        className="w-44 bg-transparent text-xs text-daintree-text placeholder:text-text-placeholder outline-hidden border border-transparent focus:border-border-strong transition-colors"
+        className="w-44 bg-transparent text-xs text-text-primary placeholder:text-text-placeholder outline-hidden border border-transparent focus:border-border-strong transition-colors"
         spellCheck={false}
       />
       <span
         id={counterId}
         role="status"
         aria-atomic="true"
-        className={`text-[11px] tabular-nums whitespace-nowrap mr-0.5 ${
-          noResults ? "text-status-error" : "text-daintree-text/50"
+        className={`text-2xs tabular-nums whitespace-nowrap mr-0.5 ${
+          noResults ? "text-status-error" : "text-text-secondary"
         }`}
       >
         {countText}
@@ -94,7 +94,7 @@ export function FindBar({ find }: FindBarProps) {
             className={`px-1 rounded text-xs font-medium transition-colors ${
               matchCase
                 ? "text-accent-primary bg-accent-primary/10"
-                : "text-daintree-text/50 hover:text-daintree-text/70 hover:bg-overlay-medium"
+                : "text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
             }`}
             aria-label="Match case"
             aria-pressed={matchCase}

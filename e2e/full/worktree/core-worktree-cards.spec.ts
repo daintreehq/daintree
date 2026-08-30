@@ -132,20 +132,45 @@ test.describe.serial("Core: Worktree Cards", () => {
         await actionsBtn.click();
       });
 
-      await test.step("Verify expected menu items are visible", async () => {
-        await expect(window.getByRole("menuitem", { name: "Launch" })).toBeVisible({
+      await test.step("Verify the intent-based root hierarchy is visible", async () => {
+        // The root is submenu triggers plus the destructive row — filesystem,
+        // session and card-organization commands live one level down now.
+        for (const name of ["Launch", "Open", "Sessions", "Copy"]) {
+          await expect(window.getByRole("menuitem", { name })).toBeVisible({ timeout: T_SHORT });
+        }
+
+        // Organize also renders on the sidebar main card (it can collapse);
+        // Delete is the genuinely feature-only row.
+        await expect(window.getByRole("menuitem", { name: "Organize" })).toBeVisible();
+        await expect(window.getByRole("menuitem", { name: /Delete worktree/i })).toBeVisible();
+      });
+
+      await test.step("Filesystem destinations live under Open", async () => {
+        const openTrigger = window.getByRole("menuitem", { name: "Open", exact: true });
+        // Hover doesn't reliably open Radix submenus on Linux CI; click does.
+        await openTrigger.click();
+        await expect(window.getByRole("menuitem", { name: "Open in editor" })).toBeVisible({
           timeout: T_SHORT,
         });
-        await expect(window.getByRole("menuitem", { name: "Sessions" })).toBeVisible();
-        await expect(window.getByRole("menuitem", { name: "Open in Editor" })).toBeVisible();
-        await expect(window.getByRole("menuitem", { name: "Reveal in Finder" })).toBeVisible();
 
-        // Feature-only items (not shown on main worktree card)
-        await expect(window.getByRole("menuitem", { name: "Pin to Top" })).toBeVisible();
-        await expect(window.getByRole("menuitem", { name: /Delete Worktree/i })).toBeVisible();
+        // The exact label for THIS platform, not any of the three: accepting
+        // all of them everywhere would pass on "Show in Explorer" under macOS,
+        // which is the only failure the row can actually have.
+        const expectedRevealLabel =
+          process.platform === "darwin"
+            ? "Show in Finder"
+            : process.platform === "win32"
+              ? "Show in Explorer"
+              : "Show in file manager";
+        await expect(
+          window.getByRole("menuitem", { name: expectedRevealLabel, exact: true })
+        ).toBeVisible({ timeout: T_SHORT });
       });
 
       await test.step("Close the menu via Escape", async () => {
+        // One press, from inside the open submenu: Radix menus dismiss the
+        // whole stack on Escape (ArrowLeft is what closes just a submenu). A
+        // second press would fall through to the app's global Escape handler.
         await window.keyboard.press("Escape");
         await expect(window.locator('[role="menu"]')).toHaveCount(0, { timeout: T_SHORT });
       });
@@ -153,7 +178,7 @@ test.describe.serial("Core: Worktree Cards", () => {
 
     // The card's two menu surfaces are one item list rendered through two sets
     // of primitives, so they must present the same top-level menu. They drifted
-    // once (Browse Files was wired into the dropdown only), which no test caught
+    // once (Browse files was wired into the dropdown only), which no test caught
     // because both specs assert item labels one surface at a time. This compares
     // the surfaces to each other instead of to hardcoded expectations.
     test("right-click menu and actions dropdown present the same items", async () => {
@@ -221,7 +246,7 @@ test.describe.serial("Core: Worktree Cards", () => {
       ).toEqual([]);
     });
 
-    test("Launch submenu opens on hover and Open Terminal creates a panel", async () => {
+    test("Launch submenu opens on hover and Terminal creates a panel", async () => {
       const { window } = ctx;
       let panelsBefore = 0;
       const featureCard = window.locator(SEL.worktree.card(FEATURE));
@@ -233,12 +258,12 @@ test.describe.serial("Core: Worktree Cards", () => {
         await actionsBtn.click();
       });
 
-      await test.step("Hover Launch submenu and click Open Terminal", async () => {
+      await test.step("Hover Launch submenu and click Terminal", async () => {
         const launchTrigger = window.getByRole("menuitem", { name: "Launch" });
         await expect(launchTrigger).toBeVisible({ timeout: T_SHORT });
         await launchTrigger.hover();
 
-        const openTerminal = window.getByRole("menuitem", { name: "Open Terminal" });
+        const openTerminal = window.getByRole("menuitem", { name: "Terminal", exact: true });
         await expect(openTerminal).toBeVisible({ timeout: T_SHORT });
         await openTerminal.click();
       });
@@ -283,7 +308,7 @@ test.describe.serial("Core: Worktree Cards", () => {
       const mainCard = window.locator(SEL.worktree.mainCard);
 
       await test.step("Select feature worktree and confirm panels are present", async () => {
-        // Feature card should have at least 1 panel from the Open Terminal test
+        // Feature card should have at least 1 panel from the Launch ▸ Terminal test
         await featureCard.click({ position: { x: 10, y: 10 } });
         await expect(window.locator(SEL.worktree.row(FEATURE))).toHaveAttribute(
           "aria-current",

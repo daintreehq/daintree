@@ -4,6 +4,7 @@ import {
   Command,
   FileCode,
   GitBranch,
+  GitBranchPlus,
   History,
   LayoutGrid,
   Mic,
@@ -32,6 +33,8 @@ import type {
 
 // Boot-path consumers import the ids/validators from settingsTabIds (no
 // component imports); re-export them so registry consumers are untouched.
+import { scopeForTab } from "./settingsTabIds";
+
 export { isSettingsTab, scopeForTab } from "./settingsTabIds";
 export type { GlobalSettingsTab, ProjectSettingsTab, SettingsScope, SettingsTab };
 
@@ -57,6 +60,13 @@ export interface SettingsTabEntry {
   // matching tuple entry fails to compile (drift guard, direction 1).
   readonly id: SettingsTab;
   readonly scope: "global" | "project";
+  /**
+   * What the tab's content actually writes to, when that differs from the nav scope it
+   * is filed under. `integrations` lives in the global nav but every control inside it
+   * saves against the current project, so the dialog's accessible name has to say
+   * project or it states the wrong scope outright. Nav placement is unchanged.
+   */
+  readonly contentScope?: "global" | "project";
   readonly group: string;
   readonly label: string;
   readonly headerTitle?: string;
@@ -1037,6 +1047,7 @@ export const SETTINGS_REGISTRY = [
           "dangerous",
           "allow",
           "bypass",
+          "review",
         ],
       },
       {
@@ -1169,6 +1180,9 @@ export const SETTINGS_REGISTRY = [
   {
     id: "integrations",
     scope: "global",
+    // Both children (EditorIntegrationTab, ImageViewerTab) write per-project:
+    // editorClient.setConfig({ projectId }) and projectClient.saveSettings(projectId).
+    contentScope: "project",
     group: "Integrations",
     label: "Integrations",
     icon: <Blocks className="w-4 h-4" />,
@@ -1648,7 +1662,9 @@ export const SETTINGS_REGISTRY = [
     scope: "project",
     group: "Project",
     label: "Worktree Setup",
-    icon: <GitBranch className="w-4 h-4" />,
+    // Not GitBranch: project Code Forge already uses it, and two sections in the same
+    // nav list sharing one glyph makes the icon useless for telling them apart.
+    icon: <GitBranchPlus className="w-4 h-4" />,
     importKind: "lazy",
     importer: importProjectAutomationTab,
     LazyComponent: LazyProjectAutomationTab,
@@ -1709,6 +1725,20 @@ export const SETTINGS_REGISTRY = [
 // field on SettingsTabEntry. Direction 2: every tuple id must have a
 // registered entry — `_Missing` is non-never (and this fails to compile) when
 // an id is added to settingsTabIds without a registry entry.
+
+/**
+ * The scope a tab's content actually writes to — its `contentScope` when it declares
+ * one, otherwise the nav scope it is filed under. The dialog's accessible name keys off
+ * this rather than `scopeForTab`, so a tab that is filed globally but saves against the
+ * current project announces the project instead of claiming to be application-wide.
+ */
+export function contentScopeForTab(tab: SettingsTab): "global" | "project" {
+  // Widened to the interface on purpose: SETTINGS_REGISTRY is `as const`, so `find`
+  // returns the literal union of entries and `contentScope` only exists on the members
+  // that declare it. The base type is where the optional property lives.
+  const entry: AnySettingsTabEntry | undefined = SETTINGS_REGISTRY.find((e) => e.id === tab);
+  return entry?.contentScope ?? scopeForTab(tab);
+}
 
 type ProjectScopedEntry = Extract<(typeof SETTINGS_REGISTRY)[number], { scope: "project" }>;
 
@@ -1944,7 +1974,7 @@ export const projectTabIcons: Record<ProjectSettingsTab, ReactNode> = {
   "project:general": <SettingsIcon className="w-5 h-5 text-text-secondary" />,
   "project:context": <FileCode className="w-5 h-5 text-text-secondary" />,
   "project:variables": <KeyRound className="w-5 h-5 text-text-secondary" />,
-  "project:automation": <GitBranch className="w-5 h-5 text-text-secondary" />,
+  "project:automation": <GitBranchPlus className="w-5 h-5 text-text-secondary" />,
   "project:recipes": <Workflow className="w-5 h-5 text-text-secondary" />,
   "project:commands": <Command className="w-5 h-5 text-text-secondary" />,
   "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,

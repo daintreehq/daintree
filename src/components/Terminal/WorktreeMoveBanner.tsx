@@ -23,7 +23,7 @@ export interface WorktreeMoveBannerProps {
  * and spelling it twice would put three controls in front of two outcomes.
  *
  * The action *is* the sentence rather than a button beside it (#11868). A boxed
- * banner action draws its fill from `bg-daintree-border`, the one surface the
+ * banner action draws its fill from `bg-border-default`, the one surface the
  * amber wash renders indistinct — the neutral label was always legible, the box
  * around it was not. Dropping the box and underlining the label keeps the same
  * text colour, so nothing new has to be mixed over a composited tint, and it
@@ -73,7 +73,7 @@ export function WorktreeMoveBanner({
               e.stopPropagation();
               onTell();
             }}
-            className="-ml-1 mt-0.5 inline-block max-w-full cursor-pointer rounded-sm px-1 py-0.5 text-left text-xs font-medium whitespace-normal break-words text-daintree-text underline underline-offset-4 outline-hidden transition-[background-color] duration-150 ease-out hover:bg-overlay-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent"
+            className="-ml-1 mt-0.5 inline-block max-w-full cursor-pointer rounded-sm px-1 py-0.5 text-left text-xs font-medium whitespace-normal break-words text-text-primary underline underline-offset-4 outline-hidden transition-[background-color] duration-150 ease-out hover:bg-overlay-hover focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
           >
             {deliveryFailed ? "Retry telling it to continue in" : "Tell it to continue in"}{" "}
             {destinationPath}

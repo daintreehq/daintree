@@ -116,36 +116,36 @@ function ErrorRow({
           isExpanded && "bg-daintree-border/30"
         )}
       >
-        <td className="px-3 py-2 text-xs text-daintree-text/60 whitespace-nowrap">
+        <td className="px-3 py-2 text-xs text-text-secondary whitespace-nowrap">
           {formatTimestamp(error.timestamp)}
         </td>
         <td className={cn("px-3 py-2 text-xs whitespace-nowrap font-medium", typeColor)}>
           {typeLabel}
         </td>
-        <td className="px-3 py-2 text-sm text-daintree-text max-w-md">
+        <td className="px-3 py-2 text-sm text-text-primary max-w-md">
           <button
             onClick={onToggleExpand}
-            className="text-left w-full hover:text-daintree-text transition-colors"
+            className="text-left w-full hover:text-text-primary transition-colors"
             aria-expanded={isExpanded}
             aria-controls={`error-details-${error.id}`}
           >
             <span className="truncate block">{error.message}</span>
             {error.recoveryHint && (
-              <span className="flex items-center gap-1 mt-0.5 text-xs text-daintree-text/60">
+              <span className="flex items-center gap-1 mt-0.5 text-xs text-text-secondary">
                 <Lightbulb className="w-3 h-3 shrink-0" />
                 {error.recoveryHint}
               </span>
             )}
           </button>
         </td>
-        <td className="px-3 py-2 text-xs text-daintree-text/60 whitespace-nowrap">
+        <td className="px-3 py-2 text-xs text-text-secondary whitespace-nowrap">
           {error.source || "-"}
         </td>
         <td className="px-3 py-2 whitespace-nowrap">
           <div className="flex items-center gap-1">
             {isRetrying && onCancelRetry && (
               <>
-                <span className="text-[10px] text-status-warning">
+                <span className="text-3xs text-status-warning">
                   Retrying {error.retryProgress!.attempt}/{error.retryProgress!.maxAttempts}...
                 </span>
                 <button
@@ -175,7 +175,7 @@ function ErrorRow({
                 e.stopPropagation();
                 onDismiss();
               }}
-              className="p-1 text-daintree-text/60 hover:text-daintree-text"
+              className="p-1 text-daintree-text/60 hover:text-text-primary"
               aria-label="Dismiss error"
             >
               ×
@@ -187,7 +187,7 @@ function ErrorRow({
         <tr className="bg-daintree-sidebar/50" id={`error-details-${error.id}`}>
           <td colSpan={5} className="px-3 py-2">
             <div className="flex items-start justify-between gap-2">
-              <pre className="text-xs text-daintree-text/60 whitespace-pre-wrap break-all font-mono max-h-40 overflow-y-auto flex-1 select-text">
+              <pre className="text-xs text-text-secondary whitespace-pre-wrap break-all font-mono max-h-40 overflow-y-auto flex-1 select-text">
                 {error.details}
               </pre>
               <Tooltip>
@@ -195,7 +195,7 @@ function ErrorRow({
                   <button
                     type="button"
                     onClick={handleCopyDetails}
-                    className="shrink-0 p-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 rounded transition-colors"
+                    className="shrink-0 p-1.5 text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/50 rounded transition-colors"
                     aria-label={copied ? "Copied to clipboard" : "Copy error details to clipboard"}
                   >
                     {copied ? (
@@ -211,7 +211,7 @@ function ErrorRow({
               </Tooltip>
             </div>
             {error.context && Object.keys(error.context).length > 0 && (
-              <div className="mt-2 text-xs text-daintree-text/60">
+              <div className="mt-2 text-xs text-text-secondary">
                 <span className="font-medium">Context: </span>
                 {Object.entries(error.context)
                   .filter(([, v]) => v !== undefined)
@@ -266,21 +266,21 @@ export function ProblemsContent({ onRetry, onCancelRetry, className }: ProblemsC
         </div>
       ) : (
         <table className="w-full">
-          <thead className="sticky top-0 bg-daintree-sidebar border-b border-daintree-border">
+          <thead className="sticky top-0 bg-surface-sidebar border-b border-border-default">
             <tr>
-              <th className="px-3 py-2 text-left text-xs font-medium text-daintree-text/60 w-24">
+              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary w-24">
                 Time
               </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-daintree-text/60 w-20">
+              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary w-20">
                 Type
               </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-daintree-text/60">
+              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary">
                 Message
               </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-daintree-text/60 w-28">
+              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary w-28">
                 Source
               </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-daintree-text/60 w-24">
+              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary w-24">
                 Actions
               </th>
             </tr>

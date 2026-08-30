@@ -68,7 +68,7 @@ function CrossWorktreeFileRow({ file, isSelected, onClick }: CrossWorktreeFileRo
           {file.path.split(/[/\\]/).filter(Boolean).pop()}
         </span>
         {hasChurn && (
-          <span className="ml-auto flex items-center gap-1 shrink-0 text-[10px] tabular-nums">
+          <span className="ml-auto flex items-center gap-1 shrink-0 text-3xs tabular-nums">
             {insertions > 0 && <span className="text-status-success/80">+{insertions}</span>}
             {deletions > 0 && <span className="text-status-error/80">-{deletions}</span>}
           </span>
@@ -419,7 +419,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                 <button
                   type="button"
                   onClick={() => void fetchFileDiff(selectedFile)}
-                  className="px-3 py-1.5 text-xs font-medium rounded bg-daintree-border hover:bg-daintree-border/80 text-daintree-text transition-colors"
+                  className="px-3 py-1.5 text-xs font-medium rounded bg-border-default hover:bg-daintree-border/80 text-text-primary transition-colors"
                 >
                   Retry
                 </button>

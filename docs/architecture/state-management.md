@@ -39,7 +39,7 @@ Use `…OrNull()` from anything that can run during initial render or the action
 
 ## Store inventory (categorized)
 
-`src/store/index.ts` is the source of truth; this is a map of the major clusters, not an exhaustive list. ~92 files end in `Store.ts`.
+`src/store/index.ts` is the source of truth; this is a map of the major clusters, not an exhaustive list. ~110 files end in `Store.ts`.
 
 | Cluster | Representative stores | Notes |
 | --- | --- | --- |

@@ -79,22 +79,22 @@ All thresholds are derived from CSS Color 4, APCA research, and Material 3 guide
 | `text-inverse` | Text on solid accent/color backgrounds | Required |
 | `text-link` | Hyperlink color | Derived: `accent-primary` |
 
-Dim or disabled icons must use a solid token (`text-text-muted` for disabled/needs-setup glyphs, `text-text-secondary` for de-emphasized ones), never a half-transparent one. The `icon-opacity-dimming/no-icon-opacity-dimming` ESLint rule blocks the two opacity-compositing patterns on `<svg>` and icon components — `opacity-*` utilities (other than the `opacity-0`/`opacity-100` visibility toggles) and the `grayscale` filter — because both blend the icon with whatever sits behind it and read differently on each palette. Prefer a solid token over slash-alpha color modifiers (`text-text-primary/50`) too; those aren't lint-enforced but carry the same compositing pitfall. Genuine visibility toggles (an icon that fades from `opacity-0`) opt out of the rule with an inline `eslint-disable-next-line` carrying a reason.
+Dim or disabled icons must use a solid token (`text-text-muted` for disabled/needs-setup glyphs, `text-text-secondary` for de-emphasized ones), never a half-transparent one. This is the rule for new code without exception; the icon and glyph sites #12065 left on the legacy alpha ramp are a closed, reviewed set recorded in `scripts/baselines/text-ramp-manifest.json`, not a precedent — a contract test fails on any ramp site that manifest does not name. The `icon-opacity-dimming/no-icon-opacity-dimming` ESLint rule blocks the two opacity-compositing patterns on `<svg>` and icon components — `opacity-*` utilities (other than the `opacity-0`/`opacity-100` visibility toggles) and the `grayscale` filter — because both blend the icon with whatever sits behind it and read differently on each palette. Prefer a solid token over slash-alpha color modifiers (`text-text-primary/50`) too; on text colors that is enforced by `component-contract/no-text-color-slash-alpha` (see [component-contract.md](./component-contract.md)), and the same compositing pitfall applies wherever it isn't. Genuine visibility toggles (an icon that fades from `opacity-0`) opt out of the rule with an inline `eslint-disable-next-line` carrying a reason.
 
 ## Border Tokens
 
-| Token                | Purpose                             | Dark default | Light default |
-| -------------------- | ----------------------------------- | ------------ | ------------- |
-| `border-default`     | Card outlines, input borders        | Required     | Required      |
-| `border-subtle`      | Panel-internal dividers             | `white 8%`   | `black 5%`    |
-| `border-strong`      | Focused panel borders               | `white 14%`  | `black 14%`   |
-| `border-divider`     | Structural separators               | `white 5%`   | `black 4%`    |
-| `border-interactive` | Hovered/focused interactive borders | `white 20%`  | `black 10%`   |
-| `selection-outline`  | Palette selected-row hairline       | `text 42%`   | `text 53%`    |
+| Token                | Purpose                               | Dark default | Light default |
+| -------------------- | ------------------------------------- | ------------ | ------------- |
+| `border-default`     | Card outlines, input borders          | Required     | Required      |
+| `border-subtle`      | Panel-internal dividers               | `white 8%`   | `black 5%`    |
+| `border-strong`      | Focused panel borders                 | `white 14%`  | `black 14%`   |
+| `border-divider`     | Structural separators                 | `white 5%`   | `black 4%`    |
+| `border-interactive` | Hovered/focused interactive borders   | `white 20%`  | `black 10%`   |
+| `selection-outline`  | Palette selected-row leading-rail ink | `text 42%`   | `text 53%`    |
 
 **Polarity pattern:** Dark themes use white-alpha; light themes use black-alpha.
 
-**`selection-outline` is deliberately outside that ladder.** It is derived from `text-primary` rather than the border ink, and sits 2-3x above `border-strong`, because it is the only border in the app that must satisfy WCAG 1.4.11 on its own — the raised fill it encloses clears barely 1.1-1.2:1 against the palette surface, so the outline is the whole non-text indicator. `getThemeContrastWarnings` gates it at 3:1 against both the selected fill and the surrounding surface, so retuning `text-primary` or the fill trips the theme contract rather than silently weakening the indicator. See [interaction-state-recipes.md](./interaction-state-recipes.md#selected-state-list-item).
+**`selection-outline` is deliberately outside that ladder.** The name is historical — the token drew an outline around all four sides of the selected row before the geometry moved to a leading rail; the job did not change. It is derived from `text-primary` rather than the border ink, and sits 2-3x above `border-strong`, because it is the only selection mark in the app that must satisfy WCAG 1.4.11 on its own — the raised fill it marks clears barely 1.1-1.2:1 against the palette surface, so the rail is the whole non-text indicator. The rail sits on the row's boundary, touching the fill on one side and the surrounding palette surface on the other, and `getThemeContrastWarnings` gates it at 3:1 against both — so retuning `text-primary` or the fill trips the theme contract rather than silently weakening the indicator. See [interaction-state-recipes.md](./interaction-state-recipes.md#selected-state-list-item).
 
 ## Accent Tokens
 
@@ -123,12 +123,12 @@ An optional second color lane for themes with two distinct interaction colors.
 
 Fixed hue families across all themes. Each theme tunes brightness/saturation.
 
-| Token                   | Hue family                         | Derived?                         |
-| ----------------------- | ---------------------------------- | -------------------------------- |
-| `status-success`        | Green — completed/ready states     | Required                         |
-| `status-warning`        | Amber — caution states             | Required                         |
-| `status-danger`         | Red — error/destructive states     | Required                         |
-| `status-info`           | Blue — neutral informational       | Required                         |
+| Token | Hue family | Derived? |
+| --- | --- | --- |
+| `status-success` | Green — transient confirmations, named outcomes, checklist marks, git notation. Never standing "all is well" chrome — see [status-success-policy.md](./status-success-policy.md) | Required |
+| `status-warning` | Amber — caution states | Required |
+| `status-danger` | Red — error/destructive states | Required |
+| `status-info` | Blue — neutral informational | Required |
 | `status-danger-surface` | Validation wash for invalid fields | Derived: `danger` at 8-10% alpha |
 
 ## Activity Tokens

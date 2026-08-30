@@ -6,6 +6,8 @@ import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   buildFolderListingRows,
+  countHiddenRows,
+  NO_HIDDEN_ROWS,
   createVisibilityFilter,
   DEFAULT_FILE_SORT,
   findNodeInListings,
@@ -22,7 +24,15 @@ import {
   type FileBrowserSource,
   type FlatTreeRow,
   type FolderListingRow,
+  type HiddenRowCounts,
 } from "./fileBrowserTree";
+
+/**
+ * Shared empty expansion set for the single-directory listing count. A fresh
+ * `new Set()` per render would change identity every commit and defeat the memo
+ * it is an input to.
+ */
+const EMPTY_EXPANDED: ReadonlySet<string> = new Set();
 
 /**
  * Ceiling on directory listings in flight at once.
@@ -120,6 +130,13 @@ export interface UseFileBrowserTreeResult {
    * empty state offer "Show dotfiles" only when it can actually help.
    */
   hasHiddenDotfiles: boolean;
+  /**
+   * How many rows each filter is removing from the branches currently on
+   * screen, for the view-options badge. Separate from `hasHiddenDotfiles`,
+   * which answers a narrower question (would the toggle reveal anything at
+   * THIS one directory) that the empty states still need.
+   */
+  hiddenCounts: HiddenRowCounts;
   /** Fetch a directory if it isn't already loaded or in flight. */
   ensureLoaded: (dirPath: string) => void;
   /**
@@ -173,6 +190,8 @@ export interface UseFileBrowserTreeResult {
    * so its empty state can offer "Show dotfiles" only when that would help.
    */
   listingHasHiddenDotfiles: boolean;
+  /** The selected folder's own hidden tally, for the viewer's listing chrome. */
+  listingHiddenCounts: HiddenRowCounts;
 }
 
 interface QueueEntry {
@@ -907,6 +926,29 @@ export function useFileBrowserTree({
     [listings, rootPath, alwaysHiddenPatterns]
   );
 
+  // What the two filters are removing from the branches the user can see, for
+  // the view-options badge. Walks only loaded, expanded folders, so the number
+  // never counts rows behind a collapsed parent — see `countHiddenRows`.
+  const hiddenCounts = useMemo(
+    () => countHiddenRows(listings, expandedSet, rootPath, { hideDotfiles, alwaysHiddenPatterns }),
+    [listings, expandedSet, rootPath, hideDotfiles, alwaysHiddenPatterns]
+  );
+
+  // The listing's own tally, for the strip and empty state the viewer shows
+  // over a selected folder. One directory, never a descent: the flat listing
+  // renders exactly one level, so counting deeper would describe rows that
+  // surface has no way to show.
+  const listingHiddenCounts = useMemo(
+    () =>
+      listingPath === null
+        ? NO_HIDDEN_ROWS
+        : countHiddenRows(listings, EMPTY_EXPANDED, listingPath, {
+            hideDotfiles,
+            alwaysHiddenPatterns,
+          }),
+    [listings, listingPath, hideDotfiles, alwaysHiddenPatterns]
+  );
+
   // The same question asked of the folder being listed rather than of the root
   // (#11620) — its empty state offers "Show dotfiles" only when that would
   // actually put something on screen.
@@ -936,6 +978,7 @@ export function useFileBrowserTree({
     isInitialLoading: source !== null && !hasLoadedRoot && !hasSeededRoot,
     rootError,
     hasHiddenDotfiles,
+    hiddenCounts,
     ensureLoaded,
     refresh,
     isRefreshing,
@@ -945,6 +988,7 @@ export function useFileBrowserTree({
     listingRows,
     listingStatus,
     listingHasHiddenDotfiles,
+    listingHiddenCounts,
   };
 }
 

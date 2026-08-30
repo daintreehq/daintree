@@ -141,6 +141,14 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // result worth awaiting.
   "terminal:update-title",
 
+  // fire-and-forget — renderer->main cross-worktree move, mirrored onto the
+  // pty-host terminal record so the fleet palette groups a run by the worktree
+  // it is in rather than the one it launched in (#12060). Send-only for the
+  // same reason as its `update-title` sibling: the renderer panel store is
+  // already authoritative for the grouping the user sees, so there is no result
+  // worth awaiting.
+  "terminal:update-worktree-id",
+
   // fire-and-forget — high-frequency renderer→main streaming audio chunks
   // for voice input. Same rationale as the terminal input channels.
   "voice-input:audio-chunk",

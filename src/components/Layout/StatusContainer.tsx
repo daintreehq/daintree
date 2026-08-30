@@ -85,7 +85,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
               {compact && displayCount > 0 && (
                 <span
                   className={cn(
-                    "absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold tabular-nums shadow-sm",
+                    "absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-3xs font-bold tabular-nums shadow-sm",
                     config.badgeColor,
                     config.badgeTextColor
                   )}
@@ -115,9 +115,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
         >
           <div className="flex flex-col">
             <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
-              <span className="text-xs font-medium text-daintree-text/70">
-                {config.headerLabel}
-              </span>
+              <span className="text-xs font-medium text-text-secondary">{config.headerLabel}</span>
             </div>
 
             <div className="p-1 flex flex-col gap-1 max-h-[300px] overflow-y-auto">
@@ -145,7 +143,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                         className="h-3 w-3"
                       />
                     </div>
-                    <span className="text-xs truncate font-medium text-daintree-text/70 group-hover:text-daintree-text transition-colors">
+                    <span className="text-xs truncate font-medium text-text-secondary group-hover:text-text-primary transition-colors">
                       {terminal.title}
                     </span>
                   </div>

@@ -25,6 +25,28 @@ describe("corpus-replay", () => {
     });
   });
 
+  // Antigravity keys working on its braille status line and NOT on the
+  // `esc to cancel` footer — the footer stays up while it blocks on an
+  // approval prompt. The corpus carries that footer as a `waiting` entry so
+  // a future footer-keyed pattern fails here rather than in the field.
+  //
+  // Gated at exact accuracy rather than the shared 90% floor on purpose:
+  // stripping the pattern banks back to empty (the pre-#12005 state, where the
+  // universal set applies) still scores 91.2% here, because the universal
+  // fallback happens to match the two fixed-verb spinner texts. A 90% gate
+  // would sit above that and notice nothing. The three entries it misses are
+  // the ones that matter — `Signing in...` and the live thought-summary status
+  // text that makes up most of a real `agy` turn.
+  describe("antigravity corpus replay", () => {
+    it("classifies every antigravity sample entry", () => {
+      const result = replayCorpus(path.join(CORPUS_DIR, "antigravity_sample.jsonl"), "antigravity");
+      expect(result.total).toBeGreaterThan(0);
+      // `wrong` rather than `accuracy`: it is the same assertion, but a failure
+      // names the entries that regressed instead of printing a ratio.
+      expect(result.wrong).toEqual([]);
+    });
+  });
+
   describe("gemini corpus replay", () => {
     it("achieves >= 90% accuracy on gemini sample corpus", () => {
       const result = replayCorpus(path.join(CORPUS_DIR, "gemini_sample.jsonl"), "gemini");

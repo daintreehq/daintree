@@ -16,10 +16,10 @@ describe("QuickStateFilterBar", () => {
     // "All" keeps its visible text anchor; the status segments go icon-only.
     expect(screen.getByText("All")).toBeTruthy();
     expect(screen.queryByText("Working")).toBeNull();
-    expect(screen.queryByText("Waiting")).toBeNull();
+    expect(screen.queryByText("Attention")).toBeNull();
     expect(screen.queryByText("Finished")).toBeNull();
     expect(screen.getByRole("button", { name: "Working" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Waiting" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Attention" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Finished" })).toBeTruthy();
   });
 
@@ -33,7 +33,7 @@ describe("QuickStateFilterBar", () => {
     );
     const all = screen.getByRole("button", { name: /^All/ });
     const working = screen.getByRole("button", { name: /Working/ });
-    const waiting = screen.getByRole("button", { name: /Waiting/ });
+    const waiting = screen.getByRole("button", { name: /Attention/ });
     const finished = screen.getByRole("button", { name: /Finished/ });
     expect(within(all).getByText("9")).toBeTruthy();
     expect(within(working).getByText("3")).toBeTruthy();
@@ -52,7 +52,7 @@ describe("QuickStateFilterBar", () => {
       />
     );
     const working = screen.getByRole("button", { name: /Working/ });
-    const waiting = screen.getByRole("button", { name: /Waiting/ });
+    const waiting = screen.getByRole("button", { name: /Attention/ });
     const finished = screen.getByRole("button", { name: /Finished/ });
     // Empty buckets still show "0" — a missing digit reads as broken, not empty.
     expect(within(working).getByText("0")).toBeTruthy();
@@ -88,7 +88,7 @@ describe("QuickStateFilterBar", () => {
     );
     expect(screen.getByRole("button", { name: "All, 9 worktrees" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Working, 3 worktrees" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Waiting, 1 worktree" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Attention, 1 worktree" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Finished, 2 worktrees" })).toBeTruthy();
   });
 
@@ -104,7 +104,7 @@ describe("QuickStateFilterBar", () => {
       "true"
     );
     expect(screen.getByRole("button", { name: /^All/ }).getAttribute("aria-pressed")).toBe("false");
-    expect(screen.getByRole("button", { name: /Waiting/ }).getAttribute("aria-pressed")).toBe(
+    expect(screen.getByRole("button", { name: /Attention/ }).getAttribute("aria-pressed")).toBe(
       "false"
     );
     expect(screen.getByRole("button", { name: /Finished/ }).getAttribute("aria-pressed")).toBe(
@@ -134,7 +134,7 @@ describe("QuickStateFilterBar", () => {
         counts={{ all: 9, working: 0, waiting: 3, finished: 0 }}
       />
     );
-    fireEvent.click(screen.getByRole("button", { name: /Waiting/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Attention/ }));
     expect(onChange).toHaveBeenCalledWith("all");
   });
 
@@ -153,7 +153,7 @@ describe("QuickStateFilterBar", () => {
     );
     const all = screen.getByRole("button", { name: /^All/ });
     const working = screen.getByRole("button", { name: /Working/ });
-    const waiting = screen.getByRole("button", { name: /Waiting/ });
+    const waiting = screen.getByRole("button", { name: /Attention/ });
     const finished = screen.getByRole("button", { name: /Finished/ });
     expect(all.querySelector("svg")).toBeNull();
     expect(working.querySelector("svg")).not.toBeNull();
@@ -224,7 +224,7 @@ describe("QuickStateFilterBar", () => {
         counts={{ all: 9, working: 3, waiting: 2, finished: 4 }}
       />
     );
-    for (const name of [/Waiting/, /Finished/]) {
+    for (const name of [/Attention/, /Finished/]) {
       const svg = screen.getByRole("button", { name }).querySelector("svg");
       expect(svg).not.toBeNull();
       expect(svg?.getAttribute("class") ?? "").not.toContain("animate-spin-slow");
@@ -239,7 +239,7 @@ describe("QuickStateFilterBar", () => {
         counts={{ all: 9, working: 1, waiting: 1, finished: 1 }}
       />
     );
-    for (const name of [/Working/, /Waiting/, /Finished/]) {
+    for (const name of [/Working/, /Attention/, /Finished/]) {
       const button = screen.getByRole("button", { name });
       const svg = button.querySelector("svg");
       expect(svg).not.toBeNull();
@@ -247,7 +247,7 @@ describe("QuickStateFilterBar", () => {
     }
   });
 
-  it("renders the active count at full text opacity and inactive counts at /60 — issue #7971", () => {
+  it("distinguishes the active count from the inactive ones — issue #7971", () => {
     // The count digit is the load-bearing signal in icon-only segments — the
     // active segment must read at full neutral text opacity (no /N suffix);
     // inactive segments stay muted at /60 to preserve the active hierarchy.
@@ -259,14 +259,17 @@ describe("QuickStateFilterBar", () => {
       />
     );
     const working = screen.getByRole("button", { name: /Working/ });
-    const waiting = screen.getByRole("button", { name: /Waiting/ });
+    const waiting = screen.getByRole("button", { name: /Attention/ });
     const activeCount = within(working).getByText("3");
     const inactiveCount = within(waiting).getByText("1");
     const activeClass = activeCount.getAttribute("class") ?? "";
     const inactiveClass = inactiveCount.getAttribute("class") ?? "";
-    expect(activeClass).toContain("text-daintree-text");
+    // The selected bucket's count leads and the rest recede. Naming either
+    // colour would just copy the component; that they differ is the claim, and
+    // neither may fall back to the retired alpha ramp (#12065).
+    expect(activeClass).not.toBe(inactiveClass);
     expect(activeClass).not.toContain("text-daintree-text/");
-    expect(inactiveClass).toContain("text-daintree-text/60");
+    expect(inactiveClass).not.toContain("text-daintree-text/");
   });
 
   it("fades each empty bucket's icon with its own state color — issue #10353", () => {
@@ -279,7 +282,7 @@ describe("QuickStateFilterBar", () => {
     );
     const fadedBySegment: [RegExp, string][] = [
       [/Working/, "text-state-working/40"],
-      [/Waiting/, "text-state-waiting/40"],
+      [/Attention/, "text-state-waiting/40"],
       [/Finished/, "text-category-blue/40"],
     ];
     for (const [name, fadedClass] of fadedBySegment) {
@@ -299,7 +302,7 @@ describe("QuickStateFilterBar", () => {
     );
     const colorBySegment: [RegExp, string][] = [
       [/Working/, "text-state-working"],
-      [/Waiting/, "text-state-waiting"],
+      [/Attention/, "text-state-waiting"],
       [/Finished/, "text-category-blue"],
     ];
     for (const [name, colorClass] of colorBySegment) {
@@ -326,7 +329,7 @@ describe("QuickStateFilterBar", () => {
         ?.getAttribute("class") ?? "";
     const waitingClass =
       screen
-        .getByRole("button", { name: /Waiting/ })
+        .getByRole("button", { name: /Attention/ })
         .querySelector("svg")
         ?.getAttribute("class") ?? "";
     const finishedClass =
@@ -342,7 +345,7 @@ describe("QuickStateFilterBar", () => {
 
   it("does not fade icons when the counts prop is omitted", () => {
     renderBar(<QuickStateFilterBar value="all" onChange={() => {}} />);
-    for (const name of ["Working", "Waiting", "Finished"]) {
+    for (const name of ["Working", "Attention", "Finished"]) {
       const svg = screen.getByRole("button", { name }).querySelector("svg");
       expect(svg).not.toBeNull();
       expect(svg?.getAttribute("class") ?? "").not.toContain("/40");
@@ -359,7 +362,7 @@ describe("QuickStateFilterBar", () => {
         counts={{ all: 2, working: 1, waiting: 0, finished: 1 }}
       />
     );
-    const waiting = screen.getByRole("button", { name: /Waiting/ });
+    const waiting = screen.getByRole("button", { name: /Attention/ });
     expect(waiting.getAttribute("aria-pressed")).toBe("true");
     expect(waiting.querySelector("svg")?.getAttribute("class") ?? "").toContain(
       "text-state-waiting/40"

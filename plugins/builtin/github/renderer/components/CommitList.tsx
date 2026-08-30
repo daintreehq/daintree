@@ -206,7 +206,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
         variant="ghost"
         size="sm"
         onClick={handleRetry}
-        className="ml-auto h-6 text-xs text-muted-foreground hover:text-daintree-text shrink-0"
+        className="ml-auto h-6 text-xs text-muted-foreground hover:text-text-primary shrink-0"
       >
         <RefreshCw className="h-3 w-3" />
         Retry
@@ -252,7 +252,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
             aria-controls={listId}
             aria-activedescendant={activeCommitId}
             aria-label="Search commits"
-            className="flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-muted-foreground focus:outline-hidden"
+            className="flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-muted-foreground focus:outline-hidden"
           />
         </div>
       </div>
@@ -320,8 +320,8 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
                     onClick={handleLoadMore}
                     disabled={loadingMore}
                     className={cn(
-                      "w-full text-muted-foreground hover:text-daintree-text",
-                      isLoadMoreActive && "ring-1 ring-daintree-accent text-daintree-text"
+                      "w-full text-muted-foreground hover:text-text-primary",
+                      isLoadMoreActive && "ring-1 ring-accent-primary text-text-primary"
                     )}
                   >
                     {loadingMore ? (
@@ -346,7 +346,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
               variant="ghost"
               size="sm"
               onClick={handleRetry}
-              className="mt-2 text-muted-foreground hover:text-daintree-text"
+              className="mt-2 text-muted-foreground hover:text-text-primary"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               Retry
@@ -361,7 +361,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
           variant="ghost"
           size="sm"
           onClick={handleViewOnGitHub}
-          className="text-muted-foreground hover:text-daintree-text"
+          className="text-muted-foreground hover:text-text-primary"
         >
           <ExternalLink className="h-3.5 w-3.5" />
           View on GitHub
@@ -370,7 +370,7 @@ export function CommitList({ projectPath, branch, onClose, initialCount }: Commi
           variant="ghost"
           size="sm"
           onClick={onClose}
-          className="text-muted-foreground hover:text-daintree-text"
+          className="text-muted-foreground hover:text-text-primary"
         >
           Close
         </Button>

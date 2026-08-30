@@ -39,7 +39,7 @@ export const TIPS: TipEntry[] = [
       </>
     ),
     actionId: "nav.quickSwitcher",
-    actionLabel: "Open Quick Switcher",
+    actionLabel: "Open quick switcher",
     requiresShortcut: true,
   },
   {
@@ -55,7 +55,7 @@ export const TIPS: TipEntry[] = [
       </>
     ),
     actionId: "terminal.new",
-    actionLabel: "New Terminal",
+    actionLabel: "New terminal",
     requiresShortcut: true,
   },
   {
@@ -73,7 +73,7 @@ export const TIPS: TipEntry[] = [
       </>
     ),
     actionId: "panel.palette",
-    actionLabel: "Open Panel Palette",
+    actionLabel: "Open panel palette",
     requiresShortcut: true,
   },
   {
@@ -89,7 +89,7 @@ export const TIPS: TipEntry[] = [
       </>
     ),
     actionId: "agent.terminal",
-    actionLabel: "Launch Agent",
+    actionLabel: "Launch agent",
     requiresShortcut: true,
     requiredAgents: ["claude"],
   },
@@ -106,7 +106,7 @@ export const TIPS: TipEntry[] = [
       </>
     ),
     actionId: "agent.terminal",
-    actionLabel: "Launch Agent",
+    actionLabel: "Launch agent",
     requiresShortcut: true,
     requiredAgents: ["gemini"],
   },
@@ -123,7 +123,7 @@ export const TIPS: TipEntry[] = [
       </>
     ),
     actionId: "terminal.inject",
-    actionLabel: "Inject Context",
+    actionLabel: "Inject context",
     requiresShortcut: true,
   },
   {
@@ -139,7 +139,7 @@ export const TIPS: TipEntry[] = [
       </>
     ),
     actionId: "action.palette.open",
-    actionLabel: "Open Command Palette",
+    actionLabel: "Open command palette",
     requiresShortcut: true,
   },
   {
@@ -155,7 +155,7 @@ export const TIPS: TipEntry[] = [
       </>
     ),
     actionId: "worktree.openPalette",
-    actionLabel: "Open Worktree Palette",
+    actionLabel: "Open worktree palette",
     requiresShortcut: true,
   },
   {
@@ -172,7 +172,7 @@ export const TIPS: TipEntry[] = [
     ),
     actionId: "worktree.overview.open",
     shortcutActionId: "worktree.overview",
-    actionLabel: "Open Worktrees Overview",
+    actionLabel: "Open worktrees overview",
     requiresShortcut: true,
   },
   {
@@ -188,14 +188,14 @@ export const TIPS: TipEntry[] = [
       </>
     ),
     actionId: "agent.palette",
-    actionLabel: "Open Agent Switcher",
+    actionLabel: "Open agent switcher",
     requiresShortcut: true,
   },
   {
     id: "recipes",
     message: <>Create a recipe to run multi-terminal workflows with a single click</>,
     actionId: "recipe.manager.open",
-    actionLabel: "Open Recipes",
+    actionLabel: "Open recipes",
   },
   {
     id: "new-worktree",
@@ -206,7 +206,7 @@ export const TIPS: TipEntry[] = [
       </>
     ),
     actionId: "worktree.createDialog.open",
-    actionLabel: "New Worktree",
+    actionLabel: "New worktree",
   },
 ];
 
@@ -263,8 +263,17 @@ export function RotatingTip() {
 
   if (tip) {
     return (
-      <div className="flex flex-col items-center gap-2 animate-in fade-in duration-200">
-        <p className="text-xs text-daintree-text/70 text-center">
+      // `motion-safe:` + the shared entry tier fed to the ANIMATION's own slot.
+      // The bare `duration-200` this used to carry compiled to
+      // `transition-duration` on an element with no `transition-property`,
+      // landing on CSS's `all` default — an every-property transition nobody
+      // asked for — while the keyframe animation it was meant to time ignored
+      // it entirely. Exactly the trap `.lessons/11180.md` documents for the
+      // sections above. The marker class is what lets Daintree's own
+      // reduce-animations toggle reach this fade; `motion-safe:` only covers
+      // the OS preference.
+      <div className="launcher-section-enter flex flex-col items-center gap-2 motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]">
+        <p className="text-xs text-text-secondary text-center">
           Tip: <LiveTipMessage tip={tip} />
         </p>
         {tip.actionId && tip.actionLabel && (
@@ -273,7 +282,19 @@ export function RotatingTip() {
             onClick={() =>
               void actionService.dispatch(tip.actionId!, undefined, { source: "user" })
             }
-            className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 rounded px-1"
+            // `tip-action` opts this control out of the button-border rules
+            // that BOTH accessibility media modes apply. Without it the tip's
+            // link grows a pill in `forced-colors: active` and in
+            // `prefers-contrast: more` and reads as another action on the
+            // surface — the one thing teaching content must never do. The
+            // standing underline is the affordance in every mode, so nothing
+            // is lost by dropping the frame.
+            //
+            // A standing underline, not a hover-only one. Rendered as bare
+            // centred text at the same size and colour as the sentence above
+            // it, the only control that names the user's actual goal read as a
+            // second sentence — an affordance nobody could see was there.
+            className="tip-action text-xs text-text-secondary underline decoration-text-muted underline-offset-2 hover:text-text-primary hover:decoration-current transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded px-1"
           >
             {tip.actionLabel}
           </button>

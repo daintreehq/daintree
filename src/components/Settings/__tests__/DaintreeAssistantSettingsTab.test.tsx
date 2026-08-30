@@ -621,7 +621,7 @@ describe("DaintreeAssistantSettingsTab", () => {
       name: /^rotate key$/i,
     }) as HTMLButtonElement;
     // Rotation is recoverable (#10547): no typed-name gate, button is live immediately.
-    expect(confirmButton.disabled).toBe(false);
+    expect(confirmButton.hasAttribute("aria-disabled")).toBe(false);
     expect(screen.queryByLabelText(/^Type .* to confirm$/i)).toBeNull();
 
     fireEvent.click(confirmButton);

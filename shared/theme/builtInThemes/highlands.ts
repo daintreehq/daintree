@@ -142,8 +142,8 @@ export const theme: BuiltInThemeSource = {
     // Composited settings-sidebar-bg over the shell.
     "settings-sidebar-scroll-fade": "#1F1D21",
     "sidebar-action-hover-bg": "rgba(207,192,225,0.05)",
-    "sidebar-active-bg": "rgba(255,255,255,0.05)",
-    "sidebar-hover-bg": "rgba(255,255,255,0.03)",
+    "sidebar-active-bg": "rgba(255,255,255,0.065)",
+    "sidebar-hover-bg": "rgba(255,255,255,0.048)",
     "toolbar-agent-hover-bg": "rgba(207,192,225,0.06)",
     "toolbar-control-active-bg": "rgba(207,192,225,0.14)",
     "toolbar-control-armed-bg": "rgba(207,192,225,0.14)",

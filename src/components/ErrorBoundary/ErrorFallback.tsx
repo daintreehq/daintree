@@ -19,7 +19,7 @@ export interface ErrorFallbackProps {
 }
 
 const VARIANT_STYLES = {
-  fullscreen: "h-screen w-screen flex items-center justify-center bg-daintree-bg",
+  fullscreen: "h-screen w-screen flex items-center justify-center bg-surface-canvas",
   section: "h-full w-full flex items-center justify-center p-8",
   component:
     "p-4 rounded-[var(--radius-lg)] bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)] border border-status-error/30",
@@ -113,7 +113,7 @@ export function ErrorFallback({
             {variant === "component" && `${componentName || "Component"} error`}
           </h2>
 
-          <p className={cn("text-daintree-text/80", sizes.message)}>
+          <p className={cn("text-text-primary", sizes.message)}>
             {import.meta.env.DEV
               ? error.message
               : variant === "fullscreen"
@@ -124,14 +124,14 @@ export function ErrorFallback({
           </p>
 
           {!import.meta.env.DEV && incidentId && variant !== "component" && (
-            <p className={cn("text-daintree-text/50 font-mono break-all", sizes.message)}>
+            <p className={cn("text-text-secondary font-mono break-all", sizes.message)}>
               Error ID:{" "}
               <button
                 type="button"
                 onClick={handleCopyIncidentId}
                 aria-label="Copy error ID"
                 data-testid="error-fallback-copy-id"
-                className="cursor-copy hover:text-daintree-text/80 transition-colors text-left break-all"
+                className="cursor-copy hover:text-text-primary transition-colors text-left break-all"
               >
                 {incidentIdCopied ? "Copied" : incidentId}
               </button>
@@ -146,7 +146,7 @@ export function ErrorFallback({
             data-testid="error-fallback-restart"
             autoFocus={isFullscreen}
             className={cn(
-              "bg-status-error hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)] text-daintree-bg rounded transition-colors",
+              "bg-status-error hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)] text-surface-canvas rounded transition-colors",
               sizes.button
             )}
           >
@@ -164,7 +164,7 @@ export function ErrorFallback({
               disabled={reportInFlight}
               data-testid="error-fallback-report"
               className={cn(
-                "bg-daintree-border hover:bg-daintree-border/80 text-daintree-text rounded transition-colors",
+                "bg-border-default hover:bg-daintree-border/80 text-text-primary rounded transition-colors",
                 "disabled:opacity-60 disabled:cursor-not-allowed",
                 sizes.button
               )}
@@ -179,7 +179,7 @@ export function ErrorFallback({
               onClick={handleOpenLogs}
               data-testid="error-fallback-logs"
               className={cn(
-                "bg-daintree-border hover:bg-daintree-border/80 text-daintree-text rounded transition-colors",
+                "bg-border-default hover:bg-daintree-border/80 text-text-primary rounded transition-colors",
                 sizes.button
               )}
             >
@@ -190,7 +190,7 @@ export function ErrorFallback({
 
         {(error.stack || errorInfo?.componentStack) && variant !== "component" && (
           <details className="w-full mt-4">
-            <summary className="cursor-pointer text-xs text-daintree-text/60 hover:text-daintree-text/80">
+            <summary className="cursor-pointer text-xs text-text-secondary hover:text-text-primary">
               Technical details
             </summary>
             {/* Production stacks are scrubbed before display so crash reporters

@@ -10,16 +10,22 @@ const PLUGIN_RENDERER_ROOTS = [path.join(REPO_ROOT, "plugins/builtin/github/rend
 
 // ── Forbidden accent token patterns ────────────────────────────────────
 
+// Both vocabularies stay listed: #12031 renamed every solid call site to the
+// semantic spelling, but the alpha-modified legacy forms it left behind
+// (`ring-daintree-accent/30`, `border-daintree-accent/40`) are still accent.
 const FORBIDDEN_UTILITIES = [
   "bg-daintree-accent",
   "text-daintree-accent",
   "border-daintree-accent",
   "ring-daintree-accent",
   "outline-daintree-accent",
+  "fill-daintree-accent",
   "bg-accent-primary",
   "text-accent-primary",
   "border-accent-primary",
-  "fill-daintree-accent",
+  "ring-accent-primary",
+  "outline-accent-primary",
+  "fill-accent-primary",
   "bg-accent-soft",
 ] as const;
 
@@ -47,10 +53,17 @@ function assertAccentMatch(m: { 0: string; 1?: string; index?: number } | undefi
 // focus-visible:ring-daintree-accent/50, focus-within:outline-daintree-accent.
 // bg-* and text-* accent tokens with focus variants are still flagged (decorative, not structural).
 // group-focus/peer-focus are parent/sibling state selectors, not structural focus rings.
+const FOCUS_RING_UTILITIES: readonly string[] = [
+  "border-daintree-accent",
+  "ring-daintree-accent",
+  "outline-daintree-accent",
+  "border-accent-primary",
+  "ring-accent-primary",
+  "outline-accent-primary",
+];
+
 function isFocusRing(context: string, matchIndex: number, utility: string): boolean {
-  if (
-    !["border-daintree-accent", "ring-daintree-accent", "outline-daintree-accent"].includes(utility)
-  ) {
+  if (!FOCUS_RING_UTILITIES.includes(utility)) {
     return false;
   }
 
@@ -121,16 +134,10 @@ const DURABLE_ALLOWLIST = new Set([
   // Primary CTA (QuickRun button) + bg-accent-soft autocomplete + fill-daintree-accent Pin icon
   "src/components/Project/QuickRun.tsx",
 
-  // Current worktree card left-edge accent bar (single primary anchor per active focus region)
-  "src/components/Worktree/WorktreeCard.tsx",
-
   // PluginManagerView selected-row left-edge accent stripe in the master-detail
   // list, plus the detail subtab active-tab underline (single primary anchor per
   // active focus region)
   "src/components/Plugin/PluginManagerView.tsx",
-
-  // Setup wizard step indicators, accent icon, telemetry toggle (one-time setup flow)
-  "src/components/Setup/AgentSetupWizard.tsx",
 
   // PresetColorPicker Done CTA (primary commit action) + focus-visible ring
   "src/components/Settings/PresetColorPicker.tsx",
@@ -145,6 +152,15 @@ const DURABLE_ALLOWLIST = new Set([
   // one keyboard-focusable separator (single focus anchor per active focus
   // region), mirroring the PortalDock/Sidebar resize-handle convention (#11331)
   "src/panels/file-browser/FileBrowserPane.tsx",
+
+  // Worktree overview grid: the active-descendant cursor. The grid is a single
+  // tab stop whose 2D arrow keys move `aria-activedescendant`, so the cursor is
+  // NOT DOM focus and cannot be written as a `focus-visible:` variant the way
+  // the auto-exclusion above expects. It is nonetheless the one load-bearing
+  // anchor in that arrow-key domain, which is what accent is reserved for.
+  // Membership deliberately takes a neutral tint plus inset ring instead, so
+  // the two marks cannot be confused with each other (#11989).
+  "src/components/Worktree/WorktreeOverviewModal.tsx",
 ]);
 
 // Pre-existing accent usage inherited from cleanup buckets #5978-#5986 (all
@@ -154,11 +170,7 @@ const DURABLE_ALLOWLIST = new Set([
 // file no longer contains any non-focus-ring forbidden utility.
 const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
   "#5978-5986-pre-existing": [
-    "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
     "plugins/builtin/github/renderer/components/CommitList.tsx",
-    "plugins/builtin/github/renderer/components/GitHubListItem.tsx",
-    "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
-    "src/components/Browser/WebviewDialog.tsx",
     "src/components/Commands/CommandBuilder.tsx",
     "src/components/Commands/CommandPicker.tsx",
     "src/components/DevPreview/DevPreviewEmptyStates.tsx",
@@ -177,10 +189,7 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Panel/TabButton.tsx",
     "src/components/Portal/PortalDock.tsx",
     "src/components/Portal/PortalToolbar.tsx",
-    "src/components/Project/CloneRepoDialog.tsx",
-    "src/components/Project/CreateProjectFolderDialog.tsx",
     "src/components/Project/GeneralTab.tsx",
-    "src/components/Project/GitInitDialog.tsx",
     "src/components/Project/ProjectNotificationsTab.tsx",
     "src/components/Project/WelcomeScreen.tsx",
     "src/components/Recovery/CrashRecoveryDialog.tsx",
@@ -188,7 +197,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Settings/EditorIntegrationTab.tsx",
     "src/components/Settings/EnvVarEditor.tsx",
     "src/components/Settings/ImageViewerTab.tsx",
-    "src/components/Settings/ImportEnvDialog.tsx",
     "src/components/Settings/KeyboardShortcutsTab.tsx",
     "src/components/Settings/PortalSettingsTab.tsx",
     "src/components/Settings/PresetSelector.tsx",
@@ -198,7 +206,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Settings/SettingsSwitchCard.tsx",
     "src/components/Settings/TerminalSettingsTab.tsx",
     "src/components/Settings/WorktreeSettingsTab.tsx",
-    "src/components/Setup/AgentCliStep.tsx",
     "src/components/Terminal/ContentGridDefault.tsx",
     "src/components/Terminal/ContentGridTwoPaneSplit.tsx",
     "src/components/Terminal/HybridInputBar.tsx",
@@ -206,16 +213,11 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerList.tsx",
     "src/components/Terminal/TwoPaneSplitDivider.tsx",
-    "src/components/Terminal/UpdateCwdDialog.tsx",
     "src/components/Terminal/VoiceInputButton.tsx",
     "src/components/TerminalRecipe/RecipeEditor.tsx",
-    "src/components/Worktree/NewWorktreeDialog.tsx",
     "src/components/Worktree/QuickCreatePalette.tsx",
     "src/components/Worktree/WorktreeCard/WorktreeTerminalSection.tsx",
-    "src/components/Worktree/WorktreeDeleteDialog.tsx",
     "src/components/Worktree/WorktreeFilterPopover.tsx",
-    "src/components/Worktree/views/IssueSelectorView.tsx",
-    "src/components/Worktree/views/RecipePickerPopover.tsx",
     "src/hooks/useUpdateListener.tsx",
   ],
 };
@@ -236,7 +238,11 @@ describe("accent guard", () => {
       "bg-accent-primary",
       "text-accent-primary",
       "border-accent-primary",
+      "ring-accent-primary",
+      "ring-accent-primary/50",
+      "outline-accent-primary",
       "fill-daintree-accent",
+      "fill-accent-primary",
       "bg-accent-soft",
       "bg-accent-soft/20",
       // With variants — utility should still be matched
@@ -248,6 +254,7 @@ describe("accent guard", () => {
     const negatives = [
       // Native CSS accent-color property — not a Tailwind color utility
       "accent-daintree-accent",
+      "accent-accent-primary",
       // -foreground is a distinct token
       "text-accent-primary-foreground",
       "bg-accent-primary-foreground",
@@ -283,12 +290,6 @@ describe("accent guard", () => {
   });
 
   describe("focus ring auto-exclusion", () => {
-    const FOCUS_RING_UTILITIES = [
-      "border-daintree-accent",
-      "ring-daintree-accent",
-      "outline-daintree-accent",
-    ];
-
     function isExcluded(input: string): boolean {
       const matches = Array.from(input.matchAll(FORBIDDEN_PATTERN));
       expect(matches.length, `no match found for: ${input}`).toBeGreaterThan(0);
@@ -324,6 +325,10 @@ describe("accent guard", () => {
       "focus:outline-daintree-accent",
       // stacked variants
       "motion-safe:focus-visible:ring-daintree-accent/20",
+      // semantic spelling (#12031) — same structural exclusion
+      "focus-within:border-accent-primary",
+      "focus-visible:ring-accent-primary/20",
+      "focus-visible:outline-accent-primary",
     ];
 
     const stillFlagged = [
@@ -347,6 +352,10 @@ describe("accent guard", () => {
       "border-daintree-accent",
       "ring-daintree-accent",
       "outline-daintree-accent",
+      // semantic spelling (#12031) — same rules apply
+      "hover:border-accent-primary",
+      "group-focus:ring-accent-primary",
+      "outline-accent-primary",
     ];
 
     for (const input of excluded) {

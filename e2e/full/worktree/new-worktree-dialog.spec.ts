@@ -37,7 +37,14 @@ function seedRecipe(dir: string): void {
  * `feature/test-branch` to the linked one, which leaves that list empty.
  * Distinct first letters so a one-character query narrows to exactly one.
  */
-const SPARE_BRANCHES = ["e2e-spare-alpha", "e2e-spare-zulu"];
+const SPARE_BRANCHES = [
+  "e2e-spare-alpha",
+  "e2e-spare-zulu",
+  // Long enough to be croppable as a base. Deliberately carries no "z" and no
+  // "spare"/"alpha" token, so the one-character and multi-token search
+  // assertions above still narrow to exactly one row.
+  "feature/long-running-base-branch-for-footer-measurement",
+];
 
 function seedSpareBranches(dir: string): void {
   for (const branch of SPARE_BRANCHES) {
@@ -99,7 +106,7 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     const { window } = ctx;
     await openDialog(window);
 
-    await expect(window.locator(SEL.worktree.newDialog)).toContainText("Create New Worktree");
+    await expect(window.locator(SEL.worktree.newDialog)).toContainText("Create worktree");
     await expect(window.locator(SEL.worktree.branchNameInput)).toBeVisible({ timeout: T_MEDIUM });
     await expect(window.locator(SEL.worktree.createButton)).toBeVisible();
   });
@@ -272,5 +279,200 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     await expect(listbox).toHaveCount(0, { timeout: T_SHORT });
     await expect(window.locator(SEL.worktree.newDialog)).toBeVisible();
     await expect(trigger).toContainText(chosen, { timeout: T_MEDIUM });
+  });
+  test("a click elsewhere in the form dismisses an open picker", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    // AppDialog stops click propagation on its panel, which used to swallow the
+    // click Radix defers its outside-dismissal to: every picker in every dialog
+    // stayed open until you pressed Escape or clicked its own trigger again.
+    const baseTrigger = window.locator(SEL.worktree.baseBranchTrigger);
+    await baseTrigger.click();
+    const branchList = window.locator(SEL.worktree.baseBranchListbox);
+    await expect(branchList).toBeVisible({ timeout: T_MEDIUM });
+
+    await window.locator("h3", { hasText: "Destination" }).first().click();
+    await expect(branchList).toHaveCount(0, { timeout: T_MEDIUM });
+    // The click lands inside the dialog, so the dialog itself must survive it.
+    await expect(window.locator(SEL.worktree.newDialog)).toBeVisible();
+
+    const recipeTrigger = window.locator(SEL.worktree.recipeTrigger);
+    await recipeTrigger.click();
+    const recipeList = window.locator(SEL.worktree.recipeListbox);
+    await expect(recipeList).toBeVisible({ timeout: T_MEDIUM });
+
+    await window.locator("h3", { hasText: "Destination" }).first().click();
+    await expect(recipeList).toHaveCount(0, { timeout: T_MEDIUM });
+    await expect(window.locator(SEL.worktree.newDialog)).toBeVisible();
+  });
+
+  test("the base-branch and recipe pickers open at their trigger's width", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    // The recipe and issue panels were pinned at 400px while the branch pickers
+    // tracked their trigger, so working down the form stepped the surface width.
+    const widthOf = async (locator: ReturnType<Page["locator"]>) => {
+      const box = await locator.boundingBox();
+      return Math.round(box?.width ?? 0);
+    };
+
+    for (const [triggerSel, listSel] of [
+      [SEL.worktree.baseBranchTrigger, SEL.worktree.baseBranchListbox],
+      [SEL.worktree.recipeTrigger, SEL.worktree.recipeListbox],
+    ] as const) {
+      const trigger = window.locator(triggerSel);
+      await trigger.click();
+      const list = window.locator(listSel);
+      await expect(list).toBeVisible({ timeout: T_MEDIUM });
+      // The panel itself, not the listbox inside it (which gives up a few
+      // pixels to the scrollbar) and not the popper wrapper around it (which
+      // carries Radix's own `min-width: max-content`). Polled, not read once:
+      // Radix parks the panel off-screen at content width until Floating UI's
+      // first pass publishes the anchor width it sizes from, and `toBeVisible`
+      // is already true by then.
+      const panel = window.locator(
+        `[data-radix-popper-content-wrapper]:has(${listSel}) > [role="dialog"]`
+      );
+      await expect
+        .poll(async () => Math.abs((await widthOf(panel)) - (await widthOf(trigger))), {
+          timeout: T_MEDIUM,
+        })
+        .toBeLessThanOrEqual(2);
+      await window.keyboard.press("Escape");
+      await expect(list).toHaveCount(0, { timeout: T_SHORT });
+    }
+  });
+  test("the dialog body reserves its scrollbar so fields cannot resize under it", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    // The app's scrollbar is 11px of real layout (`scrollbar-width: thin` in
+    // index.css outranks the 6px ::-webkit-scrollbar rule), so a body that only
+    // makes room for it once it overflows resizes every control in the form the
+    // moment a hint row or a validation banner tips it over the fold.
+    //
+    const body = window.locator(`${SEL.worktree.newDialog} .overflow-y-auto`).first();
+    const trigger = window.locator(SEL.worktree.baseBranchTrigger);
+    expect(await body.evaluate((el) => el.scrollHeight > el.clientHeight + 1)).toBe(false);
+    const widthBeforeOverflow = await trigger.evaluate((el) => (el as HTMLElement).offsetWidth);
+
+    // The window cannot shrink below 600px, so add temporary content to make
+    // this otherwise short form overflow without changing its horizontal
+    // layout. A stable gutter keeps the field width identical when the
+    // scrollbar appears; without it the field loses the scrollbar width.
+    await body.evaluate((el) => {
+      const spacer = document.createElement("div");
+      spacer.style.height = "1000px";
+      spacer.style.flexShrink = "0";
+      el.append(spacer);
+    });
+    await expect
+      .poll(() => body.evaluate((el) => el.scrollHeight > el.clientHeight + 1))
+      .toBe(true);
+
+    expect(await trigger.evaluate((el) => (el as HTMLElement).offsetWidth)).toBe(
+      widthBeforeOverflow
+    );
+  });
+
+  test("a long branch name crops in the footer instead of pushing the actions out", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    // Built from a repeat rather than a literal so the name is unambiguously
+    // wider than the footer at any font scale, and so the assertion below is
+    // about geometry rather than about where the crop happens to land.
+    const longBranch = `feature/${"payload-segment-".repeat(6)}end`;
+    await window.locator(SEL.worktree.branchNameInput).fill(longBranch);
+
+    const panel = window.locator(`${SEL.worktree.newDialog} > div`).first();
+    const panelBox = await panel.boundingBox();
+    expect(panelBox).not.toBeNull();
+
+    // The bug: the footer hint grew to its content width and shoved both
+    // actions past the panel's right edge, where they were clipped away.
+    for (const action of [
+      window.locator(SEL.worktree.createButton),
+      window.getByRole("button", { name: "Cancel", exact: true }),
+    ]) {
+      const box = await action.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(panelBox!.x - 1);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(panelBox!.x + panelBox!.width + 1);
+    }
+
+    // Cropping is only acceptable because nothing is lost: the footer still
+    // carries the whole name for assistive tech and for the hover tooltip.
+    const footer = window.locator(`${SEL.worktree.newDialog} .border-t`).last();
+    await expect(footer).toContainText(longBranch);
+
+    // And each name is cropped to a width it genuinely fits, so `text-overflow`
+    // never fires on top of the crop. That double truncation is what rendered
+    // as `feature/...ne…` — two ellipses in one name.
+    const { names, overflowing } = await footer.evaluate((el) => {
+      const all = [...el.querySelectorAll("[data-branch-name]")];
+      return {
+        names: all.length,
+        overflowing: all.filter((name) => name.scrollWidth > name.clientWidth + 1).length,
+      };
+    });
+    // Without this the check passes vacuously when nothing rendered at all.
+    expect(names).toBe(2);
+    expect(overflowing).toBe(0);
+  });
+
+  test("a long base and a long new name each crop without crowding the other", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    // The base above is short, so it only gates the "a short name donates its
+    // spare room" half of the split. Both being long is the case that shipped
+    // broken: two fixed character budgets that each fit alone but not together,
+    // so `text-overflow` cropped what the JS crop had already cropped.
+    const longBase = SPARE_BRANCHES.find((b) => b.length > 40)!;
+    await window.locator(SEL.worktree.baseBranchTrigger).click();
+    await window
+      .getByRole("option", { name: new RegExp(longBase.replace(/[/-]/g, "\\$&")) })
+      .first()
+      .click();
+    await expect(window.locator(SEL.worktree.baseBranchTrigger)).toContainText(longBase, {
+      timeout: T_MEDIUM,
+    });
+
+    const longBranch = `feature/${"payload-segment-".repeat(6)}end`;
+    await window.locator(SEL.worktree.branchNameInput).fill(longBranch);
+
+    const panel = window.locator(`${SEL.worktree.newDialog} > div`).first();
+    const panelBox = await panel.boundingBox();
+    expect(panelBox).not.toBeNull();
+
+    for (const action of [
+      window.locator(SEL.worktree.createButton),
+      window.getByRole("button", { name: "Cancel", exact: true }),
+    ]) {
+      const box = await action.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x + box!.width).toBeLessThanOrEqual(panelBox!.x + panelBox!.width + 1);
+    }
+
+    const footer = window.locator(`${SEL.worktree.newDialog} .border-t`).last();
+    // Both names survive whole underneath the crop, and neither is so starved
+    // that it renders as nothing but an ellipsis.
+    await expect(footer).toContainText(longBase);
+    await expect(footer).toContainText(longBranch);
+
+    const shown = await footer.evaluate((el) =>
+      [...el.querySelectorAll("[data-branch-name]")].map((name) => ({
+        visible: name.querySelector("[aria-hidden]")?.textContent ?? name.textContent ?? "",
+        overflowing: name.scrollWidth > name.clientWidth + 1,
+      }))
+    );
+    expect(shown).toHaveLength(2);
+    for (const name of shown) {
+      expect(name.overflowing).toBe(false);
+      expect(name.visible.replace(/\.\.\./g, "").length).toBeGreaterThan(4);
+    }
   });
 });

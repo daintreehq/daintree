@@ -144,7 +144,7 @@ export function PluginQuickPickDialog() {
           className={cn(
             PALETTE_ROW_CLASS,
             "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
-            "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
+            "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
           )}
         >
           {canSelectMany && (
@@ -152,7 +152,7 @@ export function PluginQuickPickDialog() {
               className={cn(
                 "shrink-0 size-4 rounded border flex items-center justify-center",
                 isChecked
-                  ? "bg-overlay-raised border-overlay text-daintree-text"
+                  ? "bg-overlay-raised border-overlay text-text-primary"
                   : "border-overlay text-transparent"
               )}
               aria-hidden="true"
@@ -161,9 +161,9 @@ export function PluginQuickPickDialog() {
             </span>
           )}
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-daintree-text truncate">{item.label}</div>
+            <div className="text-sm font-medium text-text-primary truncate">{item.label}</div>
             {item.description && (
-              <div className="text-xs text-daintree-text/50 truncate">{item.description}</div>
+              <div className="text-xs text-text-secondary truncate">{item.description}</div>
             )}
             {item.detail && (
               <div className="text-xs text-daintree-text/40 truncate">{item.detail}</div>

@@ -373,7 +373,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
             <span
               className={cn(
                 "truncate",
-                isWorktreeValid ? "text-daintree-text" : "text-daintree-text/50"
+                isWorktreeValid ? "text-text-primary" : "text-text-secondary"
               )}
             >
               {activeWorktreeName}
@@ -417,7 +417,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                   placeholder="Execute command..."
                   aria-label="Command input"
                   className={cn(
-                    "flex-1 bg-transparent py-2.5 text-xs font-mono text-daintree-text placeholder:text-text-placeholder",
+                    "flex-1 bg-transparent py-2.5 text-xs font-mono text-text-primary placeholder:text-text-placeholder",
                     "focus:outline-hidden min-w-0"
                   )}
                   autoComplete="off"
@@ -434,7 +434,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                         className={cn(
                           "p-1.5 rounded-[var(--radius-sm)] transition-colors",
                           autoRestart
-                            ? "bg-overlay-medium text-daintree-text"
+                            ? "bg-overlay-medium text-text-primary"
                             : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
                         )}
                         aria-label={autoRestart ? "Disable auto-restart" : "Enable auto-restart"}
@@ -457,7 +457,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                         className={cn(
                           "p-1.5 rounded-[var(--radius-sm)] transition-colors",
                           runAsDocked
-                            ? "bg-overlay-medium text-daintree-text"
+                            ? "bg-overlay-medium text-text-primary"
                             : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
                         )}
                         aria-label={
@@ -511,7 +511,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                     onMouseDown={(e) => e.preventDefault()}
                     className="absolute bottom-full left-0 right-0 z-50 mb-1 flex max-h-64 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated shadow-[var(--theme-shadow-floating)]"
                   >
-                    <div className="shrink-0 border-b border-border-subtle bg-surface-input px-3 py-1 text-[11px] font-sans tracking-wider text-text-muted">
+                    <div className="shrink-0 border-b border-border-subtle bg-surface-input px-3 py-1 text-2xs font-sans tracking-wider text-text-muted">
                       COMMANDS
                     </div>
                     <div className="overflow-y-auto flex-1">
@@ -524,7 +524,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           className={cn(
                             "group flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-mono transition-colors",
                             index === focusedSuggestionIndex
-                              ? "bg-accent-soft text-daintree-text"
+                              ? "bg-accent-soft text-text-primary"
                               : "text-text-secondary hover:bg-overlay-soft"
                           )}
                           onClick={() => {
@@ -543,26 +543,26 @@ export function QuickRun({ projectId }: QuickRunProps) {
                             <div className="truncate">
                               <span
                                 className={cn(
-                                  "group-hover:text-daintree-text",
-                                  item.type === "saved" ? "font-semibold text-daintree-text" : ""
+                                  "group-hover:text-text-primary",
+                                  item.type === "saved" ? "font-semibold text-text-primary" : ""
                                 )}
                               >
                                 {item.type === "saved" ? item.label : item.value}
                               </span>
                               {item.type === "script" && item.label !== item.value && (
-                                <span className="ml-2 text-[11px] font-sans text-text-muted">
+                                <span className="ml-2 text-2xs font-sans text-text-muted">
                                   ({item.label})
                                 </span>
                               )}
                               {item.type === "saved" && item.label !== item.value && (
-                                <span className="ml-2 text-[11px] font-sans text-text-muted">
+                                <span className="ml-2 text-2xs font-sans text-text-muted">
                                   {item.value}
                                 </span>
                               )}
                               {(item.type === "script" || item.type === "saved") &&
                                 "description" in item &&
                                 item.description && (
-                                  <span className="mt-0.5 block truncate text-[11px] font-sans text-text-muted">
+                                  <span className="mt-0.5 block truncate text-2xs font-sans text-text-muted">
                                     {item.description}
                                   </span>
                                 )}
@@ -583,7 +583,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                                 className="ml-2 shrink-0 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-overlay-soft"
                                 aria-label="Pin this command"
                               >
-                                <Pin className="h-3 w-3 text-text-muted hover:text-daintree-text" />
+                                <Pin className="h-3 w-3 text-text-muted hover:text-text-primary" />
                               </button>
                             )}
                           </div>

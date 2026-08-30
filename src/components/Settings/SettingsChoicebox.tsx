@@ -34,12 +34,12 @@ interface SettingsChoiceboxProps<T extends string = string> extends Omit<
 }
 
 const CARD_BASE_CLASSES =
-  "flex-1 px-3 py-2 rounded-[var(--radius-md)] border text-sm text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2";
+  "flex-1 px-3 py-2 rounded-[var(--radius-md)] border text-sm text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 
-const CARD_SELECTED_CLASSES = "border-border-strong bg-overlay-subtle text-daintree-text shadow-sm";
+const CARD_SELECTED_CLASSES = "border-border-strong bg-overlay-subtle text-text-primary shadow-sm";
 
 const CARD_UNSELECTED_CLASSES =
-  "border-daintree-border bg-daintree-bg text-text-secondary hover:border-daintree-text/30 hover:text-daintree-text disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-daintree-border disabled:hover:text-text-secondary";
+  "border-border-default bg-surface-canvas text-text-secondary hover:border-daintree-text/30 hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-border-default disabled:hover:text-text-secondary";
 
 export function SettingsChoicebox<T extends string = string>({
   label,
@@ -134,16 +134,19 @@ export function SettingsChoicebox<T extends string = string>({
             {label}
           </label>
           {isModified && (
-            <span className="w-1.5 h-1.5 rounded-full bg-state-modified" aria-hidden="true" />
+            <span
+              className="status-mark w-1.5 h-1.5 rounded-full bg-state-modified"
+              aria-hidden="true"
+            />
           )}
           {showReset && (
             <button
               type="button"
               aria-label={resetAriaLabel ?? `Reset ${label} to default`}
               className={cn(
-                "p-0.5 rounded-sm text-text-muted hover:text-daintree-text",
+                "p-0.5 rounded-sm text-text-muted hover:text-text-primary",
                 "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
                 "transition-colors"
               )}
               onClick={onReset}
@@ -159,9 +162,9 @@ export function SettingsChoicebox<T extends string = string>({
             type="button"
             aria-label="Reset to default"
             className={cn(
-              "p-0.5 rounded-sm text-text-muted hover:text-daintree-text",
+              "p-0.5 rounded-sm text-text-muted hover:text-text-primary",
               "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
               "transition-colors"
             )}
             onClick={onReset}

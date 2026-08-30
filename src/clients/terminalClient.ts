@@ -378,6 +378,10 @@ export const terminalClient = {
    * shutdown records all read the pty-host copy — without this they keep
    * naming the run by its launch title (#11830).
    */
+  updateWorktreeId: (id: string, worktreeId: string | null): void => {
+    window.electron.terminal.updateWorktreeId(id, worktreeId);
+  },
+
   updateTitle: (id: string, title: string, titleMode: PanelTitleMode): void => {
     window.electron.terminal.updateTitle(id, title, titleMode);
   },

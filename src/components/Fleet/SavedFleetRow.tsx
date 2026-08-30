@@ -31,7 +31,7 @@ export function SavedFleetRow({
       className={isStale ? "flex items-center gap-2 opacity-50" : "flex items-center gap-2"}
     >
       <span className="flex-1 truncate">{scope.name}</span>
-      <span className="text-[10px] text-daintree-text/50 tabular-nums">
+      <span className="text-3xs text-text-secondary tabular-nums">
         {count} · {flavorLabel}
       </span>
       <button
@@ -52,7 +52,7 @@ export function SavedFleetRow({
           // delete from triggering recall by stopping propagation early.
           e.stopPropagation();
         }}
-        className="inline-flex shrink-0 items-center rounded p-0.5 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+        className="inline-flex shrink-0 items-center rounded p-0.5 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
       >
         <Trash2 className="h-3 w-3" />
       </button>

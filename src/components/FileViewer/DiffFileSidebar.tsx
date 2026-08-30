@@ -121,15 +121,15 @@ export function DiffFileSidebar({
   // surface show beneath the list — flex stretch always fills the row.
   return (
     <div
-      className="flex min-h-0 w-60 shrink-0 select-none flex-col self-stretch border-r border-daintree-border bg-daintree-sidebar"
+      className="flex min-h-0 w-60 shrink-0 select-none flex-col self-stretch border-r border-border-default bg-surface-sidebar"
       data-testid="diff-file-sidebar"
     >
-      <div className="shrink-0 border-b border-daintree-border px-3 py-2">
+      <div className="shrink-0 border-b border-border-default px-3 py-2">
         <div className="flex items-baseline justify-between gap-2 text-xs">
-          <span className="font-medium text-daintree-text">
+          <span className="font-medium text-text-primary">
             {files.length} {files.length === 1 ? "file" : "files"}
           </span>
-          <span className="flex items-center gap-1.5 font-mono text-[11px]">
+          <span className="flex items-center gap-1.5 font-mono text-2xs">
             {summary.insertions > 0 && (
               <span className="text-status-success">+{summary.insertions}</span>
             )}
@@ -139,7 +139,7 @@ export function DiffFileSidebar({
           </span>
         </div>
         <div className="mt-1" data-testid="diff-sidebar-progress">
-          <span className="text-[11px] text-text-muted">
+          <span className="text-2xs text-text-muted">
             {viewedCount} of {files.length} viewed
           </span>
           {/* The track only appears once review has started — an empty
@@ -147,7 +147,7 @@ export function DiffFileSidebar({
           {viewedCount > 0 && (
             <div className="mt-1 h-0.5 overflow-hidden rounded-full bg-tint/10">
               <div
-                className="h-full rounded-full bg-status-success/70 transition-[width] duration-150 ease-out"
+                className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
                 style={{ width: `${files.length ? (viewedCount / files.length) * 100 : 0}%` }}
               />
             </div>
@@ -156,7 +156,7 @@ export function DiffFileSidebar({
       </div>
 
       <div className="shrink-0 px-2 py-1.5">
-        <div className="flex items-center gap-1.5 rounded border border-daintree-border bg-daintree-bg px-2 py-1 focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20">
+        <div className="flex items-center gap-1.5 rounded border border-border-default bg-surface-canvas px-2 py-1 focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20">
           <Search className="h-3 w-3 shrink-0 text-text-muted" />
           <input
             value={filter}
@@ -172,7 +172,7 @@ export function DiffFileSidebar({
             }}
             placeholder="Filter files"
             aria-label="Filter files"
-            className="w-full bg-transparent text-xs text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
+            className="w-full bg-transparent text-xs text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
             data-testid="diff-sidebar-filter"
           />
         </div>
@@ -188,7 +188,7 @@ export function DiffFileSidebar({
               <button
                 type="button"
                 onClick={() => setFilter("")}
-                className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline underline-offset-2"
+                className="text-xs text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
               >
                 Clear filter
               </button>
@@ -197,7 +197,7 @@ export function DiffFileSidebar({
         )}
         {groups.map((group) => (
           <div key={group.dir || "(root)"} className="mb-1.5">
-            <div className="flex items-center gap-1.5 px-1.5 py-1 text-[11px] text-daintree-text/40">
+            <div className="flex items-center gap-1.5 px-1.5 py-1 text-2xs text-text-secondary">
               <Folder className="h-3 w-3 shrink-0" />
               <span className="truncate font-mono">{formatDir(group.dir)}</span>
             </div>
@@ -238,7 +238,7 @@ export function DiffFileSidebar({
                       }}
                       aria-current={isCurrent || undefined}
                       aria-label={`Open ${file.path}`}
-                      className="flex min-w-0 flex-1 items-center text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-daintree-accent"
+                      className="flex min-w-0 flex-1 items-center text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary"
                       data-testid="diff-sidebar-file"
                     >
                       <span className={cn("w-4 shrink-0 font-bold", config.color)}>
@@ -247,12 +247,12 @@ export function DiffFileSidebar({
                       <span
                         className={cn(
                           "truncate font-medium",
-                          viewed ? "text-daintree-text/50" : "text-daintree-text"
+                          viewed ? "text-text-secondary" : "text-text-primary"
                         )}
                       >
                         {basename(file.path)}
                       </span>
-                      <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-[11px]">
+                      <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-2xs">
                         {(file.insertions ?? 0) > 0 && (
                           <span className="text-status-success/80">+{file.insertions}</span>
                         )}
@@ -272,7 +272,7 @@ export function DiffFileSidebar({
                             "ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border transition-colors",
                             viewed
                               ? "border-status-success/60 bg-status-success/20 text-status-success"
-                              : "border-daintree-border text-transparent opacity-0 hover:border-border-strong group-hover/diffrow:opacity-100 focus-visible:opacity-100"
+                              : "border-border-default text-transparent opacity-0 hover:border-border-strong group-hover/diffrow:opacity-100 focus-visible:opacity-100"
                           )}
                           data-testid="diff-sidebar-viewed-toggle"
                         >

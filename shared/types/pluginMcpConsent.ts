@@ -172,7 +172,11 @@ export interface PluginMcpConsentRequestEvent {
   pluginDisplayName: string;
   /** Tool description, ANSI/OSC stripped, ready to render verbatim. */
   descriptionDisplay: string;
-  /** Sanitised, single-level args preview for D2+ tiers. Empty when no args. */
+  /**
+   * Sanitised, single-level args preview. Empty for D0 and for a call with no
+   * arguments; produced for every other tier — D1 included, which the consent
+   * dialog renders behind a disclosure.
+   */
   argsSummary: string;
   dangerTier: PluginMcpDangerTier;
   /** Plugin's manifest `capabilities[]` list — surfaced for transparency. */

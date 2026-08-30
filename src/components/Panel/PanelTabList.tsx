@@ -70,7 +70,7 @@ export function PanelTabList({
                       onAddTab();
                     }}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                    className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
                     aria-label="Duplicate panel as new tab"
                     type="button"
                   >

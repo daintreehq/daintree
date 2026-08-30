@@ -645,6 +645,53 @@ describe("createWorktreeStore — mutation outbox (#8405)", () => {
       expect(store.getState().deleteErrors.has("wt-1")).toBe(false);
       expect(store.getState().deleteErrorArgs.has("wt-1")).toBe(false);
     });
+
+    // #12087 — the banner carrying this Dismiss only became clickable on
+    // sidebar cards with that fix, which makes the stale-click window real: a
+    // reconnect replay flips an entry to `in-flight` without clearing the
+    // banner, so Dismiss can land on a mutation that is still running. Pruning
+    // it there would make the success handler discard a write the host had
+    // already committed.
+    it("dismissOutboxEntry keeps an in-flight issue entry so its result still applies", async () => {
+      worktreeClientAttachIssueMock.mockRejectedValueOnce(new Error("network blip"));
+
+      const store = createWorktreeStore();
+      store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+      store.getState().startAttachIssue({
+        worktreeId: "wt-1",
+        issueNumber: 42,
+        issueTitle: "Issue 42",
+      });
+      await flushPromises();
+      await flushPromises();
+      expect(store.getState().issueErrors.has("wt-1")).toBe(true);
+
+      let settleAttach: () => void = () => {};
+      worktreeClientAttachIssueMock.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            settleAttach = resolve;
+          })
+      );
+      store.getState().replayOutboxAfterReconnect();
+      await flushPromises();
+
+      const entry = [...store.getState().mutationOutbox.values()][0]!;
+      expect(entry.status).toBe("in-flight");
+
+      store.getState().dismissOutboxEntry(entry.mutationId);
+
+      // Banner goes; the live mutation and its in-flight guard do not.
+      expect(store.getState().issueErrors.has("wt-1")).toBe(false);
+      expect(store.getState().mutationOutbox.has(entry.mutationId)).toBe(true);
+
+      // The host commits the write, so the renderer must still record it.
+      settleAttach();
+      await flushPromises();
+      await flushPromises();
+      expect(store.getState().manualAssociations.get("wt-1")?.issueNumber).toBe(42);
+    });
   });
 
   describe("issue-association mutations (#9163)", () => {

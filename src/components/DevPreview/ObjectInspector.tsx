@@ -20,9 +20,9 @@ function PrimitiveValue({ arg }: { arg: CdpRemoteArg & { type: "primitive" } }) 
     case "boolean":
       return <span className="text-category-purple">{String(arg.value)}</span>;
     case "null":
-      return <span className="text-daintree-text/40">null</span>;
+      return <span className="text-text-secondary">null</span>;
     case "undefined":
-      return <span className="text-daintree-text/40">undefined</span>;
+      return <span className="text-text-secondary">undefined</span>;
     case "symbol":
       return <span className="text-syntax-keyword">{String(arg.value)}</span>;
     case "bigint":
@@ -51,7 +51,7 @@ function PropertyTree({
       {visibleProps.map((prop) => (
         <div key={prop.name} className="flex items-start gap-1">
           <span className="text-text-secondary shrink-0">{prop.name}</span>
-          <span className="text-daintree-text/40 shrink-0">:</span>
+          <span className="text-text-secondary shrink-0">:</span>
           {prop.value ? (
             <ObjectInspector
               arg={prop.value}
@@ -60,7 +60,7 @@ function PropertyTree({
               depth={depth + 1}
             />
           ) : (
-            <span className="text-daintree-text/40">undefined</span>
+            <span className="text-text-secondary">undefined</span>
           )}
         </div>
       ))}
@@ -130,14 +130,14 @@ export function ObjectInspector({
 
   if (isStale) {
     return (
-      <span className="text-daintree-text/30 italic" title="Value unavailable after navigation">
+      <span className="text-text-placeholder italic" title="Value unavailable after navigation">
         {displayText}
       </span>
     );
   }
 
   if (!canExpand) {
-    return <span className="text-daintree-text/70">{displayText}</span>;
+    return <span className="text-text-secondary">{displayText}</span>;
   }
 
   return (
@@ -147,7 +147,7 @@ export function ObjectInspector({
         onClick={() => void handleExpand()}
         className={cn(
           "inline text-left hover:bg-tint/5 rounded px-0.5 -mx-0.5 transition-colors",
-          isExpanded ? "text-daintree-text/90" : "text-daintree-text/70"
+          isExpanded ? "text-text-primary" : "text-text-secondary"
         )}
       >
         <span className="text-daintree-text/40 mr-0.5 select-none">
@@ -155,7 +155,7 @@ export function ObjectInspector({
         </span>
         {displayText}
       </button>
-      {fetchError && <span className="text-status-error text-[10px] ml-1">unavailable</span>}
+      {fetchError && <span className="text-status-error text-3xs ml-1">unavailable</span>}
       {isExpanded && properties && (
         <PropertyTree
           properties={properties}

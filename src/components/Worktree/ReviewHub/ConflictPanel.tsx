@@ -19,6 +19,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Spinner } from "@/components/ui/Spinner";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { REVIEW_HUB_STICKY_BAND } from "./reviewHubUtils";
 
 type ConflictOperationState = Exclude<RepoState, "CLEAN" | "DIRTY">;
 
@@ -92,13 +93,15 @@ function RebaseSequenceRail({ entries }: { entries: RebaseEntry[] }) {
 
   return (
     <div className="border-b border-divider" data-testid="conflict-rebase-sequence">
-      <div className="px-4 py-2 bg-overlay-subtle flex items-center">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
-          Rebase sequence
-          <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
-            {display.length}
+      <div className={REVIEW_HUB_STICKY_BAND}>
+        <div className="px-4 py-2 bg-overlay-subtle flex items-center">
+          <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
+            Rebase sequence
+            <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
+              {display.length}
+            </span>
           </span>
-        </span>
+        </div>
       </div>
       <ul
         className="px-2 py-1 flex flex-col gap-0.5 max-h-48 overflow-y-auto"
@@ -123,7 +126,7 @@ function RebaseSequenceRow({ entry }: { entry: RebaseDisplayEntry }) {
     ? "text-accent-primary font-medium"
     : isDone
       ? "text-daintree-text/45"
-      : "text-daintree-text/75";
+      : "text-text-primary";
 
   const StateIcon = isCurrent
     ? ChevronRight
@@ -146,25 +149,22 @@ function RebaseSequenceRow({ entry }: { entry: RebaseDisplayEntry }) {
       <StateIcon className="w-3 h-3 shrink-0" aria-hidden />
       <span
         className={cn(
-          "text-[10px] uppercase tracking-wider font-mono w-12 shrink-0 text-daintree-text/55",
+          "text-3xs uppercase tracking-wider font-mono w-12 shrink-0 text-text-secondary",
           isCurrent && "text-accent-primary/80"
         )}
       >
         {REBASE_ACTION_LABEL[entry.action]}
       </span>
       {entry.sha != null && entry.sha.length > 0 ? (
-        <span className="font-mono text-[11px] tabular-nums text-daintree-text/55 shrink-0">
+        <span className="font-mono text-2xs tabular-nums text-text-secondary shrink-0">
           {entry.sha.slice(0, 7)}
         </span>
       ) : (
-        <span className="font-mono text-[11px] text-daintree-text/30 shrink-0">—</span>
+        <span className="font-mono text-2xs text-daintree-text/30 shrink-0">—</span>
       )}
       <TruncatedTooltip content={entry.subject || REBASE_ACTION_LABEL[entry.action]}>
         <span
-          className={cn(
-            "flex-1 min-w-0 truncate font-mono text-[11px]",
-            isDropped && "line-through"
-          )}
+          className={cn("flex-1 min-w-0 truncate font-mono text-2xs", isDropped && "line-through")}
         >
           {entry.subject}
         </span>
@@ -434,21 +434,21 @@ export function ConflictPanel({
           <GitMerge className="w-4 h-4 text-status-warning mt-0.5 shrink-0" />
           <div className="flex-1 min-w-0">
             <div className="flex items-baseline gap-2 flex-wrap">
-              <span className="text-sm font-semibold text-daintree-text">
+              <span className="text-sm font-semibold text-text-primary">
                 Resolve {operationLabel} Conflicts
               </span>
               {operationState === "REBASING" &&
                 status.rebaseStep != null &&
                 status.rebaseTotalSteps != null && (
                   <span
-                    className="text-[11px] tabular-nums text-daintree-text/70 bg-tint/[0.08] border border-tint/[0.08] rounded px-1.5 py-0.5"
+                    className="text-2xs tabular-nums text-text-secondary bg-tint/[0.08] border border-tint/[0.08] rounded px-1.5 py-0.5"
                     data-testid="conflict-rebase-progress"
                   >
                     Step {status.rebaseStep} of {status.rebaseTotalSteps}
                   </span>
                 )}
             </div>
-            <p className="text-xs text-daintree-text/60 mt-0.5">
+            <p className="text-xs text-text-secondary mt-0.5">
               {conflictCount > 0
                 ? `${conflictCount} conflicted file${conflictCount !== 1 ? "s" : ""} — resolve each, then continue.`
                 : hasStagedResolutions
@@ -461,7 +461,7 @@ export function ConflictPanel({
             size="xs"
             onClick={() => setIsAbortOpen(true)}
             disabled={isAborting || isContinuing}
-            className="shrink-0 text-daintree-text/60 hover:text-status-error"
+            className="shrink-0 text-text-secondary hover:text-status-error"
             data-testid="conflict-abort"
           >
             <XCircle className="w-3 h-3" />
@@ -479,13 +479,15 @@ export function ConflictPanel({
 
       {/* Region 2: Conflict worklist */}
       <div className="border-b border-divider">
-        <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
-            Conflicted
-            <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
-              {conflictCount}
+        <div className={REVIEW_HUB_STICKY_BAND}>
+          <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
+            <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
+              Conflicted
+              <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
+                {conflictCount}
+              </span>
             </span>
-          </span>
+          </div>
         </div>
         {conflictCount > 0 ? (
           <ul className="px-2 py-1 flex flex-col gap-0.5" role="list">
@@ -507,21 +509,21 @@ export function ConflictPanel({
                   <TruncatedTooltip content={`${file.path} (${file.label})`}>
                     <div className="flex-1 min-w-0 flex items-baseline">
                       {dir && (
-                        <span className="shrink truncate text-daintree-text/50 font-mono text-[11px]">
+                        <span className="shrink truncate text-text-secondary font-mono text-2xs">
                           {dir}/
                         </span>
                       )}
-                      <span className="shrink truncate text-daintree-text font-medium font-mono text-[11px]">
+                      <span className="shrink truncate text-text-primary font-medium font-mono text-2xs">
                         {base}
                       </span>
-                      <span className="ml-2 text-[10px] uppercase tracking-wider text-daintree-text/50 font-mono">
+                      <span className="ml-2 text-3xs uppercase tracking-wider text-text-secondary font-mono">
                         {file.label}
                       </span>
                     </div>
                   </TruncatedTooltip>
                   {hunkCount != null && hunkCount > 0 && (
                     <span
-                      className="shrink-0 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium text-daintree-text/70"
+                      className="shrink-0 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium text-text-secondary"
                       title={`${hunkCount} conflict ${hunkCount === 1 ? "region" : "regions"}`}
                       data-testid={`conflict-hunk-count-${file.path}`}
                     >
@@ -536,7 +538,7 @@ export function ConflictPanel({
                         setPendingCheckout({ filePath: file.path, side: "ours" });
                       }}
                       disabled={isBusy}
-                      className="h-5 px-1.5 text-[10px]"
+                      className="h-5 px-1.5 text-3xs"
                       aria-label={`Take ours for ${file.path}`}
                       title={oursHint}
                     >
@@ -549,7 +551,7 @@ export function ConflictPanel({
                         setPendingCheckout({ filePath: file.path, side: "theirs" });
                       }}
                       disabled={isBusy}
-                      className="h-5 px-1.5 text-[10px]"
+                      className="h-5 px-1.5 text-3xs"
                       aria-label={`Take theirs for ${file.path}`}
                       title={theirsHint}
                     >
@@ -560,7 +562,7 @@ export function ConflictPanel({
                       size="sm"
                       onClick={() => handleOpenRow(file.path)}
                       disabled={isBusy}
-                      className="h-5 px-1.5 text-[10px]"
+                      className="h-5 px-1.5 text-3xs"
                       aria-label={`Open ${file.path} in external editor`}
                     >
                       <ExternalLink className="w-3 h-3 mr-1" />
@@ -573,7 +575,7 @@ export function ConflictPanel({
                         handleMarkResolvedClick(file.path).catch(() => {});
                       }}
                       disabled={isBusy}
-                      className="h-5 px-1.5 text-[10px]"
+                      className="h-5 px-1.5 text-3xs"
                       aria-label={`Mark ${file.path} as resolved`}
                     >
                       {isBusy ? (
@@ -598,7 +600,7 @@ export function ConflictPanel({
             <button
               type="button"
               onClick={() => setShowResolved((v) => !v)}
-              className="w-full flex items-center gap-1.5 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-daintree-text/50 hover:text-daintree-text/70 hover:bg-overlay-subtle transition-colors"
+              className="w-full flex items-center gap-1.5 px-4 py-1.5 text-2xs font-semibold uppercase tracking-wider text-text-secondary hover:text-text-primary hover:bg-overlay-subtle transition-colors"
               aria-expanded={showResolved}
               data-testid="conflict-resolved-toggle"
             >
@@ -609,7 +611,7 @@ export function ConflictPanel({
                 )}
               />
               Resolved
-              <span className="tabular-nums bg-tint/[0.06] rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal text-daintree-text/50">
+              <span className="tabular-nums bg-tint/[0.06] rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal text-text-secondary">
                 {status.staged.length}
               </span>
             </button>
@@ -630,11 +632,11 @@ export function ConflictPanel({
                       <TruncatedTooltip content={file.path}>
                         <div className="flex-1 min-w-0 flex items-baseline">
                           {dir && (
-                            <span className="shrink truncate text-daintree-text/40 font-mono text-[11px]">
+                            <span className="shrink truncate text-daintree-text/40 font-mono text-2xs">
                               {dir}/
                             </span>
                           )}
-                          <span className="shrink truncate text-daintree-text/60 font-mono text-[11px]">
+                          <span className="shrink truncate text-text-secondary font-mono text-2xs">
                             {base}
                           </span>
                         </div>

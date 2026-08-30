@@ -308,10 +308,11 @@ describe("ReviewHub", () => {
   beforeEach(() => {
     debounceCancelSpy.mockReset();
 
-    // The Review Hub's file-list disclosure defaults to collapsed (issue
-    // #7886). Existing tests assume rows are visible — expand the disclosure
-    // for the canonical worktree path so suite-wide assertions keep working.
-    useUIStore.getState().setReviewHubFileListExpanded(WORKTREE_PATH, true);
+    // Clear the file-list disclosure map rather than force-expanding it: the
+    // disclosure now defaults to expanded, so an unset entry is what production
+    // renders, and clearing also stops a test that collapses it from leaking
+    // into the next one.
+    useUIStore.setState({ reviewHubFileListExpanded: {} });
 
     // #8025: reset the per-worktree push-confirm opt-out so a previous test
     // that pre-set it can't leak into the next one.
@@ -647,7 +648,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      // The Abort control is now sized `xs` (text-[10px]); Continue is the
+      // The Abort control is now sized `xs` (text-3xs); Continue is the
       // only `sm` primary in the footer region. Verify both exist and that
       // there is exactly one Continue and exactly one Abort.
       expect(screen.getAllByRole("button", { name: /^Continue /i })).toHaveLength(1);

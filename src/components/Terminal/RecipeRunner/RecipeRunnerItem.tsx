@@ -76,27 +76,38 @@ export function RecipeRunnerItem({
               // over 150ms. A disabled card never enters :active, so the scale
               // needs no disabled: reset. `launcher-press` is what lets reduced
               // motion suppress the scale — see the rule in `index.css`.
-              "launcher-press group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
+              "launcher-press group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
               recipe.shadowedBy && "opacity-60"
             )}
           >
             <div className="flex items-center gap-2 w-full">
               <Play
                 className={cn(
-                  "h-3.5 w-3.5 text-status-success/50 transition-colors shrink-0",
+                  "h-3.5 w-3.5 text-status-success transition-colors shrink-0",
                   !disabled && "group-hover:text-status-success"
                 )}
                 aria-hidden
               />
-              <span className="flex-1 text-sm font-medium text-daintree-text truncate">
+              <span className="flex-1 text-sm font-medium text-text-primary truncate">
                 {recipe.name}
               </span>
               {recipe.shadowedBy && (
-                <span className="text-[11px] text-text-muted shrink-0">Overridden by Team</span>
+                <span className="text-2xs text-text-muted shrink-0">Overridden by Team</span>
               )}
-              {isPinned && <Pin className="h-3 w-3 text-daintree-accent/60 shrink-0" aria-hidden />}
+              {isPinned && (
+                // Neutral, not accent: pinning is membership, and the accent is
+                // the one signal that means "this is where the keyboard is".
+                // Spending it on a static badge left two greens on screen at
+                // once in the dense state, and made the brightest glyph on the
+                // card the one that does nothing. The state was also
+                // `aria-hidden`, so it existed for sighted users only.
+                <>
+                  <Pin className="h-3 w-3 text-text-secondary shrink-0" aria-hidden />
+                  <span className="sr-only">Pinned</span>
+                </>
+              )}
             </div>
-            <span className="flex items-center gap-2 w-full pl-5.5 text-xs text-text-muted">
+            <span className="flex items-center gap-2 w-full pl-5.5 text-xs text-text-secondary">
               <span className="shrink-0">{scopeLabel}</span>
               {recipeSummary && recipeSummary !== recipe.name && (
                 <span className="truncate">{recipeSummary}</span>
@@ -133,7 +144,7 @@ export function RecipeRunnerItem({
           disabled={disabled}
           tabIndex={disabled ? -1 : (tabIndex ?? 0)}
           className={cn(
-            "launcher-press group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
+            "launcher-press group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
             recipe.shadowedBy && "opacity-60"
           )}
         >
@@ -141,17 +152,28 @@ export function RecipeRunnerItem({
             className="h-3.5 w-3.5 text-status-success/50 group-hover:text-status-success transition-colors shrink-0"
             aria-hidden
           />
-          <span className="flex-1 text-sm font-medium text-daintree-text truncate">
+          <span className="flex-1 text-sm font-medium text-text-primary truncate">
             {recipe.name}
           </span>
-          <span className="text-[11px] text-text-muted shrink-0">{scopeLabel}</span>
+          <span className="text-2xs text-text-muted shrink-0">{scopeLabel}</span>
           {recipe.shadowedBy && (
-            <span className="text-[11px] text-text-muted shrink-0">Overridden by Team</span>
+            <span className="text-2xs text-text-muted shrink-0">Overridden by Team</span>
           )}
           {recipeSummary && recipeSummary !== recipe.name && (
             <span className="text-xs text-text-muted truncate max-w-[30%]">{recipeSummary}</span>
           )}
-          {isPinned && <Pin className="h-3 w-3 text-daintree-accent/60 shrink-0" aria-hidden />}
+          {isPinned && (
+            // Neutral, not accent: pinning is membership, and the accent is
+            // the one signal that means "this is where the keyboard is".
+            // Spending it on a static badge left two greens on screen at
+            // once in the dense state, and made the brightest glyph on the
+            // card the one that does nothing. The state was also
+            // `aria-hidden`, so it existed for sighted users only.
+            <>
+              <Pin className="h-3 w-3 text-text-secondary shrink-0" aria-hidden />
+              <span className="sr-only">Pinned</span>
+            </>
+          )}
         </button>
       </ContextMenuTrigger>
       <RecipeContextMenu

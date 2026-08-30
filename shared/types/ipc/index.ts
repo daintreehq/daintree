@@ -25,6 +25,7 @@ export * from "./devPreview.js";
 export * from "./connectivity.js";
 export * from "./maps.js";
 export * from "./agentSessionHistory.js";
+export * from "./agentSubagents.js";
 export * from "./api.js";
 export * from "./crashRecovery.js";
 export * from "./webviewConsole.js";

@@ -11,8 +11,9 @@ export function PrHeader({ pr }: PrHeaderProps) {
     <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-strong text-sm min-w-0">
       <FolderGit2 className="w-4 h-4 text-daintree-text/60 shrink-0" aria-hidden="true" />
       <TruncatedTooltip content={`PR #${pr.number} — ${pr.title}`}>
-        <span className="text-daintree-text/80 min-w-0 truncate">
-          PR <span className="font-medium text-daintree-text">#{pr.number}</span> — {pr.title}
+        <span className="text-text-primary min-w-0 truncate">
+          PR <span className="font-medium text-text-primary">#{pr.number}</span>
+          <span className="ml-1"> {pr.title}</span>
         </span>
       </TruncatedTooltip>
     </div>

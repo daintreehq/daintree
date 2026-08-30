@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   bandFilterHasDemand,
   buildPilotGroups,
+  buildPilotWorktreeGroups,
+  hasWorktreeAxis,
   countPilotBands,
   filterPilotBands,
   filterPilotGroups,
@@ -910,8 +912,8 @@ describe("parked rows", () => {
   });
 });
 
-describe("stalled runs", () => {
-  it("carries the quiet duration only for a working run main flagged", () => {
+describe("quiet runs", () => {
+  it("clocks a flagged run from its silence and a healthy one from its state", () => {
     const [group] = buildPilotGroups(
       [
         run({
@@ -926,13 +928,25 @@ describe("stalled runs", () => {
     );
 
     const byId = new Map(group!.rows.map((r) => [r.run.runId, r]));
-    expect(byId.get("stalled")?.quietFor).toBe("12m");
-    expect(byId.get("busy")?.quietFor).toBeNull();
+    // One clock per row: the flagged run's column measures the silence and
+    // names it, the healthy one's measures the work and does not.
+    expect(byId.get("stalled")?.band).toBe("quiet");
+    expect(byId.get("stalled")?.age).toBe("12m");
+    expect(byId.get("stalled")?.ageLabel).toBe("quiet");
+    expect(byId.get("stalled")?.agePhrase).toBe("quiet for 12m");
+    // The working duration survives into the accessible name, where there is
+    // room for the second fact the column had to drop.
+    expect(byId.get("stalled")?.secondaryPhrase).toBe("working for 1h");
+
+    expect(byId.get("busy")?.band).toBe("running");
+    expect(byId.get("busy")?.ageLabel).toBeNull();
+    expect(byId.get("busy")?.agePhrase).toBe("working for 1h");
+    expect(byId.get("busy")?.secondaryPhrase).toBeNull();
   });
 
   it("drops the cue when the run is no longer in the running band", () => {
     // A stale quietSince arriving alongside a state change (one poll of skew)
-    // must not paint a waiting or parked row as a stalled worker.
+    // must not paint a waiting or parked row as a silent worker.
     const [group] = buildPilotGroups(
       [
         run({
@@ -945,7 +959,8 @@ describe("stalled runs", () => {
       ctx()
     );
 
-    expect(group!.rows[0]!.quietFor).toBeNull();
+    expect(group!.rows[0]!.band).toBe("parked");
+    expect(group!.rows[0]!.ageLabel).toBeNull();
   });
 });
 
@@ -980,13 +995,16 @@ describe("bandFilterHasDemand", () => {
 });
 
 describe("state vocabulary", () => {
-  it("calls a waiting run the same thing on the row as on the segment that filters to it", () => {
-    // The segment and the row's status word are two surfaces naming one state.
-    // They drifted once — "Needs you" here against the sidebar's "Waiting" —
-    // and one state with two names is a vocabulary the user has to learn twice.
+  it("names the bucket wider than the states inside it, never after one of them", () => {
+    // The segment holds `blocked` AND `needs-you`, so it cannot borrow either
+    // one's word: "Waiting 2" over an errored run and a waiting one is a claim
+    // about both that is only true of one. The ROW keeps the exact state.
     const waiting = run({ agentState: "waiting", waitingReason: "question" });
+    const blocked = run({ agentState: "waiting", waitingReason: "error" });
 
-    expect(bandLabel(bandForRun(waiting), waiting)).toBe(PILOT_BAND_FILTER_LABEL["needs-you"]);
+    expect(bandLabel(bandForRun(waiting), waiting)).toBe("Waiting");
+    expect(bandLabel(bandForRun(blocked), blocked)).toBe("Blocked");
+    expect(PILOT_BAND_FILTER_LABEL["needs-you"]).toBe("Attention");
   });
 });
 
@@ -1115,5 +1133,461 @@ describe("summarizePilotGroups", () => {
 
     const perGroup = built.reduce((sum, g) => sum + g.demandCount, 0);
     expect(summarizePilotGroups(built).demand).toBe(perGroup);
+  });
+});
+
+describe("hasWorktreeAxis", () => {
+  it("is false for runs that all share one worktree", () => {
+    // Regrouping these would produce a single section holding the rows the
+    // project already had — a drill that costs a gesture and says nothing.
+    expect(hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }, { worktreeId: "/repo/wt/a" }])).toBe(
+      false
+    );
+  });
+
+  it("is false for runs that all lack a worktree", () => {
+    // The shape a scratch workspace always has, and a project worked only in
+    // its own root. Both fall back rather than opening a one-section list.
+    expect(hasWorktreeAxis([{}, { worktreeId: undefined }])).toBe(false);
+  });
+
+  it("is false with nothing to group", () => {
+    // What keeps an empty scoped list unreachable from the shortcut.
+    expect(hasWorktreeAxis([])).toBe(false);
+  });
+
+  it("counts the absent worktree as a bucket of its own", () => {
+    // A root-launched run beside a worktree one is exactly the split worth
+    // seeing, so "one real worktree" is not the same as "no axis".
+    expect(hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }, {}])).toBe(true);
+  });
+
+  it("is true across two worktrees", () => {
+    expect(hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }, { worktreeId: "/repo/wt/b" }])).toBe(
+      true
+    );
+  });
+
+  describe("with the project's own worktree count", () => {
+    it("is true where every agent shares one worktree but the project has several", () => {
+      // The bug: a fleet row exists only for a terminal classified an agent, so
+      // drillability tracked where agents happened to be sitting rather than
+      // whether the project has an axis at all (#11957).
+      expect(hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }, { worktreeId: "/repo/wt/a" }], 3)).toBe(
+        true
+      );
+    });
+
+    it("is true for a lone agent in a project with two worktrees", () => {
+      expect(hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }], 2)).toBe(true);
+    });
+
+    it("is true with no runs at all once the project is known to have two", () => {
+      // A scoped view of a project with no agents says "none here yet", which
+      // answers the question asked. The whole fleet answers a different one.
+      expect(hasWorktreeAxis([], 2)).toBe(true);
+    });
+
+    it("is false where the project has exactly one worktree", () => {
+      // The root checkout is a first-class entry in that count, so one means a
+      // project worked only in its own root.
+      expect(hasWorktreeAxis([{ worktreeId: "/repo" }], 1)).toBe(false);
+    });
+
+    it("is false where the project has no worktrees to speak of", () => {
+      expect(hasWorktreeAxis([], 0)).toBe(false);
+    });
+
+    it("never lets an absent or zero count veto an axis the runs proved", () => {
+      // The count is `undefined` for a view whose store has not mounted and
+      // zero for one that has not hydrated. Neither is evidence AGAINST an
+      // axis, so neither may take one the runs already established.
+      expect(
+        hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }, { worktreeId: "/repo/wt/b" }], undefined)
+      ).toBe(true);
+      expect(hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }, { worktreeId: "/repo/wt/b" }], 0)).toBe(
+        true
+      );
+    });
+  });
+});
+
+describe("buildPilotWorktreeGroups", () => {
+  /** One project's rows, cut on the worktree axis, named in rendered order. */
+  function worktreeGroups(
+    runs: FleetRunRow[],
+    mainWorktreeId?: string | null
+  ): ReturnType<typeof buildPilotWorktreeGroups> {
+    const [project] = buildPilotGroups(runs, ctx());
+    return buildPilotWorktreeGroups(project!, mainWorktreeId);
+  }
+
+  it("groups a project's runs by worktree and keeps every run", () => {
+    const groups = worktreeGroups([
+      run({ runId: "a", worktreeId: "/repo/wt/alpha", agentState: "working" }),
+      run({ runId: "b", worktreeId: "/repo/wt/beta", agentState: "working" }),
+      run({ runId: "c", worktreeId: "/repo/wt/alpha", agentState: "working" }),
+    ]);
+
+    expect(groups.map((g) => g.name)).toEqual(["alpha", "beta"]);
+    expect(groups.flatMap((g) => g.rows.map((r) => r.run.runId)).sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("keeps runs with no worktree, in a bucket ahead of the named ones", () => {
+    // Dropping them would hide a live agent because a field was absent. The
+    // bucket leads because a live agent filed under no worktree at all is an
+    // anomaly worth seeing — NOT because it holds the root, which carries an id
+    // of its own and gets its own section (#11957).
+    const groups = worktreeGroups([
+      run({ runId: "wt", worktreeId: "/repo/wt/alpha", agentState: "working" }),
+      run({ runId: "root", agentState: "working" }),
+    ]);
+
+    expect(groups.map((g) => g.rows.map((r) => r.run.runId))).toEqual([["root"], ["wt"]]);
+    expect(groups[0]!.worktreeId).toBeNull();
+  });
+
+  it("keys on the worktree id, never on the directory the agent is sitting in", () => {
+    // `cwd` moves the moment an agent runs `cd`, so two runs in one worktree
+    // would split into two sections the user cannot account for.
+    const groups = worktreeGroups([
+      run({ runId: "a", worktreeId: "/repo/wt/alpha", cwd: "/repo/wt/alpha" }),
+      run({ runId: "b", worktreeId: "/repo/wt/alpha", cwd: "/repo/wt/alpha/src/deep" }),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.rows.map((r) => r.run.runId).sort()).toEqual(["a", "b"]);
+  });
+
+  it("orders sections independently of severity", () => {
+    // #11678's rule, on the second axis: a blocked agent turns its own
+    // header's chip on, it does not lift the section over its neighbours.
+    const calm = worktreeGroups([
+      run({ runId: "a", worktreeId: "/repo/wt/alpha", agentState: "working" }),
+      run({ runId: "z", worktreeId: "/repo/wt/zulu", agentState: "working" }),
+    ]);
+    const alarmed = worktreeGroups([
+      run({ runId: "a", worktreeId: "/repo/wt/alpha", agentState: "working" }),
+      run({ runId: "z", worktreeId: "/repo/wt/zulu", agentState: "waiting", since: NOW - 60_000 }),
+    ]);
+
+    expect(alarmed.map((g) => g.name)).toEqual(calm.map((g) => g.name));
+    expect(alarmed.find((g) => g.name === "zulu")!.demandCount).toBe(1);
+  });
+
+  it("keeps the project's row ranking inside each worktree", () => {
+    // Bucketing preserves array order, so worst-band-first and the
+    // anti-starvation tiebreak survive the regrouping rather than being redone.
+    const [group] = worktreeGroups([
+      run({ runId: "working", worktreeId: "/repo/wt/alpha", agentState: "working" }),
+      run({
+        runId: "waiting",
+        worktreeId: "/repo/wt/alpha",
+        agentState: "waiting",
+        since: NOW - 60_000,
+      }),
+    ]);
+
+    expect(group!.rows.map((r) => r.run.runId)).toEqual(["waiting", "working"]);
+  });
+
+  it("recomputes each section's demand from its own rows", () => {
+    // Inheriting the project's counts would print "1 needs you" over a
+    // worktree holding nothing but a working agent.
+    const groups = worktreeGroups([
+      run({
+        runId: "blocked",
+        worktreeId: "/repo/wt/alpha",
+        agentState: "waiting",
+        since: NOW - 60_000,
+      }),
+      run({ runId: "busy", worktreeId: "/repo/wt/beta", agentState: "working" }),
+    ]);
+
+    expect(groups.map((g) => [g.name, g.demandCount])).toEqual([
+      ["alpha", 1],
+      ["beta", 0],
+    ]);
+    expect(groups[1]!.topBand).toBe("running");
+  });
+
+  it("gives colliding basenames enough path to tell them apart", () => {
+    // Two headers reading "feature-x" file their agents under a distinction
+    // the user cannot see.
+    const groups = worktreeGroups([
+      run({ runId: "a", worktreeId: "/repos/one/feature-x" }),
+      run({ runId: "b", worktreeId: "/repos/two/feature-x" }),
+    ]);
+
+    expect(groups.map((g) => g.name).sort()).toEqual(["one/feature-x", "two/feature-x"]);
+  });
+
+  it("charges only the colliding worktrees for the extra path", () => {
+    const groups = worktreeGroups([
+      run({ runId: "a", worktreeId: "/repos/one/feature-x" }),
+      run({ runId: "b", worktreeId: "/repos/two/feature-x" }),
+      run({ runId: "c", worktreeId: "/repos/one/solo" }),
+    ]);
+
+    expect(groups.find((g) => g.rows[0]!.run.runId === "c")!.name).toBe("solo");
+  });
+
+  it("reads Windows separators as separators", () => {
+    const groups = worktreeGroups([
+      run({ runId: "a", worktreeId: "C:\\repos\\one\\feature-x" }),
+      run({ runId: "b", worktreeId: "C:\\repos\\two\\feature-x" }),
+    ]);
+
+    expect(groups.map((g) => g.name).sort()).toEqual(["one/feature-x", "two/feature-x"]);
+  });
+
+  it("keeps a worktree literally named 'none' out of the no-worktree bucket", () => {
+    // Ids are what selection, the pointer's order hold and the DOM key on, so
+    // two sections sharing one make the second behave as the first. The wire
+    // type is a bare string: nothing stops a worktree id spelling the sentinel.
+    const groups = worktreeGroups([
+      run({ runId: "root" }),
+      run({ runId: "named", worktreeId: "none" }),
+    ]);
+
+    expect(groups).toHaveLength(2);
+    expect(new Set(groups.map((g) => g.groupId)).size).toBe(2);
+  });
+
+  it("falls back to whole ids for two worktrees differing only in case", () => {
+    // The disambiguator folds case to DETECT a collision, because that is how
+    // the name reads — but it cannot then emit one label for two real
+    // directories, so it runs out of path and says both in full.
+    const groups = worktreeGroups([
+      run({ runId: "a", worktreeId: "/repos/one/Feature" }),
+      run({ runId: "b", worktreeId: "/repos/one/feature" }),
+    ]);
+
+    expect(groups).toHaveLength(2);
+    expect(new Set(groups.map((g) => g.groupId)).size).toBe(2);
+    expect(groups.map((g) => g.name).sort()).toEqual(["/repos/one/Feature", "/repos/one/feature"]);
+  });
+
+  it("gives two worktrees distinct ids where a variable-width escape would not", () => {
+    // The escape marker plus `2f` spells `/`, and equally spells U+0002 then a
+    // literal `f`. Encoded to one id, these two worktrees would share a DOM id,
+    // a React key and an order-hold entry — one section swallowing the other.
+    const groups = worktreeGroups([
+      run({ runId: "slash", worktreeId: "/" }),
+      run({ runId: "pair", worktreeId: `${String.fromCharCode(2)}f` }),
+    ]);
+
+    expect(groups).toHaveLength(2);
+    expect(new Set(groups.map((g) => g.groupId)).size).toBe(2);
+  });
+
+  it("survives worktree ids the wire type allows but the app never mints", () => {
+    // A display path has no business rejecting data. Every one of these is
+    // type-valid, and the failure to avoid is a thrown palette rather than an
+    // ugly heading — `encodeURIComponent` alone throws on the lone surrogate.
+    const hostile = [
+      "",
+      "   ",
+      "/",
+      "//",
+      "\\",
+      "/repos/one/feature-x/",
+      "C:\\repos\\one\\feature-x",
+      "/repos/one/f e a t u r e",
+      "/repos/one/\uD800",
+      `/repos/${"deep/".repeat(60)}leaf`,
+    ];
+    const runs = hostile.map((worktreeId, i) => run({ runId: `r${i}`, worktreeId }));
+
+    const groups = worktreeGroups(runs);
+
+    // Nothing dropped: a live agent must not vanish because a field was odd.
+    expect(groups.flatMap((g) => g.rows)).toHaveLength(runs.length);
+    // Separately addressable, or two sections share a DOM id and a React key.
+    expect(new Set(groups.map((g) => g.groupId)).size).toBe(groups.length);
+    // Nameable: a blank heading files its rows under nothing at all.
+    expect(groups.every((g) => g.name.trim().length > 0)).toBe(true);
+  });
+
+  it("files an empty worktree id with the runs whose worktree is unknown", () => {
+    // An empty id identifies no worktree, so a section of its own would be a
+    // blank heading standing beside the one that already means "unknown".
+    const groups = worktreeGroups([
+      run({ runId: "blank", worktreeId: "" }),
+      run({ runId: "root" }),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.worktreeId).toBeNull();
+    expect(groups[0]!.rows.map((r) => r.run.runId).sort()).toEqual(["blank", "root"]);
+  });
+
+  it("agrees with the drill gate about an empty id", () => {
+    // The gate and the grouping have to count buckets the same way, or the
+    // chevron promises an axis the regrouping then declines to cut.
+    expect(hasWorktreeAxis([{ worktreeId: "" }, {}])).toBe(false);
+  });
+
+  it("opens the same way twice for the same fleet", () => {
+    // The comparator has to be a total order, or spatial memory never forms.
+    const runs = [
+      run({ runId: "a", worktreeId: "/repo/wt/beta" }),
+      run({ runId: "b", worktreeId: "/repo/wt/alpha" }),
+      run({ runId: "c" }),
+    ];
+
+    expect(worktreeGroups(runs).map((g) => g.groupId)).toEqual(
+      worktreeGroups([...runs].reverse()).map((g) => g.groupId)
+    );
+  });
+
+  describe("with the main worktree named", () => {
+    /** A root whose basename sorts last, so only the lead rule can move it. */
+    const ZEBRA_ROOT = "/repo/zebra";
+
+    it("leads with the root even where its name sorts last", () => {
+      // The complaint in #11957: root work sorted alphabetically among branch
+      // checkouts, first by luck in a project called `daintree` and buried in
+      // one called `zebra`.
+      const groups = worktreeGroups(
+        [
+          run({ runId: "root", worktreeId: ZEBRA_ROOT }),
+          run({ runId: "a", worktreeId: "/repo/wt/alpha" }),
+          run({ runId: "b", worktreeId: "/repo/wt/beta" }),
+        ],
+        ZEBRA_ROOT
+      );
+
+      expect(groups.map((g) => g.worktreeId)).toEqual([
+        ZEBRA_ROOT,
+        "/repo/wt/alpha",
+        "/repo/wt/beta",
+      ]);
+    });
+
+    it("keeps the alphabetical order when the id resolves to nothing", () => {
+      // The two mint sites can spell one directory differently, so a miss has
+      // to cost nothing but the lead position.
+      const runs = [
+        run({ runId: "root", worktreeId: ZEBRA_ROOT }),
+        run({ runId: "a", worktreeId: "/repo/wt/alpha" }),
+      ];
+
+      expect(worktreeGroups(runs, "/private/repo/zebra").map((g) => g.worktreeId)).toEqual(
+        worktreeGroups(runs).map((g) => g.worktreeId)
+      );
+    });
+
+    it("puts the root ahead of the runs filed under no worktree", () => {
+      const groups = worktreeGroups(
+        [
+          run({ runId: "root", worktreeId: ZEBRA_ROOT }),
+          run({ runId: "orphan" }),
+          run({ runId: "a", worktreeId: "/repo/wt/alpha" }),
+        ],
+        ZEBRA_ROOT
+      );
+
+      expect(groups.map((g) => g.worktreeId)).toEqual([ZEBRA_ROOT, null, "/repo/wt/alpha"]);
+    });
+
+    it("does not let a null or empty id claim the no-worktree bucket", () => {
+      // `null` would otherwise equal every unbucketed group and promote a
+      // section of orphans as though it were the project root.
+      const runs = [
+        run({ runId: "orphan" }),
+        run({ runId: "a", worktreeId: "/repo/wt/alpha" }),
+        run({ runId: "root", worktreeId: ZEBRA_ROOT }),
+      ];
+
+      for (const absent of [null, undefined, ""]) {
+        expect(worktreeGroups(runs, absent).map((g) => g.worktreeId)).toEqual([
+          null,
+          "/repo/wt/alpha",
+          ZEBRA_ROOT,
+        ]);
+      }
+    });
+
+    it("stays a total order with the root named", () => {
+      const runs = [
+        run({ runId: "a", worktreeId: "/repo/wt/beta" }),
+        run({ runId: "root", worktreeId: ZEBRA_ROOT }),
+        run({ runId: "b", worktreeId: "/repo/wt/alpha" }),
+        run({ runId: "c" }),
+      ];
+
+      expect(worktreeGroups(runs, ZEBRA_ROOT).map((g) => g.groupId)).toEqual(
+        worktreeGroups([...runs].reverse(), ZEBRA_ROOT).map((g) => g.groupId)
+      );
+    });
+  });
+});
+
+describe("narrowing on the worktree axis", () => {
+  function worktreeGroups(runs: FleetRunRow[]) {
+    const [project] = buildPilotGroups(runs, ctx());
+    return buildPilotWorktreeGroups(project!);
+  }
+
+  const SPREAD = [
+    run({
+      runId: "blocked",
+      worktreeId: "/repo/wt/alpha",
+      title: "Fix auth",
+      agentState: "waiting",
+      since: NOW - 60_000,
+    }),
+    run({ runId: "busy", worktreeId: "/repo/wt/beta", title: "Run tests", agentState: "working" }),
+    run({
+      runId: "quiet",
+      worktreeId: "/repo/wt/beta",
+      title: "Nothing alike",
+      agentState: "working",
+    }),
+  ];
+
+  it("drops a worktree the query emptied", () => {
+    const filtered = filterPilotGroups(worktreeGroups(SPREAD), "auth");
+
+    expect(filtered.map((g) => g.name)).toEqual(["alpha"]);
+  });
+
+  it("admits a whole worktree on its own name", () => {
+    // Typing a worktree name to see everything in it is the question this
+    // surface exists for, and it is the same rule the project name already got.
+    // Both of beta's rows have to survive — one of them matches nothing about
+    // the query itself, which is the whole point of a group-level match.
+    const filtered = filterPilotGroups(worktreeGroups(SPREAD), "beta");
+
+    expect(filtered.map((g) => g.name)).toEqual(["beta"]);
+    expect(filtered.flatMap((g) => g.rows.map((r) => r.run.runId)).sort()).toEqual([
+      "busy",
+      "quiet",
+    ]);
+  });
+
+  it("still admits the scope on the project's name after the drill", () => {
+    // A query naming the PROJECT is how the user found the project to drill
+    // into. Once inside, the project heading is gone and its name matches no
+    // worktree label — so without the parent alias the drill would empty the
+    // very list it just opened.
+    const filtered = filterPilotGroups(worktreeGroups(SPREAD), "daintree");
+
+    expect(filtered.flatMap((g) => g.rows)).toHaveLength(SPREAD.length);
+  });
+
+  it("counts and summarises the scoped population only", () => {
+    const groups = worktreeGroups(SPREAD);
+
+    expect(countPilotBands(groups).all).toBe(SPREAD.length);
+    expect(summarizePilotGroups(groups).demand).toBe(1);
+  });
+
+  it("recomputes a band-filtered worktree's own summary", () => {
+    const filtered = filterPilotBands(worktreeGroups(SPREAD), "needs-you");
+
+    expect(filtered.map((g) => g.name)).toEqual(["alpha"]);
+    expect(filtered[0]!.demandCount).toBe(1);
   });
 });

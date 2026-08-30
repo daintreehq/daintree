@@ -1,13 +1,68 @@
-/* Light themes opt the idle card into an opaque lifted plane via
-   --sidebar-card-bg/--sidebar-card-shadow; unset (dark) keeps the transparent
-   card unchanged. Shadow fallback must stay `0 0 #0000`, never `none` — it
-   joins comma-joined shadow lists in the selected rules below. */
-.sidebar-worktree-card {
-  background: var(--sidebar-card-bg, transparent);
+/* Every palette gives the idle card a real plane: light themes an opaque lift
+   via --sidebar-card-bg, dark themes the additive fallback below.
+
+   Dark cards used to be transparent — identical to the sidebar behind them —
+   and that is the root cause of everything this file has been fighting. A
+   compound card whose middle is indistinguishable from its parent has no
+   surface for the eye to hold, so grouping fell to whatever local material was
+   nearest, and each attempt to supply that (a well, a tray, a pair of bands)
+   grouped ACROSS cards instead of within them: a painted region overrides
+   proximity, so the band at the bottom of one card binds to the top of the
+   next. Dark-first products do not do this — Linear's rows sit on a plane
+   above the canvas — and the light themes here already proved the model.
+
+   Shadow fallback must stay `0 0 #0000`, never `none` — it is the card's
+   resting material and the property is animated.
+
+   Scoped to `[data-variant="sidebar"]`: the same class is on the grid card the
+   overview modal renders, which owns its own surface (`bg-overlay-subtle`
+   inside a `rounded-lg` divider cell). This file is unlayered, so anything
+   declared here beats that card's utilities — the lift would double up and the
+   gutter below would paint an opaque band just inside the cell's own border,
+   leaving one edge that doesn't match the other three. */
+.sidebar-worktree-card[data-variant="sidebar"] {
+  background: var(--sidebar-card-bg, rgba(255, 255, 255, 0.03));
   box-shadow: var(--sidebar-card-shadow, 0 0 #0000);
+
+  /* The card boundary, and the only structural line on the card. Painted in
+     the sidebar's own surface, so it reads as a gap the list is cut into
+     rather than as another rule competing with the ones inside the card — in a
+     full-bleed list with no radius and no margin, this IS the gap.
+
+     2px, and the sidebar colour rather than a border token, because the card
+     now sits above that colour: the gutter is the parent showing through
+     between two planes. That is also why it can be the only boundary device —
+     Material's rule is that a container's edge is full-bleed while dividers
+     inside it are inset, and the eye separates the two by bleed, not weight.
+
+     Everything inside the card is then free of structural fills. */
+  border-bottom: 2px solid var(--theme-surface-sidebar);
   transition:
     background-color var(--duration-150) var(--ease-out-expo),
     box-shadow var(--duration-150) var(--ease-out-expo);
+}
+
+/* Selection/drop edges paint through an overlay rather than as a box-shadow on
+   the card itself. The session well is a filled child, and a child's
+   background covers the parent's inset shadow no matter how the two are
+   stacked, so the right-edge marker broke wherever the well sat. The overlay
+   sits above every child (the body is z-10) and takes no pointer events, so
+   one marker runs the card's full height again.
+
+   `inset: 0` resolves against the padding box, which means the marker stops
+   short of the 2px gutter below — correct, since the gutter is the sidebar
+   showing between two cards and belongs to neither of them.
+
+   `--card-edge` is what the state rules below set; the overlay just renders
+   whatever is current. */
+.sidebar-worktree-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  box-shadow: var(--card-edge, 0 0 #0000);
+  transition: box-shadow var(--duration-150) var(--ease-out-expo);
 }
 
 /* Selected row: the active worktree ELEVATES (selection lifts, container
@@ -24,10 +79,8 @@
    is the card's resting material (idle rows carry it too), not a selection
    signal. */
 .sidebar-worktree-card[data-active="true"] {
-  background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.05));
-  box-shadow:
-    inset -2px 0 0 var(--theme-accent-primary),
-    var(--sidebar-card-shadow, 0 0 #0000);
+  background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.065));
+  --card-edge: inset -2px 0 0 var(--theme-accent-primary);
 }
 
 /* Inactive selection: when the sidebar loses focus the selected row must stay
@@ -36,15 +89,37 @@
    highlight; VS Code `list.inactiveSelectionBackground`). Keep the neutral fill
    and a dimmed right-edge accent border rather than zeroing the box-shadow. */
 .sidebar-root:not(:focus-within) .sidebar-worktree-card[data-active="true"] {
-  background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.05));
-  box-shadow:
-    inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 45%, transparent),
-    var(--sidebar-card-shadow, 0 0 #0000);
+  background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.065));
+  --card-edge: inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 65%, transparent);
+}
+
+/* Accent restraint: exactly one accent anchor per focus region. While a
+   control inside the active row is drawing its own accent focus ring, the
+   full-strength selection edge and that ring are two load-bearing accent
+   shapes in one frame and neither reads as the anchor. Focus wins for as long
+   as it lasts — it is the transient thing the user is steering — so the
+   selection edge recedes to the same dimmed accent it already uses when the
+   sidebar loses focus entirely, rather than the ring changing colour depending
+   on which row it lands on.
+
+   65%, not 45%. The receded edge is still the SOLE indicator that a row is
+   selected — the neutral lift measures about 1.03:1 and cannot carry the state
+   on its own — so it owes WCAG 1.4.11's 3:1. Alpha-mixing to transparent is
+   what broke that: on the light palettes 45% of the accent composited over a
+   white selected card measured 2.33:1. At 65% it clears 3:1 there and still
+   sits visibly under full strength on the dark palettes, which is the only
+   thing the recede has to say.
+
+   `:has(:focus-visible)` and not `:focus-within`: the keyboard-cursor row
+   draws no ring at all (#8094), so on that path there is no second accent to
+   yield to and the edge must stay at full strength. */
+.sidebar-root .sidebar-worktree-card[data-active="true"]:has(:focus-visible) {
+  --card-edge: inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 65%, transparent);
 }
 
 .sidebar-worktree-card[data-hoverable="true"]:hover,
 .sidebar-worktree-card[data-hovered="true"] {
-  background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.03));
+  background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.048));
 }
 
 /* The selected-card fill as a standalone opaque plane (the details panel's
@@ -54,8 +129,8 @@
 .sidebar-active-well {
   background-color: var(--theme-surface-sidebar);
   background-image: linear-gradient(
-    var(--sidebar-active-bg, rgba(255, 255, 255, 0.05)),
-    var(--sidebar-active-bg, rgba(255, 255, 255, 0.05))
+    var(--sidebar-active-bg, rgba(255, 255, 255, 0.065)),
+    var(--sidebar-active-bg, rgba(255, 255, 255, 0.065))
   );
 }
 
@@ -74,14 +149,13 @@ html[data-dragging="true"]
    `.sidebar-worktree-card` background/box-shadow declarations override layered
    utilities on the same element. */
 .sidebar-worktree-card[data-drop-target="true"] {
-  background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.03));
-  box-shadow:
-    inset 0 0 0 2px var(--theme-border-strong),
-    var(--sidebar-card-shadow, 0 0 #0000);
+  background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.048));
+  --card-edge: inset 0 0 0 2px var(--theme-border-strong);
 }
 
-/* No focus/cursor ring on the rows: the only visual signal in this list is the
-   active-worktree left marker. Suppress the default browser outline so clicking
+/* No focus/cursor ring on the rows: the only visual signals in this list are
+   the active row's neutral lift and its right-edge marker. Suppress the default
+   browser outline so clicking
    or tabbing through rows doesn't paint an outline. The per-row toolbar/drag
    handle still reveal on keyboard focus (below) so keyboard users keep a usable
    affordance, and forced-colors mode still gets a system outline (it can't be
@@ -115,8 +189,18 @@ html[data-dragging="true"]
   [role="grid"]:focus-within
   [data-worktree-row][data-keyboard-cursor="true"]
   [data-worktree-row-drag-handle] {
+  /* opacity as well as colour: the grip rests at opacity 0 and fades in with
+     the card on pointer hover, so a keyboard user reaching it via the row
+     needs the same reveal or the affordance is pointer-only.
+
+     No backplate here, deliberately. The plate answers "am I about to drag?"
+     and only the pointer arriving on the grip itself can answer that. This
+     rule fires whenever the row holds the keyboard cursor — which the selected
+     row does — so painting the plate here ran a lit bar down the full height
+     of the selected card and never went away. The dots are the affordance;
+     the plate is the commitment. */
+  opacity: 1;
   color: color-mix(in srgb, var(--theme-text-primary) 30%, transparent);
-  background-color: var(--theme-overlay-soft);
 }
 
 /* High-contrast only: forced-colors users rely on a system focus outline, so
@@ -133,6 +217,28 @@ html[data-dragging="true"]
     .sidebar-worktree-card {
     outline: 2px solid Highlight;
     outline-offset: -2px;
+  }
+}
+
+/* The grip's two stages run on two timings, and a Tailwind `duration-*`
+   utility cannot give two properties two durations.
+
+   Opacity gets the 75ms tier because the dots appear directly under a pointer
+   that is already there: at 150ms the mark arrives after the eye has landed
+   on the spot it was going to occupy, which reads as lag rather than as
+   motion. The backplate keeps the 150ms state-change tier — by the time it
+   paints, the pointer has committed to the grip, and there is nothing to
+   catch up with. */
+[data-worktree-row-drag-handle] {
+  transition:
+    opacity var(--duration-75) var(--ease-out-expo),
+    color var(--duration-150) var(--ease-out-expo),
+    background-color var(--duration-150) var(--ease-out-expo);
+}
+
+@variant reduce-motion {
+  [data-worktree-row-drag-handle] {
+    transition: none;
   }
 }
 
@@ -154,7 +260,8 @@ html[data-dragging="true"]
 }
 
 @variant reduce-motion {
-  .sidebar-worktree-card {
+  .sidebar-worktree-card,
+  .sidebar-worktree-card::after {
     transition: none;
   }
 }
@@ -165,11 +272,15 @@ html[data-dragging="true"]
     outline-offset: -2px;
   }
 
-  /* The active row's left-edge indicator is an inset box-shadow, which is
-     stripped here. Fall back to a system-color left border so the selected
-     worktree stays distinguishable from idle rows. */
+  /* The active row's right-edge indicator is an inset box-shadow, which is
+     stripped here. Fall back to a system-color border on the SAME edge so the
+     selected worktree stays distinguishable from idle rows without moving the
+     marker across the card — a left fallback contradicted the all-theme
+     right-edge vocabulary (#9711 round 3) and read as a second, different
+     selection signal for exactly the high-contrast users least able to
+     absorb one. */
   .sidebar-worktree-card[data-active="true"] {
-    border-left: 2px solid SelectedItem;
+    border-right: 2px solid SelectedItem;
   }
 
   /* The panel drag-over ring is also an inset box-shadow; restore it as a

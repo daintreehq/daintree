@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
@@ -39,6 +39,22 @@ async function openIssuesDropdown(window: Page): Promise<void> {
   await expect(pill).not.toHaveAccessibleName(/Configure/, { timeout: T_MEDIUM });
   await pill.scrollIntoViewIfNeeded();
   await pill.click();
+}
+
+async function expectAlignedColumn(items: Locator, count: number): Promise<void> {
+  await expect(items).toHaveCount(count);
+  await expect
+    .poll(
+      async () =>
+        items.evaluateAll((elements) => {
+          const boxes = elements.map((element) => element.getBoundingClientRect());
+          if (boxes.some((box) => box.width === 0 || box.height === 0)) return 1_000_000;
+          const xs = boxes.map((box) => box.x);
+          return Math.max(...xs) - Math.min(...xs);
+        }),
+      { timeout: T_MEDIUM }
+    )
+    .toBeLessThan(0.5);
 }
 
 test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)", () => {
@@ -109,9 +125,15 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
 
     await openIssuesDropdown(window);
 
-    // The select-all control only renders with a non-empty search query AND data.
     await window.locator(SEL.github.searchIssues).fill("e2e");
     await expect(window.locator(SEL.github.item(101))).toBeVisible({ timeout: T_LONG });
+
+    // The bulk helpers follow selection mode rather than a non-empty query —
+    // typing used to grow the stacked header and shove the list down on the
+    // first keystroke. Entering selection is the deliberate act, so do it:
+    // the cursor moves to the first row and Shift+Space takes it.
+    await window.keyboard.press("ArrowDown");
+    await window.keyboard.press("Shift+Space");
 
     const selectAll = window
       .locator(SEL.github.selectionActions)
@@ -126,6 +148,48 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
     // The dialog must carry the selected issues, not open empty/stale.
     await expect(dialog.locator('text="E2E issue one"')).toBeVisible({ timeout: T_MEDIUM });
+  });
+
+  test("keeps every row's assignee avatar in one column", async () => {
+    // The reported defect: the trailing rail was a right-anchored flex row of
+    // conditional slots, so a neighbour appearing to the RIGHT of the avatar
+    // — a worktree glyph, or the "+N" more-assignees count — pushed it ~20px
+    // left and the avatars stopped lining up down the list. jsdom cannot see
+    // that: a DOM-order test still passes if a width or a gap changes. This is
+    // the assertion that actually measures the column.
+    const { window } = ctx;
+    await connectGitHub(ctx.app, window);
+    await stubRepoStats(ctx.app, { issueCount: 3, prCount: 0, commitCount: 5 }, window);
+    await stubListIssues(ctx.app, [
+      makeFixtureIssue(201, "One assignee", {
+        assignees: [{ login: "alice", avatarUrl: "" }],
+      }),
+      makeFixtureIssue(202, "Three assignees, so the row also carries a +2", {
+        assignees: [
+          { login: "alice", avatarUrl: "" },
+          { login: "bob", avatarUrl: "" },
+          { login: "carol", avatarUrl: "" },
+        ],
+      }),
+      makeFixtureIssue(203, "One assignee and a long title that will truncate hard", {
+        assignees: [{ login: "dave", avatarUrl: "" }],
+        labels: [{ name: "bug", color: "d73a4a" }],
+        commentCount: 12,
+      }),
+    ]);
+
+    await openIssuesDropdown(window);
+    await expect(window.locator(SEL.github.item(201))).toBeVisible({ timeout: T_LONG });
+
+    const slots = window.locator('[role="img"][aria-label^="Assigned to"]');
+    // Measure the complete column in one render frame and poll through the
+    // dropdown's entry/layout transition. Sequential boundingBox() calls can
+    // otherwise mix frames or observe an element while it is briefly hidden.
+    await expectAlignedColumn(slots, 3);
+
+    // And the anchor they hang off — the actions menu — is itself a column.
+    const menus = window.locator('[aria-label^="Actions for #"]');
+    await expectAlignedColumn(menus, 3);
   });
 
   test("issues dropdown renders search and filter chrome when connected", async () => {

@@ -5,11 +5,13 @@ import type { PanelKind, PanelLocation } from "@shared/types/panel";
 import {
   normalizeDockLocation,
   normalizeGroupDockLocation,
+  panelKindHasPty,
   panelKindIsDockable,
 } from "@shared/config/panelKindRegistry";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { buildWorktreeIndex } from "@/store/slices/panelRegistry/worktreeIndex";
+import { syncWorktreeAttributionToHost } from "@/store/slices/panelRegistry/helpers";
 import { reconcileMovedPanel } from "@/services/terminal/crossWorktreeMove";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
@@ -209,8 +211,21 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
   // the banner — and its queued instruction — for the destination it just left,
   // so "Tell the agent" would send it somewhere the user has undone (#11853).
   for (const [id, before] of worktreeBefore) {
-    const after = newTerminalsById[id]?.worktreeId;
-    if (before === after || after === undefined) continue;
+    const restoredPanel = newTerminalsById[id];
+    if (!restoredPanel) continue;
+    const after = restoredPanel.worktreeId;
+    if (before === after) continue;
+
+    // The pty-host record is re-filed for both directions, including the undo
+    // that takes an adopted worktree back off a global dock pane. That clear is
+    // sent explicitly as `null` rather than skipped: leaving the old id behind
+    // would keep the fleet palette grouping the run under a worktree the user
+    // has just undone it out of (#12060).
+    if (panelKindHasPty(restoredPanel.kind ?? "terminal")) {
+      syncWorktreeAttributionToHost(id, after ?? null);
+    }
+
+    if (after === undefined) continue;
     reconcileMovedPanel(id, after);
   }
 

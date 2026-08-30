@@ -39,8 +39,8 @@ export function RecipeVariablePreview({ initialPrompt, worktreeId }: RecipeVaria
 
   return (
     <div className="mt-2 border-l-2 border-border-subtle pl-2.5 transition-colors">
-      <div className="text-xs font-medium text-daintree-text mb-1">Resolved prompt</div>
-      <div className="text-xs leading-relaxed text-daintree-text/80 break-all whitespace-pre-wrap font-mono">
+      <div className="text-xs font-medium text-text-primary mb-1">Resolved prompt</div>
+      <div className="text-xs leading-relaxed text-text-primary break-all whitespace-pre-wrap font-mono">
         {hasContext && resolvedText !== null
           ? resolvedText
           : splitByRecipeVariables(initialPrompt).map((part, i) =>
@@ -56,13 +56,13 @@ export function RecipeVariablePreview({ initialPrompt, worktreeId }: RecipeVaria
               )
             )}
       </div>
-      {!hasContext && <p className="text-[10px] text-text-muted mt-1">Resolving at run time</p>}
+      {!hasContext && <p className="text-3xs text-text-muted mt-1">Resolving at run time</p>}
       {hasContext && unresolvedVars.length > 0 && (
         <div className="mt-1 flex flex-wrap gap-1">
           {unresolvedVars.map((name) => (
             <span
               key={name}
-              className="inline-flex items-center gap-1 rounded-full px-1.5 py-px text-[9px] bg-category-rose-subtle text-category-rose-text"
+              className="inline-flex items-center gap-1 rounded-full px-1.5 py-px text-4xs bg-category-rose-subtle text-category-rose-text"
             >
               <AlertTriangle className="h-2.5 w-2.5" aria-hidden="true" />
               {`{{${name}}}`} unresolved

@@ -54,6 +54,8 @@ import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preloa
 import { buildRunHistoryPreloadBindings } from "./ipc/handlers/runHistory.preload.js";
 import { buildCopyTreeHistoryPreloadBindings } from "./ipc/handlers/copyTreeHistory.preload.js";
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
+import { buildCodexPreloadBindings } from "./ipc/handlers/codex.preload.js";
+import { buildClaudePreloadBindings } from "./ipc/handlers/claude.preload.js";
 import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
 import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
@@ -1353,6 +1355,9 @@ function buildElectronApi(): ElectronAPI {
       updateTitle: (id: string, title: string, titleMode: PanelTitleMode) =>
         ipcRenderer.send(CHANNELS.TERMINAL_UPDATE_TITLE, { id, title, titleMode }),
 
+      updateWorktreeId: (id: string, worktreeId: string | null) =>
+        ipcRenderer.send(CHANNELS.TERMINAL_UPDATE_WORKTREE_ID, { id, worktreeId }),
+
       onSpawnResult: (callback: (id: string, result: SpawnResultPayload) => void): (() => void) =>
         _eventBusOn("terminal:spawn-result", (payload) => {
           if (!Array.isArray(payload)) return;
@@ -2117,6 +2122,10 @@ function buildElectronApi(): ElectronAPI {
 
       listRemoteCommits: (cwd: string, branchName: string, limit?: number) =>
         _unwrappingInvoke(CHANNELS.GIT_LIST_REMOTE_COMMITS, { cwd, branchName, limit }),
+      listPushCommits: (cwd: string, branchName: string, limit?: number) =>
+        _unwrappingInvoke(CHANNELS.GIT_LIST_PUSH_COMMITS, { cwd, branchName, limit }),
+      listRebaseCommits: (cwd: string, branchName: string, limit?: number) =>
+        _unwrappingInvoke(CHANNELS.GIT_LIST_REBASE_COMMITS, { cwd, branchName, limit }),
 
       onPushProgress: (callback: (event: PushProgressEvent) => void) =>
         _typedOn(CHANNELS.GIT_PUSH_PROGRESS, callback),
@@ -2218,6 +2227,7 @@ function buildElectronApi(): ElectronAPI {
           type: "alert" | "confirm" | "prompt";
           message: string;
           defaultValue: string;
+          origin: string | null;
         }) => void
       ): (() => void) => _typedOn(CHANNELS.WEBVIEW_DIALOG_REQUEST, callback),
       onDialogDismiss: (callback: (payload: { panelId: string }) => void): (() => void) =>
@@ -2540,6 +2550,8 @@ function buildElectronApi(): ElectronAPI {
 
     // Gemini API
     gemini: buildGeminiPreloadBindings(_unwrappingInvoke),
+    codex: buildCodexPreloadBindings(_unwrappingInvoke),
+    claude: buildClaudePreloadBindings(_unwrappingInvoke),
 
     // Daintree CLI install API
     cli: buildCliPreloadBindings(_unwrappingInvoke),

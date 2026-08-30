@@ -313,8 +313,8 @@ export const theme: BuiltInThemeSource = {
     // Required dark interaction chrome. A no-chrome theme still has to answer
     // "did my click land", so these stay perceptible even though the resting
     // state is bare. armed/active clear hover by 0.07 (floor is 0.04).
-    "sidebar-hover-bg": "rgba(255,255,255,0.035)",
-    "sidebar-active-bg": "rgba(255,255,255,0.075)",
+    "sidebar-hover-bg": "rgba(255,255,255,0.052)",
+    "sidebar-active-bg": "rgba(255,255,255,0.07)",
     "sidebar-action-hover-bg": "rgba(255,255,255,0.06)",
     "toolbar-control-hover-bg": "rgba(255,255,255,0.07)",
     "toolbar-control-armed-bg": "rgba(255,255,255,0.14)",

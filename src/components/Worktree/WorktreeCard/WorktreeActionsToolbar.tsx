@@ -11,6 +11,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuMeta,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuSub,
@@ -20,14 +23,18 @@ import {
 } from "../../ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 
-const DROPDOWN_COMPONENTS: WorktreeMenuComponents = {
+/** Exported so a test can mount the menu through the real dropdown primitives. */
+export const DROPDOWN_COMPONENTS: WorktreeMenuComponents = {
   Item: DropdownMenuItem,
   Label: DropdownMenuLabel,
   Separator: DropdownMenuSeparator,
   Shortcut: DropdownMenuShortcut,
+  Meta: DropdownMenuMeta,
   Sub: DropdownMenuSub,
   SubTrigger: DropdownMenuSubTrigger,
   SubContent: DropdownMenuSubContent,
+  RadioGroup: DropdownMenuRadioGroup,
+  RadioItem: DropdownMenuRadioItem,
 };
 
 interface WorktreeActionsToolbarProps {
@@ -105,7 +112,7 @@ export function WorktreeActionsToolbar({
                 onCleanupWorktree();
               }}
               data-no-dnd
-              className="sidebar-action-button p-1.5 text-status-error/70 hover:text-status-error rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+              className="sidebar-action-button p-1.5 text-status-error/70 hover:text-status-error rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               aria-label="Delete worktree"
               data-testid="worktree-cleanup-button"
             >
@@ -119,7 +126,7 @@ export function WorktreeActionsToolbar({
         <button
           onClick={onToggleCollapse}
           data-no-dnd
-          className="sidebar-action-button p-1.5 text-daintree-text/60 hover:text-text-primary rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+          className="sidebar-action-button p-1.5 text-daintree-text/60 hover:text-text-primary rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
           aria-expanded={!isCollapsed}
           aria-controls={isCollapsed ? undefined : contentId}
           aria-label={isCollapsed ? "Expand card" : "Collapse card"}
@@ -141,7 +148,7 @@ export function WorktreeActionsToolbar({
               <button
                 onClick={(e) => e.stopPropagation()}
                 data-no-dnd
-                className="sidebar-action-button p-1.5 text-daintree-text/60 hover:text-text-primary rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                className="sidebar-action-button p-1.5 text-daintree-text/60 hover:text-text-primary rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 aria-label="More actions"
                 data-testid="worktree-actions-menu"
               >

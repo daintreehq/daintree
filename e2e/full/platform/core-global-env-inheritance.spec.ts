@@ -4,7 +4,7 @@ import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
-import { openSettings, openTerminal } from "../../helpers/panels";
+import { openSettings, openTerminal, selectSettingsScope } from "../../helpers/panels";
 import { runTerminalCommand, waitForTerminalText } from "../../helpers/terminal";
 
 let ctx: AppContext;
@@ -97,8 +97,7 @@ test.describe.serial("Full: Global Environment Variable Inheritance", () => {
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     // Switch to Project scope (Radix Select)
-    await window.locator('[aria-label="Settings scope"]').click();
-    await window.locator('[role="option"]', { hasText: "Project" }).click();
+    await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
     // Click Variables tab

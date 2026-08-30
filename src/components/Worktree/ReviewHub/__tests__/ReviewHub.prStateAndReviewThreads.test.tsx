@@ -295,10 +295,11 @@ describe("ReviewHub", () => {
   beforeEach(() => {
     debounceCancelSpy.mockReset();
 
-    // The Review Hub's file-list disclosure defaults to collapsed (issue
-    // #7886). Existing tests assume rows are visible — expand the disclosure
-    // for the canonical worktree path so suite-wide assertions keep working.
-    useUIStore.getState().setReviewHubFileListExpanded(WORKTREE_PATH, true);
+    // Clear the file-list disclosure map rather than force-expanding it: the
+    // disclosure now defaults to expanded, so an unset entry is what production
+    // renders, and clearing also stops a test that collapses it from leaking
+    // into the next one.
+    useUIStore.setState({ reviewHubFileListExpanded: {} });
 
     // #8025: reset the per-worktree push-confirm opt-out so a previous test
     // that pre-set it can't leak into the next one.
@@ -565,6 +566,29 @@ describe("ReviewHub", () => {
         screen.getByText("failing");
         screen.getByLabelText(/ci failing/i);
       });
+    });
+
+    it("renders an in-flight run as a dot with its label on a text channel", async () => {
+      setWorktreePR({
+        prNumber: 42,
+        prUrl: "https://github.com/test/repo/pull/42",
+        prState: "open",
+        prCiStatus: "pending",
+      });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+
+      const { container } = render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+
+      const label = await waitFor(() => screen.getByText("pending"));
+      // The mark is a painted disc carrying the forced-colors rescue hook…
+      const dot = container.querySelector(".status-mark");
+      expect(dot).toBeTruthy();
+      expect(dot?.className).toContain("bg-status-warning");
+      // …and the words beside it take a text colour, not the disc's background
+      // class, which would paint nothing on the label at all.
+      expect(label.className).toContain("text-status-warning");
     });
 
     it("omits CI status when prCiStatus is undefined", async () => {

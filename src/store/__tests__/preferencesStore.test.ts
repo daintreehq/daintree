@@ -858,6 +858,101 @@ describe("preferencesStore migration", () => {
     });
   });
 
+  describe("projectSwitcherCollapsedBands (v17 migration, issue #11943)", () => {
+    it("starts empty so a fresh install opens with every band unfolded", async () => {
+      const store = await loadStore();
+      expect(store.getState().projectSwitcherCollapsedBands).toEqual({});
+    });
+
+    it("keeps each band's fold independent of the others", async () => {
+      const store = await loadStore();
+      store.getState().setProjectSwitcherBandCollapsed("other", true);
+      store.getState().setProjectSwitcherBandCollapsed("running", true);
+      store.getState().setProjectSwitcherBandCollapsed("other", false);
+
+      expect(store.getState().projectSwitcherCollapsedBands).toEqual({
+        other: false,
+        running: true,
+      });
+    });
+
+    it("records an unfolded band rather than dropping its key", async () => {
+      // The whole reason this map keeps `false` entries: Scratch's default is
+      // "folded while empty", so an absent key would re-fold a section the user
+      // deliberately opened. Dropping the key on `false` is what the
+      // neighbouring skip-confirm map does, and it would be wrong here.
+      const store = await loadStore();
+      store.getState().setProjectSwitcherBandCollapsed("scratch", false);
+
+      const persisted = JSON.parse(storage[STORAGE_KEY]!) as { state: Record<string, unknown> };
+      expect(persisted.state.projectSwitcherCollapsedBands).toEqual({ scratch: false });
+    });
+
+    it("survives a reload rather than unfolding on restart", async () => {
+      const first = await loadStore();
+      first.getState().setProjectSwitcherBandCollapsed("other", true);
+
+      vi.resetModules();
+      _resetPersistedStoreRegistryForTests();
+      const reloaded = await loadStore();
+      expect(reloaded.getState().projectSwitcherCollapsedBands).toEqual({ other: true });
+    });
+
+    it("no-ops when the band is already in the requested state", async () => {
+      const store = await loadStore();
+      store.getState().setProjectSwitcherBandCollapsed("other", true);
+      const before = store.getState().projectSwitcherCollapsedBands;
+      store.getState().setProjectSwitcherBandCollapsed("other", true);
+
+      expect(store.getState().projectSwitcherCollapsedBands).toBe(before);
+    });
+
+    it("supplies the field in the migration itself, not only in the sanitizer", async () => {
+      const store = await loadStore();
+      const migrated = store.persist
+        .getOptions()
+        .migrate?.({ dockDensity: "compact" }, 16) as Record<string, unknown>;
+
+      expect(migrated.projectSwitcherCollapsedBands).toEqual({});
+      expect(migrated.dockDensity).toBe("compact");
+    });
+
+    it("carries an existing map through the v17 migration untouched", async () => {
+      setStoredState({ projectSwitcherCollapsedBands: { other: true } }, 16);
+      const store = await loadStore();
+      expect(store.getState().projectSwitcherCollapsedBands).toEqual({ other: true });
+    });
+
+    it("discards a non-record blob instead of reading it as folded", async () => {
+      // A hand-edited string is truthy for every key it is asked about, which
+      // would open the switcher with nothing on screen and no way back.
+      setStoredState({ projectSwitcherCollapsedBands: "all" }, 17);
+      const store = await loadStore();
+      expect(store.getState().projectSwitcherCollapsedBands).toEqual({});
+    });
+
+    it("keeps the boolean entries of a partly corrupt map and drops the rest", async () => {
+      setStoredState(
+        { projectSwitcherCollapsedBands: { other: true, running: "yes", pinned: false } },
+        17
+      );
+      const store = await loadStore();
+      expect(store.getState().projectSwitcherCollapsedBands).toEqual({
+        other: true,
+        pinned: false,
+      });
+    });
+
+    it("keeps a key it does not recognise rather than dropping the user's fold", async () => {
+      // Keys are free-form on purpose. A band renamed by a newer build leaves an
+      // inert entry, which costs nothing — where validating against today's
+      // closed set would silently discard a fold that build still honours.
+      setStoredState({ projectSwitcherCollapsedBands: { somethingNew: true } }, 17);
+      const store = await loadStore();
+      expect(store.getState().projectSwitcherCollapsedBands).toEqual({ somethingNew: true });
+    });
+  });
+
   describe("keyboardLayoutConfirmationsByBinding (v16 migration, issue #11704)", () => {
     const KEY = "nav.toggleSidebar@Cmd+B";
 

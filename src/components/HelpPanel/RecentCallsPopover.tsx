@@ -2,20 +2,22 @@ import { useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
+import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import type { McpAuditRecord, McpAuditResult } from "@shared/types";
 
-// Local, deliberately-minimal mirror of the Settings audit viewer's styling.
-// The popover is a simpler read-only view; cross-importing from Settings would
-// create a HelpPanel → Settings layer dependency for two stable constants.
-const RESULT_DOT_CLASS: Record<McpAuditResult, string> = {
-  success: "bg-status-success",
-  error: "bg-status-danger",
-  "confirmation-pending": "bg-status-warning",
-  unauthorized: "bg-status-danger",
-  dedup: "bg-status-info",
-  collision: "bg-status-warning",
-  rate_limited: "bg-status-warning",
+// Local mirror of the Settings audit viewer's outcome→severity mapping. The
+// popover is a simpler read-only view; cross-importing from Settings would
+// create a HelpPanel → Settings layer dependency for two stable constants. The
+// glyphs themselves are shared, so the two views still agree on shape and tone.
+const RESULT_SEVERITY: Record<McpAuditResult, StatusSeverity> = {
+  success: "success",
+  error: "error",
+  "confirmation-pending": "warning",
+  unauthorized: "error",
+  dedup: "info",
+  collision: "warning",
+  rate_limited: "warning",
 };
 
 const RESULT_LABEL: Record<McpAuditResult, string> = {
@@ -73,8 +75,8 @@ export function RecentCallsPopover({ records, loading, error }: RecentCallsPopov
   const groups = useMemo(() => groupCallsByTurn(records), [records]);
 
   return (
-    <div className="flex flex-col text-[11px] text-daintree-text">
-      <div className="px-3 pt-2.5 pb-1.5 text-daintree-text/50 font-medium">Recent tool calls</div>
+    <div className="flex flex-col text-2xs text-text-primary">
+      <div className="px-3 pt-2.5 pb-1.5 text-text-secondary font-medium">Recent tool calls</div>
 
       <div className="max-h-[min(360px,var(--radix-popover-content-available-height,360px))] overflow-y-auto px-1 pb-1">
         {loading ? (
@@ -84,17 +86,15 @@ export function RecentCallsPopover({ records, loading, error }: RecentCallsPopov
             <SkeletonBone className="h-3 w-3/4" />
           </Skeleton>
         ) : error ? (
-          <p className="px-2 py-3 text-daintree-text/50">Couldn't load recent calls</p>
+          <p className="px-2 py-3 text-text-secondary">Couldn't load recent calls</p>
         ) : records.length === 0 ? (
-          <p className="px-2 py-3 text-daintree-text/50">No calls yet this session</p>
+          <p className="px-2 py-3 text-text-secondary">No calls yet this session</p>
         ) : (
           <ul className="divide-y divide-daintree-border/60">
             {groups.map((group, index) => (
               <li key={group.turnId ?? `unassociated-${index}`} className="py-1">
                 {group.turnId === null && (
-                  <div className="px-2 pb-0.5 text-[10px] text-daintree-text/40">
-                    Not tied to a turn
-                  </div>
+                  <div className="px-2 pb-0.5 text-3xs text-text-secondary">Not tied to a turn</div>
                 )}
                 <ul className="space-y-0.5">
                   {group.records.map((record) => (
@@ -126,7 +126,7 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
         type="button"
         aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}
-        className="grid w-full grid-cols-[auto_auto_1fr_auto] items-center gap-2 rounded-[var(--radius-md)] px-2 py-1 text-left hover:bg-overlay-soft transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2"
+        className="grid w-full grid-cols-[auto_auto_1fr_auto] items-center gap-2 rounded-[var(--radius-md)] px-2 py-1 text-left hover:bg-overlay-soft transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
       >
         <ChevronRight
           aria-hidden
@@ -135,21 +135,21 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
             expanded && "rotate-90"
           )}
         />
-        <span
-          aria-hidden
-          className={cn("h-1.5 w-1.5 rounded-full shrink-0", RESULT_DOT_CLASS[record.result])}
-          title={RESULT_LABEL[record.result]}
+        <SeverityMark
+          severity={RESULT_SEVERITY[record.result]}
+          label={RESULT_LABEL[record.result]}
+          className="h-3 w-3"
         />
-        <span className="min-w-0 font-mono text-daintree-text/80 truncate">{record.toolId}</span>
+        <span className="min-w-0 font-mono text-text-primary truncate">{record.toolId}</span>
         {/* Recency, not duration — calls are almost always sub-100ms, so
             "when did this run" is the metric worth a column. */}
-        <span className="text-daintree-text/40 whitespace-nowrap tabular-nums">
+        <span className="text-text-secondary whitespace-nowrap tabular-nums">
           {formatTimeAgo(record.timestamp)}
         </span>
       </button>
       {expanded && (
         <div className="mx-2 mb-1.5 flex flex-col gap-1.5 rounded-[var(--radius-md)] bg-overlay-subtle px-2 py-1.5 select-text">
-          <div className="flex items-center gap-2 text-daintree-text/50">
+          <div className="flex items-center gap-2 text-text-secondary">
             <span
               className={cn(
                 record.result === "error" || record.result === "unauthorized"
@@ -164,7 +164,7 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
           {hasArgs && (
             <div>
               <div className="text-daintree-text/40">Arguments</div>
-              <pre className="mt-0.5 max-h-32 overflow-y-auto whitespace-pre-wrap break-all font-mono text-daintree-text/70">
+              <pre className="mt-0.5 max-h-32 overflow-y-auto whitespace-pre-wrap break-all font-mono text-text-secondary">
                 {record.argsSummary}
               </pre>
             </div>
@@ -172,15 +172,13 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
           <div>
             <div className="text-daintree-text/40">Result</div>
             {record.result === "rate_limited" && record.resultMeta?.retryAfter !== undefined ? (
-              <p className="mt-0.5 text-daintree-text/45">
-                Retry in {record.resultMeta.retryAfter}s
-              </p>
+              <p className="mt-0.5 text-text-secondary">Retry in {record.resultMeta.retryAfter}s</p>
             ) : record.resultSummary ? (
-              <pre className="mt-0.5 max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-daintree-text/70">
+              <pre className="mt-0.5 max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-text-secondary">
                 {record.resultSummary}
               </pre>
             ) : (
-              <p className="mt-0.5 text-daintree-text/45">No output recorded for this call</p>
+              <p className="mt-0.5 text-text-secondary">No output recorded for this call</p>
             )}
           </div>
         </div>

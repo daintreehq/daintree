@@ -4,15 +4,37 @@ import {
   detectCommandIdentity,
   extractCommandNameCandidates,
   extractScriptBasenameFromCommand,
+  redactArgv,
 } from "../ProcessDetector.js";
 import {
   clearPluginProcessToolRegistryForTests,
   setPluginProcessToolRegistry,
 } from "../../../shared/config/pluginProcessToolRegistry.js";
 import { AGENT_CLI_NAMES } from "../ProcessDetector/registries.js";
+import { AGENT_REGISTRY } from "../../../shared/config/agentRegistry.js";
 import { buildDetectedCandidate } from "../ProcessDetector/candidateHelpers.js";
+import {
+  executablePositionLimit,
+  isChromiumChildProcess,
+} from "../ProcessDetector/commandParser.js";
+import { logInfo } from "../../utils/logger.js";
 
-type ProcessNode = { pid: number; comm: string; command?: string };
+vi.mock("../../utils/logger.js", () => ({
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
+}));
+
+/** Commit-diagnostic lines emitted so far, newest last. */
+function agentCommitLogs(): string[] {
+  return vi
+    .mocked(logInfo)
+    .mock.calls.map(([message]) => message)
+    .filter((message) => message.includes("agent identity committed"));
+}
+
+type ProcessNode = { pid: number; comm: string; command: string };
 
 function createCacheMock() {
   const listeners = new Set<() => void>();
@@ -1758,6 +1780,416 @@ describe("ProcessDetector", () => {
     });
   });
 
+  describe("argument paths are not executables (#11931)", () => {
+    // This repo is full of file paths that name agents, so a process that
+    // merely *opens* one must not inherit that agent's identity.
+    const agentPath = "/repo/shared/config/agents/opencode.ts";
+
+    it.each([
+      { label: "cat", comm: "cat", command: `cat ${agentPath}` },
+      { label: "git log", comm: "git", command: `git log -- ${agentPath}` },
+      { label: "an editor", comm: "nvim", command: `nvim ${agentPath}` },
+      { label: "a grep", comm: "rg", command: `rg opencode ${agentPath}` },
+    ])("does not brand the terminal OpenCode from $label", ({ label, comm, command }) => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm, command }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        `terminal-argpath-${label.replace(/\s+/g, "-")}`,
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      // Witness that the walk actually ran, so the absence below is a verdict
+      // rather than a detector that never started.
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({ isBusy: true }),
+        expect.any(Number)
+      );
+      expect(detector.getLastDetected()).toBeNull();
+      for (const [result] of callback.mock.calls) {
+        expect(result.agentType).toBeUndefined();
+        expect(result.processIconId).not.toBe("opencode");
+      }
+    });
+
+    it("still resolves an agent a runtime is hosting", () => {
+      // The guard must not cost the real case it exists alongside: `claude`
+      // installed as a Node CLI shows comm="node" with the agent at argv[1].
+      const cache = createCacheMock();
+      cache.setChildren(100, [
+        { pid: 200, comm: "node", command: "node /opt/bin/opencode --continue" },
+      ]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-argpath-runtime",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      expect(detector.getLastDetected()).toBe("opencode");
+    });
+  });
+
+  describe("nested app process boundary (#11931)", () => {
+    /** The reported repro: `npx electron .` running Daintree from the repo. */
+    function seedNestedDaintree(cache: ReturnType<typeof createCacheMock>) {
+      cache.setChildren(100, [{ pid: 200, comm: "npm", command: "npm exec electron ." }]);
+      cache.setChildren(200, [
+        { pid: 300, comm: "node", command: "node /repo/node_modules/electron/cli.js ." },
+      ]);
+      cache.setChildren(300, [
+        { pid: 400, comm: "Electron", command: "/repo/node_modules/electron/dist/Electron ." },
+      ]);
+      cache.setChildren(400, [
+        {
+          pid: 500,
+          // `ProcessTreeCache.parseUnixLine` captures comm as `\S+`, so a real
+          // helper's comm arrives without the spaces its bundle path has.
+          comm: "Electron",
+          command:
+            "/repo/node_modules/electron/dist/Electron.app/Contents/Frameworks/Electron Helper.app/Contents/MacOS/Electron Helper --type=utility --utility-sub-type=node.mojom.NodeService",
+        },
+      ]);
+      cache.setChildren(500, [{ pid: 600, comm: "zsh", command: "/bin/zsh -l" }]);
+      cache.setChildren(600, [{ pid: 700, comm: "opencode", command: "opencode" }]);
+    }
+
+    it("does not inherit the inner instance's agent through its pty-host", () => {
+      const cache = createCacheMock();
+      seedNestedDaintree(cache);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-nested-daintree",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      // The walk ran and descended: it reached the boundary node's parent.
+      expect(cache.getChildren).toHaveBeenCalledWith(400);
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({ isBusy: true }),
+        expect.any(Number)
+      );
+      expect(detector.getLastDetected()).toBeNull();
+      for (const [result] of callback.mock.calls) {
+        expect(result.agentType).toBeUndefined();
+      }
+      // ...and stopped there: the boundary node's subtree is never fetched.
+      expect(cache.getChildren).not.toHaveBeenCalledWith(500);
+    });
+
+    it("still reaches an agent that is not behind a Chromium helper", () => {
+      // Same depth, same shape — only the boundary node is missing. Proves the
+      // prune is what stopped the walk above, not the depth budget.
+      const cache = createCacheMock();
+      seedNestedDaintree(cache);
+      cache.setChildren(400, [{ pid: 500, comm: "zsh", command: "/bin/zsh -l" }]);
+      cache.setChildren(500, [{ pid: 700, comm: "opencode", command: "opencode" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-nested-control",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      expect(detector.getLastDetected()).toBe("opencode");
+    });
+
+    it("never matches or probes the boundary node itself", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [
+        {
+          pid: 200,
+          comm: "Electron",
+          command:
+            "/repo/node_modules/electron/dist/Electron Helper --type=utility --utility-sub-type=node.mojom.NodeService",
+        },
+      ]);
+      cache.setChildren(200, [{ pid: 300, comm: "opencode", command: "opencode" }]);
+      // Returning an agent basename here fails the test if the node is probed.
+      const imagePathProbe = {
+        readBasename: vi.fn((pid: number) => (pid === 200 ? "opencode" : null)),
+        evict: vi.fn(),
+        dispose: vi.fn(),
+      };
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-boundary-node",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true,
+        imagePathProbe as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      // A pruned child is still a running process: the terminal stays busy.
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({ isBusy: true }),
+        expect.any(Number)
+      );
+      expect(detector.getLastDetected()).toBeNull();
+      expect(imagePathProbe.readBasename).not.toHaveBeenCalledWith(200);
+      expect(cache.getChildren).not.toHaveBeenCalledWith(200);
+    });
+  });
+
+  describe("agent commit diagnostics (#11931)", () => {
+    it("logs the winning process once when a tree-sourced agent commits", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "sh", command: "sh -c launch" }]);
+      cache.setChildren(200, [
+        { pid: 300, comm: "node", command: "node /opt/bin/opencode --api-key=do-not-log" },
+      ]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-commit-log",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        false
+      );
+      detector.start();
+      cache.emitRefresh();
+      cache.emitRefresh();
+      // A third agreeing poll must not log again — the commit already happened.
+      cache.emitRefresh();
+
+      const logs = agentCommitLogs();
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toContain("agent=opencode");
+      expect(logs[0]).toContain("evidence=process_tree");
+      expect(logs[0]).toContain("match=argv");
+      expect(logs[0]).toContain("pid=300");
+      expect(logs[0]).toContain('comm="node"');
+      expect(logs[0]).toContain('argv0="node"');
+      expect(logs[0]).toContain("depth=2");
+    });
+
+    it("never puts raw argv in the log", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [
+        { pid: 200, comm: "node", command: "node /opt/bin/opencode --api-key=sk-secret" },
+      ]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-commit-redaction",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      const [line] = agentCommitLogs();
+      expect(line).toBeDefined();
+      expect(line).not.toContain("sk-secret");
+      expect(line).not.toContain("/opt/bin/opencode");
+    });
+
+    it("reports comm as the match source when the process names itself", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "opencode", command: "opencode" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-commit-comm",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      const [line] = agentCommitLogs();
+      expect(line).toContain("match=comm");
+      expect(line).toContain("pid=200");
+      expect(line).toContain("depth=1");
+    });
+
+    it("claims no process provenance for a shell-sourced commit", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "npm", command: "npm install" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-commit-shell",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        false
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      detector.injectShellCommandEvidence(
+        { agentType: "opencode", processIconId: "opencode", processName: "opencode" },
+        "opencode"
+      );
+
+      const [line] = agentCommitLogs();
+      expect(line).toContain("agent=opencode");
+      expect(line).toContain("evidence=shell_command");
+      expect(line).toContain("match=<none>");
+      expect(line).toContain("pid=<none>");
+      expect(line).toContain("depth=<none>");
+      expect(line).not.toContain("pid=200");
+    });
+
+    it("keeps tree provenance when both signals agree", () => {
+      const cache = createCacheMock();
+      // The wrapper must not name the agent itself, or it wins at depth 1 and
+      // the walk never reaches the process this test is about.
+      cache.setChildren(100, [{ pid: 200, comm: "sh", command: "sh -c launch" }]);
+      cache.setChildren(200, [{ pid: 300, comm: "node", command: "node /opt/bin/opencode" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-commit-both",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        false
+      );
+      detector.injectShellCommandEvidence(
+        { agentType: "opencode", processIconId: "opencode", processName: "opencode" },
+        "opencode"
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      const [line] = agentCommitLogs();
+      expect(line).toContain("evidence=both");
+      expect(line).toContain("pid=300");
+      expect(line).toContain("depth=2");
+    });
+
+    it("names the image path when that is what identified the process", () => {
+      // The #8790 shape: the CLI rewrote comm and argv, and only the on-disk
+      // binary still says what it is.
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "Ask anything", command: "Ask anything" }]);
+      const imagePathProbe = {
+        readBasename: vi.fn((pid: number) => (pid === 200 ? "opencode" : null)),
+        evict: vi.fn(),
+        dispose: vi.fn(),
+      };
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-commit-image",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true,
+        imagePathProbe as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      const [line] = agentCommitLogs();
+      expect(line).toContain("agent=opencode");
+      expect(line).toContain("match=image_path");
+      expect(line).toContain("pid=200");
+    });
+
+    it("does not leak a Windows path through the redacted argv0", () => {
+      // `splitShellLikeCommand` eats backslashes as escapes, which would flatten
+      // the path into one separator-less token and persist the whole thing —
+      // home directory and project name included — to the log file.
+      const cache = createCacheMock();
+      cache.setChildren(100, [
+        {
+          pid: 200,
+          comm: "opencode.cmd",
+          command: '"C:\\Users\\alice\\secret-project\\opencode.cmd" --resume',
+        },
+      ]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-commit-winpath",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      const [line] = agentCommitLogs();
+      expect(line).toContain('argv0="opencode.cmd"');
+      expect(line).not.toContain("alice");
+      expect(line).not.toContain("secret-project");
+    });
+
+    it("does not log an agent commit for a non-agent icon", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "npm", command: "npm install" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-commit-icon-only",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      // npm committed — the detector ran and reached a verdict; it just was
+      // not an agent, so nothing is logged.
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({ processIconId: "npm", isBusy: true }),
+        expect.any(Number)
+      );
+      expect(agentCommitLogs()).toHaveLength(0);
+    });
+  });
+
   describe("zombie child filtering", () => {
     it("does not set isBusy when children are all defunct", () => {
       const cache = createCacheMock();
@@ -2077,6 +2509,211 @@ describe("ProcessDetector", () => {
       );
       expect(imagePathProbe.readBasename).toHaveBeenCalledWith(300);
     });
+  });
+});
+
+describe("executable position bounds (#11931)", () => {
+  const agentPath = "/repo/shared/config/agents/opencode.ts";
+
+  it("allows only argv[0] for a command that takes file operands", () => {
+    expect(executablePositionLimit(["cat", "opencode"])).toBe(0);
+    expect(executablePositionLimit(["nvim", "opencode"])).toBe(0);
+    expect(executablePositionLimit(["git", "log", "opencode"])).toBe(0);
+  });
+
+  it("allows argv[1] for shells, runtimes, package managers and prefixes", () => {
+    for (const executor of ["sh", "node", "python3", "npx", "bunx", "env", "sudo", "mise"]) {
+      expect(executablePositionLimit([executor, "opencode"]), executor).toBe(1);
+    }
+  });
+
+  it("allows argv[2] only behind a package manager's exec subcommand", () => {
+    expect(executablePositionLimit(["pnpm", "exec", "opencode"])).toBe(2);
+    expect(executablePositionLimit(["npm", "exec", "opencode"])).toBe(2);
+    // `exec` after a non-executor is not a package-manager subcommand.
+    expect(executablePositionLimit(["docker", "exec", "opencode"])).toBe(0);
+    // `run` names a user-defined script, not a binary.
+    expect(executablePositionLimit(["npm", "run", "opencode"])).toBe(1);
+  });
+
+  it("does not treat an inherited Object member as an executor", () => {
+    expect(executablePositionLimit(["constructor", "opencode"])).toBe(0);
+    expect(executablePositionLimit(["toString", "opencode"])).toBe(0);
+  });
+
+  it("stops detectCommandIdentity promoting an agent named by an argument", () => {
+    // Compared against the same command over a neutral file: naming an agent
+    // in an operand must change nothing about how the command resolves.
+    for (const [agentArg, neutralArg] of [
+      [`cat ${agentPath}`, "cat /repo/README.md"],
+      [`git log -- ${agentPath}`, "git log -- /repo/README.md"],
+      [`nvim ${agentPath}`, "nvim /repo/README.md"],
+      ["npm run opencode", "npm run build"],
+      ["uv run opencode", "uv run build"],
+    ]) {
+      expect(detectCommandIdentity(agentArg), agentArg).toEqual(detectCommandIdentity(neutralArg));
+    }
+  });
+
+  it("keeps every supported agent launch form resolving", () => {
+    for (const command of [
+      "opencode --continue",
+      "/Users/me/.local/bin/opencode",
+      "node /opt/bin/opencode",
+      "npx opencode",
+      "bunx opencode",
+      "pnpm exec opencode",
+      "npm exec -- opencode",
+      "sh -c opencode",
+      "env FOO=bar opencode",
+      "sudo opencode",
+    ]) {
+      expect(detectCommandIdentity(command)?.agentType, command).toBe("opencode");
+    }
+  });
+
+  it("stops buildDetectedCandidate branding a file-reading process", () => {
+    expect(buildDetectedCandidate("cat", `cat ${agentPath}`, 0)).toBeNull();
+    // Neovim keeps whatever identity it has over any other file; opening an
+    // agent-named one just does not change it.
+    const identityOf = (command: string) => {
+      const candidate = buildDetectedCandidate("nvim", command, 0);
+      expect(candidate, command).not.toBeNull();
+      return {
+        agentType: candidate?.agentType,
+        processIconId: candidate?.processIconId,
+        processName: candidate?.processName,
+      };
+    };
+    expect(identityOf(`nvim ${agentPath}`)).toEqual(identityOf("nvim /repo/README.md"));
+  });
+
+  it("records where the winning name was read from", () => {
+    const origin = { pid: 42, depth: 3, comm: "node", source: "comm" } as const;
+    expect(buildDetectedCandidate("node", "node /opt/bin/opencode", 0, origin)?.provenance).toEqual(
+      { pid: 42, depth: 3, comm: "node", matchSource: "argv" }
+    );
+    expect(
+      buildDetectedCandidate("opencode", "opencode", 0, { ...origin, comm: "opencode" })?.provenance
+        ?.matchSource
+    ).toBe("comm");
+    expect(
+      buildDetectedCandidate("opencode", "Claude Code", 0, { ...origin, source: "image_path" })
+        ?.provenance?.matchSource
+    ).toBe("image_path");
+  });
+
+  it("omits provenance when no origin is supplied", () => {
+    const candidate = buildDetectedCandidate("opencode", "opencode", 0);
+    expect(candidate).not.toBeNull();
+    expect(candidate?.provenance).toBeUndefined();
+  });
+});
+
+describe("agent CLI name aliases", () => {
+  it("registers no alias that does not name its own agent", () => {
+    // The invariant, not a copy of any list: every registered name must carry
+    // its agent's id or command as a token. `@ampcode/cli` yielded the bare
+    // alias `cli`, which made every Node CLI launched as `node …/cli.js` — the
+    // Electron launcher `npx electron .` runs included — an Amp terminal. #11931
+    for (const [alias, agentId] of Object.entries(AGENT_CLI_NAMES)) {
+      const command = AGENT_REGISTRY[agentId].command.toLowerCase();
+      const lowerAlias = alias.toLowerCase();
+      const lowerId = agentId.toLowerCase();
+      const tokens = lowerAlias.split(/[^a-z0-9]+/);
+      const namesItsAgent =
+        lowerAlias === lowerId ||
+        lowerAlias === command ||
+        tokens.includes(lowerId) ||
+        tokens.includes(command);
+      expect(namesItsAgent, `${alias} -> ${agentId}`).toBe(true);
+    }
+  });
+
+  it("keeps every agent reachable by its own command and id", () => {
+    for (const [agentId, config] of Object.entries(AGENT_REGISTRY)) {
+      expect(AGENT_CLI_NAMES[config.command], config.command).toBe(agentId);
+      expect(AGENT_CLI_NAMES[agentId], agentId).toBe(agentId);
+    }
+  });
+
+  it("does not resolve an agent from a generic Node CLI entry point", () => {
+    // The end-to-end shape of the `cli` regression, through the real registry.
+    expect(detectCommandIdentity("node /repo/node_modules/electron/cli.js .")).toEqual(
+      detectCommandIdentity("node /repo/node_modules/electron/launcher.js .")
+    );
+    expect(detectCommandIdentity("node /repo/node_modules/electron/cli.js .")?.agentType).toBe(
+      undefined
+    );
+  });
+});
+
+describe("redactArgv", () => {
+  it("reduces a launch path to its basename on both platforms", () => {
+    expect(redactArgv('"C:\\Users\\alice\\secret-project\\opencode.cmd" --resume')).toBe(
+      '"opencode.cmd"'
+    );
+    expect(redactArgv("/Users/alice/secret-project/opencode --resume")).toBe('"opencode"');
+    // A quote groups the token, it does not end it.
+    expect(redactArgv("'/Users/alice/secret-project'/opencode --resume")).toBe('"opencode"');
+  });
+
+  it("emits nothing rather than guess at unbalanced quoting", () => {
+    // Returning the remainder here is how an inline secret reaches the log.
+    expect(redactArgv('"C:\\Users\\alice\\opencode.cmd --api-key=sk-secret')).toBe("");
+    expect(redactArgv("'/Users/alice/opencode --api-key=sk-secret")).toBe("");
+  });
+
+  it("never carries anything past argv[0]", () => {
+    for (const command of [
+      "opencode --api-key=sk-secret",
+      '"/opt/bin/opencode" --api-key=sk-secret',
+      "node /opt/bin/opencode --api-key=sk-secret",
+    ]) {
+      expect(redactArgv(command), command).not.toContain("sk-secret");
+    }
+  });
+
+  it("returns nothing for empty input", () => {
+    expect(redactArgv(undefined)).toBe("");
+    expect(redactArgv("")).toBe("");
+    expect(redactArgv("   ")).toBe("");
+  });
+});
+
+describe("isChromiumChildProcess", () => {
+  it("recognizes Chromium's own helper processes", () => {
+    for (const command of [
+      '"/Applications/Daintree.app/Contents/MacOS/Daintree Helper" --type=utility --utility-sub-type=node.mojom.NodeService',
+      "/opt/app/electron --type=renderer --lang=en-GB",
+      "/opt/app/electron --type=gpu-process",
+      "/opt/app/electron --type=zygote",
+      "/opt/app/electron --type=sandbox-ipc",
+      "/opt/app/electron --type=crashpad-handler",
+    ]) {
+      expect(isChromiumChildProcess(command), command).toBe(true);
+    }
+  });
+
+  it("treats the switch alone as sufficient, by design", () => {
+    // A non-Chromium process taking an exact `--type=utility` loses its
+    // subtree. That is the accepted cost of never missing a real boundary —
+    // a false negative here is the nested-instance bug returning. #11931
+    expect(isChromiumChildProcess("node orchestrator.js --type=utility")).toBe(true);
+  });
+
+  it("ignores unrelated, partial or operand `--type=` text", () => {
+    for (const command of [
+      "jq --type=json .",
+      "mytool --type=utility-worker",
+      "mytool prefix--type=utility",
+      "cat /opt/notes/--type=utility.txt",
+      "mytool -- --type=utility",
+      "opencode",
+      undefined,
+    ]) {
+      expect(isChromiumChildProcess(command), String(command)).toBe(false);
+    }
   });
 });
 

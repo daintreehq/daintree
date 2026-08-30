@@ -24,6 +24,14 @@ import { useProjectStore } from "@/store/projectStore";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
+import {
+  FIELD_FOCUS,
+  FIELD_INPUT,
+  FIELD_SURFACE,
+  FormGrid,
+  FormRow,
+} from "@/components/Worktree/views";
+import { cn } from "@/lib/utils";
 import type { TerminalRecipe } from "@/types";
 import { useRef } from "react";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
@@ -182,32 +190,32 @@ export function RecipeManager({
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-foreground truncate">{recipe.name}</span>
               {readOnly && (
-                <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
+                <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
                   <Lock className="h-3 w-3" />
                   Read-only
                 </span>
               )}
               {isShadowed && (
-                <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
+                <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
                   Overridden by team recipe
                 </span>
               )}
               {isGlobal && (
-                <span className="text-[11px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
+                <span className="text-2xs text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
                   <Globe className="h-3 w-3" />
                   Global
                 </span>
               )}
               {fromPlugin && (
-                <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 truncate">
+                <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 truncate">
                   {recipe.origin.pluginId}
                 </span>
               )}
-              <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
+              <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
                 {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
               </span>
               {recipe.showInEmptyState && (
-                <span className="text-[11px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
+                <span className="text-2xs text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
                   Empty State
                 </span>
               )}
@@ -327,13 +335,13 @@ export function RecipeManager({
         <AppDialog.Body>
           {/* Global Recipes Section */}
           <div className="mb-6">
-            <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
               <Globe className="h-4 w-4" />
               Global Recipes
             </h3>
-            <p className="text-xs text-daintree-text/60 mb-3">Available across all projects</p>
+            <p className="text-xs text-text-secondary mb-3">Available across all projects</p>
             {globalRecipes.length === 0 ? (
-              <div className="border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+              <div className="border border-dashed border-border-default rounded-[var(--radius-md)]">
                 <EmptyState
                   variant="zero-data"
                   scale="canvas"
@@ -350,7 +358,7 @@ export function RecipeManager({
               </div>
             ) : (
               <>
-                <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
+                <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
                   {globalRecipes.map((r) => renderRecipeRow(r))}
                 </div>
                 <div className="flex gap-2 mt-2">
@@ -366,14 +374,14 @@ export function RecipeManager({
           {/* Plugin Recipes Section (#11860) */}
           {pluginRecipes.length > 0 && (
             <div className="mb-6">
-              <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
                 <Plug className="h-4 w-4" />
                 Plugin Recipes
               </h3>
-              <p className="text-xs text-daintree-text/60 mb-3">
+              <p className="text-xs text-text-secondary mb-3">
                 Provided by installed plugins and available in every project
               </p>
-              <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
+              <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
                 {pluginRecipes.map((r) => renderRecipeRow(r))}
               </div>
             </div>
@@ -382,14 +390,14 @@ export function RecipeManager({
           {/* Team Recipes Section (in-repo) */}
           {inRepoRecipes.length > 0 && (
             <div className="mb-6">
-              <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
                 <GitBranch className="h-4 w-4" />
                 Team Recipes
               </h3>
-              <p className="text-xs text-daintree-text/60 mb-3">
+              <p className="text-xs text-text-secondary mb-3">
                 Shared via .daintree/recipes/ in the repository
               </p>
-              <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
+              <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
                 {inRepoRecipes.map((r) => renderRecipeRow(r))}
               </div>
             </div>
@@ -397,18 +405,18 @@ export function RecipeManager({
 
           {/* Project Recipes Section */}
           <div className="mb-4">
-            <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
               <FolderOpen className="h-4 w-4" />
               Project Recipes
               {currentProject && (
-                <span className="text-xs font-normal text-daintree-text/50">
+                <span className="text-xs font-normal text-text-secondary">
                   {currentProject.emoji} {currentProject.name}
                 </span>
               )}
             </h3>
-            <p className="text-xs text-daintree-text/60 mb-3">Specific to the current project</p>
+            <p className="text-xs text-text-secondary mb-3">Specific to the current project</p>
             {projectRecipes.length === 0 ? (
-              <div className="border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+              <div className="border border-dashed border-border-default rounded-[var(--radius-md)]">
                 <EmptyState
                   variant="zero-data"
                   scale="canvas"
@@ -441,7 +449,7 @@ export function RecipeManager({
               </div>
             ) : (
               <>
-                <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
+                <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
                   {projectRecipes.map((r) => renderRecipeRow(r, false, inRepoNames.has(r.name)))}
                 </div>
                 <div className="flex gap-2 mt-2">
@@ -541,27 +549,42 @@ export function RecipeManager({
         </AppDialog.Header>
 
         <AppDialog.Body>
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-daintree-text mb-1">Import as</label>
-            <select
-              value={importScope}
-              onChange={(e) => setImportScope(e.target.value as "global" | "project")}
-              className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text text-sm"
-            >
-              <option value="project">Project Recipe</option>
-              <option value="global">Global Recipe</option>
-            </select>
-          </div>
+          <FormGrid>
+            <FormRow label="Import as" htmlFor="recipe-import-scope">
+              <select
+                id="recipe-import-scope"
+                value={importScope}
+                onChange={(e) => setImportScope(e.target.value as "global" | "project")}
+                className={cn(FIELD_INPUT, "pr-8")}
+              >
+                <option value="project">Project Recipe</option>
+                <option value="global">Global Recipe</option>
+              </select>
+            </FormRow>
+          </FormGrid>
+
+          {/* Off the rail deliberately: pasted recipe JSON needs the dialog's
+              full width more than it needs a label column. */}
           <textarea
             value={importJson}
             onChange={(e) => setImportJson(e.target.value)}
             data-testid="recipe-import-textarea"
+            aria-label="Recipe JSON"
+            aria-describedby={importError ? "recipe-import-error" : undefined}
             placeholder='{"name": "My Recipe", "terminals": [...]}'
-            className="w-full h-48 px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 resize-none"
+            className={cn(
+              FIELD_SURFACE,
+              FIELD_FOCUS,
+              "mt-3 w-full h-48 px-2.5 py-2 text-sm text-text-primary font-mono resize-none",
+              "placeholder:text-text-placeholder"
+            )}
             spellCheck={false}
           />
           {importError && (
-            <div className="mt-3 text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3">
+            <div
+              id="recipe-import-error"
+              className="mt-3 text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3"
+            >
               {importError}
             </div>
           )}
@@ -578,7 +601,7 @@ export function RecipeManager({
           >
             Cancel
           </Button>
-          <Button onClick={handleImportRecipe} disabled={!importJson.trim()}>
+          <Button variant="contrast" onClick={handleImportRecipe} disabled={!importJson.trim()}>
             Import
           </Button>
         </AppDialog.Footer>

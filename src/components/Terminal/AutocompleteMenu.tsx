@@ -139,11 +139,11 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       >
         {(title || keyHint) && (
           <div className="flex items-center justify-between gap-2 border-b border-tint/5 px-2 py-1.5">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-daintree-text/40">
+            <span className="text-3xs font-semibold uppercase tracking-wider text-text-secondary">
               {title}
             </span>
             {keyHint && (
-              <span aria-hidden="true" className="shrink-0 text-[10px] text-daintree-text/30">
+              <span aria-hidden="true" className="shrink-0 text-3xs text-text-placeholder">
                 {keyHint}
               </span>
             )}
@@ -151,7 +151,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         )}
         <ScrollShadow className="max-h-64" scrollClassName="p-1">
           {isLoading && items.length === 0 && (
-            <div className="px-2 py-2 text-xs font-mono text-daintree-text/40">Searching…</div>
+            <div className="px-2 py-2 text-xs font-mono text-text-secondary">Searching…</div>
           )}
 
           {isEmpty && (
@@ -159,7 +159,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
               role="status"
               aria-live="polite"
               aria-atomic="true"
-              className="px-2 py-2 text-xs font-mono text-daintree-text/40"
+              className="px-2 py-2 text-xs font-mono text-text-secondary"
             >
               {emptyMessage}
             </div>
@@ -191,8 +191,8 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                       className={cn(
                         "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-[color,background-color,opacity] duration-150 ease-out",
                         idx === selectedIndex
-                          ? "bg-overlay-soft text-daintree-text"
-                          : "text-daintree-text/70 hover:bg-tint/[0.05] hover:text-daintree-text",
+                          ? "bg-overlay-soft text-text-primary"
+                          : "text-text-secondary hover:bg-tint/[0.05] hover:text-text-primary",
                         isRowStale && "opacity-50"
                       )}
                       onMouseDown={(e) => e.preventDefault()}
@@ -208,7 +208,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                         <>
                           <span
                             aria-hidden="true"
-                            className="shrink-0 rounded-sm border border-tint/10 bg-overlay-subtle px-1 text-[9px] font-medium uppercase leading-4 tracking-wide text-daintree-text/50"
+                            className="shrink-0 rounded-sm border border-tint/10 bg-overlay-subtle px-1 text-4xs font-medium uppercase leading-4 tracking-wide text-text-secondary"
                           >
                             {badge}
                           </span>
@@ -218,10 +218,8 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                       {descriptionSnippet && (
                         <span
                           className={cn(
-                            "min-w-0 truncate text-[10px] leading-4",
-                            idx === selectedIndex
-                              ? "text-daintree-text/80"
-                              : "text-daintree-text/30"
+                            "min-w-0 truncate text-3xs leading-4",
+                            idx === selectedIndex ? "text-text-primary" : "text-text-placeholder"
                           )}
                         >
                           {descriptionSnippet}

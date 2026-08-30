@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { X, Eye, RotateCw } from "lucide-react";
+import { ChevronDown, X, Eye, RotateCw } from "lucide-react";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
@@ -149,7 +150,7 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
   if (visibleTasks.length === 0) return null;
 
   const displayTasks = visibleTasks.slice(0, MAX_VISIBLE);
-  const overflowCount = visibleTasks.length - displayTasks.length;
+  const overflowTasks = visibleTasks.slice(MAX_VISIBLE);
 
   return (
     <div className="mb-2 space-y-0.5">
@@ -168,12 +169,94 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
           />
         );
       })}
-      {overflowCount > 0 && (
-        <div className="text-[10px] text-daintree-text/30 px-2 py-0.5 font-sans">
-          +{overflowCount} more
-        </div>
+      {overflowTasks.length > 0 && (
+        <TaskOverflow
+          tasks={overflowTasks}
+          now={now}
+          onStop={handleStop}
+          onFocus={handleFocus}
+          onRestart={handleRestart}
+          onDismiss={handleDismiss}
+        />
       )}
     </div>
+  );
+}
+
+/**
+ * The tasks past the visible cap.
+ *
+ * This used to be "+N more" as static text, which named running processes the
+ * user could then neither watch, stop, nor restart — every handler the rows
+ * need was already in scope, only the rows weren't rendered (#12001). Mounted
+ * only while a tail exists, so the popover can't reopen against a stale one
+ * after the list shrinks.
+ */
+function TaskOverflow({
+  tasks,
+  now,
+  onStop,
+  onFocus,
+  onRestart,
+  onDismiss,
+}: {
+  tasks: PtyPanelData[];
+  now: number;
+  onStop: (id: string) => void;
+  onFocus: (id: string) => void;
+  onRestart: (id: string) => void;
+  onDismiss: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        type="button"
+        data-testid="running-task-overflow"
+        // Deliberately not an enumeration of every hidden command: a task
+        // command is an arbitrary-length string, and concatenating several
+        // makes focusing this button read a paragraph before its state. The
+        // popover is labelled and exposes the rows themselves once opened.
+        aria-label={`Show ${tasks.length} more running ${tasks.length === 1 ? "task" : "tasks"}`}
+        className={cn(
+          "flex w-full items-center gap-0.5 px-2 py-0.5 rounded-[var(--radius-sm)] text-3xs font-sans transition-colors",
+          "text-text-secondary hover:text-text-primary hover:bg-tint/[0.04]",
+          "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+        )}
+      >
+        {tasks.length} more
+        <ChevronDown className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        aria-label="More running tasks"
+        className="p-1 min-w-64 max-w-sm max-h-[var(--radix-popover-content-available-height)] overflow-y-auto"
+      >
+        <ul className="flex flex-col gap-0.5">
+          {tasks.map((t) => (
+            <li key={t.id}>
+              <TaskRow
+                terminal={t}
+                status={deriveTaskStatus(t)}
+                now={now}
+                // Focusing a terminal moves the user out of this surface, so
+                // the popover has nothing left to anchor; stop, restart and
+                // dismiss all keep it open so several can be handled in a row.
+                onStop={onStop}
+                onFocus={(id) => {
+                  setOpen(false);
+                  onFocus(id);
+                }}
+                onRestart={onRestart}
+                onDismiss={onDismiss}
+              />
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -196,7 +279,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
   return (
     <div
       className={cn(
-        "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-sm)] text-[11px] font-mono group",
+        "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-sm)] text-2xs font-mono group",
         "hover:bg-tint/[0.04] transition-colors cursor-pointer",
         status === "failed" && "border-l-2 border-status-error",
         status === "success" && "opacity-60"
@@ -215,19 +298,19 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       <StatusDot status={status} />
 
       {/* Command */}
-      <span className="flex-1 truncate text-daintree-text/70" title={command}>
+      <span className="flex-1 truncate text-text-secondary" title={command}>
         {truncatedCommand}
       </span>
 
       {/* Elapsed time */}
       {isActive && (
-        <span className="text-[10px] text-daintree-text/30 tabular-nums shrink-0">
+        <span className="text-3xs text-text-placeholder tabular-nums shrink-0">
           {formatElapsed(elapsed)}
         </span>
       )}
 
       {/* Actions */}
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0">
         {isActive && (
           <button
             onClick={(e) => {
@@ -248,7 +331,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
                   e.stopPropagation();
                   onRestart(terminal.id);
                 }}
-                className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-daintree-text"
+                className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-text-primary"
                 aria-label="Restart task"
               >
                 <RotateCw className="h-3 w-3" />
@@ -259,7 +342,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
                 e.stopPropagation();
                 onDismiss(terminal.id);
               }}
-              className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-daintree-text"
+              className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-text-primary"
               aria-label="Dismiss"
             >
               <X className="h-3 w-3" />
@@ -271,7 +354,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
             e.stopPropagation();
             onFocus(terminal.id);
           }}
-          className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-daintree-text"
+          className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-text-primary"
           aria-label="Focus terminal"
         >
           <Eye className="h-3 w-3" />
@@ -281,12 +364,21 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
   );
 }
 
+const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
+  running: "Running",
+  restarting: "Restarting",
+  success: "Finished",
+  failed: "Failed",
+};
+
 function StatusDot({ status }: { status: TaskStatus }) {
   return (
     <span
+      role="img"
+      aria-label={TASK_STATUS_LABEL[status]}
       className={cn(
-        "h-1.5 w-1.5 rounded-full shrink-0",
-        status === "running" && "bg-status-success animate-activity-pulse",
+        "status-mark h-1.5 w-1.5 rounded-full shrink-0",
+        status === "running" && "bg-activity-working animate-activity-pulse",
         status === "restarting" && "bg-status-warning animate-activity-pulse",
         status === "success" && "bg-status-success",
         status === "failed" && "bg-status-error"

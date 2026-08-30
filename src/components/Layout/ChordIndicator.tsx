@@ -191,7 +191,7 @@ export function ChordIndicator() {
           onKeyDown={handleKeyDown}
           className={cn(
             "w-full bg-transparent px-4 py-2.5 text-sm",
-            "text-daintree-text placeholder:text-text-placeholder",
+            "text-text-primary placeholder:text-text-placeholder",
             "focus:outline-hidden"
           )}
         />
@@ -204,13 +204,13 @@ export function ChordIndicator() {
           className="border-t border-[var(--border-overlay)] px-2 py-2 max-h-[22rem] overflow-y-auto"
         >
           {results.length === 0 ? (
-            <div className="px-2 py-3 text-xs text-daintree-text/40">No commands match</div>
+            <div className="px-2 py-3 text-xs text-text-secondary">No commands match</div>
           ) : (
             groups.map((group, groupIdx) => (
               <div key={group.category}>
                 {groupIdx > 0 && <div className="border-t border-[var(--border-overlay)] my-1.5" />}
                 <div
-                  className="text-[10px] font-medium uppercase tracking-wider text-daintree-text/30 px-1 py-1"
+                  className="text-3xs font-medium uppercase tracking-wider text-text-placeholder px-1 py-1"
                   role="presentation"
                 >
                   {group.category}
@@ -233,11 +233,11 @@ export function ChordIndicator() {
                         isSelected && "bg-overlay-subtle"
                       )}
                     >
-                      <span className="min-w-0 flex-1 truncate text-daintree-text/80">
+                      <span className="min-w-0 flex-1 truncate text-text-primary">
                         {item.description}
                       </span>
                       {item.displayKey ? (
-                        <kbd className="shrink-0 font-medium text-daintree-text/50 tracking-wide">
+                        <kbd className="shrink-0 font-medium text-text-secondary tracking-wide">
                           {item.displayKey}
                         </kbd>
                       ) : null}
@@ -249,7 +249,7 @@ export function ChordIndicator() {
           )}
         </div>
 
-        <div className="flex items-center gap-2 border-t border-[var(--border-overlay)] px-4 py-1.5 text-[11px] text-daintree-text/40 select-none">
+        <div className="flex items-center gap-2 border-t border-[var(--border-overlay)] px-4 py-1.5 text-2xs text-text-secondary select-none">
           <span>↑↓ select</span>
           <span aria-hidden className="text-daintree-text/20">
             ·

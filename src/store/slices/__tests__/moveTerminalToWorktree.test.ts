@@ -6,6 +6,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 vi.mock("@/clients", () => ({
   terminalClient: {
     resize: vi.fn(),
+    updateWorktreeId: vi.fn(),
   },
   agentSettingsClient: {
     get: vi.fn().mockResolvedValue(null),
@@ -30,6 +31,7 @@ vi.mock("../../persistence/panelPersistence", () => ({
 }));
 
 const { usePanelStore } = await import("../../panelStore");
+const { terminalClient } = await import("@/clients");
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 const { panelPersistence } = await import("../../persistence/panelPersistence");
 
@@ -176,5 +178,34 @@ describe("moveTerminalToWorktree", () => {
     expect(movedGroup?.worktreeId).toBe("wt-b");
 
     expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledTimes(3);
+  });
+
+  it("re-files the run on the pty-host record so the fleet palette regroups it", () => {
+    // The palette groups by the pty-host's copy of `worktreeId`, and nothing
+    // re-stamps it after spawn — so without this hop the sidebar and the
+    // palette disagree about where the very same run is (#12060).
+    const t1 = createMockTerminal("t1", "wt-a");
+    setTerminals([t1]);
+    // Explicit: a leftover group from a prior case would route this through
+    // `moveTabGroupToWorktree`, whose own sync would satisfy the spy and hide a
+    // regression in the single-panel path.
+    usePanelStore.setState({ tabGroups: new Map() });
+    expect(usePanelStore.getState().getPanelGroup("t1")).toBeUndefined();
+
+    usePanelStore.getState().moveTerminalToWorktree("t1", "wt-b");
+
+    expect(terminalClient.updateWorktreeId).toHaveBeenCalledWith("t1", "wt-b");
+  });
+
+  it("does not re-file a run whose destination is the worktree it is already in", () => {
+    // The early return covers the whole move, the host hop included: a no-op
+    // drag must not churn the record or the fleet recompute it triggers.
+    const t1 = createMockTerminal("t1", "wt-a");
+    setTerminals([t1]);
+    usePanelStore.setState({ tabGroups: new Map() });
+
+    usePanelStore.getState().moveTerminalToWorktree("t1", "wt-a");
+
+    expect(terminalClient.updateWorktreeId).not.toHaveBeenCalled();
   });
 });

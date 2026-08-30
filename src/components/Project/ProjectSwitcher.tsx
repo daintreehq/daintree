@@ -221,6 +221,7 @@ export function ProjectSwitcher() {
             isOpen={isDropdownOpen}
             query={projectSwitcher.query}
             results={projectSwitcher.results}
+            browseBands={projectSwitcher.browseBands}
             selectedIndex={projectSwitcher.selectedIndex}
             onQueryChange={projectSwitcher.setQuery}
             onSelectPrevious={projectSwitcher.selectPrevious}
@@ -309,6 +310,7 @@ export function ProjectSwitcher() {
         isOpen={isDropdownOpen}
         query={projectSwitcher.query}
         results={projectSwitcher.results}
+        browseBands={projectSwitcher.browseBands}
         selectedIndex={projectSwitcher.selectedIndex}
         onQueryChange={projectSwitcher.setQuery}
         onSelectPrevious={projectSwitcher.selectPrevious}
@@ -383,7 +385,7 @@ export function ProjectSwitcher() {
                 )}
 
                 <div className="flex flex-col min-w-0 gap-0.5">
-                  <span className="truncate font-semibold text-daintree-text text-sm leading-none">
+                  <span className="truncate font-semibold text-text-primary text-sm leading-none">
                     {workspaceIdentity.name}
                   </span>
                   <span
@@ -413,7 +415,7 @@ export function ProjectSwitcher() {
                 >
                   <span
                     className={cn(
-                      "h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-panel-elevated)]",
+                      "status-mark h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-panel-elevated)]",
                       badgeStatus.color
                     )}
                     data-testid="project-switcher-badge-dot"

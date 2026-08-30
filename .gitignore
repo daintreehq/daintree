@@ -114,11 +114,12 @@ planning/
 *.tgz
 
 # Claude Code: ignore the whole .claude/ folder (session markers, locks,
-# scratch workflows, worktrees, etc.). Shared slash commands and skills are
-# the exception — they're project assets we commit.
+# scratch workflows, worktrees, etc.). Shared slash commands, skills and
+# path-scoped rules are the exception — they're project assets we commit.
 .claude/*
 !.claude/commands/
 !.claude/skills/
+!.claude/rules/
 
 # Claude scratch / working notes (private, ephemeral)
 .claude-scratch/

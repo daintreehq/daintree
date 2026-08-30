@@ -51,13 +51,13 @@ function RecipeListItem({
           // with it; takes the selected treatment from the family now.
           PALETTE_ROW_CLASS,
           "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex items-center gap-2",
-          "bg-daintree-bg hover:bg-surface"
+          "bg-surface-canvas hover:bg-surface"
         )}
         aria-selected={isSelected}
         role="option"
       >
         <Settings2 className="w-4 h-4 text-daintree-text/50" />
-        <span className="text-sm text-daintree-text/70">Customize…</span>
+        <span className="text-sm text-text-secondary">Customize…</span>
       </button>
     );
   }
@@ -76,26 +76,26 @@ function RecipeListItem({
       className={cn(
         PALETTE_ROW_CLASS,
         "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5",
-        "bg-daintree-bg hover:bg-surface",
+        "bg-surface-canvas hover:bg-surface",
         recipe.shadowedBy && "opacity-60"
       )}
       aria-selected={isSelected}
       role="option"
     >
       <div className="flex items-center justify-between gap-2 text-sm">
-        <span className="font-medium text-daintree-text truncate">{recipe.name}</span>
+        <span className="font-medium text-text-primary truncate">{recipe.name}</span>
         <div className="flex items-center gap-1 shrink-0">
           {uniqueTypes.map((type) => (
             <span
               key={type}
-              className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-overlay-medium text-daintree-text/70 text-[11px]"
+              className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-overlay-medium text-text-secondary text-2xs"
             >
               {type}
             </span>
           ))}
         </div>
       </div>
-      <div className="flex items-center gap-2 text-[11px] text-daintree-text/50">
+      <div className="flex items-center gap-2 text-2xs text-text-secondary">
         <span className="truncate">{getRecipeScope(recipe, () => worktreeName).label}</span>
         {recipe.shadowedBy && <span className="shrink-0">Overridden by Team</span>}
         <span className="ml-auto shrink-0">
@@ -158,7 +158,7 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
       emptyMessage="No recipes yet"
       emptyContent={
         <div className="flex flex-col items-center gap-3 mt-4">
-          <p className="text-xs text-daintree-text/40">
+          <p className="text-xs text-text-secondary">
             Create a recipe in the recipe editor to get started.
           </p>
           <Button
@@ -177,12 +177,12 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
       afterList={
         showAssignToggle ? (
           <div className="px-3 py-2 border-t border-daintree-border/40">
-            <label className="flex items-center gap-2 cursor-pointer text-sm text-daintree-text/70">
+            <label className="flex items-center gap-2 cursor-pointer text-sm text-text-secondary">
               <input
                 type="checkbox"
                 checked={palette.assignToSelf}
                 onChange={(e) => palette.setAssignToSelf(e.target.checked)}
-                className="w-3.5 h-3.5 rounded border-daintree-border bg-daintree-bg checked:bg-daintree-accent"
+                className="w-3.5 h-3.5 rounded border-border-default bg-surface-canvas checked:bg-accent-primary"
               />
               Assign issue to me
             </label>

@@ -4,6 +4,7 @@ import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { composeHandlers, primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 
 const SelectIntentContext = React.createContext<((next: boolean) => void) | null>(null);
 
@@ -102,8 +103,11 @@ const SelectTrigger = React.forwardRef<
         type="button"
         ref={ref as React.Ref<HTMLButtonElement>}
         className={cn(
-          "flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text transition-colors",
-          "focus:outline-hidden focus:border-daintree-accent/40",
+          "flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-1.5 text-sm text-text-primary transition-colors",
+          // Full accent, not /40: the recipe in docs/themes/interaction-state-recipes.md
+          // is "border-shift, no ring", and at 40% alpha the focused border was 1.58:1
+          // against the resting one — a focus indicator you cannot see is not one.
+          "focus:outline-hidden focus:border-accent-primary",
           "disabled:opacity-50 disabled:cursor-not-allowed",
           className
         )}
@@ -123,8 +127,8 @@ const SelectTrigger = React.forwardRef<
     <Trigger
       ref={ref}
       className={cn(
-        "flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text transition-colors",
-        "focus:outline-hidden focus:border-daintree-accent/40",
+        "flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-1.5 text-sm text-text-primary transition-colors",
+        "focus:outline-hidden focus:border-accent-primary",
         "disabled:opacity-50 disabled:cursor-not-allowed",
         "data-[placeholder]:text-text-muted",
         "[&>span]:line-clamp-1 [&>span]:text-left",
@@ -198,7 +202,16 @@ const SelectContent = React.forwardRef<
   SelectContentProps
 >(
   (
-    { className, children, position = "popper", sideOffset = 4, onEscapeKeyDown, style, ...props },
+    {
+      className,
+      children,
+      position = "popper",
+      sideOffset = 4,
+      onEscapeKeyDown,
+      onCloseAutoFocus,
+      style,
+      ...props
+    },
     ref
   ) => {
     const radix = useRadixPrimitives();
@@ -217,9 +230,17 @@ const SelectContent = React.forwardRef<
             event.stopPropagation();
             onEscapeKeyDown?.(event);
           }}
+          onCloseAutoFocus={(event) => {
+            onCloseAutoFocus?.(event);
+            // Radix returns focus to the trigger here with a bare `.focus()`,
+            // which opens any tooltip that trigger carries. A select's focus
+            // policy is otherwise left alone — returning to the trigger is what
+            // a combobox is supposed to do — so only the tooltip is suppressed.
+            armTooltipFocusSuppression();
+          }}
           style={{ transformOrigin: "var(--radix-select-content-transform-origin)", ...style }}
           className={cn(
-            "relative z-[var(--z-popover)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-daintree-text",
+            "relative z-[var(--z-popover)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-text-primary",
             "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
             position === "popper" &&
               "min-w-[var(--radix-select-trigger-width)] max-h-[var(--radix-select-content-available-height)]",
@@ -258,7 +279,7 @@ const SelectLabel = React.forwardRef<
     <Label
       ref={ref}
       className={cn(
-        "px-2.5 py-1.5 text-[11px] font-bold tracking-wider uppercase text-daintree-text/50",
+        "px-2.5 py-1.5 text-2xs font-bold tracking-wider uppercase text-text-secondary",
         className
       )}
       {...props}
@@ -271,6 +292,11 @@ interface SelectItemProps extends React.ComponentPropsWithoutRef<typeof SelectPr
   description?: React.ReactNode;
 }
 
+/* Same highlighted-row focus ring as the dropdown-menu primitives: Radix's
+ * `data-[highlighted]` fill is too low-contrast to be the indicator, so keyboard
+ * focus draws an inset `selection-outline` ring. `outline-solid` is load-bearing —
+ * `outline-hidden` sets `--tw-outline-style: none` and `outline-2` reads it back.
+ */
 const SelectItem = React.forwardRef<
   React.ElementRef<typeof SelectPrimitiveType.Item>,
   SelectItemProps
@@ -285,7 +311,7 @@ const SelectItem = React.forwardRef<
       ref={ref}
       className={cn(
         "relative flex w-full cursor-pointer select-none items-start rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors",
-        "focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised",
+        "data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px]",
         "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
@@ -299,7 +325,7 @@ const SelectItem = React.forwardRef<
       {description ? (
         <span className="flex flex-col gap-0.5">
           <ItemText>{children}</ItemText>
-          <span className="text-[11px] text-daintree-text/40">{description}</span>
+          <span className="text-2xs text-text-secondary">{description}</span>
         </span>
       ) : (
         <ItemText>{children}</ItemText>

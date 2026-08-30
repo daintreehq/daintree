@@ -6,6 +6,23 @@ export interface ChildProcess {
   command?: string;
 }
 
+/**
+ * Which signal inside a single process produced the winning name: its `comm`,
+ * a token in its argv, or the basename of its on-disk image. Recorded so a
+ * wrong committed identity says *how* it was resolved, not just to what. #11931
+ */
+export type CandidateMatchSource = "comm" | "argv" | "image_path";
+
+/** The process behind a candidate, carried for the agent-commit diagnostic. */
+export interface CandidateProvenance {
+  pid: number;
+  /** BFS level below the PTY; direct children are 1. */
+  depth: number;
+  /** Raw `comm` as the OS reported it, before basename/extension stripping. */
+  comm: string;
+  matchSource: CandidateMatchSource;
+}
+
 export interface DetectedProcessCandidate {
   agentType?: BuiltInAgentId;
   processIconId?: string;
@@ -13,6 +30,8 @@ export interface DetectedProcessCandidate {
   processCommand?: string;
   priority: number;
   order: number;
+  /** Absent when the caller supplied no origin (unit-level construction). */
+  provenance?: CandidateProvenance;
 }
 
 export interface CommandIdentity {
@@ -46,6 +65,19 @@ export interface DetectionResult {
 }
 
 export type DetectionCallback = (result: DetectionResult, spawnedAt: number) => void;
+
+/**
+ * One detection pass: the public result plus the tree candidate that actually
+ * supports it. The candidate rides alongside rather than inside
+ * `DetectionResult` because that type crosses to the renderer, and it is
+ * returned rather than stashed on the detector so it cannot go stale across
+ * the early-return paths (invalid PID, blind `ps`, empty tree). `treeMatch` is
+ * null whenever the identity did not come from the process tree.
+ */
+export interface DetectionPass {
+  result: DetectionResult;
+  treeMatch: DetectedProcessCandidate | null;
+}
 
 export function makeAgentResult(params: {
   agentType?: BuiltInAgentId;

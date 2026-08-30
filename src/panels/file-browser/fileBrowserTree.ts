@@ -1,4 +1,4 @@
-import type { FileTreeNode } from "@shared/types";
+import type { FileTreeNode, FileTreeSymlink } from "@shared/types";
 import type {
   FileBrowserSortDirection,
   FileBrowserSortKey,
@@ -54,6 +54,23 @@ export interface FlatTreeRow {
   isLoading: boolean;
   /** Byte size for files; undefined for directories */
   size?: number;
+  /**
+   * Present only on rows that are symbolic links (#11939). `isDirectory` still
+   * answers whether the row behaves as a directory — the listing reports the
+   * link's *target* kind — so nothing that reads that field needs to know
+   * about this one.
+   */
+  symlink?: FileTreeSymlink;
+  /**
+   * 1-based position among the row's *visible* siblings, and how many there
+   * are. Computed here rather than in the view because only this walk knows
+   * what the visibility filter removed: the APG requires `aria-posinset` /
+   * `aria-setsize` on a treeitem whose group nesting the DOM does not express,
+   * and a virtualized flat list never expresses it. Counting pre-filter would
+   * announce positions that do not exist on screen.
+   */
+  posInSet: number;
+  setSize: number;
 }
 
 /**
@@ -90,6 +107,8 @@ export interface FolderListingRow {
    * folder the user has never opened is not an empty folder.
    */
   itemCount?: number;
+  /** Present only on rows that are symbolic links (#11939). */
+  symlink?: FileTreeSymlink;
 }
 
 export type { FileBrowserSortDirection, FileBrowserSortKey };
@@ -278,6 +297,75 @@ export function createVisibilityFilter(visibility: FileVisibility): (name: strin
   };
 }
 
+/** How many rows each hiding mechanism is currently removing from the tree. */
+export interface HiddenRowCounts {
+  /** Removed by the per-panel dotfile toggle, and revealable by turning it off. */
+  dotfiles: number;
+  /** Removed by the app-global always-hidden junk list, which lives in Settings. */
+  alwaysHidden: number;
+}
+
+export const NO_HIDDEN_ROWS: HiddenRowCounts = { dotfiles: 0, alwaysHidden: 0 };
+
+/**
+ * How many rows the two filters are removing from the branches the tree is
+ * *currently showing* — the same walk `flattenTree` does, so the number always
+ * describes the rows the user could otherwise see right now.
+ *
+ * Deliberately bounded to loaded, expanded branches. A collapsed folder's
+ * contents have usually never been fetched, so any deeper total would be a
+ * guess that changes as listings arrive, and a count that climbs on its own
+ * while the user is not doing anything is worse than no count at all.
+ *
+ * The two categories stay separate because their recoveries differ: dotfiles
+ * are one toggle away in this panel, while the junk list is an app-global
+ * setting. Collapsing them into one number would offer a fix that does not
+ * work for half the rows it claims.
+ */
+export function countHiddenRows(
+  listings: DirectoryListings,
+  expandedPaths: ReadonlySet<string>,
+  rootPath = "",
+  visibility: FileVisibility
+): HiddenRowCounts {
+  const { hideDotfiles, alwaysHiddenPatterns } = visibility;
+  let dotfiles = 0;
+  let alwaysHidden = 0;
+
+  const isJunk = (name: string): boolean =>
+    alwaysHiddenPatterns.some((pattern) => matchesBasenameGlob(name, pattern));
+
+  const walk = (dirPath: string, depth: number): void => {
+    // The same depth bound `flattenTree` walks under, and for the same reason:
+    // a symlink cycle would otherwise recurse until the stack blows.
+    if (depth > MAX_TREE_DEPTH) return;
+    const listed = listings.get(dirPath);
+    if (!listed) return;
+
+    for (const node of listed) {
+      // Junk is counted first and wins: an entry matching both (`.DS_Store` is
+      // a dotfile *and* junk) is not revealable by the dotfile toggle, so
+      // counting it as a dotfile would promise a recovery that does nothing.
+      if (isJunk(node.name)) {
+        alwaysHidden += 1;
+        continue;
+      }
+      if (hideDotfiles && node.name.startsWith(".")) {
+        dotfiles += 1;
+        continue;
+      }
+      // Only visible directories are descended into — a hidden folder's
+      // children are not rows the user is missing from *this* view, they are
+      // rows behind one collapsed parent, and counting them would inflate the
+      // badge by whole subtrees.
+      if (node.isDirectory && expandedPaths.has(node.path)) walk(node.path, depth + 1);
+    }
+  };
+
+  walk(rootPath, 0);
+  return { dotfiles, alwaysHidden };
+}
+
 /**
  * Whether the row for a worktree-relative path is currently visible: every path
  * segment below the browser root must pass the filter. Used to reconcile a
@@ -320,9 +408,15 @@ export function flattenTree(
   const rows: FlatTreeRow[] = [];
 
   const walk = (dirPath: string, depth: number): void => {
-    // Depth guard: a listings map assembled from a symlink cycle (or a bug in
-    // the caller) would otherwise recurse until the stack blows. The service
-    // skips symlinks, so this is a backstop, not the primary defense.
+    // Depth guard: a listings map whose directories contain one another — the
+    // shape a symlink cycle produces, now that the service lists symlinks
+    // (#11939) — would otherwise recurse until the stack blows.
+    //
+    // This is the bound on *rendering*, and it is the only one needed. A cycle
+    // cannot run away on its own: every listing is one level fetched on
+    // explicit expansion, nothing auto-expands, and a restored panel replays a
+    // finite recorded set. Reaching depth 64 through a loop takes 64 deliberate
+    // clicks, and the rows simply stop there.
     if (depth > MAX_TREE_DEPTH) return;
     const listed = listings.get(dirPath);
     if (!listed) return;
@@ -332,11 +426,14 @@ export function flattenTree(
     // and what an unsorted consumer reads, so it must stay as the service sent
     // it.
     const children = sortFileNodes(listed, sort);
+    // Filtered first, then enumerated: `setSize` has to be the number of rows
+    // that actually render at this level, so the hidden entries must be gone
+    // before anything is counted.
+    const visible = isVisible ? children.filter((node) => isVisible(node.name)) : children;
 
-    for (const node of children) {
-      // A hidden entry contributes no row and, for a directory, no subtree —
-      // so its children are never rendered and never fetched.
-      if (isVisible && !isVisible(node.name)) continue;
+    let position = 0;
+    for (const node of visible) {
+      position += 1;
       const isExpanded = node.isDirectory && expandedPaths.has(node.path);
       rows.push({
         path: node.path,
@@ -345,7 +442,10 @@ export function flattenTree(
         depth,
         isExpanded,
         isLoading: node.isDirectory && loadingPaths.has(node.path) && !listings.has(node.path),
+        posInSet: position,
+        setSize: visible.length,
         ...(node.size != null && { size: node.size }),
+        ...(node.symlink && { symlink: node.symlink }),
       });
       if (isExpanded) walk(node.path, depth + 1);
     }
@@ -395,6 +495,7 @@ export function buildFolderListingRows(
       ...(node.size != null && { size: node.size }),
       ...(node.mtimeMs != null && { mtimeMs: node.mtimeMs }),
       ...(itemCount != null && { itemCount }),
+      ...(node.symlink && { symlink: node.symlink }),
     };
   });
 }
@@ -466,6 +567,52 @@ export function ancestorDirectories(relativePath: string): string[] {
  * conventions the issue asks for: right expands, then descends; left collapses,
  * then ascends to the parent.
  */
+/**
+ * Typeahead: the row a printable-prefix buffer should move the cursor to.
+ *
+ * Searches forward from the row *after* the cursor and wraps once, so repeating
+ * the same letter cycles through every match rather than sticking on the first.
+ * The one exception is a buffer that is still being typed (length > 1), which
+ * re-tests the cursor row first — otherwise typing `sr` in a folder holding
+ * `src` would match `src` on the `s`, then skip past it looking for the next
+ * `sr` and land somewhere unrelated.
+ *
+ * Case-insensitive, and matched against the row `name` rather than the path:
+ * the name is what is rendered, and a user typing `p` means the `panels` they
+ * can see, not `src/panels`.
+ *
+ * Returns null when nothing matches, which the caller must treat as "do
+ * nothing" — moving the cursor on a failed match would make a typo silently
+ * navigate somewhere.
+ */
+export function resolveTypeahead(
+  buffer: string,
+  rows: readonly FlatTreeRow[],
+  cursorPath: string | null
+): string | null {
+  if (buffer === "" || rows.length === 0) return null;
+  const prefix = buffer.toLowerCase();
+  const index = cursorPath === null ? -1 : rows.findIndex((row) => row.path === cursorPath);
+
+  // A multi-character buffer is a refinement of the search that just matched,
+  // so the row it landed on is a legitimate answer again.
+  const start = buffer.length > 1 ? index : index + 1;
+  const total = rows.length;
+  for (let offset = 0; offset < total; offset++) {
+    const row = rows[(Math.max(start, 0) + offset) % total];
+    if (row && row.name.toLowerCase().startsWith(prefix)) return row.path;
+  }
+  return null;
+}
+
+/**
+ * How long a typeahead buffer survives without another keystroke. The WAI-ARIA
+ * APG leaves this to the implementation; 1000ms is the long-standing platform
+ * default (Windows list views, macOS Finder) and is what a user who pauses
+ * mid-word expects to have been forgotten.
+ */
+export const TYPEAHEAD_RESET_MS = 1000;
+
 export type TreeKeyIntent =
   | { type: "select"; path: string }
   | { type: "expand"; path: string }

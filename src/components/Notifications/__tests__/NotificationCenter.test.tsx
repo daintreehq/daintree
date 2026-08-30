@@ -706,10 +706,22 @@ describe("NotificationThread visual treatment", () => {
     });
 
     const wrapper = screen.getByTestId("notification-thread");
-    expect(wrapper.className).toMatch(/border-l-2/);
-    expect(wrapper.className).toMatch(/border-tint\//);
-    expect(wrapper.className).not.toMatch(/border-daintree-accent/);
-    expect(wrapper.className).not.toMatch(/bg-daintree-accent/);
+    const rail = wrapper.querySelector("[data-notification-thread-rail]");
+
+    // The rule, not the class: a threaded row is marked by a tint rail on its
+    // left edge, and that rail must NOT be part of the row's box. As a
+    // `border-l-2` it was, so every threaded row's icon, dot and title sat 2px
+    // right of every solo row's and the panel's left column visibly broke
+    // (#12061). Out-of-flow is the invariant; `absolute` is how it is bought.
+    expect(rail).toBeTruthy();
+    expect(rail!.className).toMatch(/absolute/);
+    expect(rail!.className).toMatch(/bg-tint\//);
+    expect(wrapper.className).not.toMatch(/border-l/);
+
+    // Accent restraint: a thread is membership, never the accent signal.
+    expect(wrapper.className).not.toMatch(/border-(?:daintree-accent|accent-primary)(?![\w-])/);
+    expect(wrapper.className).not.toMatch(/bg-(?:daintree-accent|accent-primary)(?![\w-])/);
+    expect(rail!.className).not.toMatch(/(?:daintree-accent|accent-primary)(?![\w-])/);
   });
 
   it("does not render the thread rail wrapper for solo entries", async () => {
@@ -1002,7 +1014,7 @@ describe("NotificationCenter overflow menu", () => {
     expect(trigger.tagName).toBe("BUTTON");
   });
 
-  it("calls clearAll before onClose and removes the trigger when 'Clear all' is selected", async () => {
+  it("confirms before clearing, and only clears once confirmed", async () => {
     const callOrder: string[] = [];
     const originalClearAll = useNotificationHistoryStore.getState().clearAll;
     const clearAllSpy = vi.fn(() => {
@@ -1029,11 +1041,50 @@ describe("NotificationCenter overflow menu", () => {
       fireEvent.click(clearItem);
     });
 
+    // Selecting the menu item must NOT destroy anything. `clearAll` empties
+    // active, archived and snoozed entries at once, regardless of the tab in
+    // view, and persists that — a D1 local-irreversible action, which
+    // docs/architecture/destructive-action-safeguards.md requires to be gated
+    // behind a ConfirmDialog with a verb-noun button (#12061).
+    expect(clearAllSpy).not.toHaveBeenCalled();
+    expect(useNotificationHistoryStore.getState().entries).toHaveLength(2);
+    expect(onClose).not.toHaveBeenCalled();
+
+    // The confirm has to name the real scope. A count alone would not warn
+    // someone standing on the Archived tab that this reaches past it.
+    const confirmButton = screen.getByRole("button", { name: "Clear notifications" });
+    expect(screen.getByText(/Clear all notifications\?/)).toBeTruthy();
+    expect(screen.getByText(/every tab/i)).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(confirmButton);
+    });
+
     expect(useNotificationHistoryStore.getState().entries).toHaveLength(0);
     expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(callOrder).toEqual(["clearAll", "onClose"]);
     expect(screen.queryByLabelText("More notification actions")).toBeNull();
+  });
+
+  it("leaves the history intact when the clear confirm is dismissed", async () => {
+    setEntries([makeEntry(), makeEntry({ id: "entry-keep" })]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    const trigger = screen.getByLabelText("More notification actions");
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Clear all"));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    });
+
+    expect(useNotificationHistoryStore.getState().entries).toHaveLength(2);
   });
 });
 
@@ -1333,24 +1384,33 @@ describe("NotificationCenter — Group by context toggle", () => {
   });
 });
 
+/** The unprefixed text-colour utility on an element, which is what "reads dimmer" means. */
+function textRole(className: string): string | undefined {
+  return className.split(/\s+/).find((token) => /^text-text-[a-z]+$/.test(token));
+}
+
 describe("NotificationCenter — Filter inactive contrast", () => {
-  it("uses /60 on inactive pills, matching the QuickStateFilterBar pattern", () => {
+  it("recedes the inactive segment and brightens it on hover, whichever is selected", () => {
     setEntries([makeEntry({ message: "msg-1" })]);
     render(<NotificationCenter open onClose={vi.fn()} />);
 
-    // Filter starts on "All" → "Unread" is the inactive segment.
+    // Filter starts on "All" → "Unread" is the inactive segment. Which colour
+    // each segment paints is the design's business; that their FOREGROUNDS
+    // differ, and that the inactive one offers a hover lift, is this test's.
+    // Comparing whole class strings would not do: these chips also differ by
+    // background and weight, so that comparison passes even if both foregrounds
+    // collapse to the same role.
     const unread = screen.getByText("Unread");
-    expect(unread.className).toContain("text-daintree-text/60");
-    expect(unread.className).not.toContain("text-daintree-text/40");
-    expect(unread.className).toContain("hover:text-daintree-text");
+    expect(textRole(unread.className)).toBeDefined();
+    expect(textRole(unread.className)).not.toBe(textRole(screen.getByText("All").className));
+    expect(unread.className).toContain("hover:text-text-primary");
 
     fireEvent.click(unread);
 
-    // After flipping, "All" is the inactive segment.
+    // After flipping, the roles swap and the invariant has to hold either way.
     const all = screen.getByText("All");
-    expect(all.className).toContain("text-daintree-text/60");
-    expect(all.className).not.toContain("text-daintree-text/40");
-    expect(all.className).toContain("hover:text-daintree-text");
+    expect(textRole(all.className)).not.toBe(textRole(screen.getByText("Unread").className));
+    expect(all.className).toContain("hover:text-text-primary");
   });
 
   it("does not render either segment when entries is empty", () => {
@@ -1982,6 +2042,97 @@ describe("NotificationCenter — keyboard navigation", () => {
   function getRows(container: HTMLElement): HTMLElement[] {
     return Array.from(container.querySelectorAll<HTMLElement>('[role="listitem"]'));
   }
+
+  it("bounds the scrollport in flex space, never with a percentage height", () => {
+    setEntries([makeEntry(), makeEntry({ id: "entry-2" }), makeEntry({ id: "entry-3" })]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+
+    const panel = container.querySelector('[data-testid="notification-center"]')!;
+    const scrollport = container.querySelector('[role="list"][aria-label="Notifications"]')!;
+    expect(panel).toBeTruthy();
+    expect(scrollport).toBeTruthy();
+
+    // The rule: every link between the panel and the scrollport carries its
+    // bound through flex, and none of them reaches for `h-full`.
+    //
+    // A percentage height resolves against the SPECIFIED height of its
+    // containing block. These wrappers get their heights from flex layout, so
+    // their specified height is `auto` and `h-full` silently computes to
+    // `auto` — which is exactly what shipped: the scrollport took its full
+    // content height (1546px measured, inside a 420px panel), so there was no
+    // scrollbar, no wheel scrolling, no keyboard scrolling and no bottom fade,
+    // and every row past the fold was painted and then clipped away by the
+    // dropdown shell (#12061). jsdom does no layout, so the height itself is
+    // unassertable here; the chain that produces it is.
+    const chain: Element[] = [];
+    for (let el: Element | null = scrollport; el && el !== panel; el = el.parentElement) {
+      chain.push(el);
+    }
+    expect(chain.length).toBeGreaterThan(0);
+    for (const el of chain) {
+      expect(el.className.toString()).not.toMatch(/\bh-full\b/);
+    }
+    const chainClasses = chain.map((el) => el.className.toString()).join(" ");
+    expect(chainClasses).toMatch(/\bflex-1\b/);
+    expect(chainClasses).toMatch(/\bmin-h-0\b/);
+  });
+
+  it("takes focus into the panel on open, without landing on a row", () => {
+    setEntries([makeEntry(), makeEntry({ id: "entry-2" })]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const panel = container.querySelector('[data-testid="notification-center"]')!;
+
+    // The panel is portalled to the end of document.body while the bell sits in
+    // the toolbar, so leaving focus on the bell means the next Tab walks the
+    // rest of the app rather than entering the surface just opened — the rows
+    // become reachable in principle only (#12061).
+    expect(panel.getAttribute("tabindex")).toBe("-1");
+    expect(document.activeElement).toBe(panel);
+
+    // But NOT a row. Focusing the first row on open is a separate decision the
+    // code deliberately avoids, and this must not quietly reverse it.
+    expect(document.activeElement).not.toBe(getRows(container)[0]);
+  });
+
+  it("hands off from the panel root to the list on the first arrow press", () => {
+    setEntries([makeEntry(), makeEntry({ id: "entry-2" })]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const panel = container.querySelector('[data-testid="notification-center"]')!;
+    const rows = getRows(container);
+
+    // The list's own handler bails unless activeElement is already a row, so
+    // without a bridge on the root the first Down after opening does nothing.
+    fireEvent.keyDown(panel, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(rows[0]);
+
+    fireEvent.keyDown(panel, { key: "End" });
+    expect(document.activeElement).toBe(rows[rows.length - 1]);
+  });
+
+  it("delivers the dialog its trigger advertises, without claiming to be modal", () => {
+    setEntries([makeEntry()]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+
+    // The bell carries aria-haspopup="dialog". Something has to be one, and it
+    // needs a name. Non-modal on purpose — the rest of the app stays reachable,
+    // so aria-modal would be a lie and would hide the app from assistive tech.
+    const panel = container.querySelector('[data-testid="notification-center"]')!;
+    expect(panel.getAttribute("role")).toBe("dialog");
+    expect(panel.getAttribute("aria-label")).toBe("Notifications");
+    expect(panel.hasAttribute("aria-modal")).toBe(false);
+  });
+
+  it("caps its height against the space available, not a fixed pixel constant", () => {
+    setEntries([makeEntry()]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+
+    // A flat `max-h-[420px]` gave the same small box on a 27" display as on a
+    // laptop, and overflowed the screen on a short one. The rule is that the
+    // cap consults the room the shell reports; the specific ceiling is free to
+    // change.
+    const panel = container.querySelector('[data-testid="notification-center"]')!;
+    expect(panel.className.toString()).toMatch(/--fixed-dropdown-available-height/);
+  });
 
   it("marks the scroll container as role=list with an aria-label", () => {
     setEntries([

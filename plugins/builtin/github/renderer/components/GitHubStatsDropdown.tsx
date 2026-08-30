@@ -1,18 +1,18 @@
-import { Suspense, lazy, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { ForgeStatsDropdownProps } from "@/components/Layout/forgeStatsDropdownContract";
+import { retryableImport } from "@/lib/retryableImport";
 import { GitHubResourceListSkeleton, CommitListSkeleton } from "./GitHubDropdownSkeletons";
 import { useGitHubFilterStore } from "../stores/githubFilterStore";
 
 // The list bodies stay in their own chunks — this wrapper is registered (and
 // therefore bundled) at app start, but the heavy Virtuoso-backed lists load
-// only when the dropdown opens.
-const importResourceList = () => import("./GitHubResourceList");
-const importCommitList = () => import("./CommitList");
-
-const LazyResourceList = lazy(() =>
-  importResourceList().then((m) => ({ default: m.GitHubResourceList }))
+// only when the dropdown opens. `retryableImport`, not `lazy`: a lazy component
+// caches its rejection forever, so one missed chunk fetch would disable the
+// dropdown for the whole session with no way back.
+const loadResourceList = retryableImport(() =>
+  import("./GitHubResourceList").then((m) => m.GitHubResourceList)
 );
-const LazyCommitList = lazy(() => importCommitList().then((m) => ({ default: m.CommitList })));
+const loadCommitList = retryableImport(() => import("./CommitList").then((m) => m.CommitList));
 
 type ResourceListType = typeof import("./GitHubResourceList").GitHubResourceList;
 type CommitListType = typeof import("./CommitList").CommitList;
@@ -23,9 +23,10 @@ type CommitListType = typeof import("./CommitList").CommitList;
  * and freshness/rate-limit chrome; this view supplies the list content for
  * all three kinds.
  *
- * Two-tier loading: lazy()/Suspense covers the first open, AND the concrete
- * component reference is retained after it resolves so subsequent opens skip
- * the Suspense boundary.
+ * The list chunk loads on first open behind a skeleton; the resolved component
+ * is retained (in the loader and in state) so later opens render it straight
+ * away. A failed load re-throws in render for the slot's ErrorBoundary, whose
+ * Try again remounts this view and re-issues the import.
  */
 export function GitHubStatsDropdown({
   kind,
@@ -38,19 +39,25 @@ export function GitHubStatsDropdown({
   onFreshFetch,
   onCountUpdate,
 }: ForgeStatsDropdownProps) {
-  const [ResourceList, setResourceList] = useState<ResourceListType | null>(null);
-  const [CommitList, setCommitList] = useState<CommitListType | null>(null);
+  const [ResourceList, setResourceList] = useState<ResourceListType | null>(() =>
+    loadResourceList.peek()
+  );
+  const [CommitList, setCommitList] = useState<CommitListType | null>(() => loadCommitList.peek());
+  const [loadError, setLoadError] = useState<Error | null>(null);
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    const fail = (err: unknown) => {
+      if (!cancelled) setLoadError(err instanceof Error ? err : new Error(String(err)));
+    };
     if (kind === "commits") {
-      void importCommitList().then((m) => {
-        if (!cancelled) setCommitList(() => m.CommitList);
-      });
+      void loadCommitList().then((m) => {
+        if (!cancelled) setCommitList(() => m);
+      }, fail);
     } else {
-      void importResourceList().then((m) => {
-        if (!cancelled) setResourceList(() => m.GitHubResourceList);
-      });
+      void loadResourceList().then((m) => {
+        if (!cancelled) setResourceList(() => m);
+      }, fail);
     }
     return () => {
       cancelled = true;
@@ -69,6 +76,10 @@ export function GitHubStatsDropdown({
     if (kind === "prs") setPrSearchQuery("");
   }, [open, kind, setIssueSearchQuery, setPrSearchQuery]);
 
+  // Surfaced to the slot's ErrorBoundary rather than swallowed: a chunk that
+  // never arrives would otherwise leave the skeleton pulsing forever.
+  if (loadError) throw loadError;
+
   if (kind === "commits") {
     const commitProps = {
       projectPath: worktreePath ?? projectPath,
@@ -79,9 +90,7 @@ export function GitHubStatsDropdown({
     return CommitList ? (
       <CommitList {...commitProps} />
     ) : (
-      <Suspense fallback={<CommitListSkeleton count={initialCount} immediate />}>
-        <LazyCommitList {...commitProps} />
-      </Suspense>
+      <CommitListSkeleton count={initialCount} immediate />
     );
   }
 
@@ -97,8 +106,6 @@ export function GitHubStatsDropdown({
   return ResourceList ? (
     <ResourceList {...listProps} />
   ) : (
-    <Suspense fallback={<GitHubResourceListSkeleton count={initialCount} immediate type={type} />}>
-      <LazyResourceList {...listProps} />
-    </Suspense>
+    <GitHubResourceListSkeleton count={initialCount} immediate type={type} />
   );
 }

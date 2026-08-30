@@ -584,10 +584,10 @@ export function BrowserToolbar({
                 }}
                 className="w-full text-left px-2.5 py-1.5 hover:bg-overlay-medium transition-colors flex flex-col gap-0.5"
               >
-                <span className="text-xs text-daintree-text truncate">
+                <span className="text-xs text-text-primary truncate">
                   {entry.title || entry.url}
                 </span>
-                <span className="text-[11px] text-daintree-text/40 truncate">{entry.url}</span>
+                <span className="text-2xs text-text-secondary truncate">{entry.url}</span>
               </button>
             ))}
           </div>
@@ -630,10 +630,10 @@ export function BrowserToolbar({
                 }}
                 className="w-full text-left px-2.5 py-1.5 hover:bg-overlay-medium transition-colors flex flex-col gap-0.5"
               >
-                <span className="text-xs text-daintree-text truncate">
+                <span className="text-xs text-text-primary truncate">
                   {entry.title || entry.url}
                 </span>
-                <span className="text-[11px] text-daintree-text/40 truncate">{entry.url}</span>
+                <span className="text-2xs text-text-secondary truncate">{entry.url}</span>
               </button>
             ))}
           </div>
@@ -689,7 +689,7 @@ export function BrowserToolbar({
                   onClick={handleZoomReset}
                   disabled={!isNonDefaultZoom}
                   className={cn(
-                    "px-1.5 py-1 rounded text-xs font-medium text-daintree-text transition-colors",
+                    "px-1.5 py-1 rounded text-xs font-medium text-text-primary transition-colors",
                     "hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                   )}
                   aria-label="Reset zoom"
@@ -733,7 +733,7 @@ export function BrowserToolbar({
                     onViewportPresetChange(lastViewportPresetRef.current);
                   }
                 }}
-                className={cn(buttonClass, viewportPreset && "text-daintree-text")}
+                className={cn(buttonClass, viewportPreset && "text-text-primary")}
                 aria-label="Viewport preset"
                 aria-pressed={!!viewportPreset}
               >
@@ -775,7 +775,7 @@ export function BrowserToolbar({
                     onBlur={() => setChipFocusedIndex(-1)}
                     className={cn(
                       "toolbar-icon-button px-1.5 py-1 rounded text-xs font-medium",
-                      isSelected ? "text-daintree-text" : "text-daintree-text/50"
+                      isSelected ? "text-text-primary" : "text-text-secondary"
                     )}
                   >
                     {preset.label}
@@ -794,7 +794,7 @@ export function BrowserToolbar({
                       <button
                         type="button"
                         onClick={onViewportRotateToggle}
-                        className={cn(buttonClass, viewportRotated && "text-daintree-text")}
+                        className={cn(buttonClass, viewportRotated && "text-text-primary")}
                         aria-label="Rotate viewport"
                         aria-pressed={viewportRotated}
                       >
@@ -829,7 +829,7 @@ export function BrowserToolbar({
                           }}
                           className={cn(
                             "toolbar-icon-button px-1.5 py-1 rounded text-xs font-medium",
-                            isSelected ? "text-daintree-text" : "text-daintree-text/50"
+                            isSelected ? "text-text-primary" : "text-text-secondary"
                           )}
                         >
                           {dpr}×
@@ -844,7 +844,7 @@ export function BrowserToolbar({
                       <button
                         type="button"
                         onClick={onViewportFitToggle}
-                        className={cn(buttonClass, viewportFit && "text-daintree-text")}
+                        className={cn(buttonClass, viewportFit && "text-text-primary")}
                         aria-label="Zoom to fit"
                         aria-pressed={viewportFit}
                       >
@@ -903,17 +903,17 @@ export function BrowserToolbar({
               spellCheck={false}
               className={cn(
                 "w-full pl-7 pr-2 py-1 text-xs rounded",
-                "bg-daintree-bg border border-overlay",
+                "bg-surface-canvas border border-overlay",
                 "focus:outline-hidden focus:border-border-strong",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
-                "text-daintree-text placeholder:text-text-placeholder",
+                "focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                "text-text-primary placeholder:text-text-placeholder",
                 error && "border-status-error/50"
               )}
               placeholder="localhost:3000"
             />
           </div>
           {error && (
-            <div className="absolute mt-1 text-xs text-status-error bg-daintree-bg border border-status-error/30 rounded px-2 py-1 z-10">
+            <div className="absolute mt-1 text-xs text-status-error bg-surface-canvas border border-status-error/30 rounded px-2 py-1 z-10">
               {error}
             </div>
           )}
@@ -968,9 +968,9 @@ export function BrowserToolbar({
                 )}
                 <div className="flex-1 min-w-0 flex flex-col gap-0.5 text-left">
                   {entry.title && (
-                    <span className="text-xs text-daintree-text truncate">{entry.title}</span>
+                    <span className="text-xs text-text-primary truncate">{entry.title}</span>
                   )}
-                  <span className="text-xs text-daintree-text/50 truncate">{entry.url}</span>
+                  <span className="text-xs text-text-secondary truncate">{entry.url}</span>
                 </div>
                 {projectId && (
                   <button
@@ -1047,7 +1047,7 @@ export function BrowserToolbar({
             <button
               type="button"
               onClick={onToggleConsole}
-              className={cn(buttonClass, isConsoleOpen && "text-daintree-text")}
+              className={cn(buttonClass, isConsoleOpen && "text-text-primary")}
               aria-label="Toggle console"
               aria-pressed={isConsoleOpen}
             >

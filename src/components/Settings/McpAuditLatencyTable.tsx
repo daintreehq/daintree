@@ -55,8 +55,8 @@ function computeBlock(durations: number[]): ToolLatencyBlock {
 
 function sloBand(p95: number): SloBand {
   if (p95 <= 0) return { label: "", className: "" };
-  if (p95 < 200) return { label: "Instant", className: "text-status-success" };
-  if (p95 < 1000) return { label: "Fast", className: "text-status-success" };
+  if (p95 < 200) return { label: "Instant", className: "text-text-secondary" };
+  if (p95 < 1000) return { label: "Fast", className: "text-text-secondary" };
   if (p95 <= 5000) return { label: "Standard", className: "text-status-warning" };
   return { label: "Slow", className: "text-status-danger" };
 }
@@ -98,14 +98,14 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
     if (block.count === 0) return null;
     const band = sloBand(block.p95);
     return (
-      <tr className="text-daintree-text/70">
-        <td className="py-1 pl-6 pr-2 text-[10px] text-daintree-text/50 truncate">{blockLabel}</td>
-        <td className="py-1 px-2 text-right text-daintree-text/50 tabular-nums">{block.count}</td>
+      <tr className="text-text-secondary">
+        <td className="py-1 pl-6 pr-2 text-3xs text-text-secondary truncate">{blockLabel}</td>
+        <td className="py-1 px-2 text-right text-text-secondary tabular-nums">{block.count}</td>
         <td className="py-1 px-2 text-right tabular-nums">{block.p50}ms</td>
         <td className="py-1 pl-2 text-right tabular-nums">
           {block.p95}ms
           {band.label && (
-            <span className={cn("ml-1.5 text-[10px]", band.className)}>{band.label}</span>
+            <span className={cn("ml-1.5 text-3xs", band.className)}>{band.label}</span>
           )}
         </td>
       </tr>
@@ -113,14 +113,14 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
   };
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle/40">
+    <div className="rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle/40">
       <button
         type="button"
         onClick={() => setIsOpen((v) => !v)}
         aria-expanded={isOpen}
         className={cn(
           "w-full flex items-center justify-between gap-3 px-3 py-2 text-xs",
-          "text-daintree-text/80 hover:text-daintree-text transition-colors"
+          "text-daintree-text/80 hover:text-text-primary transition-colors"
         )}
       >
         <span className="flex items-center gap-2">
@@ -132,18 +132,18 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
           />
           <span>
             Latency by tool
-            {hasRecords && <span className="text-daintree-text/50"> ({stats.length} tools)</span>}
+            {hasRecords && <span className="text-text-secondary"> ({stats.length} tools)</span>}
           </span>
         </span>
       </button>
       {isOpen && (
         <div className="px-3 pb-3 pt-1">
           {!hasRecords ? (
-            <p className="text-xs text-daintree-text/50">No dispatches recorded yet.</p>
+            <p className="text-xs text-text-secondary">No dispatches recorded yet.</p>
           ) : (
             <table className="w-full table-fixed text-xs font-mono tabular-nums">
               <thead>
-                <tr className="text-daintree-text/50">
+                <tr className="text-text-secondary">
                   <th className="text-left font-medium py-1 pr-2 truncate">Tool</th>
                   <th className="text-right font-medium py-1 px-2 w-12">n</th>
                   <th className="text-right font-medium py-1 px-2 w-18">p50</th>
@@ -153,9 +153,9 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
               <tbody className="divide-y divide-daintree-border/50">
                 {stats.map((row) => (
                   <React.Fragment key={row.toolId}>
-                    <tr className="text-daintree-text/80">
+                    <tr className="text-text-primary">
                       <td className="py-1 pr-2 truncate font-medium">{row.toolId}</td>
-                      <td className="py-1 px-2 text-right text-daintree-text/60 tabular-nums">
+                      <td className="py-1 px-2 text-right text-text-secondary tabular-nums">
                         {row.success.count + row.failed.count}
                       </td>
                       <td />

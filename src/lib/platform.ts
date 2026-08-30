@@ -61,3 +61,14 @@ export function createTooltipWithShortcut(label: string, shortcut: string): stri
   const formatted = formatShortcutForTooltip(shortcut);
   return formatted ? `${label} (${formatted})` : label;
 }
+
+/**
+ * Platform-correct label for the "open this path in the OS file manager"
+ * command. One helper so the dropdown, the right-click menu and their tests
+ * can't drift onto three different names for the same action.
+ */
+export function fileManagerRevealLabel(): string {
+  if (isMac()) return "Show in Finder";
+  if (isWindows()) return "Show in Explorer";
+  return "Show in file manager";
+}

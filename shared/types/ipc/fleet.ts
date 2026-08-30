@@ -66,8 +66,14 @@ export interface RunSnoozeRecord {
  * The run — not the project — is the unit here, and that is the whole point of
  * the snapshot. `ProjectStatusMap` answers "how many of this project's agents
  * want something", which tells you where to go but nothing you can act on. A
- * run carries the branch, the agent and the age, so a surface can name the one
- * thing that is stuck instead of the repo it is stuck in.
+ * run carries the worktree, the agent and the age, so a surface can name the
+ * one thing that is stuck instead of the repo it is stuck in.
+ *
+ * The worktree is an id and a path, never a BRANCH. Branch, dirty count,
+ * ahead/behind and PR state live in the per-project-view worktree store fed by
+ * that view's own MessagePort, so they exist for the one project a renderer
+ * owns and for no other. Nothing downstream of this snapshot may claim them
+ * (#11950).
  *
  * Every field here is already on the pty-host's terminal record, so the whole
  * row is free: main fetches exactly this data today and discards it.

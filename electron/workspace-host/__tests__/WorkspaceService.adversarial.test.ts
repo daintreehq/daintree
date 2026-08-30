@@ -863,6 +863,23 @@ describe("WorkspaceService adversarial", () => {
 
   describe("onPRDetected CI-status preservation (#9551)", () => {
     type OnPRDetected = (worktreeId: string, data: Record<string, unknown>) => void;
+    type LinkedCi = { linked?: { pr?: { ciStatus?: { state?: string } } } };
+    type PrDetectedSent = WorkspaceHostEvent & { prCiStatus?: string } & LinkedCi;
+    type WorktreeUpdateSent = WorkspaceHostEvent & {
+      worktree: { prCiStatus?: string } & LinkedCi;
+    };
+
+    // The flat rollup is a legacy compatibility field; `linked.pr.ciStatus` is
+    // what every badge actually reads, and the host rebuilds it from scratch on
+    // each detection event. Preserving one without the other is the same blink
+    // moved into a different field, so both are asserted throughout.
+    function sentPrDetected(): PrDetectedSent | undefined {
+      return sentEvents.find((e) => e.type === "pr-detected") as PrDetectedSent | undefined;
+    }
+
+    function sentWorktreeUpdate(): WorktreeUpdateSent | undefined {
+      return sentEvents.find((e) => e.type === "worktree-update") as WorktreeUpdateSent | undefined;
+    }
 
     function getOnPRDetected(): OnPRDetected {
       return (service as unknown as { prService: { callbacks: { onPRDetected: OnPRDetected } } })
@@ -941,12 +958,12 @@ describe("WorkspaceService adversarial", () => {
 
       // The monitor write and both outbound events keep success — no blink.
       expect(setPRInfo).toHaveBeenCalledWith(expect.objectContaining({ prCiStatus: "success" }));
-      const prDetected = sentEvents.find((e) => e.type === "pr-detected") as
-        (WorkspaceHostEvent & { prCiStatus?: string }) | undefined;
+      const prDetected = sentPrDetected();
       expect(prDetected?.prCiStatus).toBe("success");
-      const wtUpdate = sentEvents.find((e) => e.type === "worktree-update") as
-        (WorkspaceHostEvent & { worktree: { prCiStatus?: string } }) | undefined;
+      expect(prDetected?.linked?.pr?.ciStatus).toEqual({ state: "success" });
+      const wtUpdate = sentWorktreeUpdate();
       expect(wtUpdate?.worktree.prCiStatus).toBe("success");
+      expect(wtUpdate?.worktree.linked?.pr?.ciStatus).toEqual({ state: "success" });
     });
 
     it("full-replaces to undefined when no loading flag is set (checks genuinely gone)", () => {
@@ -960,9 +977,9 @@ describe("WorkspaceService adversarial", () => {
       getOnPRDetected()("/repo/wt", baseEvent({ prCiStatus: undefined }));
 
       expect(setPRInfo).toHaveBeenCalledWith(expect.objectContaining({ prCiStatus: undefined }));
-      const prDetected = sentEvents.find((e) => e.type === "pr-detected") as
-        (WorkspaceHostEvent & { prCiStatus?: string }) | undefined;
+      const prDetected = sentPrDetected();
       expect(prDetected?.prCiStatus).toBeUndefined();
+      expect(prDetected?.linked?.pr?.ciStatus).toBeUndefined();
     });
 
     it("does not preserve across a PR reassignment even when loading", () => {
@@ -980,6 +997,7 @@ describe("WorkspaceService adversarial", () => {
       );
 
       expect(setPRInfo).toHaveBeenCalledWith(expect.objectContaining({ prCiStatus: undefined }));
+      expect(sentPrDetected()?.linked?.pr?.ciStatus).toBeUndefined();
     });
   });
 

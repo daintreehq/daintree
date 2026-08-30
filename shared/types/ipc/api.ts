@@ -349,6 +349,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     reportTitleState(id: string, state: "working" | "waiting"): void;
     updateObservedTitle(id: string, title: string): void;
     updateTitle(id: string, title: string, titleMode: PanelTitleMode): void;
+    updateWorktreeId(id: string, worktreeId: string | null): void;
     onSpawnResult(callback: (id: string, result: SpawnResult) => void): () => void;
     onReduceScrollback(
       callback: (data: { terminalIds: string[]; targetLines: number }) => void
@@ -934,6 +935,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       branchName: string,
       limit?: number
     ): Promise<import("../git.js").GitRemoteCommitPreview>;
+    listPushCommits(
+      cwd: string,
+      branchName: string,
+      limit?: number
+    ): Promise<import("../git.js").GitPushCommitPreview>;
+    listRebaseCommits(
+      cwd: string,
+      branchName: string,
+      limit?: number
+    ): Promise<import("../git.js").GitRebaseCommitPreview>;
     onPushProgress(callback: (event: PushProgressEvent) => void): () => void;
     getStagingStatus(cwd: string): Promise<StagingStatus>;
     abortRepositoryOperation(cwd: string): Promise<void>;
@@ -1022,6 +1033,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         type: "alert" | "confirm" | "prompt";
         message: string;
         defaultValue: string;
+        /**
+         * Host of the frame that raised the dialog, or null when it has no host worth
+         * claiming (data:, blob:, about:). Never guessed — an attribution that can lie
+         * is worse than none.
+         */
+        origin: string | null;
       }) => void
     ): () => void;
     /** Subscribe to dialog-dismiss events — guest navigated away or its renderer crashed */

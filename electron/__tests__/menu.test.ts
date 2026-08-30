@@ -221,6 +221,11 @@ vi.mock("../../shared/config/distribution.js", async (importOriginal) => ({
 }));
 
 import { createApplicationMenu, handleDirectoryOpen, buildAboutPanelOptions } from "../menu.js";
+import {
+  getProjectHistory,
+  disposeProjectHistory,
+  resetProjectHistory,
+} from "../services/ProjectHistoryService.js";
 import { getBuildChannelLabel } from "../../shared/config/distribution.js";
 import { webContents, app, Menu, dialog } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
@@ -234,6 +239,18 @@ function findMenuItem(
   const menu = template.find((m) => m.label === menuLabel);
   if (!menu || !Array.isArray(menu.submenu)) return undefined;
   return (menu.submenu as Electron.MenuItemConstructorOptions[]).find((i) => i.label === itemLabel);
+}
+
+/** Every item in the template, submenus included, so a chord can be searched for. */
+function flattenMenuItems(
+  template: readonly Electron.MenuItemConstructorOptions[]
+): Electron.MenuItemConstructorOptions[] {
+  return template.flatMap((item) => [
+    item,
+    ...(Array.isArray(item.submenu)
+      ? flattenMenuItems(item.submenu as Electron.MenuItemConstructorOptions[])
+      : []),
+  ]);
 }
 
 describe("About panel build channel (#11121)", () => {
@@ -322,7 +339,21 @@ describe("createApplicationMenu", () => {
       mockWebContents.isDevToolsOpened.mockReturnValue(false);
       const item = findMenuItem(capturedTemplate, "View", "Toggle Developer Tools");
       expect(item).toBeDefined();
-      expect(item!.accelerator).toBe("Alt+CommandOrControl+I");
+      // No accelerator: `Alt+CommandOrControl+I` belongs to the renderer's
+      // `pilot.openProject` binding now, and a native menu accelerator eats the
+      // keydown before the renderer ever sees it — a dev-only one here would
+      // leave that shortcut working in the shipped app and dead on every
+      // machine that develops or tests it (#11950).
+      expect(item!.accelerator).toBeUndefined();
+      // The invariant, not just this item's property: no menu item anywhere may
+      // claim the chord, or the same collision comes back under another label.
+      const flattened = flattenMenuItems(capturedTemplate);
+      // Proof the walk actually reached into the submenus — an empty result
+      // below would otherwise be true of a recursion that found nothing.
+      expect(flattened).toContain(item);
+      expect(flattened.filter((entry) => entry.accelerator === "Alt+CommandOrControl+I")).toEqual(
+        []
+      );
       item!.click!(
         {} as Electron.MenuItem,
         mockBrowserWindow as unknown as Electron.BaseWindow,
@@ -919,6 +950,39 @@ describe("handleDirectoryOpen window targeting", () => {
     projectStoreMock.addProject.mockResolvedValue(PROJECT);
     projectStoreMock.getProjectById.mockReturnValue(PROJECT);
     projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+    // Revive window 7's history per test, and retire it afterwards even when a
+    // test fails: a leftover tombstone silently makes the next test's switch
+    // record nothing, which passes for the wrong reason.
+    resetProjectHistory(7);
+  });
+
+  afterEach(() => {
+    disposeProjectHistory(7);
+  });
+
+  it("records the scratch it is leaving behind the project it opens", async () => {
+    // File → Open Recent stays reachable from a scratch, where the project
+    // pointer this path used to read is null — so the scratch left no entry and
+    // `Cmd+Alt+=` could not get back to it (#11936).
+    const SCRATCH_ID = "11111111-1111-4111-8111-111111111111";
+    const targetManager = createManager();
+    targetManager.getActiveProjectId.mockReturnValue(SCRATCH_ID);
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getByWindowId: (id: number) =>
+        id === 7 ? { services: { projectViewManager: targetManager } } : undefined,
+      getPrimary: () => ({ services: { projectViewManager: targetManager } }),
+    });
+
+    const targetWindow = { id: 7, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
+    await handleDirectoryOpen(PROJECT.path, targetWindow);
+
+    expect(getProjectHistory(7).snapshot().entries).toEqual([PROJECT.id, SCRATCH_ID]);
+    // Read before the swap: both warm activation and cold creation set
+    // `activeProjectId` to the incoming project before `switchTo` resolves, so
+    // capturing afterwards would record the destination as its own origin.
+    expect(targetManager.getActiveProjectId.mock.invocationCallOrder[0]).toBeLessThan(
+      targetManager.switchTo.mock.invocationCallOrder[0]!
+    );
   });
 
   it("switches the view of the window the menu action came from, not the newest window", async () => {

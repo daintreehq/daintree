@@ -8,6 +8,12 @@ import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { MenuActionSourceContext, useMenuActionSource } from "./menu-source";
+import {
+  OverlayFocusRestoreContext,
+  useOverlayFocusRestore,
+  useOverlayFocusRestoreValue,
+  useOverlayTriggerRef,
+} from "./overlay-focus-restore";
 import { actionService } from "@/services/ActionService";
 import { useAriaKeyshortcuts } from "@/hooks";
 import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
@@ -26,6 +32,15 @@ const DropdownMenu = ({
   const radix = useRadixPrimitives();
   const [pendingOpen, setPendingOpen] = React.useState<boolean | undefined>(undefined);
   const isControlled = open !== undefined;
+  const focusRestore = useOverlayFocusRestoreValue();
+
+  // Radix only calls `onOpenChange` for opens it initiates, so a CONTROLLED
+  // consumer flipping `open` back to true never reaches the reset below.
+  // That matters when a pointer dismissal is reversed mid-exit: the close
+  // never reaches `onCloseAutoFocus`, and its flags would decide the next one.
+  React.useEffect(() => {
+    if (open) focusRestore.resetForOpen();
+  }, [open, focusRestore]);
 
   const requestOpen = React.useCallback(
     (next: boolean) => {
@@ -52,17 +67,23 @@ const DropdownMenu = ({
   const effectiveDefaultOpen = isControlled ? defaultOpen : (pendingOpen ?? defaultOpen);
   return (
     <MenuActionSourceContext.Provider value="menu">
-      <Root
-        open={open}
-        defaultOpen={effectiveDefaultOpen}
-        onOpenChange={(next) => {
-          if (!isControlled) setPendingOpen(undefined);
-          onOpenChange?.(next);
-        }}
-        {...rest}
-      >
-        {children}
-      </Root>
+      <OverlayFocusRestoreContext.Provider value={focusRestore}>
+        <Root
+          open={open}
+          defaultOpen={effectiveDefaultOpen}
+          onOpenChange={(next) => {
+            // Every opening starts from a clean slate. The content wrapper
+            // stays mounted across open/close, so a close that never reaches
+            // `onCloseAutoFocus` would otherwise leak its gesture flags here.
+            if (next) focusRestore.resetForOpen();
+            if (!isControlled) setPendingOpen(undefined);
+            onOpenChange?.(next);
+          }}
+          {...rest}
+        >
+          {children}
+        </Root>
+      </OverlayFocusRestoreContext.Provider>
     </MenuActionSourceContext.Provider>
   );
 };
@@ -82,6 +103,8 @@ const DropdownMenuTrigger = React.forwardRef<
   ) => {
     const radix = useRadixPrimitives();
     const requestOpen = React.useContext(DropdownMenuIntentContext);
+    // Where focus goes back to after a pointer selection closes the menu.
+    const setTriggerRef = useOverlayTriggerRef(ref);
 
     const handlePointerEnter: React.PointerEventHandler<HTMLButtonElement> = (event) => {
       primeOnEvent();
@@ -105,7 +128,7 @@ const DropdownMenuTrigger = React.forwardRef<
       if (asChild) {
         return (
           <Slot
-            ref={ref}
+            ref={setTriggerRef}
             onPointerEnter={handlePointerEnter}
             onPointerDown={handlePointerDown}
             onFocusCapture={handleFocusCapture}
@@ -119,7 +142,7 @@ const DropdownMenuTrigger = React.forwardRef<
       return (
         <button
           type="button"
-          ref={ref as React.Ref<HTMLButtonElement>}
+          ref={setTriggerRef}
           onPointerEnter={handlePointerEnter}
           onPointerDown={handlePointerDown}
           onFocusCapture={handleFocusCapture}
@@ -134,7 +157,7 @@ const DropdownMenuTrigger = React.forwardRef<
     const Trigger = radix.DropdownMenuPrimitive.Trigger;
     return (
       <Trigger
-        ref={ref}
+        ref={setTriggerRef}
         asChild={asChild}
         onPointerEnter={handlePointerEnter}
         onPointerDown={handlePointerDown}
@@ -189,6 +212,26 @@ type DropdownMenuSubTriggerProps = React.ComponentPropsWithoutRef<
   inset?: boolean;
 };
 
+/* Highlighted-row focus ring, shared by every item-shaped primitive below.
+ *
+ * `data-[highlighted]` is Radix's own highlight and fires for pointer and keyboard
+ * alike, so it stays the fill. It cannot be the WCAG 1.4.11 indicator on its own:
+ * `overlay-raised` clears about 1.1:1 against the surface these menus float on
+ * (`shared/theme/contrast.ts`), which is why the palette row grew a separate rail
+ * rather than a heavier fill. Keyboard focus gets the indicator instead.
+ *
+ * `selection-outline` rather than the accent the generic inset-ring recipe names:
+ * `getPaletteSelectionWarnings` holds that token to 3:1 against all three colours an
+ * inset ring on one of these rows can touch — the raised fill, the `status-danger`
+ * wash a destructive row swaps in for it, and the `.surface-overlay` behind both.
+ * Accent is only scored against the display surfaces, so it has no guarantee against
+ * any of them.
+ *
+ * `outline-solid` is load-bearing, not decorative: `outline-hidden` sets
+ * `--tw-outline-style: none` on this element and `outline-2` reads that same
+ * variable back, so the ring resolves to `outline-style: none` without it. The
+ * suppression is kept so `forced-colors` can still recolour the outline (#6185).
+ */
 const DropdownMenuSubTrigger = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.SubTrigger>,
   DropdownMenuSubTriggerProps
@@ -200,7 +243,7 @@ const DropdownMenuSubTrigger = React.forwardRef<
     <SubTrigger
       ref={ref}
       className={cn(
-        "flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised data-[state=open]:bg-overlay-raised",
+        "flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[state=open]:bg-overlay-raised",
         inset && "pl-8",
         className
       )}
@@ -235,7 +278,7 @@ const DropdownMenuSubContent = React.forwardRef<
         collisionPadding={collisionPadding}
         style={{ transformOrigin: "var(--radix-dropdown-menu-content-transform-origin)", ...style }}
         className={cn(
-          "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-daintree-text",
+          "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
           "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
           className
         )}
@@ -258,42 +301,101 @@ type DropdownMenuContentProps = React.ComponentPropsWithoutRef<
 const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.Content>,
   DropdownMenuContentProps
->(({ className, sideOffset = 4, children, style, ...props }, ref) => {
-  const radix = useRadixPrimitives();
-  const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
-  const isDockPopoverChild = useIsDockPopoverChild();
-  if (!radix) return null;
-  const Portal = radix.DropdownMenuPrimitive.Portal;
-  const Content = radix.DropdownMenuPrimitive.Content;
-  return (
-    <Portal>
-      {/* Context reaches through a portal even though the DOM does not, so a
-          menu opened from the toolbar would otherwise measure its brand marks
-          against the toolbar's surface instead of this floating one. */}
-      <BrandSurfaceReset>
-        <Content
-          ref={shadowRef}
-          sideOffset={sideOffset}
-          style={{
-            transformOrigin: "var(--radix-dropdown-menu-content-transform-origin)",
-            ...style,
-          }}
-          className={cn(
-            "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-daintree-text",
-            "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
-            className
-          )}
-          {...props}
-          data-dock-popover-child={isDockPopoverChild ? "" : undefined}
-        >
-          {topShadow}
-          {children}
-          {bottomShadow}
-        </Content>
-      </BrandSurfaceReset>
-    </Portal>
-  );
-});
+>(
+  (
+    {
+      className,
+      sideOffset = 4,
+      children,
+      style,
+      onPointerDown,
+      onPointerDownOutside,
+      onInteractOutside,
+      onKeyDown,
+      onClick,
+      onCloseAutoFocus,
+      ...props
+    },
+    ref
+  ) => {
+    const radix = useRadixPrimitives();
+    const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
+    const isDockPopoverChild = useIsDockPopoverChild();
+    const focusRestore = useOverlayFocusRestore();
+
+    // Shared close-time focus policy (see `overlay-focus-restore.ts`). Consumer
+    // handlers run first throughout, so a caller can still veto by preventing
+    // the default on the close event.
+    const handlePointerDown: React.PointerEventHandler<HTMLDivElement> = (event) => {
+      onPointerDown?.(event);
+      focusRestore?.onContentPointerDown();
+    };
+    const handlePointerDownOutside: NonNullable<
+      DropdownMenuContentProps["onPointerDownOutside"]
+    > = (event) => {
+      onPointerDownOutside?.(event);
+      focusRestore?.onContentPointerDownOutside();
+    };
+    const handleInteractOutside: NonNullable<DropdownMenuContentProps["onInteractOutside"]> = (
+      event
+    ) => {
+      onInteractOutside?.(event);
+      focusRestore?.onContentInteractOutside(event);
+    };
+    const handleKeyDown: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
+      onKeyDown?.(event);
+      focusRestore?.onContentKeyDown();
+    };
+    const handleClick: React.MouseEventHandler<HTMLDivElement> = (event) => {
+      onClick?.(event);
+      focusRestore?.onContentClick(event);
+    };
+    const handleCloseAutoFocus: NonNullable<DropdownMenuContentProps["onCloseAutoFocus"]> = (
+      event
+    ) => {
+      onCloseAutoFocus?.(event);
+      focusRestore?.onContentCloseAutoFocus(event);
+    };
+
+    if (!radix) return null;
+    const Portal = radix.DropdownMenuPrimitive.Portal;
+    const Content = radix.DropdownMenuPrimitive.Content;
+    return (
+      <Portal>
+        {/* Context reaches through a portal even though the DOM does not, so a
+            menu opened from the toolbar would otherwise measure its brand marks
+            against the toolbar's surface instead of this floating one. */}
+        <BrandSurfaceReset>
+          <Content
+            ref={shadowRef}
+            sideOffset={sideOffset}
+            style={{
+              transformOrigin: "var(--radix-dropdown-menu-content-transform-origin)",
+              ...style,
+            }}
+            className={cn(
+              "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
+              "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
+              className
+            )}
+            {...props}
+            onPointerDown={handlePointerDown}
+            onPointerDownOutside={handlePointerDownOutside}
+            onInteractOutside={handleInteractOutside}
+            onKeyDown={handleKeyDown}
+            onClick={handleClick}
+            onCloseAutoFocus={handleCloseAutoFocus}
+            data-dock-popover-child={isDockPopoverChild ? "" : undefined}
+          >
+            {topShadow}
+            {children}
+            {bottomShadow}
+          </Content>
+        </BrandSurfaceReset>
+      </Portal>
+    );
+  }
+);
 DropdownMenuContent.displayName = "DropdownMenuContent";
 
 type DropdownMenuItemProps = React.ComponentPropsWithoutRef<
@@ -303,6 +405,10 @@ type DropdownMenuItemProps = React.ComponentPropsWithoutRef<
   destructive?: boolean;
 };
 
+/* Leading icons: mark the icon `data-menu-icon` and the text-only items in the
+ * same menu pick up a matching gutter from the `[role="menu"]:has(...)` rule in
+ * index.css — and lose it again when the icon-bearing items are filtered out.
+ * `inset` is the static alternative for a menu whose shape never changes. */
 const DropdownMenuItem = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.Item>,
   DropdownMenuItemProps
@@ -314,7 +420,7 @@ const DropdownMenuItem = React.forwardRef<
     <Item
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         inset && "pl-8",
         destructive &&
           "text-status-danger data-[highlighted]:text-status-danger data-[highlighted]:bg-status-danger/10",
@@ -397,7 +503,7 @@ const DropdownMenuLabel = React.forwardRef<
     <Label
       ref={ref}
       className={cn(
-        "px-2.5 py-1.5 text-[11px] font-bold tracking-wider uppercase text-daintree-text/50",
+        "px-2.5 py-1.5 text-2xs font-bold tracking-wider uppercase text-text-secondary",
         inset && "pl-8",
         className
       )}
@@ -410,12 +516,28 @@ DropdownMenuLabel.displayName = "DropdownMenuLabel";
 const DropdownMenuShortcut = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
   return (
     <span
-      className={cn("ml-auto pl-2 text-[11px] font-mono text-daintree-text/50", className)}
+      className={cn("ml-auto pl-2 text-2xs font-mono text-text-secondary", className)}
       {...props}
     />
   );
 };
 DropdownMenuShortcut.displayName = "DropdownMenuShortcut";
+
+/* Trailing muted slot for item METADATA — a count, a state, a reason an item is
+ * disabled. Deliberately not `DropdownMenuShortcut`: a count is not a keybinding,
+ * and rendering it in the shortcut's mono face reads as one. Non-mono, and
+ * `aria-hidden` by default because the number belongs in the item's accessible
+ * name (callers pass one), not as a second stray string after it. */
+const DropdownMenuMeta = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn("ml-auto pl-2 text-2xs text-text-secondary tabular-nums", className)}
+      {...props}
+    />
+  );
+};
+DropdownMenuMeta.displayName = "DropdownMenuMeta";
 
 type DropdownMenuRadioGroupProps = React.ComponentPropsWithoutRef<
   typeof DropdownMenuPrimitiveType.RadioGroup
@@ -445,7 +567,7 @@ const DropdownMenuRadioItem = React.forwardRef<
     <RadioItem
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
       {...props}
@@ -477,7 +599,7 @@ const DropdownMenuCheckboxItem = React.forwardRef<
     <CheckboxItem
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
       checked={checked}
@@ -506,6 +628,7 @@ export {
   DropdownMenuSeparator,
   DropdownMenuLabel,
   DropdownMenuShortcut,
+  DropdownMenuMeta,
   DropdownMenuGroup,
   DropdownMenuPortal,
   DropdownMenuSub,

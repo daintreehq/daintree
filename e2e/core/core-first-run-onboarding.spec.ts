@@ -72,7 +72,7 @@ test.describe.serial("First-run onboarding flow", () => {
       });
 
       // Skip closes the wizard and the toolbar remains interactive.
-      await window.locator('button:has-text("Skip")').click();
+      await window.getByTestId("agent-setup-exit").click();
       await expect(window.locator(SEL.firstRun.agentSetupDialog)).not.toBeVisible({
         timeout: T_SETTLE,
       });

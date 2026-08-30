@@ -48,7 +48,11 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.maximizeAll", () => ({
     id: "worktree.sessions.maximizeAll",
-    title: "Maximize All Sessions",
+    // "Maximize" described nothing this action does — it moves docked sessions
+    // back into the grid. Renamed everywhere it surfaces so the palette, the
+    // worktree menu and the audit trail name the same operation. The action ID
+    // is load-bearing and stays.
+    title: "Move All Sessions To Grid",
     description: "Move all dock sessions for a worktree into the grid",
     category: "worktree",
     kind: "command",

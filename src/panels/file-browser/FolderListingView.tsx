@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { Virtuoso } from "react-virtuoso";
-import { Folder } from "lucide-react";
+import { FileSymlink, Folder, FolderSymlink } from "lucide-react";
 import { join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/formatBytes";
@@ -101,7 +101,7 @@ export function FolderListingView({
       */}
       <div
         aria-hidden="true"
-        className="flex shrink-0 items-center gap-3 border-b border-overlay px-3 py-1 text-[11px] font-medium text-daintree-text/40"
+        className="flex shrink-0 items-center gap-3 border-b border-overlay px-3 py-1 text-2xs font-medium text-text-secondary"
       >
         <span className="min-w-0 flex-1">Name</span>
         <span className="w-20 shrink-0 text-right">Size</span>
@@ -173,7 +173,27 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
     dataTransfer.setDragImage(event.currentTarget, 12, ROW_HEIGHT_PX / 2);
   };
 
-  const RowIcon = row.isDirectory ? Folder : getFileTypeIcon(row.name).Icon;
+  // Same rule as the tree: a link's glyph says "link" (#11939), and the
+  // description carries where it points and why it may be inert.
+  const RowIcon = row.symlink
+    ? row.isDirectory
+      ? FolderSymlink
+      : FileSymlink
+    : row.isDirectory
+      ? Folder
+      : getFileTypeIcon(row.name).Icon;
+  // Wording keys off the resolved kind, never off a bare "not inside" bit: a
+  // link we could not read at all must not be announced as pointing outside
+  // the workspace, which would be a claim we never verified.
+  const symlinkDescription = row.symlink
+    ? row.symlink.targetKind === "broken"
+      ? `Broken symlink to ${row.symlink.target}`
+      : row.symlink.targetKind === "external"
+        ? `Symlink to ${row.symlink.target}, outside this folder`
+        : row.symlink.targetKind === "unknown"
+          ? `Symlink to ${row.symlink.target}, unreadable`
+          : `Symlink to ${row.symlink.target}`
+    : null;
 
   const menuItems = context.rowContextMenu?.(row);
   const rowSurface = (
@@ -187,8 +207,8 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
         // Neutral hover, no selected state: clicking a row always replaces what
         // this listing is showing, so no row is ever the standing selection —
         // a highlight would only ever paint for the frame before it unmounts.
-        "text-daintree-text/70 transition-colors duration-150 ease-out hover:bg-tint/5",
-        "data-[state=open]:bg-overlay-raised data-[state=open]:text-daintree-text"
+        "text-text-secondary transition-colors duration-150 ease-out hover:bg-tint/5",
+        "data-[state=open]:bg-overlay-raised data-[state=open]:text-text-primary"
       )}
     >
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -196,12 +216,15 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
           className={cn(FILE_TREE_ICON_CLASS, "h-3.5 w-3.5 shrink-0", FILE_TREE_ICON_COLOR_CLASS)}
           aria-hidden="true"
         />
-        <span className="truncate">{row.name}</span>
+        <span className="truncate" title={symlinkDescription ?? undefined}>
+          {row.name}
+        </span>
+        {symlinkDescription && <span className="sr-only">{symlinkDescription}</span>}
       </span>
-      <span className="w-20 shrink-0 text-right tabular-nums text-daintree-text/50">
+      <span className="w-20 shrink-0 text-right tabular-nums text-text-secondary">
         {formatSize(row)}
       </span>
-      <span className="w-24 shrink-0 truncate text-right text-daintree-text/50">
+      <span className="w-24 shrink-0 truncate text-right text-text-secondary">
         {row.mtimeMs == null ? UNKNOWN : formatRelativeTime(row.mtimeMs)}
       </span>
     </div>

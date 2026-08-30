@@ -1,10 +1,11 @@
+import { useId } from "react";
 import type { ComponentType } from "react";
 import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SettingsSwitch } from "./SettingsSwitch";
 
 const COLOR_SCHEMES = {
-  accent: { icon: "text-daintree-accent" },
+  accent: { icon: "text-accent-primary" },
   amber: { icon: "text-status-warning" },
   danger: { icon: "text-status-error" },
 };
@@ -44,6 +45,7 @@ export function SettingsSwitchCard({
   lifecycleBadge,
   scope,
 }: SettingsSwitchCardProps) {
+  const descriptionId = useId();
   const scheme = COLOR_SCHEMES[colorScheme] ?? COLOR_SCHEMES.accent;
   const isCard = variant === "card";
   const showReset = isModified && onReset && !disabled;
@@ -57,7 +59,7 @@ export function SettingsSwitchCard({
   };
 
   const scopeBadge = scope ? (
-    <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-medium bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20">
+    <span className="text-3xs px-1.5 py-0.5 rounded-sm font-medium bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20">
       {scope === "project" ? "Project" : scope === "global" ? "Global" : "Default"}
     </span>
   ) : null;
@@ -67,8 +69,8 @@ export function SettingsSwitchCard({
       className={cn(
         "relative w-full flex items-center justify-between transition-colors",
         isCard ? "p-4 rounded-[var(--radius-lg)] border hover:bg-tint/5" : "py-2",
-        "border-daintree-border text-daintree-text/70",
-        isEnabled && "border-daintree-border text-daintree-text",
+        "border-border-default text-text-secondary",
+        isEnabled && "border-border-default text-text-primary",
         !disabled && "cursor-pointer",
         disabled && "opacity-50"
       )}
@@ -76,7 +78,7 @@ export function SettingsSwitchCard({
     >
       {isModified && isCard && (
         <div
-          className="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-state-modified"
+          className="status-mark absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-state-modified"
           aria-hidden="true"
         />
       )}
@@ -92,12 +94,14 @@ export function SettingsSwitchCard({
             {title}
             {scopeBadge}
             {lifecycleBadge && (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/50 uppercase tracking-wide">
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-daintree-border/50 text-text-secondary uppercase tracking-wide">
                 {lifecycleBadge}
               </span>
             )}
           </div>
-          <div className="text-xs opacity-70">{subtitle}</div>
+          <div id={descriptionId} className="text-xs opacity-70">
+            {subtitle}
+          </div>
         </div>
       </div>
       <SettingsSwitch
@@ -105,6 +109,7 @@ export function SettingsSwitchCard({
         onCheckedChange={onChange}
         disabled={disabled}
         aria-label={ariaLabel}
+        aria-describedby={descriptionId}
         colorScheme={colorScheme}
       />
     </div>
@@ -126,8 +131,8 @@ export function SettingsSwitchCard({
           aria-label={resetAriaLabel ?? `Reset ${title} to default`}
           className={cn(
             "absolute top-1/2 -translate-y-1/2 z-10 p-1 rounded-sm",
-            "text-daintree-text/40 hover:text-daintree-text",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+            "text-daintree-text/40 hover:text-text-primary",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
             "transition-colors",
             isCard ? "right-[4.5rem]" : "right-[3.25rem]"
           )}

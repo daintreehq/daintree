@@ -55,7 +55,10 @@ import { WorktreeMonitor } from "./WorktreeMonitor.js";
 import { WorktreeListService } from "./WorktreeListService.js";
 import { PRIntegrationService, type PRIntegrationCallbacks } from "./PRIntegrationService.js";
 import { RepoFetchCoordinator } from "./RepoFetchCoordinator.js";
-import { planFetchRemotes } from "../../shared/utils/baseRemoteSelection.js";
+import {
+  parseKnownRemoteBranch,
+  planFetchRemotes,
+} from "../../shared/utils/baseRemoteSelection.js";
 
 /**
  * The remote a worktree's displayed counts depend on. Derived through the same
@@ -367,6 +370,33 @@ export class WorkspaceService {
   private readonly epoch: string = randomUUID();
   /** Monotonic event counter within `epoch`. */
   private seq = 0;
+
+  /**
+   * Monotonic monitor-incarnation counter within `epoch`. Deliberately separate
+   * from `seq`: a generation is an identity for one monitor, not a position in
+   * the event stream, and minting one must not advance the stamp the renderer
+   * orders events by. A worktree id is its path, so a delete-then-create at the
+   * same location reuses the id — the incarnation is the only thing that tells
+   * the renderer's tombstone a real recreation apart from a buffered update
+   * belonging to the monitor that was just torn down (#11994). Reset on host
+   * restart, which is safe because that also mints a new `epoch` and the
+   * renderer drops every tombstone on an epoch transition.
+   */
+  private worktreeGeneration = 0;
+
+  /**
+   * In-flight `installWorktreeMonitor` promise per worktree id. The entry guard
+   * reads `monitors` before several awaits, so without single-flighting a second
+   * caller for the same id (a `syncMonitors` pass racing `performCreateWorktree`
+   * or a topology reconcile) sails past it and installs a second live monitor
+   * for one path — double-polling it, and breaking the invariant the removal
+   * tombstone leans on: the registered monitor holds the highest incarnation
+   * minted for its id (#11994). The promise, rather than a bare id set, is what
+   * lets the losing caller wait for the winner instead of returning while the
+   * monitor is still absent — `performCreateWorktree` documents that the
+   * monitor IS registered once its await resolves.
+   */
+  private readonly pendingMonitorInstalls = new Map<string, Promise<void>>();
 
   /**
    * Epoch-scoped set of mutation IDs that have been successfully acknowledged
@@ -1201,6 +1231,7 @@ export class WorkspaceService {
       worktreeId: monitor.id,
       epoch: this.epoch,
       seq: this.nextSeq(),
+      generation: monitor.generation,
     });
     events.emit("sys:worktree:remove", { worktreeId: monitor.id, timestamp: Date.now() });
   }
@@ -1363,7 +1394,35 @@ export class WorkspaceService {
     if (this.monitors.has(wt.id)) {
       return;
     }
+    const inFlight = this.pendingMonitorInstalls.get(wt.id);
+    if (inFlight) {
+      // Swallow the winner's failure rather than re-throwing it into a caller
+      // that only asked for the monitor to exist: a duplicate call stays the
+      // no-op it always was, and the shared await is purely so this returns
+      // once the install has actually settled.
+      await inFlight.catch(() => {});
+      return;
+    }
+    const install = this.installWorktreeMonitor(
+      wt,
+      isActive,
+      skipInitialGitStatus,
+      deferWatcherBudget
+    );
+    this.pendingMonitorInstalls.set(wt.id, install);
+    try {
+      await install;
+    } finally {
+      this.pendingMonitorInstalls.delete(wt.id);
+    }
+  }
 
+  private async installWorktreeMonitor(
+    wt: Worktree,
+    isActive: boolean,
+    skipInitialGitStatus: boolean,
+    deferWatcherBudget: boolean
+  ): Promise<void> {
     const enrichedWt = await this.enrichWorktreeWithWsl(wt);
     wt = enrichedWt;
 
@@ -1377,6 +1436,14 @@ export class WorkspaceService {
       createdAt = stats.birthtimeMs > 0 ? stats.birthtimeMs : stats.ctimeMs;
     } catch {
       // If stat fails, leave undefined
+    }
+
+    // The single-flight guard in the caller covers concurrent installs; this
+    // catches any other path that registered this id across the awaits above.
+    // Minting the incarnation only once we know we will register keeps the
+    // counter aligned with the monitors that actually exist.
+    if (this.monitors.has(wt.id)) {
+      return;
     }
 
     const monitor = new WorktreeMonitor(
@@ -1396,10 +1463,10 @@ export class WorkspaceService {
           this.handleMonitorUpdate(monitor, snapshot);
         },
         onRemoved: (worktreeId) => {
-          this.handleExternalWorktreeRemoval(worktreeId);
+          this.handleExternalWorktreeRemoval(worktreeId, monitor);
         },
         onExternalRemoval: (worktreeId) => {
-          this.handleExternalWorktreeRemoval(worktreeId);
+          this.handleExternalWorktreeRemoval(worktreeId, monitor);
         },
         onResourceStatusPoll: (worktreeId) => {
           return this.runResourceAction(
@@ -1446,7 +1513,8 @@ export class WorkspaceService {
         },
       },
       this.mainBranch,
-      this.pollQueue
+      this.pollQueue,
+      ++this.worktreeGeneration
     );
 
     monitor.setIssueNumber(issueNumber ?? undefined);
@@ -2131,9 +2199,19 @@ export class WorkspaceService {
     }
   }
 
-  private handleExternalWorktreeRemoval(worktreeId: string): void {
+  /**
+   * `origin` is the monitor whose callback fired. A watcher/poll continuation
+   * belonging to a torn-down monitor can resume after a same-path worktree was
+   * recreated, and the id alone would then resolve to the *new* monitor and
+   * delete a live worktree the user just created (#11994). Identity, not id,
+   * is what makes the two incarnations distinguishable here.
+   */
+  private handleExternalWorktreeRemoval(worktreeId: string, origin?: WorktreeMonitor): void {
     const monitor = this.monitors.get(worktreeId);
     if (!monitor) {
+      return;
+    }
+    if (origin && origin !== monitor) {
       return;
     }
 
@@ -2691,22 +2769,63 @@ export class WorkspaceService {
       // or path that slipped past validation is treated as positional.
       const addReusingBranch = () =>
         git.raw(["worktree", "add", "--end-of-options", path, newBranch]);
-      // --no-track: local-base branches shouldn't auto-track a local ref even
-      // when the user has branch.autoSetupMerge=always. Skipping tracking also
-      // avoids a .git/config.lock acquisition, cutting contention under bulk
-      // creation. PR-mode (fromRemote) keeps --track — ahead/behind badges
-      // at WorktreeMonitor.ts:1092 depend on @{u} resolving.
-      const addNewBranch = () =>
-        git.raw([
+      // Remote names, read once and only when a remote base is actually in
+      // play. The tracking decision below is the only thing that needs them,
+      // and the local-base path — the overwhelming majority, and the one that
+      // runs in bulk — must not pay a spawn for a question it never asks.
+      let remoteNames: string[] | null = null;
+      const knownRemotes = async (): Promise<string[]> => {
+        if (remoteNames === null) {
+          try {
+            remoteNames = (await git.getRemotes()).map((r) => r.name).filter((n) => n.length > 0);
+          } catch {
+            remoteNames = [];
+          }
+        }
+        return remoteNames;
+      };
+
+      /**
+       * `--track` only when the new branch is the local counterpart of the
+       * remote base — `-b topic --track origin/topic`, which is the PR-mode
+       * shape and the only one where tracking is the truth.
+       *
+       * `-b bugfix/x --track origin/develop` is the shape that broke: git
+       * writes `branch.bugfix/x.merge = refs/heads/develop`, so a brand new
+       * topic branch tracks the BASE. Everything downstream reads `@{u}` as
+       * the branch's own remote counterpart, so `git status` reports
+       * ahead/behind of develop with nothing naming develop, the base
+       * divergence line then suppresses itself as a duplicate, and
+       * `push.default=simple` refuses to push a branch whose upstream carries
+       * a different name.
+       *
+       * `--no-track` is also what keeps a local base from auto-tracking a
+       * local ref under `branch.autoSetupMerge=always`, and skipping the
+       * tracking write avoids a `.git/config.lock` acquisition — real
+       * contention relief under bulk creation.
+       *
+       * Recomputed per call: collision recovery can suffix `newBranch` to
+       * `topic-2`, and `origin/topic` is not that branch's counterpart.
+       */
+      const shouldTrackBase = async (branchName: string): Promise<boolean> => {
+        if (!fromRemote) return false;
+        const parsed = parseKnownRemoteBranch(baseBranch, await knownRemotes());
+        return parsed !== null && parsed.branch === branchName;
+      };
+
+      const addNewBranch = async () => {
+        const tracking = (await shouldTrackBase(newBranch)) ? "--track" : "--no-track";
+        return git.raw([
           "worktree",
           "add",
           "-b",
           newBranch,
-          fromRemote ? "--track" : "--no-track",
+          tracking,
           "--end-of-options",
           path,
           baseBranch,
         ]);
+      };
 
       markHostPerformance("wtcreate.git-add:start", { branch: newBranch });
       if (useExistingBranch) {
@@ -2755,10 +2874,13 @@ export class WorkspaceService {
             listFailed = true;
           }
 
-          // For fromRemote (PR mode) we never reuse a stale local branch:
-          // the local ref is at the previous tip, and dropping --track would
-          // strip @{u} that ahead/behind badges depend on. Suffix instead so
-          // a fresh tracking branch is created.
+          // For fromRemote (PR mode) we never reuse a stale local branch: the
+          // local ref sits at the previous tip, so reuse would check the
+          // worktree out at old code instead of the remote base's current
+          // tip. Suffix instead — the retry branches from `baseBranch`, so it
+          // starts at the right commit. That retry emits `--no-track`: a
+          // suffixed name is by definition not the remote base's counterpart,
+          // and shouldTrackBase is recomputed against the name being created.
           const canReuse = !listFailed && !fromRemote && !checkedOut.has(newBranch);
 
           this.topologyWatcher.markPendingCreate(pendingCreateKey);

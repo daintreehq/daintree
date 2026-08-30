@@ -263,7 +263,7 @@ export function CrashRecoveryDialog({
         </AppDialog.Header>
 
         <AppDialog.Body className="space-y-4">
-          <p className="text-sm text-daintree-text/80">
+          <p className="text-sm text-text-primary">
             {getCrashCauseDescription(crash.entry.crashCause)} The previous session ended on{" "}
             {crashDate}.
             {hasPanels ? " Select which panels to restore:" : " Choose how to continue:"}
@@ -271,17 +271,17 @@ export function CrashRecoveryDialog({
 
           {hasPanels ? (
             <>
-              <div className="border border-daintree-border rounded-lg overflow-hidden">
-                <div className="flex items-center justify-between px-3 py-2 bg-overlay-soft border-b border-daintree-border">
+              <div className="border border-border-default rounded-lg overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-2 bg-overlay-soft border-b border-border-default">
                   <button
                     type="button"
                     onClick={toggleAll}
-                    className="cursor-pointer text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors"
+                    className="cursor-pointer text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
                     data-testid="toggle-all-button"
                   >
                     {allSelected ? "Deselect all" : "Select all"}
                   </button>
-                  <span className="text-xs tabular-nums text-daintree-text/50">
+                  <span className="text-xs tabular-nums text-text-secondary">
                     {selectedCount} of {panels.length} selected
                   </span>
                 </div>
@@ -320,6 +320,7 @@ export function CrashRecoveryDialog({
 
               <div className="flex gap-2">
                 <Button
+                  variant="contrast"
                   onClick={handleRestoreSelected}
                   disabled={resolving || selectedCount === 0}
                   className="flex-1"
@@ -338,7 +339,7 @@ export function CrashRecoveryDialog({
               </div>
 
               {backupDate && (
-                <p className="text-xs text-daintree-text/50">Session backup from {backupDate}</p>
+                <p className="text-xs text-text-secondary">Session backup from {backupDate}</p>
               )}
             </>
           ) : (
@@ -347,22 +348,22 @@ export function CrashRecoveryDialog({
                 type="button"
                 onClick={handleRestoreAll}
                 disabled={resolving}
-                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-daintree-border hover:border-daintree-accent hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-border-default hover:border-accent-primary hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
                 data-testid="restore-button"
               >
                 <div className="mt-0.5 h-5 w-5 rounded-full bg-overlay-medium flex items-center justify-center shrink-0">
                   <div className="h-2 w-2 rounded-full bg-daintree-text/40" />
                 </div>
                 <div>
-                  <div className="text-sm font-medium text-daintree-text">
+                  <div className="text-sm font-medium text-text-primary">
                     Restore previous session
                   </div>
                   {backupDate ? (
-                    <div className="text-xs text-daintree-text/60 mt-0.5">
+                    <div className="text-xs text-text-secondary mt-0.5">
                       Restore session from {backupDate}
                     </div>
                   ) : (
-                    <div className="text-xs text-daintree-text/60 mt-0.5">
+                    <div className="text-xs text-text-secondary mt-0.5">
                       No backup available — layout may be empty
                     </div>
                   )}
@@ -373,17 +374,17 @@ export function CrashRecoveryDialog({
                 type="button"
                 onClick={() => setShowFreshConfirm(true)}
                 disabled={resolving || showFreshConfirm}
-                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-daintree-border hover:border-daintree-border/80 hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                className="cursor-pointer flex items-start gap-3 p-3 rounded-lg border border-border-default hover:border-daintree-border/80 hover:bg-overlay-soft text-left transition-colors disabled:opacity-50 disabled:pointer-events-none"
                 data-testid="fresh-button"
               >
                 <div className="mt-0.5 h-5 w-5 rounded-full bg-daintree-text/10 flex items-center justify-center shrink-0">
                   <div className="h-2 w-2 rounded-full bg-daintree-text/40" />
                 </div>
                 <div>
-                  <div className="text-sm font-medium text-daintree-text">
+                  <div className="text-sm font-medium text-text-primary">
                     Continue without restoring
                   </div>
-                  <div className="text-xs text-daintree-text/60 mt-0.5">
+                  <div className="text-xs text-text-secondary mt-0.5">
                     Reset to a clean layout — open panels will be cleared
                   </div>
                 </div>
@@ -411,11 +412,11 @@ export function CrashRecoveryDialog({
             </div>
           )}
 
-          <div className="border border-daintree-border rounded-lg overflow-hidden">
+          <div className="border border-border-default rounded-lg overflow-hidden">
             <button
               type="button"
               onClick={() => setDetailsOpen((o) => !o)}
-              className="cursor-pointer w-full flex items-center justify-between px-3 py-2 text-sm text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+              className="cursor-pointer w-full flex items-center justify-between px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
               data-testid="details-toggle"
             >
               <span className="font-medium">Error details</span>
@@ -428,7 +429,7 @@ export function CrashRecoveryDialog({
 
             {detailsOpen && (
               <div
-                className="px-3 pb-3 space-y-2 border-t border-daintree-border"
+                className="px-3 pb-3 space-y-2 border-t border-border-default"
                 data-testid="details-section"
               >
                 <DetailRow label="App version" value={crash.entry.appVersion} />
@@ -460,7 +461,7 @@ export function CrashRecoveryDialog({
                 )}
                 {crash.entry.errorMessage && (
                   <div className="mt-2">
-                    <div className="text-xs text-daintree-text/50 mb-1">Error</div>
+                    <div className="text-xs text-text-secondary mb-1">Error</div>
                     <pre className="text-xs text-status-danger bg-status-danger/10 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all select-text">
                       {crash.entry.errorMessage}
                     </pre>
@@ -468,8 +469,8 @@ export function CrashRecoveryDialog({
                 )}
                 {crash.entry.errorStack && (
                   <div>
-                    <div className="text-xs text-daintree-text/50 mb-1">Stack trace</div>
-                    <pre className="text-xs text-daintree-text/60 bg-overlay-soft rounded p-2 overflow-x-auto max-h-32 whitespace-pre-wrap break-all select-text">
+                    <div className="text-xs text-text-secondary mb-1">Stack trace</div>
+                    <pre className="text-xs text-text-secondary bg-overlay-soft rounded p-2 overflow-x-auto max-h-32 whitespace-pre-wrap break-all select-text">
                       {crash.entry.errorStack}
                     </pre>
                   </div>
@@ -514,7 +515,7 @@ export function CrashRecoveryDialog({
 
                 {recentActions.length > 0 && (
                   <div data-testid="actions-section" className="pt-1">
-                    <div className="text-xs text-daintree-text/50 mb-1">
+                    <div className="text-xs text-text-secondary mb-1">
                       Recent actions ({recentActions.length})
                     </div>
                     <div
@@ -530,7 +531,7 @@ export function CrashRecoveryDialog({
 
                 {showReportPreview && (
                   <div className="pt-1 space-y-2" data-testid="report-preview">
-                    <p className="text-xs text-daintree-text/60">
+                    <p className="text-xs text-text-secondary">
                       Review and edit before submitting. The report is redacted and will be publicly
                       visible on GitHub.
                     </p>
@@ -545,12 +546,12 @@ export function CrashRecoveryDialog({
                             .usedClipboardFallback
                         )
                       }
-                      className="w-full max-h-48 min-h-32 h-48 resize-y rounded border border-daintree-border bg-overlay-soft p-2 font-mono text-xs text-daintree-text/80 select-text"
+                      className="w-full max-h-48 min-h-32 h-48 resize-y rounded border border-border-default bg-overlay-soft p-2 font-mono text-xs text-text-primary select-text"
                       data-testid="report-textarea"
                     />
                     {clipboardFallback && (
                       <p
-                        className="text-xs text-daintree-text/60"
+                        className="text-xs text-text-secondary"
                         data-testid="report-clipboard-note"
                       >
                         This report is too long for a GitHub URL — it'll be copied to your clipboard
@@ -567,6 +568,7 @@ export function CrashRecoveryDialog({
                     )}
                     <div className="flex gap-2">
                       <Button
+                        variant="contrast"
                         size="sm"
                         className="text-xs h-7"
                         onClick={() => void handleSubmitReport()}
@@ -594,7 +596,7 @@ export function CrashRecoveryDialog({
 
           {isInCrashLoop ? (
             config.autoRestoreOnCrash && (
-              <p className="text-xs text-daintree-text/60" data-testid="auto-restore-paused">
+              <p className="text-xs text-text-secondary" data-testid="auto-restore-paused">
                 Auto-restore paused — too many consecutive crashes.
               </p>
             )
@@ -604,10 +606,10 @@ export function CrashRecoveryDialog({
               data-testid="auto-restore-label"
             >
               <div className="text-left">
-                <div id="auto-restore-title" className="text-sm font-medium text-daintree-text">
+                <div id="auto-restore-title" className="text-sm font-medium text-text-primary">
                   Restore automatically next time
                 </div>
-                <div className="text-xs text-daintree-text/60">
+                <div className="text-xs text-text-secondary">
                   Skips this dialog. Shows again if Daintree crashes twice in a row.
                 </div>
               </div>
@@ -635,14 +637,17 @@ export function CrashRecoveryDialog({
         }
         confirmLabel="Reset to clean layout"
         variant="destructive"
+        // Only the panel-listing branch carries structured content; the
+        // no-panels branch really is the brief message alertdialog is for.
+        hasPreview={hasPanels}
         zIndex="nested"
         onConfirm={handleFreshConfirm}
       >
         {hasPanels && (
           <ul className="space-y-1.5">
             {panels.map((panel) => (
-              <li key={panel.id} className="flex items-center gap-2 text-sm text-daintree-text/80">
-                <span className="shrink-0 text-daintree-text/50">{getPanelIcon(panel.kind)}</span>
+              <li key={panel.id} className="flex items-center gap-2 text-sm text-text-primary">
+                <span className="shrink-0 text-text-secondary">{getPanelIcon(panel.kind)}</span>
                 <span className="truncate">{panel.title || panel.kind}</span>
               </li>
             ))}
@@ -671,21 +676,21 @@ function PanelRow({
         type="checkbox"
         checked={selected}
         onChange={() => onToggle(panel.id)}
-        className="accent-daintree-accent h-3.5 w-3.5 shrink-0"
+        className="accent-accent-primary h-3.5 w-3.5 shrink-0"
         data-testid={`panel-checkbox-${panel.id}`}
       />
-      <span className="text-daintree-text/60 shrink-0">{getPanelIcon(panel.kind)}</span>
+      <span className="text-text-secondary shrink-0">{getPanelIcon(panel.kind)}</span>
       <div className="flex-1 min-w-0">
-        <div className="text-sm text-daintree-text truncate">{panel.title || panel.kind}</div>
-        {panel.cwd && <div className="text-xs text-daintree-text/40 truncate">{panel.cwd}</div>}
+        <div className="text-sm text-text-primary truncate">{panel.title || panel.kind}</div>
+        {panel.cwd && <div className="text-xs text-text-secondary truncate">{panel.cwd}</div>}
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
         {panel.agentState && (
-          <span className="text-xs text-daintree-text/50" data-testid={`agent-state-${panel.id}`}>
+          <span className="text-xs text-text-secondary" data-testid={`agent-state-${panel.id}`}>
             {panel.agentState}
           </span>
         )}
-        <span className="text-xs text-daintree-text/40">{panel.location}</span>
+        <span className="text-xs text-text-secondary">{panel.location}</span>
         {panel.isSuspect && (
           <span
             className="text-status-warning"
@@ -703,8 +708,8 @@ function PanelRow({
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-0.5">
-      <span className="text-xs text-daintree-text/50 shrink-0">{label}</span>
-      <span className="text-xs text-daintree-text/80 text-right font-mono">{value}</span>
+      <span className="text-xs text-text-secondary shrink-0">{label}</span>
+      <span className="text-xs text-text-primary text-right font-mono">{value}</span>
     </div>
   );
 }
@@ -745,14 +750,14 @@ function ActionTrailRow({ action }: { action: ActionBreadcrumb }) {
       className="flex items-baseline gap-2 px-2 py-1 text-xs"
       data-testid={`action-row-${action.id}`}
     >
-      <span className="text-daintree-text/40 tabular-nums shrink-0">{time}</span>
-      <span className="font-mono text-daintree-text/80 truncate">{action.actionId}</span>
+      <span className="text-text-secondary tabular-nums shrink-0">{time}</span>
+      <span className="font-mono text-text-primary truncate">{action.actionId}</span>
       {action.count > 1 && (
-        <span className="text-daintree-text/50 tabular-nums shrink-0">×{action.count}</span>
+        <span className="text-text-secondary tabular-nums shrink-0">×{action.count}</span>
       )}
-      <span className="text-daintree-text/40 shrink-0">{action.source}</span>
+      <span className="text-text-secondary shrink-0">{action.source}</span>
       {action.danger !== "safe" && (
-        <span className="text-daintree-text/50 shrink-0">{action.danger}</span>
+        <span className="text-text-secondary shrink-0">{action.danger}</span>
       )}
       {action.confirmed && (
         <span className="text-status-warning shrink-0" title="Confirmed destructive action">
@@ -760,7 +765,7 @@ function ActionTrailRow({ action }: { action: ActionBreadcrumb }) {
         </span>
       )}
       {args && (
-        <span className="text-daintree-text/40 truncate font-mono" title={args}>
+        <span className="text-text-secondary truncate font-mono" title={args}>
           {args}
         </span>
       )}

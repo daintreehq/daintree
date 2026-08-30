@@ -35,6 +35,12 @@ interface AgentCliStepProps {
   availability: CliAvailability;
   selections: Record<string, boolean>;
   onInstallComplete?: () => void;
+  /**
+   * Reports whether an install is in flight so the shell can lock navigation
+   * and dismissal. An install that is interrupted mid-batch stops before the
+   * remaining agents, so Continue/Back/Escape must not be live while it runs.
+   */
+  onBusyChange?: (busy: boolean) => void;
   // During first-run, the dedicated permissions step owns the global trust
   // decision, so the per-agent dangerous toggles here are suppressed to avoid
   // a competing control.
@@ -45,6 +51,7 @@ export function AgentCliStep({
   availability,
   selections,
   onInstallComplete,
+  onBusyChange,
   isFirstRun = false,
 }: AgentCliStepProps) {
   const [cardStatuses, setCardStatuses] = useState<Record<string, CardStatus>>({});
@@ -58,6 +65,20 @@ export function AgentCliStep({
   useEffect(() => {
     cardStatusesRef.current = cardStatuses;
   }, [cardStatuses]);
+
+  const isBusy = isBatchRunning || Object.values(cardStatuses).includes("installing");
+  const onBusyChangeRef = useRef(onBusyChange);
+  useEffect(() => {
+    onBusyChangeRef.current = onBusyChange;
+  });
+  useEffect(() => {
+    onBusyChangeRef.current?.(isBusy);
+  }, [isBusy]);
+  // Release the lock if the step unmounts mid-install, so a shell that outlives
+  // this component can never be left permanently undismissable.
+  useEffect(() => {
+    return () => onBusyChangeRef.current?.(false);
+  }, []);
 
   const selectedAgentIds = useMemo(() => AGENT_ORDER.filter((id) => selections[id]), [selections]);
 
@@ -202,15 +223,6 @@ export function AgentCliStep({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-base font-semibold text-daintree-text mb-1">Install agents</h3>
-          <p className="text-sm text-daintree-text/60">
-            Install agents individually or use the batch button below.
-          </p>
-        </div>
-      </div>
-
       <div className="space-y-1.5 max-h-[320px] overflow-y-auto">
         {selectedAgentIds.map((agentId) => {
           const config = AGENT_REGISTRY[agentId];
@@ -237,11 +249,9 @@ export function AgentCliStep({
                 className={`flex items-center gap-3 w-full px-3 py-2 rounded-[var(--radius-md)] border transition-colors ${
                   isInstalling
                     ? "bg-overlay-soft border-border-strong"
-                    : isInstalled
-                      ? "bg-status-success/5 border-status-success/20"
-                      : isError
-                        ? "bg-status-error/5 border-status-error/20"
-                        : "bg-daintree-bg/30 border-daintree-border"
+                    : isError
+                      ? "bg-status-error/5 border-status-error/20"
+                      : "bg-daintree-bg/30 border-border-default"
                 }`}
               >
                 {/* The box only aligns the row; the mark carries its own colour and
@@ -252,9 +262,9 @@ export function AgentCliStep({
                   </BrandMark>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-daintree-text">{config.name}</div>
+                  <div className="text-sm font-medium text-text-primary">{config.name}</div>
                   {description && (
-                    <div className="text-[11px] text-daintree-text/40 truncate">{description}</div>
+                    <div className="text-2xs text-text-secondary truncate">{description}</div>
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
@@ -263,7 +273,7 @@ export function AgentCliStep({
                       <TooltipTrigger asChild>
                         <button
                           type="button"
-                          className="text-daintree-text/30 hover:text-daintree-text transition-colors p-0.5 cursor-pointer"
+                          className="text-daintree-text/30 hover:text-text-primary transition-colors p-0.5 cursor-pointer"
                           onClick={() => systemClient.openExternal(config.install!.docsUrl!)}
                           aria-label="Open documentation"
                         >
@@ -274,26 +284,26 @@ export function AgentCliStep({
                     </Tooltip>
                   )}
                   {isInstalled ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-status-success font-medium">
+                    <span className="inline-flex items-center gap-1 text-2xs text-status-success font-medium">
                       <CircleCheck className="w-3 h-3" />
                       Installed
                     </span>
                   ) : isInstalling ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-daintree-accent font-medium">
+                    <span className="inline-flex items-center gap-1 text-2xs text-text-secondary font-medium">
                       <Loader2 className="w-3 h-3 animate-spin" />
                       Installing
                     </span>
                   ) : isError ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-status-error font-medium">
+                    <span className="inline-flex items-center gap-1 text-2xs text-status-error font-medium">
                       <AlertCircle className="w-3 h-3" />
                       Failed
                     </span>
                   ) : isManual ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-daintree-text/40">
+                    <span className="inline-flex items-center gap-1 text-2xs text-text-secondary">
                       Manual
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-daintree-text/30">
+                    <span className="inline-flex items-center gap-1 text-2xs text-text-muted">
                       <CircleDashed className="w-3 h-3" />
                       Not installed
                     </span>
@@ -302,7 +312,7 @@ export function AgentCliStep({
                     <button
                       type="button"
                       onClick={() => handleInstall(agentId)}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium text-daintree-accent hover:bg-daintree-accent/10 transition-colors"
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded text-2xs font-medium text-text-primary hover:bg-overlay-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
                     >
                       <Download className="w-3 h-3" />
                       Install
@@ -313,7 +323,7 @@ export function AgentCliStep({
 
               {hasMultipleMethods && !isInstalled && (
                 <div className="flex items-center gap-1 pl-14 pt-1 pb-0.5">
-                  <span className="text-[10px] text-daintree-text/30 mr-1">via</span>
+                  <span className="text-3xs text-text-placeholder mr-1">via</span>
                   {blocks.map((block, idx) => (
                     <button
                       key={idx}
@@ -321,7 +331,7 @@ export function AgentCliStep({
                       disabled={isInstalling || isBatchRunning}
                       onClick={() => handleMethodChange(agentId, idx)}
                       data-selected={idx === currentMethodIdx || undefined}
-                      className="px-1.5 py-0.5 rounded text-[10px] text-daintree-text/50 transition-colors hover:text-daintree-text/80 data-[selected]:bg-tint/[0.12] data-[selected]:text-daintree-text disabled:opacity-50 disabled:pointer-events-none"
+                      className="px-1.5 py-0.5 rounded text-3xs text-daintree-text/50 transition-colors hover:text-daintree-text/80 data-[selected]:bg-tint/[0.12] data-[selected]:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
                     >
                       {block.label ?? `Method ${idx + 1}`}
                     </button>
@@ -331,7 +341,7 @@ export function AgentCliStep({
 
               {isManual && currentBlock?.commands && (
                 <div className="pl-14 pt-1.5 pb-1 space-y-1">
-                  <div className="text-[11px] text-daintree-text/40 mb-1">
+                  <div className="text-2xs text-text-secondary mb-1">
                     Run this command in your terminal. It will be detected automatically.
                   </div>
                   {currentBlock.commands.map((cmd) => (
@@ -349,7 +359,7 @@ export function AgentCliStep({
                         onClick={() => toggleErrorExpanded(agentId)}
                         aria-expanded={isErrorExpanded ?? false}
                         aria-controls={`error-log-${agentId}`}
-                        className="inline-flex items-center gap-1 text-[11px] text-daintree-text/50 hover:text-daintree-text/80 transition-colors"
+                        className="inline-flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary transition-colors"
                       >
                         {isErrorExpanded ? (
                           <ChevronDown className="w-3 h-3" />
@@ -361,7 +371,7 @@ export function AgentCliStep({
                       <pre
                         id={`error-log-${agentId}`}
                         hidden={!isErrorExpanded}
-                        className="text-[10px] text-status-error/80 bg-daintree-bg border border-daintree-border rounded-[var(--radius-sm)] p-2 max-h-[120px] overflow-y-auto whitespace-pre-wrap font-mono"
+                        className="text-3xs text-status-error/80 bg-surface-canvas border border-border-default rounded-[var(--radius-sm)] p-2 max-h-[120px] overflow-y-auto whitespace-pre-wrap font-mono"
                       >
                         {errorLog}
                       </pre>
@@ -369,7 +379,7 @@ export function AgentCliStep({
                   )}
                   {currentBlock?.commands && (
                     <div className="space-y-1">
-                      <div className="text-[11px] text-daintree-text/40">Or install manually:</div>
+                      <div className="text-2xs text-text-secondary">Or install manually:</div>
                       {currentBlock.commands.map((cmd) => (
                         <CopyableCommand
                           key={cmd}
@@ -391,7 +401,7 @@ export function AgentCliStep({
           type="button"
           disabled={isBatchRunning}
           onClick={handleInstallAll}
-          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-accent-primary-foreground text-sm font-medium hover:bg-daintree-accent/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] border border-border-strong bg-overlay-subtle text-text-primary text-sm font-medium hover:bg-overlay-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary disabled:opacity-50 disabled:pointer-events-none"
         >
           {isBatchRunning ? (
             <>
@@ -408,8 +418,8 @@ export function AgentCliStep({
       )}
 
       {!isFirstRun && agentsWithDangerousToggle.length > 0 && (
-        <div className="border-t border-daintree-border pt-3 space-y-2">
-          <div className="text-xs font-medium text-daintree-text/60">Skip permissions</div>
+        <div className="border-t border-border-default pt-3 space-y-2">
+          <div className="text-xs font-medium text-text-secondary">Skip permissions</div>
           <div className="space-y-1.5">
             {agentsWithDangerousToggle.map((agentId) => {
               const config = AGENT_REGISTRY[agentId];
@@ -421,7 +431,7 @@ export function AgentCliStep({
               return (
                 <label
                   key={agentId}
-                  className="flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 cursor-pointer hover:bg-daintree-bg/60 transition-colors"
+                  className="flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30 cursor-pointer hover:bg-daintree-bg/60 transition-colors"
                 >
                   <input
                     type="checkbox"
@@ -434,9 +444,9 @@ export function AgentCliStep({
                       });
                     }}
                   />
-                  <span className="text-xs text-daintree-text/70">{config.name}</span>
+                  <span className="text-xs text-text-secondary">{config.name}</span>
                   {isEnabled && (
-                    <code className="text-[10px] text-status-error font-mono ml-auto">
+                    <code className="text-3xs text-status-error font-mono ml-auto">
                       {dangerousArg}
                     </code>
                   )}
@@ -444,7 +454,7 @@ export function AgentCliStep({
               );
             })}
           </div>
-          <p className="text-[11px] text-daintree-text/30">
+          <p className="text-2xs text-text-placeholder">
             Auto-approve all actions. Use with caution.
           </p>
         </div>

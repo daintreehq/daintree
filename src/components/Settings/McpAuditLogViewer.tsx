@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Check, Clock, Copy, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -33,14 +34,14 @@ const RESULT_LABEL: Record<McpAuditResult, string> = {
   rate_limited: "Rate limited",
 };
 
-const RESULT_DOT_CLASS: Record<McpAuditResult, string> = {
-  success: "bg-status-success",
-  error: "bg-status-danger",
-  "confirmation-pending": "bg-status-warning",
-  unauthorized: "bg-status-danger",
-  dedup: "bg-status-info",
-  collision: "bg-status-warning",
-  rate_limited: "bg-status-warning",
+const RESULT_SEVERITY: Record<McpAuditResult, StatusSeverity> = {
+  success: "success",
+  error: "error",
+  "confirmation-pending": "warning",
+  unauthorized: "error",
+  dedup: "info",
+  collision: "warning",
+  rate_limited: "warning",
 };
 
 const GRANT_TYPE_LABEL: Record<McpGrantRecordType, string> = {
@@ -53,14 +54,14 @@ const GRANT_TYPE_LABEL: Record<McpGrantRecordType, string> = {
   "tier.decayed": "Tier decayed",
 };
 
-const GRANT_TYPE_DOT_CLASS: Record<McpGrantRecordType, string> = {
-  "grant.issued": "bg-status-info",
-  "grant.expired": "bg-status-warning",
-  "grant.revoked": "bg-status-danger",
-  "grant.used": "bg-status-info",
-  "grant.exhausted": "bg-status-warning",
-  "tier.elevated": "bg-status-warning",
-  "tier.decayed": "bg-status-info",
+const GRANT_TYPE_SEVERITY: Record<McpGrantRecordType, StatusSeverity> = {
+  "grant.issued": "info",
+  "grant.expired": "warning",
+  "grant.revoked": "error",
+  "grant.used": "info",
+  "grant.exhausted": "warning",
+  "tier.elevated": "warning",
+  "tier.decayed": "info",
 };
 
 type TimeRange = "5m" | "1h" | "24h" | "all";
@@ -241,39 +242,38 @@ function GrantRow({
 }) {
   return (
     <li className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
-      <span
-        className={cn("mt-1 h-1.5 w-1.5 rounded-full shrink-0", GRANT_TYPE_DOT_CLASS[record.type])}
-        aria-label={GRANT_TYPE_LABEL[record.type]}
-        title={GRANT_TYPE_LABEL[record.type]}
+      <SeverityMark
+        severity={GRANT_TYPE_SEVERITY[record.type]}
+        label={GRANT_TYPE_LABEL[record.type]}
+        className="mt-0.5 h-3 w-3"
+        decorative
       />
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <span className="text-daintree-text/80">{GRANT_TYPE_LABEL[record.type]}</span>
-          <span className="font-mono text-daintree-text/60 truncate">{record.toolId}</span>
+          <span className="text-text-primary">{GRANT_TYPE_LABEL[record.type]}</span>
+          <span className="font-mono text-text-secondary truncate">{record.toolId}</span>
         </div>
         {record.type === "tier.elevated" && record.tier && record.previousTier && (
-          <div className="mt-0.5 text-[10px] text-daintree-text/50">
+          <div className="mt-0.5 text-3xs text-text-secondary">
             {record.previousTier} → {record.tier}
           </div>
         )}
         {record.type === "tier.decayed" && record.tier && record.previousTier && (
-          <div className="mt-0.5 text-[10px] text-daintree-text/50">
+          <div className="mt-0.5 text-3xs text-text-secondary">
             {record.previousTier} → {record.tier}
           </div>
         )}
         {record.type === "grant.revoked" && record.revokedReason && (
-          <div className="mt-0.5 text-[10px] text-daintree-text/50">
-            Reason: {record.revokedReason}
-          </div>
+          <div className="mt-0.5 text-3xs text-text-secondary">Reason: {record.revokedReason}</div>
         )}
         {record.maxUses !== undefined &&
           (record.type === "grant.used" || record.type === "grant.exhausted") && (
-            <div className="mt-0.5 text-[10px] text-daintree-text/50">
+            <div className="mt-0.5 text-3xs text-text-secondary">
               {record.remainingUses ?? 0} of {record.maxUses} uses left
             </div>
           )}
         {record.expiresAt !== undefined && record.type === "grant.issued" && (
-          <div className="mt-0.5 text-[10px] text-daintree-text/50">
+          <div className="mt-0.5 text-3xs text-text-secondary">
             Expires{" "}
             {new Date(record.expiresAt).toLocaleTimeString([], {
               hour: "2-digit",
@@ -283,7 +283,7 @@ function GrantRow({
         )}
       </div>
       <div
-        className={cn("text-right text-daintree-text/40 whitespace-nowrap", !compact && "self-end")}
+        className={cn("text-right text-text-secondary whitespace-nowrap", !compact && "self-end")}
       >
         <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
       </div>
@@ -403,7 +403,7 @@ export function McpAuditLogViewer({
           onChange={(e) => setToolFilter(e.target.value)}
           placeholder="Filter by tool ID"
           aria-label="Filter audit by tool name"
-          className="flex-1 min-w-[160px] bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="flex-1 min-w-[160px] bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         />
         <input
           type="text"
@@ -411,7 +411,7 @@ export function McpAuditLogViewer({
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search arguments"
           aria-label="Search audit arguments"
-          className="w-40 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="w-40 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         />
         <select
           value={resultFilter}
@@ -431,7 +431,7 @@ export function McpAuditLogViewer({
             }
           }}
           aria-label="Filter audit by result"
-          className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         >
           <option value="all">All results</option>
           <option value="success">Success</option>
@@ -451,7 +451,7 @@ export function McpAuditLogViewer({
             }
           }}
           aria-label="Filter audit by time range"
-          className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         >
           <option value="all">All</option>
           <option value="5m">Last 5 minutes</option>
@@ -462,7 +462,7 @@ export function McpAuditLogViewer({
           <button
             type="button"
             onClick={showTierRejections}
-            className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+            className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
           >
             <ShieldOff className="w-3.5 h-3.5" />
             Show tier rejections ({unauthorizedCount})
@@ -475,8 +475,8 @@ export function McpAuditLogViewer({
             className={cn(
               "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
               groupByTurn
-                ? "bg-overlay-subtle border-daintree-border text-daintree-text"
-                : "border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+                ? "bg-overlay-subtle border-border-default text-text-primary"
+                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
             )}
           >
             <Layers className="w-3.5 h-3.5" />
@@ -491,7 +491,7 @@ export function McpAuditLogViewer({
               "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
               ignoreLastHour
                 ? "border-status-warning/20 text-status-warning bg-status-warning/10"
-                : "border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
             )}
           >
             <Clock className="w-3.5 h-3.5" />
@@ -512,7 +512,7 @@ export function McpAuditLogViewer({
         </div>
       )}
 
-      <div className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg">
+      <div className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas">
         {loading ? (
           <Skeleton label="Loading audit records" className="space-y-2 p-3">
             <SkeletonBone className="h-5 w-5/6" />
@@ -534,17 +534,17 @@ export function McpAuditLogViewer({
             />
           )
         ) : groupByTurn && turnGroups ? (
-          <ul className="divide-y divide-daintree-border">
+          <ul className="divide-y divide-border-default">
             {turnGroups.groups.map((group) => (
               <li key={group.turnId} className="p-2 text-xs">
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="font-medium text-daintree-text/90">
+                  <span className="font-medium text-text-primary">
                     {OUTCOME_LABEL[group.turnRecord.outcome] ?? group.turnRecord.outcome}
                   </span>
-                  <span className="text-daintree-text/40">
+                  <span className="text-text-secondary">
                     {formatRelativeTimestamp(group.turnRecord.timestamp, now)}
                   </span>
-                  <span className="text-daintree-text/40">
+                  <span className="text-text-secondary">
                     {group.callCount} call{group.callCount !== 1 ? "s" : ""}
                   </span>
                   {group.unauthorizedCount > 0 && (
@@ -557,46 +557,43 @@ export function McpAuditLogViewer({
                       {group.errorCount} error{group.errorCount !== 1 ? "s" : ""}
                     </span>
                   )}
-                  <span className="text-daintree-text/40">{group.totalDurationMs}ms</span>
+                  <span className="text-text-secondary">{group.totalDurationMs}ms</span>
                 </div>
                 <ul className="ml-3 space-y-1 border-l-2 border-daintree-border/50 pl-3">
                   {group.records.map((record) =>
                     isAuditRecord(record) ? (
                       <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
-                        <span
-                          className={cn(
-                            "mt-1 h-1.5 w-1.5 rounded-full shrink-0",
-                            RESULT_DOT_CLASS[record.result]
-                          )}
-                          aria-label={RESULT_LABEL[record.result]}
-                          title={RESULT_LABEL[record.result]}
+                        <SeverityMark
+                          severity={RESULT_SEVERITY[record.result]}
+                          label={RESULT_LABEL[record.result]}
+                          className="mt-0.5 h-3 w-3"
                         />
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="font-mono text-daintree-text/80 truncate">
+                            <span className="font-mono text-text-primary truncate">
                               {record.toolId}
                             </span>
                             {record.errorCode && (
-                              <span className="text-[10px] uppercase tracking-wide text-status-danger/80">
+                              <span className="text-3xs uppercase tracking-wide text-status-danger/80">
                                 {record.errorCode}
                               </span>
                             )}
                           </div>
-                          <div className="font-mono text-daintree-text/50 truncate">
+                          <div className="font-mono text-text-secondary truncate">
                             {record.argsSummary || "{}"}
                           </div>
                           {record.result === "unauthorized" && record.tierHint && (
-                            <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                            <div className="mt-0.5 text-3xs text-text-secondary">
                               Raise capability tier to {TIER_HINT_LABEL[record.tierHint]} to allow.
                             </div>
                           )}
                           {record.result === "unauthorized" && record.tierHint === null && (
-                            <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                            <div className="mt-0.5 text-3xs text-text-secondary">
                               Tool isn't permitted at any tier.
                             </div>
                           )}
                         </div>
-                        <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                        <div className="text-right text-text-secondary whitespace-nowrap">
                           <div>{record.durationMs}ms</div>
                         </div>
                       </li>
@@ -617,8 +614,8 @@ export function McpAuditLogViewer({
             {turnGroups.unassociated.length > 0 && (
               <li className="p-2 text-xs">
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="font-medium text-daintree-text/60">Unassociated</span>
-                  <span className="text-daintree-text/40">
+                  <span className="font-medium text-text-secondary">Unassociated</span>
+                  <span className="text-text-secondary">
                     {turnGroups.unassociated.length} record
                     {turnGroups.unassociated.length !== 1 ? "s" : ""}
                   </span>
@@ -627,30 +624,27 @@ export function McpAuditLogViewer({
                   {turnGroups.unassociated.map((record) =>
                     isAuditRecord(record) ? (
                       <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
-                        <span
-                          className={cn(
-                            "mt-1 h-1.5 w-1.5 rounded-full shrink-0",
-                            RESULT_DOT_CLASS[record.result]
-                          )}
-                          aria-label={RESULT_LABEL[record.result]}
-                          title={RESULT_LABEL[record.result]}
+                        <SeverityMark
+                          severity={RESULT_SEVERITY[record.result]}
+                          label={RESULT_LABEL[record.result]}
+                          className="mt-0.5 h-3 w-3"
                         />
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="font-mono text-daintree-text/80 truncate">
+                            <span className="font-mono text-text-primary truncate">
                               {record.toolId}
                             </span>
                             {record.errorCode && (
-                              <span className="text-[10px] uppercase tracking-wide text-status-danger/80">
+                              <span className="text-3xs uppercase tracking-wide text-status-danger/80">
                                 {record.errorCode}
                               </span>
                             )}
                           </div>
-                          <div className="font-mono text-daintree-text/50 truncate">
+                          <div className="font-mono text-text-secondary truncate">
                             {record.argsSummary || "{}"}
                           </div>
                         </div>
-                        <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                        <div className="text-right text-text-secondary whitespace-nowrap">
                           <div>{record.durationMs}ms</div>
                         </div>
                       </li>
@@ -664,8 +658,8 @@ export function McpAuditLogViewer({
             {turnGroups.lifecycle.length > 0 && (
               <li className="p-2 text-xs">
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="font-medium text-daintree-text/60">Lifecycle events</span>
-                  <span className="text-daintree-text/40">
+                  <span className="font-medium text-text-secondary">Lifecycle events</span>
+                  <span className="text-text-secondary">
                     {turnGroups.lifecycle.length} event
                     {turnGroups.lifecycle.length !== 1 ? "s" : ""}
                   </span>
@@ -679,90 +673,85 @@ export function McpAuditLogViewer({
             )}
           </ul>
         ) : (
-          <ul className="divide-y divide-daintree-border">
+          <ul className="divide-y divide-border-default">
             {filteredRecords.map((record) =>
               isAuditRecord(record) ? (
                 <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
-                  <div className="flex items-start gap-1 mt-1">
-                    <span
-                      className={cn(
-                        "h-2 w-2 rounded-full shrink-0",
-                        RESULT_DOT_CLASS[record.result]
-                      )}
-                      aria-label={RESULT_LABEL[record.result]}
-                      title={RESULT_LABEL[record.result]}
+                  <div className="flex self-start items-center gap-1 mt-0.5">
+                    <SeverityMark
+                      severity={RESULT_SEVERITY[record.result]}
+                      label={RESULT_LABEL[record.result]}
+                      className="h-3 w-3"
                     />
                     {signalRecordIds.has(record.id) && (
                       <span
-                        className="h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
+                        role="img"
+                        aria-label="Anomaly"
+                        className="status-mark h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
                         title="Anomaly"
                       />
                     )}
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-daintree-text/90 truncate">
-                        {record.toolId}
-                      </span>
+                      <span className="font-mono text-text-primary truncate">{record.toolId}</span>
                       {record.errorCode && (
-                        <span className="text-[10px] uppercase tracking-wide text-status-danger/80">
+                        <span className="text-3xs uppercase tracking-wide text-status-danger/80">
                           {record.errorCode}
                         </span>
                       )}
                     </div>
-                    <div className="mt-0.5 font-mono text-daintree-text/50 truncate">
+                    <div className="mt-0.5 font-mono text-text-secondary truncate">
                       {record.argsSummary || "{}"}
                     </div>
                     {record.result === "unauthorized" && record.tierHint && (
-                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                      <div className="mt-0.5 text-3xs text-text-secondary">
                         Raise capability tier to {TIER_HINT_LABEL[record.tierHint]} to allow.
                       </div>
                     )}
                     {record.result === "unauthorized" && record.tierHint === null && (
-                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                      <div className="mt-0.5 text-3xs text-text-secondary">
                         Tool isn't permitted at any tier.
                       </div>
                     )}
                   </div>
-                  <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                  <div className="text-right text-text-secondary whitespace-nowrap">
                     <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
                     <div>{record.durationMs}ms</div>
                   </div>
                 </li>
               ) : (
                 <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
-                  <span
-                    className={cn(
-                      "mt-1 h-2 w-2 rounded-full shrink-0",
-                      GRANT_TYPE_DOT_CLASS[record.type]
-                    )}
-                    aria-label={GRANT_TYPE_LABEL[record.type]}
-                    title={GRANT_TYPE_LABEL[record.type]}
+                  <SeverityMark
+                    severity={GRANT_TYPE_SEVERITY[record.type]}
+                    label={GRANT_TYPE_LABEL[record.type]}
+                    className="mt-0.5 h-3 w-3"
+                    decorative
                   />
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-daintree-text/90">{GRANT_TYPE_LABEL[record.type]}</span>
-                      <span className="font-mono text-daintree-text/60 truncate">
+                      <span className="text-text-primary">{GRANT_TYPE_LABEL[record.type]}</span>
+                      <span className="font-mono text-text-secondary truncate">
                         {record.toolId}
                       </span>
                     </div>
                     {record.type === "tier.elevated" && record.tier && record.previousTier && (
-                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                      <div className="mt-0.5 text-3xs text-text-secondary">
                         {record.previousTier} → {record.tier}
                       </div>
                     )}
                     {record.type === "tier.decayed" && record.tier && record.previousTier && (
-                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                      <div className="mt-0.5 text-3xs text-text-secondary">
                         {record.previousTier} → {record.tier}
                       </div>
                     )}
                     {record.type === "grant.revoked" && record.revokedReason && (
-                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                      <div className="mt-0.5 text-3xs text-text-secondary">
                         Reason: {record.revokedReason}
                       </div>
                     )}
                     {record.expiresAt !== undefined && record.type === "grant.issued" && (
-                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                      <div className="mt-0.5 text-3xs text-text-secondary">
                         Expires{" "}
                         {new Date(record.expiresAt).toLocaleTimeString([], {
                           hour: "2-digit",
@@ -771,7 +760,7 @@ export function McpAuditLogViewer({
                       </div>
                     )}
                   </div>
-                  <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                  <div className="text-right text-text-secondary whitespace-nowrap">
                     <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
                   </div>
                 </li>
@@ -785,7 +774,7 @@ export function McpAuditLogViewer({
         <button
           type="button"
           onClick={() => void onRefresh()}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
           aria-label="Refresh audit log"
         >
           <RefreshCw className="w-3.5 h-3.5" />
@@ -798,10 +787,10 @@ export function McpAuditLogViewer({
           className={cn(
             "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
             filteredRecords.length === 0
-              ? "border-daintree-border text-daintree-text/30 cursor-not-allowed"
+              ? "border-border-default text-text-placeholder cursor-not-allowed"
               : copyFlashActive
                 ? "text-status-success border-status-success/30"
-                : "border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
           )}
         >
           {copyFlashActive ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -815,10 +804,10 @@ export function McpAuditLogViewer({
             className={cn(
               "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
               filteredRecords.length === 0
-                ? "border-daintree-border text-daintree-text/30 cursor-not-allowed"
+                ? "border-border-default text-text-placeholder cursor-not-allowed"
                 : exportFlashActive
                   ? "text-status-success border-status-success/30"
-                  : "border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+                  : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
             )}
           >
             {exportFlashActive ? (
@@ -837,14 +826,14 @@ export function McpAuditLogViewer({
             className={cn(
               "px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
               visibleRecords.length === 0
-                ? "border-daintree-border text-daintree-text/30 cursor-not-allowed"
-                : "border-daintree-border text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20"
+                ? "border-border-default text-text-placeholder cursor-not-allowed"
+                : "border-border-default text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20"
             )}
           >
             Clear log
           </button>
         )}
-        <span className="ml-auto text-xs text-daintree-text/40">
+        <span className="ml-auto text-xs text-text-secondary">
           {resultFilter !== "all" ||
           toolFilter.trim().length > 0 ||
           timeRange !== "all" ||

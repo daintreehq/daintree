@@ -37,6 +37,8 @@ const errorStoreState = vi.hoisted(() => ({
   reset: vi.fn(),
 }));
 const requestConflictMock = vi.hoisted(() => vi.fn());
+const requestMcpConfirmationMock = vi.hoisted(() => vi.fn(() => Promise.resolve("rejected")));
+const mcpConfirmState = vi.hoisted(() => ({ setPreview: vi.fn(), reset: vi.fn() }));
 const diagnosticsState = vi.hoisted(() => ({ isOpen: false, openDock: vi.fn() }));
 const perfMetricsState = vi.hoisted(() => ({
   fps: 60,
@@ -69,6 +71,10 @@ vi.mock("@/store", () => ({
 vi.mock("@/store/recipeConflictStore", () => ({
   useRecipeConflictStore: { getState: () => ({ requestConflict: requestConflictMock }) },
 }));
+vi.mock("@/store/mcpConfirmStore", () => ({
+  requestMcpConfirmation: requestMcpConfirmationMock,
+  useMcpConfirmStore: { getState: () => mcpConfirmState },
+}));
 vi.mock("@/store/perfMetricsStore", () => ({
   usePerfMetricsStore: { getState: () => perfMetricsState },
 }));
@@ -90,6 +96,11 @@ const E2E_GLOBAL_KEYS = [
   "__DAINTREE_E2E_CLEAR_ERRORS__",
   "__DAINTREE_E2E_WORKTREES__",
   "__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__",
+  "__DAINTREE_E2E_ENQUEUE_MCP_CONFIRM__",
+  "__DAINTREE_E2E_SET_MCP_PREVIEW__",
+  "__DAINTREE_E2E_RESET_MCP_CONFIRM__",
+  "__DAINTREE_E2E_ENQUEUE_PLUGIN_MCP_CONFIRM__",
+  "__DAINTREE_E2E_RESET_PLUGIN_MCP_CONFIRM__",
   "__DAINTREE_E2E_DIAGNOSTICS_STATE__",
   "__DAINTREE_E2E_OPEN_DIAGNOSTICS__",
   "__DAINTREE_E2E_PERF_METRICS_STATE__",
@@ -168,6 +179,29 @@ describe("useE2EBridges", () => {
       recipeName: "my-recipe",
       updates: { name: "my-recipe" },
     });
+  });
+
+  it("routes the MCP confirm backdoors to the confirmation queue", () => {
+    window.__DAINTREE_E2E_MODE__ = true;
+    renderHook(() => useE2EBridges());
+
+    window.__DAINTREE_E2E_ENQUEUE_MCP_CONFIRM__?.({
+      requestId: "shot-1",
+      actionId: "worktree.delete",
+      actionTitle: "Delete worktree",
+      actionDescription: "Permanently delete a worktree.",
+      argsSummary: "{}",
+      danger: "confirm",
+    });
+    expect(requestMcpConfirmationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: "shot-1", danger: "confirm" })
+    );
+
+    window.__DAINTREE_E2E_SET_MCP_PREVIEW__?.("shot-1", ["M src/App.tsx"]);
+    expect(mcpConfirmState.setPreview).toHaveBeenCalledWith("shot-1", ["M src/App.tsx"]);
+
+    window.__DAINTREE_E2E_RESET_MCP_CONFIRM__?.();
+    expect(mcpConfirmState.reset).toHaveBeenCalledTimes(1);
   });
 
   it("deletes every E2E global on unmount", async () => {

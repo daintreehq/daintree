@@ -1,6 +1,13 @@
-import { useCallback, useEffect, useId, useMemo, useRef } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import { ChevronDown, ChevronRight, Folder, FolderOpen } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  FileSymlink,
+  Folder,
+  FolderOpen,
+  FolderSymlink,
+} from "lucide-react";
 import { join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
@@ -11,7 +18,13 @@ import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
-import { resolveTreeKey, type FileEntryLike, type FlatTreeRow } from "./fileBrowserTree";
+import {
+  resolveTreeKey,
+  resolveTypeahead,
+  TYPEAHEAD_RESET_MS,
+  type FileEntryLike,
+  type FlatTreeRow,
+} from "./fileBrowserTree";
 import { getFileBrowserRowGitStatus, type FileBrowserGitStatusIndex } from "./fileBrowserGitStatus";
 import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
 import { FILE_TREE_ICON_CLASS, FILE_TREE_ICON_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
@@ -148,6 +161,18 @@ export function FileTreeView({
   // mint `file-browser-row-src/index.ts` — duplicate DOM ids that make
   // `aria-activedescendant` ambiguous.
   const instanceId = useId();
+  // A ref, not state: the buffer must never re-render the tree — it only steers
+  // the next keystroke, and a virtualized list re-rendering on every character
+  // typed would be a real cost for no visible change.
+  const typeaheadRef = useRef<{ buffer: string; at: number }>({ buffer: "", at: 0 });
+  // Which slice Virtuoso currently has mounted. State rather than a ref because
+  // `aria-activedescendant` is rendered from it, so the attribute has to follow
+  // scrolling. Starts as an empty range — before the first `rangeChanged` no row
+  // is known to be mounted, and claiming one would be the very bug this fixes.
+  const [renderedRange, setRenderedRange] = useState<{ start: number; end: number }>({
+    start: 0,
+    end: -1,
+  });
 
   const cursorIndex = useMemo(
     () => (cursorPath === null ? -1 : rows.findIndex((row) => row.path === cursorPath)),
@@ -224,6 +249,36 @@ export function FileTreeView({
         event.preventDefault();
         event.stopPropagation();
         onInsertFileReference(cursorPath);
+        return;
+      }
+
+      // Typeahead, after the navigation keys have had their say: `resolveTreeKey`
+      // is a bare switch over the arrows plus Home/End/Enter and never claims a
+      // letter, so a printable character can only land here. Modifier-bearing
+      // keystrokes are left alone — those are shortcuts, not typing — and so is
+      // Space, which would otherwise start a buffer that matches nothing.
+      if (
+        event.key.length === 1 &&
+        event.key !== " " &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
+        const now = Date.now();
+        const buffer =
+          now - typeaheadRef.current.at > TYPEAHEAD_RESET_MS
+            ? event.key
+            : typeaheadRef.current.buffer + event.key;
+        typeaheadRef.current = { buffer, at: now };
+        const match = resolveTypeahead(buffer, rows, cursorPath);
+        // A miss moves nothing. Navigating on a failed match would turn a typo
+        // into a jump, and the buffer is kept either way so the next character
+        // can still complete a name.
+        if (match !== null) {
+          event.preventDefault();
+          const target = rows.find((candidate) => candidate.path === match);
+          onSelect(match, target?.isDirectory === true);
+        }
         return;
       }
 
@@ -340,11 +395,19 @@ export function FileTreeView({
     ]
   );
 
-  // Only advertise an active descendant that is actually rendered. A cursor
-  // scrolled out of the virtualized window — or deleted by a live update — has
-  // no DOM node, and pointing at a missing id is worse than pointing at none.
+  // Only advertise an active descendant that is actually rendered — and
+  // "rendered" has to mean MOUNTED, not merely present in `rows`. Virtuoso
+  // mounts a window, so a cursor row the user has scrolled past has an index in
+  // the data array and no DOM node at all; gating on `cursorIndex >= 0` alone
+  // left the tree pointing at an id that was not in the document, which is
+  // exactly what the active-descendant contract forbids.
   const activeDescendant =
-    cursorPath !== null && cursorIndex >= 0 ? rowDomId(instanceId, cursorPath) : undefined;
+    cursorPath !== null &&
+    cursorIndex >= 0 &&
+    cursorIndex >= renderedRange.start &&
+    cursorIndex <= renderedRange.end
+      ? rowDomId(instanceId, cursorPath)
+      : undefined;
 
   // Only advertised while the shortcut would actually do something — announcing
   // Cmd+I with no reachable agent, or with a cursor that no longer resolves
@@ -380,6 +443,16 @@ export function FileTreeView({
         computeItemKey={computeRowKey}
         itemContent={renderRow}
         fixedItemHeight={ROW_HEIGHT_PX}
+        rangeChanged={({ startIndex, endIndex }) => {
+          // Guarded rather than set unconditionally: Virtuoso fires this on
+          // every scroll frame, and re-rendering a virtualized tree at that
+          // cadence would cost far more than the attribute is worth.
+          setRenderedRange((current) =>
+            current.start === startIndex && current.end === endIndex
+              ? current
+              : { start: startIndex, end: endIndex }
+          );
+        }}
         skipAnimationFrameInResizeObserver
         className="h-full w-full overflow-y-auto"
       />
@@ -522,7 +595,29 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
   // Files carry their type; folders keep the folder shape (#11596). Resolved
   // per render rather than memoized: it is an object lookup, and Virtuoso only
   // ever renders the visible window.
-  const RowIcon = row.isDirectory ? FolderIcon : getFileTypeIcon(row.name).Icon;
+  // A symlink says so in the glyph itself rather than through a badge layered
+  // over the type icon: the row's icon slot is a single bare element by
+  // contract (see below), and "this is a link" outranks the file's extension
+  // for a row that used to be invisible entirely (#11939).
+  const RowIcon = row.symlink
+    ? row.isDirectory
+      ? FolderSymlink
+      : FileSymlink
+    : row.isDirectory
+      ? FolderIcon
+      : getFileTypeIcon(row.name).Icon;
+  // Wording keys off the resolved kind, never off a bare "not inside" bit: a
+  // link we could not read at all must not be announced as pointing outside
+  // the workspace, which would be a claim we never verified.
+  const symlinkDescription = row.symlink
+    ? row.symlink.targetKind === "broken"
+      ? `Broken symlink to ${row.symlink.target}`
+      : row.symlink.targetKind === "external"
+        ? `Symlink to ${row.symlink.target}, outside this folder`
+        : row.symlink.targetKind === "unknown"
+          ? `Symlink to ${row.symlink.target}, unreadable`
+          : `Symlink to ${row.symlink.target}`
+    : null;
 
   // A file's own status; a folder's is the worst thing anywhere beneath it, so a
   // collapsed branch still says that something inside it changed.
@@ -535,6 +630,10 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
     : null;
   const rowId = rowDomId(context.instanceId, row.path);
   const gitMarkerId = gitPresentation ? `${rowId}-git` : undefined;
+  const symlinkMarkerId = symlinkDescription ? `${rowId}-symlink` : undefined;
+  // Space-separated id list: a row can be both a link and changed, and the two
+  // descriptions are owned by different concerns.
+  const describedBy = [gitMarkerId, symlinkMarkerId].filter(Boolean).join(" ") || undefined;
 
   const menuItems = context.rowContextMenu?.(row);
   const rowSurface = (
@@ -548,8 +647,15 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
       // filename above, and rows are virtualized — folding status into the name
       // would rewrite every accessible row query and re-announce the row as a
       // different thing whenever an agent touched the file.
-      {...(gitMarkerId && { "aria-describedby": gitMarkerId })}
+      {...(describedBy && { "aria-describedby": describedBy })}
       aria-level={row.depth + 1}
+      // The tree is a flat virtualized list, so the DOM expresses no group
+      // nesting a screen reader could infer position from. Without these a user
+      // hears the depth but never "2 of 11", which is most of what makes a tree
+      // navigable by ear. Both count VISIBLE siblings — see the
+      // filter-then-enumerate step in `flattenTree`.
+      aria-posinset={row.posInSet}
+      aria-setsize={row.setSize}
       aria-selected={isSelected}
       // "The viewer is showing this one" — a different question from which row
       // the tree's cursor is on, and the only channel that answers it once the
@@ -573,18 +679,18 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
         // is reserved for a single load-bearing signal per focus region.
         "transition-colors duration-150 ease-out",
         isSelected
-          ? "bg-overlay-subtle text-daintree-text"
+          ? "bg-overlay-subtle text-text-primary"
           : // Full-strength text, no fill: enough to find the open row at a
             // glance without reading as a second selection.
             isOpen
-            ? "text-daintree-text"
-            : "text-daintree-text/70",
+            ? "text-text-primary"
+            : "text-text-secondary",
         !isSelected && "hover:bg-tint/5",
         // The row whose context menu is open lifts to a distinct neutral tier
         // (raised, not the selection's subtle) so it reads as "the menu targets
         // this row" without masquerading as the selection. Radix forwards
         // data-state onto this surface through the asChild trigger below.
-        "data-[state=open]:bg-overlay-raised data-[state=open]:text-daintree-text"
+        "data-[state=open]:bg-overlay-raised data-[state=open]:text-text-primary"
       )}
     >
       {row.isDirectory ? (
@@ -595,7 +701,7 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
           onClick={handleChevronClick}
           onDoubleClick={handleChevronDoubleClick}
           aria-hidden="true"
-          className="flex h-4 w-4 shrink-0 items-center justify-center text-daintree-text/40"
+          className="flex h-4 w-4 shrink-0 items-center justify-center text-text-secondary"
         >
           <Chevron className="h-3 w-3" />
         </span>
@@ -619,7 +725,21 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
       {/* `min-w-0` is what lets `truncate` actually shrink here: a flex item
           defaults to `min-width: auto` and would otherwise push the trailing
           status marker out of the row instead of ellipsing the name. */}
-      <span className={cn("min-w-0 truncate", isSelected && "font-medium")}>{row.name}</span>
+      <span
+        className={cn("min-w-0 truncate", isSelected && "font-medium")}
+        title={symlinkDescription ?? undefined}
+      >
+        {row.name}
+      </span>
+      {symlinkMarkerId && (
+        // Screen-reader only, and layout-neutral (`sr-only` is absolutely
+        // positioned) so it can sit between the name and the `ml-auto` git
+        // marker without disturbing either. The title above is the mouse's
+        // half of the same answer.
+        <span id={symlinkMarkerId} className="sr-only">
+          {symlinkDescription}
+        </span>
+      )}
       {gitPresentation && (
         // `ml-auto` parks the marker at the trailing edge so a column of them
         // scans vertically, rather than tracking each name's ragged end.
@@ -633,12 +753,14 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
         </span>
       )}
       {showLoadingSpinner && (
-        // Subdued via `text-daintree-text/40` (Spinner strokes currentColor) so
-        // it stays quiet even on a selected row, per accent restraint.
+        // Subdued via the secondary text token (Spinner strokes currentColor) so
+        // it stays quiet even on a selected row, per accent restraint. A solid
+        // token, not slash-alpha: v4 bakes the alpha into `color-mix()` on
+        // `color`, so the contrast can no longer be reasoned about.
         <span
           role="status"
           aria-label={`Loading contents of ${row.name}`}
-          className="ml-1 inline-flex shrink-0 text-daintree-text/40"
+          className="ml-1 inline-flex shrink-0 text-text-secondary"
         >
           <Spinner size="xs" />
         </span>

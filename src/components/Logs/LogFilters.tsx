@@ -15,7 +15,7 @@ interface LogFiltersProps {
 }
 
 const LOG_LEVELS: { level: LogLevel; label: string; color: string }[] = [
-  { level: "debug", label: "Debug", color: "text-daintree-text/60 hover:bg-daintree-border" },
+  { level: "debug", label: "Debug", color: "text-text-secondary hover:bg-border-default" },
   { level: "info", label: "Info", color: "text-status-info hover:bg-status-info/15" },
   {
     level: "warn",
@@ -103,7 +103,7 @@ export function LogFilters({
     filters.search;
 
   return (
-    <div className="flex flex-wrap items-center gap-2 p-2 border-b border-daintree-border bg-daintree-sidebar/50">
+    <div className="flex flex-wrap items-center gap-2 p-2 border-b border-border-default bg-daintree-sidebar/50">
       <div className="relative flex-1 min-w-[150px] max-w-[250px]">
         <input
           type="search"
@@ -112,8 +112,8 @@ export function LogFilters({
           placeholder="Search logs..."
           className={cn(
             "w-full px-2 py-1 text-xs rounded",
-            "bg-daintree-bg border border-daintree-border",
-            "text-daintree-text placeholder-daintree-text/40",
+            "bg-surface-canvas border border-border-default",
+            "text-text-primary placeholder-daintree-text/40",
             "focus:outline-hidden focus:border-status-info",
             "[&::-webkit-search-cancel-button]:hidden"
           )}
@@ -132,7 +132,7 @@ export function LogFilters({
       </div>
 
       <div className="flex items-center gap-1">
-        <span className="text-daintree-text/60 text-xs mr-1">Level:</span>
+        <span className="text-text-secondary text-xs mr-1">Level:</span>
         {LOG_LEVELS.map(({ level, label, color }) => {
           const isActive = filters.levels?.includes(level) ?? false;
           const count = levelCounts?.[level] ?? 0;
@@ -142,7 +142,7 @@ export function LogFilters({
               variant="subtle"
               size="xs"
               onClick={() => handleLevelToggle(level)}
-              className={cn(isActive ? "bg-daintree-border font-medium" : "bg-daintree-bg/50", color)}
+              className={cn(isActive ? "bg-border-default font-medium" : "bg-daintree-bg/50", color)}
               aria-pressed={isActive}
               aria-label={`${label}${count > 0 ? ` (${count})` : ""}`}
             >
@@ -168,7 +168,7 @@ export function LogFilters({
             <div
               className={cn(
                 "absolute left-0 top-full mt-1 z-50",
-                "bg-daintree-bg border border-daintree-border rounded shadow-[var(--theme-shadow-floating)]",
+                "bg-surface-canvas border border-border-default rounded shadow-[var(--theme-shadow-floating)]",
                 "min-w-[150px] max-h-[200px] overflow-y-auto"
               )}
             >
@@ -183,7 +183,7 @@ export function LogFilters({
                     onClick={() => handleSourceToggle(source)}
                     className={cn(
                       "w-full justify-start rounded-none",
-                      isActive ? "text-status-info bg-status-info/10" : "text-daintree-text",
+                      isActive ? "text-status-info bg-status-info/10" : "text-text-primary",
                       count === 0 && !isActive && "opacity-50"
                     )}
                     aria-pressed={isActive}

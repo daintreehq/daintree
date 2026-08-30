@@ -139,7 +139,7 @@ export function buildResumeSessionItems(
         session,
         name,
         iconId: agentConfig?.iconId ?? "terminal",
-        color: agentConfig?.color ?? "var(--color-daintree-text)",
+        color: agentConfig?.color ?? "var(--color-text-primary)",
         description,
         searchAliases,
         isStale,

@@ -77,12 +77,31 @@ type ConfirmDialogBaseProps = {
    */
   restoreFocusTo?: RestoreFocusTarget;
   /**
+   * Forwarded to {@link AppDialog.Footer.hint}: a subdued status line rendered
+   * beside the action row. Use it to say why the primary action is currently
+   * unavailable, or what resolving this dialog will do next — the action row is
+   * where the user is looking when they ask that question, and a body-level
+   * note is not.
+   *
+   * Deliberately not a countdown. Ticking timers on a security decision push
+   * the reader into impulsive rather than deliberative processing and raise
+   * erroneous-approval rates, so state the condition, not the seconds.
+   */
+  hint?: React.ReactNode;
+  /**
    * Forwarded to {@link AppDialog.hasPreview}: set to true when the dialog
    * body contains scrollable preview content (commit lists, directory tables).
    * Switches the ARIA role from `alertdialog` to `dialog` for destructive
    * variants, per WAI-ARIA APG guidance.
    */
   hasPreview?: boolean;
+  /**
+   * Forwarded to {@link AppDialog.Body.resetScrollKey}: scrolls the body back
+   * to the top when it changes. Queue-driven singletons pass the per-item id so
+   * a freshly promoted item opens at the top rather than inheriting the
+   * previous item's scroll offset.
+   */
+  bodyResetKey?: string | number;
 };
 
 export type ConfirmDialogProps =
@@ -114,6 +133,8 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     initialFocus,
     restoreFocusTo,
     hasPreview = false,
+    hint,
+    bodyResetKey,
   } = props;
   const rawTypedNameTarget = (props as { typedNameTarget?: string }).typedNameTarget;
   const typedNameTarget = variant === "destructive" ? rawTypedNameTarget : undefined;
@@ -191,6 +212,11 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   const isTypedMatched = !hasTypedNameGate || typedValue === typedNameTarget;
 
   const handleConfirm = () => {
+    // `TypedNameConfirmInput` submits on Enter by calling straight through here,
+    // so neither `Button`'s loading guard nor the footer's disabled guard is on
+    // this path — without the check, Enter could fire the action a second time
+    // while the first is still running.
+    if (isConfirmLoading) return;
     if (isCooldownActive) return;
     if (hasTypedNameGate && !isTypedMatched) return;
     if (confirmDisabled) return;
@@ -213,7 +239,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         {onClose && <AppDialog.CloseButton />}
       </AppDialog.Header>
 
-      <AppDialog.Body className="space-y-3">
+      <AppDialog.Body className="space-y-3" resetScrollKey={bodyResetKey}>
         {description && <AppDialog.Description>{description}</AppDialog.Description>}
         {children}
         {hasTypedNameGate && (
@@ -229,6 +255,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       </AppDialog.Body>
 
       <AppDialog.Footer
+        hint={hint}
         secondaryAction={{
           label: cancelLabel,
           onClick: handleClose,

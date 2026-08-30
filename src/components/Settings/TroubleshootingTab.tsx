@@ -75,7 +75,7 @@ function SystemHealthSection() {
         size="sm"
         onClick={() => void runCheck()}
         disabled={isChecking}
-        className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text mb-3"
+        className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary mb-3"
       >
         <RotateCw className={cn("w-4 h-4", isChecking && "animate-spin")} />
         {isChecking ? "Checking…" : result ? "Re-run Check" : "Run Health Check"}
@@ -89,16 +89,16 @@ function SystemHealthSection() {
             return (
               <div
                 key={check.tool}
-                className="flex items-center gap-2.5 px-3 py-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30"
+                className="flex items-center gap-2.5 px-3 py-2 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
               >
                 {check.available ? (
                   <CircleCheck className="w-3.5 h-3.5 text-status-success shrink-0" />
                 ) : (
                   <CircleX className="w-3.5 h-3.5 text-status-error shrink-0" />
                 )}
-                <span className="text-sm text-daintree-text">{label}</span>
+                <span className="text-sm text-text-primary">{label}</span>
                 {check.version && (
-                  <span className="text-xs text-daintree-text/40">v{check.version}</span>
+                  <span className="text-xs text-text-secondary">v{check.version}</span>
                 )}
                 {!check.available && (
                   <span className="ml-auto text-xs text-status-error">Not found</span>
@@ -135,7 +135,7 @@ export function DownloadDiagnosticsSection() {
         size="sm"
         onClick={handleOpenReview}
         disabled={isCollecting}
-        className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text mb-3"
+        className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary mb-3"
       >
         {isCollecting ? <Spinner size="sm" /> : <Download className="w-4 h-4" />}
         {isCollecting ? "Collecting…" : "Download diagnostics"}
@@ -221,7 +221,7 @@ function RendererCpuProfileSection() {
             variant="outline"
             size="sm"
             onClick={() => void handleStop()}
-            className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
+            className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
           >
             <Square className="w-4 h-4" />
             Stop recording
@@ -232,14 +232,14 @@ function RendererCpuProfileSection() {
             size="sm"
             onClick={() => void handleRecord()}
             disabled={phase === "saving"}
-            className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
+            className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
           >
             <Activity className="w-4 h-4" />
             {phase === "saving" ? "Saving…" : "Record profile"}
           </Button>
         )}
         {phase === "recording" && (
-          <span className="text-xs text-daintree-text/60">
+          <span className="text-xs text-text-secondary">
             Reproduce the slow interaction — auto-stops in {secondsLeft}s
           </span>
         )}
@@ -322,7 +322,7 @@ export function ApplicationLogsSection() {
           onClick={() =>
             void actionService.dispatch("logs.openFile", undefined, { source: "user" })
           }
-          className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
+          className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
         >
           <FileText />
           Open Log File
@@ -331,7 +331,7 @@ export function ApplicationLogsSection() {
           variant="outline"
           size="sm"
           onClick={() => setShowClearDialog(true)}
-          className="text-status-error border-daintree-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+          className="text-status-error border-border-default hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
         >
           <Trash2 />
           Clear Logs
@@ -533,7 +533,7 @@ export function TroubleshootingTab() {
           ariaLabel="Developer Mode Toggle"
         />
 
-        <div className="ml-4 space-y-3 border-l-2 border-daintree-border pl-4">
+        <div className="ml-4 space-y-3 border-l-2 border-border-default pl-4">
           <SettingsSwitchCard
             variant="compact"
             title="Auto-open diagnostics dock"
@@ -576,14 +576,14 @@ export function TroubleshootingTab() {
         )}
 
         <div className="p-3 bg-daintree-border/30 rounded-[var(--radius-md)]">
-          <h5 className="text-xs font-medium text-daintree-text mb-2">
+          <h5 className="text-xs font-medium text-text-primary mb-2">
             Advanced: Persistent Verbose Logging
           </h5>
-          <p className="text-xs text-daintree-text/60 mb-2 select-text">
+          <p className="text-xs text-text-secondary mb-2 select-text">
             Use the toggle above for quick debugging. For persistent verbose logs across restarts,
             launch the app with environment variables:
           </p>
-          <code className="block text-xs bg-daintree-bg p-2 rounded border border-daintree-border font-mono text-daintree-text">
+          <code className="block text-xs bg-surface-canvas p-2 rounded border border-border-default font-mono text-text-primary">
             DAINTREE_DEBUG=1 npm run dev
           </code>
         </div>
@@ -599,7 +599,7 @@ export function TroubleshootingTab() {
             variant="outline"
             size="sm"
             onClick={handleOpenLogLevelPalette}
-            className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text"
+            className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
           >
             <SlidersHorizontal />
             Set Log Level…
@@ -609,7 +609,7 @@ export function TroubleshootingTab() {
               variant="outline"
               size="sm"
               onClick={() => void handleClearLogOverrides()}
-              className="text-status-error border-daintree-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+              className="text-status-error border-border-default hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
             >
               <Trash2 />
               Clear All Overrides
@@ -619,16 +619,16 @@ export function TroubleshootingTab() {
 
         {Object.keys(logOverrides).length > 0 && (
           <div className="space-y-1 mt-3">
-            <h5 className="text-xs font-medium text-daintree-text/80 mb-1">Active overrides</h5>
+            <h5 className="text-xs font-medium text-text-primary mb-1">Active overrides</h5>
             {Object.entries(logOverrides)
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([name, level]) => (
                 <div
                   key={name}
-                  className="flex items-center justify-between px-3 py-1.5 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30"
+                  className="flex items-center justify-between px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
                 >
-                  <span className="text-xs font-mono text-daintree-text truncate">{name}</span>
-                  <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-daintree-border/60 text-daintree-text/80">
+                  <span className="text-xs font-mono text-text-primary truncate">{name}</span>
+                  <span className="text-3xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-daintree-border/60 text-text-primary">
                     {level}
                   </span>
                 </div>
@@ -638,9 +638,17 @@ export function TroubleshootingTab() {
       </SettingsSection>
 
       <div className="space-y-2">
-        <h4 className="text-sm font-medium text-daintree-text">Keyboard Shortcuts</h4>
-        <p className="text-xs text-daintree-text/50 select-text">
-          Use Cmd+Option+I (Mac) or Ctrl+Shift+I (Windows/Linux) to open DevTools.
+        <h4 className="text-sm font-medium text-text-primary">Keyboard Shortcuts</h4>
+        {/*
+          Named by route, not by chord. The dev-only Alt+Cmd+I accelerator this
+          used to advertise was removed when that chord became the fleet
+          overview's scoped shortcut (#11950), and a settings page promising a
+          key that now does something else entirely is worse than one that does
+          not mention a key at all.
+        */}
+        <p className="text-xs text-text-secondary select-text">
+          In development builds, open DevTools from View → Toggle Developer Tools, or run the Toggle
+          DevTools command from the command palette.
         </p>
       </div>
     </div>

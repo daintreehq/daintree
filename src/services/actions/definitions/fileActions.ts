@@ -4,12 +4,20 @@ import { filesClient } from "@/clients/filesClient";
 import { useProjectStore } from "@/store";
 import { usePanelStore } from "@/store/panelStore";
 import { usePanelDialogStore } from "@/store/panelDialogStore";
-import { isFilePanel } from "@shared/types/panel";
+import { isFilePanel, type FileViewMode } from "@shared/types/panel";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
-import { isAbsolute, isPathInside, join, normalize, toWorktreeRelative } from "@shared/utils/path";
+import {
+  isAbsolute,
+  isPathInside,
+  join,
+  normalize,
+  resolveWorktreePathScope,
+  toWorktreeRelative,
+} from "@shared/utils/path";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
+import { isClientAppError } from "@/utils/clientAppError";
 import { isForegroundDispatch } from "./dispatchSource";
 import { PANEL_LIMIT_ERROR_SUFFIX } from "./panelLimitError";
 
@@ -21,6 +29,15 @@ const viewArgsSchema = z.object({
     .describe(
       "Repository root that a relative path is resolved against — use a worktree root from the worktree-listing capability."
     ),
+  worktreeId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Worktree the panel belongs to; defaults to the one containing the file."),
+  viewMode: z
+    .enum(["rendered", "source"])
+    .optional()
+    .describe('Initial view mode; defaults to "source". "rendered" applies to Markdown and HTML.'),
   line: z.number().int().positive().optional().describe("1-based line to scroll to."),
   col: z.number().int().positive().optional().describe("1-based column to scroll to."),
 });
@@ -90,7 +107,58 @@ const openImageViewerArgsSchema = z.object({
 
 const showItemInFolderArgsSchema = z.object({
   path: z.string().min(1),
+  allowOutsideRoots: z.boolean().default(false),
 });
+
+/**
+ * "rendered" applies only to Markdown and HTML — clamp so a stray request can't
+ * persist a mode the panel can never display. Shared by the dialog and grid
+ * openers so both answer the same way for the same path.
+ */
+function resolveFileViewMode(
+  absolutePath: string,
+  viewMode: FileViewMode | undefined
+): FileViewMode | undefined {
+  if (viewMode !== "rendered") return viewMode;
+  return isMarkdownFilePath(absolutePath) || isHtmlFilePath(absolutePath) ? viewMode : "source";
+}
+
+/**
+ * Which worktree a file panel belongs to. That binding decides the pane's read
+ * root and, on promotion, which grid bucket it lands in.
+ *
+ * An explicit id is a claim about the target, so an unresolvable one throws
+ * rather than falling back — a silent substitution on a named target is the
+ * class of bug #7880 banned, and it is what `panel.openPluginPanel` already
+ * refuses. Otherwise the answer is containment, never whichever worktree
+ * happens to be selected (#11276): the active worktree is only right when it is
+ * also the containing one, and a file outside every worktree (a scratch folder,
+ * a worktree-less project) has no containing answer to give.
+ */
+function resolveFilePanelWorktreeId(
+  absolutePath: string,
+  requested: string | undefined,
+  callbacks: ActionCallbacks
+): string | undefined {
+  const worktrees = callbacks.getWorktrees();
+  if (requested !== undefined) {
+    // An unloaded list can't establish membership either, and says so
+    // distinctly: that one is transient and worth retrying, a foreign id never
+    // will be.
+    if (worktrees.length === 0) {
+      throw new Error(
+        `Can't verify worktree "${requested}": the project's worktrees haven't loaded yet`
+      );
+    }
+    if (!worktrees.some((worktree) => worktree.id === requested)) {
+      throw new Error(`Worktree "${requested}" does not belong to the current project`);
+    }
+    return requested;
+  }
+  return (
+    resolveWorktreePathScope(absolutePath, worktrees)?.worktreeId ?? callbacks.getActiveWorktreeId()
+  );
+}
 
 function resolveFilePanelPath(path: string, rootPath: string | undefined): string {
   if (isAbsolute(path)) return normalize(path);
@@ -123,10 +191,11 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       },
     ],
     run: async (args: unknown) => {
-      const { path, rootPath, line } = viewArgsSchema.parse(args);
+      const { path, rootPath, worktreeId, viewMode, line } = viewArgsSchema.parse(args);
       // Resolve before creating the record, matching file.openPanel: the panel
       // stores an absolute path and has no root to resolve against later.
       const absolutePath = resolveFilePanelPath(path, rootPath);
+      const effectiveViewMode = resolveFileViewMode(absolutePath, viewMode);
       // Title the panel with the file name so the dialog header names the file.
       // FilePane derives the same name for its own panel header, but the dialog
       // header reads the stored title through the kind-agnostic host.
@@ -134,8 +203,9 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       const panelId = await usePanelDialogStore.getState().openPanelDialog({
         kind: "file",
         filePath: absolutePath,
-        worktreeId: callbacks.getActiveWorktreeId(),
+        worktreeId: resolveFilePanelWorktreeId(absolutePath, worktreeId, callbacks),
         ...(fileName && { title: fileName }),
+        ...(effectiveViewMode && { fileViewMode: effectiveViewMode }),
         ...(line != null && { initialLine: line }),
       });
       if (!panelId) {
@@ -221,14 +291,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     run: async (args: unknown, ctx?: ActionContext) => {
       const { path, rootPath, viewMode } = openPanelArgsSchema.parse(args);
       const absolutePath = resolveFilePanelPath(path, rootPath);
-      // "rendered" applies only to Markdown and HTML — clamp so a stray request
-      // can't persist a mode the panel can never display.
-      const effectiveViewMode =
-        viewMode === "rendered" &&
-        !isMarkdownFilePath(absolutePath) &&
-        !isHtmlFilePath(absolutePath)
-          ? "source"
-          : viewMode;
+      const effectiveViewMode = resolveFileViewMode(absolutePath, viewMode);
 
       const store = usePanelStore.getState();
       const existing = store.panelIds
@@ -367,15 +430,44 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     id: "file.showItemInFolder",
     title: "Reveal in File Manager",
     description:
-      "Reveal a file or directory in the OS file manager (Finder on macOS, Explorer on Windows, the default file manager on Linux) with the item selected. Args: `path` (required) — absolute file or directory path. Reveals only; it never opens or launches the item. Errors when the path is missing, outside your project roots, or no longer exists.",
+      "Reveal a file or directory in the OS file manager (Finder on macOS, Explorer on Windows, the default file manager on Linux) with the item selected. Args: `path` (required) — absolute file or directory path; `allowOutsideRoots` (optional, default false) — when containment refuses the path, retry through a guarded fallback that skips project-root containment but still refuses executable targets, so it cannot reveal everything a root-contained reveal can. Plugins may not set it. Reveals only; it never opens or launches the item. Errors when the path is missing, no longer exists, or sits outside your project roots without `allowOutsideRoots`.",
     category: "files",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: showItemInFolderArgsSchema,
-    run: async (args: unknown) => {
-      const { path } = showItemInFolderArgsSchema.parse(args);
-      await systemClient.showItemInFolder(path);
+    run: async (args: unknown, ctx?: ActionContext) => {
+      const { path, allowOutsideRoots } = showItemInFolderArgsSchema.parse(args);
+
+      // The plugin system gates its own reveal capability; letting a plugin set
+      // the flag would hand it the unconfined op for free. Refused ahead of the
+      // confined call so it is the flag being rejected, not the reveal — a
+      // plugin dispatching `{ path }` keeps today's contained behavior. Plain
+      // `Error` rather than an AppError, mirroring the recipe-terminal gate in
+      // `workflowCreationActions.ts`.
+      if (allowOutsideRoots && ctx?.dispatchSource === "plugin") {
+        throw new Error(
+          "Plugins cannot reveal paths outside your project roots. Dispatch file.showItemInFolder without `allowOutsideRoots`."
+        );
+      }
+
+      try {
+        await systemClient.showItemInFolder(path);
+      } catch (error) {
+        // Flag first so a caller that never opted in gets an untouched rethrow:
+        // `isClientAppError` decodes by mutating the error in place. Then the
+        // decode, which is the only sound read of the discriminant — contextBridge
+        // strips the error's own `code`/`name` on the way to the renderer, leaving
+        // the encoded message prefix as the sole carrier (#6116). Narrowed to the
+        // exact containment rejection: INVALID_PATH, a denied extension, or any
+        // other failure must never reach the relaxed op.
+        if (!allowOutsideRoots || !isClientAppError(error) || error.code !== "OUTSIDE_ROOT") {
+          throw error;
+        }
+        // Deliberately not wrapped: a rejection here is the user's answer, and
+        // the unconfined op keeps its own deny-list, realpath and stat guards.
+        await systemClient.showItemInFolderUnconfined(path);
+      }
     },
   }));
 }

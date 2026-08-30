@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { cn } from "@/lib/utils";
+import { Spinner } from "@/components/ui/Spinner";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PilotRunState } from "./PilotRunState";
 import type { PilotProjectGroup, PilotRow } from "./pilotRows";
@@ -24,6 +27,9 @@ export interface PilotParkTarget {
 }
 
 const GATE_NONE = "__none__";
+
+/** Where "this is taking a while" stops being noise and starts being news. */
+const PARK_STILL_WORKING_MS = 5_000;
 
 function gateOptionDomId(runId: string): string {
   return `pilot-park-gate-${runId}`;
@@ -60,6 +66,21 @@ export function PilotParkEditor({
   const [gateId, setGateId] = useState<string>(target.existingPark?.gateRunId ?? GATE_NONE);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Submitting disables the whole form, and a disabled form with no other sign
+   * of life is indistinguishable from a broken one.
+   *
+   * Doherty-gated, so a park that lands in 80ms — which is nearly all of them,
+   * the write being a local record — flashes nothing on the way. Past the gate
+   * the button says it is working; past five seconds a polite status says so
+   * in words, for the case where the pty host is the thing not answering.
+   *
+   * The form's values stay on screen throughout. A note the user typed is the
+   * one thing here that cannot be recovered by trying again.
+   */
+  const showBusy = useDeferredLoading(busy, UI_DOHERTY_THRESHOLD);
+  const showStillWorking = useDeferredLoading(busy, PARK_STILL_WORKING_MS);
 
   const noteRef = useRef<HTMLInputElement>(null);
   const gateRefs = useRef(new Map<string, HTMLButtonElement | null>());
@@ -194,12 +215,12 @@ export function PilotParkEditor({
           className="h-4 w-4 shrink-0"
           brandColor={target.row.presetColor ?? target.row.chrome.color}
         />
-        <span className="min-w-0 truncate text-sm text-daintree-text">{target.row.title}</span>
-        <span className="shrink-0 text-xs text-daintree-text/40">{target.group.name}</span>
+        <span className="min-w-0 truncate text-sm text-text-primary">{target.row.title}</span>
+        <span className="shrink-0 text-xs text-text-secondary">{target.group.name}</span>
       </div>
 
       <label className="flex flex-col gap-1">
-        <span className="text-[10px] font-medium tracking-wide text-daintree-text/50 uppercase">
+        <span className="text-3xs font-medium tracking-wide text-text-secondary uppercase">
           Note
         </span>
         <input
@@ -213,7 +234,7 @@ export function PilotParkEditor({
           data-testid="pilot-park-note"
           className={cn(
             "w-full rounded-[var(--radius-sm)] border border-border-default bg-transparent px-2 py-1.5",
-            "text-sm text-daintree-text placeholder:text-daintree-text/35"
+            "text-sm text-text-primary placeholder:text-text-secondary"
           )}
         />
       </label>
@@ -221,7 +242,7 @@ export function PilotParkEditor({
       <div className="flex flex-col gap-1">
         <span
           id="pilot-park-gate-label"
-          className="text-[10px] font-medium tracking-wide text-daintree-text/50 uppercase"
+          className="text-3xs font-medium tracking-wide text-text-secondary uppercase"
         >
           Park until
         </span>
@@ -260,14 +281,14 @@ export function PilotParkEditor({
                 onClick={() => setGateId(id)}
                 className={cn(
                   "flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
                   isActive
-                    ? "bg-overlay-subtle text-daintree-text"
-                    : "text-daintree-text/70 hover:bg-tint/[0.04]"
+                    ? "bg-overlay-subtle text-text-primary"
+                    : "text-text-secondary hover:bg-tint/[0.04]"
                 )}
               >
                 {candidate === null ? (
-                  <span className="text-daintree-text/70">I unpark it myself</span>
+                  <span className="text-text-secondary">I unpark it myself</span>
                 ) : (
                   <>
                     <span className="flex size-3.5 shrink-0 items-center justify-center">
@@ -282,7 +303,7 @@ export function PilotParkEditor({
                       brandColor={candidate.row.presetColor ?? candidate.row.chrome.color}
                     />
                     <span className="min-w-0 flex-1 truncate">{candidate.row.title}</span>
-                    <span className="shrink-0 text-xs text-daintree-text/40">
+                    <span className="shrink-0 text-xs text-text-secondary">
                       {candidate.group.name}
                     </span>
                   </>
@@ -291,7 +312,7 @@ export function PilotParkEditor({
             );
           })}
         </div>
-        <p className="text-[11px] leading-snug text-daintree-text/40">
+        <p className="text-2xs leading-snug text-text-secondary">
           Gated parks lift when that agent next finishes working — the run pops back into Waiting
           with your note.
         </p>
@@ -303,6 +324,12 @@ export function PilotParkEditor({
         </p>
       )}
 
+      {showStillWorking && error === null && (
+        <p role="status" data-testid="pilot-park-slow" className="text-xs text-text-secondary">
+          Still working…
+        </p>
+      )}
+
       <div className="flex items-center gap-2">
         <button
           type="button"
@@ -310,12 +337,15 @@ export function PilotParkEditor({
           disabled={busy}
           data-testid="pilot-park-confirm"
           className={cn(
-            "rounded-[var(--radius-sm)] bg-overlay-subtle px-3 py-1 text-sm text-daintree-text transition-colors",
+            "rounded-[var(--radius-sm)] bg-overlay-subtle px-3 py-1 text-sm text-text-primary transition-colors",
             "hover:bg-tint/[0.08] disabled:opacity-50",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+            "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           )}
         >
-          {isReparking ? "Update park" : "Park"}
+          <span className="flex items-center gap-1.5">
+            {showBusy && <Spinner size="sm" />}
+            {isReparking ? "Update park" : "Park"}
+          </span>
         </button>
         {isReparking && (
           <button
@@ -325,9 +355,9 @@ export function PilotParkEditor({
             data-no-submit
             data-testid="pilot-park-unpark"
             className={cn(
-              "rounded-[var(--radius-sm)] px-3 py-1 text-sm text-daintree-text/70 transition-colors",
-              "hover:bg-overlay-subtle hover:text-daintree-text disabled:opacity-50",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+              "rounded-[var(--radius-sm)] px-3 py-1 text-sm text-text-secondary transition-colors",
+              "hover:bg-overlay-subtle hover:text-text-primary disabled:opacity-50",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             )}
           >
             Unpark
@@ -340,9 +370,9 @@ export function PilotParkEditor({
           data-no-submit
           data-testid="pilot-park-cancel"
           className={cn(
-            "ml-auto rounded-[var(--radius-sm)] px-3 py-1 text-sm text-daintree-text/50 transition-colors",
-            "hover:bg-overlay-subtle hover:text-daintree-text disabled:opacity-50",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+            "ml-auto rounded-[var(--radius-sm)] px-3 py-1 text-sm text-text-secondary transition-colors",
+            "hover:bg-overlay-subtle hover:text-text-primary disabled:opacity-50",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           )}
         >
           Cancel

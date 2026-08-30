@@ -1,3 +1,4 @@
+import { Card } from "@/components/ui/card";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PresetSelector } from "../PresetSelector";
@@ -35,18 +36,15 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
   const title = "Runtime settings";
 
   return (
-    <div
-      id="agents-presets"
-      className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4"
-    >
+    <Card id="agents-presets" className="space-y-4">
       {/* Header: title + Add button */}
       <div
-        className={`pb-3${scope.allPresets.length > 0 ? " border-b border-daintree-border" : ""}`}
+        className={`pb-3${scope.allPresets.length > 0 ? " border-b border-border-default" : ""}`}
       >
         <div className="flex items-center justify-between">
           <div>
-            <label className="text-sm font-medium text-daintree-text">{title}</label>
-            <p className="text-xs text-daintree-text/40 select-text">
+            <label className="text-sm font-medium text-text-primary">{title}</label>
+            <p className="text-xs text-text-secondary select-text">
               Pick a scope — Default applies everywhere; presets override it.
             </p>
           </div>
@@ -170,6 +168,6 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
           />
         )}
       </div>
-    </div>
+    </Card>
   );
 }

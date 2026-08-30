@@ -63,7 +63,7 @@ export function SettingsSelect({
     undefined;
 
   const scopeBadge = scope ? (
-    <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-medium bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20">
+    <span className="text-3xs px-1.5 py-0.5 rounded-sm font-medium bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20">
       {scope === "project" ? "Project" : scope === "global" ? "Global" : "Default"}
     </span>
   ) : null;
@@ -76,16 +76,19 @@ export function SettingsSelect({
         </label>
         {scopeBadge}
         {isModified && (
-          <span className="w-1.5 h-1.5 rounded-full bg-state-modified" aria-hidden="true" />
+          <span
+            className="status-mark w-1.5 h-1.5 rounded-full bg-state-modified"
+            aria-hidden="true"
+          />
         )}
         {showReset && (
           <button
             type="button"
             aria-label={resetAriaLabel ?? `Reset ${label} to default`}
             className={cn(
-              "p-0.5 rounded-sm text-text-muted hover:text-daintree-text",
+              "p-0.5 rounded-sm text-text-muted hover:text-text-primary",
               "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
               "transition-colors"
             )}
             onClick={onReset}

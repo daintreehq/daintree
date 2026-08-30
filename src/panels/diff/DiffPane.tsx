@@ -17,7 +17,7 @@ import { FolderOpen } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
-import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
+import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
@@ -81,9 +81,13 @@ const GENERIC_AUDIO_ERROR: MediaPreviewError = {
   description: "The format is supported but the codec may not be — Refresh to try again.",
 };
 
-// Mirrors the ladder the modal used, so the preference keeps meaning the same
-// sizes it always did.
-const DIFF_FONT_SIZE_PX: Record<DiffFontSize, string> = { s: "11px", m: "12px", l: "14px" };
+// The S/M/L rungs are the shared type steps, so the preference keeps meaning the
+// same sizes it always did while still tracking the scale.
+const DIFF_FONT_SIZE: Record<DiffFontSize, string> = {
+  s: "var(--text-2xs)",
+  m: "var(--text-xs)",
+  l: "var(--text-sm)",
+};
 
 export interface DiffPaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -178,7 +182,7 @@ export function DiffPane({
   const diffShowFileList = usePreferencesStore((s) => s.diffShowFileList);
   const diffFontSize = usePreferencesStore((s) => s.diffFontSize);
   const diffFontStyle: CSSProperties & Record<"--diff-font-size", string> = {
-    "--diff-font-size": DIFF_FONT_SIZE_PX[diffFontSize],
+    "--diff-font-size": DIFF_FONT_SIZE[diffFontSize],
   };
   const setDiffShowFileList = usePreferencesStore((s) => s.setDiffShowFileList);
 
@@ -549,7 +553,7 @@ export function DiffPane({
   const reveal = revealCopy();
   const toolbar = filePath ? (
     <>
-      <FileViewerToolbar.Root>
+      <FileViewerToolbar.Root label="Diff viewer controls">
         {!isImageMode && !isMediaMode && !isPdfMode && (
           <div role="group" aria-label="Diff layout">
             <SegmentedToggle<DiffViewType>
@@ -580,11 +584,11 @@ export function DiffPane({
               pressed={diffWrapLines}
               onClick={() => setDiffWrapLines(!diffWrapLines)}
             >
-              <WrapText className="w-4 h-4" />
+              <WrapText className={TOOLBAR_ICON_CLASS} />
             </FileViewerToolbar.IconButton>
           )}
           <FileViewerToolbar.IconButton label="Refresh" onClick={refreshAll}>
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className={TOOLBAR_ICON_CLASS} />
           </FileViewerToolbar.IconButton>
           {absolutePath && (
             <>
@@ -592,13 +596,13 @@ export function DiffPane({
                 label={reveal.label}
                 onClick={() => void handleExternalAction("reveal")}
               >
-                <FolderOpen className="w-4 h-4" />
+                <FolderOpen className={TOOLBAR_ICON_CLASS} />
               </FileViewerToolbar.IconButton>
               <FileViewerToolbar.IconButton
                 label="Open in editor"
                 onClick={() => void handleExternalAction("editor")}
               >
-                <ExternalLink className="w-4 h-4" />
+                <ExternalLink className={TOOLBAR_ICON_CLASS} />
               </FileViewerToolbar.IconButton>
             </>
           )}
@@ -866,7 +870,7 @@ export function DiffPane({
                 label="Show file list"
                 onToggle={() => setDiffShowFileList(!diffShowFileList)}
               >
-                <PanelLeft className="w-4 h-4" />
+                <PanelLeft className={TOOLBAR_ICON_CLASS} />
               </IconToggle>
             )}
             {isWorkspace && (
@@ -878,9 +882,9 @@ export function DiffPane({
                       onClick={() => navigateFile(-1)}
                       disabled={!hasPrevFile}
                       aria-label="Previous file"
-                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                     >
-                      <ChevronLeft className="w-4 h-4" />
+                      <ChevronLeft className={TOOLBAR_ICON_CLASS} />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="top">Previous file ([)</TooltipContent>
@@ -898,9 +902,9 @@ export function DiffPane({
                       onClick={() => navigateFile(1)}
                       disabled={!hasNextFile}
                       aria-label="Next file"
-                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                     >
-                      <ChevronRight className="w-4 h-4" />
+                      <ChevronRight className={TOOLBAR_ICON_CLASS} />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="top">Next file (])</TooltipContent>
@@ -914,7 +918,7 @@ export function DiffPane({
               label="Viewed"
               onToggle={() => toggleViewed(worktreePath, currentEntry.viewedKey)}
             >
-              <Check className="w-4 h-4" />
+              <Check className={TOOLBAR_ICON_CLASS} />
               <span className="text-xs">Viewed</span>
             </IconToggle>
           )}

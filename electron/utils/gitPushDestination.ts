@@ -10,6 +10,18 @@ import type { GitPushDestination } from "../../shared/types/git.js";
 export interface ResolvedGitPushDestination extends GitPushDestination {
   /** Full ref, e.g. `refs/remotes/fork/release/topic`. */
   remoteTrackingRef: string;
+  /**
+   * The branch's upstream names a DIFFERENT branch on the one remote this repo
+   * has, so `push.default=simple` refuses the push outright and git offers no
+   * push ref of its own. The destination above is the same-name branch on that
+   * remote — the only one this branch could mean — and the caller must issue
+   * the push with an explicit `--set-upstream <remote> <local>:<local>`, which
+   * both performs the push and repairs the tracking config that broke it.
+   *
+   * Main-process-only, like {@link remoteTrackingRef}: it changes how the push
+   * is invoked, not what the renderer renders.
+   */
+  requiresUpstreamRepair?: boolean;
 }
 
 export type GitPushDestinationResolution =
@@ -113,7 +125,10 @@ export async function resolveGitPushDestination(
 
   const raw = await git.raw([
     "for-each-ref",
-    "--format=%(refname)%00%(push:remotename)%00%(push)",
+    // `%(upstream)` rides along for free and is what separates "this branch
+    // tracks something differently named" from "this branch tracks nothing" —
+    // the two states that both surface as an empty `%(push)`.
+    "--format=%(refname)%00%(push:remotename)%00%(push)%00%(upstream)",
     `refs/heads/${branchName}`,
   ]);
 
@@ -136,6 +151,7 @@ export async function resolveGitPushDestination(
   // The guard below rejects such names outright instead.
   const remote = record[1] ?? "";
   const pushRef = record[2] ?? "";
+  const upstreamRef = record[3] ?? "";
 
   if (!remote) {
     return resolveUnconfigured(remotes, branchName);
@@ -158,7 +174,7 @@ export async function resolveGitPushDestination(
   //     same-name push.
   // Refuse rather than invent a branch name — the remote alone isn't enough.
   if (!pushRef) {
-    return { status: "unresolved", reason: "not-configured" };
+    return await resolveNameMismatchRepair(git, branchName, remote, remotes, upstreamRef);
   }
 
   const remoteBranch = stripRemotePrefix(pushRef, remotes);
@@ -181,6 +197,114 @@ export async function resolveGitPushDestination(
       remoteTrackingRef: `${REMOTE_TRACKING_PREFIX}${remote}/${remoteBranch}`,
     },
   };
+}
+
+/** The one `push.default` value under which the recovery below is git's own intent. */
+const SIMPLE_PUSH_DEFAULT = "simple";
+
+/**
+ * Recover the destination of a branch whose upstream names a different branch.
+ *
+ * This is the state `git worktree add -b topic --track origin/develop` leaves
+ * behind: `branch.topic.merge` points at `develop`, so under `push.default=simple`
+ * git refuses the push ("the upstream branch of your current branch does not
+ * match the name of your current branch") and reports a push REMOTE with an
+ * empty push REF. Before this, that empty ref fell into `not-configured` and the
+ * push button was dead — while the same branch created without any tracking at
+ * all pushed happily through {@link resolveUnconfigured}. The more-configured
+ * branch was the broken one.
+ *
+ * Narrow on purpose. Every one of these must hold, or it falls back to refusing:
+ *
+ *   - the branch really does track something, and that something is a
+ *     remote-tracking ref under a known remote carrying a DIFFERENT branch name
+ *     (a same-name upstream with an empty push ref is a different fault, and an
+ *     untracked branch is {@link resolveUnconfigured}'s case, not this one);
+ *   - the repository has exactly one remote and git named that same one, so
+ *     "which repository" has a single answer rather than a preferred one;
+ *   - `push.default` is unset or `simple`, so the refusal we are recovering
+ *     from is the name-mismatch rule and not `nothing`, `matching`, or a
+ *     triangular setup;
+ *   - no per-remote push refspec exists to map the branch somewhere else.
+ *
+ * What it infers is only what `simple` itself would have pushed had the names
+ * agreed: the same branch name on that remote. The caller still shows the
+ * destination in the D2 confirm before anything is written.
+ */
+async function resolveNameMismatchRepair(
+  git: Pick<SimpleGit, "raw">,
+  branchName: string,
+  remote: string,
+  remotes: readonly string[],
+  upstreamRef: string
+): Promise<GitPushDestinationResolution> {
+  const unresolved: GitPushDestinationResolution = {
+    status: "unresolved",
+    reason: "not-configured",
+  };
+
+  if (!upstreamRef) return unresolved;
+  if (remotes.length !== 1 || remote !== remotes[0]) return unresolved;
+
+  const upstreamBranch = stripRemotePrefix(upstreamRef, remotes);
+  if (!upstreamBranch || upstreamBranch === branchName) return unresolved;
+
+  if (!(await hasDefaultSimplePushConfig(git))) return unresolved;
+
+  return {
+    status: "resolved",
+    destination: {
+      remote,
+      branch: branchName,
+      remoteTrackingRef: `${REMOTE_TRACKING_PREFIX}${remote}/${branchName}`,
+      requiresUpstreamRepair: true,
+    },
+  };
+}
+
+/**
+ * True when nothing in the effective config redirects a push away from the
+ * plain same-name destination — no `push.default` other than `simple`, and no
+ * `remote.<name>.push` refspec.
+ *
+ * `--list -z` rather than `--get-regexp`: the latter exits non-zero both when
+ * nothing matched (the ordinary case) and when the read genuinely failed, and
+ * simple-git surfaces the two identically. Reading a real failure as "no
+ * overrides" would authorize a push the config had redirected. `--list` exits
+ * zero for an empty configuration, so a rejection here is unambiguously a read
+ * failure and this fails CLOSED on it: a refused push is a visible prompt to
+ * fix the config, a misdirected one is not recoverable.
+ *
+ * The whole effective config is read, not just the local file, because a
+ * global `push.default` governs this push exactly as a local one would.
+ */
+async function hasDefaultSimplePushConfig(git: Pick<SimpleGit, "raw">): Promise<boolean> {
+  let out: string;
+  try {
+    out = await git.raw(["config", "--list", "-z"]);
+  } catch {
+    return false;
+  }
+
+  // `-z` because a refspec is whitespace-adjacent and a value may span lines:
+  // entries are NUL-separated and the key ends at the first newline.
+  //
+  // Later entries win, exactly as git resolves them, so `push.default` is
+  // carried to the end rather than decided on first sight — a repo-local
+  // `simple` must be allowed to override a global `current`.
+  let pushDefault: string | null = null;
+  for (const entry of out.split("\u0000")) {
+    if (!entry) continue;
+    const newline = entry.indexOf("\n");
+    const key = (newline === -1 ? entry : entry.slice(0, newline)).toLowerCase();
+    const value = newline === -1 ? "" : entry.slice(newline + 1);
+    if (key === "push.default") {
+      pushDefault = value.trim();
+    } else if (key.startsWith("remote.") && key.endsWith(".push")) {
+      return false;
+    }
+  }
+  return pushDefault === null || pushDefault === SIMPLE_PUSH_DEFAULT;
 }
 
 /**

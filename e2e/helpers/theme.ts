@@ -5,7 +5,7 @@ import { T_LONG } from "./timeouts";
 export interface ThemeChromeMetrics {
   projectTitleContrast: number;
   quickRunFieldBorderContrast: number;
-  worktreeSectionContrast: number;
+  worktreeSectionLabelContrast: number;
   sidebarVsCanvasContrast: number;
   panelVsGridContrast: number;
 }
@@ -221,8 +221,15 @@ export async function getThemeChromeMetrics(
         throw new Error("Worktree details section was not found");
       }
 
+      const detailsTrigger = detailsSection.querySelector<HTMLElement>('[id$="-button"]');
+      const detailsLabel = Array.from(
+        detailsTrigger?.querySelectorAll<HTMLElement>("span") ?? []
+      ).find((element) => (element.textContent ?? "").trim() === "Details");
+      if (!detailsLabel) {
+        throw new Error("Worktree details label was not found");
+      }
+
       const cardBackground = resolveEffectiveBackground(worktreeCard);
-      const sectionBackground = resolveEffectiveBackground(detailsSection);
 
       const rootBackground = resolveEffectiveBackground(document.body);
       const sidebarBackground = sidebar ? resolveEffectiveBackground(sidebar) : rootBackground;
@@ -237,7 +244,10 @@ export async function getThemeChromeMetrics(
           projectBackground
         ),
         quickRunFieldBorderContrast: contrastRatio(fieldBorderColor, quickRunBackground),
-        worktreeSectionContrast: contrastRatio(sectionBackground, cardBackground),
+        worktreeSectionLabelContrast: contrastRatio(
+          parseColor(getComputedStyle(detailsLabel).color),
+          cardBackground
+        ),
         sidebarVsCanvasContrast: contrastRatio(sidebarBackground, rootBackground),
         panelVsGridContrast: panelBackground
           ? contrastRatio(panelBackground, gridContainerBackground)

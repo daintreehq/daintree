@@ -50,6 +50,7 @@ import {
 } from "@/components/DragDrop/SortableWorktreeCard";
 import { applyManualWorktreeReorder } from "@/lib/worktreeReorder";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { cn } from "@/lib/utils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore, useWorktreeSelectionStore, useProjectStore } from "@/store";
 import type { PendingCreation, DeletedWorktree } from "@/store/worktreeStore";
@@ -127,9 +128,10 @@ function formatButtonTitle(label: string, shortcut?: string | null): string {
 
 const NO_MATCH_QUERY_MAX = 40;
 
+/** Mirrors `QuickStateFilterBar`'s own labels — see the rationale there. */
 const QUICK_STATE_LABELS: Record<"working" | "waiting" | "finished", string> = {
   working: "Working",
-  waiting: "Waiting",
+  waiting: "Attention",
   finished: "Finished",
 };
 
@@ -307,12 +309,12 @@ function renderSidebarFlatItem(
       <div
         role="row"
         aria-rowindex={item.ariaRowIndex}
-        className="bg-daintree-sidebar border-b border-divider"
+        className="bg-surface-sidebar border-b border-divider"
       >
         <div
           role="rowheader"
           aria-colspan={1}
-          className="px-4 py-2 text-[10px] font-medium text-daintree-text/50 uppercase tracking-wide"
+          className="px-4 py-2 text-3xs font-medium text-text-secondary uppercase tracking-wide"
         >
           {item.displayName} ({item.count})
         </div>
@@ -1523,8 +1525,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return (
       <div className="flex flex-col h-full">
         {worktreeLoadErrorBanner}
-        <div className="flex items-center px-4 py-2 border-b border-divider shrink-0">
-          <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
+        <div className="flex items-center px-3 py-3 border-b border-divider shrink-0">
+          <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
+            Worktrees
+          </h2>
         </div>
         <div className="flex-1 min-h-0 relative overflow-hidden pb-8">
           <Skeleton label="Loading worktrees">
@@ -1557,8 +1561,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       <>
         <div className="flex flex-col h-full">
           {worktreeLoadErrorBanner}
-          <div className="flex items-center px-4 py-2 border-b border-divider shrink-0">
-            <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
+          <div className="flex items-center px-3 py-3 border-b border-divider shrink-0">
+            <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
+              Worktrees
+            </h2>
           </div>
           {errorBanner}
 
@@ -1572,7 +1578,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               icon={<FolderOpen />}
               title="Open a Git repository"
               action={
-                <span className="text-xs text-daintree-text/50">
+                <span className="text-xs text-text-secondary">
                   Use{" "}
                   <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-xs">
                     File → Open Directory
@@ -1638,7 +1644,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               { source: "user" }
             );
           }}
-          className="inline-flex items-center justify-center self-stretch px-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06] aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/60"
+          className="inline-flex items-center justify-center self-stretch px-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06] aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/60"
           aria-label={armMatchingLabel}
         >
           <Zap className="w-3 h-3" aria-hidden="true" />
@@ -1651,9 +1657,27 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     <div className="flex flex-col h-full">
       {worktreeLoadErrorBanner}
       {/* Header Section */}
-      <div className="group/header flex items-center justify-between px-4 py-2 border-b border-divider bg-transparent shrink-0">
-        <div className="flex items-baseline gap-1.5">
-          <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
+      {/* The control zone carries ONE horizontal rule, at its bottom edge. When
+          the search rail renders it owns that rule, so the header goes without;
+          with no rail the header IS the bottom of the zone and keeps it.
+          Stacking a header rule on a rail rule put two hairlines in the first
+          90px of the sidebar and neither was carrying hierarchy (#11991). */}
+      {/* py-3, not a fixed h-8. The zone read as cramped against the window
+          chrome above it, and an even 12px rhythm — above the title, title to
+          field, field to list — is what a control zone needs before the eye
+          will treat it as one band rather than two stacked strips. The loading
+          and error branches above carry the same box, or the sidebar jumps as
+          a project resolves. */}
+      <div
+        className={cn(
+          "group/header @container/header flex items-center justify-between gap-1 px-3 py-3 bg-transparent shrink-0",
+          !hasNonMainWorktrees && "border-b border-divider"
+        )}
+      >
+        <div className="flex min-w-0 items-baseline gap-1.5">
+          <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
+            Worktrees
+          </h2>
           {showReconnecting && (
             <span
               aria-hidden="true"
@@ -1664,8 +1688,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 <Tooltip autoDismiss={false}>
                   <TooltipTrigger asChild>
                     <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-status-warning text-xs">
-                      <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
-                      Reconnecting…
+                      <RefreshCw
+                        className="w-3 h-3 animate-spin motion-reduce:animate-none"
+                        aria-hidden="true"
+                      />
+                      <span className="hidden @[16rem]/header:inline">Reconnecting…</span>
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
@@ -1673,20 +1700,26 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                   </TooltipContent>
                 </Tooltip>
               ) : (
-                <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-daintree-text/60 text-xs">
-                  <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
-                  Reconnecting…
+                <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-text-secondary text-xs">
+                  <RefreshCw
+                    className="w-3 h-3 animate-spin motion-reduce:animate-none"
+                    aria-hidden="true"
+                  />
+                  <span className="hidden @[16rem]/header:inline">Reconnecting…</span>
                 </span>
               )}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1">
-          <div className="invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/header:visible group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-hover/header:delay-75 group-focus-within/header:visible group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:delay-75 motion-reduce:transition-none flex items-center gap-1">
+        {/* gap-0.5, not gap-1: the four buttons already carry p-1, so a 4px gap
+            on top of that spent ~12px the 200px minimum width does not have —
+            the cluster crowded the "Worktrees" landmark it sits beside. */}
+        <div className="flex shrink-0 items-center gap-0.5">
+          <div className="invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/header:visible group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-hover/header:delay-75 group-focus-within/header:visible group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:delay-75 motion-reduce:transition-none flex items-center gap-0.5">
             <button
               type="button"
               onClick={onOpenOverview}
-              className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+              className="p-1 text-daintree-text/40 hover:text-text-primary hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               aria-label="Open worktrees overview"
               aria-keyshortcuts={overviewAriaShortcut}
               title={formatButtonTitle("Open worktrees overview", overviewShortcut)}
@@ -1696,7 +1729,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             <button
               type="button"
               onClick={openFleetPicker}
-              className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+              className="p-1 text-daintree-text/40 hover:text-text-primary hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               aria-label="Select terminals to arm"
               title="Select terminals to arm"
             >
@@ -1708,7 +1741,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                   type="button"
                   onClick={handleRefreshAll}
                   aria-disabled={isRefreshing || undefined}
-                  className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/40"
+                  className="p-1 text-daintree-text/40 hover:text-text-primary hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/40"
                   aria-label="Refresh sidebar"
                   aria-keyshortcuts={refreshAriaShortcut}
                 >
@@ -1728,7 +1761,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               })
             }
             onPointerEnter={() => void preloadNewWorktreeDialog()}
-            className="p-1 text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+            className="p-1 text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             aria-label="Create new worktree"
             aria-keyshortcuts={createWorktreeAriaShortcut}
             title={formatButtonTitle("Create new worktree", createWorktreeShortcut)}
@@ -1843,14 +1876,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                     <button
                       type="button"
                       onClick={() => setQuickStateFilter("all")}
-                      className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
+                      className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
                     >
                       Show all worktrees
                     </button>
                     <button
                       type="button"
                       onClick={onOpenOverview}
-                      className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors ml-1"
+                      className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
                       title={formatButtonTitle("Open overview", overviewShortcut)}
                       aria-keyshortcuts={overviewAriaShortcut}
                     >
@@ -1875,14 +1908,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                   <button
                     type="button"
                     onClick={clearAllFilters}
-                    className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
+                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
                   >
                     Show all worktrees
                   </button>
                   <button
                     type="button"
                     onClick={onOpenOverview}
-                    className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors ml-1"
+                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
                     title={formatButtonTitle("Open overview", overviewShortcut)}
                     aria-keyshortcuts={overviewAriaShortcut}
                   >
@@ -1909,14 +1942,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                   <button
                     type="button"
                     onClick={clearAllFilters}
-                    className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
+                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
                   >
                     Show all worktrees
                   </button>
                   <button
                     type="button"
                     onClick={onOpenOverview}
-                    className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors ml-1"
+                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
                     title={formatButtonTitle("Open overview", overviewShortcut)}
                     aria-keyshortcuts={overviewAriaShortcut}
                   >

@@ -150,7 +150,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
           onChange={(e) => setSearchQuery(e.target.value)}
           aria-label="Search shortcuts"
           aria-controls={resultsId}
-          className="w-full px-4 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
+          className="w-full px-4 py-2 bg-surface-canvas border border-border-default rounded-[var(--radius-md)] text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
         />
       </AppDialog.Header>
 
@@ -166,7 +166,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
             id={resultsId}
             role="status"
             aria-live="polite"
-            className="text-center text-daintree-text/60 py-8"
+            className="text-center text-text-secondary py-8"
           >
             No shortcuts found matching "{searchQuery}"
           </div>
@@ -181,7 +181,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
                 <div key={category}>
                   <h3
                     id={headingId}
-                    className="text-lg font-semibold text-daintree-text mb-3 pb-2 border-b border-daintree-border"
+                    className="text-lg font-semibold text-text-primary mb-3 pb-2 border-b border-border-default"
                   >
                     {category}
                   </h3>
@@ -193,11 +193,9 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
                         className="flex items-center justify-between py-2 px-3 rounded hover:bg-daintree-border/50"
                       >
                         <div className="flex-1">
-                          <div className="text-daintree-text font-medium">
-                            {binding.description}
-                          </div>
+                          <div className="text-text-primary font-medium">{binding.description}</div>
                           {binding.scope !== "global" && (
-                            <div className="text-xs text-daintree-text/60 mt-1">
+                            <div className="text-xs text-text-secondary mt-1">
                               Scope: {binding.scope}
                             </div>
                           )}
@@ -209,7 +207,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
                               aria-label={binding.displayCombo}
                             />
                           ) : (
-                            <span className="text-xs text-daintree-text/60 italic">unbound</span>
+                            <span className="text-xs text-text-secondary italic">unbound</span>
                           )}
                         </div>
                       </div>
@@ -223,7 +221,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
       </AppDialog.Body>
 
       <AppDialog.Footer className="justify-center">
-        <div className="text-sm text-daintree-text/60">
+        <div className="text-sm text-text-secondary">
           Press <Kbd>Esc</Kbd> to close
         </div>
       </AppDialog.Footer>

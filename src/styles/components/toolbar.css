@@ -232,7 +232,7 @@
   );
   --_border: var(--toolbar-project-border, var(--theme-border-subtle));
   --_shadow: var(--toolbar-project-shadow, var(--theme-shadow-ambient));
-  --_radius: var(--toolbar-pill-radius, 0.5rem);
+  --_radius: var(--toolbar-pill-radius, var(--radius-md));
   position: relative;
   isolation: isolate;
   background: var(--_bg);
@@ -309,7 +309,7 @@
   --_bg: var(--toolbar-project-chip-bg, var(--theme-overlay-hover));
   --_border: var(--toolbar-project-chip-border, var(--theme-border-subtle));
   --_fg: var(--toolbar-project-meta-fg, var(--theme-text-secondary));
-  --_size: var(--toolbar-project-chip-size, 10px);
+  --_size: var(--toolbar-project-chip-size, var(--text-3xs));
   background: var(--_bg);
   border-color: var(--_border);
   color: var(--_fg);
@@ -362,7 +362,7 @@
  * 2. Per-surface ring rule. The ring (box-shadow / Tailwind ring-1) creates
  *    a cut-out gap so the pip floats visually above the icon:
  *
- *      - ring-daintree-sidebar — semantic-status pips on a colored dot
+ *      - ring-surface-sidebar — semantic-status pips on a colored dot
  *        (AssistantButton MCP/agent pips, AgentButton, LauncherMenuButton
  *        running-state pip, plus LauncherMenuButton's separate discovery
  *        badge — see `showDiscoveryBadge` in LauncherMenuButton.tsx). Ring
@@ -392,7 +392,7 @@
  * no visibility — color comes from a per-surface class, visibility/motion from
  * .toolbar-badge. No forced-colors entry is needed here (no background-color of
  * its own); the composed .toolbar-badge already covers that. The ring matches
- * `ring-1 ring-daintree-sidebar`. */
+ * `ring-1 ring-surface-sidebar`. */
 .toolbar-pip {
   position: absolute;
   top: -2px;
@@ -400,7 +400,7 @@
   height: 6px;
   width: 6px;
   border-radius: 9999px;
-  box-shadow: 0 0 0 1px var(--color-daintree-sidebar);
+  box-shadow: 0 0 0 1px var(--color-surface-sidebar);
 }
 
 /* ── Badge entrance / exit ──
@@ -512,14 +512,14 @@
 .toolbar-overflow-badge[data-severity="warning"] {
   --overflow-badge-color: var(--color-state-waiting);
   border-radius: 2px;
-  box-shadow: 0 0 0 1px rgb(from var(--color-daintree-bg) r g b / 0.6);
+  box-shadow: 0 0 0 1px rgb(from var(--color-surface-canvas) r g b / 0.6);
 }
 
 .toolbar-overflow-badge[data-severity="info"] {
-  --overflow-badge-color: var(--color-daintree-text, #94a3b8);
+  --overflow-badge-color: var(--color-text-primary, #94a3b8);
   opacity: 0.5;
   border-radius: 9999px;
-  box-shadow: 0 0 0 1px rgb(from var(--color-daintree-bg) r g b / 0.6);
+  box-shadow: 0 0 0 1px rgb(from var(--color-surface-canvas) r g b / 0.6);
 }
 
 /* ── Problems dot ──

@@ -288,6 +288,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "A panel was renamed and the authoritative record now agrees",
   },
+  "terminal:worktree-changed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A run was re-filed onto another worktree (or none) and the record now agrees",
+  },
   "terminal:park-released": {
     category: "agent",
     requiresContext: false,
@@ -816,6 +822,17 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * A cross-worktree move reached the authoritative terminal record. The fleet
+   * projection subscribes because the row's worktree grouping changed; no agent
+   * state moved, so no other feed reports it and the 5s poll would otherwise own
+   * the latency of a drag the user just made (#12060).
+   */
+  "terminal:worktree-changed": {
+    id: string;
+    timestamp: number;
+  };
+
+  /**
    * Emitted whenever a run's snooze record is created, replaced or removed —
    * by the user, or automatically when they typed at the run. Both attention
    * projections subscribe: `ProjectStatsService` because a snooze changes the
@@ -1012,6 +1029,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "terminal:park-changed",
   "terminal:park-released",
   "terminal:title-changed",
+  "terminal:worktree-changed",
   "terminal:snooze-changed",
   "agent-session:captured",
   "agent-session:recorded",

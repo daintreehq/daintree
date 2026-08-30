@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
-import { CloudOff, CornerDownRight, GitPullRequest } from "lucide-react";
+import { CloudOff, CornerDownRight } from "lucide-react";
+import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import type { CIStatus } from "@shared/types/forge";
 import type { NormalizedPRState } from "@shared/types/forge";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
@@ -73,12 +74,10 @@ export function PRBadge({
 
   const { freshnessCause, rateLimitResetAt, now } = useForgeBadgeFreshness("pr");
 
-  const prStateColor =
-    prState === "merged"
-      ? "text-pr-merged"
-      : prState === "closed" || prState === "declined"
-        ? "text-pr-closed"
-        : "text-pr-open";
+  // Shape AND colour, not colour alone: `getPrStateGlyph` is shared with the
+  // Review Hub chip and the forge list so the three cannot drift.
+  const PrStateGlyph = getPrStateGlyph(prState);
+  const prStateColor = getPrStateColor(prState);
 
   const prStateLabel =
     prState === "merged"
@@ -126,8 +125,8 @@ export function PRBadge({
           onClick={handleClick}
           data-no-dnd
           className={cn(
-            "flex items-center gap-1 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
-            isHeadline ? "gap-1.5 text-[13px]" : "text-xs"
+            "flex items-center gap-1 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary min-w-0",
+            isHeadline ? "gap-1.5 text-sm leading-[inherit]" : "text-xs"
           )}
           aria-disabled={!isActive || undefined}
           aria-label={ariaLabel}
@@ -138,11 +137,11 @@ export function PRBadge({
               aria-hidden="true"
             />
           )}
-          <GitPullRequest
+          <PrStateGlyph
             className={cn(
               "shrink-0",
               isHeadline ? "w-3.5 h-3.5" : "w-3 h-3",
-              missingCredential ? "text-text-muted" : prStateColor
+              missingCredential ? "text-text-secondary" : prStateColor
             )}
             aria-hidden="true"
           />
@@ -189,7 +188,9 @@ export function PRBadge({
               {ciVisual.kind === "icon" ? (
                 <ciVisual.Icon className={cn("w-3 h-3", ciVisual.colorClass)} />
               ) : (
-                <span className={cn("block w-2 h-2 rounded-full", ciVisual.colorClass)} />
+                <span
+                  className={cn("status-mark block w-2 h-2 rounded-full", ciVisual.colorClass)}
+                />
               )}
             </span>
           )}
@@ -211,7 +212,7 @@ export function PRBadge({
           <span className="text-xs text-text-secondary">PR #{prNumber}</span>
         )}
         {!data && (
-          <FreshnessMetaItem freshness={freshness} className="text-[11px] text-text-muted mt-1" />
+          <FreshnessMetaItem freshness={freshness} className="text-2xs text-text-muted mt-1" />
         )}
       </TooltipContent>
     </Tooltip>

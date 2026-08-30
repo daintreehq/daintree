@@ -20,7 +20,7 @@ import type { AgentState } from "@/types";
 // corner — anomaly signals are background diagnostics, not live state.
 const ANOMALY_PIP_TOOLTIP = "MCP anomaly signals detected";
 
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
+const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
 
 interface PipDescriptor {
   className: string;

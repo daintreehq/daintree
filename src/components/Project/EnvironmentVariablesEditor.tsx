@@ -162,7 +162,7 @@ export function EnvironmentVariablesEditor({
     <div id="project-env-vars" className="mb-6">
       {hasGlobals && (
         <>
-          <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
             <Globe className="h-4 w-4" />
             Inherited (Global)
           </h3>
@@ -173,11 +173,11 @@ export function EnvironmentVariablesEditor({
               return (
                 <div
                   key={`global-${key}`}
-                  className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border opacity-70"
+                  className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default opacity-70"
                 >
                   <span
                     className={cn(
-                      "flex-1 text-sm text-daintree-text font-mono px-2 py-1",
+                      "flex-1 text-sm text-text-primary font-mono px-2 py-1",
                       isOverridden && "line-through text-daintree-text/40"
                     )}
                   >
@@ -188,11 +188,11 @@ export function EnvironmentVariablesEditor({
                     {isSensitive ? "********" : value}
                   </span>
                   {isOverridden ? (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-warning/15 text-status-warning font-medium">
+                    <span className="text-3xs px-1.5 py-0.5 rounded bg-status-warning/15 text-status-warning font-medium">
                       Overridden
                     </span>
                   ) : (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-info/15 text-status-info font-medium">
+                    <span className="text-3xs px-1.5 py-0.5 rounded bg-status-info/15 text-status-info font-medium">
                       Global
                     </span>
                   )}
@@ -200,12 +200,12 @@ export function EnvironmentVariablesEditor({
               );
             })}
           </div>
-          <div className="border-t border-daintree-border mb-4" />
+          <div className="border-t border-border-default mb-4" />
         </>
       )}
 
       <div className="mb-2 flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-daintree-text/80 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
           <Key className="h-4 w-4" />
           Environment Variables
         </h3>
@@ -216,7 +216,7 @@ export function EnvironmentVariablesEditor({
               type="button"
               onClick={handleSave}
               disabled={isSaving}
-              className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {settings.insecureEnvironmentVariables.length === 1
                 ? "Move 1 value out of shared settings"
@@ -224,7 +224,7 @@ export function EnvironmentVariablesEditor({
             </button>
           )}
       </div>
-      <p className="text-xs text-daintree-text/60 mb-4">
+      <p className="text-xs text-text-secondary mb-4">
         Project-specific variables injected into new terminals. Names containing KEY, SECRET, TOKEN,
         or PASSWORD are kept out of the shared settings file{" "}
         <Lock className="inline h-3 w-3" aria-hidden="true" />.
@@ -232,7 +232,7 @@ export function EnvironmentVariablesEditor({
 
       <div className="space-y-2">
         {rows.length === 0 ? (
-          <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+          <div className="text-sm text-text-secondary text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
             No environment variables configured yet
           </div>
         ) : (
@@ -247,13 +247,13 @@ export function EnvironmentVariablesEditor({
               <div key={row.id}>
                 <div
                   className={cn(
-                    "flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-daintree-bg border",
-                    error ? "border-status-error/40" : "border-daintree-border"
+                    "flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-surface-canvas border",
+                    error ? "border-status-error/40" : "border-border-default"
                   )}
                 >
                   {isSecured && (
                     <Lock
-                      className="h-3.5 w-3.5 text-status-success/60 flex-shrink-0"
+                      className="h-3.5 w-3.5 text-daintree-text/60 flex-shrink-0"
                       aria-label="Kept out of shared settings"
                     />
                   )}
@@ -269,7 +269,7 @@ export function EnvironmentVariablesEditor({
                     onChange={(e) => updateRow(index, "key", e.target.value)}
                     spellCheck={false}
                     autoCapitalize="none"
-                    className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                    className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                     placeholder="VARIABLE_NAME"
                     aria-label="Environment variable name"
                   />
@@ -283,7 +283,7 @@ export function EnvironmentVariablesEditor({
                       autoCapitalize="none"
                       autoComplete={isSensitive ? "new-password" : "off"}
                       className={cn(
-                        "w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30",
+                        "w-full bg-surface-sidebar border border-border-strong rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30",
                         isSensitive && "pr-8"
                       )}
                       placeholder="value"
@@ -314,7 +314,7 @@ export function EnvironmentVariablesEditor({
                     <Trash2 className="h-4 w-4 text-status-error" />
                   </button>
                 </div>
-                {error && <p className="text-[11px] text-status-error mt-1 ml-1">{error}</p>}
+                {error && <p className="text-2xs text-status-error mt-1 ml-1">{error}</p>}
               </div>
             );
           })
@@ -326,7 +326,7 @@ export function EnvironmentVariablesEditor({
         </Button>
       </div>
 
-      <p className="text-xs text-daintree-text/60 mt-2">{helperText}</p>
+      <p className="text-xs text-text-secondary mt-2">{helperText}</p>
 
       {saveError && <p className="text-xs text-status-error mt-2">{saveError}</p>}
 

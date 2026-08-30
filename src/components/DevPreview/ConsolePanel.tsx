@@ -25,8 +25,8 @@ type LevelFilter = ConsoleLevel | "all";
 
 const LEVEL_STYLES: Record<ConsoleLevel, { row: string; badge: string; label: string }> = {
   log: {
-    row: "text-daintree-text/80",
-    badge: "text-daintree-text/50 bg-daintree-text/10",
+    row: "text-text-primary",
+    badge: "text-text-secondary bg-daintree-text/10",
     label: "LOG",
   },
   info: {
@@ -111,12 +111,12 @@ const ConsoleRow = memo(function ConsoleRow({
       )}
       style={indentPx > 0 ? { paddingLeft: `${8 + indentPx}px` } : undefined}
     >
-      <span className="shrink-0 text-daintree-text/30 select-none tabular-nums">
+      <span className="shrink-0 text-text-placeholder select-none tabular-nums">
         {msg.timeLabel}
       </span>
       <span
         className={cn(
-          "shrink-0 text-[9px] font-bold tracking-wide px-1 py-0.5 rounded select-none",
+          "shrink-0 text-4xs font-bold tracking-wide px-1 py-0.5 rounded select-none",
           style.badge
         )}
       >
@@ -130,7 +130,7 @@ const ConsoleRow = memo(function ConsoleRow({
               onClick={handleToggle}
               aria-expanded={!isGroupCollapsed}
               aria-label="Toggle console group"
-              className="text-daintree-text/40 mr-1 select-none hover:text-daintree-text/60"
+              className="text-text-secondary mr-1 select-none hover:text-text-primary"
             >
               <span aria-hidden="true">{isGroupCollapsed ? "▶" : "▼"}</span>
             </button>
@@ -143,7 +143,7 @@ const ConsoleRow = memo(function ConsoleRow({
               </span>
             ))
           ) : (
-            <span className="text-daintree-text/50">{msg.summaryText}</span>
+            <span className="text-text-secondary">{msg.summaryText}</span>
           )}
         </div>
         {msg.stackTrace && <StackTrace stackTrace={msg.stackTrace} />}
@@ -154,7 +154,7 @@ const ConsoleRow = memo(function ConsoleRow({
             <button
               type="button"
               onClick={handleCopy}
-              className="p-0.5 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
+              className="p-0.5 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-text-primary transition-colors"
               aria-label="Copy console message"
             >
               {copied ? (
@@ -322,13 +322,13 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
   }, []);
 
   const buttonClass =
-    "px-2 py-0.5 rounded text-[10px] font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50";
+    "px-2 py-0.5 rounded text-3xs font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50";
 
   return (
-    <div className="flex h-full flex-col bg-daintree-bg">
+    <div className="flex h-full flex-col bg-surface-canvas">
       {/* Toolbar */}
       <div className="flex items-center gap-1.5 px-2 py-1 border-b border-overlay bg-surface shrink-0">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-daintree-text/50 mr-1">
+        <span className="text-3xs font-semibold uppercase tracking-wide text-text-secondary mr-1">
           Console
         </span>
 
@@ -343,8 +343,8 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
               className={cn(
                 buttonClass,
                 levelFilter === filter
-                  ? "bg-overlay-emphasis text-daintree-text"
-                  : "text-daintree-text/50 hover:bg-overlay-soft hover:text-daintree-text/70"
+                  ? "bg-overlay-emphasis text-text-primary"
+                  : "text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
               )}
             >
               {label}
@@ -365,7 +365,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Filter…"
           aria-label="Filter console messages"
-          className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-[11px] rounded bg-daintree-bg border border-overlay focus:outline-hidden focus:border-border-strong text-daintree-text placeholder:text-text-placeholder"
+          className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-2xs rounded bg-surface-canvas border border-overlay focus:outline-hidden focus:border-border-strong text-text-primary placeholder:text-text-placeholder"
         />
 
         <div className="flex-1" />
@@ -377,7 +377,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
               <button
                 type="button"
                 onClick={handleScrollToBottom}
-                className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
+                className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-text-primary transition-colors"
                 aria-label="Scroll to bottom"
               >
                 <ChevronDown className="w-3.5 h-3.5" />
@@ -394,7 +394,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
               type="button"
               onClick={handleCopyVisible}
               disabled={filtered.length === 0}
-              className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-daintree-text/50"
+              className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-text-primary transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-daintree-text/50"
               aria-label="Copy visible console messages"
             >
               {allCopied ? (
@@ -413,7 +413,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
             <button
               type="button"
               onClick={handleClear}
-              className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
+              className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-text-primary transition-colors"
               aria-label="Clear console"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -425,8 +425,8 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
 
       {/* Message list */}
       {filtered.length === 0 ? (
-        <div className="flex-1 overflow-y-auto font-mono text-[11px] leading-relaxed">
-          <div className="flex items-center justify-center h-full text-daintree-text/30 text-xs select-none">
+        <div className="flex-1 overflow-y-auto font-mono text-2xs leading-relaxed">
+          <div className="flex items-center justify-center h-full text-text-placeholder text-xs select-none">
             {allMessages.length === 0 ? "No console output" : "No messages match filter"}
           </div>
         </div>
@@ -445,7 +445,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
               onToggleGroup={msg.isGroupHeader ? toggleGroup : undefined}
             />
           )}
-          className="flex-1 font-mono text-[11px] leading-relaxed"
+          className="flex-1 font-mono text-2xs leading-relaxed"
         />
       )}
     </div>

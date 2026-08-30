@@ -4,6 +4,26 @@ export function hasClaudeApiKey(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY);
 }
 
+export function isClaudeTrustRejectionSelected(text: string): boolean {
+  return /(?:^|\n)\s*[>❯›]\s*(?:\d+\.\s*)?no,\s*exit\b/im.test(text);
+}
+
+export async function quitClaudeAgentSession(page: Page, terminalId: string): Promise<void> {
+  await page.evaluate(
+    ({ id, payload }) => {
+      window.electron.terminal.write(id, payload);
+    },
+    { id: terminalId, payload: "\x05\x15" }
+  );
+  await page.waitForTimeout(150);
+  await page.evaluate(
+    ({ id, payload }) => {
+      window.electron.terminal.write(id, payload);
+    },
+    { id: terminalId, payload: "/quit\r" }
+  );
+}
+
 export async function configureClaudeAuthEnv(page: Page): Promise<void> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {

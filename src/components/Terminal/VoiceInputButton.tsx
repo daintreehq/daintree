@@ -294,7 +294,7 @@ export function VoiceInputButton({
             />
             <span
               ref={dotCoreRef}
-              className="absolute rounded-full bg-daintree-accent"
+              className="absolute rounded-full bg-accent-primary"
               style={{
                 width: "3.5px",
                 height: "3.5px",
@@ -328,13 +328,13 @@ export function VoiceInputButton({
         className={cn(
           "relative flex items-center justify-center rounded-full transition duration-150",
           "h-6 w-6",
-          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent",
+          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary",
           showOrbit
-            ? "bg-overlay-soft text-daintree-text hover:bg-overlay-medium"
+            ? "bg-overlay-soft text-text-primary hover:bg-overlay-medium"
             : cn(
                 status === "error"
                   ? "text-activity-waiting hover:text-activity-waiting/80"
-                  : "text-daintree-text/50 hover:text-daintree-text/80 hover:bg-tint/[0.06]"
+                  : "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]"
               ),
           disabled && !isActive && "pointer-events-none opacity-40"
         )}
@@ -357,13 +357,13 @@ export function VoiceInputButton({
             className="flex h-2.5 w-2.5 items-stretch justify-between"
             aria-hidden="true"
           >
-            <span className="block w-[2px] rounded-[1px] bg-current opacity-70" />
-            <span className="block w-[2px] rounded-[1px] bg-current opacity-70" />
+            <span className="status-mark block w-[2px] rounded-full bg-current opacity-70" />
+            <span className="status-mark block w-[2px] rounded-full bg-current opacity-70" />
           </span>
         ) : showOrbit ? (
           <span
             ref={iconRef}
-            className="block h-2 w-2 rounded-[1.5px] bg-current transition-transform duration-100"
+            className="status-mark block h-2 w-2 rounded-[1.5px] bg-current transition-transform duration-100"
           />
         ) : (
           <Mic className="h-3.5 w-3.5 relative" />

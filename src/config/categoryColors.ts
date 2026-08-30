@@ -33,7 +33,7 @@ export const ACTION_CATEGORY_COLORS: Record<string, string> = {
   browser: "bg-category-cyan-subtle text-category-cyan-text border border-category-cyan-border",
 };
 
-export const ACTION_CATEGORY_DEFAULT_COLOR = "bg-tint/[0.06] text-daintree-text/50";
+export const ACTION_CATEGORY_DEFAULT_COLOR = "bg-tint/[0.06] text-text-secondary";
 
 /**
  * The 12 --color-cat-* hue tokens as complete Tailwind class literals.

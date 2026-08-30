@@ -98,23 +98,21 @@ function ThemeRow({
       )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <span className="text-xs font-medium text-daintree-text truncate">{scheme.name}</span>
+          <span className="text-xs font-medium text-text-primary truncate">{scheme.name}</span>
           {warnings.length > 0 && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] text-status-warning shrink-0">
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-3xs text-status-warning shrink-0">
               <AlertTriangle className="h-2.5 w-2.5" />
               {warnings.length}
             </span>
           )}
         </div>
         {scheme.location && (
-          <span className="text-[11px] text-daintree-text/40 truncate block">
-            {scheme.location}
-          </span>
+          <span className="text-2xs text-text-secondary truncate block">{scheme.location}</span>
         )}
       </div>
       <PaletteStrip scheme={scheme} />
       <div className="w-4 shrink-0 flex items-center justify-center">
-        {isCommitted && <Check className="w-3.5 h-3.5 text-daintree-accent" />}
+        {isCommitted && <Check className="w-3.5 h-3.5 text-accent-primary" />}
       </div>
     </button>
   );
@@ -428,7 +426,7 @@ export function ThemeBrowser() {
 
   return (
     <div
-      className="flex flex-col h-full bg-daintree-bg border-l border-daintree-border shadow-2xl"
+      className="flex flex-col h-full bg-surface-canvas border-l border-border-default shadow-2xl"
       style={{ width: PANEL_WIDTH }}
       role="dialog"
       aria-modal="true"
@@ -470,7 +468,7 @@ export function ThemeBrowser() {
             {activeScheme.name}
           </span>
           {activeScheme.location && (
-            <span className="text-[11px] text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+            <span className="text-2xs text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
               {activeScheme.location}
             </span>
           )}
@@ -478,7 +476,7 @@ export function ThemeBrowser() {
       </div>
 
       {/* Search + type filter */}
-      <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-daintree-border shrink-0">
+      <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-border-default shrink-0">
         <div className="flex items-center gap-1.5 flex-1 min-w-0 focus-within:border-daintree-accent/40">
           <Search className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none" />
           <input
@@ -489,10 +487,10 @@ export function ThemeBrowser() {
             onKeyDown={handleSearchKeyDown}
             placeholder="Filter themes..."
             aria-label="Filter themes"
-            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
+            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
           />
         </div>
-        <div className="flex rounded-[var(--radius-md)] border border-daintree-border overflow-hidden shrink-0">
+        <div className="flex rounded-[var(--radius-md)] border border-border-default overflow-hidden shrink-0">
           <button
             type="button"
             onClick={() => {
@@ -505,10 +503,10 @@ export function ThemeBrowser() {
               setTypeFilter("dark");
             }}
             className={cn(
-              "px-2.5 py-0.5 text-[11px] font-medium transition-colors",
+              "px-2.5 py-0.5 text-2xs font-medium transition-colors",
               typeFilter === "dark"
-                ? "bg-daintree-accent/15 text-daintree-text"
-                : "text-daintree-text/50 hover:text-daintree-text/70"
+                ? "bg-daintree-accent/15 text-text-primary"
+                : "text-text-secondary hover:text-text-primary"
             )}
           >
             Dark
@@ -521,10 +519,10 @@ export function ThemeBrowser() {
               setTypeFilter("light");
             }}
             className={cn(
-              "px-2.5 py-0.5 text-[11px] font-medium transition-colors border-l border-daintree-border",
+              "px-2.5 py-0.5 text-2xs font-medium transition-colors border-l border-border-default",
               typeFilter === "light"
-                ? "bg-daintree-accent/15 text-daintree-text"
-                : "text-daintree-text/50 hover:text-daintree-text/70"
+                ? "bg-daintree-accent/15 text-text-primary"
+                : "text-text-secondary hover:text-text-primary"
             )}
           >
             Light
@@ -544,7 +542,7 @@ export function ThemeBrowser() {
         className="flex-1 overflow-y-auto min-h-0"
       >
         {isEmpty ? (
-          <p className="text-xs text-daintree-text/50 text-center py-4">
+          <p className="text-xs text-text-secondary text-center py-4">
             No themes match your search.
           </p>
         ) : (
@@ -571,7 +569,7 @@ export function ThemeBrowser() {
           (near-white fill + off-black text on dark themes, near-black fill +
           off-white text on light) so it's highly visible and never restyles to
           the previewed accent. */}
-      <div className="flex items-center justify-end gap-2 px-2.5 py-2 border-t border-daintree-border bg-daintree-bg shrink-0">
+      <div className="flex items-center justify-end gap-2 px-2.5 py-2 border-t border-border-default bg-surface-canvas shrink-0">
         <Button variant="ghost" size="sm" onClick={handleCancel}>
           Cancel
         </Button>

@@ -29,7 +29,7 @@ type RowStatus = PluginMcpServerStatus | "not-started";
 
 const STATUS_DOT: Record<RowStatus, string> = {
   spawning: "bg-status-warning",
-  ready: "bg-status-success",
+  ready: "bg-activity-working",
   crashed: "bg-status-danger",
   stopped: "bg-daintree-text/30",
   "not-started": "bg-daintree-text/30",
@@ -259,10 +259,8 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
   if (rows.length === 0) {
     return (
       <div className="space-y-3">
-        {showLoading && <p className="text-xs text-daintree-text/40">Loading…</p>}
-        {!loading && (
-          <p className="text-xs text-daintree-text/40">This plugin has no MCP servers.</p>
-        )}
+        {showLoading && <p className="text-xs text-text-secondary">Loading…</p>}
+        {!loading && <p className="text-xs text-text-secondary">This plugin has no MCP servers.</p>}
         {error && <SectionError message={error} />}
       </div>
     );
@@ -270,7 +268,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-daintree-text/50">
+      <p className="text-xs text-text-secondary">
         Servers this plugin runs to provide tools. Restart one if it crashes.
       </p>
       <ul className="space-y-2">
@@ -286,7 +284,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
           return (
             <li
               key={key}
-              className="rounded-[var(--radius-md)] border border-daintree-border overflow-hidden"
+              className="rounded-[var(--radius-md)] border border-border-default overflow-hidden"
             >
               <div className="flex items-center gap-3 px-3 py-2.5">
                 <span
@@ -296,8 +294,8 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
                   aria-hidden
                 />
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm text-daintree-text truncate">{row.name}</div>
-                  <div className="text-[11px] text-daintree-text/40">
+                  <div className="text-sm text-text-primary truncate">{row.name}</div>
+                  <div className="text-2xs text-text-secondary">
                     {STATUS_LABEL[status]}
                     {row.info?.pid != null && status === "ready" && ` · pid ${row.info.pid}`}
                   </div>
@@ -317,7 +315,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
               {row.info?.lastError && status === "crashed" && (
                 <div className="mx-3 mb-2.5 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
                   <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-                  <p className="text-[11px] text-status-danger break-words select-text">
+                  <p className="text-2xs text-status-danger break-words select-text">
                     {row.info.lastError}
                   </p>
                 </div>
@@ -326,7 +324,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
               {rowRestartError && (
                 <div className="mx-3 mb-2.5 flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
                   <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-                  <p className="text-[11px] text-status-danger break-words">{rowRestartError}</p>
+                  <p className="text-2xs text-status-danger break-words">{rowRestartError}</p>
                 </div>
               )}
 
@@ -336,7 +334,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
                     type="button"
                     onClick={() => void toggleStderr(row, isOpen)}
                     aria-expanded={isOpen}
-                    className="flex items-center gap-1.5 w-full px-3 py-2 text-[11px] text-daintree-text/50 hover:text-daintree-text/80 transition-[color] duration-150"
+                    className="flex items-center gap-1.5 w-full px-3 py-2 text-2xs text-text-secondary hover:text-text-primary transition-[color] duration-150"
                   >
                     {isOpen ? (
                       <ChevronDown className="w-3.5 h-3.5 shrink-0" />
@@ -363,24 +361,24 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
 
 function StderrView({ state }: { state: StderrState | undefined }) {
   if (!state || (state.loading && !state.result)) {
-    return <p className="text-[11px] text-daintree-text/40">Loading output…</p>;
+    return <p className="text-2xs text-text-secondary">Loading output…</p>;
   }
   if (state.error) {
-    return <p className="text-[11px] text-status-danger">{state.error}</p>;
+    return <p className="text-2xs text-status-danger">{state.error}</p>;
   }
   const result = state.result;
   if (!result || result.lines.length === 0) {
-    return <p className="text-[11px] text-daintree-text/40">No output captured.</p>;
+    return <p className="text-2xs text-text-secondary">No output captured.</p>;
   }
   const hidden = result.totalLines - result.lines.length;
   return (
     <div className="space-y-1.5">
       {hidden > 0 && (
-        <p className="text-[10px] text-daintree-text/40">
+        <p className="text-3xs text-text-secondary">
           Showing the most recent {result.lines.length} of {result.totalLines} lines.
         </p>
       )}
-      <pre className="max-h-48 overflow-auto rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border p-2 font-mono text-[11px] leading-relaxed text-daintree-text/80 whitespace-pre-wrap break-words select-text">
+      <pre className="max-h-48 overflow-auto rounded-[var(--radius-md)] bg-surface-canvas border border-border-default p-2 font-mono text-2xs leading-relaxed text-text-primary whitespace-pre-wrap break-words select-text">
         {result.lines.join("\n")}
       </pre>
     </div>
@@ -391,7 +389,7 @@ function SectionError({ message }: { message: string }) {
   return (
     <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
       <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-      <p className="text-[11px] text-status-danger break-words">{message}</p>
+      <p className="text-2xs text-status-danger break-words">{message}</p>
     </div>
   );
 }

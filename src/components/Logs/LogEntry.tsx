@@ -24,7 +24,7 @@ interface LogEntryProps {
 const LEVEL_COLORS: Record<LogLevel, { bg: string; text: string; border: string }> = {
   debug: {
     bg: "bg-daintree-border/20",
-    text: "text-daintree-text/60",
+    text: "text-text-secondary",
     border: "border-daintree-border/30",
   },
   info: {
@@ -148,7 +148,7 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
       <div className="flex items-start gap-2 min-w-0">
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="text-daintree-text/60 text-xs font-mono shrink-0">
+            <span className="text-text-secondary text-xs font-mono shrink-0">
               {formatTimestamp(entry.timestamp)}
             </span>
           </TooltipTrigger>
@@ -166,16 +166,16 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
         </span>
 
         {entry.source && (
-          <span className="text-daintree-text/60 text-xs font-mono shrink-0">[{entry.source}]</span>
+          <span className="text-text-secondary text-xs font-mono shrink-0">[{entry.source}]</span>
         )}
 
-        <span className="text-daintree-text text-xs font-mono break-words min-w-0 flex-1">
+        <span className="text-text-primary text-xs font-mono break-words min-w-0 flex-1">
           {entry.message}
         </span>
 
         {count > 1 && (
           <span
-            className="text-daintree-text/60 text-xs font-mono shrink-0 tabular-nums bg-daintree-border/30 px-1.5 rounded"
+            className="text-text-secondary text-xs font-mono shrink-0 tabular-nums bg-daintree-border/30 px-1.5 rounded"
             aria-label={`Repeated ${count} times`}
           >
             ×{count}
@@ -218,7 +218,7 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
           role="region"
           aria-label="Log entry context"
         >
-          <pre className="text-daintree-text whitespace-pre-wrap select-text">{formatContext(entry.context!)}</pre>
+          <pre className="text-text-primary whitespace-pre-wrap select-text">{formatContext(entry.context!)}</pre>
         </div>
       )}
     </div>

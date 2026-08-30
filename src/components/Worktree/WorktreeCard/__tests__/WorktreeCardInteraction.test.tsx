@@ -9,6 +9,7 @@ import { resolve } from "path";
 // absolute overlay div, and suppresses hover background while a drag is active.
 
 const cardSource = readFileSync(resolve(__dirname, "../../WorktreeCard.tsx"), "utf-8");
+const overviewSource = readFileSync(resolve(__dirname, "../../WorktreeOverviewModal.tsx"), "utf-8");
 const sidebarCss = readFileSync(
   resolve(__dirname, "../../../../styles/components/sidebar.css"),
   "utf-8"
@@ -20,6 +21,24 @@ const terminalSectionSource = readFileSync(
   "utf-8"
 );
 const envPopoverSource = readFileSync(resolve(__dirname, "../EnvironmentPopover.tsx"), "utf-8");
+
+/** The grip's transition declaration, which lives in sidebar.css because the
+ *  two stages run on two different timings. */
+function gripTransitionRule(): string {
+  // Anchored to the start of a line: the keyboard-reveal rule above ends its
+  // selector list with the same attribute and would match first.
+  const block = sidebarCss.match(/^\[data-worktree-row-drag-handle\]\s*{([^}]*)}/m);
+  const body = block?.[1];
+  if (!body) throw new Error("no [data-worktree-row-drag-handle] rule in sidebar.css");
+  return body;
+}
+
+/** Resolve `transition: <prop> var(--duration-N) ...` to milliseconds. */
+function transitionDurationMs(rule: string, property: string): number {
+  const match = rule.match(new RegExp(`${property}\\s+var\\(--duration-(\\d+)\\)`));
+  if (!match) throw new Error(`no transition entry for ${property}`);
+  return Number(match[1]);
+}
 
 describe("WorktreeCard interaction-state axes (issue #6963)", () => {
   it("marks the panel drop-target via data-drop-target, painted as an inset ring in CSS", () => {
@@ -42,7 +61,23 @@ describe("WorktreeCard interaction-state axes (issue #6963)", () => {
   });
 
   it("suppresses the grid hover-shadow lift while a drag is active", () => {
-    expect(cardSource).toContain("[html[data-dragging='true']_&]:hover:shadow-none");
+    // The guard has to sit on whichever element paints the lift. That is
+    // `OverviewGridCell` now — the grid card shell stopped painting a plane
+    // of its own — so assert the pairing rather than a fixed file: any
+    // element with the ambient hover shadow also carries the drag guard.
+    for (const source of [cardSource, overviewSource]) {
+      const liftCount = (source.match(/hover:shadow-\[var\(--theme-shadow-ambient\)\]/g) ?? [])
+        .length;
+      const guardCount = (
+        source.match(/\[html\[data-dragging='true'\]_&\]:hover:shadow-none/g) ?? []
+      ).length;
+      expect(guardCount).toBe(liftCount);
+    }
+    // …and the pairing exists somewhere, so a variant that simply deleted the
+    // hover lift cannot satisfy the rule vacuously.
+    expect(cardSource + overviewSource).toContain(
+      "[html[data-dragging='true']_&]:hover:shadow-none"
+    );
   });
 
   it("suppresses sidebar hover background while a drag is active, except on the drop target", () => {
@@ -54,8 +89,22 @@ describe("WorktreeCard interaction-state axes (issue #6963)", () => {
     );
   });
 
-  it("delays the drag-handle hover reveal to filter fast cursor sweeps", () => {
-    expect(cardSource).toContain("group-hover/card:delay-[50ms]");
+  it("reveals the drag-handle dots on the fast tier, with nothing gating them", () => {
+    // Was a 50ms delay on a 150ms fade, to filter fast cursor sweeps. The
+    // dots appear directly under a pointer that is already sitting on them,
+    // so the filtering cost more than it bought: the mark arrived after the
+    // eye had landed on the spot it was going to occupy, which reads as lag
+    // rather than as motion.
+    //
+    // Assert the rule, not the number: opacity resolves faster than the
+    // 150ms state-change tier the backplate uses, and no delay stands in
+    // front of it.
+    const rule = gripTransitionRule();
+    const opacityMs = transitionDurationMs(rule, "opacity");
+    const plateMs = transitionDurationMs(rule, "background-color");
+    expect(opacityMs).toBeGreaterThan(0);
+    expect(opacityMs).toBeLessThan(plateMs);
+    expect(cardSource).not.toContain("delay-[50ms]");
   });
 });
 
@@ -106,22 +155,45 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
   });
 
   it("terminal sub-row drag handle stays visible-but-dimmed (no opacity-0 at rest)", () => {
-    expect(terminalSectionSource).toContain("text-text-primary/25");
-    expect(terminalSectionSource).toContain("group-hover/termrow:text-text-primary/40");
+    // Dimmed by stepping DOWN the text hierarchy, not by fading a brighter
+    // token: Tailwind v4 bakes slash-alpha into `color-mix()` on the `color`
+    // property itself, so the contrast it loses cannot be recovered anywhere
+    // downstream. The rule is "solid token at rest, solid token on hover, and
+    // the hover one is the brighter of the two".
+    const handle = terminalSectionSource.slice(
+      terminalSectionSource.indexOf("cursor-grab"),
+      terminalSectionSource.indexOf("cursor-grab") + 400
+    );
+    expect(handle).toMatch(/(^|\s)text-text-(muted|secondary)\b/);
+    expect(handle).toMatch(/group-hover\/termrow:text-text-(secondary|primary)\b/);
+    expect(handle).not.toMatch(/text-text-\w+\/\d/);
     expect(terminalSectionSource).not.toMatch(/data-drag-handle[\s\S]{0,400}opacity-0/);
   });
 
   it("resource action buttons use outline (not ring-2) for forced-colors survival", () => {
-    expect(detailsSource).not.toMatch(/focus-visible:ring-2\s+focus-visible:ring-daintree-accent/);
     expect(detailsSource).not.toMatch(
-      /focus-visible:outline-hidden\s+focus-visible:ring-2\s+focus-visible:ring-daintree-accent/
+      /focus-visible:ring-2\s+focus-visible:ring-(?:daintree-accent|accent-primary)(?![\w-])/
+    );
+    expect(detailsSource).not.toMatch(
+      /focus-visible:outline-hidden\s+focus-visible:ring-2\s+focus-visible:ring-(?:daintree-accent|accent-primary)(?![\w-])/
     );
   });
 
-  it("Review & Commit button uses inset outline (-2px offset) for its flush rounded-r edge", () => {
-    expect(detailsSource).toMatch(
-      /rounded-r-\[var\(--radius-lg\)\][\s\S]{0,200}focus-visible:outline-offset-\[-2px\][\s\S]{0,400}aria-label=\{`Open \$\{reviewHubButtonLabel\}`\}/
+  it("Review & Commit button keeps an inset focus ring and clears the 24px target floor", () => {
+    // It used to be a fenced right segment in the grid — a left border plus a
+    // right-rounded cap — which read as a split pill with an unlabelled second
+    // half. Both variants now draw it as a trailing icon button. What must
+    // survive that is the inset ring (it sits flush inside a row, so a
+    // positive offset would be clipped) and the SC 2.5.8 target size.
+    const button = detailsSource.slice(
+      Math.max(0, detailsSource.indexOf("aria-label={`Open ${reviewHubButtonLabel}`}") - 1200),
+      detailsSource.indexOf("aria-label={`Open ${reviewHubButtonLabel}`}")
     );
+    expect(button).toContain("focus-visible:outline-offset-[-2px]");
+    expect(button).toMatch(/min-h-6[\s\S]*min-w-6|min-w-6[\s\S]*min-h-6/);
+    // No fence: the grid's border-l + rounded-r pair is gone from this button.
+    expect(button).not.toContain("border-l");
+    expect(button).not.toContain("rounded-r-[var(--radius-lg)]");
   });
 
   it("sidebar row CSS reveal rules use :has(:focus-visible) so mousedown does not flash", () => {
@@ -138,7 +210,7 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
 
   it("environment popover trigger uses outline (not ring-1) for forced-colors survival", () => {
     expect(envPopoverSource).not.toMatch(
-      /focus-visible:ring-1\s+focus-visible:ring-daintree-accent/
+      /focus-visible:ring-1\s+focus-visible:ring-(?:daintree-accent|accent-primary)(?![\w-])/
     );
     expect(envPopoverSource).toContain("focus-visible:outline-2");
   });
@@ -179,11 +251,109 @@ describe("WorktreeCard disabled drag handle (issue #8395)", () => {
     expect(cardSource).toContain("{...dragHandleListeners}");
   });
 
-  it("preserves the group-hover delay on the enabled grip", () => {
-    expect(cardSource).toContain("group-hover/card:delay-[50ms]");
+  it("leaves the enabled grip's reveal timing to the stylesheet", () => {
+    // Two properties, two durations — a Tailwind `duration-*` utility cannot
+    // express that, so the grip must not carry one at all or it would flatten
+    // both channels onto whichever value it names.
+    expect(cardSource).not.toMatch(/data-worktree-row-drag-handle[\s\S]{0,600}?duration-\d+/);
+    expect(gripTransitionRule()).toContain("opacity");
   });
 
   it("gates the grip block on dragHandleListeners OR isDragHandleDisabled", () => {
-    expect(cardSource).toMatch(/\(dragHandleListeners\s*\|\|\s*isDragHandleDisabled\)\s*&&/);
+    // The gate is a named flag rather than the expression inlined at each use
+    // site: the card reads it three times now (the grip, the body padding, and
+    // the data attribute the footer aligns off), and three copies of the same
+    // condition is three chances for them to disagree about whether the row
+    // has a grip. Assert the definition and that nothing has drifted back to
+    // testing the raw expression in place.
+    expect(cardSource).toMatch(
+      /const hasRowDragHandle =\s*Boolean\(dragHandleListeners\)\s*\|\|\s*isDragHandleDisabled;/
+    );
+    expect(cardSource).toMatch(/\{hasRowDragHandle &&/);
   });
+});
+
+// Issue #12087 — Retry/Dismiss on the delete and issue error banners were dead
+// on sidebar cards. Both banners mount as bare siblings of the card's content
+// column inside a `relative isolate` root that also carries the sidebar's
+// full-card select overlay at `absolute inset-0 z-0`. A static in-flow block
+// paints in an earlier step than a positioned `z-0` sibling no matter the DOM
+// order (CSS 2.1 Appendix E), so the overlay covered the banners and, since
+// hit-testing follows paint order, swallowed every click.
+//
+// jsdom has no layout engine and loads no CSS, so the real coordinate check is
+// impossible here — this asserts the ORDERING that makes it true. Renumbering
+// either tier keeps the test green; breaking the relationship fails it.
+
+/** Positioning/stacking tokens carried by one element's Tailwind class list. */
+function stackingTokens(classList: string): { positioned: boolean; z: number | null } {
+  const tokens = classList.split(/\s+/).filter(Boolean);
+  const positioned = tokens.some((t) => ["relative", "absolute", "fixed", "sticky"].includes(t));
+  const zToken = tokens.filter((t) => /^z-\d+$/.test(t)).pop();
+  return { positioned, z: zToken ? Number(zToken.slice(2)) : null };
+}
+
+/** A z-tier that must exist — fails with the element's name rather than
+ *  comparing against null (or asserting the type away). */
+function requireZ(label: string, tokens: { z: number | null }): number {
+  if (tokens.z === null) throw new Error(`${label} carries no z-* utility`);
+  return tokens.z;
+}
+
+/** The single opening tag carrying `attribute`, and nothing past its `>`. The
+ *  `[^>]*` fences keep the match inside one element, so a className lifted out
+ *  of it can never belong to a descendant however the attributes are ordered. */
+function openingTagWith(source: string, tag: string, attribute: string): string {
+  const found = source.match(new RegExp(`<${tag}\\b[^>]*\\b${attribute}[^>]*>`))?.[0];
+  if (found === undefined) throw new Error(`no <${tag}> carrying ${attribute}`);
+  return found;
+}
+
+/** The sidebar select overlay's class string, anchored on its unique attribute. */
+function selectOverlayClasses(): string {
+  const tag = openingTagWith(cardSource, "button", 'data-card-select-overlay=""');
+  const classes = tag.match(/className=\{cn\(\s*"([^"]+)"/)?.[1];
+  if (classes === undefined) {
+    throw new Error("no className={cn(...)} on the [data-card-select-overlay] button");
+  }
+  return classes;
+}
+
+/** A banner root's class string, anchored on its unique test id. */
+function bannerRootClasses(testId: string): string {
+  const tag = openingTagWith(detailsSource, "div", `data-testid="${testId}"`);
+  const classes = tag.match(/className="([^"]+)"/)?.[1];
+  if (classes === undefined) throw new Error(`no root className for [data-testid="${testId}"]`);
+  return classes;
+}
+
+describe("worktree error banner stacking (issue #12087)", () => {
+  it("renders both banners from the card", () => {
+    // Named for what it actually proves: the card still mounts them. Every
+    // other test here reads the banner definitions or renders the exports
+    // directly, so deleting these two blocks from WorktreeCard would otherwise
+    // leave the whole suite green. It says nothing about WHERE they sit.
+    expect(cardSource).toMatch(/\{deleteError && \(\s*<WorktreeDeleteErrorBanner/);
+    expect(cardSource).toMatch(/\{issueError && \(\s*<WorktreeIssueErrorBanner/);
+  });
+
+  it("gives the select overlay a positioned, z-indexed full-card layer", () => {
+    // Guards the ordering assertions from passing vacuously if the overlay's
+    // class string ever stops being extractable.
+    const overlay = stackingTokens(selectOverlayClasses());
+    expect(overlay.positioned).toBe(true);
+    expect(overlay.z).not.toBeNull();
+  });
+
+  it.each([["worktree-delete-error-banner"], ["worktree-issue-error-banner"]])(
+    "%s is positioned above the select overlay so its buttons take the click",
+    (testId) => {
+      const overlayZ = requireZ("the select overlay", stackingTokens(selectOverlayClasses()));
+      const banner = stackingTokens(bannerRootClasses(testId));
+
+      // A z-index on a static element is inert — both halves are required.
+      expect(banner.positioned).toBe(true);
+      expect(requireZ(testId, banner)).toBeGreaterThan(overlayZ);
+    }
+  );
 });
