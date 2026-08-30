@@ -48,9 +48,36 @@
       "maxMetricValues": { "eventLoopLagMs": 100 }
     },
 
-    "PERF-050": { "p95Ms": 1800, "maxRegressionPct": 15 },
-    "PERF-051": { "p95Ms": 1800, "maxRegressionPct": 15 },
-    "PERF-052": { "p95Ms": 2400, "maxRegressionPct": 50 },
+    "PERF-053": {
+      "maxMetricValues": { "rowMisses": 0 }
+    },
+    "PERF-054": {
+      "maxMetricValues": { "lookupMisses": 0, "indexPlanMisses": 0, "orderedRowMisses": 0 }
+    },
+    "PERF-055": {
+      "maxMetricValues": {
+        "readerBusyRetries": 0,
+        "readerRowMisses": 0,
+        "contentionProbeMisses": 0,
+        "checkpointReclaimMisses": 0,
+        "rowMisses": 0,
+        "cleanupMisses": 0
+      }
+    },
+    "PERF-056": {
+      "maxMetricValues": {
+        "schemaColumnMisses": 0,
+        "rowMisses": 0,
+        "dataMigrationMisses": 0,
+        "migrationCountMisses": 0
+      }
+    },
+    "PERF-057": {
+      "maxMetricValues": { "readBackMisses": 0, "writeMisses": 0 }
+    },
+    "PERF-058": {
+      "maxMetricValues": { "keyReadMisses": 0, "hydrationMisses": 0 }
+    },
 
     "PERF-070": {
       "p95Ms": 1200,
