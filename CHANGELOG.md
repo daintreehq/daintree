@@ -1,5 +1,116 @@
 # Changelog
 
+## [0.34.0] - 2026-08-30
+
+A refinement release. Nearly every dialog and panel in the app went through a design pass, and the colour system underneath them was rebuilt: the legacy `daintree-*` vocabulary and the fifteen-step opacity ramp are retired onto semantic tokens, green no longer stands for "everything is fine", and status marks survive Windows High Contrast. Alongside that, Claude Code and Codex subagents became inspectable from the terminal header, the fleet overview learned to say when an agent has gone quiet, and the push and rebase confirms started previewing the commits they will actually touch.
+
+### Features
+
+**Agents**
+
+- Claude Code subagents appear as inspectable child sessions in the terminal header, read from the session files Claude Code already writes (#11949)
+- Codex subagent threads get the same treatment, read over Codex's own app-server protocol rather than scraped (#11948)
+- Antigravity ships real agent-state detection patterns, derived from a recorded `agy` session instead of guesses (#12005)
+
+**Fleet overview**
+
+- A `quiet` band names the agent that has said nothing for twelve minutes — previously it had no band, no count and no filter, and read as ordinary work in flight
+- Drilling into a project regroups its agents by worktree, with `Cmd+Alt+I` opening the overview already scoped to the current project (#11950)
+- The cursor opens on the fleet's worst run rather than the top of the most recently opened project
+- The worktree axis is derived from the project's worktrees rather than from wherever agents happen to be sitting, so the shortcut stops falling back in most projects (#11957)
+
+**Worktrees**
+
+- The card's `⋯` and right-click menus are reorganised from one flat list of ~25 commands into eleven named groups, with plugin items nested under Extensions instead of trailing after Delete
+- Copy branch name joins Copy path on the card menu, hidden on a detached HEAD (#11930)
+- Plan files open through the normal file viewer — rendered Markdown, source one click away, and promotable into the grid (#11942)
+- The card path row opens the built-in file browser
+- The status mark is a segmented vertical tick in the grip gutter instead of a corner wedge, so `cleanup` and `complete` separate by cut count rather than by how much of a 12px box they fill
+
+**File browser**
+
+- Sort and dotfile visibility move into one view-options menu owned by whichever column is rendering the tree, so the control for a setting that reorders the tree is on screen whenever the tree is (#11938)
+- Symbolic links are listed rather than silently dropped; a link resolving inside the root expands like the real thing, one resolving outside is a terminal node naming its target (#11939)
+- A strip under the tree says how many dotfiles are hidden and offers a one-click Show; both header rows get the APG toolbar contract and a collapse-all
+
+**Dialogs and forms**
+
+- The high-contrast neutral button is the standard dialog primary action, replacing the accent fill across every dialog footer (#11963)
+- Seven more forms move onto the shared label rail, and the bulk-create worktree dialog is rebuilt on the same layout (#11965, #11964)
+- New form, card and badge primitives land in `src/components/ui/`, with id generation, `aria-describedby` ordering and `aria-invalid` handled by the compound component rather than each call site (#12026)
+- The redacted-payload disclosure rolls to the plugin approval dialogs, split by tier so D2 and above keep their evidence inline (#12015)
+
+**Git**
+
+- The push confirm previews the commits a push would actually publish, ranged against the resolved destination, and fails closed instead of rendering a broken read as "nothing to publish" (#11979)
+- The rebase confirm previews the real replay set — `--no-merges --cherry-pick --right-only` against the upstream — instead of the branch's recent history (#11980)
+
+### Bug Fixes
+
+**Worktrees and fleet**
+
+- New worktrees stopped tracking their base branch, and existing ones are healed on load; the same bad config was breaking push destination resolution and making three worktrees on one commit render three different sync states
+- A worktree recreated at the same path is no longer swallowed by the removal tombstone for 30–60 seconds, counted as a ghost, or have its fresh terminals trashed (#11994)
+- The fleet palette stopped filing every agent under "No worktree" — the pty-host terminal record now carries `worktreeId` through spawn, restart and both move paths (#12060, #12078)
+- A long base branch name yields width to the sync counts instead of pushing them out of the card (#12074)
+- Retry and Dismiss on the card's error banners are reachable again; the select overlay was painting over them (#12087)
+- The sidebar scroll pill no longer lands on the card title you are scanning while you scroll (#12010)
+
+**Workspaces and sessions**
+
+- An external MCP client scoped to a workspace with no live view completes its handshake with an identity-only binding, instead of taking a terminal HTTP 400 at `initialize` that left it with no Daintree tools for the rest of the session (#12082)
+- Relaunching with a scratch workspace active binds the window to it, rather than restoring a structurally unbound window with an empty grid and a dead assistant (#11958)
+- `Cmd+Alt+=` returns to a scratch workspace, which two independent bugs had made unreachable (#11936)
+- A terminal is no longer branded with an agent by an unrelated descendant process — argument paths were being read as executables, and the walk crossed into nested apps (#11931)
+- A deleted in-repo recipe leaves the list immediately instead of lingering as an undeletable ghost until the next reload (#11993)
+- The file viewer can reveal files living outside every project root, and the raw transport error no longer leaks into the UI when it cannot (#11934)
+
+**Notifications**
+
+- The notification center scrolls, and sizes itself against the room actually left under its anchor — the list previously painted its full height inside a 420px panel with no scrollbar, no wheel and no bottom fade, so a truncated list read as a finished one (#12061)
+- The inbox row's trailing controls sit in one stable rail instead of an overlay that covered the timestamp and snooze state on hover (#11988)
+
+**Accessibility**
+
+- About 40 status marks survive `forced-colors: active`, where an author background is forced to `Canvas` and a `ring-*` compiles to a `box-shadow` the browser strips outright (#12000)
+- Radix menu, context-menu and select rows get a real keyboard focus ring; their previous only signal cleared roughly 1.1:1 (#12035)
+- Eight card-style option buttons across Settings and the issue picker stop falling through to the OS accent outline (#11997)
+- 250 sites carrying prose, a label or a value move off a ramp step measuring about 3.26:1 onto a token that clears 4.5:1 on every surface in all fifteen bundled themes (#12003)
+- Every "+N more" indicator has somewhere to go, each with the treatment its own surface calls for (#12001)
+- Dialog footer actions use `aria-disabled` with a JS activation guard, so a disabled action stays focusable and the dialog's initial focus lands inside it (#12014)
+- A label and its subordinate detail are ranked by weight and colour instead of an em dash that made the pair read as one run-on sentence (#12004)
+
+**Interface**
+
+- Overlay close-time focus is owned by the primitives, so a menu or popover no longer leaves a tooltip hanging open and an accent focus ring on a button a mouse user never asked for
+- Green stops standing in for "everything is fine" across 55 places; it is kept for transient confirmations, finite checklists, named operation outcomes and live processes, and demoted or dropped everywhere else (#12002)
+- The settings shell names its scope and the open project, splits the scope switch into a two-segment radiogroup, and attaches project load and save failures to the project with a Retry (#11986)
+- The global skip-permissions toggle is weighted to match its consequence rather than reading like the cosmetic setting beneath it (#11999)
+- The Review Hub opens with its changed files shown, gives its readiness rail a silent ready state and one condition at a constant height, tells the truth about the files its bulk stage button will act on, and renders its empty and failure states on one grammar (#11983, #11984, #11985)
+- The clone and git-init dialogs become four exclusive modes of one surface — configuration, running, failure, success — with one live phase on a determinate bar instead of a transcript of racing spinners (#11974, #11975)
+- The setup wizard names its step, counts it honestly against the route actually walked, and holds still (#11976)
+- The MCP and plugin consent dialogs order themselves requester, consequence, evidence, arguments, and name an unidentified caller as unidentified rather than letting it inherit the assistant's standing (#11981, #11982)
+- The delete dialog lists only what will actually happen, in cause-then-effect order, instead of striking through four non-events to find the one real one (#11977)
+- The `.env` import previews what the chosen merge policy will actually do; the two modes were previously pixel-identical over the whole list (#11973)
+- `WebviewDialog` names the page that wrote the text, so a web page can no longer render a `prompt()` that is pixel-identical to a system dialog (#11971)
+- The project switcher lands every row on one alignment grid, replaces the selected row's four-sided outline with a leading rail, and gives every band a collapse that persists across restarts (#11943, #11944)
+- The launcher row drops the trailing label that repeated the heading above it, and names the category only where a mixed search needs it (#11990)
+- The issue and PR dropdowns pin their identity column, move the worktree marker onto the second line where it can name the worktree, and run one action per row
+- The worktree overview composes the shared dialog frame, gaining the portal, focus trap, escape stack and scroll shadows, and its grid card is rebuilt on the sidebar card's construction (#11989)
+- The sidebar worktree card gets a resting surface of its own on dark themes, one content column, one left indent, and a single narrative rail in place of four treatments of the same slot (#11992)
+- The Worktrees sidebar header and its search rail read as one set of controls, and cost 73px before the first worktree instead of 90px (#11991)
+- The terminal info dialog leads with whether the terminal is alive and what is running in it, and answers on a preserved terminal instead of `Terminal <id> not found` (#11978)
+- The canvas home's panel palette button sits at a fixed offset under project identity rather than at a position determined by how many recipes the project happens to have (#11987)
+- `AddPresetDialog` drops start-from options that were never available, rather than offering two choices that produce the same blank preset (#11972)
+- The pending CI dot is back on the PR badge, matching what the forge dropdown rows already rendered, and stops blinking on every metadata refresh
+- Identity editing moves off the project pill's emoji onto its context menu, so a habitual click-type-Enter into the switcher can no longer commit a rename (#12086)
+
+### Other Changes
+
+- The legacy `daintree-*` colour vocabulary is retired: 2,345 solid call sites renamed onto semantic tokens, and 1,876 opacity-ramp sites resolved against measured contrast across all fifteen themes — 1,422 onto solid tokens, 454 deliberately left dim and each one named (#12031, #12065)
+- The type and radius scales are back in charge: the toolbar pill radius, `rounded-4xl` and about twenty fixed declarations in plain CSS and CodeMirror styles no longer bypass them (#12033)
+- The component contract is documented in `docs/themes/component-contract.md` and enforced by five new lint rules over `src/**` and the builtin plugin renderers (#12029)
+
 ## [0.33.1] - 2026-08-24
 
 A correctness patch on 0.33.0, mostly about surfaces that reported the wrong thing. A failed git probe stopped being read as "this folder has no repository" — the fault that left the worktree sidebar permanently empty on packaged Windows — and both memory-facing surfaces were recalibrated: the sidebar badge drops a figure that counted shared pages once per process, and cached-view reclaim starts scaling with installed RAM instead of flat-capping.
