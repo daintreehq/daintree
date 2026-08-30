@@ -33,14 +33,31 @@ function timers(outcomes: AssistantTimerOutcomeRow[]): AssistantTimers {
   return { rows: [], outcomes, takenAt: 1, readFailed: false };
 }
 
-function setup(initial: AssistantTimers | null, sessionId: string | null = "s1") {
+/**
+ * A stand-in for the store's read-and-clear. Seed it with the ids the engine has said
+ * fired; the hook drains it exactly as the real action does.
+ */
+function firedQueue(ids: string[] = []) {
+  let pending = ids;
+  return vi.fn(() => {
+    const out = pending;
+    pending = [];
+    return out;
+  });
+}
+
+function setup(
+  initial: AssistantTimers | null,
+  sessionId: string | null = "s1",
+  takeFiredTimerIds = firedQueue()
+) {
   const requestTimers = vi.fn();
   const view = renderHook(
     (props: { timers: AssistantTimers | null; timersStale: boolean; sessionId: string | null }) =>
-      useAssistantTimerNotifications({ ...props, requestTimers }),
+      useAssistantTimerNotifications({ ...props, requestTimers, takeFiredTimerIds }),
     { initialProps: { timers: initial, timersStale: false, sessionId } }
   );
-  return { ...view, requestTimers };
+  return { ...view, requestTimers, takeFiredTimerIds };
 }
 
 beforeEach(() => notifyMock.mockClear());
@@ -124,6 +141,124 @@ describe("what it announces", () => {
     expect(notifyMock).toHaveBeenCalledTimes(1);
     rerender({ timers: timers(rows), timersStale: false, sessionId: "s1" });
     expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the first fire of a session", () => {
+  /**
+   * The defect this correlation exists for.
+   *
+   * The list is read lazily, so a session's FIRST timer usually fires before anything
+   * has read the list — the fire is what triggers the first read. Baselining that
+   * reading (correct for a reading that arrives unprompted) swallowed the exact
+   * outcome it had been fetched to describe. Schedule a timer, watch it fire, see
+   * nothing.
+   */
+  it("announces a fire that arrives on the very first reading", () => {
+    const { rerender } = setup(null, "s1", firedQueue(["tmr_1"]));
+    // The engine says tmr_1 fired. Nothing has been read yet.
+    rerender({ timers: null, timersStale: true, sessionId: "s1" });
+    // ...and the answer to that arrives carrying its outcome.
+    rerender({
+      timers: timers([outcome({ timerId: "tmr_1", summary: "Spawned claude." })]),
+      timersStale: false,
+      sessionId: "s1",
+    });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Scheduled timer fired", message: "Spawned claude." })
+    );
+  });
+
+  it("announces the failure of a fire that had nothing read before it", () => {
+    // The real one: a timer-dispatched spawn that named no worktree. It fired, it
+    // failed, and the only place that said so was a deck nobody had open.
+    const { rerender } = setup(null, "s1", firedQueue(["tmr_1"]));
+    rerender({ timers: null, timersStale: true, sessionId: "s1" });
+    rerender({
+      timers: timers([
+        outcome({ timerId: "tmr_1", severity: "error", summary: "must name the worktree" }),
+      ]),
+      timersStale: false,
+      sessionId: "s1",
+    });
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", title: "Scheduled timer failed" })
+    );
+  });
+
+  it("swallows the backlog that arrives alongside it, however recent", () => {
+    // The correlation must not degrade into "announce everything on the first read".
+    // The discriminator is WHICH TIMER fired, not when a row was stamped — so a
+    // backlog row stamped in the same millisecond still stays quiet.
+    const at = Date.now();
+    const { rerender } = setup(null, "s1", firedQueue(["tmr_new"]));
+    rerender({ timers: null, timersStale: true, sessionId: "s1" });
+    rerender({
+      timers: timers([
+        outcome({ eventId: "evt_old", timerId: "tmr_old", summary: "backlog", updatedAt: at }),
+        outcome({ eventId: "evt_new", timerId: "tmr_new", summary: "just now", updatedAt: at }),
+      ]),
+      timersStale: false,
+      sessionId: "s1",
+    });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ message: "just now" }));
+  });
+
+  it("announces a fire whose read took longer than any plausible time window", () => {
+    // A stamped-recently rule could not survive this: a slow or suspended renderer
+    // pushes the outcome arbitrarily far into the past before it is ever seen. The id
+    // does not decay.
+    const { rerender } = setup(null, "s1", firedQueue(["tmr_1"]));
+    rerender({ timers: null, timersStale: true, sessionId: "s1" });
+    rerender({
+      timers: timers([
+        outcome({ timerId: "tmr_1", summary: "late", updatedAt: Date.now() - 3_600_000 }),
+      ]),
+      timersStale: false,
+      sessionId: "s1",
+    });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ message: "late" }));
+  });
+
+  it("does not announce the backlog when no fire was signalled", () => {
+    // Unchanged behaviour, restated because the correlation is the only thing standing
+    // between it and a burst of notifications on every reconnect.
+    const { rerender } = setup(null);
+    rerender({
+      timers: timers([outcome({ updatedAt: Date.now() })]),
+      timersStale: false,
+      sessionId: "s1",
+    });
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the fire when the session id and the fire land in the same commit", () => {
+    // The ordering trap. Effects run in declaration order, so a baseline reset that
+    // lived in the announce effect would wipe a fire the effect above it had just
+    // recorded — silently baselining its outcome. Drives sessionId null -> "s1" and
+    // timersStale false -> true in ONE render, which is what a replayed pre-ready
+    // fire, or a reconnect, actually looks like.
+    const { rerender } = setup(null, null, firedQueue(["tmr_1"]));
+    rerender({ timers: null, timersStale: true, sessionId: "s1" });
+    rerender({
+      timers: timers([outcome({ timerId: "tmr_1", summary: "survived" })]),
+      timersStale: false,
+      sessionId: "s1",
+    });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ message: "survived" }));
+  });
+});
+
+describe("the eager baseline", () => {
+  it("reads the list once as soon as there is a session to read it from", () => {
+    // Establishing the baseline BEFORE anything can fire is what makes the latch
+    // above the rare path rather than the guaranteed one.
+    const { requestTimers } = setup(null);
+    expect(requestTimers).toHaveBeenCalled();
   });
 });
 

@@ -97,6 +97,7 @@ export const PROSE_SPECIMEN: AssistantSessionState = {
   operations: null,
   timers: null,
   timersStale: false,
+  pendingFiredTimerIds: [],
   timerCancelPending: {},
   timerCancelErrors: {},
   toolGrants: {},

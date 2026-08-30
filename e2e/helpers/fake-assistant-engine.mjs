@@ -134,10 +134,56 @@ function timerRow(over = {}) {
   };
 }
 
+/**
+ * How far out the `countdown` mode's single timer is scheduled.
+ *
+ * Under a minute, because that is the band `formatDueIn` renders in SECONDS — the only
+ * band where a broken clock is visible within a test's patience. At a minute or more
+ * the same defect renders as a stationary "in 5m", which a frozen clock and a working
+ * one produce identically.
+ */
+const COUNTDOWN_DUE_MS = Number(process.env.FAKE_ENGINE_TIMER_DUE_MS ?? 20_000);
+
+/**
+ * Outcomes produced by a timer that fired during THIS run, newest last.
+ *
+ * `countdown` mode serves these and nothing else, so a test asserting "the fire was
+ * announced" cannot be satisfied by one of the pre-baked rows below that were already
+ * there when the panel connected.
+ */
+const firedOutcomes = [];
+
 /** Seeds the timer table on first read, so a run that never asks pays nothing. */
 function seedTimers() {
   if (timers.size > 0) return;
   if (process.env.FAKE_ENGINE_TIMERS === "empty") return;
+  // FAKE_ENGINE_TIMERS=countdown is the whole timer lifecycle in one run: ONE timer,
+  // due seconds from now, which really comes due and really fires. It exists because
+  // the panel's two timer defects were both invisible to a static fixture — a
+  // countdown that never moved, and a fire that was never announced — and neither can
+  // be caught by a list that is the same shape at the end of the test as the start.
+  if (process.env.FAKE_ENGINE_TIMERS === "countdown") {
+    // Seeded ONCE, tracked separately from the map's size. The map empties when the
+    // timer fires, and a size check would read that as "never seeded" and put the row
+    // back on the very next read — which is indistinguishable, from the outside, from
+    // a panel that failed to drop a fired timer.
+    if (countdownSeeded) return;
+    countdownSeeded = true;
+    timers.set(
+      "tmr_countdown",
+      timerRow({
+        id: "tmr_countdown",
+        label: "Spawn new default agent terminal",
+        dueAt: now() + COUNTDOWN_DUE_MS,
+        payloadKind: "tool_call",
+        toolName: "agentTask.spawnForEdits",
+        targetWorktreeId: "/p/app",
+        liveGrants: 1,
+      })
+    );
+    armCountdownFire();
+    return;
+  }
   timers.set("tmr_1", timerRow());
   timers.set(
     "tmr_2",
@@ -165,6 +211,46 @@ function seedTimers() {
  * being below the attention threshold is exactly why the operations deck could not
  * show one, and a fake that carried only failures would hide that.
  */
+let firesAnnounced = false;
+let countdownArmed = false;
+let countdownSeeded = false;
+/** The armed fire, kept so a cancel can actually disarm it. */
+let countdownHandle = null;
+
+/**
+ * Fires the countdown timer when it actually comes due.
+ *
+ * A real fire is unprompted — the scheduler's own tick, not an answer to anything the
+ * host asked — so this is a timer in the engine process rather than a branch in the
+ * read handler. A test that had to POKE the engine to make a timer fire would prove
+ * only that the poke works.
+ */
+function armCountdownFire() {
+  if (countdownArmed) return;
+  countdownArmed = true;
+  const row = timers.get("tmr_countdown");
+  const delay = Math.max(0, (row?.dueAt ?? now()) - now());
+  countdownHandle = setTimeout(() => {
+    // The row leaves the list the moment it fires: a one-shot timer that stayed
+    // scheduled after firing would be a lie the manager renders as still pending.
+    timers.delete("tmr_countdown");
+    firedOutcomes.push({
+      eventId: "evt_countdown",
+      timerId: "tmr_countdown",
+      severity: "info",
+      title: "Spawn new default agent terminal",
+      summary: "Spawned claude in /p/app (terminal term_9).",
+      createdAt: now(),
+      updatedAt: now(),
+      count: 1,
+    });
+    emit({ type: "timer:fired", timerId: "tmr_countdown", firedAt: now() });
+  }, delay);
+  // Never hold the process open past its work — the engine exits when the host closes
+  // the pipe, and a pending timer that kept it alive would hang every run.
+  countdownHandle.unref?.();
+}
+
 const timerOutcomes = () => [
   {
     eventId: "evt_ok",
@@ -1221,7 +1307,8 @@ async function handleCommand(cmd) {
       emit({
         type: "timers:snapshot",
         timers: process.env.FAKE_ENGINE_TIMERS === "read-fail" ? [] : [...timers.values()],
-        outcomes: timerOutcomes(),
+        outcomes:
+          process.env.FAKE_ENGINE_TIMERS === "countdown" ? [...firedOutcomes] : timerOutcomes(),
         takenAt: now(),
         readFailed: process.env.FAKE_ENGINE_TIMERS === "read-fail",
       });
@@ -1230,7 +1317,11 @@ async function handleCommand(cmd) {
       // by an env flag rather than an inbound command on purpose: a fake that accepted
       // a command the real engine does not would stop being a faithful stand-in for
       // the exact surface these tests exist to cover.
-      if (process.env.FAKE_ENGINE_TIMERS === "fires") {
+      // ONE fire, not one per read. Re-announcing on every read models an engine that
+      // does not exist — a real fire happens once — and a host that re-reads on a fire
+      // (which is the correct reaction) would chase its own tail forever.
+      if (process.env.FAKE_ENGINE_TIMERS === "fires" && !firesAnnounced) {
+        firesAnnounced = true;
         emit({ type: "timer:fired", timerId: "tmr_1", firedAt: now() });
       }
       return;
@@ -1254,6 +1345,13 @@ async function handleCommand(cmd) {
         return;
       }
       timers.delete(cmd.timerId);
+      // Disarm the pending fire as well as dropping the row. Leaving it armed lets a
+      // CANCELLED timer go off — a ghost fire the host would faithfully announce, which
+      // is precisely the bug a cancel test would be written to rule out.
+      if (cmd.timerId === "tmr_countdown" && countdownHandle) {
+        clearTimeout(countdownHandle);
+        countdownHandle = null;
+      }
       emit({
         type: "timer:cancelled",
         timerId: cmd.timerId,

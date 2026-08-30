@@ -333,6 +333,19 @@ export interface AssistantSessionState {
    */
   timersStale: boolean;
   /**
+   * Timers the engine has told us fired, and whose outcome nothing has reported yet.
+   *
+   * The fire event carries a `timerId`; the outcome list is fetched separately and
+   * carries one per row. Holding the ids is what lets a reader correlate the two
+   * EXACTLY — "these are the timers that just went off" — instead of inferring it from
+   * how recently an outcome was stamped, which cannot tell a fire that arrived during
+   * a slow first read apart from one that happened before anyone was watching.
+   *
+   * Appended on every fire and cleared by the reader that announces them; a session
+   * change resets it with the rest of the session's state.
+   */
+  pendingFiredTimerIds: string[];
+  /**
    * Timers with a cancel in flight, so a row can show its own pending state rather
    * than the whole list going busy. Cleared by the matching `timer:cancelled`.
    */
@@ -470,6 +483,16 @@ interface AssistantStoreActions {
    * attempt on the same row so a retry does not show the last failure while running.
    */
   markTimerCancelPending: (timerId: string) => void;
+  /**
+   * Takes the ids of timers that have fired but whose outcome nothing has reported
+   * yet, clearing them.
+   *
+   * Read-and-clear in one step, like `takeRetractedDraft`, because the caller
+   * ANNOUNCES what it takes: leaving the ids behind would let a second reader announce
+   * the same fire again, and clearing them from the snapshot reducer instead would
+   * clear them before the reader that needs them ever ran.
+   */
+  takeFiredTimerIds: () => string[];
   /** Take the handed-back follow-up, clearing it so it is consumed once. */
   takeRetractedDraft: () => string | null;
   dropQueuedInterjection: (text: string) => void;
@@ -517,6 +540,7 @@ const EMPTY: AssistantSessionState = {
   operations: null,
   timers: null,
   timersStale: false,
+  pendingFiredTimerIds: [],
   timerCancelPending: {},
   timerCancelErrors: {},
   toolGrants: {},
@@ -835,6 +859,12 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
       timerCancelPending: { ...get().timerCancelPending, [timerId]: true },
       timerCancelErrors: errors,
     });
+  },
+
+  takeFiredTimerIds: () => {
+    const ids = get().pendingFiredTimerIds;
+    if (ids.length > 0) set({ pendingFiredTimerIds: [] });
+    return ids;
   },
 
   takeRetractedDraft: () => {
@@ -1334,12 +1364,24 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
         });
         return;
 
-      case "timer:fired":
-        // Deliberately does not mutate the list. The event carries an id and no
-        // payload, so patching a row from it would be inventing state; the honest
-        // reaction is to record that what we hold is out of date.
-        set({ timersStale: true, lastActivityAt: Date.now() });
+      case "timer:fired": {
+        // Deliberately does not mutate the LIST. The event carries an id and no row,
+        // so patching one from it would be inventing state; the honest reaction is to
+        // record that what we hold is out of date.
+        //
+        // The id itself is kept, though. It is the only thing that ties the fire we
+        // were told about to the outcome we are about to go and read, and dropping it
+        // forced the reader to guess by timestamp.
+        const pending = get().pendingFiredTimerIds;
+        set({
+          timersStale: true,
+          pendingFiredTimerIds: pending.includes(event.timerId)
+            ? pending
+            : [...pending, event.timerId],
+          lastActivityAt: Date.now(),
+        });
         return;
+      }
 
       case "timer:cancelled": {
         const { [event.timerId]: _wasPending, ...pending } = get().timerCancelPending;
