@@ -65,6 +65,30 @@ export type WorktreeSubmoduleRiskState =
   | { status: "verified"; risk: SubmoduleDeleteRisk }
   | { status: "unverified"; risk: SubmoduleDeleteRisk | null };
 
+/**
+ * A preview whose PARENT status fetch failed, carrying whatever the submodule
+ * arm managed to establish on its own.
+ *
+ * The two fetches are independent and only one of them failed, so the surviving
+ * answer is real evidence. A `verified` one is as good here as on the happy
+ * path: the host runs the same inventory at delete time and will refuse, or
+ * demand force, on exactly what it reports.
+ */
+export class WorktreeDeletePreviewError extends Error {
+  readonly submodules: WorktreeSubmoduleRiskState;
+
+  constructor(submodules: WorktreeSubmoduleRiskState, cause: unknown) {
+    super("Worktree delete preview could not read the parent status", { cause });
+    this.name = "WorktreeDeletePreviewError";
+    this.submodules = submodules;
+  }
+}
+
+/** The submodule half of a failed preview, or `null` when it failed too. */
+export function submodulesFromPreviewError(error: unknown): WorktreeSubmoduleRiskState | null {
+  return error instanceof WorktreeDeletePreviewError ? error.submodules : null;
+}
+
 /** Max at-risk commit rows shown before the tail is collapsed. */
 export const SUBMODULE_COMMIT_LIMIT = 5;
 
@@ -114,6 +138,19 @@ export function submoduleDeleteBlock(
  */
 export function submoduleForceRequired(state: WorktreeSubmoduleRiskState): boolean {
   return state.status === "verified" && submoduleFileCount(state) > 0;
+}
+
+/**
+ * True when the at-risk commit list is a FLOOR rather than a total.
+ *
+ * The host marks the inventory incomplete when the rev walk hits its ceiling,
+ * so a submodule holding two hundred unpushed commits arrives here as fifty
+ * plus `incomplete`. Stating that fifty as the count is the same confident
+ * undercount as the single `M vendor/lib` row this surface replaced, so every
+ * sentence that names the number has to say "at least" instead.
+ */
+export function submoduleCommitsAreCapped(state: WorktreeSubmoduleRiskState): boolean {
+  return state.status === "unverified" && (state.risk?.atRiskCommits.length ?? 0) > 0;
 }
 
 /** Total nested files (dirty + untracked) a delete would discard. */
@@ -173,7 +210,20 @@ export async function buildWorktreeDeletePreview(
         : ({ status: "verified", risk } as const)
     )
     .catch(() => ({ status: "unverified", risk: null }) as const);
-  const fresh: WorktreeChanges | null = await worktreeClient.getFreshChanges(worktreeId);
+  let fresh: WorktreeChanges | null;
+  try {
+    fresh = await worktreeClient.getFreshChanges(worktreeId);
+  } catch (error) {
+    // The two arms are independent, so a parent failure must not throw the
+    // submodule answer away. It used to: the rejection propagated before the
+    // settled submodule arm was ever read, and the dialog then rendered its
+    // generic "couldn't verify" warning over an inventory that had completed
+    // and found nested files. A force delete from that state destroys content
+    // the D2 preview never showed, which is the one thing this module exists
+    // to prevent. Carried on the error so the parent arm keeps rejecting and
+    // callers keep their existing fail-closed branch.
+    throw new WorktreeDeletePreviewError(await submodulePromise, error);
+  }
   if (!fresh) {
     // Monitor gone — the worktree is already removed, so there is nothing left
     // to gate. Await the settled submodule arm anyway so it can never surface
@@ -429,8 +479,13 @@ export function formatSubmodulePreviewLines(state: WorktreeSubmoduleRiskState): 
     // `force`, so an approver told the delete "may destroy" these commits would
     // be consenting to something that cannot happen either way.
     const count = risk.atRiskCommits.length;
+    // "At least" when the walk was capped: the host reports a ceiling hit as an
+    // incomplete inventory, and naming the retained length as the total there
+    // understates it by however many it stopped short of.
+    const capped = submoduleCommitsAreCapped(state);
+    const measured = capped ? `at least ${plural(count, "commit")}` : plural(count, "commit");
     lines.push(
-      `${MCP_PREVIEW_CAUTION_PREFIX}${plural(count, "commit")} inside submodules ${count === 1 ? "is" : "are"} on no remote this clone knows about — the worktree cannot be deleted until ${count === 1 ? "it is" : "they are"} pushed:`
+      `${MCP_PREVIEW_CAUTION_PREFIX}${measured} inside submodules ${count === 1 && !capped ? "is" : "are"} on no remote this clone knows about — the worktree cannot be deleted until ${count === 1 && !capped ? "it is" : "they are"} pushed:`
     );
     for (const row of commitRows) {
       lines.push(row.isOverflow ? `  ${row.subject}` : `  ${row.shortOid} ${row.subject}`);

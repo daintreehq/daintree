@@ -865,6 +865,42 @@ describe("buildSubmoduleDeleteRisk", () => {
 
     expect((await buildSubmoduleDeleteRisk(ghosted)).incomplete).toBe(true);
   });
+
+  it("fails closed on a store that holds nested submodule stores", async () => {
+    const nested = path.join(tmp, "wt-nested");
+    git(superRepo, "worktree", "add", "-q", nested, "-b", "nested");
+    git(nested, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q");
+    expect((await buildSubmoduleDeleteRisk(nested)).incomplete).toBe(false);
+
+    // The scan stops descending once it recognises a repository, so a nested
+    // submodule's own store is never walked — while `worktree remove --force`
+    // deletes it along with everything else under the worktree's gitdir. The
+    // presence of `modules/` is the only signal available at depth 1.
+    const gitDir = git(nested, "rev-parse", "--absolute-git-dir").trim();
+    mkdirSync(path.join(gitDir, "modules", "vendor", "lib", "modules", "child", "objects"), {
+      recursive: true,
+    });
+
+    expect((await buildSubmoduleDeleteRisk(nested)).incomplete).toBe(true);
+  });
+
+  it("fails closed when an inferred checkout path turns out to be absent", async () => {
+    const moved = path.join(tmp, "wt-moved");
+    git(superRepo, "worktree", "add", "-q", moved, "-b", "moved");
+    git(moved, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q");
+
+    // A store that declares no `core.worktree` of its own can only be bound by
+    // a second-hand claim. When that guess names a path with nothing on it, the
+    // real checkout may simply have been moved elsewhere in the worktree, still
+    // pointing at this store and still holding uncommitted work that would
+    // never be read.
+    const gitDir = git(moved, "rev-parse", "--absolute-git-dir").trim();
+    const store = path.join(gitDir, "modules", "vendor", "lib");
+    writeFileSync(path.join(store, "config"), "[core]\n\tbare = false\n");
+    rmSync(path.join(moved, "vendor", "lib"), { recursive: true, force: true });
+
+    expect((await buildSubmoduleDeleteRisk(moved)).incomplete).toBe(true);
+  });
 });
 
 describe("resolveModuleGitDir", () => {

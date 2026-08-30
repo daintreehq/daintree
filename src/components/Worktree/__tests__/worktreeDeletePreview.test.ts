@@ -24,6 +24,9 @@ import {
   formatWorktreeChangeRows,
   buildWorktreeChangeRows,
   submoduleForceRequired,
+  submoduleCommitsAreCapped,
+  submodulesFromPreviewError,
+  WorktreeDeletePreviewError,
   type WorktreeSubmoduleRiskState,
 } from "../worktreeDeletePreview";
 
@@ -161,9 +164,62 @@ describe("buildWorktreeDeletePreview", () => {
     await expect(buildWorktreeDeletePreview("wt-1")).resolves.toBeNull();
   });
 
-  it("propagates a fetch error so callers can fail closed", async () => {
+  it("propagates a fetch error so callers can fail closed, keeping the cause", async () => {
+    const cause = new Error("timeout");
+    getFreshChangesMock.mockRejectedValue(cause);
+    getSubmoduleDeleteRiskMock.mockResolvedValue(emptyRisk());
+    const error = await buildWorktreeDeletePreview("wt-1").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WorktreeDeletePreviewError);
+    expect((error as Error).cause).toBe(cause);
+  });
+
+  it("carries a completed submodule inventory through a failed parent fetch", async () => {
+    // The two arms are independent. Discarding a completed inventory because
+    // the parent status timed out is what let a force delete destroy nested
+    // files the D2 preview had already been told about.
     getFreshChangesMock.mockRejectedValue(new Error("timeout"));
-    await expect(buildWorktreeDeletePreview("wt-1")).rejects.toThrow("timeout");
+    getSubmoduleDeleteRiskMock.mockResolvedValue(
+      emptyRisk({ dirtyFiles: ["vendor/lib/src/main.c"] })
+    );
+    const error = await buildWorktreeDeletePreview("wt-1").catch((e: unknown) => e);
+    const submodules = submodulesFromPreviewError(error);
+    expect(submodules?.status).toBe("verified");
+    expect(submodules?.risk?.dirtyFiles).toEqual(["vendor/lib/src/main.c"]);
+  });
+
+  it("reports no submodule evidence when both arms fail", async () => {
+    getFreshChangesMock.mockRejectedValue(new Error("timeout"));
+    getSubmoduleDeleteRiskMock.mockRejectedValue(new Error("host gone"));
+    const error = await buildWorktreeDeletePreview("wt-1").catch((e: unknown) => e);
+    expect(submodulesFromPreviewError(error)).toEqual({ status: "unverified", risk: null });
+  });
+
+  it("returns no submodule state for an error it did not raise", () => {
+    expect(submodulesFromPreviewError(new Error("unrelated"))).toBeNull();
+  });
+});
+
+describe("submoduleCommitsAreCapped", () => {
+  it("treats commits on an incomplete inventory as a floor", () => {
+    expect(
+      submoduleCommitsAreCapped({
+        status: "unverified",
+        risk: emptyRisk({ incomplete: true, atRiskCommits: [{ oid: "a1b2c3d", subject: "wip" }] }),
+      })
+    ).toBe(true);
+  });
+
+  it("treats commits on a completed inventory as an exact total", () => {
+    expect(
+      submoduleCommitsAreCapped({
+        status: "verified",
+        risk: emptyRisk({ atRiskCommits: [{ oid: "a1b2c3d", subject: "wip" }] }),
+      })
+    ).toBe(false);
+  });
+
+  it("is false when there are no commits to undercount", () => {
+    expect(submoduleCommitsAreCapped({ status: "unverified", risk: null })).toBe(false);
   });
 });
 

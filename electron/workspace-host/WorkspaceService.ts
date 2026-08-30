@@ -4129,12 +4129,11 @@ export class WorkspaceService {
           `submodule store scan: ${child}`
         );
         let store = false;
+        let nested = false;
         for (const grandchild of children) {
-          if (grandchild.name === "HEAD" && grandchild.isFile()) {
-            store = true;
-            break;
-          }
-          if (grandchild.name === "config" && grandchild.isFile()) store = true;
+          if (grandchild.name === "modules" && grandchild.isDirectory()) nested = true;
+          if (grandchild.name === "HEAD" && grandchild.isFile()) store = true;
+          else if (grandchild.name === "config" && grandchild.isFile()) store = true;
           else if (
             (grandchild.name === "objects" || grandchild.name === "refs") &&
             grandchild.isDirectory()
@@ -4142,8 +4141,14 @@ export class WorkspaceService {
             store = true;
           }
         }
-        if (store) found.push(child);
-        else await walk(child, depth + 1);
+        if (store) {
+          found.push(child);
+          // A store holding its own `modules/` has nested submodules whose
+          // stores the prune also destroys. The rev walk below stops at this
+          // repository and cannot see them, so a clean answer here would be a
+          // claim about commits nobody looked at.
+          if (nested) throw new Error(`nested submodule stores under ${child}`);
+        } else await walk(child, depth + 1);
       }
     };
     try {

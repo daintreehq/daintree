@@ -7,6 +7,7 @@ import { act, render, screen, cleanup, fireEvent, waitFor, within } from "@testi
 import type { WorktreeState } from "@/types";
 import type { WorktreeChanges, GitStatus } from "@shared/types/git";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
+import { WorktreeDeletePreviewError } from "../worktreeDeletePreview";
 import type { WorktreeSubmoduleRiskState } from "../worktreeDeletePreview";
 
 vi.stubGlobal(
@@ -1609,6 +1610,57 @@ describe("WorktreeDeleteDialog — submodules", () => {
     expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
       false
     );
+  });
+
+  it("still blocks on a completed inventory when the parent status fetch failed", async () => {
+    // The two fetches are independent. A parent timeout used to discard a
+    // completed submodule answer, leaving the generic "couldn't verify"
+    // warning over commits the host refuses to destroy.
+    buildPreviewMock.mockRejectedValue(
+      new WorktreeDeletePreviewError(
+        {
+          status: "verified",
+          risk: makeRisk({ atRiskCommits: [{ oid: "a1b2c3d4e5f6", subject: "Patch the parser" }] }),
+        },
+        new Error("timeout")
+      )
+    );
+    render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+
+    const banner = await screen.findByTestId("delete-worktree-blocked");
+    expect(banner.textContent).toContain("Push the submodule commits first");
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      true
+    );
+    // The commit itself is still previewed, not just counted.
+    expect(screen.getByTestId("delete-worktree-submodule-commit-list").textContent).toContain(
+      "Patch the parser"
+    );
+  });
+
+  it("does not block on an unverified inventory when the parent status fetch failed", async () => {
+    // Nothing was established about the submodules either, and the host
+    // re-reads for itself, so refusing here would strand a delete that can
+    // still succeed.
+    buildPreviewMock.mockRejectedValue(
+      new WorktreeDeletePreviewError({ status: "unverified", risk: null }, new Error("timeout"))
+    );
+    render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+    await settlePreview();
+
+    expect(screen.queryByTestId("delete-worktree-blocked")).toBeNull();
   });
 
   it("holds the dispatch until the open-time preview has settled", async () => {

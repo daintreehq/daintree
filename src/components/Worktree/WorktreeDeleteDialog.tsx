@@ -12,9 +12,11 @@ import {
   buildWorktreeChangeRows,
   buildSubmoduleCommitRows,
   buildSubmoduleFileRows,
+  submoduleCommitsAreCapped,
   submoduleDeleteBlock,
   submoduleFileCount,
   submoduleForceRequired,
+  submodulesFromPreviewError,
   summarizeWorktreeChanges,
   PREVIEW_FILE_LIMIT,
   type WorktreeDeletePreview,
@@ -53,6 +55,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // null`, which is also what a resolved-`null` (monitor gone) preview leaves
   // behind — reading pending off that would disable the primary for good.
   const [previewPending, setPreviewPending] = useState(true);
+  // The submodule half of a preview whose parent arm failed. Held separately
+  // because `freshPreview` has to stay null on that path: the summary falls
+  // back to the prop snapshot through it, and a preview object carrying an
+  // empty change list would read as a clean tree.
+  const [failedSubmodules, setFailedSubmodules] = useState<WorktreeSubmoduleRiskState | null>(null);
   // Bumped by the blocked banners' recovery action to re-run the open-time
   // fetch. The whole preview rides one call, so a retry re-reads the parent
   // status too — which is right: the two failures share a cause often enough.
@@ -111,11 +118,14 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
    * What the delete would destroy INSIDE this worktree's submodules.
    *
    * `null` means the fetch has not landed yet — distinct from "checked, and
-   * clean". A failed parent fetch takes the submodule half down with it: the
-   * two ride one call, so the state we could not read is unknown here too.
+   * clean". A failed PARENT fetch no longer takes the submodule half with it:
+   * the two arms are independent, and the inventory frequently completes while
+   * the parent status is what could not be read. Discarding that answer left
+   * the dialog force-gating on nothing over nested files it had already been
+   * told about.
    */
   const submodules: WorktreeSubmoduleRiskState | null = verifyFailed
-    ? { status: "unverified", risk: null }
+    ? (failedSubmodules ?? { status: "unverified", risk: null })
     : (freshPreview?.submodules ?? null);
   // Real nested paths and real commit subjects. The parent's own status shows
   // every one of these files as a single ` M vendor/lib` row — precise-looking
@@ -124,16 +134,30 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const submoduleCommitRows = buildSubmoduleCommitRows(submodules?.risk ?? null);
   const nestedFileCount = submodules ? submoduleFileCount(submodules) : 0;
   const atRiskCommitCount = submodules?.risk?.atRiskCommits.length ?? 0;
+  // A capped walk comes back incomplete, so the retained length is a floor. Say
+  // "at least" rather than stating a number the host already knows is short.
+  const atRiskCommitsCapped = submodules ? submoduleCommitsAreCapped(submodules) : false;
+  const atRiskCommitsPlural = atRiskCommitCount !== 1 || atRiskCommitsCapped;
+  const atRiskCommitLabel = `${atRiskCommitsCapped ? "At least " : ""}${atRiskCommitCount} commit${atRiskCommitCount === 1 ? "" : "s"} ${atRiskCommitsPlural ? "are" : "is"}`;
   /**
    * The delete the host will refuse outright, whatever the user consents to.
    *
    * Scoped to the submodule inventory's own answer: when the PARENT status
    * fetch is what failed (`verifyFailed`) we know nothing about submodules
    * either, but the host re-reads both for itself at delete time and may well
-   * proceed — so refusing here would strand a delete that can still succeed.
-   * That state keeps its existing warn-and-require-force treatment.
+   * proceed — so refusing on an UNVERIFIED inventory there would strand a
+   * delete that can still succeed. That state keeps its existing
+   * warn-and-require-force treatment.
+   *
+   * A VERIFIED inventory is different and does block, parent failure or not:
+   * it is a completed answer about the submodules specifically, and the host
+   * runs the same one and refuses on it. Suppressing that was how a parent
+   * timeout turned an unrecoverable-commit refusal into an offered delete.
    */
-  const submoduleBlock = submodules && !verifyFailed ? submoduleDeleteBlock(submodules) : null;
+  const submoduleBlock =
+    submodules && (!verifyFailed || submodules.status === "verified")
+      ? submoduleDeleteBlock(submodules)
+      : null;
   const isBlocked = submoduleBlock !== null;
   // Nested modified/untracked files: the one submodule state `force` genuinely
   // consents to, so the plain delete is disabled and force enables it. Not
@@ -214,13 +238,16 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     let cancelled = false;
     setFreshPreview(null);
     setVerifyFailed(false);
+    setFailedSubmodules(null);
     setPreviewPending(true);
     buildWorktreeDeletePreview(worktree.id)
       .then((preview) => {
         if (!cancelled) setFreshPreview(preview);
       })
-      .catch(() => {
-        if (!cancelled) setVerifyFailed(true);
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setVerifyFailed(true);
+        setFailedSubmodules(submodulesFromPreviewError(error));
       })
       .finally(() => {
         if (!cancelled) setPreviewPending(false);
@@ -310,10 +337,12 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     setIsDeleting(true);
     let preview: WorktreeDeletePreview | null = null;
     let failed = false;
+    let failedRisk: WorktreeSubmoduleRiskState | null = null;
     try {
       preview = await buildWorktreeDeletePreview(worktree.id);
-    } catch {
+    } catch (error) {
       failed = true;
+      failedRisk = submodulesFromPreviewError(error);
     }
     // Abort if the dialog closed/reopened/changed worktree or unmounted while
     // the fresh re-check was in flight — never dispatch against a session the
@@ -321,12 +350,21 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     if (!mountedRef.current || sessionRef.current !== session) return;
     setFreshPreview(preview);
     setVerifyFailed(failed);
+    setFailedSubmodules(failedRisk);
     // An agent can commit inside a submodule between open and submit, which
     // turns a delete the dialog was offering into one the host will refuse.
     // Hold the dispatch and let the newly-rendered banner say so, rather than
     // sending a call whose only outcome is a toast. The state updates above
     // have already put the evidence on screen.
-    if (!failed && preview && submoduleDeleteBlock(preview.submodules) !== null) {
+    //
+    // A parent-status failure does not exempt this: the submodule arm may have
+    // completed, and a completed inventory is what the host refuses on.
+    const freshRisk = failed ? failedRisk : (preview?.submodules ?? null);
+    if (
+      freshRisk &&
+      (!failed || freshRisk.status === "verified") &&
+      submoduleDeleteBlock(freshRisk) !== null
+    ) {
       setIsDeleting(false);
       return;
     }
@@ -334,8 +372,10 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     // Same fail-closed shape as `freshHasTracked`. A resolved-`null` preview
     // means the monitor is gone — the worktree is already removed, so there is
     // no submodule left to lose and escalating would only strand the user.
-    const freshSubmoduleFilesAtRisk =
-      !failed && preview ? submoduleForceRequired(preview.submodules) : false;
+    // `submoduleForceRequired` answers false for anything unverified, so a
+    // surviving inventory from a failed parent fetch escalates on its own
+    // merits rather than being discarded with the arm that failed.
+    const freshSubmoduleFilesAtRisk = freshRisk ? submoduleForceRequired(freshRisk) : false;
     const freshTier = deriveEffectiveTier("worktree.delete", {
       force: true,
       isProtectedBranch,
@@ -546,7 +586,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               // else": the inventory can only prove a commit is unreachable
               // from this module repository's own remote-tracking refs, so a
               // fetch is a real remedy alongside a push.
-              `${atRiskCommitCount} commit${atRiskCommitCount === 1 ? " is" : "s are"} on no remote this clone knows about, so deleting this worktree isn't available. Push ${atRiskCommitCount === 1 ? "it" : "them"} from inside the submodule — or fetch, if ${atRiskCommitCount === 1 ? "it is" : "they are"} already on the remote — then delete the worktree.`
+              `${atRiskCommitLabel} on no remote this clone knows about, so deleting this worktree isn't available. Push ${atRiskCommitsPlural ? "them" : "it"} from inside the submodule — or fetch, if ${atRiskCommitsPlural ? "they are" : "it is"} already on the remote — then delete the worktree.`
             : "Deleting it could destroy nested work that isn't listed here, so deletion isn't available until the check finishes."}
         </p>
       </div>
@@ -753,8 +793,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   <p className="mt-2 flex items-start gap-1.5 text-xs font-medium text-status-error">
                     <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" aria-hidden="true" />
                     <span id={submoduleCommitsHeadingId}>
-                      {atRiskCommitCount} commit{atRiskCommitCount === 1 ? " is" : "s are"} on no
-                      remote this clone knows about
+                      {atRiskCommitLabel} on no remote this clone knows about
                     </span>
                   </p>
                   <ul

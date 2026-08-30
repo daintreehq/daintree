@@ -456,6 +456,13 @@ interface ScannedModule {
    * directory holding modules.
    */
   malformed?: boolean;
+  /**
+   * The store holds its own `modules/` directory, so this submodule has nested
+   * submodules whose object stores also live under this worktree's gitdir and
+   * also die with it. The inventory is depth 1 and cannot enumerate them, so
+   * the caller marks the answer incomplete rather than reporting it clean.
+   */
+  hasNestedModules?: boolean;
 }
 
 /**
@@ -531,11 +538,14 @@ export async function buildSubmoduleDeleteRisk(
     // index alone would report "nothing at stake" for the orphan case this
     // whole type exists to catch.
     //
-    // Residual gap, accepted deliberately: an OLD-FORM embedded `.git`
-    // directory that is simultaneously absent from the index and has no
-    // `.gitmodules` stanza is invisible here, because finding it would cost a
-    // `ls-tree HEAD` on every submodule-free repository. `git submodule add`
-    // has not produced that layout since git 1.7.8.
+    // Residual gap, accepted deliberately: a nested repository that is
+    // simultaneously absent from the index and has no `.gitmodules` stanza is
+    // invisible here, because finding it would cost a `ls-tree HEAD` on every
+    // submodule-free repository. That covers two layouts — an OLD-FORM embedded
+    // `.git` directory (`git submodule add` has not produced one since git
+    // 1.7.8), and a `.git` POINTER FILE aimed at a store somewhere other than
+    // `<worktree gitdir>/modules`, which nothing in this repository creates but
+    // a hand-run `git init --separate-git-dir` would.
     //
     // The gate also passes a gitlink that is in HEAD but staged away, with
     // `.gitmodules` deleted and the module never initialized — the HEAD roster
@@ -617,8 +627,13 @@ export async function buildSubmoduleDeleteRisk(
     // inventorying only one reports a clean risk for a repository that has one.
     const scannedByPath = new Map<string, ScannedModule[]>();
     const unboundStores: ScannedModule[] = [];
+    /** Roster paths that came from a guess rather than the store's own claim. */
+    const inferredBindings = new Set<string>();
     for (const module of scannedModules) {
       if (module.malformed) markIncomplete(`module store ${module.name} has no HEAD`);
+      if (module.hasNestedModules) {
+        markIncomplete(`module store ${module.name} holds nested submodules`);
+      }
       const binding = await resolveModuleCheckoutPath(git, root, module, stanzas, timeoutMs);
       if (binding.kind !== "bound") {
         markIncomplete(`module ${module.name}: ${binding.reason}`, binding.error);
@@ -626,6 +641,7 @@ export async function buildSubmoduleDeleteRisk(
         continue;
       }
       if (binding.conflict) markIncomplete(`module ${module.name}: ${binding.conflict}`);
+      if (binding.inferred) inferredBindings.add(binding.checkoutPath);
       rosterPaths.add(binding.checkoutPath);
       const bucket = scannedByPath.get(binding.checkoutPath);
       if (bucket) bucket.push(module);
@@ -772,6 +788,15 @@ export async function buildSubmoduleDeleteRisk(
           // metadata", and the file itself is never enumerated.
           if (info && !checkoutExists) {
             markIncomplete(`${submodulePath}: checkout is not a directory`);
+          }
+          // An inferred path that turns out to hold nothing is not evidence
+          // that nothing is checked out. The store declared no `core.worktree`,
+          // so this path came from `.gitmodules` or the directory name, and a
+          // checkout moved elsewhere in the worktree keeps its `.git` pointer
+          // to this store while never entering the roster — its dirty files
+          // would go unread and the answer would still say complete.
+          if (!info && inferredBindings.has(submodulePath)) {
+            markIncomplete(`${submodulePath}: inferred checkout path is absent`);
           }
         } catch (error) {
           markIncomplete(`${submodulePath}: checkout unreadable`, error);
@@ -978,9 +1003,17 @@ async function readModuleFiles(
  * `rev-list --branches --not --remotes` return EMPTY while the commit is still
  * live in the module's object store and reflog. `--reflog` is a revision
  * pseudo-option (not `--walk-reflogs`), so the negative `--remotes` still
- * applies. Residual gap: a commit whose reflog entry has been expired or was
- * never written (`core.logAllRefUpdates=false`) is reachable only by `fsck`,
- * which is too slow to run on this path.
+ * applies. Two residual gaps, both accepted:
+ *
+ *  - A commit whose reflog entry has expired or was never written
+ *    (`core.logAllRefUpdates=false`) and which no ref reaches is findable only
+ *    by `fsck`, which is far too slow for this path.
+ *  - `--all` does not cover pseudo-refs (`ORIG_HEAD`, `MERGE_HEAD`,
+ *    `CHERRY_PICK_HEAD`, `FETCH_HEAD`). A commit held ONLY by one of those,
+ *    with its reflog entry already expired, is missed. Adding them means
+ *    probing each for existence first, since `log` fails on a ref that is not
+ *    there, and the combination that reaches this gap is narrow enough that the
+ *    per-module cost was not judged worth it.
  */
 async function readAtRiskCommits(
   moduleGitDir: string,
@@ -1088,7 +1121,20 @@ function resolveStanzaName(
  * `conflict` (the store and `.gitmodules` naming different checkouts) with it.
  */
 type ModuleBinding =
-  | { kind: "bound"; checkoutPath: string; conflict?: string }
+  | {
+      kind: "bound";
+      checkoutPath: string;
+      conflict?: string;
+      /**
+       * The path came from `.gitmodules` or the directory name rather than the
+       * store's own `core.worktree` — a claim ABOUT the store, not one it
+       * makes. It is the right guess to inspect, but it is still a guess, so a
+       * checkout that turns out to be absent at that path cannot be read as
+       * "nothing checked out": the real one may have been moved, and it would
+       * never enter the roster.
+       */
+      inferred?: boolean;
+    }
   | { kind: "unbound"; reason: string; error?: unknown };
 
 async function resolveModuleCheckoutPath(
@@ -1134,9 +1180,9 @@ async function resolveModuleCheckoutPath(
 
   // Only here — with a SUCCESSFUL read establishing that the store declares no
   // checkout of its own — are second-hand claims about it a safe answer.
-  if (stanzaPath) return { kind: "bound", checkoutPath: stanzaPath };
+  if (stanzaPath) return { kind: "bound", checkoutPath: stanzaPath, inferred: true };
   const asName = toRosterPath(module.name);
-  if (asName) return { kind: "bound", checkoutPath: asName };
+  if (asName) return { kind: "bound", checkoutPath: asName, inferred: true };
   return { kind: "unbound", reason: "no checkout path could be established" };
 }
 
@@ -1267,8 +1313,10 @@ async function resolveWorktreeGitDir(root: string): Promise<string | null> {
  * Every module git directory under `<worktree gitdir>/modules`.
  *
  * Descent stops at a repository, so a nested submodule's own `modules/` subtree
- * is not reported (depth 1 only). Returns null when any part of the scan could
- * not be completed — a partial scan must not be mistaken for an empty one.
+ * is not enumerated (depth 1 only) — but its PRESENCE is recorded, because the
+ * deletion that follows is not depth-limited and takes those stores too.
+ * Returns null when any part of the scan could not be completed — a partial
+ * scan must not be mistaken for an empty one.
  *
  * Identification deliberately does NOT rest on `HEAD` alone. `--name` puts
  * modules under namespace directories, so anything without a `HEAD` used to be
@@ -1298,10 +1346,18 @@ async function collectModuleGitDirs(modulesDir: string): Promise<ScannedModule[]
         await walk(child, childRelative);
         continue;
       }
+      // A store that itself holds `modules/` has nested submodules, and THEIR
+      // object stores are under this worktree's gitdir too — so `worktree
+      // remove --force` takes them while the walk below, which stops at this
+      // repository, never sees them. The inventory models depth 1; deletion
+      // does not. Flagging it fails closed on the gap rather than reporting a
+      // clean answer for a child commit that exists nowhere else.
+      const nested = children.some((entry) => entry.name === "modules" && entry.isDirectory());
       found.push({
         name: childRelative,
         gitDir: child,
         ...(shape === "malformed" ? { malformed: true } : {}),
+        ...(nested ? { hasNestedModules: true } : {}),
       });
     }
   };
