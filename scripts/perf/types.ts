@@ -108,6 +108,13 @@ export interface ScenarioAggregate {
    * Surfaced loudly, because a silently-absent metric reads as a pass.
    */
   measurementIssues: string[];
+  /**
+   * How far this platform's copy of the number can be trusted. Absent means
+   * `supported`. A `diagnostic` reading is a signal, not a measurement, and
+   * carrying it into a cross-platform comparison would be presenting an
+   * emulated path as an authoritative one.
+   */
+  applicability?: PlatformApplicability;
   notes: string[];
 }
 
@@ -175,6 +182,16 @@ export interface PerfRunSummary {
   scenarioCount: number;
   /** Scenarios outside a reference value. Informational — never a failure. */
   scenariosOutsideReference: string[];
+  /**
+   * Scenarios not run because they are `unsupported` on this platform.
+   *
+   * Recorded rather than merely printed, because in the results file a skipped
+   * scenario is otherwise indistinguishable from one that was never written:
+   * `perf compare` would report it as absent from both sides and say nothing.
+   * Naming them is what lets a cross-platform comparison state which rows are
+   * missing by design.
+   */
+  scenariosSkipped: string[];
   aggregates: ScenarioAggregate[];
 }
 

@@ -110,10 +110,16 @@ const RULES: ReadonlyArray<{ cls: ComparabilityClass; pattern: RegExp }> = [
   // `[Ll]oad` finds "load" inside "payload", which would read a deterministic
   // `payloadBytesPerMessage` as a machine-dependent figure and lose its
   // cross-machine comparison.
+  //
+  // `Elu` is in the base group because the scenarios spell event-loop
+  // utilization both ways: `eluUtilization` matches the word and `idleEluPct`
+  // does not, so without the abbreviation the same quantity was machine-
+  // independent under one name and machine-dependent under the other. That is
+  // how "Windows idle ELU 12%, macOS 3%" gets reported as a finding.
   {
     cls: "derived-ratio",
     pattern:
-      /[Uu]tili[sz]ation|[Dd]egradationX?$|((?=.*([Cc]pu|[Hh]eap|[Rr]ss|[Mm]emory|[Ff]ootprint|[Ll]oadAvg|[a-z0-9]Load([A-Z0-9]|$)))(?=.*([Pp]ct$|[Pp]ercent|[Ff]raction|[a-z0-9]Ratio|[a-z0-9]Per[A-Z])).*)/,
+      /[Uu]tili[sz]ation|[Dd]egradationX?$|((?=.*([Cc]pu|[Hh]eap|[Rr]ss|[Mm]emory|[Ff]ootprint|[Ll]oadAvg|[a-z0-9]Load([A-Z0-9]|$)|^elu|[a-z0-9]Elu([A-Z0-9]|$)))(?=.*([Pp]ct$|[Pp]ercent|[Ff]raction|[a-z0-9]Ratio|[a-z0-9]Per[A-Z])).*)/,
   },
   // Structural proportions and per-unit rates over deterministic quantities.
   // `Ratio` is capitalised or leading, never the substring inside "decorations".

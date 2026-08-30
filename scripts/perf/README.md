@@ -28,12 +28,23 @@ This is deliberate, and the reasoning is recorded so nobody re-arms the gate by 
 
 Two things decide whether a number can be compared with another number, and `lib/comparability.ts` is the authority on both.
 
-- **Machine-independent** — counts, byte sizes and ratios. Compare these freely across machines and operating systems: "Windows 34, macOS 0" is a finding.
-- **Machine-dependent** — wall-clock durations and runtime memory. Only meaningful against another run on the _same_ machine. Across two machines the difference is mostly the two machines.
+- **Machine-independent** — `count`, `size`, and `ratio`. Compare these freely across machines and operating systems: "Windows 34, macOS 0" is a finding.
+- **Machine-dependent** — `duration`, `memory`, `derived-ratio`, and `unknown`. Only meaningful against another run on the _same_ machine. Across two machines the difference is mostly the two machines.
+
+`derived-ratio` is the class worth knowing about, because it is the one that looks portable and is not. A percentage is only machine-independent when both of its terms are: `spawnsPerWorktree` divides two tallies and travels, but `memoryGrowthPct`, `cpuPct` and event-loop utilization divide by the machine's own behaviour. Normalising a runtime number by another runtime number does not remove the machine from the figure, it changes the units it is wrong in. The report marks each number `≡` (compare freely) or `~` (compare only against itself) — two markers, not four, because the question the marker answers is binary.
 
 Counts are also the class that catches the bug latency benchmarks are blind to: a recovery state machine that takes a wrong turn under a transient fault and never returns to the cheap path keeps every individual operation fast. Only a count over a fixed idle window sees it. PERF-105/106 exist for exactly that shape.
 
-**Every count needs a paired correctness reading.** A dead watcher spawns nothing and scores perfectly. Scenarios carry a `*Misses` metric so a broken feature cannot be reported as a win — PERF-105's zero idle spawns is only meaningful beside `detectionMisses: 0`, which proves the edit was still detected.
+**Every count needs a paired correctness reading.** A dead watcher spawns nothing and scores perfectly — it is the best result the harness has ever recorded. So a scenario reporting a count-class metric declares `correctness: [...]` naming its miss counts, and the runner flags any scenario that does not. PERF-105's zero idle spawns is only meaningful beside `detectionMisses: 0`, which proves the edit was still detected.
+
+Two rules make the predicate worth having, and both are enforced rather than trusted:
+
+- **It is emitted on every iteration, including healthy ones.** `MetricStat.count` tallies the iterations that emitted a metric, not the run count, so a predicate present in one iteration of fifteen still aggregates to `max: 0` — a clean pass from a scenario that mostly did not run. The runner compares `count` against `runs` and says so when they differ.
+- **It is an independent oracle.** The test to apply is whether a no-op implementation of the subject could satisfy it. A count of its own spawns cannot; a read-back of the state the subject was supposed to produce can.
+
+Fifteen scenarios report no count-class metric and so carry no predicate — they measure only durations, a checksum, or retained heap. They are listed by id, with reasons, in `__tests__/scenarioMatrix.test.ts`, so a new scenario must either declare `correctness` or be exempted deliberately.
+
+The spawn counter validates itself before a scenario trusts it: it confirms its `child_process` hook is still installed and that a real child registers, and reports `spawnObserverMisses` when it does not. It remains blind to starts made from C++ inside native addons, to grandchildren, and to `spawnSync`. A zero means "nothing started through Node in this process", never "nothing started".
 
 ## Known gap: `scripts/perf` is not type-checked
 

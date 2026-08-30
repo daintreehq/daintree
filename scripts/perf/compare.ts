@@ -408,6 +408,36 @@ export function buildComparison(before: PerfRunSummary, after: PerfRunSummary): 
         `(${before.generatedAt}) — check the argument order`
     );
   }
+  // A skipped scenario reads as a missing row, which reads as nothing at all.
+  // Saying which rows are absent BY DESIGN is what stops a cross-platform
+  // reader concluding the other side simply performed better.
+  const skippedEitherSide = [
+    ...new Set([...(before.scenariosSkipped ?? []), ...(after.scenariosSkipped ?? [])]),
+  ].sort();
+  if (skippedEitherSide.length > 0) {
+    warnings.push(
+      `${skippedEitherSide.length} scenario(s) are unsupported on one side and were never run ` +
+        `(${skippedEitherSide.join(", ")}) — their absence is by design, not a result`
+    );
+  }
+
+  // Diagnostic rows ran on an emulated or shimmed path. Comparing one against
+  // an authoritative reading of the same id compares two different things.
+  const diagnosticEitherSide = [
+    ...new Set(
+      [...before.aggregates, ...after.aggregates]
+        .filter((aggregate) => aggregate.applicability === "diagnostic")
+        .map((aggregate) => aggregate.id)
+    ),
+  ].sort();
+  if (diagnosticEitherSide.length > 0) {
+    warnings.push(
+      `${diagnosticEitherSide.length} scenario(s) are diagnostic on one side ` +
+        `(${diagnosticEitherSide.join(", ")}) — a signal, not a measurement; do not read a delta ` +
+        "on these as a change in the code"
+    );
+  }
+
   if (durationRows.length === 0) {
     warnings.push("no scenario appears in both files — there is nothing to compare");
   }

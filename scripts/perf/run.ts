@@ -813,6 +813,7 @@ async function run(): Promise<void> {
       name: aggregate.name,
       description: aggregate.description,
       tier: aggregate.tier,
+      ...(isDiagnostic ? { applicability: "diagnostic" as const } : {}),
       runs,
       p50Ms: round(p50Ms),
       p95Ms: round(p95Ms),
@@ -872,6 +873,7 @@ async function run(): Promise<void> {
     },
     scenarioCount: aggregates.length,
     scenariosOutsideReference,
+    scenariosSkipped: skippedScenarios.map((scenario) => scenario.id),
     aggregates,
   };
 

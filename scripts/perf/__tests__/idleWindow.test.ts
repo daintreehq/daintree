@@ -61,7 +61,12 @@ const COUNT_METRICS = [
   "settleMisses",
 ];
 
-const RATIO_METRICS = ["idleEluPct", "healedEluPct", "gitSpawnsPerMonitor"];
+const RATIO_METRICS = ["gitSpawnsPerMonitor"];
+
+// Event-loop utilization over a wall-clock window, however it is spelled. A
+// slower CPU raises it for identical work, so it is a reading about this
+// machine and comparing it to another machine's is not a finding.
+const DERIVED_RATIO_METRICS = ["idleEluPct", "healedEluPct"];
 
 const DURATION_METRICS = [
   "idleCpuMs",
@@ -101,6 +106,14 @@ describe("idleWindow metric naming", () => {
   it("classifies the normalised metrics as ratios", () => {
     for (const name of RATIO_METRICS) {
       expect(`${name}:${classifyMetric(name)}`).toBe(`${name}:ratio`);
+      expect(isMachineIndependent(classifyMetric(name))).toBe(true);
+    }
+  });
+
+  it("keeps event-loop utilization machine-dependent under either spelling", () => {
+    for (const name of DERIVED_RATIO_METRICS) {
+      expect(`${name}:${classifyMetric(name)}`).toBe(`${name}:derived-ratio`);
+      expect(isMachineIndependent(classifyMetric(name))).toBe(false);
     }
   });
 
