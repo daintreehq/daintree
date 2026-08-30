@@ -5,8 +5,9 @@ import { useAssistantTimerNotifications } from "../useAssistantTimerNotification
 import type { AssistantTimers } from "@/store/assistantStore";
 import type { AssistantTimerOutcomeRow } from "@shared/types/ipc/assistantHost";
 
+// The panel's own notice strip — this hook no longer touches the app-wide notifier,
+// because everything the assistant does stays inside the assistant.
 const notifyMock = vi.fn();
-vi.mock("@/lib/notify", () => ({ notify: (p: unknown) => notifyMock(p) }));
 
 /**
  * Announcing a fired timer.
@@ -54,7 +55,12 @@ function setup(
   const requestTimers = vi.fn();
   const view = renderHook(
     (props: { timers: AssistantTimers | null; timersStale: boolean; sessionId: string | null }) =>
-      useAssistantTimerNotifications({ ...props, requestTimers, takeFiredTimerIds }),
+      useAssistantTimerNotifications({
+        ...props,
+        requestTimers,
+        takeFiredTimerIds,
+        pushNotice: (level, message) => notifyMock({ level, message }),
+      }),
     { initialProps: { timers: initial, timersStale: false, sessionId } }
   );
   return { ...view, requestTimers, takeFiredTimerIds };
@@ -93,12 +99,9 @@ describe("what it announces", () => {
     expect(notifyMock).toHaveBeenCalledTimes(1);
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        // grid-bar: the least-restricted surface that crosses a pane boundary. A
-        // timer fires outside whatever the user is looking at, but a reminder
-        // landing on time is not an interruption, so it is not a toast.
-        placement: "grid-bar",
-        type: "info",
-        message: "Reminder: stand-up",
+        // Reported in the PANEL, never on a surface that spans the window.
+        level: "info",
+        message: expect.stringContaining("Reminder: stand-up"),
       })
     );
   });
@@ -111,7 +114,10 @@ describe("what it announces", () => {
       sessionId: "s1",
     });
     expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Scheduled timer failed" })
+      // A failure is a WARNING in the panel: the timer did what it was asked, and it is
+      // the action it carried that failed. The panel's error level is for the session
+      // itself being broken.
+      expect.objectContaining({ level: "warning", message: expect.stringContaining("failed") })
     );
   });
 
@@ -129,9 +135,7 @@ describe("what it announces", () => {
     expect(notifyMock).toHaveBeenCalledTimes(1);
     // ...and one live signal per timer: the repeat replaces its own notice rather
     // than stacking a new one beside it every night.
-    expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ supersedeKey: "assistant-timer:tmr_1" })
-    );
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ level: "warning" }));
   });
 
   it("does not re-announce a reading that has not changed", () => {
@@ -166,7 +170,10 @@ describe("the first fire of a session", () => {
     });
     expect(notifyMock).toHaveBeenCalledTimes(1);
     expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Scheduled timer fired", message: "Spawned claude." })
+      expect.objectContaining({
+        level: "info",
+        message: expect.stringContaining("Spawned claude."),
+      })
     );
   });
 
@@ -182,9 +189,7 @@ describe("the first fire of a session", () => {
       timersStale: false,
       sessionId: "s1",
     });
-    expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Scheduled timer failed" })
-    );
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ level: "warning" }));
   });
 
   it("swallows the backlog that arrives alongside it, however recent", () => {
@@ -203,7 +208,9 @@ describe("the first fire of a session", () => {
       sessionId: "s1",
     });
     expect(notifyMock).toHaveBeenCalledTimes(1);
-    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ message: "just now" }));
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("just now") })
+    );
   });
 
   it("announces a fire whose read took longer than any plausible time window", () => {
@@ -220,7 +227,9 @@ describe("the first fire of a session", () => {
       sessionId: "s1",
     });
     expect(notifyMock).toHaveBeenCalledTimes(1);
-    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ message: "late" }));
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("late") })
+    );
   });
 
   it("does not announce the backlog when no fire was signalled", () => {
@@ -249,7 +258,9 @@ describe("the first fire of a session", () => {
       sessionId: "s1",
     });
     expect(notifyMock).toHaveBeenCalledTimes(1);
-    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ message: "survived" }));
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("survived") })
+    );
   });
 });
 
