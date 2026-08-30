@@ -1,5 +1,5 @@
-import { readFile, readdir, stat } from "node:fs/promises";
-import type { Stats } from "node:fs";
+import { readFile, readdir, realpath, stat } from "node:fs/promises";
+import type { Dirent, Stats } from "node:fs";
 import path from "node:path";
 import type { SimpleGit } from "simple-git";
 import type {
@@ -59,6 +59,51 @@ const UNIT_SEPARATOR = "\u001f";
 /** Errno values that mean "definitively not there", as opposed to "cannot tell". */
 const MISSING_ERRNO = new Set(["ENOENT", "ENOTDIR"]);
 
+/** Every tree-entry mode git emits is six octal digits. */
+const OCTAL_MODE = /^[0-7]{6}$/;
+
+/** SHA-1 (40) through SHA-256 (64). Deliberately not a fixed width. */
+const OBJECT_ID = /^[0-9a-f]{40,64}$/;
+
+/** Porcelain v2 field 3: `N...` for an ordinary path, `S<c><m><u>` for a gitlink. */
+const SUB_STATE_FIELD = /^(N\.\.\.|S[C.][M.][U.])$/;
+
+/**
+ * Raised when git's own output does not match the framing it documents.
+ *
+ * Skipping an unparsable record is the wrong move for a safety gate: the
+ * records are positional, so one corrupt record means every record after it is
+ * suspect, and a parser that quietly drops them hands the caller a SHORT list
+ * that looks complete. Every parse here therefore rejects the whole output, and
+ * every call site turns that rejection into `incomplete`.
+ */
+export class MalformedGitOutputError extends Error {
+  constructor(source: string, detail: string) {
+    super(`malformed \`git ${source}\` output: ${detail}`);
+    this.name = "MalformedGitOutputError";
+  }
+}
+
+/**
+ * Split `-z` output into records.
+ *
+ * NUL is a TERMINATOR, not a separator, so well-formed output either is empty
+ * or ends with one. A trailing partial record is the signature of output that
+ * was cut short — a truncated pipe, a killed process, a `2` header sitting at
+ * the buffer edge — and must never be parsed as if it were whole.
+ */
+function splitNulRecords(stdout: string, source: string): string[] {
+  if (stdout === "") return [];
+  if (!stdout.endsWith("\0")) {
+    throw new MalformedGitOutputError(source, "output does not end in NUL");
+  }
+  const records = stdout.slice(0, -1).split("\0");
+  for (const record of records) {
+    if (!record) throw new MalformedGitOutputError(source, "empty record");
+  }
+  return records;
+}
+
 export interface IndexGitlink {
   path: string;
   oid: string;
@@ -103,19 +148,29 @@ export interface SubmoduleDeleteRiskOptions {
  * tabs, newlines and backslashes — but the metadata before the FIRST tab never
  * does. All conflict stages are preserved; a path present at stages 1/2/3 is a
  * conflicted gitlink and the caller needs every stage to say so.
+ *
+ * Throws `MalformedGitOutputError` rather than skipping a record it cannot
+ * read: the roster is the authority for the whole inventory, so a partial
+ * roster is indistinguishable from a repository with fewer submodules.
  */
 export function parseIndexGitlinks(stdout: string): IndexGitlink[] {
+  const source = "ls-files";
   const out: IndexGitlink[] = [];
-  for (const record of stdout.split("\0")) {
-    if (!record) continue;
+  for (const record of splitNulRecords(stdout, source)) {
     const tab = record.indexOf("\t");
-    if (tab === -1) continue;
+    if (tab === -1) throw new MalformedGitOutputError(source, "record has no tab separator");
     const meta = record.slice(0, tab).split(" ");
-    if (meta.length !== 3 || meta[0] !== GITLINK_MODE) continue;
+    if (meta.length !== 3 || !OCTAL_MODE.test(meta[0]) || !OBJECT_ID.test(meta[1])) {
+      throw new MalformedGitOutputError(source, "unreadable entry metadata");
+    }
     const stage = Number.parseInt(meta[2], 10);
-    if (!Number.isInteger(stage) || stage < 0 || stage > 3) continue;
+    if (!Number.isInteger(stage) || stage < 0 || stage > 3) {
+      throw new MalformedGitOutputError(source, `stage out of range: ${meta[2]}`);
+    }
     const entryPath = record.slice(tab + 1);
-    if (!meta[1] || !entryPath) continue;
+    if (!entryPath) throw new MalformedGitOutputError(source, "record has no path");
+    // Blobs and trees are not malformed, just not gitlinks.
+    if (meta[0] !== GITLINK_MODE) continue;
     out.push({ path: entryPath, oid: meta[1], stage });
   }
   return out;
@@ -128,15 +183,18 @@ export function parseIndexGitlinks(stdout: string): IndexGitlink[] {
  * `<mode> <type> <oid>`.
  */
 export function parseTreeGitlinks(stdout: string): Map<string, string> {
+  const source = "ls-tree";
   const out = new Map<string, string>();
-  for (const record of stdout.split("\0")) {
-    if (!record) continue;
+  for (const record of splitNulRecords(stdout, source)) {
     const tab = record.indexOf("\t");
-    if (tab === -1) continue;
+    if (tab === -1) throw new MalformedGitOutputError(source, "record has no tab separator");
     const meta = record.slice(0, tab).split(" ");
-    if (meta.length !== 3 || meta[0] !== GITLINK_MODE) continue;
+    if (meta.length !== 3 || !OCTAL_MODE.test(meta[0]) || !OBJECT_ID.test(meta[2])) {
+      throw new MalformedGitOutputError(source, "unreadable entry metadata");
+    }
     const entryPath = record.slice(tab + 1);
-    if (!meta[2] || !entryPath) continue;
+    if (!entryPath) throw new MalformedGitOutputError(source, "record has no path");
+    if (meta[0] !== GITLINK_MODE) continue;
     out.set(entryPath, meta[2]);
   }
   return out;
@@ -155,15 +213,23 @@ interface StatusRecord {
  * NUL-separated values, `<path>` then `<origPath>`. Consuming only the first
  * leaves the origin path to be read as the next record header, desynchronising
  * every record after it — a rename anywhere in the parent would silently
- * corrupt the submodule sub-states that follow. The extra token is consumed
- * only once the record itself has parsed, so a malformed `2` cannot swallow a
- * valid record behind it.
+ * corrupt the submodule sub-states that follow.
+ *
+ * A record that does not parse rejects the WHOLE output. Skipping it and
+ * carrying on cannot be right here: the `2` framing means position is state, so
+ * one unreadable record makes every following record's identity a guess — and a
+ * guessed-short list of at-risk files reads exactly like a clean one.
  */
 function* iterateStatusRecords(stdout: string): Generator<StatusRecord> {
-  const tokens = stdout.split("\0");
+  const source = "status";
+  const tokens = splitNulRecords(stdout, source);
   for (let i = 0; i < tokens.length; i++) {
     const record = tokens[i];
-    if (!record || record[1] !== " ") continue;
+    // `#` header lines (`# branch.oid <oid>`) carry no path.
+    if (record[0] === "#") continue;
+    if (record[1] !== " ") {
+      throw new MalformedGitOutputError(source, `unreadable record header: ${headOf(record)}`);
+    }
     const kind = record[0];
     let leadingFields: number;
     switch (kind) {
@@ -181,14 +247,27 @@ function* iterateStatusRecords(stdout: string): Generator<StatusRecord> {
         leadingFields = 1;
         break;
       default:
-        // `#` header lines carry no path.
-        continue;
+        throw new MalformedGitOutputError(source, `unknown record kind: ${headOf(record)}`);
     }
     const split = splitLeadingFields(record, leadingFields);
-    if (!split) continue;
-    if (kind === "2") i += 1;
+    if (!split) {
+      throw new MalformedGitOutputError(source, `truncated \`${kind}\` record: ${headOf(record)}`);
+    }
+    if (kind === "2") {
+      // The rename origin is its own NUL-terminated token. A `2` header sitting
+      // at the buffer edge has none, which means the output was cut mid-record.
+      if (!tokens[i + 1]) {
+        throw new MalformedGitOutputError(source, "rename record has no origin path");
+      }
+      i += 1;
+    }
     yield { kind, fields: split.fields, path: split.rest };
   }
+}
+
+/** A bounded prefix of a record, for error messages. */
+function headOf(record: string): string {
+  return JSON.stringify(record.length > 40 ? `${record.slice(0, 40)}…` : record);
 }
 
 /**
@@ -226,8 +305,11 @@ export function parseSubmoduleSubStates(stdout: string): Map<string, SubmoduleSu
   const states = new Map<string, SubmoduleSubState>();
   for (const record of iterateStatusRecords(stdout)) {
     if (record.kind !== "1" && record.kind !== "2" && record.kind !== "u") continue;
-    const sub = record.fields[2];
-    if (!sub || sub.length !== 4 || sub[0] !== "S") continue;
+    const sub = record.fields[2] ?? "";
+    if (!SUB_STATE_FIELD.test(sub)) {
+      throw new MalformedGitOutputError("status", `unreadable sub-state field: ${headOf(sub)}`);
+    }
+    if (sub[0] !== "S") continue;
     states.set(record.path, {
       commitChanged: sub[1] === "C",
       modifiedContent: sub[2] === "M",
@@ -265,11 +347,16 @@ type GitmodulesProperty = (typeof GITMODULES_PROPERTIES)[number];
 export function parseGitmodulesConfig(stdout: string): Map<string, GitmodulesStanza> {
   const prefix = "submodule.";
   const stanzas = new Map<string, GitmodulesStanza>();
-  for (const record of stdout.split("\0")) {
-    if (!record.startsWith(prefix)) continue;
+  for (const record of splitNulRecords(stdout, "config")) {
     const newline = record.indexOf("\n");
     const key = newline === -1 ? record : record.slice(0, newline);
     const value = newline === -1 ? "" : record.slice(newline + 1);
+    // Every key git emits is at least `<section>.<name>`; anything else means
+    // the record boundaries have slipped.
+    if (!key.includes(".")) {
+      throw new MalformedGitOutputError("config", `unreadable key: ${headOf(key)}`);
+    }
+    if (!key.startsWith(prefix)) continue;
     const lastDot = key.lastIndexOf(".");
     if (lastDot <= prefix.length) continue;
     const property = key.slice(lastDot + 1).toLowerCase();
@@ -308,19 +395,49 @@ export async function resolveModuleGitDir(
   worktreePath: string,
   submodulePath: string
 ): Promise<string | null> {
+  const resolution = await inspectModuleGitDir(worktreePath, submodulePath);
+  return resolution.kind === "resolved" ? resolution.gitDir : null;
+}
+
+/**
+ * The three answers `resolveModuleGitDir` collapses into `null`.
+ *
+ * The collapse is what makes a nonempty, un-inspectable checkout look like an
+ * empty one: "there is no `.git` here" and "the `.git` here is broken" both read
+ * as `uninitialized`, and `uninitialized` is the one state where the inventory
+ * skips file inspection entirely. An uninitialized submodule is also invisible
+ * to the parent's `git status`, so nothing downstream can rescue the mistake.
+ */
+export type ModuleGitDirResolution =
+  | { kind: "resolved"; gitDir: string }
+  /** No `.git` entry in the checkout at all — never initialized, or deinit'd. */
+  | { kind: "absent" }
+  /** A `.git` entry exists but does not lead to a usable repository. */
+  | { kind: "malformed"; reason: string };
+
+export async function inspectModuleGitDir(
+  worktreePath: string,
+  submodulePath: string
+): Promise<ModuleGitDirResolution> {
   const checkout = path.resolve(worktreePath, submodulePath);
   let pointer = path.join(checkout, ".git");
   for (let hop = 0; hop < MAX_GITDIR_HOPS; hop++) {
     const info = await statOrMissing(pointer);
-    if (!info) return null;
-    if (info.isDirectory()) return pointer;
-    if (!info.isFile()) return null;
+    if (!info) {
+      return hop === 0
+        ? { kind: "absent" }
+        : { kind: "malformed", reason: `gitdir pointer leads nowhere (${pointer})` };
+    }
+    if (info.isDirectory()) return { kind: "resolved", gitDir: pointer };
+    if (!info.isFile()) {
+      return { kind: "malformed", reason: "`.git` is neither a file nor a directory" };
+    }
     const contents = await readFileOrMissing(pointer);
     const match = contents?.match(/^gitdir:\s*(.+?)\s*$/m);
-    if (!match) return null;
+    if (!match) return { kind: "malformed", reason: "`.git` file is not a gitdir pointer" };
     pointer = path.resolve(path.dirname(pointer), match[1]);
   }
-  return null;
+  return { kind: "malformed", reason: "gitdir pointer chain too deep" };
 }
 
 /** One module git directory found under `<worktree gitdir>/modules`. */
@@ -332,6 +449,13 @@ interface ScannedModule {
    */
   name: string;
   gitDir: string;
+  /**
+   * The directory holds a repository skeleton (`objects`/`refs`/`config`) but no
+   * `HEAD`. Its objects die with the worktree exactly like a healthy store's, so
+   * it is reported — it must never be walked into as if it were a namespace
+   * directory holding modules.
+   */
+  malformed?: boolean;
 }
 
 /**
@@ -412,6 +536,14 @@ export async function buildSubmoduleDeleteRisk(
     // `.gitmodules` stanza is invisible here, because finding it would cost a
     // `ls-tree HEAD` on every submodule-free repository. `git submodule add`
     // has not produced that layout since git 1.7.8.
+    //
+    // The gate also passes a gitlink that is in HEAD but staged away, with
+    // `.gitmodules` deleted and the module never initialized — the HEAD roster
+    // read is below it. That one is genuinely covered elsewhere rather than
+    // merely accepted: with no index gitlink, no stanza and no nested `.git`,
+    // the checkout is ordinary untracked content of the PARENT, which the
+    // parent's own delete preview enumerates. The moment any of those three
+    // exists the gate does not fire.
     if (
       indexRead &&
       !incomplete &&
@@ -464,43 +596,72 @@ export async function buildSubmoduleDeleteRisk(
     }
 
     // The deletion roster is deliberately broader than a display roster: every
-    // source that can evidence a nested repository, unioned, so orphans are
+    // source that can EVIDENCE a nested repository, unioned, so orphans are
     // found rather than only the well-formed entries.
+    //
+    // A `.gitmodules` stanza is deliberately not such a source. It is tracked,
+    // attacker-influenceable content in a cloned repository, and a stanza with
+    // no gitlink and no module store is stale config naming a directory the
+    // index never called a submodule — letting it create roster membership
+    // points every probe below (stat, status, `log`) at a path of the config
+    // author's choosing, which is the opposite of the index-authority contract.
     const rosterPaths = new Set<string>();
     for (const gitlink of indexGitlinks) rosterPaths.add(gitlink.path);
     for (const treePath of headGitlinks?.keys() ?? []) rosterPaths.add(treePath);
-    for (const stanza of stanzas.values()) {
-      const configured = toRosterPath(stanza.path);
-      if (configured) rosterPaths.add(configured);
-    }
 
     // A scanned module's directory name is its LOGICAL name, which only equals
     // the checkout path by default convention — `--name` decouples them. Bind
-    // each one to a real path before it can enter the roster, and remember the
-    // git directory so a checkout deleted out from under it is still reachable.
-    const gitDirByPath = new Map<string, string>();
+    // each one to a real path before it can enter the roster, and keep EVERY
+    // store that lands on a given path rather than the last one seen: two
+    // stores claiming one checkout means `worktree remove` deletes both, so
+    // inventorying only one reports a clean risk for a repository that has one.
+    const scannedByPath = new Map<string, ScannedModule[]>();
+    const unboundStores: ScannedModule[] = [];
     for (const module of scannedModules) {
-      const bound = await resolveModuleCheckoutPath(
-        git,
-        root,
-        module,
-        stanzas,
-        rosterPaths,
-        timeoutMs
-      );
-      if (!bound) {
-        markIncomplete(`module ${module.name} could not be bound to a checkout path`);
+      if (module.malformed) markIncomplete(`module store ${module.name} has no HEAD`);
+      const binding = await resolveModuleCheckoutPath(git, root, module, stanzas, timeoutMs);
+      if (binding.kind !== "bound") {
+        markIncomplete(`module ${module.name}: ${binding.reason}`, binding.error);
+        unboundStores.push(module);
         continue;
       }
-      rosterPaths.add(bound);
-      gitDirByPath.set(bound, module.gitDir);
+      if (binding.conflict) markIncomplete(`module ${module.name}: ${binding.conflict}`);
+      rosterPaths.add(binding.checkoutPath);
+      const bucket = scannedByPath.get(binding.checkoutPath);
+      if (bucket) bucket.push(module);
+      else scannedByPath.set(binding.checkoutPath, [module]);
+    }
+
+    // Resolved once, and only past the cost gate, so a submodule-free
+    // repository still pays nothing for it.
+    let realRoot: string | null = null;
+    if (rosterPaths.size > 0) {
+      try {
+        realRoot = await realpathOrMissing(root);
+      } catch (error) {
+        markIncomplete("worktree path could not be resolved", error);
+      }
     }
 
     const entries: SubmoduleEntry[] = [];
     const dirtyFiles: string[] = [];
     const untrackedFiles: string[] = [];
     const atRiskCommits: SubmoduleAtRiskCommit[] = [];
+    const seenAtRiskOids = new Set<string>();
     let collectedFiles = 0;
+
+    const collectAtRisk = async (gitDir: string, label: string): Promise<void> => {
+      const commits = await readAtRiskCommits(gitDir, opts.signal, timeoutMs, maxAtRiskCommits);
+      if (!commits) {
+        markIncomplete(`${label}: rev walk failed`);
+        return;
+      }
+      for (const commit of commits) {
+        if (seenAtRiskOids.has(commit.oid)) continue;
+        seenAtRiskOids.add(commit.oid);
+        atRiskCommits.push(commit);
+      }
+    };
 
     for (const submodulePath of [...rosterPaths].sort()) {
       const stages = indexGitlinks.filter((gitlink) => gitlink.path === submodulePath);
@@ -517,28 +678,67 @@ export async function buildSubmoduleDeleteRisk(
       const stanza = name ? stanzas.get(name) : undefined;
 
       const checkoutDir = path.resolve(root, submodulePath);
-      let moduleGitDir: string | null = null;
-      try {
-        // A checkout deleted out from under an absorbed module leaves no
-        // pointer to follow, but the module — and its objects — are still there.
-        moduleGitDir =
-          (await resolveModuleGitDir(root, submodulePath)) ??
-          gitDirByPath.get(submodulePath) ??
-          null;
-      } catch (error) {
-        markIncomplete(`${submodulePath}: git directory unreadable`, error);
+      // Lexical containment is not enough. The checkout path — or any directory
+      // above it — can be a symlink or junction pointing at an unrelated
+      // repository, and every probe below would then read that repository's
+      // files, refs and commit subjects and report them as this worktree's
+      // at-risk work.
+      const containment = await classifyCheckout(realRoot, checkoutDir);
+      if (containment === "escaped") {
+        markIncomplete(`${submodulePath}: checkout resolves outside the worktree`);
+      } else if (containment === "unknown") {
+        markIncomplete(`${submodulePath}: checkout could not be resolved`);
       }
+      const checkoutUsable = containment === "contained" || containment === "absent";
+
+      // A checkout deleted out from under an absorbed module leaves no pointer
+      // to follow, but the module — and its objects — are still there, which is
+      // what the scanned stores below cover.
+      let pointerGitDir: string | null = null;
+      if (checkoutUsable) {
+        try {
+          const resolution = await inspectModuleGitDir(root, submodulePath);
+          if (resolution.kind === "resolved") pointerGitDir = resolution.gitDir;
+          else if (resolution.kind === "malformed") {
+            markIncomplete(`${submodulePath}: ${resolution.reason}`);
+          }
+        } catch (error) {
+          markIncomplete(`${submodulePath}: git directory unreadable`, error);
+        }
+      }
+
+      const candidateGitDirs: string[] = [];
+      const addCandidate = (dir: string): void => {
+        const resolved = path.resolve(dir);
+        if (!candidateGitDirs.includes(resolved)) candidateGitDirs.push(resolved);
+      };
+      if (pointerGitDir) addCandidate(pointerGitDir);
+      for (const module of scannedByPath.get(submodulePath) ?? []) addCandidate(module.gitDir);
+      if (candidateGitDirs.length > 1) {
+        // Preferring the checkout's own pointer and dropping the rest is
+        // precisely how a worktree-owned store gets skipped: `worktree remove`
+        // deletes every store under the worktree gitdir, agreement or not.
+        markIncomplete(
+          `${submodulePath}: ${candidateGitDirs.length} module git directories claim this checkout`
+        );
+      }
+      const moduleGitDir = candidateGitDirs[0] ?? null;
 
       let headOid: string | undefined;
       let branch: string | undefined;
-      if (moduleGitDir) {
-        const head = await readModuleHead(moduleGitDir, opts.signal, timeoutMs);
-        if (head) {
+      for (const [index, candidate] of candidateGitDirs.entries()) {
+        const head = await readModuleHead(candidate, opts.signal, timeoutMs);
+        if (!head) {
+          markIncomplete(`${submodulePath}: HEAD unreadable in ${candidate}`);
+          continue;
+        }
+        if (index === 0) {
           headOid = head.oid;
           branch = head.branch;
-        } else {
-          markIncomplete(`${submodulePath}: HEAD unreadable`);
         }
+        // Skipped without a HEAD: an unborn module has no commits to strand,
+        // and the failed read above has already flagged the inventory.
+        await collectAtRisk(candidate, submodulePath);
       }
 
       let state: SubmoduleState;
@@ -554,49 +754,56 @@ export async function buildSubmoduleDeleteRisk(
       let hasUntrackedContent = subState?.untrackedContent ?? false;
 
       let checkoutExists = false;
-      try {
-        checkoutExists = await isDirectory(checkoutDir);
-      } catch (error) {
-        markIncomplete(`${submodulePath}: checkout unreadable`, error);
-      }
-
-      if (moduleGitDir && checkoutExists) {
-        const files = await readModuleFiles(moduleGitDir, checkoutDir, opts.signal, timeoutMs);
-        if (files) {
-          hasModifiedContent ||= files.dirty.length > 0;
-          hasUntrackedContent ||= files.untracked.length > 0;
-          // The per-module budget is shared between the two lists, as is the
-          // global one; a truncated dirty list must not suppress collection of
-          // the untracked one.
-          let moduleBudget = maxFilesPerModule;
-          let truncated = false;
-          for (const [target, collected] of [
-            [dirtyFiles, files.dirty],
-            [untrackedFiles, files.untracked],
-          ] as const) {
-            const room = Math.min(moduleBudget, maxFilesTotal - collectedFiles);
-            const added = appendPrefixed(target, collected, submodulePath, room);
-            collectedFiles += added;
-            moduleBudget -= added;
-            if (added < collected.length) truncated = true;
+      if (checkoutUsable) {
+        try {
+          const info = await statOrMissing(checkoutDir);
+          checkoutExists = info?.isDirectory() === true;
+          // A regular file (or a device, or a pipe) where a checkout belongs
+          // holds content the delete takes, and neither inventory branch below
+          // can read it: `<file>/.git` answers ENOTDIR, which reads as "no
+          // metadata", and the file itself is never enumerated.
+          if (info && !checkoutExists) {
+            markIncomplete(`${submodulePath}: checkout is not a directory`);
           }
-          if (truncated) markIncomplete(`${submodulePath}: file list truncated`);
-        } else {
-          markIncomplete(`${submodulePath}: status failed`);
+        } catch (error) {
+          markIncomplete(`${submodulePath}: checkout unreadable`, error);
         }
       }
 
-      // Skipped without a HEAD: an unborn module has no commits to strand, and
-      // the failed `rev-parse` above has already flagged the inventory.
-      if (moduleGitDir && headOid) {
-        const commits = await readAtRiskCommits(
-          moduleGitDir,
-          opts.signal,
-          timeoutMs,
-          maxAtRiskCommits
-        );
-        if (commits) atRiskCommits.push(...commits);
-        else markIncomplete(`${submodulePath}: rev walk failed`);
+      let files: { dirty: string[]; untracked: string[] } | null = null;
+      if (checkoutExists && moduleGitDir) {
+        files = await readModuleFiles(moduleGitDir, checkoutDir, opts.signal, timeoutMs);
+        if (!files) markIncomplete(`${submodulePath}: status failed`);
+      } else if (checkoutExists) {
+        // A checkout with no usable git metadata is the blind spot this gate
+        // cannot afford: nothing on disk can say which of these files are
+        // recoverable, and the parent cannot help either because an
+        // uninitialized submodule emits no `git status` record at all. So every
+        // file present is reported as content the delete would take.
+        const listed = await listCheckoutFiles(checkoutDir, maxFilesPerModule + 1);
+        if (listed) files = { dirty: [], untracked: listed };
+        else markIncomplete(`${submodulePath}: checkout could not be listed`);
+      }
+
+      if (files) {
+        hasModifiedContent ||= files.dirty.length > 0;
+        hasUntrackedContent ||= files.untracked.length > 0;
+        // The per-module budget is shared between the two lists, as is the
+        // global one; a truncated dirty list must not suppress collection of
+        // the untracked one.
+        let moduleBudget = maxFilesPerModule;
+        let truncated = false;
+        for (const [target, collected] of [
+          [dirtyFiles, files.dirty],
+          [untrackedFiles, files.untracked],
+        ] as const) {
+          const room = Math.min(moduleBudget, maxFilesTotal - collectedFiles);
+          const added = appendPrefixed(target, collected, submodulePath, room);
+          collectedFiles += added;
+          moduleBudget -= added;
+          if (added < collected.length) truncated = true;
+        }
+        if (truncated) markIncomplete(`${submodulePath}: file list truncated`);
       }
 
       entries.push({
@@ -611,6 +818,15 @@ export async function buildSubmoduleDeleteRisk(
         hasModifiedContent,
         hasUntrackedContent,
       });
+    }
+
+    // A store nobody could bind to a checkout path is still deleted with the
+    // worktree, so its unreachable commits are still at risk. Failing to NAME
+    // it is not a reason to leave its contents out of the answer.
+    for (const store of unboundStores) {
+      const head = await readModuleHead(store.gitDir, opts.signal, timeoutMs);
+      if (!head) continue;
+      await collectAtRisk(store.gitDir, `module ${store.name}`);
     }
 
     return {
@@ -787,7 +1003,9 @@ async function readAtRiskCommits(
     for (const line of output.split("\n")) {
       if (!line) continue;
       const separator = line.indexOf(UNIT_SEPARATOR);
-      if (separator === -1) continue;
+      // The `--format` puts one on every line, so its absence means the walk
+      // did not answer what was asked — a failure, not a line to drop.
+      if (separator === -1) return null;
       const oid = line.slice(0, separator);
       if (seen.has(oid)) continue;
       seen.add(oid);
@@ -835,54 +1053,93 @@ function resolveStanzaName(
  *
  * `git submodule add --name <logical> <url> <path>` puts the module at
  * `modules/<logical>` while the checkout lives at `<path>`, so the directory
- * name is only a path by default convention. Order is cheapest-first: the
- * `.gitmodules` stanza, then a name that the index or HEAD already vouches for,
- * and only then the module's own `core.worktree` — which is the sole remaining
- * evidence once the stanza has been committed away.
+ * name is only a path by default convention. Order is the store's OWN
+ * `core.worktree` first, and only if it declares none, the `.gitmodules` stanza
+ * and then the conventional name.
+ *
+ * `core.worktree` goes first because it is the only claim the store itself
+ * makes — everything else is a claim ABOUT it. A stale stanza
+ * (`submodule.logical-name.path = probe`) otherwise binds the store to a path
+ * the index never vouched for while the real checkout at `vendor/lib` is never
+ * inspected: the same fail-open by another route, `.gitmodules` deciding roster
+ * membership.
+ *
+ * A FAILED read is not evidence of anything, and must never fall through to the
+ * conventional name: for a store whose stanza, index entry and HEAD entry are
+ * all gone, that binds `modules/<logical-name>` to a phantom checkout path, and
+ * the real checkout's dirty files are then never looked at while the HEAD and
+ * reflog probes go on succeeding against the store. Hence the discriminated
+ * result — the caller turns every non-`bound` answer into `incomplete`, and a
+ * `conflict` (the store and `.gitmodules` naming different checkouts) with it.
  */
+type ModuleBinding =
+  | { kind: "bound"; checkoutPath: string; conflict?: string }
+  | { kind: "unbound"; reason: string; error?: unknown };
+
 async function resolveModuleCheckoutPath(
   git: SimpleGit,
   root: string,
   module: ScannedModule,
   stanzas: Map<string, GitmodulesStanza>,
-  knownPaths: ReadonlySet<string>,
   timeoutMs: number
-): Promise<string | null> {
-  const configured = toRosterPath(stanzas.get(module.name)?.path);
-  if (configured) return configured;
-
-  const asName = toRosterPath(module.name);
-  if (asName && knownPaths.has(asName)) return asName;
-
+): Promise<ModuleBinding> {
+  let declared: string | null;
   try {
-    const config = parseCoreWorktree(
+    declared = parseCoreWorktree(
       await runGit(
         git,
-        ["config", "-f", path.join(module.gitDir, "config"), "-z", "--list"],
+        // `--includes` because git resolves this config the same way; without it
+        // a `core.worktree` reached through `include.path` reads as absent and
+        // the conventional-name fallback binds a checkout git does not use.
+        ["config", "-f", path.join(module.gitDir, "config"), "-z", "--includes", "--list"],
         timeoutMs
       )
     );
-    if (config) {
-      const resolved = path.resolve(module.gitDir, config);
-      const relative = path.relative(root, resolved);
-      const bound = toRosterPath(relative.split(path.sep).join("/"));
-      if (bound) return bound;
-    }
-  } catch {
-    // Fall through to the conventional name below.
+  } catch (error) {
+    return { kind: "unbound", reason: "core.worktree could not be read", error };
   }
 
-  return asName;
+  const stanzaPath = toRosterPath(stanzas.get(module.name)?.path);
+
+  if (declared !== null) {
+    const resolved = path.resolve(module.gitDir, declared);
+    const relative = path.relative(root, resolved).split(path.sep).join("/");
+    const bound = toRosterPath(relative);
+    if (!bound) {
+      return { kind: "unbound", reason: `core.worktree points outside the worktree (${declared})` };
+    }
+    return {
+      kind: "bound",
+      checkoutPath: bound,
+      ...(stanzaPath && stanzaPath !== bound
+        ? { conflict: `.gitmodules says ${stanzaPath}, the store says ${bound}` }
+        : {}),
+    };
+  }
+
+  // Only here — with a SUCCESSFUL read establishing that the store declares no
+  // checkout of its own — are second-hand claims about it a safe answer.
+  if (stanzaPath) return { kind: "bound", checkoutPath: stanzaPath };
+  const asName = toRosterPath(module.name);
+  if (asName) return { kind: "bound", checkoutPath: asName };
+  return { kind: "unbound", reason: "no checkout path could be established" };
 }
 
+/**
+ * `core.worktree` as GIT would resolve it: the LAST occurrence wins for a
+ * single-valued key, so taking the first would bind the store to a checkout git
+ * itself does not use.
+ */
 function parseCoreWorktree(stdout: string): string | null {
-  for (const record of stdout.split("\0")) {
+  let value: string | null = null;
+  for (const record of splitNulRecords(stdout, "config")) {
     const newline = record.indexOf("\n");
+    // A valueless key is emitted bare; `core.worktree` is never one.
     if (newline === -1) continue;
     if (record.slice(0, newline).toLowerCase() !== "core.worktree") continue;
-    return record.slice(newline + 1) || null;
+    value = record.slice(newline + 1);
   }
-  return null;
+  return value ? value : null;
 }
 
 /**
@@ -890,18 +1147,78 @@ function parseCoreWorktree(stdout: string): string | null {
  * inside the worktree. A `.gitmodules` stanza is tracked content, so
  * `path = .` or `path = ../../other` would otherwise point the inventory at the
  * superproject or an unrelated repository.
+ *
+ * Validation assumes BOTH separator vocabularies regardless of host. `path` here
+ * is host-agnostic, and `path.win32.resolve("C:\\repo\\wt", "..\\..\\outside")`
+ * escapes to `C:\outside` — so a value that traverses under EITHER
+ * interpretation is rejected, even though only one of them can be true at a
+ * time. The returned path still splits on `/` alone: git writes `/` in
+ * `.gitmodules`, and a backslash is a legal character in a POSIX filename.
  */
-function toRosterPath(value: string | undefined): string | null {
-  if (!value) return null;
-  // Deliberately no backslash translation: git writes `/` in `.gitmodules`, and
-  // a backslash is a legal character in a POSIX filename.
+export function toRosterPath(value: string | undefined): string | null {
+  if (!value || value.includes("\0")) return null;
   const trimmed = value.replace(/\/+$/, "");
-  if (!trimmed || trimmed === "." || path.isAbsolute(trimmed) || /^[a-zA-Z]:/.test(trimmed)) {
+  if (!trimmed || trimmed === ".") return null;
+  if (path.posix.isAbsolute(trimmed) || path.win32.isAbsolute(trimmed)) return null;
+  // `C:foo` is drive-RELATIVE rather than absolute, and still leaves the tree.
+  if (/^[a-zA-Z]:/.test(trimmed)) return null;
+  if (trimmed.split(/[/\\]/).some((segment) => segment === "..")) return null;
+  const segments = trimmed.split("/").filter((segment) => segment !== "." && segment !== "");
+  if (segments.length === 0) return null;
+  return segments.join("/");
+}
+
+/**
+ * Where a roster path's checkout directory actually lands on this host.
+ *
+ * `toRosterPath` only guarantees lexical containment; a symlink or junction
+ * anywhere along the path defeats that at resolve time. `realpath` is the only
+ * answer that survives it, and "cannot tell" is answered as `unknown` so the
+ * caller fails closed rather than probing a directory it has not contained.
+ */
+async function classifyCheckout(
+  realRoot: string | null,
+  checkoutDir: string
+): Promise<"contained" | "absent" | "escaped" | "unknown"> {
+  if (!realRoot) return "unknown";
+  let resolved: string | null;
+  try {
+    resolved = await realpathOrMissing(checkoutDir);
+  } catch {
+    return "unknown";
+  }
+  if (resolved === null) return "absent";
+  return resolved.startsWith(realRoot + path.sep) ? "contained" : "escaped";
+}
+
+/**
+ * Every file under `dir`, repo-relative, up to `limit`.
+ *
+ * Symlinks are listed but never followed — a link out of the checkout is one
+ * file the delete removes, not a directory tree to descend into and report.
+ * Returns null when any part of the walk could not be completed.
+ */
+async function listCheckoutFiles(dir: string, limit: number): Promise<string[] | null> {
+  const files: string[] = [];
+  const walk = async (current: string, relative: string): Promise<void> => {
+    const dirents = await withTimeout(
+      readdir(current, { withFileTypes: true }),
+      FS_PROBE_TIMEOUT_MS,
+      `readdir timed out: ${current}`
+    );
+    for (const dirent of dirents) {
+      if (files.length >= limit) return;
+      const childRelative = relative ? `${relative}/${dirent.name}` : dirent.name;
+      if (dirent.isDirectory()) await walk(path.join(current, dirent.name), childRelative);
+      else files.push(childRelative);
+    }
+  };
+  try {
+    if (limit > 0) await walk(dir, "");
+    return files;
+  } catch {
     return null;
   }
-  const segments = trimmed.split("/").filter((segment) => segment !== "." && segment !== "");
-  if (segments.length === 0 || segments.includes("..")) return null;
-  return segments.join("/");
 }
 
 function clampCount(value: number | undefined, fallback: number, min: number): number {
@@ -913,25 +1230,36 @@ function clampCount(value: number | undefined, fallback: number, min: number): n
  * `gitdir:` target for a linked one. Deliberately does NOT follow `commondir`:
  * the modules that a linked worktree owns live under its per-worktree gitdir,
  * and that is the directory `git worktree remove` gates on.
+ *
+ * `null` means there is no `.git` here at all. A `.git` that exists but does not
+ * lead anywhere THROWS instead: answering `null` would leave the caller's
+ * `hasModulesDir` reading `false`, which is a definite "this worktree owns no
+ * modules" drawn from a probe that established nothing.
  */
 async function resolveWorktreeGitDir(root: string): Promise<string | null> {
   const dotGit = path.join(root, ".git");
   const info = await statOrMissing(dotGit);
   if (!info) return null;
   if (info.isDirectory()) return dotGit;
-  if (!info.isFile()) return null;
+  if (!info.isFile()) throw new Error(`${dotGit} is neither a file nor a directory`);
   const contents = await readFileOrMissing(dotGit);
   const match = contents?.match(/^gitdir:\s*(.+?)\s*$/m);
-  return match ? path.resolve(root, match[1]) : null;
+  if (!match) throw new Error(`${dotGit} is not a gitdir pointer`);
+  return path.resolve(root, match[1]);
 }
 
 /**
  * Every module git directory under `<worktree gitdir>/modules`.
  *
- * A module gitdir is identified by holding a `HEAD`; descent stops there, so a
- * nested submodule's own `modules/` subtree is not reported (depth 1 only).
- * Returns null when any part of the scan could not be completed — a partial
- * scan must not be mistaken for an empty one.
+ * Descent stops at a repository, so a nested submodule's own `modules/` subtree
+ * is not reported (depth 1 only). Returns null when any part of the scan could
+ * not be completed — a partial scan must not be mistaken for an empty one.
+ *
+ * Identification deliberately does NOT rest on `HEAD` alone. `--name` puts
+ * modules under namespace directories, so anything without a `HEAD` used to be
+ * descended into as one — and an orphaned store that still holds `objects` and
+ * reflogs but has lost its `HEAD` then simply vanished, taking its commits with
+ * the delete while the inventory came back empty and complete.
  */
 async function collectModuleGitDirs(modulesDir: string): Promise<ScannedModule[] | null> {
   const found: ScannedModule[] = [];
@@ -945,11 +1273,21 @@ async function collectModuleGitDirs(modulesDir: string): Promise<ScannedModule[]
       if (!dirent.isDirectory()) continue;
       const child = path.join(dir, dirent.name);
       const childRelative = relative ? `${relative}/${dirent.name}` : dirent.name;
-      if (await isFile(path.join(child, "HEAD"))) {
-        found.push({ name: childRelative, gitDir: child });
+      const children = await withTimeout(
+        readdir(child, { withFileTypes: true }),
+        FS_PROBE_TIMEOUT_MS,
+        `readdir timed out: ${child}`
+      );
+      const shape = classifyRepositoryShape(children);
+      if (shape === "namespace") {
+        await walk(child, childRelative);
         continue;
       }
-      await walk(child, childRelative);
+      found.push({
+        name: childRelative,
+        gitDir: child,
+        ...(shape === "malformed" ? { malformed: true } : {}),
+      });
     }
   };
   try {
@@ -958,6 +1296,27 @@ async function collectModuleGitDirs(modulesDir: string): Promise<ScannedModule[]
   } catch {
     return null;
   }
+}
+
+/**
+ * Whether a directory under `modules/` is a repository, a wrecked repository,
+ * or a namespace directory holding other modules.
+ *
+ * A namespace directory contains nothing but module directories, so `config`
+ * (a file) can never appear in one and `objects`/`refs` only could if a
+ * submodule were literally named `<namespace>/objects`. That case is reported
+ * as malformed rather than descended into, which loses a name but fails closed.
+ */
+function classifyRepositoryShape(children: Dirent[]): "repository" | "malformed" | "namespace" {
+  let skeleton = false;
+  for (const child of children) {
+    if (child.name === "HEAD" && child.isFile()) return "repository";
+    if (child.name === "config" && child.isFile()) skeleton = true;
+    else if ((child.name === "objects" || child.name === "refs") && child.isDirectory()) {
+      skeleton = true;
+    }
+  }
+  return skeleton ? "malformed" : "namespace";
 }
 
 async function runGit(git: SimpleGit, args: string[], timeoutMs: number): Promise<string> {
@@ -984,6 +1343,19 @@ async function readFileOrMissing(target: string): Promise<string | null> {
       readFile(target, "utf-8"),
       FS_PROBE_TIMEOUT_MS,
       `readFile timed out: ${target}`
+    );
+  } catch (error) {
+    if (isMissingError(error)) return null;
+    throw error;
+  }
+}
+
+async function realpathOrMissing(target: string): Promise<string | null> {
+  try {
+    return await withTimeout(
+      realpath(target),
+      FS_PROBE_TIMEOUT_MS,
+      `realpath timed out: ${target}`
     );
   } catch (error) {
     if (isMissingError(error)) return null;

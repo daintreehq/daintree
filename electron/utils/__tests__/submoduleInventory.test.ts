@@ -1,15 +1,26 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  MalformedGitOutputError,
   buildSubmoduleDeleteRisk,
   parseGitmodulesConfig,
   parseIndexGitlinks,
   parseSubmoduleSubStates,
   parseTreeGitlinks,
   resolveModuleGitDir,
+  toRosterPath,
 } from "../submoduleInventory.js";
 
 const NUL = "\0";
@@ -47,14 +58,32 @@ describe("parseIndexGitlinks", () => {
     expect(parseIndexGitlinks(stdout)[0].path).toBe(nasty);
   });
 
-  it("ignores malformed records rather than emitting partial entries", () => {
-    const stdout = framed(
+  it("rejects the whole listing rather than emitting a short roster", () => {
+    // Skipping a record it cannot read would hand the caller a roster that is
+    // silently missing a submodule, which is indistinguishable from a
+    // repository that has fewer. The roster is the authority for everything
+    // downstream, so an unreadable record has to reject the listing outright.
+    const good = "160000 f1d8402c6bb2266e199a4d99159900189160ddea 0\tvendor/ok";
+    for (const bad of [
       "160000 f1d8402c6bb2266e199a4d99159900189160ddea 0",
       "160000 f1d8402c6bb2266e199a4d99159900189160ddea 9\tvendor/bad-stage",
       "160000 f1d8402c6bb2266e199a4d99159900189160ddea 0\t",
-      "160000 f1d8402c6bb2266e199a4d99159900189160ddea 0\tvendor/ok"
-    );
-    expect(parseIndexGitlinks(stdout).map((entry) => entry.path)).toEqual(["vendor/ok"]);
+      "160000 not-an-oid 0\tvendor/bad-oid",
+      "16000 f1d8402c6bb2266e199a4d99159900189160ddea 0\tvendor/bad-mode",
+    ]) {
+      expect(() => parseIndexGitlinks(framed(bad, good))).toThrow(MalformedGitOutputError);
+    }
+  });
+
+  it("rejects output that was cut short mid-record", () => {
+    const whole = framed("160000 f1d8402c6bb2266e199a4d99159900189160ddea 0\tvendor/ok");
+    expect(parseIndexGitlinks(whole)).toHaveLength(1);
+    expect(() => parseIndexGitlinks(whole.slice(0, -1))).toThrow(MalformedGitOutputError);
+    expect(() => parseIndexGitlinks(`${whole}\0`)).toThrow(MalformedGitOutputError);
+  });
+
+  it("treats empty output as an empty listing, not a failure", () => {
+    expect(parseIndexGitlinks("")).toEqual([]);
   });
 });
 
@@ -123,9 +152,38 @@ describe("parseSubmoduleSubStates", () => {
     expect(states.get("vendor/lib")?.commitChanged).toBe(true);
   });
 
-  it("does not let a malformed rename record swallow the record behind it", () => {
+  it("rejects a malformed rename record instead of parsing on past it", () => {
+    // A `2` record's framing makes position state: its origin path is a second
+    // NUL token. Once one record is unreadable, every record's identity after
+    // it is a guess — and a guessed-short list of at-risk files reads exactly
+    // like a clean one, so the whole output has to be rejected.
     const stdout = framed("2 truncated", `1 .M S.M. 160000 160000 160000 ${oid} ${oid} vendor/lib`);
-    expect([...parseSubmoduleSubStates(stdout).keys()]).toEqual(["vendor/lib"]);
+    expect(() => parseSubmoduleSubStates(stdout)).toThrow(MalformedGitOutputError);
+  });
+
+  it("rejects a rename record whose origin path never arrives", () => {
+    // The `2` header parses cleanly and sits at the buffer edge: the origin
+    // token it promises is simply not there, which means the output was cut.
+    const stdout = framed(`2 R. N... 100644 100644 100644 ${oid} ${oid} R100 renamed`);
+    expect(() => parseSubmoduleSubStates(stdout)).toThrow(/origin path/);
+
+    // ...and with the origin present it parses, so the rejection above is
+    // about the missing token and not about the header.
+    const whole = framed(`2 R. N... 100644 100644 100644 ${oid} ${oid} R100 renamed`, "p.txt");
+    expect(parseSubmoduleSubStates(whole).size).toBe(0);
+  });
+
+  it("rejects output that does not end in NUL", () => {
+    const whole = framed(`1 .M S.M. 160000 160000 160000 ${oid} ${oid} vendor/lib`);
+    expect(parseSubmoduleSubStates(whole).size).toBe(1);
+    expect(() => parseSubmoduleSubStates(whole.slice(0, -1))).toThrow(MalformedGitOutputError);
+  });
+
+  it("rejects a record kind and a sub-state field it does not recognise", () => {
+    expect(() => parseSubmoduleSubStates(framed("x junk record"))).toThrow(/unknown record kind/);
+    expect(() =>
+      parseSubmoduleSubStates(framed(`1 .M SXYZ 160000 160000 160000 ${oid} ${oid} vendor/lib`))
+    ).toThrow(/sub-state/);
   });
 
   it("reads a renamed submodule's own sub-state and skips its origin path", () => {
@@ -193,6 +251,51 @@ describe("parseGitmodulesConfig", () => {
   it("keeps a multi-line value whole", () => {
     const stdout = framed("submodule.x.url\nline one\nline two");
     expect(parseGitmodulesConfig(stdout).get("x")?.url).toBe("line one\nline two");
+  });
+
+  it("rejects slipped framing rather than returning a short stanza map", () => {
+    const whole = framed("submodule.x.url\n../sub");
+    expect(parseGitmodulesConfig(whole).size).toBe(1);
+    expect(() => parseGitmodulesConfig(whole.slice(0, -1))).toThrow(MalformedGitOutputError);
+    // Every key git emits is at least `<section>.<name>`.
+    expect(() => parseGitmodulesConfig(framed("bareword\nvalue"))).toThrow(/unreadable key/);
+  });
+});
+
+describe("toRosterPath", () => {
+  it("keeps a relative path inside the worktree", () => {
+    expect(toRosterPath("vendor/lib")).toBe("vendor/lib");
+    expect(toRosterPath("vendor/lib/")).toBe("vendor/lib");
+    expect(toRosterPath("./vendor//lib")).toBe("vendor/lib");
+  });
+
+  it("rejects traversal under BOTH separator vocabularies", () => {
+    // `path.win32.resolve("C:\\repo\\wt", "..\\..\\outside")` escapes to
+    // `C:\outside`, so a backslash-separated traversal has to be rejected even
+    // though the returned path still splits on `/` alone.
+    for (const escape of [
+      "..",
+      "../../outside",
+      "vendor/../../outside",
+      "..\\..\\outside",
+      "vendor\\..\\..\\outside",
+    ]) {
+      expect(toRosterPath(escape)).toBeNull();
+    }
+    // A backslash that is not traversal stays a legal POSIX filename.
+    expect(toRosterPath("ven\\dor")).toBe("ven\\dor");
+  });
+
+  it("rejects absolute, drive-relative and UNC paths", () => {
+    for (const absolute of ["/etc", "C:\\Windows", "c:relative", "\\\\server\\share", "\\rooted"]) {
+      expect(toRosterPath(absolute)).toBeNull();
+    }
+  });
+
+  it("rejects the worktree root itself and empty values", () => {
+    for (const value of [".", "./", "", undefined, "a\0b"]) {
+      expect(toRosterPath(value)).toBeNull();
+    }
   });
 });
 
@@ -479,6 +582,288 @@ describe("buildSubmoduleDeleteRisk", () => {
     expect(risk.entries[0].hasModifiedContent).toBe(true);
     expect(risk.dirtyFiles).toContain("vendor/lib/a.txt");
     expect(risk.untrackedFiles).toContain("vendor/lib/hidden.txt");
+  });
+
+  it("enumerates a nonempty checkout that carries no git metadata", async () => {
+    const stray = path.join(tmp, "wt-stray");
+    git(superRepo, "worktree", "add", "-q", stray, "-b", "stray");
+    const checkout = path.join(stray, "vendor", "lib");
+    mkdirSync(path.join(checkout, "src"), { recursive: true });
+    writeFileSync(path.join(checkout, "src", "main.c"), "int main(){}\n");
+
+    // The parent cannot rescue this: an uninitialized submodule is invisible to
+    // `git status`, so if the inventory skips file inspection here there is no
+    // second source that would report the content.
+    expect(git(stray, "status", "--porcelain", "--ignore-submodules=none").trim()).toBe("");
+
+    const risk = await buildSubmoduleDeleteRisk(stray);
+    expect(risk.entries.map((entry) => entry.state)).toEqual(["uninitialized"]);
+    expect(risk.untrackedFiles).toContain("vendor/lib/src/main.c");
+    expect(risk.entries[0].hasUntrackedContent).toBe(true);
+  });
+
+  it("fails closed on a dangling gitdir pointer rather than reporting an empty risk", async () => {
+    const broken = path.join(tmp, "wt-broken");
+    git(superRepo, "worktree", "add", "-q", broken, "-b", "broken");
+    const checkout = path.join(broken, "vendor", "lib");
+    mkdirSync(checkout, { recursive: true });
+    writeFileSync(path.join(checkout, "work.txt"), "unsaved\n");
+    writeFileSync(path.join(checkout, ".git"), "gitdir: ../../.git/modules/gone\n");
+
+    const risk = await buildSubmoduleDeleteRisk(broken);
+    expect(risk.incomplete).toBe(true);
+    expect(risk.untrackedFiles).toContain("vendor/lib/work.txt");
+  });
+
+  // A named pipe where `.git` belongs is the one broken shape the parent's own
+  // `git status` tolerates in silence, which makes it the only fixture where
+  // "metadata we could not read" has to carry `incomplete` on its own. mkfifo
+  // has no Windows equivalent; CI is Ubuntu.
+  it.skipIf(process.platform === "win32")(
+    "does not read unreadable metadata as an uninitialized submodule",
+    async () => {
+      const special = path.join(tmp, "wt-special");
+      git(superRepo, "worktree", "add", "-q", special, "-b", "special");
+      const checkout = path.join(special, "vendor", "lib");
+      mkdirSync(checkout, { recursive: true });
+      writeFileSync(path.join(checkout, "work.txt"), "unsaved\n");
+      execFileSync("mkfifo", [path.join(checkout, ".git")]);
+
+      // git says nothing at all about this submodule, so a silent
+      // `uninitialized` here is the last word anyone gets.
+      expect(git(special, "status", "--porcelain", "--ignore-submodules=none").trim()).toBe("");
+
+      const risk = await buildSubmoduleDeleteRisk(special);
+      expect(risk.incomplete).toBe(true);
+      expect(risk.untrackedFiles).toContain("vendor/lib/work.txt");
+    }
+  );
+
+  it("does not let a .gitmodules stanza alone put a path on the roster", async () => {
+    const stanzaOnly = path.join(tmp, "wt-stanza");
+    git(superRepo, "worktree", "add", "-q", stanzaOnly, "-b", "stanza-only");
+    const probe = path.join(stanzaOnly, "probe");
+    mkdirSync(probe);
+    writeFileSync(path.join(probe, "notes.txt"), "not a submodule\n");
+    writeFileSync(
+      path.join(stanzaOnly, ".gitmodules"),
+      '[submodule "probe"]\n\tpath = probe\n\turl = ../sub\n'
+    );
+
+    // `.gitmodules` is tracked, attacker-influenceable content. The index never
+    // called `probe` a submodule, so nothing under it is stat'ed or read.
+    const risk = await buildSubmoduleDeleteRisk(stanzaOnly);
+    expect(risk.entries.map((entry) => entry.path)).toEqual(["vendor/lib"]);
+    expect(risk.untrackedFiles.some((file) => file.startsWith("probe/"))).toBe(false);
+    expect(risk.dirtyFiles.some((file) => file.startsWith("probe/"))).toBe(false);
+  });
+
+  it("refuses to inspect a checkout that resolves outside the worktree", async () => {
+    const linked = path.join(tmp, "wt-symlink");
+    git(superRepo, "worktree", "add", "-q", linked, "-b", "symlink");
+
+    const outside = path.join(tmp, "outside-repo");
+    mkdirSync(outside);
+    git(outside, "init", "-q", "-b", "main", ".");
+    writeFileSync(path.join(outside, "private.txt"), "private\n");
+    git(outside, "add", ".");
+    git(outside, "commit", "-qm", "private work nobody asked about");
+    writeFileSync(path.join(outside, "private.txt"), "dirtied\n");
+
+    rmSync(path.join(linked, "vendor", "lib"), { recursive: true, force: true });
+    symlinkSync(outside, path.join(linked, "vendor", "lib"), "dir");
+
+    // Lexical containment says `vendor/lib` is inside; the symlink says
+    // otherwise, and reporting an unrelated repository's commit subjects as
+    // this worktree's at-risk work is both wrong and a disclosure.
+    const risk = await buildSubmoduleDeleteRisk(linked);
+    expect(risk.incomplete).toBe(true);
+    expect(risk.dirtyFiles).toEqual([]);
+    expect(risk.atRiskCommits.map((commit) => commit.subject)).not.toContain(
+      "private work nobody asked about"
+    );
+  });
+
+  it("inventories every store that claims one checkout, not just the first", async () => {
+    const collide = path.join(tmp, "wt-collision");
+    git(superRepo, "worktree", "add", "-q", collide, "-b", "collision");
+    git(collide, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q");
+    expect((await buildSubmoduleDeleteRisk(collide)).incomplete).toBe(false);
+
+    const decoyWork = path.join(tmp, "decoy-work");
+    mkdirSync(decoyWork);
+    git(decoyWork, "init", "-q", "-b", "main", ".");
+    writeFileSync(path.join(decoyWork, "d.txt"), "d\n");
+    git(decoyWork, "add", ".");
+    git(decoyWork, "commit", "-qm", "decoy store commit");
+
+    // A second worktree-owned store bound to the SAME checkout path.
+    // `worktree remove` deletes both, so keying the inventory on the checkout
+    // path alone silently drops one of them and its commits with it.
+    const gitDir = git(collide, "rev-parse", "--absolute-git-dir").trim();
+    const decoyGitDir = path.join(gitDir, "modules", "decoy");
+    cpSync(path.join(decoyWork, ".git"), decoyGitDir, { recursive: true });
+    git(
+      tmp,
+      "config",
+      "-f",
+      path.join(decoyGitDir, "config"),
+      "core.worktree",
+      path.join(collide, "vendor", "lib")
+    );
+
+    const risk = await buildSubmoduleDeleteRisk(collide);
+    expect(risk.incomplete).toBe(true);
+    expect(risk.atRiskCommits.map((commit) => commit.subject)).toContain("decoy store commit");
+  });
+
+  it("does not fall back to the conventional name when the binding read fails", async () => {
+    const opaque = path.join(tmp, "opaque-super");
+    mkdirSync(opaque);
+    git(opaque, "init", "-q", "-b", "main", ".");
+    writeFileSync(path.join(opaque, "p.txt"), "p\n");
+    git(opaque, "add", ".");
+    git(opaque, "commit", "-qm", "init");
+    git(
+      opaque,
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "-q",
+      "--name",
+      "logical-name",
+      path.join(tmp, "sub"),
+      "vendor/lib"
+    );
+    git(opaque, "commit", "-qm", "add named submodule");
+    git(opaque, "rm", "-q", "--cached", "vendor/lib");
+    writeFileSync(path.join(opaque, ".gitmodules"), "");
+    git(opaque, "add", ".gitmodules");
+    git(opaque, "commit", "-qm", "drop stanza");
+    writeFileSync(path.join(opaque, "vendor", "lib", "a.txt"), "work that would be lost\n");
+
+    // A config file that cannot be read at all — the shape a transient failure
+    // takes. `logical-name` is a module DIRECTORY name, never a repo path, so
+    // binding to it strands the real checkout at vendor/lib uninspected while
+    // the HEAD and reflog probes go on succeeding against the store.
+    const storeConfig = path.join(opaque, ".git", "modules", "logical-name", "config");
+    rmSync(storeConfig);
+    mkdirSync(storeConfig);
+
+    const risk = await buildSubmoduleDeleteRisk(opaque);
+    expect(risk.incomplete).toBe(true);
+    expect(risk.entries.map((entry) => entry.path)).not.toContain("logical-name");
+  });
+
+  /**
+   * A superproject whose only surviving evidence of its submodule is the module
+   * store itself: custom `--name`, gitlink dropped from the index and HEAD.
+   * Everything about which checkout it belongs to then rests on the binding.
+   */
+  function buildOrphanedStoreRepo(name: string): { root: string; storeConfig: string } {
+    const root = path.join(tmp, name);
+    mkdirSync(root);
+    git(root, "init", "-q", "-b", "main", ".");
+    writeFileSync(path.join(root, "p.txt"), "p\n");
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "init");
+    git(
+      root,
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "-q",
+      "--name",
+      "logical-name",
+      path.join(tmp, "sub"),
+      "vendor/lib"
+    );
+    git(root, "commit", "-qm", "add named submodule");
+    git(root, "rm", "-q", "--cached", "vendor/lib");
+    writeFileSync(path.join(root, ".gitmodules"), "");
+    git(root, "add", ".gitmodules");
+    git(root, "commit", "-qm", "drop stanza");
+    return { root, storeConfig: path.join(root, ".git", "modules", "logical-name", "config") };
+  }
+
+  it("binds a store by its own core.worktree, not by a stale stanza", async () => {
+    const { root } = buildOrphanedStoreRepo("stale-super");
+    writeFileSync(path.join(root, "vendor", "lib", "a.txt"), "work at risk\n");
+    // A stanza is a claim ABOUT the store; core.worktree is the store's own.
+    // Letting the stanza win rebuilds the fail-open the roster change closed —
+    // `.gitmodules` deciding which path gets inspected.
+    writeFileSync(
+      path.join(root, ".gitmodules"),
+      '[submodule "logical-name"]\n\tpath = probe\n\turl = ../sub\n'
+    );
+
+    const risk = await buildSubmoduleDeleteRisk(root);
+    expect(risk.entries.map((entry) => entry.path)).toEqual(["vendor/lib"]);
+    expect(risk.dirtyFiles).toContain("vendor/lib/a.txt");
+    // The store and `.gitmodules` name different checkouts: a disagreement the
+    // gate cannot adjudicate, so it fails closed on top of binding correctly.
+    expect(risk.incomplete).toBe(true);
+  });
+
+  it("resolves a repeated core.worktree the way git does", async () => {
+    const { root, storeConfig } = buildOrphanedStoreRepo("repeated-super");
+    writeFileSync(path.join(root, "vendor", "lib", "a.txt"), "work at risk\n");
+    git(tmp, "config", "-f", storeConfig, "--unset-all", "core.worktree");
+    git(tmp, "config", "-f", storeConfig, "--add", "core.worktree", path.join(root, "decoy"));
+    git(
+      tmp,
+      "config",
+      "-f",
+      storeConfig,
+      "--add",
+      "core.worktree",
+      path.join(root, "vendor", "lib")
+    );
+    // git resolves a single-valued key to its LAST occurrence.
+    expect(git(tmp, "config", "-f", storeConfig, "--get", "core.worktree").trim()).toBe(
+      path.join(root, "vendor", "lib")
+    );
+
+    const risk = await buildSubmoduleDeleteRisk(root);
+    expect(risk.entries.map((entry) => entry.path)).toEqual(["vendor/lib"]);
+    expect(risk.dirtyFiles).toContain("vendor/lib/a.txt");
+  });
+
+  it("fails closed when a gitlink path is a regular file", async () => {
+    const typechanged = path.join(tmp, "wt-typechange");
+    git(superRepo, "worktree", "add", "-q", typechanged, "-b", "typechange");
+    rmSync(path.join(typechanged, "vendor", "lib"), { recursive: true, force: true });
+    writeFileSync(path.join(typechanged, "vendor", "lib"), "unsaved work\n");
+
+    // `<file>/.git` answers ENOTDIR, which reads as "no metadata", and the file
+    // itself is not a directory to enumerate — so both inventory branches skip
+    // it and the content would be discarded unannounced.
+    const risk = await buildSubmoduleDeleteRisk(typechanged);
+    expect(risk.incomplete).toBe(true);
+  });
+
+  it("does not lose an orphaned store that has no HEAD", async () => {
+    const ghosted = path.join(tmp, "wt-ghost");
+    git(superRepo, "worktree", "add", "-q", ghosted, "-b", "ghost");
+    git(ghosted, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q");
+    expect((await buildSubmoduleDeleteRisk(ghosted)).incomplete).toBe(false);
+
+    // A repository skeleton with objects and a config but no HEAD. Identifying
+    // stores by HEAD alone descended into this as a namespace directory, found
+    // nothing, and returned a clean inventory — while `worktree remove`
+    // destroys its objects exactly like a healthy store's.
+    const gitDir = git(ghosted, "rev-parse", "--absolute-git-dir").trim();
+    const ghost = path.join(gitDir, "modules", "ghost");
+    mkdirSync(path.join(ghost, "objects", "pack"), { recursive: true });
+    mkdirSync(path.join(ghost, "refs", "heads"), { recursive: true });
+    writeFileSync(
+      path.join(ghost, "config"),
+      `[core]\n\tworktree = ${path.join(ghosted, "vendor", "ghost")}\n`
+    );
+
+    expect((await buildSubmoduleDeleteRisk(ghosted)).incomplete).toBe(true);
   });
 });
 
