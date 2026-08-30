@@ -553,10 +553,28 @@ describe("WorktreeDeleteDialog — consequence list", () => {
     ).toBe(true);
     // The outcome and the guard that qualifies it are separate elements — the
     // dash that used to join them read as one sentence.
-    const guard = screen.getByText(/Fails if it has unmerged changes/);
+    const guard = screen.getByText(/Kept instead if it isn't fully merged/);
     const outcome = guard.previousSibling;
     expect(outcome?.textContent).toContain(worktree.branch);
     expect(guard.textContent).toMatch(/^\s/);
+  });
+
+  it("keeps the branch guard truthful when force delete is on", () => {
+    // The regression this locks: `force` used to upgrade the backend's
+    // `branch -d` to `-D`, so this row promised the branch would survive an
+    // unmerged state while the delete discarded its commits. Force is now
+    // about the working tree only, and the row must read the same either way.
+    const worktree = makeWorktree(makeChanges([{ path: "src/a.ts", status: "modified" }]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /delete branch/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+
+    const rows = within(screen.getByTestId("delete-worktree-consequences")).getAllByRole(
+      "listitem"
+    );
+    const branchRow = rows.find((row) => (row.textContent ?? "").startsWith("Branch feature/test"));
+    expect(branchRow?.textContent).toContain("Kept instead if it isn't fully merged");
   });
 
   it("does not offer a branch row for a protected branch", () => {

@@ -633,88 +633,104 @@ describe("WorkspaceService.deleteWorktree", () => {
     );
   });
 
-  it("uses 'branch -D' when force=true and deleteBranch=true", async () => {
-    const fsModule = await import("fs/promises");
-    vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
-      if (n(p as string) === "/test/worktree") return undefined;
-      throw new Error("ENOENT");
+  // `force` and `forceDeleteBranch` are two consents. `force` covers the
+  // working tree; only `forceDeleteBranch` may reach for `branch -D`. They
+  // used to be one boolean, so a user who agreed to discard uncommitted files
+  // also, unannounced, discarded commits no other branch held.
+  describe("branch deletion is a consent of its own", () => {
+    function mockUnmergedBranch() {
+      mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
+        if (args[0] === "branch" && args[1] === "-d") {
+          throw new Error("error: the branch 'feature/test' is not fully merged.");
+        }
+        return undefined;
+      });
+    }
+
+    async function mockWorktreePathPresent() {
+      const fsModule = await import("fs/promises");
+      vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
+        if (n(p as string) === "/test/worktree") return undefined;
+        throw new Error("ENOENT");
+      });
+    }
+
+    function branchArgs(): string[][] {
+      return mockSimpleGit.raw.mock.calls
+        .map((c) => c[0])
+        .filter((a): a is string[] => Array.isArray(a) && a[0] === "branch");
+    }
+
+    it("still uses the safe 'branch -d' when force=true", async () => {
+      await mockWorktreePathPresent();
+      createAndRegisterMonitor({ branch: "feature/test" });
+
+      await service.deleteWorktree("req-force-delete", "/test/worktree", true, true);
+
+      expect(branchArgs()).toEqual([["branch", "-d", "feature/test"]]);
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "delete-worktree-result",
+          requestId: "req-force-delete",
+          success: true,
+        })
+      );
     });
 
-    createAndRegisterMonitor({ branch: "feature/test" });
+    it("uses 'branch -D' only when forceDeleteBranch is granted", async () => {
+      await mockWorktreePathPresent();
+      mockUnmergedBranch();
+      createAndRegisterMonitor({ branch: "feature/test" });
 
-    await service.deleteWorktree("req-force-delete", "/test/worktree", true, true);
+      await service.deleteWorktree(
+        "req-force-branch",
+        "/test/worktree",
+        false,
+        true,
+        undefined,
+        false,
+        {
+          forceDeleteBranch: true,
+        }
+      );
 
-    const branchCalls = mockSimpleGit.raw.mock.calls.filter(
-      (c) => Array.isArray(c[0]) && c[0][0] === "branch"
-    );
-    expect(branchCalls.length).toBe(1);
-    expect(branchCalls[0][0]).toEqual(["branch", "-D", "feature/test"]);
-    expect(mockSendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "delete-worktree-result",
-        requestId: "req-force-delete",
-        success: true,
-      })
-    );
-  });
-
-  it("surfaces unmerged-branch error when force=false and branch is not fully merged", async () => {
-    const fsModule = await import("fs/promises");
-    vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
-      if (n(p as string) === "/test/worktree") return undefined;
-      throw new Error("ENOENT");
+      expect(branchArgs()).toEqual([["branch", "-D", "feature/test"]]);
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "delete-worktree-result",
+          requestId: "req-force-branch",
+          success: true,
+        })
+      );
     });
 
-    mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
-      if (args[0] === "branch" && args[1] === "-d") {
-        throw new Error("error: the branch 'feature/test' is not fully merged.");
+    it.each([
+      ["force=false", false],
+      ["force=true", true],
+    ])(
+      "keeps an unmerged branch when %s and reports the removal that happened",
+      async (_label, force) => {
+        await mockWorktreePathPresent();
+        mockUnmergedBranch();
+        createAndRegisterMonitor({ branch: "feature/test" });
+
+        const requestId = `req-unmerged-${force}`;
+        await service.deleteWorktree(requestId, "/test/worktree", force, true);
+
+        // Only the safe attempt is ever made — `force` must not reach for `-D`.
+        expect(branchArgs()).toEqual([["branch", "-d", "feature/test"]]);
+        // The worktree is gone by the time the branch step runs, so the error
+        // has to say so — the user cannot retry the operation as a whole. And
+        // it must not tell them to enable force, which no longer does this.
+        const result = mockSendEvent.mock.calls
+          .map((c) => c[0])
+          .find((e) => e.type === "delete-worktree-result" && e.requestId === requestId);
+        expect(result.success).toBe(false);
+        expect(result.error).toContain("Worktree removed.");
+        expect(result.error).toContain("was kept because Git reports it isn't fully merged");
+        expect(result.error).not.toContain("force");
+        expect(service["monitors"].has("/test/worktree")).toBe(false);
       }
-      return undefined;
-    });
-
-    createAndRegisterMonitor({ branch: "feature/test" });
-
-    await service.deleteWorktree("req-unmerged", "/test/worktree", false, true);
-
-    expect(mockSendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "delete-worktree-result",
-        requestId: "req-unmerged",
-        success: false,
-        error: expect.stringContaining("Enable force delete"),
-      })
-    );
-  });
-
-  it("succeeds when force=true and branch is unmerged", async () => {
-    const fsModule = await import("fs/promises");
-    vi.mocked(fsModule.access).mockImplementation(async (p: unknown) => {
-      if (n(p as string) === "/test/worktree") return undefined;
-      throw new Error("ENOENT");
-    });
-
-    mockSimpleGit.raw.mockImplementation(async (args: string[]) => {
-      if (args[0] === "branch" && args[1] === "-d") {
-        throw new Error("error: the branch 'feature/test' is not fully merged.");
-      }
-      return undefined;
-    });
-
-    createAndRegisterMonitor({ branch: "feature/test" });
-
-    await service.deleteWorktree("req-force-unmerged", "/test/worktree", true, true);
-
-    const branchCalls = mockSimpleGit.raw.mock.calls.filter(
-      (c) => Array.isArray(c[0]) && c[0][0] === "branch"
-    );
-    expect(branchCalls.length).toBe(1);
-    expect(branchCalls[0][0]).toEqual(["branch", "-D", "feature/test"]);
-    expect(mockSendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "delete-worktree-result",
-        requestId: "req-force-unmerged",
-        success: true,
-      })
     );
   });
 

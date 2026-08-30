@@ -3241,6 +3241,11 @@ export class WorkspaceService {
   async deleteWorktree(
     requestId: string,
     worktreeId: string,
+    /**
+     * Remove the working tree even though it has uncommitted changes
+     * (`worktree remove --force`). It says nothing about the branch — see
+     * `branchOptions.forceDeleteBranch`.
+     */
     force: boolean = false,
     deleteBranch: boolean = false,
     mutationId?: string,
@@ -3252,7 +3257,22 @@ export class WorkspaceService {
      * etc.) reject the renderer's `worktreePort.request("delete-worktree")`
      * instead of silently resolving to `{ ok: true }` (#8405 review #1).
      */
-    throwOnError: boolean = false
+    throwOnError: boolean = false,
+    /**
+     * The consents that are emphatically NOT `force`, in an object off the end
+     * of the positional run above: another same-typed boolean in that row is
+     * exactly how `force` came to mean both "remove the working tree anyway"
+     * and "discard commits no other branch holds".
+     *
+     * `forceDeleteBranch` selects `branch -D` over `-d`, and nothing sets it
+     * today. The delete dialog deliberately never asks for it — a D2 confirm
+     * owes a preview of the actual content it destroys and we have no listing
+     * of the commits that would go — so branch deletion is always the safe
+     * one and a not-fully-merged branch survives its worktree. The port
+     * payload already carries the field; `handleWorktreePortRequest` in
+     * `electron/workspace-host.ts` is the one hop that still has to forward it.
+     */
+    branchOptions: { forceDeleteBranch?: boolean } = {}
   ): Promise<void> {
     // Mutation-outbox replay short-circuit (#8405): a replay of an already
     // acknowledged delete must not re-run `git worktree remove` (which would
@@ -3408,31 +3428,44 @@ export class WorkspaceService {
       this.topologyWatcher.clearPending(pendingDeleteKey);
 
       if (branchToDelete && this.git) {
+        // `-d` unless the caller asked for `-D` by name. This step runs AFTER
+        // `git worktree remove` and after monitor cleanup, so every message
+        // below has to lead with the removal that already happened — the user
+        // cannot retry the whole operation, only deal with the leftover branch.
+        const forceDeleteBranch = branchOptions.forceDeleteBranch === true;
         try {
-          await this.git.raw(["branch", force ? "-D" : "-d", branchToDelete]);
+          await this.git.raw(["branch", forceDeleteBranch ? "-D" : "-d", branchToDelete]);
           console.log(
-            `[WorkspaceHost] Deleted branch: ${branchToDelete} (${force ? "force" : "safe"})`
+            `[WorkspaceHost] Deleted branch: ${branchToDelete} (${forceDeleteBranch ? "force" : "safe"})`
           );
         } catch (branchError) {
           const errorMsg = (branchError as Error).message || "";
           if (errorMsg.includes("not found")) {
             console.log(`[WorkspaceHost] Branch already deleted: ${branchToDelete}`);
           } else if (errorMsg.includes("not fully merged")) {
+            // Git's own test, stated in Git's own terms: `-d` refuses when the
+            // branch isn't fully merged into its upstream (or into HEAD when it
+            // has none). Paraphrasing that as "commits nothing else holds"
+            // overclaims — the commits may well be reachable from another
+            // branch and Git will still refuse.
             throw new Error(
-              `Branch '${branchToDelete}' has unmerged changes. Enable force delete to remove it.`,
+              `Worktree removed. Branch '${branchToDelete}' was kept because Git reports it isn't fully merged.`,
               { cause: branchError }
             );
           } else if (errorMsg.includes("checked out at") || errorMsg.includes("Cannot delete")) {
             throw new Error(
-              `Cannot delete branch '${branchToDelete}': ${errorMsg.split("\n")[0]}`,
+              `Worktree removed. Couldn't delete branch '${branchToDelete}': ${errorMsg.split("\n")[0]}`,
               {
                 cause: branchError,
               }
             );
           } else {
-            throw new Error(`Failed to delete branch '${branchToDelete}': ${errorMsg}`, {
-              cause: branchError,
-            });
+            throw new Error(
+              `Worktree removed. Couldn't delete branch '${branchToDelete}': ${errorMsg}`,
+              {
+                cause: branchError,
+              }
+            );
           }
         }
       }

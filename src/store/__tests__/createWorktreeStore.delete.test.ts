@@ -19,10 +19,17 @@ const {
   devPreviewGetByWorktreeMock,
   devPreviewStopByWorktreeMock,
 } = vi.hoisted(() => ({
-  worktreeClientDeleteMock:
-    vi.fn<
-      (id: string, force?: boolean, deleteBranch?: boolean, mutationId?: string) => Promise<void>
-    >(),
+  worktreeClientDeleteMock: vi.fn<
+    (
+      id: string,
+      options: {
+        force?: boolean;
+        deleteBranch?: boolean;
+        forceDeleteBranch?: boolean;
+        mutationId?: string;
+      }
+    ) => Promise<void>
+  >(),
   captureWorktreeTerminalSnapshotMock: vi.fn<(id: string) => unknown[]>(),
   closeTerminalsForWorktreeMock: vi.fn<(id: string) => Promise<void>>(),
   restoreClosedTerminalsMock: vi.fn<(snapshot: readonly unknown[]) => Promise<void>>(),
@@ -472,7 +479,7 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     expect(store.getState().deletingIds.has("wt-1")).toBe(false);
     expect(store.getState().worktrees.has("wt-1")).toBe(false);
 
-    rejectIpc(new Error("Branch 'feature/x' has unmerged changes"));
+    rejectIpc(new Error("Worktree removed. Couldn't delete branch 'feature/x': locked ref"));
     await flushPromises();
     await flushPromises();
 
@@ -486,12 +493,57 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
       type: string;
       title: string;
       message: string;
-      context: { worktreeId: string };
+      context: { worktreeId?: string };
     };
     expect(payload.type).toBe("error");
     expect(payload.title).toContain("branch");
-    expect(payload.message).toContain("unmerged");
-    expect(payload.context.worktreeId).toBe("wt-1");
+    expect(payload.message).toContain("Couldn't delete branch");
+    // No `worktreeId` context on this path: `notify`'s origin-surface gate
+    // treats a matching active worktree as "already visible inline" and drops
+    // the toast to inbox-only. This branch runs because the card is gone, and
+    // a ghost row keeping terminals alive still answers to the id — so the id
+    // would suppress the only surface reporting the outcome.
+    expect(payload.context.worktreeId).toBeUndefined();
+  });
+
+  it("partial-success path: a branch the backend deliberately kept is a warning, not a failed delete", async () => {
+    // `branch -d` refusing a not-fully-merged branch is the safeguard working.
+    // Reporting it as an error toast dressed a correct outcome as a fault and
+    // implied a retry that could never succeed — the worktree is already gone
+    // by the time this arrives.
+    let rejectIpc: (reason: unknown) => void = () => {};
+    worktreeClientDeleteMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectIpc = reject;
+        })
+    );
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: true, deleteBranch: true });
+    await flushPromises();
+
+    store.getState().applyRemove("wt-1", nextV());
+    rejectIpc(
+      new Error(
+        "Worktree removed. Branch 'feature/x' was kept because Git reports it isn't fully merged."
+      )
+    );
+    await flushPromises();
+    await flushPromises();
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const payload = notifyMock.mock.calls[0]![0] as {
+      type: string;
+      title: string;
+      message: string;
+    };
+    expect(payload.type).toBe("warning");
+    expect(payload.title).toBe("Branch kept");
+    // The removal that already happened has to be part of what the user reads.
+    expect(payload.message).toContain("Worktree removed.");
   });
 
   it("closeTerminalsForWorktree rejection short-circuits IPC and records the error on the card", async () => {
@@ -648,7 +700,11 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
 
       // worktree-removed arrives before the branch-delete rejection.
       store.getState().applyRemove("wt-1", nextV());
-      rejectIpc(new Error("Branch 'feature/x' has unmerged changes"));
+      rejectIpc(
+        new Error(
+          "Worktree removed. Branch 'feature/x' was kept because Git reports it isn't fully merged."
+        )
+      );
       await flushPromises();
       await flushPromises();
 

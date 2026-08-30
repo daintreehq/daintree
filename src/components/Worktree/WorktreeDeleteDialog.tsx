@@ -365,7 +365,15 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           <span className="font-medium">
             Branch <span className="font-mono break-all">{worktree.branch}</span> will be deleted
           </span>
-          <span className="ml-1 text-text-secondary"> Fails if it has unmerged changes</span>
+          {/* Says the outcome, not that "it fails". The branch delete runs
+              after the directory is already gone, so a failure here never
+              cancels the delete the user is confirming — it leaves the branch
+              behind. Force delete does not change this: the two consents are
+              separate and nothing in this dialog grants the second one, so a
+              branch Git won't delete safely survives. "Fully merged" is Git's
+              own test rather than a paraphrase — `branch -d` measures the
+              branch against its upstream (or HEAD), not against every ref. */}
+          <span className="ml-1 text-text-secondary"> Kept instead if it isn't fully merged</span>
         </>
       ),
     });
