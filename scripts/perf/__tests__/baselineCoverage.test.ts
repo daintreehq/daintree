@@ -18,7 +18,6 @@ function scenario(id: string): PerfScenario {
 }
 
 const budgetConfig: PerfBudgetConfig = {
-  criticalScenarios: ["PERF-001"],
   defaultBudget: { p95Ms: 5000, maxRegressionPct: 15 },
   scenarios: {
     "PERF-001": { p95Ms: 3500, maxRegressionPct: 15 },
@@ -29,7 +28,6 @@ const budgetConfig: PerfBudgetConfig = {
 // A config whose defaultBudget has no regression gate, so a scenario without an
 // override is genuinely not regression-gated (the merge can't reintroduce it).
 const noRegressionConfig: PerfBudgetConfig = {
-  criticalScenarios: [],
   defaultBudget: { p95Ms: 5000 },
   scenarios: {
     "PERF-200": { p95Ms: 1000 },

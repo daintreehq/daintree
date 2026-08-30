@@ -35,6 +35,25 @@ Counts are also the class that catches the bug latency benchmarks are blind to: 
 
 **Every count needs a paired correctness reading.** A dead watcher spawns nothing and scores perfectly. Scenarios carry a `*Misses` metric so a broken feature cannot be reported as a win — PERF-105's zero idle spawns is only meaningful beside `detectionMisses: 0`, which proves the edit was still detected.
 
+## Known gap: `scripts/perf` is not type-checked
+
+`npm run typecheck` covers **zero files** under `scripts/perf` — `scripts/` appears in no tsconfig's `include`. The harness is gated by execution (`npm test` and real benchmark runs) and by nothing else, so a rename can silently break a fixture and every test still passes: vitest transpiles without checking types.
+
+This is not hypothetical. Two real instances found while this directory was being reworked:
+
+- `scripts/perf/scenarios/ipc.ts` called a function that had been renamed out from under it. `npm run typecheck` passed; only a real benchmark run caught it.
+- `lib/worktreeSidebarFixture.ts` calls `svc.loadProject(requestId, repoPath)` where the signature now takes 3–6 arguments.
+
+To see the real state:
+
+```bash
+npx tsc --noEmit --strict --skipLibCheck --target ES2022 --module ESNext \
+  --moduleResolution bundler --types node --allowImportingTsExtensions \
+  --resolveJsonModule scripts/perf/run.ts
+```
+
+Wiring this into `typecheck:projects` was attempted and reverted. It surfaces roughly 30 further pre-existing errors — `migrationFixture.ts` has drifted from `StoreSchema`, `agentAnalysisSim.ts` has unguarded optionals, `archiver` has no types — and the module graph transitively pulls in `src/` and `electron/`, so the config also needs their path aliases. Closing this properly is its own piece of work.
+
 ## Entry point
 
 Every benchmark runs through one dispatcher, `scripts/perf/index.ts`, exposed as the `perf` npm script. `npm run perf list` prints the full command table; each command spawns its benchmark in its own process, so behavior matches invoking the underlying script directly. Add a benchmark by adding one entry to the `REGISTRY` in `index.ts` — nothing else changes.

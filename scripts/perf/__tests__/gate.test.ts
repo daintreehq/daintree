@@ -23,7 +23,6 @@ function makeParams(overrides: Partial<GateParams> = {}): GateParams {
     metricStats: {},
     budget: { p95Ms: 1000, maxRegressionPct: 15 },
     baselineP95: undefined,
-    isCritical: false,
     hasBaselineFile: true,
     ...overrides,
   };
@@ -264,7 +263,6 @@ describe("evaluateScenarioBudget — Bug 1: sub-floor critical scenarios", () =>
       makeParams({
         p95Ms: baselineP95 + ABSOLUTE_REGRESSION_MS_FLOOR + 0.5,
         baselineP95,
-        isCritical: true,
       })
     );
     expect(result.outsideReference).toBe(true);
@@ -275,34 +273,31 @@ describe("evaluateScenarioBudget — Bug 1: sub-floor critical scenarios", () =>
       makeParams({
         p95Ms: baselineP95 + ABSOLUTE_REGRESSION_MS_FLOOR, // delta == floor, strict >
         baselineP95,
-        isCritical: true,
       })
     );
     expect(result.outsideReference).toBe(false);
   });
 
-  it("flags a sub-floor delta the same way whether or not the scenario is critical", () => {
-    // Behaviour deliberately changed. This branch used to annotate only
-    // `criticalScenarios` and stay silent for everything else, which left about
-    // a third of the suite reporting no number at all. Criticality decided who
-    // got BLOCKED, and nothing blocks any more — so it no longer decides who
-    // gets MEASURED. A +3ms move on a sub-millisecond baseline is a multiple-x
-    // change and is exactly what someone optimising needs to see.
-    const overFloor = { p95Ms: baselineP95 + ABSOLUTE_REGRESSION_MS_FLOOR + 10, baselineP95 };
-    const critical = evaluateScenarioBudget(makeParams({ ...overFloor, isCritical: true }));
-    const ordinary = evaluateScenarioBudget(makeParams({ ...overFloor, isCritical: false }));
+  it("flags a sub-floor delta past the absolute floor", () => {
+    // Behaviour deliberately changed. This branch used to annotate only the
+    // scenarios listed in `criticalScenarios` and stay silent for everything
+    // else, which left about a third of the suite reporting no number at all.
+    // That list decided who could be BLOCKED, and nothing blocks any more — so
+    // it no longer decides who gets MEASURED, and it has been removed outright.
+    // A +3ms move on a sub-millisecond baseline is a multiple-x change and is
+    // exactly what someone optimising needs to see.
+    const result = evaluateScenarioBudget(
+      makeParams({ p95Ms: baselineP95 + ABSOLUTE_REGRESSION_MS_FLOOR + 10, baselineP95 })
+    );
 
-    expect(ordinary.outsideReference).toBe(true);
-    expect(ordinary.outsideReference).toBe(critical.outsideReference);
-    expect(ordinary.reasons.join()).toBe(critical.reasons.join());
+    expect(result.outsideReference).toBe(true);
+    expect(result.reasons.join()).toContain("noise floor");
   });
 
   it("reports the absolute delta even when it is within the floor", () => {
     // The silent case is the one that used to report nothing. A number that has
     // not moved much is still a number worth printing.
-    const result = evaluateScenarioBudget(
-      makeParams({ p95Ms: baselineP95 + 0.2, baselineP95, isCritical: false })
-    );
+    const result = evaluateScenarioBudget(makeParams({ p95Ms: baselineP95 + 0.2, baselineP95 }));
     expect(result.outsideReference).toBe(false);
     expect(result.reasons.join()).toContain("sub-noise-floor");
   });
@@ -310,30 +305,26 @@ describe("evaluateScenarioBudget — Bug 1: sub-floor critical scenarios", () =>
 
 describe("evaluateScenarioBudget — a baseline entry missing from a present file", () => {
   // Behaviour deliberately changed throughout this block. A missing baseline
-  // used to set `outsideReference` for a critical scenario ("failing closed").
-  // It no longer does, for any scenario: an absent reference is an absent
-  // COMPARISON, not a measurement that came back worse. Reporting it as drift
-  // would invent a regression out of a scenario nobody has ever baselined —
-  // which is the normal state on a machine or OS being measured for the
-  // first time, and this whole change exists to make that easy.
-  it("does not report a missing entry as drift, whether critical or not", () => {
-    const critical = evaluateScenarioBudget(
-      makeParams({ baselineP95: undefined, isCritical: true, hasBaselineFile: true })
-    );
-    const ordinary = evaluateScenarioBudget(
-      makeParams({ baselineP95: undefined, isCritical: false, hasBaselineFile: true })
+  // used to set `outsideReference` for a scenario listed in
+  // `criticalScenarios` ("failing closed"). It no longer does, for any
+  // scenario — and that list no longer exists: an absent reference is an
+  // absent COMPARISON, not a measurement that came back worse. Reporting it as
+  // drift would invent a regression out of a scenario nobody has ever
+  // baselined, which is the normal state on a machine or OS being measured for
+  // the first time — the case this whole change exists to make easy.
+  it("does not report a missing entry as drift", () => {
+    const result = evaluateScenarioBudget(
+      makeParams({ baselineP95: undefined, hasBaselineFile: true })
     );
 
-    expect(critical.outsideReference).toBe(false);
-    expect(ordinary.outsideReference).toBe(false);
+    expect(result.outsideReference).toBe(false);
     // Still says something — silence would be indistinguishable from a match.
-    expect(critical.reasons.length).toBeGreaterThan(0);
-    expect(ordinary.reasons.length).toBeGreaterThan(0);
+    expect(result.reasons.join()).toContain("no recorded baseline");
   });
 
   it("treats a non-finite baseline value the same as a missing entry", () => {
     const result = evaluateScenarioBudget(
-      makeParams({ baselineP95: Number.NaN, isCritical: true, hasBaselineFile: true })
+      makeParams({ baselineP95: Number.NaN, hasBaselineFile: true })
     );
     expect(result.outsideReference).toBe(false);
     expect(result.reasons.join()).toContain("no recorded baseline");
@@ -343,7 +334,7 @@ describe("evaluateScenarioBudget — a baseline entry missing from a present fil
 describe("evaluateScenarioBudget — no baseline file at all", () => {
   it("does not report an absent baseline file as drift", () => {
     const result = evaluateScenarioBudget(
-      makeParams({ baselineP95: undefined, isCritical: true, hasBaselineFile: false })
+      makeParams({ baselineP95: undefined, hasBaselineFile: false })
     );
     expect(result.outsideReference).toBe(false);
     expect(result.reasons.join()).toContain("no baseline file");
@@ -351,10 +342,10 @@ describe("evaluateScenarioBudget — no baseline file at all", () => {
 
   it("distinguishes a missing file from a missing entry in its reason", () => {
     const noFile = evaluateScenarioBudget(
-      makeParams({ baselineP95: undefined, isCritical: true, hasBaselineFile: false })
+      makeParams({ baselineP95: undefined, hasBaselineFile: false })
     );
     const noEntry = evaluateScenarioBudget(
-      makeParams({ baselineP95: undefined, isCritical: true, hasBaselineFile: true })
+      makeParams({ baselineP95: undefined, hasBaselineFile: true })
     );
     expect(noFile.reasons.join()).not.toBe(noEntry.reasons.join());
   });
@@ -367,7 +358,6 @@ describe("evaluateScenarioBudget — thresholds are exported, not magic numbers"
       makeParams({
         p95Ms: MIN_REGRESSION_BASELINE_MS,
         baselineP95: MIN_REGRESSION_BASELINE_MS,
-        isCritical: true,
       })
     );
     expect(atFloor.outsideReference).toBe(false);
@@ -379,14 +369,12 @@ describe("evaluateScenarioBudget — thresholds are exported, not magic numbers"
       makeParams({
         p95Ms: baselineP95 + ABSOLUTE_REGRESSION_MS_FLOOR + 1e-6,
         baselineP95,
-        isCritical: true,
       })
     );
     const exactly = evaluateScenarioBudget(
       makeParams({
         p95Ms: baselineP95 + ABSOLUTE_REGRESSION_MS_FLOOR,
         baselineP95,
-        isCritical: true,
       })
     );
     expect(justOver.outsideReference).toBe(true);
