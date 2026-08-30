@@ -1,6 +1,39 @@
 # Performance Harness
 
-This directory contains the benchmark harness for app-level performance regression tracking.
+This directory measures what Daintree's performance currently **is**, on each operating system, so that improvements can be found and proven. It is not a gate.
+
+## Measurement, not gating
+
+**The perf suite never fails a run because a number is worse.** Not on a schedule, not anywhere. A run fails only when the measurement apparatus itself is broken:
+
+| Condition                                  | Fails the run? |
+| ------------------------------------------ | -------------- |
+| A number is worse than its reference value | **No**         |
+| A number is worse than yesterday           | **No**         |
+| No reference value exists for a scenario   | **No**         |
+| A scenario threw                           | Yes            |
+| `assertMatrixCoverage` violated            | Yes            |
+| An unknown flag, mode or scenario id       | Yes            |
+| A metric emitted a non-finite value        | Yes            |
+| Results could not be written               | Yes            |
+| A configured metric stopped being emitted  | Loud warning   |
+
+This is deliberate, and the reasoning is recorded so nobody re-arms the gate by accident. The gate that existed was providing nothing: it ran on a cron, blocked no pull request, and was red for fifteen consecutive days over ~2% overshoots without anyone noticing. A permanently red suite trains everyone to ignore it. A suite that is always green and always publishes numbers keeps the numbers legible.
+
+**What this costs:** nothing catches a regression automatically. A regression is found when someone next runs a benchmark, or when a user reports it. That is an accepted trade.
+
+**The consequence for anyone reading a run:** green means nothing threw. It is not evidence that the measurement still means anything. A metric that stopped being emitted is reported as a _measurement issue_ and still exits 0 — read that section of the report, not just the exit code.
+
+## Reading a number
+
+Two things decide whether a number can be compared with another number, and `lib/comparability.ts` is the authority on both.
+
+- **Machine-independent** — counts, byte sizes and ratios. Compare these freely across machines and operating systems: "Windows 34, macOS 0" is a finding.
+- **Machine-dependent** — wall-clock durations and runtime memory. Only meaningful against another run on the _same_ machine. Across two machines the difference is mostly the two machines.
+
+Counts are also the class that catches the bug latency benchmarks are blind to: a recovery state machine that takes a wrong turn under a transient fault and never returns to the cheap path keeps every individual operation fast. Only a count over a fixed idle window sees it. PERF-105/106 exist for exactly that shape.
+
+**Every count needs a paired correctness reading.** A dead watcher spawns nothing and scores perfectly. Scenarios carry a `*Misses` metric so a broken feature cannot be reported as a win — PERF-105's zero idle spawns is only meaningful beside `detectionMisses: 0`, which proves the edit was still detected.
 
 ## Entry point
 
@@ -12,10 +45,12 @@ npm run perf list
 
 ## Modes
 
-- `smoke`: fast local smoke suite (not invoked by any workflow — run on demand)
-- `ci`: broader validation — run on the daily schedule and via manual dispatch in `performance.yml`, not on PRs or merges
-- `nightly`: full matrix + soak coverage (daily schedule / manual dispatch in `performance.yml`)
-- `soak`: long-run stress focus (daily schedule / manual dispatch in `performance.yml`)
+- `smoke`: fast local suite — the one to use while iterating
+- `ci`: broader validation — daily schedule and manual dispatch in `performance.yml`, on **ubuntu-22.04, windows-2022 and macos-14**. Gates no pull request.
+- `nightly`: full matrix + the packaged-binary scenario, plus baseline regeneration (Linux only)
+- `soak`: long-run stress focus
+
+A scenario declares which modes it runs in, and an id outside the chosen mode is a usage error — `--mode smoke --scenario PERF-002` fails, because PERF-002 is `ci`/`nightly` only.
 
 ## Commands
 
@@ -25,6 +60,48 @@ npm run perf ci
 npm run perf nightly
 npm run perf soak
 ```
+
+### Running one benchmark
+
+The flags that make the local optimisation loop work:
+
+```bash
+npm run perf smoke -- --scenario PERF-105 --iterations 5 --label before --json .tmp/opt/before.json
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--scenario <ids>` | Repeatable and comma-separated. Unknown id → error listing the available ones |
+| `--iterations <n>` | Overrides the per-tier default for every scenario in the run |
+| `--warmups <n>` | Overrides each scenario's own warmup count |
+| `--label <name>` | Stamped into the summary — `before`, `after`, `pin-backend` |
+| `--json <path>` | Writes the summary somewhere you chose, for `perf compare` |
+| `--machine <label>` | Overrides the machine identity (or set `PERF_MACHINE_LABEL`) |
+| `--update-baseline` | Regenerates the mode's baseline. Rejected alongside `--scenario` |
+
+Argument parsing is strict: an unknown flag, a missing value or a stray positional is an error rather than being ignored. The previous parser silently dropped what it did not recognise, so a typo'd `--secnario` ran the whole matrix and looked like it had worked. Every run ends by printing the exact invocation to reproduce it.
+
+### Comparing two runs
+
+```bash
+npm run perf compare .tmp/opt/before.json .tmp/opt/after.json
+```
+
+Diffs every scenario and metric into a delta table, leading with the median — at these iteration counts a p95 is effectively one of the two largest samples, not a stable tail estimate.
+
+It **refuses** machine-dependent rows when the two runs are not comparable, and prints `REFUSED` in each affected cell:
+
+- different machine, platform or architecture
+- different `--warmups` or `--iterations` (a `--warmups 0` run still carries cold-start cost a warmed run has already paid, and both sides can report the same iteration count, so nothing else would reveal it)
+- a summary written before the protocol block existed
+
+Counts still compare through a refusal — that cross-machine comparison is the point. Note the command exits 0 even when it refuses: read the output, not the exit code.
+
+### Results history
+
+Every unfiltered run writes `scripts/perf/history/<mode>.<machineLabel>.json` — a small **tracked** file, so `git log -p scripts/perf/history/` answers "when did this get slower" months later. It records p50, p95 and each metric's max, sum and own sample count.
+
+CI does not commit history. Hosted runners fold the run id into the machine label because every job is a fresh VM, so a committed CI history file would be per-run noise, incomparable to the last. Hosted history ships as an artifact; the committed record comes from real, stable machines run by hand.
 
 ## Outputs
 
@@ -45,18 +122,28 @@ Three families in the in-process matrix measure interactions a user hits many ti
 - **Terminal search (PERF-193/194)** — find-in-scrollback via the real `@xterm/addon-search` and the app's own `buildSearchOptions`. The search bar debounces at 150ms, so the gated number is a single post-debounce search over a full scrollback, not a per-keystroke cost. The addon memoizes its buffer-to-string translation for 15s and drops it on any line feed, so a terminal still streaming output re-translates on every search where a quiet one does not — worth ~1.3x across the mixed-term sweep, reported per run as `coldToWarmRatio`. PERF-193 gates that cold path, because it is what a live agent terminal actually pays, and reports the warm one alongside. Sizes come from `shared/config/scrollback.ts`, so the benchmark tracks the real configurable range. Fidelity gap (documented in `lib/terminalSearchFixture.ts`): headless has no render service, so decorations are shimmed — the buffer walk, the capped match collection and marker lifecycle are real, the highlight painting is not.
 - **Session snapshot/reparse (PERF-195/196)** — `SerializeAddon.serialize()` across a 12-terminal fleet at maximum scrollback (the real teardown cost on every quit), and feeding those payloads back through the xterm parser. PERF-196 is a PARSER FLOOR, not wall-clock restore: production sends payloads this size (~600 KiB) through `TerminalRestoreController`, which chunks at 32 KiB with UI yields and schedules fleet restores independently, and that controller cannot run in-process. A regression in chunking, yielding or scheduling is invisible to PERF-196 and needs a Playwright benchmark. The corpus is SGR-dense because real agent output is, and colour dominates payload size.
 
-These seven budgets carry `calibrating: true`. Every scenario inherits `maxRegressionPct` from `defaultBudget`, and `checkBaselineCoverage` fails a run when a scenario has a regression gate but no baseline entry — while baselines must be generated on the CI runner and never committed from a local machine. `calibrating` suppresses only the regression gate; the absolute `p95Ms` ceiling and every `maxMetricValues` entry still apply. Once `perf-update-baselines` publishes Linux baselines containing these scenarios, **remove the `calibrating` flag** to arm the inherited regression gate — do not add a new one. `npm run perf verify-baselines` fails on any scenario still flagged after its baseline lands, so the flag cannot rot unnoticed.
+Every scenario inherits `maxRegressionPct` from `defaultBudget`. A scenario with no baseline entry is a note, not a problem — normal for a new scenario, and normal for any scenario on a machine or OS being measured for the first time.
+
+The `calibrating` flag is gone. It existed to suppress the regression gate until a runner-generated baseline landed; with no gate left to suppress it did nothing but hide the coverage note for the scenarios it was applied to.
+
+## Reference values
+
+`scripts/perf/config/budgets.json` holds reference values, not thresholds. A measurement outside one is annotated in the report and in the console as `[outside]`, and the run still exits 0. Metric ceilings are compared against each metric's **max** across iterations, never its mean: a ceiling of `gitSpawns: 1.5` must not pass when one iteration in sixteen spawned twenty.
+
+`criticalScenarios` is gone with the gate. It only ever decided which scenarios could fail a run, and while it remained it silently exempted those scenarios from the baseline-coverage note.
 
 ## Baselines
 
-Baselines are read from `scripts/perf/config/baseline.<mode>.json`.
+Baselines are read from `scripts/perf/config/baseline.<mode>.json` and are the reference the drift annotation compares against.
 
-Update baseline after accepted optimization work:
+Regenerate after accepted optimisation work:
 
 ```bash
 npm run perf smoke -- --update-baseline
 npm run perf ci -- --update-baseline
 ```
+
+Baselines are runner-specific — regenerate them on the machine class they describe, and never commit one generated on a laptop. CI regenerates all four modes in `perf-nightly` and uploads them as the `perf-baselines` artifact; a human harvests and commits them, because the org blocks Actions from opening pull requests. `--update-baseline` is rejected alongside `--scenario`, since a filtered run would replace every other scenario's reference with nothing and the resulting file is indistinguishable from a complete one.
 
 ## Manual cold-start
 

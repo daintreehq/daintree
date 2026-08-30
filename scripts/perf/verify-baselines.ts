@@ -128,8 +128,13 @@ function main(): void {
   }
 
   if (failed) {
+    // No job opens a baseline PR any more — the org blocks Actions from
+    // creating them, so that automation was permanently jammed and its failures
+    // were invisible. Baselines are harvested from the workflow artifact and
+    // committed by hand, which makes this the last check before a human commits
+    // a file that looks healthy and is not.
     console.error(
-      "[perf:verify-baselines] refusing to open a baseline PR — fix the failing regen step first"
+      "[perf:verify-baselines] these baseline files are not fit to commit — fix the failing regen step first"
     );
     process.exit(1);
   }

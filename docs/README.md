@@ -86,6 +86,13 @@ The plugin sub-index links onward to getting-started, manifest reference, contri
 | [e2e-testing.md](./e2e-testing.md) | Playwright E2E setup, buckets, and how to run a single spec. |
 | [activity-testing.md](./activity-testing.md) | Manual verification process for agent activity (working/waiting) accuracy. |
 
+## Performance
+
+| Doc | Purpose |
+| --- | --- |
+| [scripts/perf/README.md](../scripts/perf/README.md) | The benchmark harness: why it measures rather than gates, which numbers compare across machines, running one scenario, and `perf compare`. |
+| [.agents/skills/optimize/SKILL.md](../.agents/skills/optimize/SKILL.md) | The human-invoked loop that moves one benchmark's number and proves it, or proves it cannot be moved. |
+
 ## Brand & vision
 
 | Doc | Purpose |
