@@ -23,7 +23,7 @@ const REPO = path.resolve(HERE, "../..");
 const BACKEND = process.env.DAINTREE_BACKEND_URL?.trim() || "http://127.0.0.1:8473";
 // Pinned to the constant the app ships, so a protocol bump fails this harness loudly
 // rather than letting it test a version nothing runs.
-const PROTOCOL_VERSION = 3;
+const PROTOCOL_VERSION = 4;
 const TURN_TIMEOUT_MS = Number(process.env.ASSISTANT_TURN_TIMEOUT_MS ?? 240_000);
 
 const args = process.argv.slice(2);

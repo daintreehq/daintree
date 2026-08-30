@@ -91,6 +91,11 @@ export function describeAction(row: AssistantTimerRow): string {
   switch (row.payloadKind) {
     case "tool_call":
       return row.toolName ? `Runs ${row.toolName}` : "Runs a tool";
+    case "message":
+      // The only kind that acts. Worded as the assistant being handed something to do,
+      // because that is the difference a user is deciding about when they read this
+      // row: a reminder waits for them, this does not.
+      return "Sends you an instruction";
     case "reminder":
       return "Reminder";
     default:

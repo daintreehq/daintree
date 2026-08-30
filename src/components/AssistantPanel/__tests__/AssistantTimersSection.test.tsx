@@ -112,6 +112,17 @@ describe("describeAction", () => {
   it("marks a legacy row rather than passing it off as an ordinary reminder", () => {
     expect(describeAction(row({ payloadKind: "legacy" }))).toContain("legacy");
   });
+
+  it("tells a message apart from a reminder", () => {
+    // The two are opposite promises — one carries the work out, the other waits for a
+    // human — and before the engine reported "message" as its own kind this row fell
+    // through to the legacy branch and told the user a scheduled instruction was a
+    // stale reminder.
+    const message = describeAction(row({ payloadKind: "message" }));
+    expect(message).not.toContain("Reminder");
+    expect(message).not.toContain("legacy");
+    expect(message.length).toBeGreaterThan(0);
+  });
 });
 
 describe("describeCancelConsequence", () => {

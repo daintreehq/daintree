@@ -277,7 +277,15 @@ export interface AssistantTimerRow {
  * registered tool; `"legacy"` is a row written by a retired payload type, which still
  * fires as a plain reminder but cannot honestly be described as either.
  */
-export type AssistantTimerPayloadKind = "reminder" | "tool_call" | "legacy";
+/**
+ * What a timer does when it fires.
+ *
+ * `message` is the one that ACTS: the instruction is delivered to the assistant and
+ * carried out in an ordinary turn. `reminder` only posts a note for the human and
+ * `tool_call` runs one fixed tool, so the three are genuinely different promises and a
+ * surface must not blur them.
+ */
+export type AssistantTimerPayloadKind = "reminder" | "message" | "tool_call" | "legacy";
 
 /** One recent tool call. */
 export interface AssistantAuditRow {
