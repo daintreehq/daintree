@@ -183,6 +183,7 @@ export const ipcScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 5, nightly: 8 },
     warmups: 1,
+    correctness: ["bootReadyMisses", "healthCheckMisses", "disposeExitMisses"],
     async run() {
       const host = spawnUtilityHost({ kind: "workspace" });
       try {
@@ -243,6 +244,7 @@ export const ipcScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 5, nightly: 8 },
     warmups: 1,
+    correctness: ["responseMisses", "responseTypeMisses"],
     async run() {
       const host = spawnUtilityHost({ kind: "workspace" });
       try {
@@ -352,6 +354,7 @@ export const ipcScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 5, nightly: 8 },
     warmups: 1,
+    correctness: ["lineMisses", "spawnMisses", "exitMisses", "exitCodeMisses"],
     async run() {
       const host = spawnUtilityHost({
         kind: "pty",
@@ -488,6 +491,7 @@ export const ipcScenarios: PerfScenario[] = [
     modes: ["ci", "nightly"],
     iterations: { ci: 3, nightly: 5 },
     warmups: 0,
+    correctness: ["respawnReadyMisses", "respawnHealthMisses", "reapMisses"],
     async run() {
       const cycles = 3;
       let host = spawnUtilityHost({ kind: "workspace" });

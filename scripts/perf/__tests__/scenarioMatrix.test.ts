@@ -6,6 +6,47 @@ import {
   getScenariosForMode,
 } from "../scenarios";
 import { getConstructedReflowTerminalCount } from "../lib/reflowFixture";
+import { classifyMetric } from "../lib/comparability";
+
+/**
+ * Scenarios that report no count-class metric and so need no paired miss
+ * count. Every one of them reports only durations, a `checksum`, or a runtime
+ * memory reading — none of which a dead subsystem can win by being dead the
+ * way a spawn tally or an event count can.
+ *
+ * The list is explicit so the exemption is a decision rather than an oversight:
+ * a new scenario is required to declare `correctness` or to be added here on
+ * purpose. Several of these WOULD benefit from a predicate, but the reading
+ * that would supply it lives in a fixture module rather than in the scenario
+ * (`workloads.ts` for the synthetic transforms, `agentAnalysisSim.ts`,
+ * `packagedLaunch.ts`), so it belongs with a change to those.
+ */
+const NO_COUNT_CLASS_METRICS: ReadonlySet<string> = new Set([
+  // Boot marks, all durations; fails closed by throwing when the NDJSON
+  // pipeline produced no marks at all.
+  "PERF-004",
+  // `checksum` plus synthetic switch durations.
+  "PERF-011",
+  "PERF-012",
+  // Byte totals (size class) plus `checksum`.
+  "PERF-030",
+  "PERF-031",
+  "PERF-032",
+  // CPU-per-MB and virtual-time flip latencies; the sim throws when an agent's
+  // FSM timeline loses its canonical transitions.
+  "PERF-035",
+  // Event-loop lag, a duration.
+  "PERF-042",
+  // Heap growth (memory / derived-ratio) plus `checksum`.
+  "PERF-060",
+  "PERF-061",
+  "PERF-062",
+  // Per-phase switch durations plus `checksum`.
+  "PERF-070",
+  "PERF-071",
+  "PERF-072",
+  "PERF-073",
+]);
 
 describe("perf scenario matrix", () => {
   it("covers full PERF matrix in both directions", () => {
@@ -40,6 +81,33 @@ describe("perf scenario matrix", () => {
     expect(ci.length).toBeGreaterThan(smoke.length - 1);
     expect(nightly.length).toBeGreaterThanOrEqual(ci.length);
     expect(soak.length).toBeGreaterThan(0);
+  });
+
+  it("pairs every count-reporting scenario with a declared miss count", () => {
+    const undeclared = allScenarios
+      .filter((scenario) => !scenario.correctness?.length)
+      .map((scenario) => scenario.id)
+      .filter((id) => !NO_COUNT_CLASS_METRICS.has(id));
+    expect(undeclared).toEqual([]);
+  });
+
+  it("keeps the exemption list free of scenarios that since gained a predicate", () => {
+    const declared = new Set(allScenarios.filter((s) => s.correctness?.length).map((s) => s.id));
+    expect([...NO_COUNT_CLASS_METRICS].filter((id) => declared.has(id))).toEqual([]);
+  });
+
+  it("declares only count-class metrics as correctness readings", () => {
+    // A predicate has to survive `perf compare` between two machines, and only
+    // the machine-independent classes do. A `*Ms` reading declared here would
+    // be written off as timing noise on exactly the run that needed it.
+    const wrong: string[] = [];
+    for (const scenario of allScenarios) {
+      for (const name of scenario.correctness ?? []) {
+        const cls = classifyMetric(name);
+        if (cls !== "count") wrong.push(`${scenario.id}:${name} is ${cls}`);
+      }
+    }
+    expect(wrong).toEqual([]);
   });
 
   it("has unique scenario IDs", () => {

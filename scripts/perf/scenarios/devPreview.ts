@@ -51,6 +51,7 @@ export const devPreviewScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 20, nightly: 28 },
     warmups: 2,
+    correctness: ["detectionMisses"],
     async run() {
       const result = await ensurePreviewRuntime({ frameCount: 80, noisy: true });
       return {
@@ -58,6 +59,10 @@ export const devPreviewScenarios: PerfScenario[] = [
         metrics: {
           detectedAtMs: result.detectedAtMs,
           hasUrl: result.url ? 1 : 0,
+          // `detectedAtMs` falls back to the whole scan when nothing matched,
+          // so a detector that stopped matching reports a latency rather than
+          // a failure. This is the reading that separates the two.
+          detectionMisses: result.url ? 0 : 1,
         },
         notes: result.url ? undefined : "No URL detected",
       };
@@ -71,6 +76,7 @@ export const devPreviewScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 16, nightly: 24 },
     warmups: 1,
+    correctness: ["detectionMisses"],
     async run() {
       const [one, two] = await Promise.all([
         ensurePreviewRuntime({ frameCount: 90, noisy: true }),
@@ -82,6 +88,7 @@ export const devPreviewScenarios: PerfScenario[] = [
         metrics: {
           detectedAtMs: Math.max(one.detectedAtMs, two.detectedAtMs),
           bothRunning: one.url && two.url ? 1 : 0,
+          detectionMisses: (one.url ? 0 : 1) + (two.url ? 0 : 1),
         },
         notes: one.url && two.url ? undefined : "One or both sessions failed URL detection",
       };
@@ -95,10 +102,15 @@ export const devPreviewScenarios: PerfScenario[] = [
     modes: ["ci", "nightly"],
     iterations: { ci: 6, nightly: 10 },
     warmups: 1,
+    correctness: ["detectionMisses"],
     async run() {
       const rng = createRng(22022);
       let supersededEnsures = 0;
       let completedEnsures = 0;
+      // Ensures that were awaited to completion and still produced no URL.
+      // Without it, a detector that stopped detecting reports the same
+      // superseded/completed split as a healthy run minus the completions.
+      let detectionMisses = 0;
 
       for (let i = 0; i < 14; i += 1) {
         const ensurePromise = ensurePreviewRuntime({
@@ -117,6 +129,8 @@ export const devPreviewScenarios: PerfScenario[] = [
         const result = await ensurePromise;
         if (result.url) {
           completedEnsures += 1;
+        } else {
+          detectionMisses += 1;
         }
       }
 
@@ -125,6 +139,7 @@ export const devPreviewScenarios: PerfScenario[] = [
         metrics: {
           supersededEnsures,
           completedEnsures,
+          detectionMisses,
         },
       };
     },
@@ -137,11 +152,13 @@ export const devPreviewScenarios: PerfScenario[] = [
     modes: ["ci", "nightly"],
     iterations: { ci: 5, nightly: 8 },
     warmups: 1,
+    correctness: ["restartMisses"],
     async run() {
+      const RESTARTS = 30;
       let successfulRestarts = 0;
       let maxDetectionMs = 0;
 
-      for (let i = 0; i < 30; i += 1) {
+      for (let i = 0; i < RESTARTS; i += 1) {
         const result = await ensurePreviewRuntime({
           frameCount: 65 + (i % 4) * 5,
           noisy: true,
@@ -158,6 +175,10 @@ export const devPreviewScenarios: PerfScenario[] = [
         metrics: {
           successfulRestarts,
           maxDetectionMs,
+          // The count's denominator, made explicit: a loop that restarted
+          // nothing reports `successfulRestarts: 0` and the best possible
+          // `maxDetectionMs`.
+          restartMisses: RESTARTS - successfulRestarts,
         },
       };
     },
@@ -170,6 +191,7 @@ export const devPreviewScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 16, nightly: 22 },
     warmups: 1,
+    correctness: ["stopMisses"],
     async run() {
       const rng = createRng(24024);
       const sessions = Array.from({ length: 20 }, (_, index) => ({
@@ -200,12 +222,16 @@ export const devPreviewScenarios: PerfScenario[] = [
         }
       }
 
+      const stoppedSessions = sessions.filter((session) => session.stopped).length;
       return {
         durationMs: 0,
         metrics: {
           retries,
           hardFailures,
-          stoppedSessions: sessions.filter((session) => session.stopped).length,
+          stoppedSessions,
+          // A cleanup loop that stopped attempting anything retries nothing and
+          // finishes instantly; this is what keeps that from reading as a win.
+          stopMisses: sessions.length - stoppedSessions,
         },
       };
     },

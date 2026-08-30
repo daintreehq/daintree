@@ -87,6 +87,7 @@ const projectViewScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: ["warmSwitchMisses", "attachMisses", "closeMisses"],
     async run() {
       const harness = await ProjectViewHarness.create({
         cachedProjectViews: WARM_PROJECTS.length,
@@ -165,6 +166,13 @@ const projectViewScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: [
+      "lruOrderMisses",
+      "lruRequestOrderMisses",
+      "bootstrapProbeMisses",
+      "capOverflowCount",
+      "attachMisses",
+    ],
     async run() {
       const harness = await ProjectViewHarness.create({
         cachedProjectViews: COLD_CACHE_LIMIT,
@@ -273,6 +281,14 @@ const projectViewScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: [
+      "pressureLadderMisses",
+      "pressureBudgetMisses",
+      "healthyBandMisses",
+      "forcedConvergenceMisses",
+      "protectedEvictionMisses",
+      "assistantFloorMisses",
+    ],
     async run() {
       const harness = await ProjectViewHarness.create({
         cachedProjectViews: PRESSURE_PROJECTS.length,
@@ -388,6 +404,7 @@ const projectViewScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: ["finalActiveMisses", "attachMisses", "strandedViewCount"],
     async run() {
       const harness = await ProjectViewHarness.create({
         cachedProjectViews: RACE_CACHE_LIMIT,

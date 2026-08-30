@@ -7,6 +7,7 @@ import {
   getGitPipelineFixture,
   loadPipelineModules,
   sleep,
+  spawnObserverMisses,
 } from "../lib/gitPipelineFixture";
 import {
   EmitRecorder,
@@ -201,6 +202,7 @@ export const idleWindowScenarios: PerfScenario[] = [
     // not need one.
     warmups: 1,
     iterations: { smoke: 2, ci: 3, nightly: 5 },
+    correctness: ["discoveryMisses", "refreshMisses", "spawnObserverMisses"],
     async run() {
       const harness = await createProcessTreeHarness(PROCESS_TREE_POLL_INTERVAL_MS);
       let child: ProbeChild | null = null;
@@ -212,6 +214,7 @@ export const idleWindowScenarios: PerfScenario[] = [
             ...(await measureResidual(harness, killChild)),
             refreshMisses: 1,
             discoveryMisses: 1,
+            spawnObserverMisses: spawnObserverMisses(),
           });
         }
 
@@ -253,6 +256,10 @@ export const idleWindowScenarios: PerfScenario[] = [
           // dead" and the benchmark rewards the second.
           discoveryMisses: discoveryMs === null ? 1 : 0,
           refreshMisses: idleRefreshCallbacks === 0 ? 1 : 0,
+          // The observer's own reading: every count above is a tally of Node
+          // `child_process` starts, and a hook that stopped firing reports the
+          // same zero a quiet machine does.
+          spawnObserverMisses: reading.spawnObserverMisses,
           ...residual,
         };
         return {
@@ -279,6 +286,14 @@ export const idleWindowScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     warmups: 1,
     iterations: { smoke: 2, ci: 3, nightly: 5 },
+    correctness: [
+      "recoveryMisses",
+      "postHealDiscoveryMisses",
+      "preFaultRefreshMisses",
+      "faultInjectionMisses",
+      "faultStateMisses",
+      "spawnObserverMisses",
+    ],
     async run() {
       const harness = await createProcessTreeHarness(PROCESS_TREE_POLL_INTERVAL_MS);
       let fault: ProbeFaultHandle | null = null;
@@ -295,6 +310,9 @@ export const idleWindowScenarios: PerfScenario[] = [
             preFaultRefreshMisses: 1,
             recoveryMisses: 1,
             postHealDiscoveryMisses: 1,
+            faultInjectionMisses: 1,
+            faultStateMisses: 1,
+            spawnObserverMisses: spawnObserverMisses(),
           });
         }
 
@@ -361,6 +379,7 @@ export const idleWindowScenarios: PerfScenario[] = [
           preFaultRefreshMisses: 0,
           faultInjectionMisses: faultInjected && healed ? 0 : 1,
           faultStateMisses: wentBlind && observedFailure && drained ? 0 : 1,
+          spawnObserverMisses: healedReading.spawnObserverMisses,
           ...residual,
         };
 
@@ -394,6 +413,15 @@ export const idleWindowScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     warmups: 1,
     iterations: { smoke: 2, ci: 3, nightly: 5 },
+    correctness: [
+      "detectionMisses",
+      "discoveryMisses",
+      "pollTickMisses",
+      "warmMisses",
+      "populationMisses",
+      "settleMisses",
+      "spawnObserverMisses",
+    ],
     async run() {
       const fixture = getGitPipelineFixture();
       const { PQueue } = await loadPipelineModules();
@@ -513,6 +541,7 @@ export const idleWindowScenarios: PerfScenario[] = [
           warmMisses: warmRejections,
           populationMisses: monitors.length === FLEET_MONITOR_COUNT ? 0 : 1,
           settleMisses: quiet ? 0 : 1,
+          spawnObserverMisses: reading.spawnObserverMisses,
         };
 
         for (const monitor of monitors) monitor.stop();

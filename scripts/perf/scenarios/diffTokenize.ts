@@ -15,9 +15,16 @@ import {
 // the multi-file open that a review workspace triggers.
 //
 // runDiffTokenize catches its own errors and returns tokens: null (a silent
-// plaintext downgrade). A null pass is FASTER, so every scenario asserts real
-// tokens were produced — otherwise a tokenization regression would read as an
-// improvement and slip the gate.
+// plaintext downgrade). A null pass is FASTER, so every scenario reports
+// `tokenizeMisses` — files that came back without a token tree. It is emitted
+// on every iteration, 0 when healthy, because a metric that only exists on the
+// failure path cannot be read as a predicate: a run where tokenization died
+// everywhere would report the same absent column as a run that never happened.
+// This used to be a throw, which aborted the whole suite rather than reporting
+// the number; the harness measures and only fails on apparatus breakage, and a
+// silent plaintext downgrade is a result, not a broken apparatus. The fixture
+// assertions below (is the diff actually over the intra-line budget?) stay
+// throws — those ARE the apparatus.
 
 interface DiffSpec {
   path: string;
@@ -94,11 +101,12 @@ export const diffTokenizeScenarios: PerfScenario[] = [
       "marking (under the markEdits budget, so markEdits + suppressFullLineEdits run) — the common " +
       "'review a substantial file change' case. durationMs is the runDiffTokenize pass the " +
       "worker/fallback executes; fixture build + parseDiff are excluded from the bracket. Throws " +
-      "if tokenization silently degraded to null.",
+      "tokenizeMisses is non-zero if tokenization silently degraded to null.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 14, nightly: 20 },
     warmups: 1,
+    correctness: ["tokenizeMisses"],
     async run() {
       const { hunks, changedLines } = hunksFor({
         path: "src/service.ts",
@@ -113,16 +121,16 @@ export const diffTokenizeScenarios: PerfScenario[] = [
         extraRanges: null,
       });
       const durationMs = performance.now() - start;
-      if (!result.tokens) {
-        throw new Error("PERF-160: runDiffTokenize returned null tokens (silent tokenize failure)");
-      }
+      const tokenizeMisses = result.tokens ? 0 : 1;
       return {
         durationMs,
         metrics: {
           changedLines,
           hunks: hunks.length,
-          tokensProduced: 1,
+          tokensProduced: 1 - tokenizeMisses,
+          tokenizeMisses,
         },
+        notes: tokenizeMisses > 0 ? "runDiffTokenize returned null tokens" : undefined,
       };
     },
   },
@@ -133,11 +141,12 @@ export const diffTokenizeScenarios: PerfScenario[] = [
       "Tokenize a diff sized past the real MAX_INTRALINE_CHANGES budget so shouldMarkIntraLineEdits " +
       "returns false and the whole-line fallback runs (no per-block diff-match-patch churn). Proves " +
       "the large-diff path git-diff-highlight/VS Code also use stays cheap; markedIntraLine (derived " +
-      "from the imported production threshold) must stay 0. Throws on a null tokenize.",
+      "from the imported production threshold) must stay 0; tokenizeMisses catches a null tokenize.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: ["tokenizeMisses"],
     async run() {
       // Size from the real threshold with margin so the fixture is over-budget
       // regardless of what MAX_INTRALINE_CHANGES is set to in production.
@@ -160,9 +169,7 @@ export const diffTokenizeScenarios: PerfScenario[] = [
         extraRanges: null,
       });
       const durationMs = performance.now() - start;
-      if (!result.tokens) {
-        throw new Error("PERF-161: runDiffTokenize returned null tokens (silent tokenize failure)");
-      }
+      const tokenizeMisses = result.tokens ? 0 : 1;
       return {
         durationMs,
         metrics: {
@@ -171,8 +178,10 @@ export const diffTokenizeScenarios: PerfScenario[] = [
           // Mirrors shouldMarkIntraLineEdits against the imported production
           // threshold — 0 asserts the fallback (no intra-line marking) path.
           markedIntraLine: changedLines <= MAX_INTRALINE_CHANGES ? 1 : 0,
-          tokensProduced: 1,
+          tokensProduced: 1 - tokenizeMisses,
+          tokenizeMisses,
         },
+        notes: tokenizeMisses > 0 ? "runDiffTokenize returned null tokens" : undefined,
       };
     },
   },
@@ -183,11 +192,12 @@ export const diffTokenizeScenarios: PerfScenario[] = [
       "Tokenize a five-file, multi-language changeset (typescript, tsx, json, css, markdown), each " +
       "~320 changed lines (rounded to whole hunks), back to back — models opening a multi-file " +
       "review workspace where each file is tokenized on demand. durationMs is the summed tokenize " +
-      "cost; throws unless every file produced real tokens.",
+      "cost; tokenizeMisses counts files that produced no tokens.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: ["tokenizeMisses"],
     async run() {
       const files: Array<{ spec: DiffSpec; language: string }> = [
         { spec: { path: "src/a.ts", changedLines: 320, seed: 1 }, language: "typescript" },
@@ -212,11 +222,7 @@ export const diffTokenizeScenarios: PerfScenario[] = [
         changedLines += file.changedLines;
       }
       const durationMs = performance.now() - start;
-      if (filesTokenized !== prepared.length) {
-        throw new Error(
-          `PERF-162: only ${filesTokenized}/${prepared.length} files tokenized (silent tokenize failure)`
-        );
-      }
+      const tokenizeMisses = prepared.length - filesTokenized;
 
       return {
         durationMs,
@@ -224,7 +230,12 @@ export const diffTokenizeScenarios: PerfScenario[] = [
           filesTokenized,
           fileCount: prepared.length,
           changedLines,
+          tokenizeMisses,
         },
+        notes:
+          tokenizeMisses > 0
+            ? `only ${filesTokenized}/${prepared.length} files tokenized`
+            : undefined,
       };
     },
   },

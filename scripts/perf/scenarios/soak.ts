@@ -53,6 +53,24 @@ function simulatePortBatcherFlushFlood(flushes: number, chunkBytes: number): num
   return checksum;
 }
 
+/**
+ * The checksum the flood MUST produce, derived from the byte-generation rule
+ * rather than from the flood.
+ *
+ * `simulatePortBatcherFlushFlood` is the subject: a version that skipped the
+ * allocate-and-copy entirely would burn no CPU, trigger no GC and post the
+ * best numbers this scenario can record. Recomputing the expected sum without
+ * allocating anything is the independent half — the running `& 0xffff` is
+ * addition mod 2^16, so the total is just the sum of the touched source bytes.
+ */
+function expectedFlushChecksum(flushes: number, chunkBytes: number): number {
+  let checksum = 0;
+  for (let f = 0; f < flushes; f += 1) {
+    checksum = (checksum + (((f % chunkBytes) * 31 + 7) & 0xff)) & 0xffff;
+  }
+  return checksum;
+}
+
 async function measureMinorGc(body: () => void): Promise<GcStats> {
   const stats: GcStats = { minorGcCount: 0, minorGcPauseMs: 0 };
   const record = (entries: PerformanceEntryList): void => {
@@ -240,15 +258,18 @@ export const soakScenarios: PerfScenario[] = [
     modes: ["nightly", "soak"],
     iterations: { nightly: 3, soak: 6 },
     warmups: 1,
+    correctness: ["floodMisses"],
     async run() {
       maybeRunGc();
-      const startedAt = performance.now();
       // ~2KB single-chunk flushes are the dominant latency-mode case under an
       // agent-output flood. 400k of them (~800MB transient churn) is far more
       // than any realistic inter-flush burst — sized so a pathological future
       // allocation regression is unmissable while a clean baseline stays low.
       const flushes = 400000;
       const chunkBytes = 2048;
+      // Derived before the bracket opens so the oracle is never in the timing.
+      const expectedChecksum = expectedFlushChecksum(flushes, chunkBytes);
+      const startedAt = performance.now();
       let checksum = 0;
       const gc = await measureMinorGc(() => {
         checksum = simulatePortBatcherFlushFlood(flushes, chunkBytes);
@@ -263,6 +284,7 @@ export const soakScenarios: PerfScenario[] = [
           meanMinorGcPauseMs: gc.minorGcCount > 0 ? gc.minorGcPauseMs / gc.minorGcCount : 0,
           flushes,
           checksum,
+          floodMisses: checksum === expectedChecksum ? 0 : 1,
         },
         notes:
           `minor-GC for ${flushes} flushes: ${gc.minorGcCount} pauses, ` +

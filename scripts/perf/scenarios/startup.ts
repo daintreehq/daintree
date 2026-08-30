@@ -4,8 +4,28 @@ import {
   simulateLayoutHydration,
   simulateProjectSwitchCycle,
   spinEventLoop,
+  type PersistedLayout,
 } from "../lib/workloads";
 import { findPackagedExecutable, launchPackagedAndMeasure } from "../lib/packagedLaunch";
+
+/**
+ * Panels and tab groups the hydration was handed but did not restore.
+ *
+ * The expectation comes from the layout that went IN, so no change to
+ * `simulateLayoutHydration` can satisfy it without actually rebuilding the
+ * workspace: a hydration reduced to `return { restoredPanels: 0 }` is the
+ * fastest one possible, and `restoredPanels`/`restoredGroups` on their own
+ * report that as the best sample the harness has recorded.
+ */
+function hydrationMissesFor(
+  layout: PersistedLayout,
+  hydrated: { restoredPanels: number; restoredGroups: number }
+): number {
+  return (
+    Math.abs(layout.panels.length - hydrated.restoredPanels) +
+    Math.abs(layout.tabGroups.length - hydrated.restoredGroups)
+  );
+}
 
 const EMPTY_LAYOUT = createPersistedLayout(10, 2, 101);
 const HEAVY_LAYOUT = createPersistedLayout(260, 16, 202);
@@ -21,6 +41,7 @@ export const startupScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 20, nightly: 30 },
     warmups: 2,
+    correctness: ["hydrationMisses"],
     async run() {
       const payload = JSON.stringify(EMPTY_LAYOUT);
       const parsed = JSON.parse(payload) as ReturnType<typeof createPersistedLayout>;
@@ -33,6 +54,7 @@ export const startupScenarios: PerfScenario[] = [
           restoredPanels: hydrated.restoredPanels,
           restoredGroups: hydrated.restoredGroups,
           checksum: hydrated.checksum,
+          hydrationMisses: hydrationMissesFor(parsed, hydrated),
         },
       };
     },
@@ -46,6 +68,7 @@ export const startupScenarios: PerfScenario[] = [
     modes: ["ci", "nightly"],
     iterations: { ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: ["hydrationMisses"],
     async run() {
       const parsed = JSON.parse(HEAVY_LAYOUT_SERIALIZED) as ReturnType<
         typeof createPersistedLayout
@@ -66,6 +89,7 @@ export const startupScenarios: PerfScenario[] = [
           restoredPanels: hydrated.restoredPanels,
           restoredGroups: hydrated.restoredGroups,
           checksum: hydrated.checksum + switchResult.checksum,
+          hydrationMisses: hydrationMissesFor(parsed, hydrated),
         },
       };
     },
@@ -78,6 +102,7 @@ export const startupScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 15, ci: 25, nightly: 35 },
     warmups: 3,
+    correctness: ["hydrationMisses"],
     async run() {
       const hydrated = simulateLayoutHydration(HEAVY_LAYOUT);
       await spinEventLoop(0.5);
@@ -87,6 +112,7 @@ export const startupScenarios: PerfScenario[] = [
           restoredPanels: hydrated.restoredPanels,
           restoredGroups: hydrated.restoredGroups,
           checksum: hydrated.checksum,
+          hydrationMisses: hydrationMissesFor(HEAVY_LAYOUT, hydrated),
         },
       };
     },

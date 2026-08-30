@@ -11,11 +11,67 @@ import { createHeavyMigrationFixture, getHeavyFixtureMinBytes } from "../lib/mig
  * real migration functions for correctness; this scenario focuses on
  * latency measurement and regression gating.
  */
+/**
+ * Post-conditions of the chain, checked against the FINAL state.
+ *
+ * `terminalCount`, `recipeCount` and `agentCount` are shapes of the fixture,
+ * so a chain reduced to `return state` reports all three unchanged, produces
+ * roughly the same byte total and finishes in a fraction of the time. These
+ * are the properties only a chain that actually ran can satisfy — one per
+ * migration whose whole job is to rewrite something.
+ */
+function migrationMissesFor(state: Record<string, unknown>): number {
+  let misses = 0;
+  const appState = state.appState as Record<string, unknown> | undefined;
+
+  // 002 — every terminal carries a location.
+  const terminals = (appState?.terminals as Array<Record<string, unknown>> | undefined) ?? [];
+  if (terminals.length === 0) misses += 1;
+  if (terminals.some((terminal) => terminal.location === undefined)) misses += 1;
+
+  // 003 — global recipes were moved out and the array emptied.
+  if (!Array.isArray(appState?.recipes) || (appState.recipes as unknown[]).length !== 0) {
+    misses += 1;
+  }
+
+  // 008 — the single sound file was split into three and the legacy key dropped.
+  const notifications = state.notificationSettings as Record<string, unknown> | undefined;
+  if (notifications === undefined) misses += 1;
+  else {
+    if (notifications.soundFile !== undefined) misses += 1;
+    if (notifications.completedSoundFile === undefined) misses += 1;
+    // 017 — quiet hours seeded.
+    if (notifications.quietHoursEnabled === undefined) misses += 1;
+  }
+
+  // 009 — windowStates seeded from the legacy single window state.
+  if (state.windowStates === undefined) misses += 1;
+
+  // 012/016 — every agent entry is pinned-shaped and free of the retired keys.
+  const agents = (state.agentSettings as Record<string, unknown> | undefined)?.agents as
+    Record<string, Record<string, unknown>> | undefined;
+  if (agents === undefined || Object.keys(agents).length === 0) misses += 1;
+  else {
+    const entries = Object.values(agents);
+    if (entries.some((entry) => entry?.pinned === undefined)) misses += 1;
+    if (entries.some((entry) => entry?.selected !== undefined || entry?.enabled !== undefined)) {
+      misses += 1;
+    }
+    if (entries.some((entry) => entry?.flavorId !== undefined)) misses += 1;
+  }
+
+  // 014 — the legacy telemetry block was consolidated away.
+  if (state.telemetry !== undefined) misses += 1;
+
+  return misses;
+}
+
 function runMigrationChain(fixture: ReturnType<typeof createHeavyMigrationFixture>): {
   terminalCount: number;
   recipeCount: number;
   agentCount: number;
   bytes: number;
+  migrationMisses: number;
 } {
   // Deep-clone the fixture so each iteration starts from v0
   let state: Record<string, unknown> = JSON.parse(
@@ -225,6 +281,7 @@ function runMigrationChain(fixture: ReturnType<typeof createHeavyMigrationFixtur
     recipeCount: fixture.appState.recipes?.length ?? 0,
     agentCount: agents,
     bytes: JSON.stringify(state).length,
+    migrationMisses: migrationMissesFor(state),
   };
 }
 
@@ -244,6 +301,7 @@ export const migrationScenarios: PerfScenario[] = [
     modes: ["ci", "nightly"],
     iterations: { ci: 8, nightly: 12 },
     warmups: 2,
+    correctness: ["migrationMisses"],
     run() {
       // Sanity check: fixture must stay large enough to exercise O(N) paths
       if (FIXTURE_BYTES < getHeavyFixtureMinBytes()) {

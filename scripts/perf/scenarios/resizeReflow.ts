@@ -12,6 +12,13 @@ import {
 } from "../lib/reflowFixture";
 
 /**
+ * A reveal arm must rebuild a real buffer. Both arms retain 5,000 lines at a
+ * 5,000-line scrollback, so anything near this floor means the parse never
+ * happened — and an unparsed backlog is the fastest reveal there is.
+ */
+const REVEAL_MIN_PARSED_LINES = 4_000;
+
+/**
  * PERF-110..112 — terminal resize/reflow pipeline.
  *
  * Resize is the highest-frequency geometry operation in the app: splitter
@@ -43,10 +50,18 @@ export const resizeReflowScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 18, nightly: 24 },
     warmups: 2,
+    correctness: ["reflowMisses"],
     async run() {
       const checkpoints = await getHistoryReflowFixture();
       const metrics: Record<string, number> = {};
       let duration100k = 0;
+      // Everything above was measured BEFORE the resize, which is exactly what
+      // a no-op resize needs to win: it costs nothing and the pre-resize
+      // readings are unchanged. These three post-conditions are read after
+      // each resize instead — the grid actually moved, the buffer survived,
+      // and (below the scrollback cap, where trimming cannot mask it) the row
+      // count moved, which only a real re-wrap can do.
+      let reflowMisses = 0;
 
       for (const checkpoint of checkpoints) {
         const { terminal } = checkpoint;
@@ -55,6 +70,10 @@ export const resizeReflowScenarios: PerfScenario[] = [
         const start = performance.now();
         terminal.resize(targetCols, HISTORY_ROWS);
         const reflowMs = performance.now() - start;
+        const bufferLinesAfter = terminal.buffer.active.length;
+        if (terminal.cols !== targetCols) reflowMisses += 1;
+        if (bufferLinesAfter === 0) reflowMisses += 1;
+        if (checkpoint.label !== "100k" && bufferLinesAfter === bufferLines) reflowMisses += 1;
         metrics[`reflowMsAt${checkpoint.label}`] = reflowMs;
         if (checkpoint.label === "100k") {
           duration100k = reflowMs;
@@ -63,9 +82,11 @@ export const resizeReflowScenarios: PerfScenario[] = [
           // cap, so shrink/grow cycles trim then settle. This surfaces any
           // buffer-size drift that would silently change what p95 measures.
           metrics.bufferLinesAt100k = bufferLines;
+          metrics.bufferLinesAfterAt100k = bufferLinesAfter;
         }
       }
 
+      metrics.reflowMisses = reflowMisses;
       return { durationMs: duration100k, metrics };
     },
   },
@@ -86,6 +107,7 @@ export const resizeReflowScenarios: PerfScenario[] = [
     modes: ["ci", "nightly"],
     iterations: { ci: 6, nightly: 10 },
     warmups: 1,
+    correctness: ["resizeMisses"],
     async run() {
       const fixture = await getStormFixture();
       const goingDown = fixture.colsNow === STORM_MAX_COLS;
@@ -113,9 +135,16 @@ export const resizeReflowScenarios: PerfScenario[] = [
       }
       const settleResizeMs = performance.now() - settleStart;
 
+      // A ramp of resizes that all no-op is the cheapest possible drag, and
+      // every metric above would read as an improvement. This is the reading
+      // that says the grid actually ended up where the drag put it.
+      const resizeMisses = fixture.terminals.filter(
+        (terminal) => terminal.cols !== target || terminal.rows !== STORM_ROWS
+      ).length;
+
       return {
         durationMs: totalBlockedMs,
-        metrics: { maxStepMs, totalBlockedMs, settleResizeMs },
+        metrics: { maxStepMs, totalBlockedMs, settleResizeMs, resizeMisses },
       };
     },
   },
@@ -134,6 +163,7 @@ export const resizeReflowScenarios: PerfScenario[] = [
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     warmups: 1,
+    correctness: ["revealMisses"],
     async run() {
       const backlogs = getRevealBacklogs();
       const small = await runRevealArm(backlogs.small, 911_300);
@@ -142,6 +172,13 @@ export const resizeReflowScenarios: PerfScenario[] = [
       return {
         durationMs: large.revealBlockingMs,
         metrics: {
+          // Both arms must have a rebuilt buffer behind their timing. An arm
+          // whose parse silently stopped happening reports the flattest
+          // blocking time this scenario can produce.
+          revealMisses:
+            (small.parsedLines >= REVEAL_MIN_PARSED_LINES ? 0 : 1) +
+            (large.parsedLines >= REVEAL_MIN_PARSED_LINES ? 0 : 1),
+          parsedLinesSmallBacklog: small.parsedLines,
           revealBlockingMsSmallBacklog: small.revealBlockingMs,
           revealBlockingMsLargeBacklog: large.revealBlockingMs,
           drainMsLargeBacklog: large.drainMs,

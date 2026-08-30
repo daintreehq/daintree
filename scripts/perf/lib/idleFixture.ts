@@ -11,6 +11,7 @@ import {
   gitSpawnsSince,
   installGitSpawnCounter,
   sleep,
+  spawnObserverMisses,
 } from "./gitPipelineFixture";
 
 /**
@@ -132,6 +133,7 @@ export async function createProcessTreeHarness(
 // --- Idle measurement window --------------------------------------------------
 
 export interface OpenIdleWindow {
+  observerMisses: number;
   gitMark: number;
   allMark: number;
   cpu: NodeJS.CpuUsage;
@@ -149,11 +151,21 @@ export interface IdleWindowReading {
   gitSpawns: number;
   subprocessSpawns: number;
   byExecutable: Record<string, number>;
+  /**
+   * 0 when the spawn counter proved itself able to see a known start just
+   * before this window opened. Non-zero means the counts below are not
+   * authoritative — read them as absent, not as low.
+   */
+  spawnObserverMisses: number;
 }
 
 export function openIdleWindow(): OpenIdleWindow {
   installGitSpawnCounter();
+  // Before the marks, never after: the probe starts a real child, and that
+  // start must land outside the window whose observer it is validating.
+  const observerMisses = spawnObserverMisses();
   return {
+    observerMisses,
     gitMark: gitSpawnMark(),
     allMark: allSpawnMark(),
     cpu: process.cpuUsage(),
@@ -187,6 +199,7 @@ export function closeIdleWindow(open: OpenIdleWindow): IdleWindowReading {
     gitSpawns: gitSpawnsSince(open.gitMark).count,
     subprocessSpawns: allWindow.count,
     byExecutable: allWindow.byExecutable,
+    spawnObserverMisses: open.observerMisses,
   };
 }
 

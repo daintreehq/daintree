@@ -604,6 +604,7 @@ export const persistenceScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 10, nightly: 14 },
     warmups: 1,
+    correctness: ["rowMisses"],
     run: runBatchingScenario,
   },
   {
@@ -615,6 +616,7 @@ export const persistenceScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 10, nightly: 14 },
     warmups: 1,
+    correctness: ["lookupMisses", "indexPlanMisses", "orderedRowMisses"],
     run: runQueryShapeScenario,
   },
   {
@@ -626,6 +628,13 @@ export const persistenceScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly", "soak"],
     iterations: { smoke: 2, ci: 5, nightly: 8, soak: 10 },
     warmups: 1,
+    correctness: [
+      "rowMisses",
+      "readerRowMisses",
+      "checkpointReclaimMisses",
+      "contentionProbeMisses",
+      "cleanupMisses",
+    ],
     run: runWalScenario,
   },
   {
@@ -637,6 +646,7 @@ export const persistenceScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 2, ci: 5, nightly: 8 },
     warmups: 1,
+    correctness: ["migrationCountMisses", "schemaColumnMisses", "rowMisses", "dataMigrationMisses"],
     run: runMigrationScenario,
   },
   {
@@ -648,6 +658,7 @@ export const persistenceScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: ["writeMisses", "readBackMisses"],
     run: runStoreWriteScenario,
   },
   {
@@ -659,6 +670,7 @@ export const persistenceScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: ["keyReadMisses", "hydrationMisses"],
     run: runStoreOpenScenario,
   },
 ];

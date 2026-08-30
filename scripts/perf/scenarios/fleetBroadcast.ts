@@ -14,9 +14,14 @@ import { isGridPanelLocation, type PanelLocation } from "../../../shared/types/p
 // correlated acks), modeled with the REAL RequestResponseBroker — the same
 // correlation layer the IPC scenarios exercise. The gate watches the per-target
 // amortized cost so fan-out that degrades super-linearly with fleet size (the
-// failure a large fleet feels most) is caught. Fails closed if the eligibility
-// filter ever drops to the wrong target count, so the metric can't quietly
-// become meaningless.
+// failure a large fleet feels most) is caught.
+//
+// `eligibilityMisses` is the paired reading both scenarios report: a filter
+// that keeps nothing dispatches nothing and posts the fastest fan-out the
+// harness can record, and one that keeps everything posts a plausible-looking
+// number over the wrong denominator. It used to be a throw, which aborted the
+// whole run instead of reporting a number — the harness measures and never
+// gates, so a wrong target count belongs in the results file.
 
 interface FleetPanel {
   id: string;
@@ -149,28 +154,30 @@ export const fleetBroadcastScenarios: PerfScenario[] = [
       "Model the renderer-side fan-out of one payload to a realistic armed fleet of 24 live grid " +
       "terminals mixed with ineligible chaff (dock, exited, PTY-less, browser panes). Filters via " +
       "the real shared grid-location predicate and fans out awaited per-target dispatches through " +
-      "the real RequestResponseBroker. durationMs is the fan-out wall time; throws if the filter " +
-      "does not keep exactly 24 targets.",
+      "the real RequestResponseBroker. durationMs is the fan-out wall time; eligibilityMisses is " +
+      "non-zero whenever the filter does not keep exactly 24 targets.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 18, nightly: 24 },
     warmups: 2,
+    correctness: ["eligibilityMisses"],
     async run() {
       const EXPECTED = 24;
       const panels = buildFleet(EXPECTED, 12, 150);
       const { fanoutMs, eligible, ackBytes } = await broadcastFanOut(panels);
-      if (eligible !== EXPECTED) {
-        throw new Error(
-          `PERF-150: eligibility filter kept ${eligible} targets, expected ${EXPECTED}`
-        );
-      }
+      const eligibilityMisses = Math.abs(eligible - EXPECTED);
       return {
         durationMs: fanoutMs,
         metrics: {
           eligibleTargets: eligible,
           totalPanels: panels.length,
           ackBytes,
+          eligibilityMisses,
         },
+        notes:
+          eligibilityMisses > 0
+            ? `eligibility filter kept ${eligible} targets, expected ${EXPECTED} — the fan-out timing is over the wrong denominator`
+            : undefined,
       };
     },
   },
@@ -181,26 +188,24 @@ export const fleetBroadcastScenarios: PerfScenario[] = [
       "Renderer-side fan-out latency across growing fleets (6/12/24/48 armed terminals). Budgets " +
       "msPerTargetAt48 (amortized per-target dispatch at the largest fleet) so a broadcast whose " +
       "cost grows super-linearly with fleet size — the failure the multi-agent workflow feels most " +
-      "— trips the gate even when small fleets still look instant. Throws if any fleet size filters " +
-      "to the wrong target count.",
+      "— trips the gate even when small fleets still look instant. eligibilityMisses is non-zero " +
+      "whenever a fleet size filters to the wrong target count.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 14, nightly: 20 },
     warmups: 1,
+    correctness: ["eligibilityMisses"],
     async run() {
       const sizes = [6, 12, 24, 48];
       const msBySize = new Map<number, number>();
       let eligibleAt48 = 0;
+      let eligibilityMisses = 0;
 
       const start = performance.now();
       for (const size of sizes) {
         const panels = buildFleet(size, Math.ceil(size / 2), 1510 + size);
         const { fanoutMs, eligible } = await broadcastFanOut(panels);
-        if (eligible !== size) {
-          throw new Error(
-            `PERF-151: fleet of ${size} filtered to ${eligible} targets, expected ${size}`
-          );
-        }
+        eligibilityMisses += Math.abs(eligible - size);
         msBySize.set(size, fanoutMs);
         if (size === 48) eligibleAt48 = eligible;
       }
@@ -214,7 +219,12 @@ export const fleetBroadcastScenarios: PerfScenario[] = [
           fanoutMs48: ms48,
           msPerTargetAt48: eligibleAt48 > 0 ? ms48 / eligibleAt48 : 0,
           eligibleAt48,
+          eligibilityMisses,
         },
+        notes:
+          eligibilityMisses > 0
+            ? "a fleet size filtered to the wrong target count — the per-target slope is over the wrong denominator"
+            : undefined,
       };
     },
   },

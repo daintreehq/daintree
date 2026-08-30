@@ -1,7 +1,12 @@
 import { performance } from "node:perf_hooks";
 import type { PerfScenario } from "../types";
 import { percentile } from "../lib/stats";
-import { gitSpawnMark, gitSpawnsSince, installGitSpawnCounter } from "../lib/gitPipelineFixture";
+import {
+  gitSpawnMark,
+  gitSpawnsSince,
+  installGitSpawnCounter,
+  spawnObserverMisses,
+} from "../lib/gitPipelineFixture";
 import {
   getFileSearchFixture,
   GIT_ONLY_SENTINEL,
@@ -26,28 +31,37 @@ import {
 //
 // `FileSearchService.search` swallows every error and returns `[]`, and
 // `loadFileList` silently falls back to a filesystem walk when git fails — both
-// of which are FASTER than the path being claimed. So the guards here assert
-// which path ran, not merely that something came back: every query family
-// asserts its own expected outcome, and PERF-192 proves both that git actually
-// spawned and that the result could only have come from the git listing.
+// of which are FASTER than the path being claimed. So every scenario here
+// reports which path ran, not merely that something came back: `queryMisses`
+// counts completed queries that matched nothing, and PERF-192's
+// `gitPathListMisses` covers both halves of "this really was the git listing"
+// — a git subprocess started, and the results contain a file only that listing
+// can return. All of them are emitted on every iteration, 0 when healthy: a
+// metric that only appears when the subject is broken cannot be read as a
+// predicate, because a run where every query broke and a run that never
+// happened produce the same absent column.
 
 interface KeystrokeStreamResult {
   sessionMs: number;
   keystrokes: number;
   p99KeystrokeMs: number;
   totalMatches: number;
+  /** Completed queries that matched nothing — see `runKeystrokeStream`. */
+  queryMisses: number;
 }
 
 type SearchFn = (payload: { cwd: string; query: string; limit?: number }) => Promise<string[]>;
 
 /**
  * Type every query one character at a time, timing each individual re-scan.
- * Each full query must end with at least one match: an aggregate count lets a
- * single surviving query mask several broken scoring branches.
+ * Each full query is expected to end with at least one match, counted
+ * per-query rather than in aggregate: a single surviving query would otherwise
+ * mask several broken scoring branches behind a healthy-looking total.
  */
 async function runKeystrokeStream(search: SearchFn, cwd: string): Promise<KeystrokeStreamResult> {
   const perKeystroke: number[] = [];
   let totalMatches = 0;
+  let queryMisses = 0;
 
   const sessionStart = performance.now();
   for (const query of TYPED_FILE_QUERIES) {
@@ -59,9 +73,7 @@ async function runKeystrokeStream(search: SearchFn, cwd: string): Promise<Keystr
       totalMatches += matches.length;
       finalMatches = matches.length;
     }
-    if (finalMatches === 0) {
-      throw new Error(`file search query '${query}' matched nothing in ${cwd} — scoring is broken`);
-    }
+    if (finalMatches === 0) queryMisses += 1;
   }
   const sessionMs = performance.now() - sessionStart;
 
@@ -70,6 +82,7 @@ async function runKeystrokeStream(search: SearchFn, cwd: string): Promise<Keystr
     keystrokes: perKeystroke.length,
     p99KeystrokeMs: percentile(perKeystroke, 99),
     totalMatches,
+    queryMisses,
   };
 }
 
@@ -105,6 +118,7 @@ export const fileSearchScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 6, ci: 10, nightly: 14 },
     warmups: 2,
+    correctness: ["queryMisses"],
     async run() {
       const fixture = getFileSearchFixture();
       const { fileSearchService } = await loadFileSearchModule();
@@ -125,6 +139,7 @@ export const fileSearchScenarios: PerfScenario[] = [
           avgKeystrokeMs: stream.sessionMs / Math.max(1, stream.keystrokes),
           totalMatches: stream.totalMatches,
           fileCount: fixture.representative.fileCount,
+          queryMisses: stream.queryMisses,
         },
       };
     },
@@ -141,6 +156,7 @@ export const fileSearchScenarios: PerfScenario[] = [
     modes: ["ci", "nightly"],
     iterations: { ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: ["queryMisses"],
     async run() {
       const fixture = getFileSearchFixture();
       const { fileSearchService } = await loadFileSearchModule();
@@ -163,14 +179,6 @@ export const fileSearchScenarios: PerfScenario[] = [
       const missMs = performance.now() - missStart;
       const durationMs = performance.now() - start;
 
-      // A query that matches nothing must return nothing. If it returns rows,
-      // scoring has stopped filtering and every timing here is meaningless.
-      if (missResults.length !== 0) {
-        throw new Error(
-          `no-match query returned ${missResults.length} results — scoring no longer filters`
-        );
-      }
-
       const largeAvg = large.sessionMs / Math.max(1, large.keystrokes);
       const msPerKFile = largeAvg / (fixture.monorepo.fileCount / 1000);
 
@@ -182,6 +190,11 @@ export const fileSearchScenarios: PerfScenario[] = [
           msPerKFile,
           noMatchScanMs: missMs,
           monorepoFileCount: fixture.monorepo.fileCount,
+          // Both directions: queries that should match and did not, plus the
+          // query that should match nothing and did. Scoring that stopped
+          // matching and scoring that stopped filtering are both cheaper than
+          // scoring that works.
+          queryMisses: small.queryMisses + large.queryMisses + (missResults.length === 0 ? 0 : 1),
         },
       };
     },
@@ -194,18 +207,22 @@ export const fileSearchScenarios: PerfScenario[] = [
       "--exclude-standard`, NUL parse, ancestor-directory set build and length sort, at both repo " +
       "scales. This is the wait between pressing `@` and the picker showing anything. Asserts a git " +
       "subprocess actually spawned and that the results contain a file only the git listing can " +
-      "return — without both, a broken git path degrades to the filesystem walker and this would " +
-      "report walker time under a git label.",
+      "return (gitPathListMisses) — without both, a broken git path degrades to the filesystem " +
+      "walker and this would report walker time under a git label.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: ["gitPathListMisses", "spawnObserverMisses"],
     async run() {
       const fixture = getFileSearchFixture();
       const { fileSearchService } = await loadFileSearchModule();
       // Counts async git spawns from the product path. Fixture setup uses
       // spawnSync, which does not route through ChildProcess.prototype.spawn.
       installGitSpawnCounter();
+      // Before the mark: the probe starts a child of its own to prove the
+      // counter below can still see one.
+      const observerMisses = spawnObserverMisses();
 
       fileSearchService.invalidate(fixture.representative.path);
       fileSearchService.invalidate(fixture.monorepo.path);
@@ -232,22 +249,14 @@ export const fileSearchScenarios: PerfScenario[] = [
       const durationMs = performance.now() - start;
       const spawns = gitSpawnsSince(spawnMark);
 
-      // Both halves must be genuinely cold AND genuinely git-backed.
-      if (spawns.count === 0) {
-        throw new Error(
-          "no git subprocess spawned during the cold open — the path list was served warm or the git listing was bypassed"
-        );
-      }
-      for (const [label, results] of [
-        ["representative", smallResults],
-        ["monorepo", largeResults],
-      ] as const) {
-        if (!results.includes(GIT_ONLY_SENTINEL)) {
-          throw new Error(
-            `${label} cold search did not return ${GIT_ONLY_SENTINEL} — the filesystem-walk fallback ran instead of git ls-files`
-          );
-        }
-      }
+      // Both halves must be genuinely cold AND genuinely git-backed. A warm
+      // cache and a filesystem-walk fallback are both faster than the path this
+      // scenario claims to time, and the sentinel is a file only `git ls-files`
+      // can return — so the two together are the whole predicate.
+      const gitPathListMisses =
+        (spawns.count > 0 ? 0 : 1) +
+        (smallResults.includes(GIT_ONLY_SENTINEL) ? 0 : 1) +
+        (largeResults.includes(GIT_ONLY_SENTINEL) ? 0 : 1);
 
       return {
         durationMs,
@@ -257,7 +266,13 @@ export const fileSearchScenarios: PerfScenario[] = [
           coldMsPerKFile: largeColdMs / (fixture.monorepo.fileCount / 1000),
           gitSpawns: spawns.count,
           lsFilesSpawns: spawns.bySubcommand["ls-files"] ?? 0,
+          gitPathListMisses,
+          spawnObserverMisses: observerMisses,
         },
+        notes:
+          gitPathListMisses > 0
+            ? "the cold open was served warm or by the filesystem walker — these are not git ls-files timings"
+            : undefined,
       };
     },
   },

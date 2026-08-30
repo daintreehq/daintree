@@ -1,4 +1,4 @@
-import { ChildProcess, execFileSync } from "node:child_process";
+import { ChildProcess, execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -102,6 +102,8 @@ export interface ProcessSpawnEvent {
 const spawnEvents: GitSpawnEvent[] = [];
 const processSpawnEvents: ProcessSpawnEvent[] = [];
 let counterInstalled = false;
+/** The wrapper this module installed, so a later re-patch is detectable. */
+let installedHook: unknown = null;
 
 function isGitExecutable(baseName: string): boolean {
   return baseName === "git" || baseName === "git.exe";
@@ -152,6 +154,72 @@ export function installGitSpawnCounter(): void {
     }
     return original.call(this, options);
   };
+  installedHook = proto.spawn;
+}
+
+// --- Observer self-validation ------------------------------------------------
+
+let observerProbePassed: boolean | null = null;
+
+/**
+ * Make a start the observer MUST see, and report whether it saw it.
+ *
+ * `process.execPath` is absolute, so this still starts while a fault scenario
+ * has PATH pointed at a shim directory, and `-e ""` exits immediately
+ * everywhere. The hook fires synchronously inside `spawn()`, so the window
+ * below is closed before the child has done anything at all.
+ */
+function runObserverProbe(): boolean {
+  const mark = allSpawnMark();
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+  } catch {
+    return false;
+  }
+  const observed = allSpawnsSince(mark).count > 0;
+  // Never let the probe outlive the call: unref first, then signal, and
+  // swallow the async spawn error a failed exec would otherwise throw.
+  child.unref();
+  child.on("error", () => {});
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    // Already gone.
+  }
+  return observed;
+}
+
+/**
+ * Whether the spawn counter can still be trusted. 0 = proven live.
+ *
+ * A count of zero has two indistinguishable causes: the subsystem genuinely
+ * stopped spawning, or the observer stopped observing. This settles the
+ * second, and every counting scenario emits the result as
+ * `spawnObserverMisses` so a blind observer never reads as a quiet system.
+ * Call it BEFORE opening a measurement window — the probe's own child start
+ * would otherwise land inside the count it is validating. The expensive half
+ * runs once per process; the cheap half (has anything re-patched the
+ * prototype since?) runs on every call.
+ *
+ * What stays invisible even at 0, because no in-process hook can see it:
+ *  - starts made from C++ inside a native addon — `@parcel/watcher` probes
+ *    watchman through `_popen`, and better-sqlite3 and node-pty fork their own
+ *  - grandchildren: on Windows `exec` starts `cmd.exe`, and PowerShell is that
+ *    shell's child, not this process's
+ *  - anything a child process spawns after it is running
+ *  - `spawnSync`/`execFileSync`, excluded by design so fixture setup can never
+ *    land in a measurement
+ * So a zero from this counter means "nothing started through Node in THIS
+ * process", never "nothing started". The OS-level observer that would close
+ * that gap is deliberately out of scope.
+ */
+export function spawnObserverMisses(): number {
+  installGitSpawnCounter();
+  const proto = ChildProcess.prototype as unknown as { spawn: unknown };
+  if (proto.spawn !== installedHook) return 1;
+  if (observerProbePassed === null) observerProbePassed = runObserverProbe();
+  return observerProbePassed ? 0 : 1;
 }
 
 export interface GitSpawnWindow {

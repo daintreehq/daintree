@@ -27,6 +27,9 @@ const LARGE_SCROLL_CHUNKS = makeTerminalChunks(9000, 200);
 // in the slicing path.
 const CROSSING_CHUNK_BYTES = INCREMENTAL_RESTORE_CONFIG.chunkBytes + 1024;
 const STEADY_CHUNK_BYTES = 4 * 1024;
+/** PERF-033 writes exactly three chunks and ends on the last log line. */
+const WRITE_COUNT = 3;
+const EXPECTED_LAST_LINE = "log entry 99 from agent terminal";
 
 export const terminalScenarios: PerfScenario[] = [
   {
@@ -133,6 +136,7 @@ export const terminalScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 14, nightly: 20 },
     warmups: 1,
+    correctness: ["parseMisses"],
     async run() {
       const terminal = await createHeadlessTerminal({
         cols: 120,
@@ -175,6 +179,18 @@ export const terminalScenarios: PerfScenario[] = [
           terminal.buffer.active
             .getLine(terminal.buffer.active.baseY - 1)
             ?.translateToString(true) ?? "";
+        // The final row the parser wrote, which is NOT `baseY - 1` — that row
+        // sits a viewport above the cursor. The last log entry is a known
+        // string, so this is the one reading here a parser has to have run to
+        // satisfy.
+        let lastWrittenLine = "";
+        for (let row = terminal.buffer.active.length - 1; row >= 0; row -= 1) {
+          const text = terminal.buffer.active.getLine(row)?.translateToString(true) ?? "";
+          if (text.length > 0) {
+            lastWrittenLine = text;
+            break;
+          }
+        }
 
         return {
           // Negative durationMs triggers the wall-clock fallback in run.ts
@@ -185,6 +201,13 @@ export const terminalScenarios: PerfScenario[] = [
             bytesWritten,
             parseInvocations,
             lastLineLength: lastLine.length,
+            // `bytesWritten` is arithmetic over the inputs and `parseInvocations`
+            // counts callbacks, neither of which needs a parser to have run.
+            // The buffer is where the parse actually lands, so the final row is
+            // checked against the exact string that was written last.
+            parseMisses:
+              Math.max(0, WRITE_COUNT - parseInvocations) +
+              (lastWrittenLine === EXPECTED_LAST_LINE ? 0 : 1),
           },
         };
       } finally {
@@ -210,10 +233,20 @@ export const terminalScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 5, ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: ["floodParseMisses"],
     async run() {
       const BACKGROUND_TERMINALS = 12;
       const ROUNDS = 30;
+      const TERMINAL_ROWS = 30;
       const ECHO_PAYLOAD = "k"; // one keystroke echoed back
+      // `floodBytes` is summed off the input chunks, so it reads identically
+      // whether the background terminals parsed them or dropped them — and a
+      // flood that never lands is the cheapest possible `echoDegradationX`.
+      // A terminal that parsed a 30-round stream has scrolled well past its
+      // initial `rows` of buffer; one that parsed nothing has not moved.
+      const unparsedCount = (
+        terminals: Array<{ buffer: { active: { length: number } } }>
+      ): number => terminals.filter((t) => t.buffer.active.length <= TERMINAL_ROWS).length;
 
       // Worker-ingest mode (DAINTREE_PAINT_FABRIC_WORKER_INGEST=1): the same
       // deterministic workload, but each background terminal's parse runs in a
@@ -287,6 +320,7 @@ export const terminalScenarios: PerfScenario[] = [
               floodEchoP99Ms: floodP99,
               echoDegradationX: soloP99 > 0 ? floodP99 / soloP99 : 0,
               floodBytes,
+              floodParseMisses: unparsedCount(mirrors),
             },
           };
         } finally {
@@ -348,6 +382,7 @@ export const terminalScenarios: PerfScenario[] = [
             floodEchoP99Ms: floodP99,
             echoDegradationX: soloP99 > 0 ? floodP99 / soloP99 : 0,
             floodBytes,
+            floodParseMisses: unparsedCount(background),
           },
         };
       } finally {

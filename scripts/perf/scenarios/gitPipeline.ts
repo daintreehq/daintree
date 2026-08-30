@@ -15,6 +15,7 @@ import {
   loadPipelineModules,
   nonGitSpawnCount,
   sleep,
+  spawnObserverMisses,
   withGitDirProbeFault,
 } from "../lib/gitPipelineFixture";
 import {
@@ -23,6 +24,7 @@ import {
   pollUntil,
   quiesceGitSpawns,
   removeFileQuietly,
+  snapshotChangedFileCount,
   uid,
   writeEditFile,
 } from "../lib/worktreeSidebarFixture";
@@ -50,6 +52,11 @@ import {
  */
 
 const POLL_QUEUE_TASK_TIMEOUT_MS = 60_000;
+// The dirty fixture's standing modification set (gitPipelineFixture's
+// DIRTY_MODIFIED_FILES). A floor rather than an equality: whether the twelve
+// untracked files land in the same tally is the status pass's business, and
+// pinning that here would make a reporting choice look like a regression.
+const DIRTY_MIN_CHANGED_FILES = 40;
 const STORM_SETTLE_MS = 2_000;
 const STORM_TIMEOUT_MS = 20_000;
 const WARM_STALENESS_MS = 60_000;
@@ -76,6 +83,28 @@ const IDLE_CLEANUP_WINDOW_MS = 2_000;
 
 function failClosed(notes: string, metrics: Record<string, number>): ScenarioSample {
   return { durationMs: 0, metrics, notes };
+}
+
+function statusCheckedAt(monitor: WorktreeMonitor): number {
+  return monitor.getSnapshot().lastGitStatusCheckedAt ?? 0;
+}
+
+/**
+ * Did a forced pass actually produce git state? 0 when it did.
+ *
+ * Read off the monitor's own snapshot and never off the spawn counter: a
+ * `gitSpawns` figure cannot tell a refresh that did nothing apart from an
+ * observer that saw nothing, and both report the same improved duration.
+ * `lastGitStatusCheckedAt` only advances when a pass completes, and
+ * `worktreeChanges` is the object that pass builds — a no-op `refresh()`
+ * leaves both untouched and scores 2.
+ */
+function statusPassMisses(monitor: WorktreeMonitor, checkedBefore: number): number {
+  const snapshot = monitor.getSnapshot();
+  return (
+    ((snapshot.lastGitStatusCheckedAt ?? 0) > checkedBefore ? 0 : 1) +
+    (snapshot.worktreeChanges ? 0 : 1)
+  );
 }
 
 /**
@@ -188,20 +217,32 @@ async function getScalingHarness(): Promise<ScalingHarness> {
 async function runRefreshCycle(
   harness: ScalingHarness,
   count: number
-): Promise<{ durationMs: number; rejected: number }> {
+): Promise<{ durationMs: number; misses: number }> {
   const targets = harness.monitors.slice(0, count);
+  const checkedBefore = targets.map(statusCheckedAt);
   const start = performance.now();
   // Mirrors WorkspaceService.refreshAll: each refresh takes a shared
   // pollQueue slot; allSettled so one bad worktree can't abort the cycle.
   const settled = await Promise.allSettled(
     targets.map((monitor) => harness.queue.add(() => monitor.refresh()))
   );
-  const rejected = settled.filter((result) => result.status === "rejected").length;
+  const durationMs = performance.now() - start;
   // `allSettled` is right for fidelity and wrong for measurement if left
-  // silent: a cycle where 10 of 50 refreshes threw completes FASTER and reports
-  // that as an improvement. The caller turns this into a metric so the
-  // denominator is visible rather than assumed.
-  return { durationMs: performance.now() - start, rejected };
+  // silent: a cycle where 10 of 50 refreshes threw completes FASTER and
+  // reports that as an improvement. Counting REJECTIONS alone is not enough
+  // either — fifty fulfilled no-ops reject nothing, spawn nothing and post an
+  // excellent latency. So every target is checked against its own pre-cycle
+  // freshness stamp: a worktree whose stamp did not advance is one this cycle
+  // did not actually do, however cleanly its promise resolved.
+  let misses = 0;
+  for (let i = 0; i < targets.length; i++) {
+    if (settled[i].status === "rejected") {
+      misses += 1;
+      continue;
+    }
+    if (statusCheckedAt(targets[i]) <= checkedBefore[i]) misses += 1;
+  }
+  return { durationMs, misses };
 }
 
 async function ensureWarm(harness: ScalingHarness): Promise<void> {
@@ -222,19 +263,30 @@ export const gitPipelineScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 20, nightly: 30 },
     warmups: 1,
+    correctness: ["statusPassMisses", "spawnObserverMisses"],
     async run() {
       const fixture = getGitPipelineFixture();
       if (!soloMonitor) {
         soloMonitor = await createMonitorHarness(fixture.soloPath, "wt-solo-branch");
         soloMonitor.startWithoutGitStatus();
       }
+      // Before the mark: the probe starts a child of its own.
+      const observerMisses = spawnObserverMisses();
+      const checkedBefore = statusCheckedAt(soloMonitor);
       const mark = gitSpawnMark();
       const start = performance.now();
       await soloMonitor.refresh();
       const durationMs = performance.now() - start;
       return {
         durationMs,
-        metrics: { gitSpawns: gitSpawnsSince(mark).count },
+        metrics: {
+          gitSpawns: gitSpawnsSince(mark).count,
+          // A `refresh()` that returned without doing anything spawns nothing
+          // and finishes instantly — the best duration and the best count this
+          // scenario can record. This is what stops that reading as a win.
+          statusPassMisses: statusPassMisses(soloMonitor, checkedBefore),
+          spawnObserverMisses: observerMisses,
+        },
       };
     },
   },
@@ -247,8 +299,10 @@ export const gitPipelineScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 5, ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: ["refreshMisses", "spawnObserverMisses"],
     async run() {
       const harness = await getScalingHarness();
+      const observerMisses = spawnObserverMisses();
       const cycleMs: number[] = [];
       let spawnsAt50 = 0;
       let refreshMisses = 0;
@@ -256,7 +310,7 @@ export const gitPipelineScenarios: PerfScenario[] = [
         const mark = gitSpawnMark();
         const cycle = await runRefreshCycle(harness, count);
         cycleMs.push(cycle.durationMs);
-        refreshMisses += cycle.rejected;
+        refreshMisses += cycle.misses;
         if (count === 50) {
           spawnsAt50 = gitSpawnsSince(mark).count;
         }
@@ -270,10 +324,13 @@ export const gitPipelineScenarios: PerfScenario[] = [
           cycleMsN20: cycleMs[2],
           cycleMsN50: cycleMs[3],
           spawnsPerWorktreeN50: spawnsAt50 / 50,
-          // A refresh that threw is a worktree this cycle did not actually do,
-          // so every duration above is over a smaller denominator than its
-          // label claims — and a shrinking denominator reads as a speedup.
+          // Worktrees this cycle did not actually refresh — whether the promise
+          // rejected or fulfilled without moving the worktree's freshness
+          // stamp. Every duration above is over a denominator this many
+          // worktrees short of its label, and a shrinking denominator reads as
+          // a speedup.
           refreshMisses,
+          spawnObserverMisses: observerMisses,
         },
       };
     },
@@ -287,18 +344,35 @@ export const gitPipelineScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 20, nightly: 30 },
     warmups: 1,
+    correctness: ["tickMisses", "spawnObserverMisses"],
     async run() {
       const harness = await getScalingHarness();
       await ensureWarm(harness);
+      const observerMisses = spawnObserverMisses();
+      // StatPrecheck stamps `baselineAt` on the skip path AND after a full
+      // pass, so this advances once per tick that actually ran. It is the only
+      // available oracle here: the whole point of the quiet path is that it
+      // spawns nothing, so the spawn counter cannot tell fifty successful
+      // skips apart from fifty ticks that never happened.
+      const baselinesBefore = harness.monitors.map((monitor) => monitor.lastStatBaselineAt);
       const mark = gitSpawnMark();
       const start = performance.now();
-      await Promise.allSettled(
+      const settled = await Promise.allSettled(
         harness.monitors.map((monitor) => harness.queue.add(() => monitor.updateGitStatus(false)))
       );
       const durationMs = performance.now() - start;
+      let tickMisses = 0;
+      harness.monitors.forEach((monitor, i) => {
+        if (settled[i].status === "rejected") tickMisses += 1;
+        else if (monitor.lastStatBaselineAt <= baselinesBefore[i]) tickMisses += 1;
+      });
       return {
         durationMs,
-        metrics: { gitSpawns: gitSpawnsSince(mark).count },
+        metrics: {
+          gitSpawns: gitSpawnsSince(mark).count,
+          tickMisses,
+          spawnObserverMisses: observerMisses,
+        },
       };
     },
   },
@@ -311,19 +385,33 @@ export const gitPipelineScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 20, nightly: 30 },
     warmups: 1,
+    correctness: ["statusPassMisses", "spawnObserverMisses"],
     async run() {
       const fixture = getGitPipelineFixture();
       if (!dirtyMonitor) {
         dirtyMonitor = await createMonitorHarness(fixture.dirtyPath, "wt-dirty-branch");
         dirtyMonitor.startWithoutGitStatus();
       }
+      const observerMisses = spawnObserverMisses();
+      const checkedBefore = statusCheckedAt(dirtyMonitor);
       const mark = gitSpawnMark();
       const start = performance.now();
       await dirtyMonitor.refresh();
       const durationMs = performance.now() - start;
+      // The dirty fixture is a fixed 40 modified + 12 untracked files, so the
+      // pass has an exact expected answer — a numstat/line-count path that
+      // quietly stopped reporting files is the cheapest possible pass.
+      const changedFileCount = snapshotChangedFileCount(dirtyMonitor.getSnapshot());
       return {
         durationMs,
-        metrics: { gitSpawns: gitSpawnsSince(mark).count },
+        metrics: {
+          gitSpawns: gitSpawnsSince(mark).count,
+          changedFileCount,
+          statusPassMisses:
+            statusPassMisses(dirtyMonitor, checkedBefore) +
+            (changedFileCount >= DIRTY_MIN_CHANGED_FILES ? 0 : 1),
+          spawnObserverMisses: observerMisses,
+        },
       };
     },
   },
@@ -336,14 +424,17 @@ export const gitPipelineScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 6, nightly: 8 },
     warmups: 1,
+    correctness: ["reactionMisses", "spawnObserverMisses"],
     async run() {
       const fixture = getGitPipelineFixture();
+      const recorder = new EmitRecorder();
       // Fresh monitor per iteration, stopped in the finally: the recursive
       // parcel watcher is a live native handle, and leaking it would distort
       // any scenario running after this one in the same harness process.
       const monitor = await createMonitorHarness(fixture.stormPath, "storm-base", {
         isCurrent: true,
         gitWatchEnabled: true,
+        onUpdate: (snapshot) => recorder.record(snapshot),
       });
       try {
         await monitor.start();
@@ -354,6 +445,8 @@ export const gitPipelineScenarios: PerfScenario[] = [
         const target = fixture.stormBranches[stormFlip % 2];
         stormFlip += 1;
 
+        const observerMisses = spawnObserverMisses();
+        const from = recorder.cursor();
         const mark = gitSpawnMark();
         checkoutStormBranch(target);
         const checkoutDoneAt = performance.now();
@@ -370,12 +463,30 @@ export const gitPipelineScenarios: PerfScenario[] = [
           }
         }
 
+        // The independent oracle, and the reason this is not read off the
+        // spawn window: a dead watcher reports gitSpawns 0 and statusPasses 0,
+        // which is the cheapest sample the scenario can produce. The checkout
+        // moves HEAD to the other branch, so a pipeline that actually reacted
+        // emits a snapshot naming it. Prose in `notes` was the previous
+        // answer, and prose is not a metric.
+        const reacted = await recorder.waitFor(
+          (snapshot) => snapshot.branch === target,
+          Math.max(0, deadline - performance.now()),
+          from
+        );
+        const reactionMisses = reacted ? 0 : 1;
+
         if (window.lastAtMs === null) {
           // Fail closed: a watcher that never reacted must not read as a
           // perfect zero-cost sample. The deadline blows the p95 budget.
           return {
             durationMs: STORM_TIMEOUT_MS,
-            metrics: { gitSpawns: 0, statusPasses: 0 },
+            metrics: {
+              gitSpawns: 0,
+              statusPasses: 0,
+              reactionMisses,
+              spawnObserverMisses: observerMisses,
+            },
             notes: "no pipeline reaction observed before the storm deadline",
           };
         }
@@ -385,7 +496,13 @@ export const gitPipelineScenarios: PerfScenario[] = [
           metrics: {
             gitSpawns: window.count,
             statusPasses: window.bySubcommand["status"] ?? 0,
+            reactionMisses,
+            spawnObserverMisses: observerMisses,
           },
+          notes:
+            reactionMisses === 1
+              ? "git ran during the storm but no snapshot ever named the checked-out branch"
+              : undefined,
         };
       } finally {
         monitor.stop();
@@ -401,6 +518,7 @@ export const gitPipelineScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 2, ci: 3, nightly: 5 },
     warmups: 1,
+    correctness: ["detectionMisses", "watcherArmMisses", "spawnObserverMisses"],
     async run() {
       const fixture = getGitPipelineFixture();
       const recorder = new EmitRecorder();
@@ -413,6 +531,9 @@ export const gitPipelineScenarios: PerfScenario[] = [
       });
       const probeName = `idle-probe-${uid()}.txt`;
       const probeFile = join(fixture.idlePath, probeName);
+      // Taken up front, before any counted window opens: the probe starts a
+      // child process to prove the counter can still see one.
+      const observerMisses = spawnObserverMisses();
       try {
         monitor.startWithoutGitStatus();
         const armed = await pollUntil(() => monitor.hasArmedWatcher, IDLE_ARM_TIMEOUT_MS);
@@ -430,6 +551,7 @@ export const gitPipelineScenarios: PerfScenario[] = [
             ...(await measureCleanup(monitor, probeFile)),
             watcherArmMisses: 1,
             detectionMisses: 1,
+            spawnObserverMisses: observerMisses,
           });
         }
 
@@ -438,7 +560,7 @@ export const gitPipelineScenarios: PerfScenario[] = [
         return {
           // Self-timed: the headline number is a count, not a duration.
           durationMs: 0,
-          metrics: { ...idle, ...cleanup },
+          metrics: { ...idle, ...cleanup, spawnObserverMisses: observerMisses },
           notes:
             idle.detectionMisses === 1
               ? "idle window was quiet but the paired edit was never detected"
@@ -459,6 +581,13 @@ export const gitPipelineScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 2, ci: 3, nightly: 5 },
     warmups: 1,
+    correctness: [
+      "detectionMisses",
+      "watcherArmMisses",
+      "faultInjectionMisses",
+      "faultStateMisses",
+      "spawnObserverMisses",
+    ],
     async run() {
       const fixture = getGitPipelineFixture();
       const recorder = new EmitRecorder();
@@ -471,6 +600,7 @@ export const gitPipelineScenarios: PerfScenario[] = [
       });
       const probeName = `idle-probe-${uid()}.txt`;
       const probeFile = join(fixture.faultPath, probeName);
+      const observerMisses = spawnObserverMisses();
       try {
         // Arm the watcher WHILE the probe is failing, so whatever ends up in
         // the git-dir cache is put there by the product's own getGitDir call.
@@ -508,6 +638,7 @@ export const gitPipelineScenarios: PerfScenario[] = [
           // so the poll cadence measured below is whatever happened to be
           // armed at the time — not a reading of the fault state.
           faultStateMisses: wentDark && armSettled ? 0 : 1,
+          spawnObserverMisses: observerMisses,
         };
         if (!injected || !wentDark || !armSettled) {
           return failClosed(
