@@ -166,7 +166,12 @@ async function handleWorktreePortRequest(
           msg.payload.force,
           msg.payload.deleteBranch,
           msg.payload.mutationId,
-          true
+          true,
+          // Forwarded by name so the consent the caller actually gave is the
+          // one that reaches git. Dropping it here would silently downgrade an
+          // explicit `branch -D` request to `-d` — the mirror image of the bug
+          // this split exists to fix, and just as invisible.
+          { forceDeleteBranch: msg.payload.forceDeleteBranch }
         );
         result = { ok: true };
         break;

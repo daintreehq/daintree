@@ -81,9 +81,10 @@ export interface WorktreePortProtocol {
     //
     // `force` and `forceDeleteBranch` are two different consents and must stay
     // separate. `force` means "remove the working tree even though it has
-    // changes"; `forceDeleteBranch` means "delete the branch even though it has
-    // commits no other branch holds". One flag meaning both let a dialog that
-    // truthfully described the first silently perform the second.
+    // changes"; `forceDeleteBranch` means "delete the branch even though Git
+    // refuses the safe delete" (`-D` rather than `-d`). One flag meaning both
+    // let a dialog that truthfully described the first silently perform the
+    // second.
     payload: {
       worktreeId: string;
       force?: boolean;

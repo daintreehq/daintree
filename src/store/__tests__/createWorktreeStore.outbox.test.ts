@@ -25,10 +25,17 @@ const {
   devPreviewGetByWorktreeMock,
   devPreviewStopByWorktreeMock,
 } = vi.hoisted(() => ({
-  worktreeClientDeleteMock:
-    vi.fn<
-      (id: string, force?: boolean, deleteBranch?: boolean, mutationId?: string) => Promise<void>
-    >(),
+  worktreeClientDeleteMock: vi.fn<
+    (
+      id: string,
+      options: {
+        force?: boolean;
+        deleteBranch?: boolean;
+        forceDeleteBranch?: boolean;
+        mutationId?: string;
+      }
+    ) => Promise<void>
+  >(),
   worktreeClientAttachIssueMock:
     vi.fn<(payload: import("@shared/types").AttachIssuePayload) => Promise<void>>(),
   worktreeClientDetachIssueMock: vi.fn<(worktreeId: string) => Promise<void>>(),

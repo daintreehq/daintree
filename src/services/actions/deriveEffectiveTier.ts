@@ -4,11 +4,16 @@
  * The static `danger` metadata on an action classifies its worst-case tier;
  * this pure function derives the *effective* tier for a concrete invocation
  * from runtime context (the `force` flag, branch protection, how many tabs
- * would actually close). Both the UI that gates the action (e.g.
- * `WorktreeDeleteDialog`'s typed-name input) and the action `run()` body that
- * decides whether to escalate to a confirm consult this same rule, so the
- * dialog and the dispatch path can never disagree about whether a given call
- * is high-tier.
+ * would actually close). The UI that gates the action (e.g.
+ * `WorktreeDeleteDialog`'s typed-name input) consults this rule, and so do the
+ * portal close actions' `run()` bodies, so those surfaces cannot disagree with
+ * their dispatch path about whether a call is high-tier.
+ *
+ * `worktree.delete` is the exception and it is a real gap, not a design: its
+ * `run()` does NOT consult this, so a `force: true` dispatch that never passes
+ * through `WorktreeDeleteDialog` — an agent calling it over MCP — is gated by
+ * the static `danger: "confirm"` metadata alone and never reaches the D3
+ * typed-name gate the same arguments would trigger locally.
  *
  * Keep this module pure — no store, React, or IPC imports — so the policy is
  * unit-testable in isolation.

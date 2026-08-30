@@ -553,7 +553,7 @@ describe("WorktreeDeleteDialog — consequence list", () => {
     ).toBe(true);
     // The outcome and the guard that qualifies it are separate elements — the
     // dash that used to join them read as one sentence.
-    const guard = screen.getByText(/Kept instead if it isn't fully merged/);
+    const guard = screen.getByText(/Kept if it isn't fully merged, or if Git refuses/);
     const outcome = guard.previousSibling;
     expect(outcome?.textContent).toContain(worktree.branch);
     expect(guard.textContent).toMatch(/^\s/);
@@ -574,7 +574,11 @@ describe("WorktreeDeleteDialog — consequence list", () => {
       "listitem"
     );
     const branchRow = rows.find((row) => (row.textContent ?? "").startsWith("Branch feature/test"));
-    expect(branchRow?.textContent).toContain("Kept instead if it isn't fully merged");
+    expect(branchRow?.textContent).toContain("Kept if it isn't fully merged");
+    // Not-fully-merged is only the refusal the user is most likely to hit: a
+    // lock, a checkout elsewhere, or a permissions error keeps the branch too,
+    // so the row must not promise deletion with one stated exception.
+    expect(branchRow?.textContent).toContain("or if Git refuses for any other reason");
   });
 
   it("does not offer a branch row for a protected branch", () => {

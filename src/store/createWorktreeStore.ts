@@ -210,7 +210,7 @@ export interface IssueMutationError {
 
 /**
  * The clause `WorkspaceService.deleteWorktree` uses when the safe `branch -d`
- * refused a branch holding commits nothing else does. Two things key off it:
+ * refused a branch Git does not consider fully merged. Two things key off it:
  * the delete is permanent-failed rather than retried (a retry can only find
  * the worktree already gone), and the toast reports a branch deliberately kept
  * rather than a broken delete. Matched as a substring so a wrapped or prefixed
@@ -1540,7 +1540,7 @@ async function runDeleteAsync(
       // nothing is lost by dropping it.
       if (isBranchKeptError(message)) {
         // Not a malfunction: the safe `branch -d` refused rather than discard
-        // work Git can't see anywhere else. A warning keeps that legible as a
+        // work Git does not consider merged. A warning keeps that legible as a
         // deliberate outcome instead of dressing a working safeguard as a fault
         // — and as a fault the user could fix by retrying, which they can't.
         notify({

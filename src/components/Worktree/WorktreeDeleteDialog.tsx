@@ -363,7 +363,8 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       content: (
         <>
           <span className="font-medium">
-            Branch <span className="font-mono break-all">{worktree.branch}</span> will be deleted
+            Branch <span className="font-mono break-all">{worktree.branch}</span> will be deleted if
+            Git allows it
           </span>
           {/* Says the outcome, not that "it fails". The branch delete runs
               after the directory is already gone, so a failure here never
@@ -372,8 +373,15 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               separate and nothing in this dialog grants the second one, so a
               branch Git won't delete safely survives. "Fully merged" is Git's
               own test rather than a paraphrase — `branch -d` measures the
-              branch against its upstream (or HEAD), not against every ref. */}
-          <span className="ml-1 text-text-secondary"> Kept instead if it isn't fully merged</span>
+              branch against its upstream (or HEAD), not against every ref.
+              "if Git allows it" rather than naming the one refusal: a branch
+              also survives a lock, a checkout elsewhere, or a permissions
+              error, so promising deletion with a single stated exception
+              still overpromises on every other path. */}
+          <span className="ml-1 text-text-secondary">
+            {" "}
+            Kept if it isn&apos;t fully merged, or if Git refuses for any other reason
+          </span>
         </>
       ),
     });

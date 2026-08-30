@@ -105,8 +105,11 @@ export const worktreeClient = {
       /** Also delete the branch the worktree had checked out. */
       deleteBranch?: boolean;
       /**
-       * Delete that branch even when it holds commits no other branch does
-       * (`branch -D` rather than `-d`). Independent of `force`: consenting to
+       * Delete that branch even when Git refuses the safe delete (`branch -D`
+       * rather than `-d`). Git's test is whether the branch is fully merged
+       * into its upstream — or into HEAD when it has none — NOT whether the
+       * commits exist on some other ref, so "commits nothing else holds"
+       * overstates what this discards. Independent of `force`: consenting to
        * discard an uncommitted file is not consenting to discard a commit.
        */
       forceDeleteBranch?: boolean;
