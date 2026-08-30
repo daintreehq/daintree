@@ -231,8 +231,10 @@ function OverviewGridCell(props: OverviewWorktreeCardProps & { isCursor?: boolea
         //
         // The top inset is a function of the card's own status mark, which
         // shares this edge. Both resolve against this cell's padding box: the
-        // tick is `top-1 start-1` w-1 h-4 at x 4-8, y 4-20, and this rail is
-        // `start-0` w-[3px] at x 0-3. One pixel apart. Two thin verticals that
+        // tick is `top-1 start-1` w-1 h-4 at x 4-8, y 4-20 — it is flush at 0,0
+        // on the square sidebar card and inset only here, where this cell's
+        // `rounded-lg overflow-hidden` arc would otherwise clip it — and this
+        // rail is `start-0` w-[3px] at x 0-3. One pixel apart. Two thin verticals that
         // close together would read as one broken rail if they also shared a
         // row, so the rail starts below the tick instead — 24px, four clear
         // pixels under it — rather than the 12px it would otherwise take. The

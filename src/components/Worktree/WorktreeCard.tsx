@@ -963,18 +963,19 @@ export function WorktreeCard({
               waiting/cleanup/complete — so this label is the only place the
               lifecycle state is spoken.
 
-              Which is why it is `z-20` and not `z-10`: from here it would
-              otherwise fall under the content column's own `z-10` and be
-              washed by the grip's hover plate. The overlays that must still
-              cover it — the flash, the input receipt, sidebar.css's `::after`
-              edge — are `z-20` too and come later, so they win the tie.
+              Which is also why it outranks the content column's own `z-10`
+              (the grip's hover plate would wash it) and the `z-20` full-card
+              overlays below — the border flash, the input receipt, sidebar.css's
+              `::after` drop ring. Those three are continuous lines on the card's
+              edge and the mark is now ON that edge, so anything that painted
+              over it would bridge its segment gaps rather than just tint it.
 
               The geometry, and the reason every number in it is what it is,
               lives in `WorktreeStatusTick`. */}
           {chipState !== null && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <WorktreeStatusTick state={chipState} />
+                <WorktreeStatusTick state={chipState} variant={variant} />
               </TooltipTrigger>
               <TooltipContent side="right" align="start" className="text-xs">
                 {CHIP_LABELS[chipState]}

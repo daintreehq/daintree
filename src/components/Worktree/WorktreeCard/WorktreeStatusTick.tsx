@@ -77,30 +77,42 @@ const CHIP_FILLS: Record<WorktreeStatusTickState, string> = {
  * closes the gaps, which is the whole encoding. It is also less total ink than
  * the 12x12 corner wedge this lineage started from.
  *
- * `top-1 start-1` (4px, 4px) is the corner-most position that survives what
- * else is drawn there, not a margin someone liked the look of:
+ * The corner means the CORNER: flush at 0,0. A mark held off the edge by a few
+ * pixels is a mark floating near a corner, and the whole point of the position
+ * is that it is outside the content entirely. The inset is not a design knob,
+ * it is a clearance — so it is spent only where something is actually there to
+ * clear, which is one surface and not the other:
  *
- * - The full-card outlines are all inset 2px and CONTINUOUS — the grid
- *   keyboard cursor (`-outline-offset-2`), the sidebar drop-target ring
- *   (`inset 0 0 0 2px`), the forced-colors row outline. Drawn over the tick
- *   they would not merely cover it, they would bridge its gaps and flatten
- *   every state to one bar for exactly the forced-colors reader who has
- *   nothing but the gaps left.
- * - The grid cell is `rounded-lg overflow-hidden`, so its arc eats whatever
- *   sits closer in than this. `--radius-lg` is 10px scaled by the theme's
- *   `--theme-radius-scale`, and inside the cell's 1px border the clip radius
- *   is R-1: at the default R=10 the arc is 9px down at x=0 and 1.5px down at
- *   x=4, so a mark starting 4px in keeps ~2.5px of clearance, and the largest
- *   built-in (R=10.5) costs 0.2px of that. A custom `radiusScale` past ~1.47
- *   would start shaving the first segment — the theme schema puts no ceiling
- *   on that number, so it is the one thing that can move these.
+ * - `sidebar` — the card is square and full-bleed (`sidebar.css` cuts the rows
+ *   apart with a `border-bottom` gutter, no radius), so nothing clips and the
+ *   mark goes on the corner itself.
+ * - `grid` — the overview cell is `rounded-lg overflow-hidden`, so its arc eats
+ *   whatever sits inside it. `--radius-lg` is 10px scaled by the theme's
+ *   `--theme-radius-scale`, and inside the cell's 1px border the clip radius is
+ *   R-1. A mark at inset `i` on both axes survives when its top-left corner is
+ *   inside the arc, i.e. `i >= r(1 - 1/sqrt2)` — about 2.64px at the default
+ *   r=9. 4px is the first whole pixel past that, keeps ~1.4px of slack, and the
+ *   largest built-in (R=10.5) costs 0.2px of it. A custom `radiusScale` past
+ *   ~1.5 would start shaving the first segment; the theme schema puts no
+ *   ceiling on that number, so it is the one thing that can move this.
  *
- * Equal on both axes, so the mark sits on the corner's diagonal rather than
- * hanging off one edge of it.
+ * Equal on both axes wherever it is inset, so the mark sits on the corner's
+ * diagonal rather than hanging off one edge of it.
  *
  * Logical `start-*`, not `left-*`: the overview grid's membership rail is
  * itself logical, so a physical inset would put the two on the same side again
  * under RTL.
+ *
+ * `z-30`, not the `z-20` this sat at while it was inset. Three full-card
+ * overlays paint at `z-20` and come later in the tree, so they win the tie: the
+ * border flash and the input receipt (`inset-0` in `WorktreeCard`) and
+ * sidebar.css's `::after` drop-target ring (`inset 0 0 0 2px`). At 4px in, none
+ * of them reached the mark. Flush on the edge, all three run straight down it —
+ * and a continuous line over a segmented one does not merely tint it, it
+ * BRIDGES the gaps and flattens all three states to one bar. The forced-colors
+ * row outline is fine either way: an `outline` on the card root paints with the
+ * root, below any positioned descendant. Nothing needs to cover a 4px mark, so
+ * it goes above them.
  *
  * Square ends, not the `rounded-full` of `.palette-row::before`. Both marks are
  * thin verticals near this edge, so radius is what keeps them apart: a pill is
@@ -108,15 +120,23 @@ const CHIP_FILLS: Record<WorktreeStatusTickState, string> = {
  */
 export function WorktreeStatusTick({
   state,
+  variant = "sidebar",
   ...rest
-}: { state: WorktreeStatusTickState } & React.ComponentProps<"div">) {
+}: {
+  state: WorktreeStatusTickState;
+  /** Which card the mark is sitting on — the corner it gets is a property of that card's radius, not of the mark. */
+  variant?: "sidebar" | "grid";
+} & React.ComponentProps<"div">) {
   return (
     <div
       // Spread first: the card wraps this in a `TooltipTrigger asChild`, which
       // clones the element with its own handlers and ref. Anything below this
       // line is the component's own and must win over what Radix passes.
       {...rest}
-      className="absolute top-1 start-1 z-20 flex h-4 w-1 cursor-default flex-col gap-0.5"
+      className={cn(
+        "absolute z-30 flex h-4 w-1 cursor-default flex-col gap-0.5",
+        variant === "grid" ? "top-1 start-1" : "top-0 start-0"
+      )}
       data-testid="worktree-status-tick"
       data-state={state}
       role="img"

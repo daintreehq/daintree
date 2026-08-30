@@ -43,11 +43,18 @@ function readVerticalGap(tick: HTMLElement): number {
   return readScalePx(gap!);
 }
 
-function renderTick(state: WorktreeStatusTickState) {
-  render(<WorktreeStatusTick state={state} />);
+function renderTick(state: WorktreeStatusTickState, variant?: "sidebar" | "grid") {
+  render(<WorktreeStatusTick state={state} variant={variant} />);
   const tick = screen.getByTestId("worktree-status-tick");
   const segments = screen.getAllByTestId("worktree-status-tick-segment");
   return { tick, segments };
+}
+
+/** The tick's corner inset in px, read off whichever axis is asked for. */
+function readInset(tick: HTMLElement, axis: "top-" | "start-"): number {
+  const inset = [...tick.classList].find((c) => c.startsWith(axis));
+  expect(inset, `the tick is not positioned on ${axis}: ${tick.className}`).toBeDefined();
+  return readScalePx(inset!);
 }
 
 describe("WorktreeStatusTick", () => {
@@ -161,17 +168,64 @@ describe("WorktreeStatusTick", () => {
     ).toBeGreaterThanOrEqual(2);
   });
 
-  it("holds off the card's edges far enough that the inset outlines cannot reach it", () => {
-    // Every full-card outline is inset 2px and continuous — the grid keyboard
-    // cursor, the sidebar drop-target ring, the forced-colors row outline.
-    // Drawn across the tick, one would bridge its gaps and flatten all three
-    // states to a single bar for the reader who has nothing but the gaps left.
-    const { tick } = renderTick("complete");
-    for (const axis of [/^top-/, /^start-/]) {
-      const inset = [...tick.classList].find((c) => axis.test(c));
-      expect(inset, `the tick is not positioned on ${String(axis)}`).toBeDefined();
-      expect(readScalePx(inset!), `${inset} sits under the 2px inset outlines`).toBeGreaterThan(2);
+  it("sits flush in the corner of a card with no radius to clear", () => {
+    // The mark's whole job is to be outside the content, on the card's corner.
+    // Held off the edge it is a mark floating NEAR a corner, which is a
+    // different and weaker statement. The sidebar card is square and
+    // full-bleed, so there is nothing there to clear and nothing to spend an
+    // inset on.
+    const { tick } = renderTick("complete", "sidebar");
+    for (const axis of ["top-", "start-"] as const) {
+      expect(readInset(tick, axis), `${axis} is holding the mark off a square corner`).toBe(0);
     }
+  });
+
+  it("clears the rounded card's corner arc, which is the only reason an inset exists", () => {
+    // The overview cell is `rounded-lg overflow-hidden`, so its arc clips
+    // whatever sits inside it — and it eats the mark from the TOP, taking the
+    // first segment and with it the count that separates the states. A mark
+    // inset `i` on both axes survives when its top-left corner falls inside a
+    // clip arc of radius `r`: (r - i)*sqrt(2) <= r.
+    //
+    // `r` is the cell's radius less its 1px border. `--radius-lg` is 10px at
+    // `--theme-radius-scale: 1`, and the largest built-in scale is 1.05.
+    const LARGEST_BUILT_IN_CLIP_RADIUS = 10 * 1.05 - 1;
+    const minimumClearance = LARGEST_BUILT_IN_CLIP_RADIUS * (1 - 1 / Math.SQRT2);
+
+    const { tick } = renderTick("complete", "grid");
+    for (const axis of ["top-", "start-"] as const) {
+      expect(
+        readInset(tick, axis),
+        `${axis} lets the cell's corner arc reach the mark's first segment`
+      ).toBeGreaterThanOrEqual(minimumClearance);
+    }
+  });
+
+  it("spends that inset only on the card that has a radius", () => {
+    // The two variants must not drift into the same number: if the grid's
+    // clearance is ever copied onto the sidebar, the flush corner is silently
+    // gone, and if the sidebar's flush corner is copied onto the grid, the
+    // clipping is silently back.
+    const grid = readInset(renderTick("complete", "grid").tick, "start-");
+    cleanup();
+    const sidebar = readInset(renderTick("complete", "sidebar").tick, "start-");
+    expect(grid, "both cards are using the same inset").toBeGreaterThan(sidebar);
+  });
+
+  it("outranks the full-card overlays it now shares an edge with", () => {
+    // The border flash, the input receipt and sidebar.css's drop-target ring
+    // are all `z-20`, `inset-0`, and later in the tree than the mark — so at
+    // equal z-index they paint over it. Each is a CONTINUOUS line on the very
+    // edge the mark is now flush against, and a continuous line over a
+    // segmented one bridges the gaps rather than tinting them, flattening
+    // every state to a single bar.
+    const { tick } = renderTick("complete", "sidebar");
+    const layer = [...tick.classList].find((c) => /^z-\d+$/.test(c));
+    expect(layer, `the tick declares no stacking layer: ${tick.className}`).toBeDefined();
+    expect(
+      Number(layer!.slice(2)),
+      `${layer} lets the z-20 card overlays paint across the mark`
+    ).toBeGreaterThan(20);
   });
 });
 
