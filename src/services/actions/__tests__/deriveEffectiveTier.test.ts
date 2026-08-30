@@ -10,8 +10,7 @@ const worktreeCtx = (over: Partial<WorktreeDeleteTierCtx> = {}): WorktreeDeleteT
   isProtectedBranch: false,
   isMainWorktree: false,
   hasTrackedChanges: false,
-  submoduleCommitsAtRisk: false,
-  submoduleRiskUnverified: false,
+  submoduleFilesAtRisk: false,
   ...over,
 });
 
@@ -49,39 +48,26 @@ describe("deriveEffectiveTier — worktree.delete", () => {
     ).toBe("D3");
   });
 
-  it("escalates to D3 on at-risk submodule commits even without force", () => {
-    // The invisible case: parent porcelain prints zero bytes, so nothing in the
-    // non-force refusal path is looking at the commits that would be lost.
+  it("escalates to D3 with force + nested submodule files", () => {
+    // The parent collapses a submodule into one ` M vendor/lib` row and can be
+    // configured not to report it at all, so this cannot ride hasTrackedChanges.
     expect(
       deriveEffectiveTier(
         "worktree.delete",
-        worktreeCtx({ force: false, submoduleCommitsAtRisk: true })
-      )
-    ).toBe("D3");
-    expect(
-      deriveEffectiveTier(
-        "worktree.delete",
-        worktreeCtx({ force: true, submoduleCommitsAtRisk: true })
+        worktreeCtx({ force: true, submoduleFilesAtRisk: true })
       )
     ).toBe("D3");
   });
 
-  it("treats an unverified submodule inventory as fail-closed under force only", () => {
-    // Mirrors the parent's failed status fetch: it counts as work present when
-    // the user has reached for force, but a delete we have no reason to think
-    // is destructive must not demand the typed-name gate on a maybe.
+  it("leaves nested submodule files at D2 without force", () => {
+    // Symmetrical with hasTrackedChanges: the host refuses the unforced delete
+    // on this state, so the gate waits for the flag that lifts the refusal.
     expect(
       deriveEffectiveTier(
         "worktree.delete",
-        worktreeCtx({ force: false, submoduleRiskUnverified: true })
+        worktreeCtx({ force: false, submoduleFilesAtRisk: true })
       )
     ).toBe("D2");
-    expect(
-      deriveEffectiveTier(
-        "worktree.delete",
-        worktreeCtx({ force: true, submoduleRiskUnverified: true })
-      )
-    ).toBe("D3");
   });
 
   it("stays D2 with force but only untracked files (#4927 regression guard)", () => {

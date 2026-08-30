@@ -36,20 +36,15 @@ export interface WorktreeDeleteTierCtx {
    */
   hasTrackedChanges: boolean;
   /**
-   * Commits that live ONLY in this worktree's own submodule object store were
-   * positively observed. A linked worktree gets its own
-   * `.git/worktrees/<id>/modules/<path>` with no `alternates`, so removing the
-   * worktree takes those commits with it — no dangling object, no reflog,
-   * nothing for `fsck --lost-found` to return.
+   * A completed inventory found modified or untracked files inside this
+   * worktree's submodules. Working-tree content, which is exactly what `force`
+   * consents to everywhere else — so it escalates under `force` and never
+   * without it, the same shape as `hasTrackedChanges`.
+   *
+   * The parent's own status cannot stand in for this: it collapses a submodule
+   * into one ` M vendor/lib` row, and can be configured not to report it at all.
    */
-  submoduleCommitsAtRisk: boolean;
-  /**
-   * The submodule inventory could not be completed (the fetch failed, or the
-   * host walked only part of the tree). Fails closed the same way a failed
-   * parent status fetch does — it counts as work present under `force` — but
-   * deliberately does NOT demand the typed-name gate on its own.
-   */
-  submoduleRiskUnverified: boolean;
+  submoduleFilesAtRisk: boolean;
 }
 
 export interface PortalCloseTierCtx {
@@ -78,35 +73,27 @@ export function deriveEffectiveTier(
   // `in`-operator narrowing keeps each branch type-safe without a cast — the
   // two ctx shapes have disjoint fields, so the discriminant is structural.
   if (actionId === "worktree.delete" && "force" in ctx) {
-    // Observed at-risk submodule commits escalate WITHOUT `force`, and that
-    // asymmetry is deliberate.
+    // Every input is conditioned on `force`, and that is sound because a
+    // backend invariant stands behind each: `git worktree remove` refuses a
+    // dirty tree and `WorkspaceService.guardSubmoduleDelete` refuses nested
+    // working-tree content, so a non-force delete cannot destroy either and the
+    // gate can wait for the flag that lifts the refusal.
     //
-    // Conditioning the other three inputs on `force` is only sound because a
-    // backend invariant stands behind it: `git worktree remove` refuses a
-    // dirty tree, so a non-force delete cannot destroy parent work and the
-    // gate can wait for the flag that lifts the refusal. No such invariant
-    // covers a submodule. In the case this input exists for — a submodule back
-    // at its recorded gitlink, clean working tree, holding a commit made on
-    // its detached HEAD — the parent's `git status --porcelain` prints zero
-    // bytes, so nothing in the refusal path is looking at the commits that
-    // would be lost. Whether the removal is refused at all turns on the mere
-    // existence of `<gitdir>/modules`, a mechanical fact about the checkout
-    // rather than about the work inside it. Gating on `force` would rest the
-    // escalation on a guard that has no view of what it is guarding, and would
-    // in any case only surface the gate AFTER the user had already reached for
-    // the destructive option.
+    // The two submodule states that have NO such flag — commits held only in
+    // this worktree's own module store, and an inventory that could not be
+    // completed — are deliberately absent. The host throws on both before it
+    // reads `force`, so they are not a tier at all: they are blocked, and the
+    // surfaces model them that way (`submoduleDeleteBlock`). Ranking a refusal
+    // as a tier is what produced a typed-name gate leading to a toast.
     //
-    // #4927 is not regressed: nested dirty and untracked content is
-    // deliberately not an input here. The parent reports both as a tracked
-    // ` M vendor/lib` row, so they already ride `hasTrackedChanges` under
-    // `force`, and an untracked-only worktree still never demands the gate on
-    // its own.
-    if (ctx.submoduleCommitsAtRisk) return "D3";
+    // #4927 is not regressed: `submoduleFilesAtRisk` covers nested content,
+    // which the parent reports as a tracked ` M vendor/lib` row anyway, and an
+    // untracked-only parent worktree still never demands the gate on its own.
     return ctx.force &&
       (ctx.isProtectedBranch ||
         ctx.isMainWorktree ||
         ctx.hasTrackedChanges ||
-        ctx.submoduleRiskUnverified)
+        ctx.submoduleFilesAtRisk)
       ? "D3"
       : "D2";
   }

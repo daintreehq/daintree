@@ -69,28 +69,51 @@ export type WorktreeSubmoduleRiskState =
 export const SUBMODULE_COMMIT_LIMIT = 5;
 
 /**
- * The two tier inputs the submodule risk contributes, derived in ONE place so
- * the dialog's render-time tier and its submit-time revalidation cannot
- * disagree about the same risk object (they already disagreed once about the
- * parent's changes — that was #11343).
+ * Why the host will refuse this delete outright, or `null` when it won't.
+ *
+ * This is a "blocked" state, NOT a tier. A tier asks for consent proportional
+ * to the damage; these two states have no consent that makes them safe, because
+ * `WorkspaceService.guardSubmoduleDelete` throws on both BEFORE it looks at
+ * `force`. Offering a typed-name gate for them would take the user through the
+ * most emphatic confirmation the app has and then hand them a toast.
+ *
+ * Mirrors `describeUnrecoverableSubmoduleLoss` in the host — including its
+ * ordering, so the reason shown is the reason thrown. `incomplete` sits here
+ * rather than with the working-tree content for the host's reason: a failed rev
+ * walk sets it just as readily as an unreadable working tree, so an incomplete
+ * inventory with no observed commits means "we could not tell whether commits
+ * are at stake", never "none are".
  */
-export function deriveSubmoduleTierInputs(state: WorktreeSubmoduleRiskState): {
-  submoduleCommitsAtRisk: boolean;
-  submoduleRiskUnverified: boolean;
-} {
-  return {
-    // Observed commits are observed regardless of whether the walk finished.
-    submoduleCommitsAtRisk: (state.risk?.atRiskCommits.length ?? 0) > 0,
-    submoduleRiskUnverified: state.status === "unverified",
-  };
+export type WorktreeSubmoduleDeleteBlock = "at-risk-commits" | "unverified";
+
+export function submoduleDeleteBlock(
+  state: WorktreeSubmoduleRiskState
+): WorktreeSubmoduleDeleteBlock | null {
+  // Observed commits are observed regardless of whether the walk finished, and
+  // they carry the more specific remedy, so they win the ordering.
+  if ((state.risk?.atRiskCommits.length ?? 0) > 0) return "at-risk-commits";
+  if (state.status === "unverified") return "unverified";
+  return null;
 }
 
-/** True when git itself will refuse `worktree remove` without `--force`. */
+/**
+ * True when the user's `force` is what stands between nested working-tree
+ * content and its deletion — the one submodule state `force` genuinely consents
+ * to, and the only one that still moves the tier.
+ *
+ * Deliberately NOT `requiresMechanicalForce`. That flag is about the mere
+ * existence of `<gitdir>/modules`, which the host now supplies `--force` for on
+ * its own account, so demanding the checkbox for it asked the user to consent to
+ * nothing. The inverse matters more: an old-form submodule with an embedded
+ * `.git` directory produces no modules directory at all, so the flag is false
+ * while its dirty files are just as destroyed. The file count is the fact.
+ *
+ * Only on a completed inventory: an unverified one is blocked outright
+ * ({@link submoduleDeleteBlock}), so there is no state left where this would be
+ * deciding anything on evidence we do not have.
+ */
 export function submoduleForceRequired(state: WorktreeSubmoduleRiskState): boolean {
-  // Only on a completed inventory: this disables the plain-delete button, and
-  // blocking the safe attempt on a state we could not check would coerce the
-  // user into forcing on exactly the evidence we do not have.
-  return state.status === "verified" && state.risk.requiresMechanicalForce;
+  return state.status === "verified" && submoduleFileCount(state) > 0;
 }
 
 /** Total nested files (dirty + untracked) a delete would discard. */
@@ -401,9 +424,13 @@ export function formatSubmodulePreviewLines(state: WorktreeSubmoduleRiskState): 
     // repository's own remote-tracking refs. A commit someone already pushed
     // from another checkout looks identical from here, so the claim is scoped
     // to what was actually measured.
+    //
+    // Stated as a refusal, not a risk: the host throws on this before it reads
+    // `force`, so an approver told the delete "may destroy" these commits would
+    // be consenting to something that cannot happen either way.
     const count = risk.atRiskCommits.length;
     lines.push(
-      `${MCP_PREVIEW_CAUTION_PREFIX}${plural(count, "commit")} inside submodules ${count === 1 ? "is" : "are"} on no remote this clone knows about — deleting this worktree may destroy ${count === 1 ? "it" : "them"} for good:`
+      `${MCP_PREVIEW_CAUTION_PREFIX}${plural(count, "commit")} inside submodules ${count === 1 ? "is" : "are"} on no remote this clone knows about — the worktree cannot be deleted until ${count === 1 ? "it is" : "they are"} pushed:`
     );
     for (const row of commitRows) {
       lines.push(row.isOverflow ? `  ${row.subject}` : `  ${row.shortOid} ${row.subject}`);
@@ -411,7 +438,7 @@ export function formatSubmodulePreviewLines(state: WorktreeSubmoduleRiskState): 
   }
   if (state.status === "unverified") {
     lines.push(
-      `${MCP_PREVIEW_CAUTION_PREFIX}Could not finish checking this worktree's submodules — deleting it may destroy nested work not listed here.`
+      `${MCP_PREVIEW_CAUTION_PREFIX}Could not finish checking this worktree's submodules — the worktree cannot be deleted until that check completes.`
     );
   }
   return lines;

@@ -12,7 +12,7 @@ import {
   buildWorktreeChangeRows,
   buildSubmoduleCommitRows,
   buildSubmoduleFileRows,
-  deriveSubmoduleTierInputs,
+  submoduleDeleteBlock,
   submoduleFileCount,
   submoduleForceRequired,
   summarizeWorktreeChanges,
@@ -20,6 +20,7 @@ import {
   type WorktreeDeletePreview,
   type WorktreeSubmoduleRiskState,
 } from "@/components/Worktree/worktreeDeletePreview";
+import { Button } from "@/components/ui/button";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import type { WorktreeState } from "@/types";
@@ -48,6 +49,14 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const [freshPreview, setFreshPreview] = useState<WorktreeDeletePreview | null>(null);
   const [verifyFailed, setVerifyFailed] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  // The open-time fetch has not settled yet. Distinct from `freshPreview ===
+  // null`, which is also what a resolved-`null` (monitor gone) preview leaves
+  // behind — reading pending off that would disable the primary for good.
+  const [previewPending, setPreviewPending] = useState(true);
+  // Bumped by the blocked banners' recovery action to re-run the open-time
+  // fetch. The whole preview rides one call, so a retry re-reads the parent
+  // status too — which is right: the two failures share a cause often enough.
+  const [retryToken, setRetryToken] = useState(0);
   // Monotonic session token bumped on every open/close/worktree change (in the
   // open effect below). An in-flight submit revalidation captures the token and
   // aborts if it changed while awaiting — so a close→reopen (or worktree swap)
@@ -108,9 +117,6 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const submodules: WorktreeSubmoduleRiskState | null = verifyFailed
     ? { status: "unverified", risk: null }
     : (freshPreview?.submodules ?? null);
-  const submoduleTierInputs = submodules
-    ? deriveSubmoduleTierInputs(submodules)
-    : { submoduleCommitsAtRisk: false, submoduleRiskUnverified: false };
   // Real nested paths and real commit subjects. The parent's own status shows
   // every one of these files as a single ` M vendor/lib` row — precise-looking
   // and wrong by an unbounded factor — and shows the commits as nothing at all.
@@ -118,10 +124,21 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const submoduleCommitRows = buildSubmoduleCommitRows(submodules?.risk ?? null);
   const nestedFileCount = submodules ? submoduleFileCount(submodules) : 0;
   const atRiskCommitCount = submodules?.risk?.atRiskCommits.length ?? 0;
-  const submodulesUnverified = submodules?.status === "unverified" && !verifyFailed;
-  // Git refuses `worktree remove` on a worktree that owns module directories,
-  // whatever the tree looks like. Offering the plain delete as the primary
-  // action there ships a button whose only outcome is a toast.
+  /**
+   * The delete the host will refuse outright, whatever the user consents to.
+   *
+   * Scoped to the submodule inventory's own answer: when the PARENT status
+   * fetch is what failed (`verifyFailed`) we know nothing about submodules
+   * either, but the host re-reads both for itself at delete time and may well
+   * proceed — so refusing here would strand a delete that can still succeed.
+   * That state keeps its existing warn-and-require-force treatment.
+   */
+  const submoduleBlock = submodules && !verifyFailed ? submoduleDeleteBlock(submodules) : null;
+  const isBlocked = submoduleBlock !== null;
+  // Nested modified/untracked files: the one submodule state `force` genuinely
+  // consents to, so the plain delete is disabled and force enables it. Not
+  // `requiresMechanicalForce` — the host adds that `--force` itself, and an
+  // old-form embedded submodule never sets it while its files die all the same.
   const forceRequiredBySubmodules = submodules ? submoduleForceRequired(submodules) : false;
 
   const isProtectedBranch = isProtectedBranchName(worktree.branch?.toLowerCase());
@@ -130,27 +147,24 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     !isProtectedBranch && !isDetachedHead && worktree.isMainWorktree === false;
 
   const confirmTarget = worktree.branch || worktree.name;
-  // Names the reason the gate is actually up. The submodule case comes first
-  // and does not say "force": it escalates without the flag, so the other two
-  // wordings would describe an option the user has not chosen. The unverified
-  // case has its own line for the opposite reason — it can escalate a clean,
-  // unprotected worktree, where "discards uncommitted tracked changes" is a
-  // statement the dialog has no evidence for.
+  // Names the reason the gate is actually up.
   const highTierPreamble =
-    atRiskCommitCount > 0
-      ? "Deleting this worktree may destroy commits inside its submodules that are on no remote this clone knows about."
-      : isProtectedBranch || worktree.isMainWorktree === true
-        ? "Force-deleting this protected worktree is irreversible."
-        : hasTrackedChanges
-          ? "Force-deleting this worktree discards uncommitted tracked changes — this is irreversible."
-          : "Force-deleting this worktree may discard submodule work Daintree couldn't finish checking for.";
+    isProtectedBranch || worktree.isMainWorktree === true
+      ? "Force-deleting this protected worktree is irreversible."
+      : hasTrackedChanges
+        ? "Force-deleting this worktree discards uncommitted tracked changes — this is irreversible."
+        : "Force-deleting this worktree discards modified and untracked files inside its submodules — this is irreversible.";
+  // Never gate a delete that cannot proceed. A typed-name input on a blocked
+  // state asks for the most emphatic consent the app has and then refuses
+  // anyway; blocked is a different thing from D3, and this is where they part.
   const isHighTier =
+    !isBlocked &&
     deriveEffectiveTier("worktree.delete", {
       force,
       isProtectedBranch,
       isMainWorktree: worktree.isMainWorktree === true,
       hasTrackedChanges,
-      ...submoduleTierInputs,
+      submoduleFilesAtRisk: forceRequiredBySubmodules,
     }) === "D3";
   const isConfirmMatched = confirmInput === confirmTarget;
   // A standard (non-force) delete on a tree we KNOW is dirty is rejected by
@@ -162,7 +176,19 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // submodule module directories is the same situation arriving from git
   // rather than from our own guard.
   const blockedByDirtyTree = (hasChanges || forceRequiredBySubmodules) && !force && !verifyFailed;
-  const canSubmit = (!isHighTier || isConfirmMatched) && !isDeleting && !blockedByDirtyTree;
+  // Nothing is submittable until the open-time fetch has settled. Before it
+  // does, `submodules` is null and every submodule input reads false, so a fast
+  // click on a worktree holding unpushed submodule commits would dispatch a
+  // delete the host refuses with the check having never run. Gating the button
+  // (rather than revalidating on the plain path) keeps the immediate dismiss
+  // #8417 asks for, and the fetch is deadline-bounded by the port client, so
+  // this cannot wedge.
+  const canSubmit =
+    (!isHighTier || isConfirmMatched) &&
+    !isDeleting &&
+    !blockedByDirtyTree &&
+    !isBlocked &&
+    !previewPending;
 
   useEffect(() => {
     if (isOpen) {
@@ -188,17 +214,21 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     let cancelled = false;
     setFreshPreview(null);
     setVerifyFailed(false);
+    setPreviewPending(true);
     buildWorktreeDeletePreview(worktree.id)
       .then((preview) => {
         if (!cancelled) setFreshPreview(preview);
       })
       .catch(() => {
         if (!cancelled) setVerifyFailed(true);
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewPending(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [isOpen, worktree.id]);
+  }, [isOpen, worktree.id, retryToken]);
 
   // Disclose a running dev server in the "What will happen" list so the user
   // isn't surprised when the cascade runs (Tier D2 destructive action rule).
@@ -268,16 +298,15 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // that looked D2 at open could discard tracked work the typed-name gate was
   // meant to guard. If the fresh check now escalates to D3 and the name isn't
   // matched, we surface the gate instead of dispatching. Fails closed on fetch
-  // error. Only the force path needs this — a non-force delete can never
-  // discard tracked changes (the backend guard rejects a dirty non-force
-  // delete), so it dispatches synchronously and keeps its immediate dismiss.
+  // error.
+  //
+  // Still only the force path. A plain delete cannot destroy anything the host
+  // does not first refuse, so the window it leaves open — a submodule commit
+  // landing between the settled preview and the click — costs a truthful toast,
+  // never data. Paying for that with a fetch on every plain delete would cost
+  // the immediate dismiss #8417 asks for on all of them.
   const revalidateThenDelete = async () => {
     const session = sessionRef.current;
-    // Captured from the render the user is submitting from, so the comparison
-    // below is against what is actually on screen.
-    const seenAtRiskCommitOids = new Set(
-      (submodules?.risk?.atRiskCommits ?? []).map((commit) => commit.oid)
-    );
     setIsDeleting(true);
     let preview: WorktreeDeletePreview | null = null;
     let failed = false;
@@ -292,17 +321,12 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     if (!mountedRef.current || sessionRef.current !== session) return;
     setFreshPreview(preview);
     setVerifyFailed(failed);
-    // Setting `freshPreview` is not proof the user SAW it. If the revalidation
-    // turns up submodule commits that were not in the list they have been
-    // looking at — an agent committed inside a submodule while the dialog was
-    // open — the typed name they already entered was consent for a different
-    // set of consequences. Clearing it re-arms the gate the tier guarantees is
-    // showing (at-risk commits are D3 unconditionally) and holds the dispatch
-    // until the newly-rendered commits have been confirmed against. Scoped to
-    // commits: they are the class nothing else on this surface can reveal.
-    const freshCommits = preview?.submodules.risk?.atRiskCommits ?? [];
-    if (freshCommits.some((commit) => !seenAtRiskCommitOids.has(commit.oid))) {
-      setConfirmInput("");
+    // An agent can commit inside a submodule between open and submit, which
+    // turns a delete the dialog was offering into one the host will refuse.
+    // Hold the dispatch and let the newly-rendered banner say so, rather than
+    // sending a call whose only outcome is a toast. The state updates above
+    // have already put the evidence on screen.
+    if (!failed && preview && submoduleDeleteBlock(preview.submodules) !== null) {
       setIsDeleting(false);
       return;
     }
@@ -310,17 +334,14 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     // Same fail-closed shape as `freshHasTracked`. A resolved-`null` preview
     // means the monitor is gone — the worktree is already removed, so there is
     // no submodule left to lose and escalating would only strand the user.
-    const freshSubmoduleInputs = failed
-      ? { submoduleCommitsAtRisk: false, submoduleRiskUnverified: true }
-      : preview
-        ? deriveSubmoduleTierInputs(preview.submodules)
-        : { submoduleCommitsAtRisk: false, submoduleRiskUnverified: false };
+    const freshSubmoduleFilesAtRisk =
+      !failed && preview ? submoduleForceRequired(preview.submodules) : false;
     const freshTier = deriveEffectiveTier("worktree.delete", {
       force: true,
       isProtectedBranch,
       isMainWorktree: worktree.isMainWorktree === true,
       hasTrackedChanges: freshHasTracked,
-      ...freshSubmoduleInputs,
+      submoduleFilesAtRisk: freshSubmoduleFilesAtRisk,
     });
     if (freshTier === "D3" && confirmInput !== confirmTarget) {
       // Escalated on fresh data — show the typed-name gate, do not dispatch.
@@ -332,7 +353,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
 
   const handleDelete = () => {
     if (isHighTier && !isConfirmMatched) return;
-    if (isDeleting) return;
+    // Guards the Enter-to-submit path in the typed-name input, which does not
+    // read the footer button's disabled state.
+    if (isDeleting || isBlocked || previewPending) return;
     if (!force) {
       dispatchDelete();
       return;
@@ -440,18 +463,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       content: `${nestedFileCount} file${nestedFileCount === 1 ? "" : "s"} inside submodules will be permanently lost`,
     });
   }
-  if (atRiskCommitCount > 0) {
-    // Not gated on `force`, unlike every other loss row here. The non-force
-    // refusal is what makes those rows conditional, and it turns on the
-    // worktree's own dirtiness and module directories — never on whether a
-    // submodule's object store holds a commit nothing else does. We cannot
-    // claim the plain delete spares these, so we do not.
-    consequences.push({
-      key: "submodule-commits",
-      tone: "danger",
-      content: `${atRiskCommitCount} commit${atRiskCommitCount === 1 ? "" : "s"} inside submodules may be lost for good — ${atRiskCommitCount === 1 ? "it is" : "they are"} on no remote this clone knows about`,
-    });
-  }
+  // No row for at-risk submodule commits: the host refuses that delete outright,
+  // so "may be lost" was a prediction about something that never runs. The
+  // blocked banner and the commit list carry that state now.
   if (deleteBranch && canDeleteBranch) {
     consequences.push({
       key: "branch",
@@ -499,40 +513,83 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     </div>
   ) : null;
 
-  // Separate from `verifyFailedBanner`: that one fires when the parent status
-  // could not be read at all, this one when the parent read fine and only the
-  // nested inventory came back short. Collapsing them would tell a user whose
-  // file list is right in front of them that we could not read it.
-  const submodulesUnverifiedBanner = submodulesUnverified ? (
+  /**
+   * The delete is refused, not merely dangerous — so the banner states the one
+   * thing the user can do about it, and the primary action stays disabled.
+   *
+   * Separate from `verifyFailedBanner`: that one fires when the PARENT status
+   * could not be read at all, and it stays a warning because the host re-reads
+   * for itself and may still proceed. Collapsing them would tell a user whose
+   * file list is right in front of them that we could not read it.
+   *
+   * One action apiece, and both do something real: after pushing from inside
+   * the submodule, or once whatever broke the inventory is fixed, re-running
+   * the same fetch is exactly what clears the block. The commits themselves are
+   * listed below — repeating them here would say the same thing twice.
+   */
+  const submoduleBlockBanner = submoduleBlock ? (
     <div
       role="alert"
+      data-testid="delete-worktree-blocked"
       className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] text-status-error text-xs"
     >
-      <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />
-      <p>
-        Couldn't finish checking this worktree's submodules. Deleting it may destroy nested work
-        that isn't listed here.
-      </p>
+      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" aria-hidden="true" />
+      <div className="flex-1 min-w-0">
+        <p className="font-medium">
+          {submoduleBlock === "at-risk-commits"
+            ? "Push the submodule commits first"
+            : "Couldn't finish checking this worktree's submodules"}
+        </p>
+        <p className="mt-0.5">
+          {submoduleBlock === "at-risk-commits"
+            ? // "On no remote this clone knows about" and not "exists nowhere
+              // else": the inventory can only prove a commit is unreachable
+              // from this module repository's own remote-tracking refs, so a
+              // fetch is a real remedy alongside a push.
+              `${atRiskCommitCount} commit${atRiskCommitCount === 1 ? " is" : "s are"} on no remote this clone knows about, so deleting this worktree isn't available. Push ${atRiskCommitCount === 1 ? "it" : "them"} from inside the submodule — or fetch, if ${atRiskCommitCount === 1 ? "it is" : "they are"} already on the remote — then delete the worktree.`
+            : "Deleting it could destroy nested work that isn't listed here, so deletion isn't available until the check finishes."}
+        </p>
+      </div>
+      <Button
+        variant="subtle"
+        size="xs"
+        className="shrink-0"
+        disabled={previewPending}
+        onClick={() => setRetryToken((token) => token + 1)}
+      >
+        {submoduleBlock === "at-risk-commits" ? "Recheck" : "Retry"}
+      </Button>
     </div>
   ) : null;
 
+  const nestedFileLabel = `${nestedFileCount} file${nestedFileCount === 1 ? "" : "s"}`;
   // Standard (non-force) deletion is rejected by the backend when the tree is
   // dirty, so the primary action would fail. Say so where the decision is made
-  // rather than letting the user find out from a toast.
-  const blockedHint =
-    force || (!hasChanges && !forceRequiredBySubmodules)
-      ? null
+  // rather than letting the user find out from a toast. A blocked delete comes
+  // first: no option on this surface unblocks it, so telling the user to select
+  // force would send them somewhere that does not help. The in-flight check
+  // comes LAST — it also disables the primary, but it is the least specific
+  // thing we can say, and the seed snapshot often already has a better one.
+  const blockedHint = isBlocked
+    ? submoduleBlock === "at-risk-commits"
+      ? // What the check actually measures, so the hint promises exactly what
+        // clears it: a push, or a fetch that proves the remote already has it.
+        "Delete unavailable until the submodule commits are on a remote"
+      : "Delete unavailable until the submodule check finishes"
+    : force || (!hasChanges && !forceRequiredBySubmodules)
+      ? previewPending
+        ? "Checking this worktree for uncommitted work"
+        : null
       : verifyFailed
         ? "Couldn't verify this worktree — standard delete may fail"
         : hasChanges
           ? `Select Force delete to continue — ${changeSummaryLabel} present`
-          : "Select Force delete to continue — Git will not remove a worktree that owns submodules";
+          : `Select Force delete to continue — ${nestedFileLabel} inside submodules will be discarded`;
 
   const changesHeadingId = "worktree-delete-changes-heading";
   const consequencesHeadingId = "worktree-delete-consequences-heading";
   const submodulesHeadingId = "worktree-delete-submodules-heading";
   const submoduleCommitsHeadingId = "worktree-delete-submodule-commits-heading";
-  const nestedFileLabel = `${nestedFileCount} file${nestedFileCount === 1 ? "" : "s"}`;
 
   return (
     <AppDialog
@@ -583,7 +640,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           </dl>
 
           {verifyFailedBanner}
-          {submodulesUnverifiedBanner}
+          {submoduleBlockBanner}
 
           {/* 2. WHAT'S IN THERE — the actual content, shown whenever the tree
               is dirty, not only once force is on. A D2 confirm owes a preview
@@ -733,127 +790,138 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               controls carry it individually. Frozen during the submit-time
               revalidation: that await can outlive a toggle, and the closure
               would then dispatch the values the user had BEFORE they changed
-              their mind. Cancel and Escape stay live throughout. */}
-          <fieldset className="space-y-3">
-            <legend className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
-              Options
-            </legend>
+              their mind. Cancel and Escape stay live throughout.
 
-            <label className="flex items-start gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={force}
-                onChange={(e) => setForce(e.target.checked)}
-                disabled={isDeleting}
-                className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
-              />
-              <span className="text-sm text-text-primary">
-                {/* Constant by rule — a toggle label never changes with state
+              Absent entirely while the delete is blocked: every control here
+              only shapes a dispatch that cannot happen, and a "Force delete"
+              checkbox reading "required to delete this worktree" would be
+              offering a way through that does not exist. */}
+          {!isBlocked && (
+            <fieldset className="space-y-3">
+              <legend className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
+                Options
+              </legend>
+
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={force}
+                  onChange={(e) => setForce(e.target.checked)}
+                  disabled={isDeleting}
+                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
+                />
+                <span className="text-sm text-text-primary">
+                  {/* Constant by rule — a toggle label never changes with state
                     (house microcopy), and this one used to swap between three
                     wordings. It also has to stay the same verb as the primary
                     button ("Force delete worktree"), so checking the box and
                     reading the button describe one action, not two. What
                     actually varies is the consequence, stated below and in the
                     "What will happen" list. */}
-                Force delete
-                {(hasChanges || forceRequiredBySubmodules) && (
-                  <span className="block text-xs text-text-secondary mt-0.5">
-                    {verifyFailed
-                      ? "Required because this worktree's status couldn't be verified"
-                      : hasChanges
-                        ? `Required to delete this worktree — ${changeSummaryLabel} present`
-                        : "Required to delete this worktree — Git will not remove a worktree that owns submodules"}
-                  </span>
-                )}
-              </span>
-            </label>
-
-            {hasTerminals && (
-              <label className="flex items-start gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={closeTerminals}
-                  onChange={(e) => setCloseTerminals(e.target.checked)}
-                  disabled={isDeleting}
-                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
-                />
-                <span className="text-sm text-text-primary">
-                  Close all terminals
-                  <span className="ml-1 tabular-nums text-text-secondary">
-                    ({terminalCounts.total})
-                  </span>
+                  Force delete
+                  {(hasChanges || forceRequiredBySubmodules) && (
+                    <span className="block text-xs text-text-secondary mt-0.5">
+                      {verifyFailed
+                        ? "Required because this worktree's status couldn't be verified"
+                        : hasChanges
+                          ? `Required to delete this worktree — ${changeSummaryLabel} present`
+                          : `Required to delete this worktree — ${nestedFileLabel} inside submodules will be discarded`}
+                    </span>
+                  )}
                 </span>
               </label>
-            )}
 
-            {canDeleteBranch && (
-              <label className="flex items-start gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={deleteBranch}
-                  onChange={(e) => setDeleteBranch(e.target.checked)}
-                  disabled={isDeleting}
-                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
-                />
-                <span className="flex items-center gap-1.5 text-sm text-text-primary">
-                  <FolderGit2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                  {/* No branch chip: the entity summary directly above names
+              {hasTerminals && (
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={closeTerminals}
+                    onChange={(e) => setCloseTerminals(e.target.checked)}
+                    disabled={isDeleting}
+                    className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
+                  />
+                  <span className="text-sm text-text-primary">
+                    Close all terminals
+                    <span className="ml-1 tabular-nums text-text-secondary">
+                      ({terminalCounts.total})
+                    </span>
+                  </span>
+                </label>
+              )}
+
+              {canDeleteBranch && (
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={deleteBranch}
+                    onChange={(e) => setDeleteBranch(e.target.checked)}
+                    disabled={isDeleting}
+                    className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
+                  />
+                  <span className="flex items-center gap-1.5 text-sm text-text-primary">
+                    <FolderGit2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                    {/* No branch chip: the entity summary directly above names
                       the branch, and so does the title. A third copy bought
                       nothing and, on a long branch, forced this label to wrap
                       while the chip took the whole remaining width. */}
-                  Delete branch
-                </span>
-              </label>
-            )}
-          </fieldset>
+                    Delete branch
+                  </span>
+                </label>
+              )}
+            </fieldset>
+          )}
 
           {/* 4. THE EFFECT — computed from the options directly above. Only
-              outcomes that will actually occur are listed. */}
-          <div>
-            <span
-              id={consequencesHeadingId}
-              role="heading"
-              aria-level={3}
-              className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
-            >
-              What will happen
-            </span>
-            {/* The list IS the live region. Mirroring it into a second sr-only
+              outcomes that will actually occur are listed — which is why a
+              blocked delete lists none: the whole set would be a prediction
+              about a call the host refuses. */}
+          {!isBlocked && (
+            <div>
+              <span
+                id={consequencesHeadingId}
+                role="heading"
+                aria-level={3}
+                className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
+              >
+                What will happen
+              </span>
+              {/* The list IS the live region. Mirroring it into a second sr-only
                 node duplicated every string in the DOM, so assistive tech read
                 each consequence twice. `polite` (not `alert`) because these
                 change on every checkbox toggle and must not interrupt. */}
-            <ul
-              data-testid="delete-worktree-consequences"
-              aria-labelledby={consequencesHeadingId}
-              aria-live="polite"
-              aria-relevant="all"
-              className="mt-2 space-y-1"
-            >
-              {consequences.map((row) => (
-                <li
-                  key={row.key}
-                  data-tone={row.tone}
-                  className={cn(
-                    "text-sm flex items-start gap-1.5",
-                    row.tone === "danger" ? "text-status-error font-medium" : "text-text-primary"
-                  )}
-                >
-                  {row.tone === "danger" && (
-                    <>
-                      {/* The irreversible row must not be distinguished by
+              <ul
+                data-testid="delete-worktree-consequences"
+                aria-labelledby={consequencesHeadingId}
+                aria-live="polite"
+                aria-relevant="all"
+                className="mt-2 space-y-1"
+              >
+                {consequences.map((row) => (
+                  <li
+                    key={row.key}
+                    data-tone={row.tone}
+                    className={cn(
+                      "text-sm flex items-start gap-1.5",
+                      row.tone === "danger" ? "text-status-error font-medium" : "text-text-primary"
+                    )}
+                  >
+                    {row.tone === "danger" && (
+                      <>
+                        {/* The irreversible row must not be distinguished by
                           colour alone. Under `forced-colors: active` every
                           status colour resolves to the same system ink, so a
                           red row and a neutral row become identical — the glyph
                           and the weight are what survive. */}
-                      <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" aria-hidden="true" />
-                      <span className="sr-only">Irreversible: </span>
-                    </>
-                  )}
-                  <span>{row.content}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
+                        <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" aria-hidden="true" />
+                        <span className="sr-only">Irreversible: </span>
+                      </>
+                    )}
+                    <span>{row.content}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {isHighTier && (
             <div ref={gateRef}>

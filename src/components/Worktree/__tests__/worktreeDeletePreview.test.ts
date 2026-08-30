@@ -19,7 +19,7 @@ import {
   buildWorktreeDeletePreview,
   buildSubmoduleCommitRows,
   buildSubmoduleFileRows,
-  deriveSubmoduleTierInputs,
+  submoduleDeleteBlock,
   formatWorktreeDeletePreviewLines,
   formatWorktreeChangeRows,
   buildWorktreeChangeRows,
@@ -343,39 +343,66 @@ describe("formatWorktreeChangeRows", () => {
 });
 
 describe("submodule risk derivation", () => {
-  it("counts observed commits as at-risk even when the walk did not finish", () => {
-    const inputs = deriveSubmoduleTierInputs({
-      status: "unverified",
-      risk: emptyRisk({
-        incomplete: true,
-        atRiskCommits: [{ oid: "a1b2c3d4", subject: "WIP" }],
-      }),
-    });
-    expect(inputs).toEqual({ submoduleCommitsAtRisk: true, submoduleRiskUnverified: true });
+  it("blocks on observed commits even when the walk did not finish", () => {
+    // Both reasons are present; the commits win because their remedy is the
+    // specific one, and it matches the order the host throws in.
+    expect(
+      submoduleDeleteBlock({
+        status: "unverified",
+        risk: emptyRisk({
+          incomplete: true,
+          atRiskCommits: [{ oid: "a1b2c3d4", subject: "WIP" }],
+        }),
+      })
+    ).toBe("at-risk-commits");
   });
 
-  it("reports a clean verified inventory as neither at-risk nor unverified", () => {
-    expect(deriveSubmoduleTierInputs(CLEAR)).toEqual({
-      submoduleCommitsAtRisk: false,
-      submoduleRiskUnverified: false,
-    });
+  it("blocks on an inventory that could not be completed", () => {
+    // The host refuses `incomplete` before it reads `force`, so this is not a
+    // tier the user can consent past.
+    expect(submoduleDeleteBlock({ status: "unverified", risk: null })).toBe("unverified");
+    expect(
+      submoduleDeleteBlock({ status: "unverified", risk: emptyRisk({ incomplete: true }) })
+    ).toBe("unverified");
   });
 
-  it("only claims force is mechanically required on a completed inventory", () => {
+  it("does not block a clean completed inventory", () => {
+    expect(submoduleDeleteBlock(CLEAR)).toBeNull();
+    expect(
+      submoduleDeleteBlock({
+        status: "verified",
+        risk: emptyRisk({ dirtyFiles: ["vendor/lib/a.c"], requiresMechanicalForce: true }),
+      })
+    ).toBeNull();
+  });
+
+  it("requires force for nested working-tree files, whatever the module layout", () => {
+    // An old-form submodule with an embedded `.git` directory sets no
+    // `requiresMechanicalForce`, and its dirty files are destroyed all the same.
+    expect(
+      submoduleForceRequired({
+        status: "verified",
+        risk: emptyRisk({ dirtyFiles: ["vendor/lib/src/main.c"] }),
+      })
+    ).toBe(true);
+    expect(
+      submoduleForceRequired({
+        status: "verified",
+        risk: emptyRisk({ untrackedFiles: ["vendor/lib/scratch.log"] }),
+      })
+    ).toBe(true);
+  });
+
+  it("does not require force for a modules directory alone", () => {
+    // The host supplies that `--force` itself, so demanding the checkbox for it
+    // collected consent to nothing.
     expect(
       submoduleForceRequired({
         status: "verified",
         risk: emptyRisk({ requiresMechanicalForce: true }),
       })
-    ).toBe(true);
-    // Blocking the safe non-force attempt on state we could not read would
-    // coerce the user into forcing on the very evidence we do not have.
-    expect(
-      submoduleForceRequired({
-        status: "unverified",
-        risk: emptyRisk({ requiresMechanicalForce: true }),
-      })
     ).toBe(false);
+    expect(submoduleForceRequired(CLEAR)).toBe(false);
   });
 });
 
@@ -494,6 +521,10 @@ describe("formatWorktreeDeletePreviewLines — submodules", () => {
     expect(header?.startsWith("⚠ ")).toBe(true);
     expect(header).toContain("1 commit inside submodules is");
     expect(header).not.toContain("cannot be recovered");
+    // Stated as the refusal it is: the host throws on this before it reads
+    // `force`, so an approver told the delete "may destroy" these commits would
+    // be consenting to something that cannot happen either way.
+    expect(header).toContain("cannot be deleted until it is pushed");
     expect(lines).toContain("  a1b2c3d WIP vendored fix");
   });
 
@@ -502,5 +533,6 @@ describe("formatWorktreeDeletePreviewLines — submodules", () => {
     const caution = lines.find((l) => l.includes("submodules"));
     expect(caution?.startsWith("⚠ ")).toBe(true);
     expect(caution).toContain("Could not finish checking");
+    expect(caution).toContain("cannot be deleted until that check completes");
   });
 });

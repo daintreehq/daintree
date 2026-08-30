@@ -3,7 +3,7 @@
  */
 import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import type { WorktreeState } from "@/types";
 import type { WorktreeChanges, GitStatus } from "@shared/types/git";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
@@ -240,6 +240,22 @@ function makePreview(
     rootPath: "/test/worktree",
     submodules,
   };
+}
+
+/**
+ * Let the open-time preview fetch settle.
+ *
+ * The primary action is gated on it: before it lands the dialog has no
+ * submodule answer at all, so a click would dispatch a delete whose submodule
+ * check never ran. Any test that submits, or reads the enabled state, has to
+ * wait for it first.
+ */
+async function settlePreview() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 }
 
 describe("WorktreeDeleteDialog — warning messages", () => {
@@ -753,6 +769,8 @@ describe("WorktreeDeleteDialog — dialog chrome contract", () => {
     const worktree = makeWorktree(makeChanges([{ path: "/wt/a.ts", status: "modified" }]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
+    await settlePreview();
+
     fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
     fireEvent.change(screen.getByTestId("delete-worktree-confirm-input"), {
       target: { value: "feature/test" },
@@ -863,9 +881,11 @@ describe("WorktreeDeleteDialog — medium tier (no name confirmation)", () => {
     cleanup();
   });
 
-  it("non-protected branch + force with only untracked files does not require name confirmation", () => {
+  it("non-protected branch + force with only untracked files does not require name confirmation", async () => {
     const worktree = makeWorktree(makeChanges([{ path: "new.txt", status: "untracked" }]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    await settlePreview();
 
     const forceCheckbox = screen.getByRole("checkbox", { name: /force delete/i });
     fireEvent.click(forceCheckbox);
@@ -876,10 +896,12 @@ describe("WorktreeDeleteDialog — medium tier (no name confirmation)", () => {
     expect(button.textContent).toBe("Force delete worktree");
   });
 
-  it("starts a delete on click and dismisses immediately", () => {
+  it("starts a delete on click and dismisses immediately", async () => {
     const onClose = vi.fn();
     const worktree = makeWorktree(makeChanges([]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={onClose} worktree={worktree} />);
+
+    await settlePreview();
 
     const button = screen.getByTestId("delete-worktree-confirm");
     fireEvent.click(button);
@@ -889,10 +911,12 @@ describe("WorktreeDeleteDialog — medium tier (no name confirmation)", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards closeTerminals when terminals are associated", () => {
+  it("forwards closeTerminals when terminals are associated", async () => {
     terminalCountsMock.total = 2;
     const worktree = makeWorktree(makeChanges([]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    await settlePreview();
 
     fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
 
@@ -936,12 +960,14 @@ describe("WorktreeDeleteDialog — high tier (name confirmation)", () => {
     expect(button.disabled).toBe(true);
   });
 
-  it("renders type-to-confirm input when force-deleting with uncommitted tracked changes", () => {
+  it("renders type-to-confirm input when force-deleting with uncommitted tracked changes", async () => {
     const worktree = makeWorktree(makeChanges([{ path: "src/app.ts", status: "modified" }]), {
       branch: "feature/x",
       name: "feature/x",
     });
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    await settlePreview();
 
     expect(screen.queryByTestId("delete-worktree-confirm-input")).toBeNull();
 
@@ -972,9 +998,11 @@ describe("WorktreeDeleteDialog — high tier (name confirmation)", () => {
     expect(button.disabled).toBe(true);
   });
 
-  it("enables the destructive button only when the typed name matches exactly", () => {
+  it("enables the destructive button only when the typed name matches exactly", async () => {
     const worktree = makeWorktree(makeChanges([]), { branch: "main", name: "main" });
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    await settlePreview();
 
     fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
 
@@ -991,13 +1019,15 @@ describe("WorktreeDeleteDialog — high tier (name confirmation)", () => {
     expect(button.disabled).toBe(false);
   });
 
-  it("falls back to worktree.name when branch is the empty string", () => {
+  it("falls back to worktree.name when branch is the empty string", async () => {
     const worktree = makeWorktree(makeChanges([]), {
       branch: "",
       name: "abc1234",
       isMainWorktree: true,
     });
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    await settlePreview();
 
     fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
 
@@ -1011,13 +1041,15 @@ describe("WorktreeDeleteDialog — high tier (name confirmation)", () => {
     expect(button.disabled).toBe(false);
   });
 
-  it("uses worktree.name as the confirmation target for detached HEAD", () => {
+  it("uses worktree.name as the confirmation target for detached HEAD", async () => {
     const worktree = makeWorktree(makeChanges([]), {
       branch: undefined,
       name: "abc1234",
       isMainWorktree: true,
     });
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    await settlePreview();
 
     fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
 
@@ -1030,9 +1062,11 @@ describe("WorktreeDeleteDialog — high tier (name confirmation)", () => {
     expect(button.disabled).toBe(false);
   });
 
-  it("clears typed name and reverts to medium tier when force is unchecked", () => {
+  it("clears typed name and reverts to medium tier when force is unchecked", async () => {
     const worktree = makeWorktree(makeChanges([]), { branch: "main", name: "main" });
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    await settlePreview();
 
     const forceCheckbox = screen.getByRole("checkbox", { name: /force delete/i });
     fireEvent.click(forceCheckbox);
@@ -1053,6 +1087,8 @@ describe("WorktreeDeleteDialog — high tier (name confirmation)", () => {
     const onClose = vi.fn();
     const worktree = makeWorktree(makeChanges([]), { branch: "main", name: "main" });
     render(<WorktreeDeleteDialog isOpen={true} onClose={onClose} worktree={worktree} />);
+
+    await settlePreview();
 
     fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
     const input = screen.getByTestId("delete-worktree-confirm-input") as HTMLInputElement;
@@ -1092,10 +1128,12 @@ describe("WorktreeDeleteDialog — immediate dismiss", () => {
     cleanup();
   });
 
-  it("does not render any in-modal skeleton after submit (progress surfaces on the card — #8417)", () => {
+  it("does not render any in-modal skeleton after submit (progress surfaces on the card — #8417)", async () => {
     const onClose = vi.fn();
     const worktree = makeWorktree(makeChanges([]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={onClose} worktree={worktree} />);
+
+    await settlePreview();
 
     fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
 
@@ -1439,9 +1477,10 @@ describe("WorktreeDeleteDialog — submodules", () => {
     expect(text).toContain("vendor/lib/scratch.log");
   });
 
-  it("shows the at-risk commit subjects and demands the typed-name gate without force", async () => {
+  it("blocks the delete outright on at-risk commits, with no gate to type past", async () => {
     // The invisible case: the parent's porcelain is empty, so nothing else on
-    // this surface would ever mention these commits.
+    // this surface would ever mention these commits. The host refuses this
+    // delete before it reads `force`, so there is no consent to collect.
     buildPreviewMock.mockResolvedValue(
       makePreview([], {
         status: "verified",
@@ -1456,19 +1495,47 @@ describe("WorktreeDeleteDialog — submodules", () => {
     const list = await screen.findByTestId("delete-worktree-submodule-commit-list");
     expect(list.textContent).toContain("Fix the vendored parser");
     expect(list.textContent).toContain("a1b2c3d");
-    // Force is untouched, and the gate is up anyway.
-    expect(
-      (screen.getByRole("checkbox", { name: /force delete/i }) as HTMLInputElement).checked
-    ).toBe(false);
-    expect(screen.getByTestId("delete-worktree-confirm-input")).toBeDefined();
-    expect(
-      within(screen.getByTestId("delete-worktree-consequences")).getByText(
-        "1 commit inside submodules may be lost for good — it is on no remote this clone knows about"
-      )
-    ).toBeDefined();
+
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      true
+    );
+    // Not a tier: no typed-name gate, and no force checkbox offering a way
+    // through that does not exist.
+    expect(screen.queryByTestId("delete-worktree-confirm-input")).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /force delete/i })).toBeNull();
+    // Nothing will happen, so nothing is predicted.
+    expect(screen.queryByTestId("delete-worktree-consequences")).toBeNull();
   });
 
-  it("blocks the plain delete when Git will refuse it over module directories", async () => {
+  it("names pushing from inside the submodule as the way out", async () => {
+    buildPreviewMock.mockResolvedValue(
+      makePreview([], {
+        status: "verified",
+        risk: makeRisk({
+          atRiskCommits: [{ oid: "a1b2c3d4e5f6", subject: "Fix the vendored parser" }],
+        }),
+      })
+    );
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    const banner = await screen.findByTestId("delete-worktree-blocked");
+    expect(banner.textContent).toContain("Push the submodule commits first");
+    expect(banner.textContent).toContain("from inside the submodule");
+    // Scoped to what the inventory can prove: it measures reachability from
+    // this module repo's own remote-tracking refs, never global existence.
+    expect(banner.textContent).toContain("on no remote this clone knows about");
+    expect(banner.textContent).not.toContain("nowhere else");
+    // The commits are listed below; a banner repeating them says it twice.
+    expect(banner.textContent).not.toContain("Fix the vendored parser");
+    expect(within(banner).getByRole("button").textContent).toBe("Recheck");
+    expect(screen.getByTestId("delete-worktree-hint").textContent).toContain("Delete unavailable");
+  });
+
+  it("does not demand force for module directories alone", async () => {
+    // `requiresMechanicalForce` is a fact about the checkout layout, not about
+    // the work in it — the host supplies that `--force` itself, so asking the
+    // user for it collected consent to nothing.
     buildPreviewMock.mockResolvedValue(
       makePreview([], {
         status: "verified",
@@ -1477,32 +1544,106 @@ describe("WorktreeDeleteDialog — submodules", () => {
     );
     const worktree = makeWorktree(makeChanges([]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+    await settlePreview();
 
-    await waitFor(() => {
-      expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
-        true
-      );
-    });
-    expect(screen.getByTestId("delete-worktree-hint").textContent).toContain(
-      "Git will not remove a worktree that owns submodules"
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      false
     );
+    expect(screen.queryByTestId("delete-worktree-hint")).toBeNull();
   });
 
-  it("says the submodule check could not finish rather than implying it found nothing", async () => {
+  it("blocks the plain delete when nested files would be discarded without a modules dir", async () => {
+    // An old-form submodule with an embedded `.git` directory produces no
+    // `<gitdir>/modules`, so `requiresMechanicalForce` is false while its dirty
+    // files are destroyed all the same. The file count is what decides.
+    buildPreviewMock.mockResolvedValue(
+      makePreview([], {
+        status: "verified",
+        risk: makeRisk({
+          dirtyFiles: ["vendor/lib/src/main.c"],
+          requiresMechanicalForce: false,
+        }),
+      })
+    );
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+    await settlePreview();
+
+    const confirm = screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    expect(screen.getByTestId("delete-worktree-hint").textContent).toContain(
+      "1 file inside submodules will be discarded"
+    );
+
+    // Force is the consent that lifts it, and it still escalates to the gate.
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    expect(screen.getByTestId("delete-worktree-confirm-input")).toBeDefined();
+    expect(confirm.disabled).toBe(true);
+    fireEvent.change(screen.getByTestId("delete-worktree-confirm-input"), {
+      target: { value: "feature/test" },
+    });
+    expect(confirm.disabled).toBe(false);
+  });
+
+  it("blocks the delete when the submodule check could not finish, and offers a retry", async () => {
     buildPreviewMock.mockResolvedValue(makePreview([], { status: "unverified", risk: null }));
     const worktree = makeWorktree(makeChanges([]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    await screen.findByText(/Couldn't finish checking this worktree's submodules/);
+    const banner = await screen.findByTestId("delete-worktree-blocked");
+    expect(banner.textContent).toContain("Couldn't finish checking this worktree's submodules");
+    expect(banner.textContent).toContain("isn't available until the check finishes");
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      true
+    );
     // The parent status read fine, so the parent banner must stay away.
     expect(screen.queryByText(/Couldn't check this worktree for uncommitted work/)).toBeNull();
+
+    // Retry re-runs the same fetch, and a completed inventory clears the block.
+    buildPreviewMock.mockResolvedValue(makePreview([]));
+    fireEvent.click(within(banner).getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("delete-worktree-blocked")).toBeNull();
+    });
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      false
+    );
   });
 
-  it("re-arms the typed-name gate when revalidation turns up commits the user never saw", async () => {
-    // Setting `freshPreview` is not proof the user saw it: on a worktree that
-    // was already D3 with the name typed, a submodule commit landing between
-    // open and submit would otherwise be destroyed under consent given for a
-    // different set of consequences.
+  it("holds the dispatch until the open-time preview has settled", async () => {
+    // Before it lands, `submodules` is null and every submodule input reads
+    // false — so a fast click used to dispatch a delete the host refuses with
+    // the check having never run.
+    let resolvePreview: (value: unknown) => void = () => {};
+    buildPreviewMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePreview = resolve;
+      })
+    );
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    expect(startDeleteMock).not.toHaveBeenCalled();
+
+    resolvePreview(
+      makePreview([], {
+        status: "verified",
+        risk: makeRisk({
+          atRiskCommits: [{ oid: "a1b2c3d4e5f6", subject: "Fix the vendored parser" }],
+        }),
+      })
+    );
+
+    await screen.findByTestId("delete-worktree-blocked");
+    expect(startDeleteMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses at submit time when revalidation turns up commits the user never saw", async () => {
+    // An agent can commit inside a submodule while the dialog is open. The
+    // typed name already entered was consent for a different set of
+    // consequences — and the host would refuse this delete anyway.
     buildPreviewMock.mockResolvedValue(makePreview([{ path: "a.ts", status: "modified" }]));
     const worktree = makeWorktree(makeChanges([{ path: "a.ts", status: "modified" }]), {
       branch: "feature/x",
@@ -1530,36 +1671,31 @@ describe("WorktreeDeleteDialog — submodules", () => {
       );
     });
     expect(startDeleteMock).not.toHaveBeenCalled();
-    expect((screen.getByTestId("delete-worktree-confirm-input") as HTMLInputElement).value).toBe(
-      ""
-    );
+    expect(screen.getByTestId("delete-worktree-blocked")).toBeDefined();
+    expect(screen.queryByTestId("delete-worktree-confirm-input")).toBeNull();
   });
 
-  it("escalates the submit-time revalidation on submodule commits the open-time fetch missed", async () => {
-    // An agent can commit inside a submodule between open and submit. Only the
-    // render-time tier saw the clean state; the submit path must catch up.
-    buildPreviewMock.mockResolvedValue(makePreview([{ path: "a.txt", status: "untracked" }]));
+  it("refuses at submit time when the revalidation inventory comes back short", async () => {
+    // The open-time check completed; the submit-time one did not. An unknown
+    // is treated as a risk, and the host refuses it either way.
+    buildPreviewMock.mockResolvedValueOnce(makePreview([{ path: "a.txt", status: "untracked" }]));
     const worktree = makeWorktree(makeChanges([]), { branch: "feature/x", name: "feature/x" });
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
     fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
-    await waitFor(() => {
-      expect(buildPreviewMock).toHaveBeenCalled();
-    });
-    // Untracked-only, so no gate yet (#4927).
+    await settlePreview();
+    // Untracked-only, so no gate (#4927) and the delete is on offer.
     expect(screen.queryByTestId("delete-worktree-confirm-input")).toBeNull();
+    expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+      false
+    );
 
-    buildPreviewMock.mockResolvedValue(
-      makePreview([{ path: "a.txt", status: "untracked" }], {
-        status: "verified",
-        risk: makeRisk({ atRiskCommits: [{ oid: "deadbee", subject: "WIP vendored fix" }] }),
-      })
+    buildPreviewMock.mockResolvedValueOnce(
+      makePreview([{ path: "a.txt", status: "untracked" }], { status: "unverified", risk: null })
     );
     fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
 
-    await waitFor(() => {
-      expect(screen.getByTestId("delete-worktree-confirm-input")).toBeDefined();
-    });
+    await screen.findByTestId("delete-worktree-blocked");
     expect(startDeleteMock).not.toHaveBeenCalled();
   });
 });
