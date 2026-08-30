@@ -55,7 +55,7 @@ The predicate is checked as an **absolute health condition every round**, not as
 - Always work on a branch cut from `origin/develop`. Never optimise on `develop` or `main`.
 - **Measure before changing anything.** No before measurement means no table and no run.
 - **One hypothesis per round.** Two changes means you cannot attribute the result and will keep the wrong one.
-- **Compare each round against the current best, not the baseline.** See **The comparison that decides**.
+- **Compare each round against the current best, not the baseline.** Judging against the baseline keeps a hypothesis that made the best result worse, so long as it still beats where the run started. See Phase 1 step 3.
 - **Revert on the evidence, not the story.** A plausible mechanism is not a measurement.
 - **Never touch any measurement surface.** Not the scenario, not its fixture, not `scripts/perf/lib/`, not `budgets.json`, not the protocol flags. If you believe the scenario measures the wrong thing, stop the run and say so — a real finding, but not an optimisation. The final diff must contain **no** changes under `scripts/perf/`; verify that before finalising.
 - Keep the branch focused. No unrelated cleanup, no dependency bumps, no drive-by refactors.
