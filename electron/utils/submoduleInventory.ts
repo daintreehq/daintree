@@ -651,12 +651,20 @@ export async function buildSubmoduleDeleteRisk(
     let collectedFiles = 0;
 
     const collectAtRisk = async (gitDir: string, label: string): Promise<void> => {
-      const commits = await readAtRiskCommits(gitDir, opts.signal, timeoutMs, maxAtRiskCommits);
-      if (!commits) {
+      const walk = await readAtRiskCommits(gitDir, opts.signal, timeoutMs, maxAtRiskCommits);
+      if (!walk) {
         markIncomplete(`${label}: rev walk failed`);
         return;
       }
-      for (const commit of commits) {
+      // A capped walk is an undercount, and the preview states this list's
+      // length as a fact ("N commits are on no remote..."). Reporting 50 when
+      // there are 200 is the same class of lie as the single `M vendor/lib`
+      // row this whole inventory exists to replace, so a walk that hit the
+      // ceiling is incomplete rather than a shorter truth.
+      if (walk.truncated) {
+        markIncomplete(`${label}: more than ${maxAtRiskCommits} at-risk commits`);
+      }
+      for (const commit of walk.commits) {
         if (seenAtRiskOids.has(commit.oid)) continue;
         seenAtRiskOids.add(commit.oid);
         atRiskCommits.push(commit);
@@ -979,7 +987,7 @@ async function readAtRiskCommits(
   signal: AbortSignal | undefined,
   timeoutMs: number,
   maxCount: number
-): Promise<SubmoduleAtRiskCommit[] | null> {
+): Promise<{ commits: SubmoduleAtRiskCommit[]; truncated: boolean } | null> {
   try {
     const git = await createHardenedGit(moduleGitDir, signal);
     const output = await runGit(
@@ -989,7 +997,9 @@ async function readAtRiskCommits(
         moduleGitDir,
         "log",
         `--format=%H${UNIT_SEPARATOR}%s`,
-        `--max-count=${maxCount}`,
+        // One more than we keep, so a walk that hit the ceiling is
+        // distinguishable from one that simply ran out of commits.
+        `--max-count=${maxCount + 1}`,
         "--reflog",
         "--all",
         "HEAD",
@@ -1000,6 +1010,7 @@ async function readAtRiskCommits(
     );
     const commits: SubmoduleAtRiskCommit[] = [];
     const seen = new Set<string>();
+    let truncated = false;
     for (const line of output.split("\n")) {
       if (!line) continue;
       const separator = line.indexOf(UNIT_SEPARATOR);
@@ -1009,9 +1020,13 @@ async function readAtRiskCommits(
       const oid = line.slice(0, separator);
       if (seen.has(oid)) continue;
       seen.add(oid);
+      if (commits.length === maxCount) {
+        truncated = true;
+        break;
+      }
       commits.push({ oid, subject: line.slice(separator + 1) });
     }
-    return commits;
+    return { commits, truncated };
   } catch {
     return null;
   }
