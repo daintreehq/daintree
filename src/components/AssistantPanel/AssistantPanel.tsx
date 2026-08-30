@@ -25,6 +25,16 @@ export interface AssistantPanelProps {
   projectPath: string | null;
   /** False while the panel is closed — the engine is not started. */
   active: boolean;
+  /**
+   * Whether the panel is on screen right now.
+   *
+   * Distinct from `active`, which latches on first open and stays true so the engine
+   * survives the panel being dismissed. Anything that costs work per second — the
+   * timer countdowns — must key off THIS, because hiding the panel slides it
+   * off-canvas rather than unmounting it. Defaults to true so a caller that does not
+   * know simply gets the old always-on behaviour.
+   */
+  visible?: boolean;
   /** Bump to tear down the current session and start a fresh one. */
   restartNonce?: number;
   /**
@@ -43,6 +53,7 @@ export function AssistantPanel({
   projectId,
   projectPath,
   active,
+  visible = true,
   restartNonce = 0,
   operationsOpen,
   onOperationsOpenChange,
@@ -106,6 +117,7 @@ export function AssistantPanel({
       operations: s.operations,
       timers: s.timers,
       timersStale: s.timersStale,
+      pendingFiredTimerIds: s.pendingFiredTimerIds,
       timerCancelPending: s.timerCancelPending,
       timerCancelErrors: s.timerCancelErrors,
       toolGrants: s.toolGrants,
@@ -224,6 +236,7 @@ export function AssistantPanel({
       onRequestOperations={requestOperations}
       onRequestTimers={requestTimers}
       onCancelTimer={cancelTimer}
+      visible={visible}
       operationsOpen={operationsOpen}
       onOperationsOpenChange={onOperationsOpenChange}
       onRetractInterjection={retractInterjection}

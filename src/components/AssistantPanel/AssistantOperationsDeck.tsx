@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import { AssistantTimersSection } from "./AssistantTimersSection";
+import { useTimerClock } from "./useTimerClock";
 import type { AssistantOperations, AssistantTimers } from "@/store/assistantStore";
 
 /**
@@ -30,6 +31,15 @@ export interface AssistantOperationsDeckProps {
    * counting down until the next full deck pull.
    */
   timers: AssistantTimers | null;
+  /**
+   * Whether the panel is on screen — gates the clock.
+   *
+   * The deck unmounts when it is closed, but the PANEL around it only hides: closing
+   * the sidebar with the deck open leaves this tree mounted and invisible, and an
+   * ungated interval would re-render all seven sections every second for the rest of
+   * the session.
+   */
+  visible?: boolean;
   /** A timer has fired since this reading, so the list is known to be behind. */
   timersStale: boolean;
   timerCancelPending: Record<string, true>;
@@ -80,6 +90,7 @@ function ago(at: number, now: number): string {
 export function AssistantOperationsDeck({
   operations,
   timers,
+  visible = true,
   timersStale,
   timerCancelPending,
   timerCancelErrors,
@@ -87,7 +98,7 @@ export function AssistantOperationsDeck({
   onRefresh,
   onClose,
 }: AssistantOperationsDeckProps) {
-  const now = Date.now();
+  const now = useTimerClock(visible);
   const ops = operations;
   const timerRows = timers?.rows ?? ops?.timers ?? [];
   const outcomes = timers?.outcomes ?? [];

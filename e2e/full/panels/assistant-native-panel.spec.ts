@@ -1360,15 +1360,21 @@ test.describe.serial("Assistant: native panel", () => {
     ).toHaveAttribute("aria-pressed", "true");
   });
 
-  test("cost reads out of the engine's own numbers", async () => {
+  test("shows no spend figure — the assistant is not billed by usage", async () => {
     const { window } = ctx;
     const panel = await openAssistant(window);
     await ask(window, "/scenario streaming");
+    // Wait for a turn to actually settle, so this is a statement about a session that
+    // HAS cost figures on the wire rather than one that never got any.
+    await expect(panel.getByText("Connected", { exact: true })).toBeVisible({
+      timeout: T_MEDIUM,
+    });
 
-    // Cost appears only once there is a figure to show. `≥` when the accounting is
-    // incomplete: claiming an exact bill from a partial sample is the one thing a spend
-    // readout must not do.
-    await expect(panel.getByText(/\$\d/)).toBeVisible({ timeout: T_MEDIUM });
+    // The engine still reports `cost` and the store still holds it; what changed is
+    // that the panel does not draw it. Per-turn spend was a readout from when the
+    // assistant billed by usage — it bills by subscription now, so a figure here
+    // answers a question nobody is being asked and implies a meter that is not running.
+    await expect(panel.getByText(/\$\d/)).toHaveCount(0);
   });
 
   /**
