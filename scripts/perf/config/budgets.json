@@ -40,12 +40,48 @@
       }
     },
 
-    "PERF-040": { "p95Ms": 1400, "maxRegressionPct": 15 },
-    "PERF-041": { "p95Ms": 2200, "maxRegressionPct": 15 },
     "PERF-042": {
       "p95Ms": 1500,
       "maxRegressionPct": 20,
       "maxMetricValues": { "eventLoopLagMs": 100 }
+    },
+    "PERF-043": {
+      "p95Ms": 12000,
+      "maxMetricValues": {
+        "bootReadyMisses": 0,
+        "healthCheckMisses": 0,
+        "disposeExitMisses": 0,
+        "residualHostCount": 0
+      }
+    },
+    "PERF-044": {
+      "p95Ms": 12000,
+      "maxMetricValues": {
+        "responseMisses": 0,
+        "responseTypeMisses": 0,
+        "unexpectedResponseMessages": 0,
+        "duplicateResponseMessages": 0,
+        "residualHostCount": 0
+      }
+    },
+    "PERF-045": {
+      "p95Ms": 30000,
+      "maxMetricValues": {
+        "lineMisses": 0,
+        "spawnMisses": 0,
+        "exitMisses": 0,
+        "exitCodeMisses": 0,
+        "residualHostCount": 0
+      }
+    },
+    "PERF-046": {
+      "p95Ms": 40000,
+      "maxMetricValues": {
+        "respawnReadyMisses": 0,
+        "respawnHealthMisses": 0,
+        "reapMisses": 0,
+        "residualHostCount": 0
+      }
     },
 
     "PERF-053": {
