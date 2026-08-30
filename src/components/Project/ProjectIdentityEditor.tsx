@@ -50,7 +50,7 @@ function PillRestoreTarget({ open }: { open: boolean }) {
  * put a rare action inside the hit box of a very frequent one with no visible
  * boundary, and the two surfaces were easy to confuse: both open with a text
  * field focused, so the switcher's own click-type-Enter muscle memory landed
- * in the name field and renamed the project (#12093).
+ * in the name field and renamed the project.
  *
  * Anchored rather than triggered: the pill is already wrapped by the switcher
  * popover, the context menu and the tooltip, and it has one job on click. This
