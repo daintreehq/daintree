@@ -2,7 +2,7 @@
 
 Human-facing reference for the Daintree IDE's internals. This is the entry point for `docs/`.
 
-For the day-to-day agent rules (accent restraint, motion timing, destructive-action tiers, notify() usage), see the root [`CLAUDE.md`](../CLAUDE.md). That file is the working contract Claude operates under; `docs/` is the long-form reference a human reads. Where `CLAUDE.md` carries an abbreviated ladder, the matching `docs/` file owns the full rationale and the per-item audit — when the two drift, the code wins and `CLAUDE.md` should be corrected.
+The agent-facing working contract is the root [`CLAUDE.md`](../CLAUDE.md) plus the path-scoped rules in `.claude/rules/`, which load when an agent touches matching files — the day-to-day design rules (accent restraint, motion timing, destructive-action tiers, notify() usage) live in `.claude/rules/design-system.md` and `.claude/rules/user-signals.md`. `docs/` is the long-form reference a human reads. Where an agent rule carries an abbreviated ladder, the matching `docs/` file owns the full rationale and the per-item audit — when the two drift, the code wins and the agent rule should be corrected.
 
 ## Start here
 
