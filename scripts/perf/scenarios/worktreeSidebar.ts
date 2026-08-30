@@ -51,12 +51,32 @@ const BULK_ADD_COUNT = 10;
 const STORE_SEED_COUNTS = [50, 200] as const;
 const STORE_APPLY_BATCH = 400;
 
+/**
+ * A scenario that never reached its outcome, reported as its timeout.
+ *
+ * The duration is the deadline, not a measurement — the operation did not
+ * complete. Under a gating harness that was enough, because the inflated number
+ * tripped the gate. Nothing gates now, so the timeout would otherwise read as a
+ * genuine slow result: an 8000ms row that looks measured and exits 0.
+ *
+ * `timeoutMisses` makes it machine-readable. The name matters — the
+ * comparability classifier reads a `*Misses` suffix as a count, so it compares
+ * across machines and shows up in `perf compare` rather than being written off
+ * as timing noise. A non-zero value means the row's duration is not a
+ * measurement at all and every other metric on it is suspect.
+ *
+ * Emitted only on the timeout path, so the metric's mere PRESENCE in a report
+ * is the signal, and `perf compare` surfaces a run that started timing out as a
+ * metric appearing on one side. Do not add a reference value for it: a
+ * configured reference that goes un-emitted is reported as a measurement issue,
+ * which would fire on every healthy run.
+ */
 function failClosed(
   durationMs: number,
   notes: string,
   metrics?: Record<string, number>
 ): ScenarioSample {
-  return { durationMs, metrics, notes };
+  return { durationMs, metrics: { ...metrics, timeoutMisses: 1 }, notes };
 }
 
 export const worktreeSidebarScenarios: PerfScenario[] = [

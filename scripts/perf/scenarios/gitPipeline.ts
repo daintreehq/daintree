@@ -185,13 +185,23 @@ async function getScalingHarness(): Promise<ScalingHarness> {
   return scalingHarness;
 }
 
-async function runRefreshCycle(harness: ScalingHarness, count: number): Promise<number> {
+async function runRefreshCycle(
+  harness: ScalingHarness,
+  count: number
+): Promise<{ durationMs: number; rejected: number }> {
   const targets = harness.monitors.slice(0, count);
   const start = performance.now();
   // Mirrors WorkspaceService.refreshAll: each refresh takes a shared
   // pollQueue slot; allSettled so one bad worktree can't abort the cycle.
-  await Promise.allSettled(targets.map((monitor) => harness.queue.add(() => monitor.refresh())));
-  return performance.now() - start;
+  const settled = await Promise.allSettled(
+    targets.map((monitor) => harness.queue.add(() => monitor.refresh()))
+  );
+  const rejected = settled.filter((result) => result.status === "rejected").length;
+  // `allSettled` is right for fidelity and wrong for measurement if left
+  // silent: a cycle where 10 of 50 refreshes threw completes FASTER and reports
+  // that as an improvement. The caller turns this into a metric so the
+  // denominator is visible rather than assumed.
+  return { durationMs: performance.now() - start, rejected };
 }
 
 async function ensureWarm(harness: ScalingHarness): Promise<void> {
@@ -241,10 +251,12 @@ export const gitPipelineScenarios: PerfScenario[] = [
       const harness = await getScalingHarness();
       const cycleMs: number[] = [];
       let spawnsAt50 = 0;
+      let refreshMisses = 0;
       for (const count of SCALING_WORKTREE_COUNTS) {
         const mark = gitSpawnMark();
-        const elapsed = await runRefreshCycle(harness, count);
-        cycleMs.push(elapsed);
+        const cycle = await runRefreshCycle(harness, count);
+        cycleMs.push(cycle.durationMs);
+        refreshMisses += cycle.rejected;
         if (count === 50) {
           spawnsAt50 = gitSpawnsSince(mark).count;
         }
@@ -258,6 +270,10 @@ export const gitPipelineScenarios: PerfScenario[] = [
           cycleMsN20: cycleMs[2],
           cycleMsN50: cycleMs[3],
           spawnsPerWorktreeN50: spawnsAt50 / 50,
+          // A refresh that threw is a worktree this cycle did not actually do,
+          // so every duration above is over a smaller denominator than its
+          // label claims — and a shrinking denominator reads as a speedup.
+          refreshMisses,
         },
       };
     },
