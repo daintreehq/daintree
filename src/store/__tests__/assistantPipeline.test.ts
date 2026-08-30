@@ -1096,6 +1096,85 @@ describe("the timer manager", () => {
   }, 20_000);
 });
 
+describe("scheduling a timer makes the list stale", () => {
+  /**
+   * The bug this exists for: you ask for a timer, you are told it is scheduled, and no
+   * countdown appears anywhere.
+   *
+   * Nothing was telling the panel the schedule had changed. The list was read once when
+   * the session armed and again when a timer FIRED, so a timer created mid-turn stayed
+   * invisible until something unrelated refreshed it — which in practice meant
+   * restarting the assistant to see the thing you had just made.
+   */
+  it("marks the list stale when timer.schedule succeeds", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    const base = { sessionId: "s1", turnId: "t1" } as const;
+    expect(useAssistantStore.getState().timersStale).toBe(false);
+
+    store.applyEvent({
+      ...base,
+      seq: 1,
+      type: "tool:settled",
+      toolCallId: "c1",
+      toolId: "timer.schedule",
+      durationMs: 3,
+      result: "success",
+      severity: "info",
+    } as never);
+
+    expect(useAssistantStore.getState().timersStale).toBe(true);
+  });
+
+  it("marks it stale on a cancel too — the row has to leave the list", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    const base = { sessionId: "s1", turnId: "t1" } as const;
+    store.applyEvent({
+      ...base,
+      seq: 1,
+      type: "tool:settled",
+      toolCallId: "c1",
+      toolId: "timer.cancel",
+      durationMs: 3,
+      result: "success",
+      severity: "info",
+    } as never);
+    expect(useAssistantStore.getState().timersStale).toBe(true);
+  });
+
+  it("leaves it alone for a FAILED schedule and for reads", () => {
+    // A refused schedule created nothing, and timer.list changes nothing — refreshing
+    // on either would spend a round trip to re-read a list that cannot have moved.
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    const base = { sessionId: "s1", turnId: "t1" } as const;
+    store.applyEvent({
+      ...base,
+      seq: 1,
+      type: "tool:settled",
+      toolCallId: "c1",
+      toolId: "timer.schedule",
+      durationMs: 3,
+      result: "error",
+      severity: "error",
+    } as never);
+    expect(useAssistantStore.getState().timersStale).toBe(false);
+
+    store.applyEvent({
+      ...base,
+      seq: 2,
+      type: "tool:settled",
+      toolCallId: "c2",
+      toolId: "timer.list",
+      durationMs: 3,
+      result: "success",
+      severity: "info",
+    } as never);
+    expect(useAssistantStore.getState().timersStale).toBe(false);
+  });
+});
+
 describe("what the engine reports on its error channel is graded by CODE", () => {
   function hostError(code: string, message: string) {
     useAssistantStore
