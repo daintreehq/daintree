@@ -21,6 +21,7 @@ import {
   Ellipsis,
   GitBranch,
   FileText,
+  Pencil,
   Pin,
   PinOff,
   Clipboard,
@@ -1927,6 +1928,61 @@ export function Toolbar({
     void projectSwitcher.togglePinProject(currentProject.id);
   }, [currentProject, projectSwitcher]);
 
+  // Which project's identity editor is open, rather than a bare boolean: a flag
+  // would outlive the project it belongs to and reopen the popover over
+  // whichever project came next.
+  const [identityEditorProjectId, setIdentityEditorProjectId] = useState<string | null>(null);
+  // Dropped rather than merely ignored when the project underneath it goes:
+  // a controlled Radix popover is not told its `open` prop fell to false, so a
+  // stale id would sit here and raise the editor again the next time that
+  // project came back. Adjusted during render for the same reason the editor's
+  // own draft re-seed is — an effect would opt this component out of the
+  // React Compiler.
+  if (identityEditorProjectId !== null && identityEditorProjectId !== currentProject?.id) {
+    setIdentityEditorProjectId(null);
+  }
+  const isIdentityEditorOpen = identityEditorProjectId !== null;
+  // Selecting the item records the intent; the menu's own close hook spends it.
+  // Opening straight from `onSelect` would raise the popover inside the menu's
+  // teardown, where Radix still holds the focus trap and the outside-pointer
+  // lock — so the release that closed the menu can dismiss the popover it just
+  // opened. `onCloseAutoFocus` fires once the menu is actually gone.
+  // Carries WHICH project was right-clicked, not just that something was: the
+  // intent outlives the menu by an exit animation, and the project can change
+  // underneath it in that time.
+  const pendingIdentityEditRef = useRef<string | null>(null);
+  const handleEditProjectIdentity = useCallback(() => {
+    pendingIdentityEditRef.current = currentProject?.id ?? null;
+  }, [currentProject?.id]);
+  // Radix keeps the content mounted through its 120ms exit, so a menu reopened
+  // inside that window never unmounts and never reaches the close hook below.
+  // Dropping the intent on every open means the worst case is one edit request
+  // the user has visibly superseded, rather than a popover that springs open on
+  // some later, unrelated close.
+  const handlePillContextMenuOpenChange = useCallback((open: boolean) => {
+    if (open) pendingIdentityEditRef.current = null;
+  }, []);
+  const handlePillContextMenuCloseAutoFocus = useCallback(
+    (event: Event) => {
+      suppressPillTooltipForFocusRestore();
+      event.preventDefault();
+      const pendingProjectId = pendingIdentityEditRef.current;
+      pendingIdentityEditRef.current = null;
+      // A project swapped in during the exit animation is a different project
+      // than the one the user right-clicked; drop the request rather than
+      // opening the editor over it.
+      if (pendingProjectId === null || pendingProjectId !== currentProject?.id) return;
+      setIdentityEditorProjectId(pendingProjectId);
+    },
+    [currentProject?.id, suppressPillTooltipForFocusRestore]
+  );
+  const handleIdentityEditorOpenChange = useCallback(
+    (next: boolean) => {
+      setIdentityEditorProjectId(next ? (currentProject?.id ?? null) : null);
+    },
+    [currentProject?.id]
+  );
+
   const projectSwitcherTrigger = (
     <ContextMenuTrigger asChild>
       <TooltipTrigger asChild>
@@ -2045,15 +2101,22 @@ export function Toolbar({
             aria-label="Project"
             className="app-no-drag relative flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
           >
-            {/* Sibling of the pill, not a child — see ProjectIdentityEditor. */}
-            {currentProject && <ProjectIdentityEditor project={currentProject} />}
+            {/* Anchor-only sibling of the pill — see ProjectIdentityEditor. */}
+            {currentProject && (
+              <ProjectIdentityEditor
+                project={currentProject}
+                open={isIdentityEditorOpen}
+                onOpenChange={handleIdentityEditorOpenChange}
+                onCloseAutoFocus={suppressPillTooltipForFocusRestore}
+              />
+            )}
             <Tooltip
               open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
               onOpenChange={
                 workspaceIdentity.kind !== "none" ? handlePillTooltipOpenChange : undefined
               }
             >
-              <ContextMenu>
+              <ContextMenu onOpenChange={handlePillContextMenuOpenChange}>
                 {shouldMountProjectSwitcherDropdown ? (
                   <Suspense fallback={projectSwitcherTrigger}>
                     <LazyProjectSwitcherPalette
@@ -2130,11 +2193,15 @@ export function Toolbar({
                 {currentProject && (
                   <ContextMenuContent
                     className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
-                    onCloseAutoFocus={(e) => {
-                      suppressPillTooltipForFocusRestore();
-                      e.preventDefault();
-                    }}
+                    onCloseAutoFocus={handlePillContextMenuCloseAutoFocus}
                   >
+                    {/* The display name and emoji. Distinct from the switcher
+                        row's "Move or rename project…", which relocates the
+                        folder on disk. */}
+                    <ContextMenuItem onSelect={handleEditProjectIdentity}>
+                      <Pencil className="mr-2 h-3.5 w-3.5" />
+                      Edit name and icon…
+                    </ContextMenuItem>
                     <ContextMenuItem onSelect={handlePillTogglePin}>
                       {activeSearchableProject?.isPinned ? (
                         <>
