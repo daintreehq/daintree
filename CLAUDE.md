@@ -52,6 +52,7 @@ npm run rebuild      # Rebuild native modules
 - **Releases:** per-OS workflows (`release-{macos,linux,windows}.yml`) on the same `v*` tag, each a full vertical slice (checks → unit → e2e → build → R2 upload → notify); failures isolate per-OS. E2E core + online + all seven `full-*` buckets gate each publish (buckets auto-shard 4× in `e2e.yml`).
 - **E2E tiers:** `e2e/core/` release smoke; `e2e/full/<bucket>/` — seven Playwright projects (`full-terminal`, `full-worktree`, `full-presets`, `full-platform`, `full-panels`, `full-resilience`, `full-plugins`); `e2e/online/` real-API agent tests (gates releases); `e2e/nightly/` memory-leak detection. Boundaries: `docs/e2e-testing.md`. All suites run via `.github/workflows/e2e.yml` (`suite` + optional `test_file`), e.g. `gh workflow run "E2E Tests" --ref develop -f platform=linux -f suite=full-terminal -f test_file=e2e/full/terminal/core-terminal-search.spec.ts`.
 - **Local E2E first:** touching a feature with an existing E2E test → run the spec or its bucket locally before pushing (`npx playwright test <spec>` / `npm run test:e2e:full-terminal`).
+- **Never decide to run E2E yourself:** local E2E runs are expensive — slow, and they lock up the machine. Run only the spec or bucket the user asks for; run everything only when explicitly asked, and via the `stabilize` workflow. Never run E2E as part of a merge.
 
 ## Architecture
 
