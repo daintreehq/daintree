@@ -919,8 +919,10 @@ function FileDiff({
   // and fires no scroll event at all, because from its point of view nothing
   // moved. Waiting for an echo would leave the pair permanently out of step, so
   // the landed value is pushed back to the source instead. That second write
-  // can never clamp in turn (it is <= the value the source already held), which
-  // is what makes this settle within the one call.
+  // can never clamp in turn — a clamp only ever moves a value *closer* to the
+  // shared zero endpoint (RTL runs [-max, 0], so its clamped offsets are
+  // numerically greater), which always lands inside the source's own range.
+  // That is what makes this settle within the one call.
   const syncNativeHScroll = useCallback((source: "content" | "proxy") => {
     const content = nativeScrollerRef.current;
     const proxy = hScrollbarRef.current;
@@ -971,7 +973,13 @@ function FileDiff({
   // hunk reveal) — the strip may clamp scrollLeft without firing a scroll
   // event. The native path re-syncs inside its measurement effect instead,
   // because its proxy range depends on a spacer width published there.
-  useEffect(() => {
+  //
+  // Layout, not passive, for the same reason as the measurement below: React
+  // reuses this div and the strip node across the centered/native branches, so
+  // the strip can arrive here still holding the native path's offset while the
+  // reused div still holds the old --diff-hscroll. Reconciling that passively
+  // paints one frame of code at the wrong indent.
+  useLayoutEffect(() => {
     const region = regionRef.current;
     if (!region) return;
     region.style.setProperty("--diff-hscroll", `${hScrollbarRef.current?.scrollLeft ?? 0}px`);

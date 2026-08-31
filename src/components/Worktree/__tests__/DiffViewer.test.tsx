@@ -847,8 +847,8 @@ describe("DiffViewer native scroll proxy", () => {
    * from that element's point of view nothing moved. jsdom does neither, so
    * model both to exercise the clamp reconciliation.
    */
-  function stubScrollLeft(element: HTMLElement, max: number) {
-    let current = 0;
+  function stubScrollLeft(element: HTMLElement, max: number, initial = 0) {
+    let current = initial;
     const writes: number[] = [];
     Object.defineProperty(element, "scrollLeft", {
       get: () => current,
@@ -1033,23 +1033,51 @@ describe("DiffViewer native scroll proxy", () => {
     expect(second!.hasAttribute("data-proxy-active")).toBe(false);
   });
 
-  it("settles on the clamped offset when the two scroll ranges disagree", () => {
+  it("settles when the shorter side is already at its end and stays silent", () => {
     const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
     const { scroller, proxy } = parts(container);
-    // The strip's range outruns the content's — exactly the state the sticky
-    // strip's own scrollbar reservation used to produce.
-    const content = stubScrollLeft(scroller!, 90);
-    const strip = stubScrollLeft(proxy, 100);
+    // Both parked at their own maximum, the strip's range outrunning the
+    // content's. This is the case an echo can never fix: writing 100 to the
+    // content clamps to the 90 it already holds, so it does not move and fires
+    // no scroll event at all. Only reading the landed value back settles it.
+    const content = stubScrollLeft(scroller!, 90, 90);
+    const strip = stubScrollLeft(proxy, 100, 100);
 
-    act(() => {
-      proxy.scrollLeft = 100;
-    });
+    fireEvent.scroll(proxy);
 
-    // The content clamps to 90 and stays silent; without the read-back the
-    // strip would sit at 100 forever, its thumb past the end of the content.
     expect(content.value()).toBe(90);
     expect(strip.value()).toBe(90);
     expect(strip.writes.length + content.writes.length).toBeLessThan(8);
+  });
+
+  it("settles the same way when the content is the longer of the two", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
+    const { scroller, proxy } = parts(container);
+    const content = stubScrollLeft(scroller!, 100, 100);
+    const strip = stubScrollLeft(proxy, 90, 90);
+
+    fireEvent.scroll(scroller!);
+
+    expect(content.value()).toBe(90);
+    expect(strip.value()).toBe(90);
+    expect(strip.writes.length + content.writes.length).toBeLessThan(8);
+  });
+
+  it("holds a one-pixel overflow below the activation threshold", () => {
+    // scrollWidth/clientWidth are rounded integers, so a sub-pixel layout
+    // difference can surface as a 1px delta. Popping a 12px strip for that is
+    // disproportionate, and the scroller keeps its own bar either way — the
+    // same tolerance centered split has always used.
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
+    const { scroller, proxy } = parts(container);
+    const layout = stubLayout(scroller!, 200, 201);
+
+    resize(scroller!);
+    expect(proxy.hasAttribute("data-active")).toBe(false);
+
+    layout.scrollWidth = 202;
+    resize(scroller!);
+    expect(proxy.getAttribute("data-active")).toBe("true");
   });
 
   it("re-attaches to the elements a collapse round-trip remounts", () => {
@@ -1091,8 +1119,10 @@ describe("DiffViewer native scroll proxy", () => {
     expect(screen.getByTestId("diff-hscrollbar").getAttribute("data-scroll-mode")).toBe("centered");
 
     rerender(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
-    // The offset does not survive a view-type change — both surfaces remount at
-    // 0. What must never happen is one of them keeping a stale offset.
+    // React reuses the strip node across the two branches, so it arrives here
+    // still holding the old offset while the inner scroller is freshly mounted
+    // at 0. The reconciliation has to pull the reused strip back to the
+    // scroller; what must never happen is the two disagreeing.
     const back = container.querySelector<HTMLElement>(".diff-file-scroll");
     expect(back!.scrollLeft).toBe(screen.getByTestId("diff-hscrollbar").scrollLeft);
   });
