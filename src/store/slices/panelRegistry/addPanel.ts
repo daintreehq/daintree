@@ -66,8 +66,25 @@ async function resolveProjectStore() {
 }
 
 /**
+ * Earliest position any of `ids` holds in `order`, or `-1` when none appear.
+ * Each ordered structure resolves the anchor against itself: a cross-worktree
+ * transfer appends to the destination bucket without moving the flat id, so
+ * bucket order is not guaranteed to be flat order projected by worktree, and
+ * reusing one structure's answer in the other would misplace the copy.
+ */
+function earliestIndexOf(order: readonly string[], ids: readonly string[]): number {
+  let earliest = -1;
+  for (const id of ids) {
+    const at = order.indexOf(id);
+    if (at !== -1 && (earliest === -1 || at < earliest)) earliest = at;
+  }
+  return earliest;
+}
+
+/**
  * Resolve `AddPanelOptions.insertAfterId` to a flat `panelIds` index for a live
- * add, or `null` to fall back to the ordinary append.
+ * add, plus the anchor ids each ordered structure should place the new panel
+ * after. `null` falls back to the ordinary append.
  *
  * Runs inside the commit `set()` on purpose. `addPanel` has async gaps before
  * it lands (agent-settings IPC while the duplicate recipe is built, then
@@ -80,10 +97,11 @@ function resolveInsertAfterAnchor(
     panelIds: string[];
     panelsById: Record<string, CarrierPanel>;
     tabGroups: Map<string, TabGroup>;
+    trashedTerminals: Map<string, unknown>;
   },
   panel: { id: string; location?: PanelLocation; worktreeId?: string | null },
   insertAfterId: string | undefined
-): { index: number; anchorId: string } | null {
+): { index: number; anchorIds: string[] } | null {
   if (!insertAfterId || insertAfterId === panel.id) return null;
 
   // Grid and dock are the only surfaces with a user-visible order to be
@@ -95,8 +113,10 @@ function resolveInsertAfterAnchor(
       : null;
   if (location === null) return null;
 
-  const inScope = (candidate: CarrierPanel | undefined): boolean => {
-    if (!candidate) return false;
+  // Mirrors the per-member filter both renderers apply, `trashedTerminals`
+  // (optimistic close) included, so the anchor is a slot the user can see.
+  const inScope = (candidate: CarrierPanel): boolean => {
+    if (state.trashedTerminals.has(candidate.id)) return false;
     const onSurface =
       location === "grid" ? isGridPanelLocation(candidate.location) : candidate.location === "dock";
     return onSurface && panelMatchesWorktreeScope(candidate.worktreeId, panel.worktreeId, location);
@@ -105,27 +125,41 @@ function resolveInsertAfterAnchor(
   // A source that has been trashed, moved to the other surface, or re-homed to
   // another worktree since dispatch no longer has a slot the copy can sit next
   // to; the same goes for one that never made it into `panelIds`.
-  if (!inScope(state.panelsById[insertAfterId])) return null;
-  const sourceIndex = state.panelIds.indexOf(insertAfterId);
-  if (sourceIndex === -1) return null;
+  const source = state.panelsById[insertAfterId];
+  if (!source || !inScope(source) || state.panelIds.indexOf(insertAfterId) === -1) return null;
 
-  // Both `getTabGroups` and the dock's render items emit an explicit group at
-  // its EARLIEST member's position, so a copy spliced after a later member
-  // would land past every panel rendered between the two. Anchor to the slot
-  // the user actually sees. The copy itself stays ungrouped — folding it into
-  // the source's group is `addTabForPanel`'s job.
-  let anchorIndex = sourceIndex;
-  for (const group of state.tabGroups.values()) {
-    if (group.location !== location || !group.panelIds.includes(insertAfterId)) continue;
-    for (const memberId of group.panelIds) {
-      if (!inScope(state.panelsById[memberId])) continue;
-      const memberIndex = state.panelIds.indexOf(memberId);
-      if (memberIndex !== -1 && memberIndex < anchorIndex) anchorIndex = memberIndex;
+  // Both renderers emit an explicit group once, at its earliest surviving
+  // member — so a copy anchored on a later member would land past every panel
+  // rendered in between. Anchor on the whole group instead and let each
+  // structure pick its own earliest. The copy itself stays ungrouped: folding
+  // it into the source's group is `addTabForPanel`'s job.
+  //
+  // The dock resolves groups PTY-only, chipping every non-PTY member standalone
+  // in place (#11332), so there a non-PTY source is its own anchor and non-PTY
+  // siblings are not candidates.
+  let anchorIds = [insertAfterId];
+  const groupsThisSource = location === "grid" || isPtyPanel(source);
+  if (groupsThisSource) {
+    for (const group of state.tabGroups.values()) {
+      if (group.location !== location) continue;
+      // Group-level scope, matching `getTabGroups`/`buildDockRenderItems`: a
+      // group pinned to another worktree is not rendered here at all.
+      if (!panelMatchesWorktreeScope(group.worktreeId, panel.worktreeId, location)) continue;
+      if (!group.panelIds.includes(insertAfterId)) continue;
+      const members = group.panelIds.filter((memberId) => {
+        const member = state.panelsById[memberId];
+        if (!member || !inScope(member)) return false;
+        return location === "grid" || isPtyPanel(member);
+      });
+      // The store enforces single-group membership, so the first match is the
+      // source's group; stop either way rather than blending two groups.
+      if (members.includes(insertAfterId)) anchorIds = members;
+      break;
     }
-    break;
   }
 
-  return { index: anchorIndex + 1, anchorId: state.panelIds[anchorIndex]! };
+  const index = earliestIndexOf(state.panelIds, anchorIds);
+  return index === -1 ? null : { index: index + 1, anchorIds };
 }
 
 type Set = PanelRegistryStoreApi["setState"];
@@ -405,7 +439,7 @@ export const createAddPanelActions = (
             state.panelIdsByWorktreeId,
             terminal.worktreeId,
             id,
-            anchor?.anchorId
+            anchor?.anchorIds
           );
           saveNormalized(newById, newIds);
           // Fold dock activation into this commit so the watchdog effect in
@@ -761,7 +795,7 @@ export const createAddPanelActions = (
           state.panelIdsByWorktreeId,
           terminal.worktreeId,
           id,
-          anchor?.anchorId
+          anchor?.anchorIds
         );
         saveNormalized(newById, newIds);
         // Fold dock activation into this commit so the watchdog effect in

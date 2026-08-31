@@ -72,7 +72,10 @@ beforeEach(() => {
 });
 
 const { usePanelStore } = await import("../../../panelStore");
-const { addToWorktreeIndex } = await import("../worktreeIndex");
+const { addToWorktreeIndex, collectUngroupedCandidateIds, NO_WORKTREE } =
+  await import("../worktreeIndex");
+const { buildDockRenderItems } = await import("@/components/Layout/dockRenderItems");
+const { saveNormalized } = await import("../persistence");
 
 /**
  * Seed a committed panel without going through `addPanel`, so a test's
@@ -106,15 +109,14 @@ function bucket(worktreeId: string): string[] {
   return usePanelStore.getState().panelIdsByWorktreeId[worktreeId] ?? [];
 }
 
+interface AddOpts {
+  worktreeId?: string;
+  location?: "grid" | "dock";
+  insertAfterId?: string;
+}
+
 /** Add a non-PTY panel through the real live commit branch. */
-async function addBrowser(
-  id: string,
-  opts: {
-    worktreeId?: string;
-    location?: "grid" | "dock";
-    insertAfterId?: string;
-  }
-): Promise<void> {
+async function addBrowser(id: string, opts: AddOpts): Promise<void> {
   await usePanelStore.getState().addPanel({
     kind: "browser",
     requestedId: id,
@@ -124,6 +126,39 @@ async function addBrowser(
     focusPolicy: "preserve",
     insertAfterId: opts.insertAfterId,
   });
+}
+
+/** Add a PTY panel through the real live commit branch. */
+async function addTerminal(id: string, opts: AddOpts): Promise<void> {
+  await usePanelStore.getState().addPanel({
+    kind: "terminal",
+    requestedId: id,
+    cwd: "/tmp",
+    location: opts.location ?? "grid",
+    worktreeId: opts.worktreeId,
+    focusPolicy: "preserve",
+    insertAfterId: opts.insertAfterId,
+  });
+}
+
+/**
+ * Ordered dock panels the way `ContentDock` derives them, so a placement can be
+ * checked against what the rail actually renders rather than only the store.
+ */
+function dockRenderOrder(worktreeId: string | undefined): string[][] {
+  const state = usePanelStore.getState();
+  const ordered = [];
+  for (const id of collectUngroupedCandidateIds(
+    state.panelIds,
+    state.panelIdsByWorktreeId,
+    worktreeId
+  )) {
+    const panel = state.panelsById[id];
+    if (panel && panel.location === "dock" && !state.trashedTerminals.has(id)) ordered.push(panel);
+  }
+  return buildDockRenderItems(ordered, state.tabGroups, worktreeId ?? null).map(
+    (item) => item.group.panelIds
+  );
 }
 
 describe("addPanel insertAfterId (#12095)", () => {
@@ -261,6 +296,116 @@ describe("addPanel insertAfterId (#12095)", () => {
 
       expect(panelIds()).toEqual(["t1", "copy"]);
       expect(bucket("wt-A")).toEqual(["t1", "copy"]);
+    });
+  });
+
+  describe("tab-group anchoring the renderers actually use", () => {
+    it("anchors on the group's earliest PTY member in the dock, not a non-PTY one", async () => {
+      // The dock resolves explicit groups PTY-only and chips every non-PTY
+      // member standalone in place (#11332), so a browser member is not the
+      // group's rendered slot even when it comes first.
+      await addBrowser("bp", { worktreeId: "wt-A", location: "dock" });
+      await addTerminal("outsider", { worktreeId: "wt-A", location: "dock" });
+      await addTerminal("src", { worktreeId: "wt-A", location: "dock" });
+      usePanelStore.getState().createTabGroup("dock", "wt-A", ["bp", "src"]);
+
+      expect(dockRenderOrder("wt-A")).toEqual([["bp"], ["outsider"], ["src"]]);
+
+      await addTerminal("copy", { worktreeId: "wt-A", location: "dock", insertAfterId: "src" });
+
+      expect(panelIds()).toEqual(["bp", "outsider", "src", "copy"]);
+      expect(dockRenderOrder("wt-A")).toEqual([["bp"], ["outsider"], ["src"], ["copy"]]);
+    });
+
+    it("skips a group member that is no longer in scope when picking the anchor", async () => {
+      seed("stale", "wt-A", "trash");
+      seed("g1", "wt-A");
+      seed("outsider", "wt-A");
+      seed("g2", "wt-A");
+      usePanelStore.getState().createTabGroup("grid", "wt-A", ["stale", "g1", "g2"]);
+
+      await addBrowser("copy", { worktreeId: "wt-A", insertAfterId: "g2" });
+
+      // `stale` is trashed, so the group renders at `g1` and the copy follows it.
+      expect(panelIds()).toEqual(["stale", "g1", "copy", "outsider", "g2"]);
+      expect(bucket("wt-A")).toEqual(["stale", "g1", "copy", "outsider", "g2"]);
+    });
+
+    it("ignores a group pinned to another worktree and anchors on the source", async () => {
+      seed("other", "wt-A");
+      seed("outsider", "wt-A");
+      seed("src", "wt-A");
+      // A repaired/corrupt group scoped to wt-B is not rendered in wt-A at all,
+      // so it must not move the copy either.
+      usePanelStore.getState().createTabGroup("grid", "wt-B", ["other", "src"]);
+
+      await addBrowser("copy", { worktreeId: "wt-A", insertAfterId: "src" });
+
+      expect(panelIds()).toEqual(["other", "outsider", "src", "copy"]);
+    });
+  });
+
+  describe("structures that disagree on order", () => {
+    it("resolves the anchor in each structure independently", async () => {
+      // A cross-worktree transfer appends to the destination bucket without
+      // moving the flat id, so bucket order is not flat order projected by
+      // worktree. Each structure must anchor on what it sees.
+      seed("t1", "wt-A");
+      seed("t2", "wt-A");
+      seed("t3", "wt-A");
+      usePanelStore.setState({ panelIdsByWorktreeId: { "wt-A": ["t2", "t3", "t1"] } });
+
+      await addBrowser("copy", { worktreeId: "wt-A", insertAfterId: "t1" });
+
+      expect(panelIds()).toEqual(["t1", "copy", "t2", "t3"]);
+      expect(bucket("wt-A")).toEqual(["t2", "t3", "t1", "copy"]);
+    });
+
+    it("keeps a worktree-less dock source adjacent in the __none__ bucket", async () => {
+      seed("global1", undefined, "dock");
+      seed("global2", undefined, "dock");
+
+      await addBrowser("copy", { location: "dock", insertAfterId: "global1" });
+
+      expect(panelIds()).toEqual(["global1", "copy", "global2"]);
+      expect(usePanelStore.getState().panelIdsByWorktreeId[NO_WORKTREE]).toEqual([
+        "global1",
+        "copy",
+        "global2",
+      ]);
+    });
+  });
+
+  describe("hydration batches", () => {
+    it("ignores the hint while a batch defers the panelIds append", async () => {
+      seed("t1", "wt-A");
+      seed("t2", "wt-A");
+
+      const { beginHydrationBatch, flushHydrationBatch } = usePanelStore.getState();
+      const token = beginHydrationBatch();
+      await addBrowser("copy", { worktreeId: "wt-A", insertAfterId: "t1" });
+
+      // The bucket commits eagerly during a batch; it must not honor the hint,
+      // or it would disagree with the plain append the flush performs.
+      expect(bucket("wt-A")).toEqual(["t1", "t2", "copy"]);
+
+      flushHydrationBatch(token);
+
+      expect(panelIds()).toEqual(["t1", "t2", "copy"]);
+      expect(bucket("wt-A")).toEqual(["t1", "t2", "copy"]);
+    });
+  });
+
+  describe("persistence", () => {
+    it("persists the anchored order, not the append order", async () => {
+      seed("t1", "wt-A");
+      seed("t2", "wt-A");
+      vi.mocked(saveNormalized).mockClear();
+
+      await addBrowser("copy", { worktreeId: "wt-A", insertAfterId: "t1" });
+
+      const lastCall = vi.mocked(saveNormalized).mock.calls.at(-1);
+      expect(lastCall?.[1]).toEqual(["t1", "copy", "t2"]);
     });
   });
 

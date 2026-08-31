@@ -213,6 +213,21 @@ describe("terminal.duplicate (copy) suffix", () => {
     expect(addPanel.mock.calls[0]![0]).not.toHaveProperty("insertAfterId");
   });
 
+  it("terminal.duplicate does not anchor the last-closed reopen fallback", async () => {
+    const addPanel = vi.fn().mockResolvedValue("p-new");
+    setPanelState({
+      panels: [],
+      lastClosedConfig: { kind: "terminal", command: "bash", cwd: "/repo" },
+      addPanel,
+    });
+    const run = setupActions();
+
+    await run("terminal.duplicate");
+
+    expect(addPanel).toHaveBeenCalledTimes(1);
+    expect(addPanel.mock.calls[0]![0]).not.toHaveProperty("insertAfterId");
+  });
+
   it("terminal.duplicate preserves spawnedBy for MCP-origin duplicated agent panels", async () => {
     const addPanel = vi.fn().mockResolvedValue(undefined);
     setPanelState({
