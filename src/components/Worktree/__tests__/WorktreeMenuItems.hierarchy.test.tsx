@@ -37,11 +37,27 @@ function fullyPopulated(): Parameters<typeof renderWorktreeMenu>[0] {
         pr: { ref: { number: 7 }, url: "https://example.test/pr/7" },
       } as WorktreeState["linked"],
       worktreeMode: "local",
+      aheadCount: 2,
+      behindCount: 0,
+      // A completed status pass with a tracking branch — without it the Git
+      // rows have no upstream to speak of and the group is not "fully
+      // populated" at all.
+      worktreeChanges: {
+        worktreeId: "wt-1",
+        rootPath: "/repo/wt-1",
+        changes: [],
+        changedFileCount: 0,
+        tracking: "origin/feature",
+      },
     }),
     counts: { grid: 2, dock: 1, active: 3, completed: 0, all: 3, waiting: 1, working: 2 },
     recipes: [{ id: "r1", name: "Two agents" }],
     onSaveLayout: vi.fn(),
     onOpenReviewHub: vi.fn(),
+    onGitPullRebase: vi.fn(),
+    onGitPush: vi.fn(),
+    onGitForcePush: vi.fn(),
+    canForcePush: true,
     onOpenChanges: vi.fn(),
     onCompareDiff: vi.fn(),
     onOpenFileBrowser: vi.fn(),

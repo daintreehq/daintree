@@ -190,6 +190,7 @@ export const BUILT_IN_ACTION_IDS = [
   "git.mergeBaseIntoBranch",
   "git.abortRepositoryOperation",
   "git.continueRepositoryOperation",
+  "git.forcePushWithLease",
   "git.markSafeDirectory",
   "git.getStagingStatus",
 

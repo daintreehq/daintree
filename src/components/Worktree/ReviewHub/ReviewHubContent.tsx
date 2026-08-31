@@ -71,7 +71,6 @@ import {
 // list. The modals open only on row click, so the chunk fetch overlaps user
 // think-time; useKeepMounted gates the first mount so nothing is fetched (or
 // rendered) until a diff is actually opened.
-import { ForcePushConfirmDialog } from "./ForcePushConfirmDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { debounce } from "@/utils/debounce";
@@ -85,6 +84,7 @@ import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients/systemClient";
 import { forgeClient } from "@/clients/forgeClient";
 import { actionService } from "@/services/ActionService";
+import { useGitForcePushStore } from "@/store/gitForcePushStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { classifyGitError } from "@shared/utils/gitOperationErrors";
 import {
@@ -215,7 +215,6 @@ export function ReviewHubContent({
   );
   const setStoreViewed = useDiffViewedStore((state) => state.setViewed);
   const [diffMode, setDiffMode] = useState<DiffMode>("working-tree");
-  const [forcePushDialogOpen, setForcePushDialogOpen] = useState(false);
   const [pullRebaseConfirmOpen, setPullRebaseConfirmOpen] = useState(false);
   const [pullRebasing, setPullRebasing] = useState(false);
   const isPullRebasingRef = useRef(false);
@@ -839,7 +838,6 @@ export function ReviewHubContent({
       setBaseBranchFiles(null);
       setBaseBranchError(null);
       setSelectedBaseBranchFile(null);
-      setForcePushDialogOpen(false);
       setPullRebasing(false);
       isPullRebasingRef.current = false;
       // Viewed markers deliberately survive close/reopen (diffViewedStore).
@@ -1127,6 +1125,12 @@ export function ReviewHubContent({
       });
     });
 
+    // Drop any lease captured by an earlier rejection before pushing again —
+    // the same order `git.push`'s action uses. Without it a push that fails for
+    // some OTHER reason (or succeeds) leaves the previous rejection's lease
+    // standing, and the worktree card goes on offering a recovery for a remote
+    // state nobody has observed since.
+    useGitForcePushStore.getState().clearRecovery(worktreePath);
     try {
       await window.electron.git.push(worktreePath);
       setPushError(null);
@@ -1146,6 +1150,16 @@ export function ReviewHubContent({
         rawMessage,
         leaseSha: errFields.leaseSha,
         branchName: errFields.branchName,
+      });
+      // This pane pushes through the IPC directly rather than the `git.push`
+      // action, so the action's own capture never runs here. Publishing the
+      // lease to the shared store is what lets the worktree card offer the
+      // same recovery the banner below does — and keeps ONE lease per
+      // worktree, captured at one rejection, however the push was started.
+      useGitForcePushStore.getState().recordRejection({
+        cwd: worktreePath,
+        branchName: errFields.branchName,
+        leaseSha: errFields.leaseSha,
       });
     } finally {
       cleanup();
@@ -1263,21 +1277,40 @@ export function ReviewHubContent({
     }
   }, [worktreePath, refresh]);
 
-  const handleForcePushSuccess = useCallback(() => {
-    setForcePushDialogOpen(false);
-    setPushError(null);
-    void refresh();
-  }, [refresh]);
-
-  const handleForcePushError = useCallback((err: unknown) => {
-    setForcePushDialogOpen(false);
-    const errFields = readGitErrorFields(err);
-    const rawMessage = formatErrorMessage(err, "Failed to force push");
+  /**
+   * The banner CTA dispatches the action rather than opening a dialog of its
+   * own. `git.forcePushWithLease` owns the confirm (globally mounted), the
+   * lease it was captured with, and the IPC — so this pane and the worktree
+   * card force push through exactly one path.
+   */
+  const handleForcePush = useCallback(async () => {
+    const result = await actionService.dispatch(
+      "git.forcePushWithLease",
+      { cwd: worktreePath },
+      { source: "user" }
+    );
+    if (result.ok) {
+      // A declined confirm succeeds with `forced: false`. Clearing the banner
+      // there would retract the recovery CTA the user just backed out of.
+      const forced =
+        typeof result.result === "object" &&
+        result.result !== null &&
+        "forced" in result.result &&
+        result.result.forced === true;
+      if (forced) {
+        setPushError(null);
+        void refresh();
+      }
+      return;
+    }
+    // Re-banner it: the old error described the rejected push, and this one
+    // describes why the recovery from it did not take.
+    const rawMessage = result.error.message || "Failed to force push";
     setPushError({
-      reason: errFields.gitReason ?? classifyGitError(rawMessage),
+      reason: classifyGitError(rawMessage),
       rawMessage,
     });
-  }, []);
+  }, [worktreePath, refresh]);
 
   useLayoutEffect(() => {
     if (scrollContainerRef.current && status) {
@@ -1754,7 +1787,7 @@ export function ReviewHubContent({
             }
             onRetryPush={() => void handleRetryPush()}
             onPullRebase={() => setPullRebaseConfirmOpen(true)}
-            onForcePush={() => setForcePushDialogOpen(true)}
+            onForcePush={() => void handleForcePush()}
           />
         )}
 
@@ -2220,18 +2253,6 @@ export function ReviewHubContent({
             />
           )}
       </div>
-
-      {pushError?.leaseSha && pushError.branchName && (
-        <ForcePushConfirmDialog
-          isOpen={forcePushDialogOpen}
-          cwd={worktreePath}
-          branchName={pushError.branchName}
-          leaseSha={pushError.leaseSha}
-          onClose={() => setForcePushDialogOpen(false)}
-          onSuccess={handleForcePushSuccess}
-          onError={handleForcePushError}
-        />
-      )}
 
       <ConfirmDialog
         isOpen={pullRebaseConfirmOpen}

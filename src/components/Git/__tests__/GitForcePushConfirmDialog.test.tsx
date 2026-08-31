@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
+import { StrictMode } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GIT_REMOTE_COMMIT_PREVIEW_MAX, type GitRemoteCommitPreview } from "@shared/types/git";
-import { ForcePushConfirmDialog } from "../ForcePushConfirmDialog";
+import { GitForcePushConfirmDialog } from "../GitForcePushConfirmDialog";
+import { useGitForcePushStore } from "@/store/gitForcePushStore";
 
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
 vi.mock("@/store", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
@@ -30,6 +32,7 @@ const listRemoteCommits =
   vi.fn<(cwd: string, branch: string, limit?: number) => Promise<GitRemoteCommitPreview>>();
 const forcePushWithLease = vi.fn().mockResolvedValue(undefined);
 
+const LEASE = "deadbeef";
 const CWD = "/repo/wt";
 const BRANCH = "feature/x";
 
@@ -50,18 +53,23 @@ function preview(shown: number, total = shown): GitRemoteCommitPreview {
   };
 }
 
+/**
+ * Opens the dialog the only way it can be opened: a lease captured from a real
+ * push rejection, then an action awaiting the confirm. The returned promise is
+ * the deferred one `git.forcePushWithLease` awaits.
+ */
+function openConfirm(cwd = CWD, branch = BRANCH, lease = LEASE) {
+  const store = useGitForcePushStore.getState();
+  const record = store.recordRejection({ cwd, branchName: branch, leaseSha: lease });
+  if (!record) throw new Error("test setup: rejection produced no recovery record");
+  return store.requestConfirmation(record);
+}
+
 function renderDialog() {
-  return render(
-    <ForcePushConfirmDialog
-      isOpen
-      cwd={CWD}
-      branchName={BRANCH}
-      leaseSha="deadbeef"
-      onClose={vi.fn()}
-      onSuccess={vi.fn()}
-      onError={vi.fn()}
-    />
-  );
+  const confirmed = openConfirm();
+  // Nothing awaits this in the preview tests; the afterEach resolves it.
+  void confirmed;
+  return render(<GitForcePushConfirmDialog />);
 }
 
 function confirmButton(): HTMLElement {
@@ -77,7 +85,7 @@ async function flush() {
   });
 }
 
-describe("ForcePushConfirmDialog preview", () => {
+describe("GitForcePushConfirmDialog preview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listRemoteCommits.mockResolvedValue(preview(3));
@@ -87,6 +95,13 @@ describe("ForcePushConfirmDialog preview", () => {
   });
 
   afterEach(() => {
+    // Settle any deferred confirm before unmount so an awaited promise cannot
+    // leak into the next test, then reset the store's recovery map.
+    act(() => {
+      const pending = useGitForcePushStore.getState().pendingConfirm;
+      if (pending) useGitForcePushStore.getState().resolveConfirmation(pending.requestId, false);
+    });
+    useGitForcePushStore.setState({ recovery: {}, pendingConfirm: null });
     cleanup();
   });
 
@@ -238,5 +253,117 @@ describe("ForcePushConfirmDialog preview", () => {
     expect(screen.queryByTestId("force-push-commits-retry")).toBeNull();
     expect(screen.getAllByTestId("force-push-commit-row")).toHaveLength(2);
     expect(confirmButton().hasAttribute("aria-disabled")).toBe(false);
+  });
+
+  it("names the pinned lease in full so it can be checked against anything", async () => {
+    renderDialog();
+    await flush();
+
+    // Abbreviated, this is the one value in the dialog a user cannot verify:
+    // everything else is a preview of the discard, but the lease is what
+    // decides whether the discard is permitted at all.
+    expect(screen.getByTestId("force-push-lease").textContent).toBe(LEASE);
+  });
+
+  it("resolves the action's deferred confirm rather than pushing itself", async () => {
+    const confirmed = openConfirm();
+    render(<GitForcePushConfirmDialog />);
+    await flush();
+
+    await act(async () => {
+      confirmButton().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(await confirmed).toBe(true);
+    // The IPC belongs to `git.forcePushWithLease`'s run(), so its dispatch
+    // result reports the real outcome instead of a dialog swallowing it.
+    expect(forcePushWithLease).not.toHaveBeenCalled();
+  });
+
+  it("resolves false when the confirm is dismissed", async () => {
+    const confirmed = openConfirm();
+    render(<GitForcePushConfirmDialog />);
+    await flush();
+
+    await act(async () => {
+      screen
+        .getByRole("button", { name: /cancel/i })
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(await confirmed).toBe(false);
+    expect(forcePushWithLease).not.toHaveBeenCalled();
+  });
+
+  it("blocks confirm until the superseding request's own preview arrives", async () => {
+    renderDialog();
+    await flush();
+    expect(confirmButton().hasAttribute("aria-disabled")).toBe(false);
+
+    // A second worktree's confirm supersedes the first. The host stays mounted
+    // across the swap, so for the frames before the new fetch lands the commit
+    // list on screen still belongs to the PREVIOUS worktree — confirming there
+    // would force push against a preview of somewhere else entirely.
+    let resolvePreview: (p: GitRemoteCommitPreview) => void = () => {};
+    listRemoteCommits.mockReturnValue(
+      new Promise<GitRemoteCommitPreview>((resolve) => {
+        resolvePreview = resolve;
+      })
+    );
+    await act(async () => {
+      void openConfirm("/repo/other", "feature/other", "beefcafe");
+      await Promise.resolve();
+    });
+
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
+
+    await act(async () => {
+      resolvePreview(preview(1));
+      await Promise.resolve();
+    });
+    expect(confirmButton().hasAttribute("aria-disabled")).toBe(false);
+  });
+
+  it("survives StrictMode's effect replay without declining a live request", async () => {
+    // StrictMode runs setup → cleanup → setup in one commit. A teardown decline
+    // that fired synchronously would cancel the confirm the moment it opened,
+    // in dev only — the sort of thing that never shows up in a production
+    // build's tests.
+    const confirmed = openConfirm();
+    render(
+      <StrictMode>
+        <GitForcePushConfirmDialog />
+      </StrictMode>
+    );
+    await flush();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+
+    expect(useGitForcePushStore.getState().pendingConfirm).not.toBeNull();
+    // Still answerable, and still the request the user is looking at.
+    await act(async () => {
+      confirmButton().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(await confirmed).toBe(true);
+  });
+
+  it("declines the pending request when the host really goes away", async () => {
+    // The action awaits this Promise. A dialog that unmounted without settling
+    // it — an ErrorBoundary catching a render crash is the real case — would
+    // leave the dispatch hanging for the rest of the session.
+    const confirmed = openConfirm();
+    const { unmount } = render(<GitForcePushConfirmDialog />);
+    await flush();
+
+    unmount();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+
+    expect(await confirmed).toBe(false);
   });
 });

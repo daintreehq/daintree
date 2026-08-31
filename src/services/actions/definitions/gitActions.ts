@@ -17,6 +17,8 @@ import {
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { useGitWorktreeOperationConfirmStore } from "@/store/gitWorktreeOperationConfirmStore";
+import { useGitForcePushStore } from "@/store/gitForcePushStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isClientGitError } from "@/utils/clientGitError";
 import { humanizeAppError, formatErrorMessage } from "@shared/utils/errorMessage";
 import { notify } from "@/lib/notify";
@@ -730,7 +732,30 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         const confirmed = await useGitPushConfirmStore.getState().requestConfirmation(resolvedCwd);
         if (!confirmed) return;
       }
-      return await window.electron.git.push(resolvedCwd, setUpstream);
+      // A rejection is the ONLY moment a `--force-with-lease` SHA may be read
+      // (#7822), and `handlePush` is the only thing that reads it — inside its
+      // own catch, against the destination it actually pushed to. Stashing it
+      // here is what lets the card menu offer a force push later without
+      // re-deriving anything. The previous lease is dropped first: once a new
+      // push has run, an older capture describes a remote state nobody has
+      // observed since.
+      const forcePush = useGitForcePushStore.getState();
+      forcePush.clearRecovery(resolvedCwd);
+      try {
+        return await window.electron.git.push(resolvedCwd, setUpstream);
+      } catch (error) {
+        if (isClientGitError(error) && error.gitReason === "push-rejected-outdated") {
+          // `recordRejection` stores nothing when either field is missing, so a
+          // rejection whose `git.revparse` failed leaves no row to click rather
+          // than a row that would force without a lease.
+          forcePush.recordRejection({
+            cwd: resolvedCwd,
+            branchName: error.branchName,
+            leaseSha: error.leaseSha,
+          });
+        }
+        throw error;
+      }
     },
   }));
 
@@ -996,6 +1021,87 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       // worktree mid-rebase whenever there are more commits to replay, and that
       // is the ordinary case rather than a failure.
       await routeHaltToReviewHub(resolvedCwd, location, ctx);
+    },
+  }));
+
+  actions.set("git.forcePushWithLease", () => ({
+    id: "git.forcePushWithLease",
+    title: "Force Push with Lease",
+    description:
+      "Complete a rebase on a published branch by overwriting the remote with the local one, but only while the remote still matches the state a rejected push observed. Available only after a push has actually been rejected for a diverged remote — the lease it overwrites against is captured from that rejection and cannot be recomputed.",
+    category: "git",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    dangerRationale:
+      "Rewrites a published branch. Remote commits the local branch does not contain are discarded and are recoverable only from a reflog on whoever pushed them.",
+    // Hidden from the palette and from every headless surface for the same
+    // reason: the action's real requirement — a lease captured moments earlier
+    // by a rejected push — lives in `run()`, not in `argsSchema`. A palette
+    // entry would be a row that fails on nearly every worktree, and an MCP
+    // client has no way to have produced the rejection this reads.
+    palette: { mode: "hidden" },
+    mcpVisibility: "hidden",
+    argsSchema: withWorktreeLocation({}, { legacy: ["cwd"] }).optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const resolvedCwd = requireWorktreePath(args as WorktreeLocationArgs | undefined, ctx);
+      const store = useGitForcePushStore.getState();
+      const record = store.getRecovery(resolvedCwd);
+      if (!record) {
+        throw new Error(
+          "Force push is available only after a push was rejected because the remote moved"
+        );
+      }
+
+      // Copied out before the first await. The store entry can be replaced
+      // while the confirm is open, and the operation must run against the
+      // lease the user was actually shown.
+      const { branchName, leaseSha, generation } = record;
+
+      // Agent dispatch has already cleared ActionService's host-attested
+      // confirm gate, and this deferred store resolves only from a renderer
+      // dialog no headless client can click — awaiting it would hang (#11538).
+      if (ctx.dispatchSource !== "agent") {
+        const confirmed = await store.requestConfirmation(record);
+        // Declining is a normal outcome, not a failure — but a caller cannot
+        // tell it from a completed push unless the two return different
+        // things. ReviewHub's banner keys its own recovery state off this.
+        if (!confirmed) return { forced: false };
+        // A push that ran while the dialog was open replaced the lease. The
+        // confirm was granted against the old one, so it does not carry over.
+        const current = useGitForcePushStore.getState().getRecovery(resolvedCwd);
+        if (!current || current.generation !== generation) {
+          throw new Error("The push state changed while confirming — try pushing again");
+        }
+      }
+
+      try {
+        await window.electron.git.forcePushWithLease(resolvedCwd, branchName, leaseSha);
+      } catch (error) {
+        // Decode before rethrowing. The preload ships the discriminant fields
+        // inside an `[GitError|reason|lease|branch]` message prefix, and
+        // `isClientGitError` strips it as a side effect — without this, every
+        // consumer downstream (the ReviewHub banner, the card toast) classifies
+        // and displays the encoded envelope instead of the message.
+        const decoded = isClientGitError(error);
+        // A rejection means the remote refused the lease: it is no longer where
+        // it stood when the push that captured it was rejected, so the record
+        // describes a state that has been disproven. Transport and auth
+        // failures say nothing about the remote's position and keep it for a
+        // retry. Matched on the message because `GitOperationReason` has no
+        // member for a failed lease — git's own `stale info` is the signal.
+        if (decoded && /\bstale info\b|\[rejected\]/i.test(error.message)) {
+          useGitForcePushStore.getState().clearRecovery(resolvedCwd, generation);
+        }
+        useAnnouncerStore.getState().announce(`Couldn't force push ${branchName}`, "assertive");
+        throw error;
+      }
+      // Conditional on the generation: a push that landed during the force
+      // push owns the record now, and clearing it would drop a lease this call
+      // never held.
+      useGitForcePushStore.getState().clearRecovery(resolvedCwd, generation);
+      useAnnouncerStore.getState().announce(`Force pushed ${branchName}`);
+      return { forced: true };
     },
   }));
 

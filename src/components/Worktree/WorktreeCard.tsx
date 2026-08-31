@@ -26,6 +26,11 @@ import {
 import { useWorktreeFilterStore } from "../../store/worktreeFilterStore";
 import { errorsClient, worktreeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
+import { useGitForcePushStore } from "@/store/gitForcePushStore";
+import { notify } from "@/lib/notify";
+import { humanizeAppError } from "@shared/utils/errorMessage";
+import { getGitRecoveryAction } from "@shared/utils/gitOperationErrors";
+import { isClientGitError } from "@/utils/clientGitError";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { cn } from "../../lib/utils";
@@ -776,6 +781,94 @@ export function WorktreeCard({
     void actionService.dispatch("panel.palette", undefined, { source });
   };
 
+  // Subscribed rather than read once: the lease is captured by a push that may
+  // have been started from this very menu, so the row has to appear without the
+  // card needing to re-render for some other reason.
+  const forcePushRecovery = useGitForcePushStore((s) => s.recovery[worktree.path]);
+  // The lease is keyed by path, but a worktree can change branch under it.
+  // Offering one captured against a branch that is no longer checked out would
+  // force push the wrong history.
+  const canForcePush =
+    forcePushRecovery !== undefined && forcePushRecovery.branchName === worktree.branch;
+
+  /**
+   * Unlike the card's other dispatches, these report failure. A push rejected
+   * for a diverged remote is the ENTIRE precondition for the Force push row,
+   * and a card that swallowed the rejection would hide the row behind a
+   * failure the user was never told about. The rejection also carries its own
+   * recovery, so the toast offers it rather than making them find the row.
+   */
+  const dispatchGitAction =
+    (actionId: "git.pullRebase" | "git.push" | "git.forcePushWithLease") =>
+    async (source: MenuActionSourceValue) => {
+      const result = await actionService.dispatch(actionId, { cwd: worktree.path }, { source });
+      if (result.ok) return;
+
+      // A lease exists only when this very push was rejected for a diverged
+      // remote, which is exactly the failure force pushing resolves.
+      const captured = useGitForcePushStore.getState().getRecovery(worktree.path);
+      if (actionId === "git.push" && captured) {
+        notify({
+          type: "error",
+          context: { eventKind: "git" },
+          title: "Push failed",
+          message: `${captured.branchName} has commits on the remote you don't have locally. Force pushing discards them; pulling keeps them.`,
+          action: {
+            label: "Force push…",
+            onClick: () => void dispatchGitAction("git.forcePushWithLease")(source),
+          },
+        });
+        return;
+      }
+
+      // ActionService preserves the original throw on `details`, and the git
+      // actions decode it before rethrowing — so the discriminated reason is
+      // right there. Dropping it would collapse auth, network, hook and policy
+      // failures into one "Git operation failed" toast that names no cause and
+      // offers no route.
+      const cause = result.error.details;
+      const gitReason = isClientGitError(cause) ? cause.gitReason : undefined;
+      const humanized = humanizeAppError({
+        type: "git",
+        source: "WorktreeCard",
+        message: result.error.message,
+        gitReason,
+        recoveryHint: undefined,
+      });
+      const recovery = gitReason ? getGitRecoveryAction(gitReason) : undefined;
+      if (recovery) {
+        // The table's entries take different location spellings, and a wrong
+        // one fails silently rather than loudly: `worktree.openReviewHub`
+        // declares `z.object({ worktreeId })`, which STRIPS a stray `cwd` and
+        // then falls back to the focused/active worktree — opening the wrong
+        // card's Review Hub. The git actions want the path.
+        const recoveryArgs =
+          recovery.args ??
+          (recovery.actionId === "worktree.openReviewHub"
+            ? { worktreeId: worktree.id }
+            : { cwd: worktree.path });
+        notify({
+          type: "error",
+          context: { eventKind: "git" },
+          title: humanized.title,
+          message: humanized.body,
+          action: {
+            label: recovery.label,
+            onClick: () => void actionService.dispatch(recovery.actionId, recoveryArgs, { source }),
+          },
+        });
+        return;
+      }
+
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok. `RECOVERY_ACTIONS` in gitOperationErrors.ts is the repo's map of which git failures have a route; the ones that reach here are the ones it deliberately leaves unrouted, and inventing an action for them would send the user somewhere unrelated to what failed.
+      notify({
+        type: "error",
+        context: { eventKind: "git" },
+        title: humanized.title,
+        message: humanized.body,
+      });
+    };
+
   // One action set drives both menu surfaces — the card's right-click menu and
   // the ⋯ toolbar dropdown — so they can't drift apart (they did: Browse Files
   // was wired into the dropdown only).
@@ -809,6 +902,10 @@ export function WorktreeCard({
     // button uses.
     onOpenChanges: hasOpenableChanges ? openChangesForThisWorktree : undefined,
     onOpenReviewHub: openReviewHubForThisWorktree,
+    onGitPullRebase: dispatchGitAction("git.pullRebase"),
+    onGitPush: dispatchGitAction("git.push"),
+    onGitForcePush: dispatchGitAction("git.forcePushWithLease"),
+    canForcePush,
     onOpenFileBrowser: openFileBrowserForThisWorktree,
     onCompareDiff: () => useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),
     onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),

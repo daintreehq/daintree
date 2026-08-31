@@ -27,7 +27,17 @@ beforeAll(async () => {
 afterEach(cleanup);
 
 const menuProps = {
-  worktree: makeWorktree({ worktreeMode: "staging" }),
+  worktree: makeWorktree({
+    worktreeMode: "staging",
+    aheadCount: 2,
+    worktreeChanges: {
+      worktreeId: "wt-1",
+      rootPath: "/repo/wt-1",
+      changes: [],
+      changedFileCount: 0,
+      tracking: "origin/feature",
+    },
+  }),
   launchAgents: [],
   recipes: [],
   runningRecipeId: null,
@@ -48,6 +58,10 @@ const menuProps = {
   onCloseAll: vi.fn(),
   onTerminateAll: vi.fn(),
   onClearHistory: vi.fn(),
+  onGitPullRebase: vi.fn(),
+  onGitPush: vi.fn(),
+  onGitForcePush: vi.fn(),
+  canForcePush: true,
   hasResourceConfig: true,
   resourceEnvironmentKeys: ["staging", "prod"],
   onSwitchEnvironment: vi.fn(),

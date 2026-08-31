@@ -2,9 +2,9 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { useGitForcePushStore } from "@/store/gitForcePushStore";
 import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { GIT_REMOTE_COMMIT_PREVIEW_MAX } from "@shared/types/git";
 import type { StagingStatus } from "@shared/types";
 import type { WorktreeState } from "@shared/types";
 
@@ -363,6 +363,7 @@ describe("ReviewHub", () => {
     });
     listCommitsMock.mockReset().mockResolvedValue({ items: [], hasMore: false, total: 0 });
     actionDispatchMock.mockReset().mockResolvedValue({ ok: true });
+    useGitForcePushStore.setState({ recovery: {}, pendingConfirm: null });
     openExternalMock.mockReset().mockResolvedValue(undefined);
     classifyPushErrorMock.mockReset().mockImplementation(async (_cwd: string, stderr: string) => {
       const match = /\bGH\d{3,}\b/.exec(String(stderr));
@@ -781,7 +782,7 @@ describe("ReviewHub", () => {
       );
     });
 
-    it("Force-push CTA opens the confirmation dialog with loaded remote commits and confirm calls forcePushWithLease", async () => {
+    it("Force-push CTA dispatches the action rather than pushing from this pane", async () => {
       pushMock.mockRejectedValue(
         Object.assign(new Error("! [rejected]"), {
           name: "GitOperationError",
@@ -790,23 +791,50 @@ describe("ReviewHub", () => {
           branchName: "feature/x",
         })
       );
-      listRemoteCommitsMock.mockResolvedValueOnce({
-        destination: { remote: "origin", branch: "feature/x" },
-        total: 2,
-        commits: [
-          {
-            hash: "abcd1234567",
-            date: "2026-01-01",
-            message: "first remote commit",
-            author: "Bob",
-          },
-          {
-            hash: "efgh1234567",
-            date: "2026-01-02",
-            message: "second remote commit",
-            author: "Bob",
-          },
-        ],
+
+      actionDispatchMock.mockResolvedValue({ ok: true, result: { forced: true } });
+
+      await triggerCommitAndPush();
+      await screen.findByTestId("review-hub-push-error");
+
+      // The rejection publishes its lease to the shared store, so the worktree
+      // card can offer the same recovery this banner does — one lease per
+      // worktree, captured at one rejection, however the push was started.
+      expect(useGitForcePushStore.getState().getRecovery(WORKTREE_PATH)).toMatchObject({
+        branchName: "feature/x",
+        leaseSha: "deadbeef",
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("review-hub-push-error-secondary-cta"));
+        await Promise.resolve();
+      });
+
+      // The confirm, the lease and the IPC all belong to the action now — this
+      // pane no longer force pushes directly, so there is one force-push path.
+      await waitFor(() =>
+        expect(actionDispatchMock).toHaveBeenCalledWith(
+          "git.forcePushWithLease",
+          { cwd: WORKTREE_PATH },
+          { source: "user" }
+        )
+      );
+      expect(forcePushWithLeaseMock).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByTestId("review-hub-push-error")).toBeNull());
+    });
+
+    it("re-banners the failure when the force push itself does not take", async () => {
+      pushMock.mockRejectedValue(
+        Object.assign(new Error("! [rejected]"), {
+          name: "GitOperationError",
+          gitReason: "push-rejected-outdated",
+          leaseSha: "deadbeef",
+          branchName: "feature/x",
+        })
+      );
+      actionDispatchMock.mockResolvedValue({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "stale info" },
       });
 
       await triggerCommitAndPush();
@@ -817,28 +845,38 @@ describe("ReviewHub", () => {
         await Promise.resolve();
       });
 
-      // Dialog opens; commit list loads.
       await waitFor(() =>
-        expect(listRemoteCommitsMock).toHaveBeenCalledWith(
-          WORKTREE_PATH,
-          "feature/x",
-          GIT_REMOTE_COMMIT_PREVIEW_MAX
+        expect(actionDispatchMock).toHaveBeenCalledWith(
+          "git.forcePushWithLease",
+          { cwd: WORKTREE_PATH },
+          { source: "user" }
         )
       );
-      await waitFor(() => screen.getByText("first remote commit"));
+      // The old banner described the rejected push; a failed recovery has to
+      // leave one standing rather than clearing it, or the pane reports the
+      // push as resolved when nothing was published.
+      const banner = await screen.findByTestId("review-hub-push-error");
+      expect(banner.getAttribute("data-reason")).not.toBe("push-rejected-outdated");
+    });
 
-      const dialog = screen.getByRole("alertdialog");
-      const confirmBtn = within(dialog).getByRole("button", { name: /Force push/i });
-
-      await act(async () => {
-        fireEvent.click(confirmBtn);
-        await Promise.resolve();
-      });
-
-      await waitFor(() =>
-        expect(forcePushWithLeaseMock).toHaveBeenCalledWith(WORKTREE_PATH, "feature/x", "deadbeef")
+    it("drops a previously captured lease before pushing again", async () => {
+      // Otherwise a push that fails for some OTHER reason leaves the earlier
+      // rejection's lease standing, and the worktree card keeps offering a
+      // recovery for a remote state nobody has observed since.
+      useGitForcePushStore
+        .getState()
+        .recordRejection({ cwd: WORKTREE_PATH, branchName: "feature/x", leaseSha: "deadbeef" });
+      pushMock.mockRejectedValue(
+        Object.assign(new Error("Permission denied"), {
+          name: "GitOperationError",
+          gitReason: "auth-failed",
+        })
       );
-      await waitFor(() => expect(screen.queryByTestId("review-hub-push-error")).toBeNull());
+
+      await triggerCommitAndPush();
+      await screen.findByTestId("review-hub-push-error");
+
+      expect(useGitForcePushStore.getState().getRecovery(WORKTREE_PATH)).toBeNull();
     });
 
     it("Force-push CTA is suppressed when leaseSha is absent", async () => {

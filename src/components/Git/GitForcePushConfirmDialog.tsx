@@ -1,24 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { Spinner } from "@/components/ui/Spinner";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { GIT_REMOTE_COMMIT_PREVIEW_MAX, type GitRemoteCommitPreview } from "@shared/types/git";
 import { formatGitPushDestination } from "@/components/Git/gitRemoteOperationPreview";
-
-interface ForcePushConfirmDialogProps {
-  isOpen: boolean;
-  cwd: string;
-  branchName: string;
-  leaseSha: string;
-  onClose: () => void;
-  onSuccess: () => void;
-  onError: (err: unknown) => void;
-}
+import { useGitForcePushStore } from "@/store/gitForcePushStore";
 
 /**
  * Ask for everything the handler will serve. It used to ask for 20 and print
@@ -28,81 +19,93 @@ interface ForcePushConfirmDialogProps {
 const COMMIT_LIMIT = GIT_REMOTE_COMMIT_PREVIEW_MAX;
 const SHORT_HASH_LEN = 7;
 
-export function ForcePushConfirmDialog({
-  isOpen,
-  cwd,
-  branchName,
-  leaseSha,
-  onClose,
-  onSuccess,
-  onError,
-}: ForcePushConfirmDialogProps) {
+/**
+ * D2 confirm for `git.forcePushWithLease`, mounted globally and driven by
+ * `gitForcePushStore` — the same deferred-Promise shape as
+ * `GitPushConfirmDialog` and `GitPullRebaseConfirmDialog`.
+ *
+ * It confirms; it does not push. The action's `run()` owns the IPC so its
+ * dispatch result reports the real outcome, and so the one place that reads a
+ * lease is the one place that was handed it.
+ *
+ * The lease is shown in full rather than abbreviated. Everything else in this
+ * dialog is a preview of what would be discarded; the lease is the thing that
+ * decides whether the discard is allowed to happen at all, and a seven-character
+ * prefix of it is not something a user can check against anything.
+ */
+function GitForcePushConfirmDialogInner() {
+  const pendingConfirm = useGitForcePushStore((s) => s.pendingConfirm);
+  const resolveConfirmation = useGitForcePushStore((s) => s.resolveConfirmation);
+
+  const record = pendingConfirm?.record ?? null;
+  const requestId = pendingConfirm?.requestId ?? null;
+  const cwd = record?.cwd ?? null;
+  const branchName = record?.branchName ?? null;
+  const leaseSha = record?.leaseSha ?? null;
+  const generation = record?.generation ?? null;
+
   const [preview, setPreview] = useState<GitRemoteCommitPreview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [isPushing, setIsPushing] = useState(false);
-  const isExecutingRef = useRef(false);
-  const requestIdRef = useRef(0);
+  /**
+   * The generation the held preview actually describes. Approval is gated on
+   * this matching the pending record, not merely on "something loaded": the
+   * host stays mounted across close/open, so without it a second request for a
+   * DIFFERENT worktree renders the previous one's commits — with Force push
+   * enabled against them — for the frames between render and effect.
+   */
+  const [previewGeneration, setPreviewGeneration] = useState<number | null>(null);
+  const fetchIdRef = useRef(0);
+  /**
+   * The request this instance last rendered. Unmount cleanup settles only that
+   * one: a tokenless decline would cancel whatever request happened to be
+   * pending, including a newer one installed while this instance was tearing
+   * down (an ErrorBoundary remount is exactly that shape).
+   */
+  const renderedRequestIdRef = useRef<number | null>(null);
+  const declineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadCommits = useCallback(() => {
-    const requestId = ++requestIdRef.current;
+    if (cwd === null || branchName === null || generation === null) return;
+    const requestId = ++fetchIdRef.current;
     setIsLoading(true);
     setLoadError(null);
     setPreview(null);
+    setPreviewGeneration(null);
 
     safeFireAndForget(
       window.electron.git
         .listRemoteCommits(cwd, branchName, COMMIT_LIMIT)
         .then((result) => {
-          if (requestIdRef.current !== requestId) return;
+          if (fetchIdRef.current !== requestId) return;
           setPreview(result);
+          setPreviewGeneration(generation);
         })
         .catch((err: unknown) => {
-          if (requestIdRef.current !== requestId) return;
+          if (fetchIdRef.current !== requestId) return;
           setLoadError(formatErrorMessage(err, "Failed to load remote commits"));
         })
         .finally(() => {
-          if (requestIdRef.current !== requestId) return;
+          if (fetchIdRef.current !== requestId) return;
           setIsLoading(false);
         }),
-      { context: "ForcePushConfirmDialog: load remote commits" }
+      { context: "GitForcePushConfirmDialog: load remote commits" }
     );
-  }, [cwd, branchName]);
+  }, [cwd, branchName, generation]);
 
   useEffect(() => {
-    if (!isOpen) {
+    if (record === null) {
+      // Invalidate anything still in flight so a late response can't repopulate
+      // the preview after the request it belonged to went away.
+      fetchIdRef.current++;
       setPreview(null);
+      setPreviewGeneration(null);
       setLoadError(null);
       setIsLoading(false);
       return;
     }
     loadCommits();
-  }, [isOpen, loadCommits]);
-
-  const handleConfirm = async () => {
-    if (isExecutingRef.current) return;
-    if (isLoading) return;
-    // Block confirm when the discard preview failed to load — without it the
-    // user has no visibility into what `--force-with-lease` would discard,
-    // even though the lease itself still keeps the operation safe. `preview`
-    // is checked too: on the first render after opening it is null while
-    // `isLoading` is still false, so the two guards together are what close
-    // the window on a click landing before the fetch starts.
-    if (loadError || preview === null || isPreviewStale) return;
-    isExecutingRef.current = true;
-    setIsPushing(true);
-    try {
-      await window.electron.git.forcePushWithLease(cwd, branchName, leaseSha);
-      onSuccess();
-      useAnnouncerStore.getState().announce(`Force pushed ${branchName}`);
-    } catch (err) {
-      onError(err);
-      useAnnouncerStore.getState().announce(`Couldn't force push ${branchName}`, "assertive");
-    } finally {
-      isExecutingRef.current = false;
-      setIsPushing(false);
-    }
-  };
+  }, [record, loadCommits]);
 
   const commits = preview?.commits ?? null;
   // Both the rows and the total come from the same `HEAD..<push ref>` range, so
@@ -114,7 +117,9 @@ export function ForcePushConfirmDialog({
   // holds, and the total may describe a range the rows don't. Picking one would
   // be guessing about what a force push discards, so the preview reloads
   // instead. Same fail-closed footing as a preview that never arrived.
-  const isPreviewStale = commits !== null && totalRemote < commits.length;
+  const isPreviewStale =
+    (commits !== null && totalRemote < commits.length) ||
+    (previewGeneration !== null && previewGeneration !== generation);
   const hiddenCount =
     commits !== null && totalRemote > commits.length ? totalRemote - commits.length : 0;
   // Optional-chained rather than keyed off `preview` alone: this crosses the
@@ -132,24 +137,82 @@ export function ForcePushConfirmDialog({
     ? formatGitPushDestination(preview.destination)
     : null;
 
+  const isBlocked = isLoading || !!loadError || preview === null || isPreviewStale;
+
+  // Resolve false on teardown so the action's awaited Promise cannot leak — the
+  // guarantee `GitPushConfirmDialog` gives, scoped to this request and deferred
+  // by a tick.
+  //
+  // The deferral is what makes it survive an effect REPLAY. StrictMode runs
+  // setup → cleanup → setup in one commit, and the host also remounts when its
+  // ErrorBoundary resets after a crash — in both, a cleanup that declined
+  // immediately would cancel a request still on screen. Only a real teardown
+  // leaves the rescheduling setup un-run, so only a real teardown declines.
+  // No dependency array on purpose: every commit re-arms the cancellation.
+  useEffect(() => {
+    renderedRequestIdRef.current = requestId;
+    if (declineTimerRef.current !== null) {
+      clearTimeout(declineTimerRef.current);
+      declineTimerRef.current = null;
+    }
+    return () => {
+      const owned = renderedRequestIdRef.current;
+      if (owned === null) return;
+      declineTimerRef.current = setTimeout(() => {
+        declineTimerRef.current = null;
+        useGitForcePushStore.getState().resolveConfirmation(owned, false);
+      }, 0);
+    };
+  });
+
+  const handleConfirm = () => {
+    // Block confirm when the discard preview failed to load — without it the
+    // user has no visibility into what `--force-with-lease` would discard,
+    // even though the lease itself still keeps the operation safe. `preview`
+    // is checked too: on the first render after opening it is null while
+    // `isLoading` is still false, so the two guards together are what close
+    // the window on a click landing before the fetch starts.
+    if (isBlocked) return;
+    if (requestId === null) return;
+    // Re-read rather than trusting the render this handler closed over. A
+    // request installed between that render and this click owns the store now,
+    // and it has its own preview the user has not seen.
+    const live = useGitForcePushStore.getState().pendingConfirm;
+    if (!live || live.requestId !== requestId) return;
+    if (previewGeneration !== live.record.generation) return;
+    resolveConfirmation(requestId, true);
+  };
+
+  if (record === null || requestId === null || branchName === null || leaseSha === null) {
+    return null;
+  }
+
   return (
     <ConfirmDialog
-      isOpen={isOpen}
+      isOpen={true}
       title={destinationLabel ? `Force push to ${destinationLabel}?` : `Force push ${branchName}?`}
-      onClose={isPushing ? undefined : onClose}
-      onConfirm={() => void handleConfirm()}
+      onClose={() => resolveConfirmation(requestId, false)}
+      onConfirm={handleConfirm}
       confirmLabel="Force push"
       cancelLabel="Cancel"
       variant="destructive"
       hasPreview={true}
-      isConfirmLoading={isPushing}
-      confirmDisabled={isLoading || !!loadError || preview === null || isPreviewStale}
+      confirmDisabled={isBlocked}
     >
       <div className="space-y-3 text-xs text-text-primary">
         <p>
           This rewrites <span className="font-mono">{destinationLabel ?? branchName}</span> to match
           your local branch <span className="font-mono">{branchName}</span>. Any commits on the
           remote that aren&apos;t in your local history will be discarded.
+        </p>
+
+        <p className="text-text-secondary">
+          It proceeds only while the remote is still at{" "}
+          <span className="font-mono break-all text-text-primary" data-testid="force-push-lease">
+            {leaseSha}
+          </span>
+          , the commit your last push was rejected against. If anyone has pushed since, git refuses
+          instead of overwriting them.
         </p>
 
         <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
@@ -250,5 +313,21 @@ export function ForcePushConfirmDialog({
         </div>
       </div>
     </ConfirmDialog>
+  );
+}
+
+export function GitForcePushConfirmDialog() {
+  // Reset the boundary on each new request so a crashed inner dialog recovers
+  // when the next force-push confirm arrives (#9918). Without a changing key,
+  // an inner render crash leaves this boundary stuck for the session.
+  const requestSeq = useGitForcePushStore((s) => s.requestSeq);
+  return (
+    <ErrorBoundary
+      variant="component"
+      componentName="GitForcePushConfirmDialog"
+      resetKeys={[requestSeq]}
+    >
+      <GitForcePushConfirmDialogInner />
+    </ErrorBoundary>
   );
 }

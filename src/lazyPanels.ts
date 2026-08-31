@@ -278,6 +278,15 @@ export const LazyGitWorktreeOperationConfirmDialog = lazy(() =>
   }))
 );
 
+export function preloadGitForcePushConfirmDialog() {
+  return import("./components/Git/GitForcePushConfirmDialog");
+}
+export const LazyGitForcePushConfirmDialog = lazy(() =>
+  preloadGitForcePushConfirmDialog().then((m) => ({
+    default: m.GitForcePushConfirmDialog,
+  }))
+);
+
 export function preloadRecipeConflictDialog() {
   return import("./components/TerminalRecipe/RecipeConflictDialog");
 }
