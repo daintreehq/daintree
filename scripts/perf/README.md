@@ -104,15 +104,15 @@ The flags that make the local optimisation loop work:
 npm run perf smoke -- --scenario PERF-105 --iterations 5 --label before --json .tmp/opt/before.json
 ```
 
-| Flag                | Effect                                                                   |
-| ------------------- | ------------------------------------------------------------------------ |
-| `--scenario <id>`   | **Required, exactly one.** Unknown id → error listing the available ones |
-| `--iterations <n>`  | Overrides the per-tier default for every scenario in the run             |
-| `--warmups <n>`     | Overrides each scenario's own warmup count                               |
-| `--label <name>`    | Stamped into the summary — `before`, `after`, `pin-backend`              |
-| `--json <path>`     | Writes the summary somewhere you chose, for `perf compare`               |
-| `--machine <label>` | Overrides the machine identity (or set `PERF_MACHINE_LABEL`)             |
-| `--update-baseline` | Regenerates the mode's baseline. Rejected alongside `--scenario`         |
+| Flag | Effect |
+| --- | --- |
+| `--scenario <id>` | **Required, exactly one.** Unknown id → error listing the available ones |
+| `--iterations <n>` | Overrides the per-tier default for every scenario in the run |
+| `--warmups <n>` | Overrides each scenario's own warmup count |
+| `--label <name>` | Stamped into the summary — `before`, `after`, `pin-backend` |
+| `--json <path>` | Writes the summary somewhere you chose, for `perf compare` |
+| `--machine <label>` | Overrides the machine identity (or set `PERF_MACHINE_LABEL`) |
+| `--update-baseline` | Merges this scenario's reference into the mode's baseline, re-dating only it |
 
 Argument parsing is strict: an unknown flag, a missing value or a stray positional is an error rather than being ignored. The previous parser silently dropped what it did not recognise, so a typo'd `--secnario` ran the whole matrix and looked like it had worked. Every run ends by printing the exact invocation to reproduce it.
 

@@ -30,6 +30,52 @@ function entry(p95Ms: number, measuredAt: string, machine: BaselineMachine | nul
   return { p95Ms, measuredAt, machine };
 }
 
+describe("readBaselineEntries — malformed provenance", () => {
+  function withEntry(value: unknown): BaselineSummary {
+    return {
+      generatedAt: "2026-08-31T00:00:00.000Z",
+      mode: "smoke",
+      scenarios: { "PERF-100": value },
+    } as unknown as BaselineSummary;
+  }
+
+  it("drops an entry that cannot say when it was measured", () => {
+    // Freshness skips an unparseable date silently, so keeping the value would
+    // let an undateable reference behave exactly like a freshly measured one.
+    const baseline = withEntry({ p95Ms: 5.5, measuredAt: "not-a-date", machine: MAC });
+    expect(readBaselineEntries(baseline)["PERF-100"]).toBeUndefined();
+    expect(findStaleBaselineEntries(baseline)).toEqual([]);
+  });
+
+  it.each([
+    ["label only", { machineLabel: "greg-macbook" }],
+    ["no arch", { machineLabel: "greg-macbook", platform: "darwin" }],
+    ["empty strings", { machineLabel: "", platform: "", arch: "" }],
+    ["not an object", "greg-macbook"],
+    ["omitted", undefined],
+  ])("nulls a machine that is %s, so it reads as foreign", (_label, machine) => {
+    // The defect this exists for: the comparison used to spread the stored
+    // machine over the CURRENT environment, so an identity carrying only a
+    // matching `machineLabel` had its platform and arch supplied by the machine
+    // asking the question, and came out local.
+    const baseline = withEntry({ p95Ms: 5.5, measuredAt: "2026-08-31T00:00:00.000Z", machine });
+    const stored = readBaselineEntries(baseline)["PERF-100"];
+    expect(stored?.machine).toBeNull();
+    expect(describeForeignReference(stored!, environment(MAC))).toContain("no usable machine");
+  });
+
+  it("still compares a complete identity that really is this machine", () => {
+    const baseline = withEntry({
+      p95Ms: 5.5,
+      measuredAt: "2026-08-31T00:00:00.000Z",
+      machine: MAC,
+    });
+    const stored = readBaselineEntries(baseline)["PERF-100"];
+    expect(describeForeignReference(stored!, environment(MAC))).toBeNull();
+    expect(describeForeignReference(stored!, environment(WINDOWS))).toContain("different machines");
+  });
+});
+
 describe("readBaselineEntries", () => {
   it("lifts a legacy file's entries with the file date and no machine", () => {
     // The pre-provenance writer wrote every entry in one pass, so the file date
@@ -171,7 +217,7 @@ describe("describeForeignReference", () => {
   it("treats an unrecorded machine as foreign rather than as local", () => {
     expect(
       describeForeignReference(entry(1, "2026-08-30T00:00:00.000Z", null), environment(MAC))
-    ).toContain("no recorded machine");
+    ).toContain("no usable machine");
   });
 
   it("refuses a same-label reference from another architecture", () => {

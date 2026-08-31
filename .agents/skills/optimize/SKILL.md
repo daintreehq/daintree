@@ -276,7 +276,7 @@ Statistic: <median|count> · precommitted threshold: <value> · measured drift D
 
 - `check-pair.mjs`, beside this file — the pre-compare gate, and the only exit code in this loop worth acting on. It reads files; the caveat on what that cannot cover is at the top of this document.
 - `scripts/perf/README.md` — the harness, its modes, and every `npm run perf` command.
-- `.claude/rules/perf-benchmarks.md` — never add a `perf:*` script to package.json; baselines are harvested by hand.
+- `.claude/rules/perf-benchmarks.md` — never add a `perf:*` script to package.json; baselines are local, per-machine, and merged one scenario at a time.
 - `scripts/perf/lib/comparability.ts` — which metrics compare across machines, and why a runtime-derived percentage does not. Read it before claiming a cross-machine result.
 - `.claude/rules/testing.md` — the E2E contract. Only a human names the spec.
 - `.agents/skills/stabilize/` — whole-tree, all-OS validation. Different job: stabilize proves the tree is green, optimize moves one number.

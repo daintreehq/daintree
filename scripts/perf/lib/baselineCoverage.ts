@@ -69,14 +69,40 @@ export function readBaselineEntries(
   for (const [scenarioId, entry] of Object.entries(baseline.scenarios ?? {})) {
     if (!entry || typeof entry !== "object") continue;
     if (typeof entry.p95Ms !== "number" || !Number.isFinite(entry.p95Ms)) continue;
+    // An entry that cannot say WHEN it was measured is dropped, not carried:
+    // the freshness check skips an unparseable date silently, so keeping the
+    // value would make an undateable reference behave exactly like a fresh one.
+    // Absent is a state the harness already reports honestly.
+    if (typeof entry.measuredAt !== "string" || !Number.isFinite(Date.parse(entry.measuredAt))) {
+      continue;
+    }
     entries[scenarioId] = {
       p95Ms: entry.p95Ms,
       measuredAt: entry.measuredAt,
-      machine: entry.machine ?? null,
+      machine: normalizeMachine(entry.machine),
     };
   }
 
   return entries;
+}
+
+/**
+ * A stored machine identity, or null when it cannot stand for one.
+ *
+ * All three fields or nothing. A half-filled identity is the dangerous case:
+ * `describeForeignReference` compares label, platform and arch, so an entry
+ * carrying only a `machineLabel` that happens to match would be read as local
+ * on the strength of one field, with the other two supplied by the machine
+ * asking the question. Partial provenance degrades to null, which is treated as
+ * foreign — the same direction every other unknown resolves in here.
+ */
+function normalizeMachine(machine: BaselineEntry["machine"]): BaselineEntry["machine"] {
+  if (!machine || typeof machine !== "object") return null;
+  const { machineLabel, platform, arch } = machine;
+  if (typeof machineLabel !== "string" || machineLabel.trim() === "") return null;
+  if (typeof platform !== "string" || platform.trim() === "") return null;
+  if (typeof arch !== "string" || arch.trim() === "") return null;
+  return { machineLabel, platform: platform as NodeJS.Platform, arch };
 }
 
 /**
@@ -179,12 +205,26 @@ export function describeForeignReference(
   environment: RunEnvironment
 ): string | null {
   if (isMachineIndependent(classifyMetric("p95Ms"))) return null;
-  if (!entry.machine) return "reference has no recorded machine (pre-provenance baseline)";
+  // Covers both causes without claiming to know which: a pre-provenance file,
+  // and an entry whose machine was present but incomplete and was nulled on
+  // read. Either way the reference cannot say where it came from.
+  if (!entry.machine) return "reference carries no usable machine identity";
 
-  // `durationsComparable` and `describeIncomparability` read machineLabel,
-  // platform and arch and nothing else, and those three are precisely what a
-  // BaselineEntry stores; the spread supplies the fields they do not consult.
-  const referenceEnvironment: RunEnvironment = { ...environment, ...entry.machine };
+  // Compared field by field rather than by spreading the stored machine over
+  // the current environment. The spread was the defect: it filled anything the
+  // entry did not carry from the machine asking the question, so an identity
+  // holding only a matching `machineLabel` came out local. `readBaselineEntries`
+  // now nulls a partial machine, and this no longer relies on it having.
+  const { machineLabel, platform, arch } = entry.machine;
+  if (
+    machineLabel === environment.machineLabel &&
+    platform === environment.platform &&
+    arch === environment.arch
+  ) {
+    return null;
+  }
+
+  const referenceEnvironment: RunEnvironment = { ...environment, machineLabel, platform, arch };
   if (durationsComparable(referenceEnvironment, environment)) return null;
 
   return describeIncomparability(referenceEnvironment, environment);
