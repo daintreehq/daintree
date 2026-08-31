@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, render, act } from "@testing-library/react";
+import { useDeferredValue, useEffect, useState } from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { DndMonitorListener } from "@dnd-kit/core";
 import { useSidebarVirtuosoReset } from "../useSidebarVirtuosoReset";
@@ -45,6 +46,8 @@ function makeScroller(scrollTop: number): HTMLElement {
 interface Props {
   itemCount: number;
   searchQuery: string;
+  /** Defaults to `searchQuery` — the settled state these cases all describe. */
+  liveQuery?: string;
 }
 
 /**
@@ -58,13 +61,72 @@ function renderReset(initialProps: Props, scrollTop: number | null = 400) {
   const seenScrollTops: (number | undefined)[] = [];
   const view = renderHook(
     (props: Props) => {
-      const result = useSidebarVirtuosoReset({ ...props, scrollerRef });
+      const result = useSidebarVirtuosoReset({
+        itemCount: props.itemCount,
+        searchQuery: props.searchQuery,
+        liveQuery: props.liveQuery ?? props.searchQuery,
+        scrollerRef,
+      });
       seenScrollTops.push(result.initialScrollTop);
       return result;
     },
     { initialProps }
   );
   return { ...view, scrollerRef, seenScrollTops };
+}
+
+/** How far the roster narrows as "feat" is typed one character at a time. */
+const COUNT_FOR_QUERY: Record<string, number> = { "": 9, f: 7, fe: 5, fea: 3, feat: 2 };
+
+interface TypingHandle {
+  type: (query: string) => void;
+  /** A background commit that touches neither the count nor the query. */
+  tick: () => void;
+}
+
+/**
+ * Drives the hook behind a *real* `useDeferredValue`, the way SidebarContent
+ * wires it. Hand-driven prop pairs cannot express the shape that matters: each
+ * keystroke commits twice, and the interleaved urgent commit — new input, list
+ * not yet narrowed — is where a naive quiet test fires the previous keystroke's
+ * reset. Every render's key is recorded, since a remount that is undone by the
+ * next commit still tore the list down.
+ */
+function renderTypingHarness() {
+  const scrollerRef: { current: HTMLElement | null } = { current: makeScroller(400) };
+  const resetKeys: number[] = [];
+  // Throwing placeholders, so a harness that never mounted fails loudly instead
+  // of leaving every assertion below reading a key nothing ever drove.
+  const unmounted = () => {
+    throw new Error("typing harness has not mounted");
+  };
+  const handle: TypingHandle = { type: unmounted, tick: unmounted };
+
+  function Harness() {
+    const [liveQuery, setLiveQuery] = useState("");
+    const [tick, setTick] = useState(0);
+    const deferredQuery = useDeferredValue(liveQuery);
+    const { resetKey } = useSidebarVirtuosoReset({
+      itemCount: COUNT_FOR_QUERY[deferredQuery] ?? 0,
+      searchQuery: deferredQuery,
+      liveQuery,
+      scrollerRef,
+    });
+    resetKeys.push(resetKey);
+    useEffect(() => {
+      handle.type = setLiveQuery;
+      handle.tick = () => setTick((n) => n + 1);
+    }, []);
+    return <span data-tick={tick}>{resetKey}</span>;
+  }
+
+  render(<Harness />);
+  return {
+    resetKeys,
+    type: (query: string) => act(() => handle.type(query)),
+    tick: () => act(() => handle.tick()),
+    currentKey: () => resetKeys[resetKeys.length - 1],
+  };
 }
 
 beforeEach(() => {
@@ -160,6 +222,27 @@ describe("useSidebarVirtuosoReset — issue #12094", () => {
     expect(result.current.resetKey).toBe(0);
     rerender({ itemCount: 3, searchQuery: "fea" });
     expect(result.current.resetKey).toBe(1);
+  });
+
+  describe("behind a real useDeferredValue", () => {
+    it("does not remount once per keystroke", () => {
+      const harness = renderTypingHarness();
+      for (const query of ["f", "fe", "fea", "feat"]) harness.type(query);
+      // The regression scored one remount per keystroke, lagged by one: the
+      // urgent commit carrying the next character read as quiet and paid off
+      // the previous character's owed reset.
+      expect(harness.resetKeys.filter((key) => key !== 0)).toEqual([]);
+    });
+
+    it("pays the burst off with a single reset once the query settles", () => {
+      const harness = renderTypingHarness();
+      for (const query of ["f", "fe", "fea", "feat"]) harness.type(query);
+      expect(harness.currentKey()).toBe(0);
+      harness.tick();
+      expect(harness.currentKey()).toBe(1);
+      harness.tick();
+      expect(harness.currentKey()).toBe(1);
+    });
   });
 
   it("resets once per shrink, not on every subsequent render", () => {

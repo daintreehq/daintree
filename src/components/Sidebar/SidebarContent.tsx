@@ -1366,6 +1366,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     useSidebarVirtuosoReset({
       itemCount: sidebarItems.length,
       searchQuery: deferredQuery,
+      liveQuery,
       scrollerRef: scrollerElementRef,
     });
 

@@ -10,6 +10,12 @@ interface UseSidebarVirtuosoResetParams {
    * input value, so it moves in the same commit the list narrows.
    */
   searchQuery: string;
+  /**
+   * The uncommitted input value. Only ever compared against `searchQuery`: while
+   * the two disagree a deferred render is still owed, so the query is in motion
+   * even on a commit that changed neither the count nor the filter.
+   */
+  liveQuery: string;
   /** The live scroller element, so the pre-remount offset can be restored. */
   scrollerRef: RefObject<HTMLElement | null>;
 }
@@ -56,10 +62,20 @@ const INITIAL_STATE: ResetState = { key: 0, scrollTop: undefined };
  * is about to change again anyway. That shrink is deferred, not forgiven: it
  * stays owed and fires on the first commit the query holds still, so a deletion
  * that merely coincided with a keystroke still gets its reset.
+ *
+ * "Holds still" has to mean *settled*, not merely unchanged since the last
+ * commit. Each keystroke lands as two commits: an urgent one carrying the new
+ * input with the filtered list still stale, then the deferred one that actually
+ * narrows it. On that urgent commit the deferred query has not moved, so an
+ * unchanged-since-last-commit test reads it as quiet and pays off the previous
+ * keystroke's owed reset — one remount per keystroke, lagged by one, which is
+ * the very teardown this exemption exists to prevent. Comparing the live query
+ * against the deferred one is what identifies those commits.
  */
 function useSidebarVirtuosoReset({
   itemCount,
   searchQuery,
+  liveQuery,
   scrollerRef,
 }: UseSidebarVirtuosoResetParams): UseSidebarVirtuosoResetReturn {
   const [reset, setReset] = useState<ResetState>(INITIAL_STATE);
@@ -108,10 +124,12 @@ function useSidebarVirtuosoReset({
     prevQueryRef.current = searchQuery;
     if (prevCount === null) return;
     if (itemCount < prevCount) pendingRef.current = true;
-    // Hold while the query is still moving, but keep the shrink owed rather
-    // than dropping it: a deletion that happens to land in the same commit as
-    // a keystroke is structural, and nothing later would report it again.
-    if (searchQuery !== prevQuery) return;
+    // Hold while the query is still moving — either it moved on this commit, or
+    // a deferred render is still owed and it is about to. Keep the shrink owed
+    // rather than dropping it: a deletion that happens to land in the same
+    // commit as a keystroke is structural, and nothing later would report it
+    // again.
+    if (searchQuery !== prevQuery || liveQuery !== searchQuery) return;
     flush();
   });
 

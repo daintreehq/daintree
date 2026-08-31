@@ -59,6 +59,16 @@ describe("SidebarContent Virtuoso reset wiring — issue #12094", () => {
     expect(source).not.toMatch(/searchQuery:\s*liveQuery/);
   });
 
+  it("also hands over the live query so the hook can tell settled from stale", () => {
+    // Without it the hook cannot see the urgent commit that carries a new
+    // character while the filtered list is still the old one, and reads that
+    // commit as the query holding still.
+    const start = source.indexOf("useSidebarVirtuosoReset({");
+    expect(start).toBeGreaterThan(-1);
+    const call = source.slice(start, source.indexOf("});", start));
+    expect(call).toMatch(/\bliveQuery\b/);
+  });
+
   it("measures the shrink against the rendered item array", () => {
     expect(source).toMatch(/itemCount:\s*sidebarItems\.length/);
   });
