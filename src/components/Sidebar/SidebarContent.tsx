@@ -97,6 +97,7 @@ import { WorktreeCardPlaceholder } from "./WorktreeCardPlaceholder";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useScrollIndicator } from "./useScrollIndicator";
+import { useSidebarVirtuosoReset } from "./useSidebarVirtuosoReset";
 import { useRecipeDialogState } from "./useRecipeDialogState";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
 import { logError } from "@/utils/logger";
@@ -1358,6 +1359,17 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     [scrollIndicatorScrollerRef]
   );
 
+  // Virtuoso's size/offset trees are index-keyed, so any shrink leaves them
+  // describing the old layout and strands a row that can never re-measure
+  // itself. Remounting is the only way to discard them (#12094).
+  const { resetKey: virtuosoResetKey, initialScrollTop: virtuosoInitialScrollTop } =
+    useSidebarVirtuosoReset({
+      itemCount: sidebarItems.length,
+      searchQuery: deferredQuery,
+      liveQuery,
+      scrollerRef: scrollerElementRef,
+    });
+
   // The pinned main row lives OUTSIDE the Virtuoso surface but INSIDE the
   // role="grid" container, so keyboard navigation must visit it before
   // descending into the virtualized list. It carries isPinned so the hook
@@ -1960,6 +1972,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             />
           ) : groupedSections ? (
             <Virtuoso<SidebarFlatItem, SidebarVirtuosoContext>
+              key={virtuosoResetKey}
+              initialScrollTop={virtuosoInitialScrollTop}
               ref={virtuosoRef}
               data={sidebarItems}
               context={virtuosoContext}
@@ -1977,6 +1991,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           ) : (
             <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
               <Virtuoso<SidebarFlatItem, SidebarVirtuosoContext>
+                key={virtuosoResetKey}
+                initialScrollTop={virtuosoInitialScrollTop}
                 ref={virtuosoRef}
                 data={sidebarItems}
                 context={virtuosoContext}
