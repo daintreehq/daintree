@@ -149,11 +149,15 @@ const KNOWN_DEAD: Readonly<Record<string, string>> = {};
  * and where nothing else is competing for the box. This exemption is only about
  * what is safe to assert inside the unit suite.
  */
-const TIMING_DEPENDENT_TERMS: ReadonlySet<string> = new Set([
-  // PERF-370/371/063 — the PortBatcher idle -> latency -> throughput machine.
-  "immediateFlushMisses",
-  "throughputFlushMisses",
-]);
+const TIMING_DEPENDENT_TERMS: Readonly<Record<string, readonly string[]>> = {
+  // The PortBatcher idle -> latency -> throughput machine, in the three
+  // scenarios that drive it. Keyed by scenario AND term, not by term alone: a
+  // future scenario that happens to reuse one of these names would otherwise
+  // inherit the exemption without anyone deciding to give it one.
+  "PERF-063": ["immediateFlushMisses", "throughputFlushMisses"],
+  "PERF-370": ["immediateFlushMisses", "throughputFlushMisses"],
+  "PERF-371": ["immediateFlushMisses", "throughputFlushMisses"],
+};
 
 /**
  * Scenarios that decline to self-time, and why — named, because otherwise the
@@ -364,7 +368,7 @@ function verdicts(id: string, report: DriverReport): string[] {
   // the term that catches a subject that still returns the right SHAPE while
   // having stopped doing the work.
   //
-  // TIMING_DEPENDENT_TERMS are exempt. They are not weaker predicates — through
+  // The scenario/term pairs in TIMING_DEPENDENT_TERMS are exempt. They are not weaker predicates — through
   // `run.ts` they grade exactly like the rest, and a real defect still moves
   // them. They are exempt HERE because this guard runs four children at a time
   // inside the unit suite, and a term whose expectation is "the timer had not
@@ -373,7 +377,7 @@ function verdicts(id: string, report: DriverReport): string[] {
   // other ~800 terms it does check. Named, not hidden, and asserted in both
   // directions below so an entry cannot outlive its cause.
   const nonZero = Object.entries(report.correctness ?? {}).filter(
-    ([key, value]) => value !== 0 && !TIMING_DEPENDENT_TERMS.has(key)
+    ([key, value]) => value !== 0 && !(TIMING_DEPENDENT_TERMS[id] ?? []).includes(key)
   );
   if (nonZero.length > 0) {
     const detail = nonZero.map(([key, value]) => `${key}=${value}`).join(", ");
@@ -472,13 +476,15 @@ describe("perf scenario liveness", () => {
     // The timing exemption in the other direction: a term no live scenario
     // declares any more is an exemption that outlived its cause, and it would
     // silently keep excusing that name if some future scenario reused it.
-    const declaredTerms = new Set(
+    const declaredTerms = new Map(
       allScenarios
         .filter((scenario) => liveIds.includes(scenario.id))
-        .flatMap((scenario) => scenario.correctness ?? [])
+        .map((scenario) => [scenario.id, new Set(scenario.correctness ?? [])] as const)
     );
-    const orphanedExemptions = [...TIMING_DEPENDENT_TERMS].filter(
-      (term) => !declaredTerms.has(term)
+    const orphanedExemptions = Object.entries(TIMING_DEPENDENT_TERMS).flatMap(([id, terms]) =>
+      terms
+        .filter((term) => !(declaredTerms.get(id) ?? new Set<string>()).has(term))
+        .map((term) => `${id}.${term}`)
     );
     expect(orphanedExemptions).toEqual([]);
   });
