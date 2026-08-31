@@ -139,6 +139,12 @@ const DURABLE_ALLOWLIST = new Set([
   // active focus region)
   "src/components/Plugin/PluginManagerView.tsx",
 
+  // Project-plugin rows share the plugin manager's master list, so they carry the
+  // same selected-row left-edge accent stripe — one row is selected at a time
+  // across both sections, so it stays a single primary anchor per active focus
+  // region rather than a second signal beside PluginManagerView's
+  "src/components/Plugin/ProjectPluginSection.tsx",
+
   // PresetColorPicker Done CTA (primary commit action) + focus-visible ring
   "src/components/Settings/PresetColorPicker.tsx",
 

@@ -2896,3 +2896,37 @@ export interface ProjectPluginTrustState {
   /** True when the decision came from electron-store rather than this session. */
   persisted: boolean;
 }
+
+/**
+ * `plugin:project-trust-prompt` — the one signal that may open the project
+ * plugin trust dialog. The controller emits it only when the folder holds at
+ * least one valid manifest and no decision is on record, so the renderer never
+ * decides for itself that a prompt is due.
+ */
+export interface ProjectPluginTrustPromptEvent {
+  projectId: string;
+  /** Every valid manifest in the folder, named so the dialog can list them. */
+  plugins: Array<{ id: string; displayName: string }>;
+}
+
+/**
+ * `plugin:project-plugins-changed` — a full snapshot, emitted on every project
+ * open, trust change and staged activation. It carries everything the plugin
+ * manager renders, so the manager can be purely reactive rather than refetching.
+ */
+export interface ProjectPluginsChangedEvent {
+  projectId: string;
+  plugins: ProjectPluginInfo[];
+  trust: ProjectPluginTrustState;
+}
+
+/**
+ * `plugin:project-plugin-staged` — a manifest id this project has never had
+ * appeared in a trusted folder. Non-blocking, and emitted once per new id: a
+ * staged plugin the user ignored or declined never re-announces itself.
+ */
+export interface ProjectPluginStagedEvent {
+  projectId: string;
+  pluginId: string;
+  displayName: string;
+}

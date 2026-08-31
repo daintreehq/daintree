@@ -85,6 +85,12 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:panel-badges-changed": "external",
   "plugin:panel-badges-cleared": "external",
   "plugin:provenance-changed": "external",
+  // Project-local plugin events: ProjectPluginController sends them itself via
+  // `broadcastToProjectRenderers`, so only that project's views receive them.
+  // Relaying here would fan them out to every window.
+  "plugin:project-trust-prompt": "external",
+  "plugin:project-plugins-changed": "external",
+  "plugin:project-plugin-staged": "external",
   "forge:remote-changed": "external",
   "plugin:bg-update-available": "external",
   "run-history:update": "external",

@@ -57,6 +57,7 @@ import {
   LazyPluginInputBoxDialog,
   LazyPluginConfirmPromptDialog,
   LazyPluginCapabilityConfirmDialog,
+  LazyProjectPluginTrustDialog,
   LazyPanelDialogHost,
   LazyGitInitDialog,
   LazyCreateProjectFolderDialog,
@@ -792,6 +793,13 @@ export function ModalHostLayer({
         >
           <Suspense fallback={null}>
             <LazyPluginCapabilityConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      {isStateLoaded && (
+        <ErrorBoundary variant="component" componentName="ProjectPluginTrustDialog">
+          <Suspense fallback={null}>
+            <LazyProjectPluginTrustDialog />
           </Suspense>
         </ErrorBoundary>
       )}

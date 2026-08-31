@@ -156,7 +156,7 @@ async function selectPlugin(name = "Acme Demo") {
 describe("PluginManagerView", () => {
   it("renders the section header immediately", async () => {
     renderDialog();
-    expect(screen.getByText("Installed plugins")).toBeTruthy();
+    expect(screen.getByText("All plugins")).toBeTruthy();
   });
 
   it("moves focus into the view on open so the keyboard isn't left on the background", async () => {

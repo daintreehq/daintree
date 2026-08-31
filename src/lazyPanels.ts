@@ -238,6 +238,11 @@ export const LazyPluginCapabilityConfirmDialog = lazy(() =>
     default: m.PluginCapabilityConfirmDialog,
   }))
 );
+export const LazyProjectPluginTrustDialog = lazy(() =>
+  import("./components/Plugin/ProjectPluginTrustDialog").then((m) => ({
+    default: m.ProjectPluginTrustDialog,
+  }))
+);
 
 export function preloadPanelLimitConfirmDialog() {
   return import("./components/Terminal/PanelLimitConfirmDialog");
