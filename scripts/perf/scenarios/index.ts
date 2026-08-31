@@ -25,6 +25,7 @@ import { panelScenarios } from "./panels";
 import { supervisionScenarios } from "./supervision";
 import { mcpSessionScenarios } from "./mcpSession";
 import { themeScenarios } from "./theme";
+import { notificationScenarios } from "./notifications";
 
 export const allScenarios: PerfScenario[] = [
   ...startupScenarios,
@@ -53,6 +54,7 @@ export const allScenarios: PerfScenario[] = [
   ...supervisionScenarios,
   ...mcpSessionScenarios,
   ...themeScenarios,
+  ...notificationScenarios,
 ];
 
 export function getScenariosForMode(mode: PerfMode): PerfScenario[] {
@@ -184,6 +186,12 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-303",
   "PERF-304",
   "PERF-305",
+  "PERF-320",
+  "PERF-321",
+  "PERF-322",
+  "PERF-323",
+  "PERF-324",
+  "PERF-325",
 ]);
 
 /**
