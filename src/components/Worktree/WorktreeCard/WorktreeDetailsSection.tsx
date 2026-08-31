@@ -49,6 +49,11 @@ export interface WorktreeDetailsSectionProps {
    * a second bordered plane inside it (with a third for the note and a fourth
    * for the file list) is the card-in-card that Carbon and Material 3 both
    * name as the failure mode for this component.
+   *
+   * Bordered is the operative word. The changed-files list inside Details does
+   * carry a fill of its own (#12102) and does not reopen this: it draws no
+   * perimeter, so it reads as a section of the well rather than a plane
+   * stacked on top of it.
    */
   variant?: "sidebar" | "grid";
   isExpanded: boolean;

@@ -69,8 +69,14 @@ export const SECTION_ROW_BOX =
 export const SECTION_ROW = `worktree-section-button flex w-full items-center text-left ${SECTION_ROW_BOX}`;
 
 /**
- * The disclosure well — the card's one fill, and the only closed contour
- * inside it. Holds an expanded Details, and holds sessions in every state.
+ * The disclosure well — the only closed contour inside the card. Holds an
+ * expanded Details, and holds sessions in every state.
+ *
+ * It is no longer the card's ONLY fill: the changed-files list inside Details
+ * carries a quiet `surface-inset` fill of its own (#12102). That is not a
+ * competing container, because a fill without a perimeter cannot close a
+ * region — it differentiates a section, it does not bound one. The budget this
+ * file protects is contours, not fills.
  *
  * This is a restoration, and the reasoning matters because it was removed once
  * for good reasons. #11992 flattened it away as a nested card, which it is;

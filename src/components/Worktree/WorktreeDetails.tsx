@@ -245,14 +245,37 @@ export function WorktreeDetails({
             <div className="text-xs text-text-muted">No AI summary yet</div>
           )}
 
-          {/* Block 3: Artifacts (grouped file changes + system path).
+          {/* Block 3: Artifacts (folder-grouped file changes + system path).
 
-              The list is flat in BOTH variants. The grid used to paint it in
-              a filled, hairlined well — which, once Details itself is a well
-              inside a card inside a grid cell, is the fourth closed contour
-              around one list of filenames. The rows carry their own hover
-              backplates, and that is all the shape a list nested this deep
-              can use. */}
+              The list carries a fill of its own in BOTH variants. The grid
+              used to paint it in a filled, hairlined well — which, once
+              Details itself is a well inside a card inside a grid cell, is the
+              fourth closed contour around one list of filenames. That part of
+              the ruling stands: no border, no hairline, nothing that closes a
+              perimeter. What is reversed (#12102) is the conclusion that the
+              list therefore gets no surface at all, which left four changed
+              files reading as four anonymous lines on the same fill as the
+              note rail above and the path line below.
+
+              `surface-inset` is the token, and the reason is theme overrides
+              rather than the derived formula. Eight of the fifteen built-ins
+              (atacama, bali, bondi, hokkaido, redwoods, serengeti, svalbard,
+              table-mountain) give `surface-inset` an opaque hex — a recessed
+              plane their authors chose deliberately, which is exactly this
+              role. The other seven are all dark and fall through to
+              `withAlpha(overlayTone, .03)`: byte-identical to the well's
+              `overlay-soft` on six of them, and two translucent layers
+              composite src-over, so the inset lands at ~5.9% against the
+              well's 3% — roughly a doubling rather than nothing. Namib tints
+              its own `overlay-soft` to a warm 3.5%, so there the step carries
+              a slight hue shift with it.
+
+              Stepping the OVERLAY ladder instead (`overlay-medium`) looks like
+              the tidier move — same tint source as the well, one rung up — and
+              it is wrong. Seven of those eight themes push `overlay-soft` up
+              to .055-.06 and leave `overlay-medium` derived at .05, so the
+              inner fill would land BELOW the well it sits in. The ladder is
+              only monotonic where nobody has touched it. */}
           {hasChanges && worktree.worktreeChanges && (
             <div className="space-y-2.5">
               <div className="flex items-center justify-between gap-2 px-2">
@@ -284,9 +307,8 @@ export function WorktreeDetails({
                 changes={worktree.worktreeChanges.changes}
                 rootPath={worktree.worktreeChanges.rootPath}
                 maxVisible={MAX_VISIBLE_FILES}
-                groupByFolder={worktree.worktreeChanges.changedFileCount > 5}
                 isStale={isStale}
-                className="rounded-[var(--radius-md)] p-2"
+                className="rounded-[var(--radius-md)] bg-surface-inset p-2"
               />
             </div>
           )}
