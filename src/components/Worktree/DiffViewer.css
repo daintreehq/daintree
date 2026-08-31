@@ -552,10 +552,28 @@
   border-spacing: 0;
 }
 
+/* Non-scrolling per-file shell whose only job is to be the sticky proxy
+   strip's containing block. The strip cannot live inside .diff-file-scroll:
+   `overflow-x: auto` with overflow-y at its initial `visible` computes to
+   `auto` (CSS Overflow 3 §3.3), making that div a scroll container on both
+   axes, so a sticky child would resolve against a scrollport the full height
+   of the file and pin exactly where the native bar already sits. From out here
+   the strip resolves against .diff-scroll-root instead, while still clamping
+   to this shell's box — which is also why two stacked files can never pin
+   their strips to the same viewport row. Must never gain overflow, contain,
+   transform, filter or perspective; any of those would become the sticky
+   containing block and silently re-pin the strip to the bottom of the file. */
+.diff-viewer .diff-file-shell {
+  position: relative;
+}
+
 /* Per-file horizontal scroll wrapper — gives each file its own scrollbar
    so all rows scroll together instead of each <td> scrolling independently.
    Used by unified view and single-side (add/delete) split tables; two-column
-   split tables use the centered-split system below instead. */
+   split tables use the centered-split system below instead. Stays a real
+   native scroller so find-in-page reveal, scrollIntoView, drag-select
+   autoscroll and native panning keep working — the sticky strip above is a
+   second control for the same offset, not a replacement. */
 .diff-viewer .diff-file-scroll {
   overflow-x: auto;
   /* Re-enable the ::-webkit-scrollbar styling below for a classic always-visible
@@ -608,6 +626,13 @@
   bottom: 0;
   z-index: 3;
   overflow-x: auto;
+  /* Explicit, not incidental: left at its initial `visible` this would compute
+     to `auto` (CSS Overflow 3 §3.3) and the 1px spacer would overflow the
+     strip's 12px box — which the 12px horizontal bar already fills — reserving
+     width for a vertical scrollbar. That shrinks the strip's clientWidth below
+     the scroller's, so the proxy's scroll range runs past the content's and its
+     last few pixels of travel would have nothing to scroll to. */
+  overflow-y: hidden;
   height: 0;
   background: var(--color-surface-canvas);
   /* The global `* { scrollbar-width: thin; scrollbar-color: … }` opts every
@@ -634,6 +659,14 @@
     100% +
       max(0px, var(--diff-max-line, 0px) - ((100% - 2 * var(--diff-gutter-width, 50px)) / 2 - 24px))
   );
+}
+
+/* The native path's strip stands in for a real scroller, so its spacer takes
+   that scroller's measured scrollWidth instead of the centered path's
+   longest-line estimate — the two ranges then match exactly, which is what
+   keeps the two-way scrollLeft mirroring from fighting over a clamp. */
+.diff-viewer .diff-hscrollbar[data-scroll-mode="native"] .diff-hscroll-spacer {
+  width: var(--diff-native-scroll-width, 100%);
 }
 
 .diff-viewer .diff-hscrollbar::-webkit-scrollbar {
@@ -670,6 +703,19 @@
 .diff-viewer .diff-file-scroll::-webkit-scrollbar {
   width: 8px;
   height: 8px;
+}
+
+/* Exactly one horizontal control per file: once the proxy strip has measured
+   real overflow and taken height, the scroller's own bar goes away. Both
+   attributes are written from the same `hasHOverflow` in one render, so the
+   handoff is atomic — and before the first measurement the strip is 0px tall
+   and this rule is off, so there is never a moment with no bar at all. */
+.diff-viewer .diff-file-scroll[data-proxy-active] {
+  scrollbar-width: none;
+}
+
+.diff-viewer .diff-file-scroll[data-proxy-active]::-webkit-scrollbar {
+  height: 0;
 }
 
 .diff-viewer .diff-file-scroll::-webkit-scrollbar-track {

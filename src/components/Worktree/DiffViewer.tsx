@@ -5,6 +5,7 @@ import {
   useDeferredValue,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -882,8 +883,18 @@ function FileDiff({
     return max;
   }, [visibleHunks, isCenteredSplit]);
 
+  // Unified and single-side (add/delete) tables keep a real native
+  // overflow-x scroller and get the sticky strip as a *sibling* proxy that
+  // mirrors its offset, rather than replacing it the way centered split does.
+  // Keeping the native scroller preserves everything the browser gives for
+  // free — find-in-page reveal, scrollIntoView, drag-select autoscroll,
+  // shift+wheel and trackpad panning, arrow keys. Wrap mode has no horizontal
+  // overflow at all, so it gets no strip.
+  const usesNativeHScrollProxy = !isCenteredSplit && !wrapLines;
+
   const regionRef = useRef<HTMLDivElement | null>(null);
   const hScrollbarRef = useRef<HTMLDivElement | null>(null);
+  const nativeScrollerRef = useRef<HTMLDivElement | null>(null);
 
   // The scrollbar strip is the single scroll surface for both panes: its
   // scrollLeft becomes --diff-hscroll, which shifts every code cell's content
@@ -896,6 +907,41 @@ function FileDiff({
     if (!region || !bar) return;
     region.style.setProperty("--diff-hscroll", `${bar.scrollLeft}px`);
   }, []);
+
+  // Two-way scrollLeft mirroring between the real scroller and its proxy strip.
+  // Deliberately no re-entrancy flag: a synchronously cleared flag can't guard
+  // a scroll event that arrives asynchronously anyway. Instead the write is
+  // skipped once the two already agree, so the echo event each write triggers
+  // finds them equal and stops there.
+  //
+  // The read-back is not belt-and-braces. If the target clamps the write — its
+  // scroll range is the shorter of the two — it lands on a *different* value
+  // and fires no scroll event at all, because from its point of view nothing
+  // moved. Waiting for an echo would leave the pair permanently out of step, so
+  // the landed value is pushed back to the source instead. That second write
+  // can never clamp in turn — a clamp only ever moves a value *closer* to the
+  // shared zero endpoint (RTL runs [-max, 0], so its clamped offsets are
+  // numerically greater), which always lands inside the source's own range.
+  // That is what makes this settle within the one call.
+  const syncNativeHScroll = useCallback((source: "content" | "proxy") => {
+    const content = nativeScrollerRef.current;
+    const proxy = hScrollbarRef.current;
+    if (!content || !proxy) return;
+    const from = source === "content" ? content : proxy;
+    const to = source === "content" ? proxy : content;
+    const target = from.scrollLeft;
+    if (to.scrollLeft === target) return;
+    to.scrollLeft = target;
+    if (to.scrollLeft !== target && from.scrollLeft === target) from.scrollLeft = to.scrollLeft;
+  }, []);
+
+  const handleNativeHScroll = useCallback(() => {
+    syncNativeHScroll("content");
+  }, [syncNativeHScroll]);
+
+  const handleNativeProxyScroll = useCallback(() => {
+    syncNativeHScroll("proxy");
+  }, [syncNativeHScroll]);
 
   // Trackpad/wheel gestures over the diff forward their horizontal component
   // to the scrollbar strip. Native listener because React delegates wheel as
@@ -922,40 +968,71 @@ function FileDiff({
     };
   }, [isCenteredSplit]);
 
-  // Keep the indent in sync when the scroll system mounts/unmounts or content
-  // changes under a non-zero offset (wrap toggle round-trip, collapse, hunk
-  // reveal) — the strip may clamp scrollLeft without firing a scroll event.
-  useEffect(() => {
+  // Keep the centered indent in sync when the scroll system mounts/unmounts or
+  // content changes under a non-zero offset (wrap toggle round-trip, collapse,
+  // hunk reveal) — the strip may clamp scrollLeft without firing a scroll
+  // event. The native path re-syncs inside its measurement effect instead,
+  // because its proxy range depends on a spacer width published there.
+  //
+  // Layout, not passive, for the same reason as the measurement below: React
+  // reuses this div and the strip node across the centered/native branches, so
+  // the strip can arrive here still holding the native path's offset while the
+  // reused div still holds the old --diff-hscroll. Reconciling that passively
+  // paints one frame of code at the wrong indent.
+  useLayoutEffect(() => {
     const region = regionRef.current;
     if (!region) return;
     region.style.setProperty("--diff-hscroll", `${hScrollbarRef.current?.scrollLeft ?? 0}px`);
-  }, [isCenteredSplit, visibleHunks]);
+  }, [isCenteredSplit, isCollapsed, visibleHunks]);
 
   // The strip only takes up vertical space when there is real overflow to
-  // scroll, measured from the spacer (estimated longest line) against the
-  // strip's own width. ResizeObserver re-measures on dialog resizes and
-  // spacer-width changes; it is absent under jsdom, where the initial
-  // measurement (always 0 > 0 → false) is all we need.
+  // scroll. Centered split measures its own spacer (an estimate of the longest
+  // line) against the strip's width; the native path measures the real
+  // scroller and publishes that scrollWidth so the proxy's range matches the
+  // content exactly instead of estimating it. Both observe a second element —
+  // the content box, not just the container — because ResizeObserver never
+  // fires for a scrollWidth-only change. `isCollapsed` is a dependency because
+  // re-expanding a file remounts both elements, and `usesNativeHScrollProxy`
+  // because a unified wrap toggle never changes `isCenteredSplit`.
   const [hasHOverflow, setHasHOverflow] = useState(false);
-  useEffect(() => {
-    if (!isCenteredSplit) {
+  // Layout, not passive: `hasHOverflow` carries across a mode switch, so a
+  // centered split that overflowed would render the native branch with its bar
+  // already hidden while the freshly mounted strip still has no measured width
+  // — one painted frame of a dead proxy and no scrollbar at all. Measuring
+  // before paint retires that frame.
+  useLayoutEffect(() => {
+    const proxy = hScrollbarRef.current;
+    const native = usesNativeHScrollProxy ? nativeScrollerRef.current : null;
+    if (!proxy || (usesNativeHScrollProxy && !native)) {
       setHasHOverflow(false);
       return;
     }
-    const bar = hScrollbarRef.current;
-    if (!bar) return;
+    const source = native ?? proxy;
     const measure = () => {
-      setHasHOverflow(bar.scrollWidth > bar.clientWidth + 1);
+      // Ordered: the proxy's scroll range has to match the content before the
+      // offset is mirrored into it, or the write clamps against a stale width.
+      if (native) {
+        proxy.style.setProperty("--diff-native-scroll-width", `${native.scrollWidth}px`);
+      }
+      setHasHOverflow(source.scrollWidth > source.clientWidth + 1);
+      if (native) syncNativeHScroll("content");
     };
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
-    observer.observe(bar);
-    if (bar.firstElementChild) observer.observe(bar.firstElementChild);
+    observer.observe(source);
+    if (source.firstElementChild) observer.observe(source.firstElementChild);
     return () => {
       observer.disconnect();
     };
-  }, [isCenteredSplit, visibleHunks, maxLineCols]);
+  }, [
+    isCenteredSplit,
+    usesNativeHScrollProxy,
+    isCollapsed,
+    visibleHunks,
+    maxLineCols,
+    syncNativeHScroll,
+  ]);
 
   // Arrow-key horizontal scrolling parity with the focusable native scroller
   // used by the other view modes.
@@ -1130,6 +1207,52 @@ function FileDiff({
     return rows;
   };
 
+  const diffBody = (
+    <>
+      <Diff
+        viewType={viewType}
+        diffType={diffType}
+        hunks={visibleHunks}
+        tokens={tokens ?? undefined}
+        renderGutter={renderGutter}
+        renderToken={renderTokenWithInvisibles}
+        generateLineClassName={generateLineClassName}
+        optimizeSelection
+      >
+        {renderHunkRows}
+      </Diff>
+      {hiddenHunkCount > 0 && (
+        <button
+          type="button"
+          onClick={handleShowMoreHunks}
+          className="flex w-full items-center justify-center gap-2 px-3 py-2 text-xs text-text-muted hover:bg-tint/5 transition-colors"
+        >
+          <UnfoldVertical className="w-3 h-3" />
+          Show {Math.min(hiddenHunkCount, SHOW_MORE_HUNKS_STEP)} more{" "}
+          {hiddenHunkCount === 1 ? "hunk" : "hunks"} ({hiddenHunkCount} remaining)
+        </button>
+      )}
+    </>
+  );
+
+  // One strip serves both scroll systems: centered split drives every code
+  // cell's text-indent through --diff-hscroll, the native path mirrors a real
+  // scroller's scrollLeft. Wrap mode has no horizontal overflow, so no strip.
+  const hScrollbar = wrapLines ? null : (
+    <div
+      ref={hScrollbarRef}
+      className="diff-hscrollbar"
+      data-testid="diff-hscrollbar"
+      data-scroll-mode={isCenteredSplit ? "centered" : "native"}
+      data-active={hasHOverflow || undefined}
+      onScroll={isCenteredSplit ? handleHScroll : handleNativeProxyScroll}
+      aria-hidden="true"
+      tabIndex={-1}
+    >
+      <div className="diff-hscroll-spacer" />
+    </div>
+  );
+
   return (
     <div className="mb-2" style={fileStyle}>
       {relPath && (
@@ -1214,54 +1337,43 @@ function FileDiff({
           </span>
         </button>
       )}
-      {!isCollapsed && (
-        <div
-          id={diffRegionId}
-          ref={regionRef}
-          className={isCenteredSplit ? "diff-file-centered" : "diff-file-scroll"}
-          tabIndex={0}
-          role="region"
-          aria-label={relPath || "Diff"}
-          onKeyDown={isCenteredSplit ? handleRegionKeyDown : undefined}
-        >
-          <Diff
-            viewType={viewType}
-            diffType={diffType}
-            hunks={visibleHunks}
-            tokens={tokens ?? undefined}
-            renderGutter={renderGutter}
-            renderToken={renderTokenWithInvisibles}
-            generateLineClassName={generateLineClassName}
-            optimizeSelection
+      {!isCollapsed &&
+        (isCenteredSplit ? (
+          <div
+            id={diffRegionId}
+            ref={regionRef}
+            className="diff-file-centered"
+            tabIndex={0}
+            role="region"
+            aria-label={relPath || "Diff"}
+            onKeyDown={handleRegionKeyDown}
           >
-            {renderHunkRows}
-          </Diff>
-          {hiddenHunkCount > 0 && (
-            <button
-              type="button"
-              onClick={handleShowMoreHunks}
-              className="flex w-full items-center justify-center gap-2 px-3 py-2 text-xs text-text-muted hover:bg-tint/5 transition-colors"
-            >
-              <UnfoldVertical className="w-3 h-3" />
-              Show {Math.min(hiddenHunkCount, SHOW_MORE_HUNKS_STEP)} more{" "}
-              {hiddenHunkCount === 1 ? "hunk" : "hunks"} ({hiddenHunkCount} remaining)
-            </button>
-          )}
-          {isCenteredSplit && (
+            {diffBody}
+            {hScrollbar}
+          </div>
+        ) : (
+          // The shell exists only so the strip can be a sibling of the real
+          // scroller: `overflow-x: auto` with overflow-y at its initial
+          // `visible` computes to `auto` (CSS Overflow 3 §3.3), so
+          // .diff-file-scroll is a scroll container on both axes and a sticky
+          // strip inside it would resolve against a scrollport the full height
+          // of the file — pinning exactly where the native bar already is.
+          <div className="diff-file-shell">
             <div
-              ref={hScrollbarRef}
-              className="diff-hscrollbar"
-              data-testid="diff-hscrollbar"
-              data-active={hasHOverflow || undefined}
-              onScroll={handleHScroll}
-              aria-hidden="true"
-              tabIndex={-1}
+              id={diffRegionId}
+              ref={nativeScrollerRef}
+              className="diff-file-scroll"
+              data-proxy-active={(usesNativeHScrollProxy && hasHOverflow) || undefined}
+              tabIndex={0}
+              role="region"
+              aria-label={relPath || "Diff"}
+              onScroll={usesNativeHScrollProxy ? handleNativeHScroll : undefined}
             >
-              <div className="diff-hscroll-spacer" />
+              {diffBody}
             </div>
-          )}
-        </div>
-      )}
+            {hScrollbar}
+          </div>
+        ))}
     </div>
   );
 }
