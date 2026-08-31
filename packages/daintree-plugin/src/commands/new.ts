@@ -230,6 +230,25 @@ function parseTemplate(value: string): TemplateKind {
 }
 
 /**
+ * Templates a project-local plugin cannot use.
+ *
+ * The project-origin manifest schema rejects `contributes.mcpServers` — an MCP
+ * server is reachable through the app-global plugin-MCP surface, where an
+ * external agent session carries no project binding, so it cannot be scoped to
+ * one project. Scaffolding one under `--project` would write a manifest the
+ * host refuses to load, and the author would only find out on the next open.
+ */
+const PROJECT_INCOMPATIBLE_TEMPLATES: readonly TemplateKind[] = ["mcp", "full"];
+
+function assertTemplateAllowedForProject(template: TemplateKind, projectLocal: boolean): void {
+  if (!projectLocal || !PROJECT_INCOMPATIBLE_TEMPLATES.includes(template)) return;
+  throw new Error(
+    `The "${template}" template contributes an MCP server, which a project-local plugin may not declare — ` +
+      `the host rejects the manifest at load. Use --template command or --template view with --project.`
+  );
+}
+
+/**
  * Non-interactive `daintree-plugin new` (the `--yes` path). Scaffolds straight
  * from flags with no prompts, for CI and scripting. The plugin name and
  * `--publisher` are required (there is no prompt to fall back on); the display
@@ -245,6 +264,7 @@ async function runNewNonInteractive(name: string | undefined, opts: RunNewOption
     throw new Error("--yes requires --publisher (there is no interactive prompt to fall back on)");
   }
   const template = opts.template ? parseTemplate(opts.template) : "command";
+  assertTemplateAllowedForProject(template, opts.project === true);
   const projectRoot = opts.project ? await resolveProjectRootOrThrow() : undefined;
 
   // scaffoldPlugin validates the name/publisher segment grammar and throws a
@@ -356,6 +376,7 @@ export async function runNew(name?: string, opts: RunNewOptions = {}): Promise<v
   let projectRoot: string | undefined;
   if (opts.project) {
     try {
+      assertTemplateAllowedForProject(template, true);
       projectRoot = await resolveProjectRootOrThrow();
     } catch (err) {
       p.cancel((err as Error).message);

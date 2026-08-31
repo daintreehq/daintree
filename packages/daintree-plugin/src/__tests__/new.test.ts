@@ -695,6 +695,35 @@ describe("runNew --project", () => {
     ).resolves.toBeUndefined();
   });
 
+  it.each(["mcp", "full"] as const)(
+    "refuses the %s template under --project instead of writing an unloadable manifest",
+    async (template) => {
+      // The project-origin schema rejects `contributes.mcpServers`, so these two
+      // templates would scaffold a manifest the host silently declines to load.
+      const root = path.join(tmpDir, `proj-${template}`);
+      await fs.mkdir(path.join(root, ".daintree"), { recursive: true });
+      cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
+
+      await expect(
+        runNew("dash", { yes: true, publisher: "acme", project: true, template })
+      ).rejects.toThrow(/may not declare/);
+      await expect(fs.access(path.join(root, ".daintree", "plugins"))).rejects.toThrow();
+    }
+  );
+
+  it.each(["command", "view"] as const)("still scaffolds the %s template", async (template) => {
+    const root = path.join(tmpDir, `proj-ok-${template}`);
+    await fs.mkdir(path.join(root, ".daintree"), { recursive: true });
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
+
+    await runNew("dash", { yes: true, publisher: "acme", project: true, template });
+
+    const manifest = await readJson(
+      path.join(root, ".daintree", "plugins", "acme.dash", "plugin.json")
+    );
+    expect((manifest.contributes as Record<string, unknown>).mcpServers).toBeUndefined();
+  });
+
   it("fails with a clear message outside a project rather than picking a directory", async () => {
     const orphan = path.join(tmpDir, "orphan");
     await fs.mkdir(orphan, { recursive: true });

@@ -2995,7 +2995,7 @@ export class PluginService {
     const needsSnapshots = declared.some(
       (entry) => entry.startsWith("${project}") || entry.startsWith("${worktree}")
     );
-    const snapshots = needsSnapshots ? await this.fetchAllWorktreeSnapshots() : [];
+    const snapshots = needsSnapshots ? await this.allowedPathSnapshots(pluginId) : [];
 
     const entries: ExpandedFsPath[] = [];
     if (opts.includeDataDir) {
@@ -3014,6 +3014,27 @@ export class PluginService {
       }
     }
     return entries;
+  }
+
+  /**
+   * The worktree set a plugin's `${project}` / `${worktree}` tokens expand against.
+   *
+   * A bound plugin gets its own project's worktrees. Resolving these from the
+   * focused window instead would let a project plugin's declared filesystem
+   * roots follow whichever project the user happened to be looking at — the
+   * confused deputy the binding exists to prevent, and the one place the
+   * containment allowlist itself would have leaked.
+   *
+   * Unbound stays ambient on purpose: an installed or builtin plugin has no
+   * project of its own, so every open project's worktrees are the only thing
+   * its tokens can mean. A bound-but-rootless binding is malformed and expands
+   * to nothing, which drops the token entries and leaves containment closed.
+   */
+  private async allowedPathSnapshots(pluginId: string): Promise<WorktreeSnapshot[]> {
+    const binding = this.plugins.get(pluginId)?.binding;
+    if (!binding || binding.projectId === null) return this.fetchAllWorktreeSnapshots();
+    if (binding.projectRoot === null) return [];
+    return this.fetchWorktreeSnapshotsForProject(binding.projectId, binding.projectRoot);
   }
 
   /** Expand a single `allowedPaths` entry (token or literal) into a typed root. */
