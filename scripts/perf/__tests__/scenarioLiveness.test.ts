@@ -421,15 +421,46 @@ function verdicts(id: string, report: DriverReport): string[] {
   return problems;
 }
 
-/** Content hash of a directory's files, so "nothing was written" is provable. */
-function hashTree(dir: string): string {
-  const hash = createHash("sha256");
+/** Per-file content hashes, so "nothing was written" is provable AND diagnosable. */
+function hashTree(dir: string): Map<string, string> {
+  const hashes = new Map<string, string>();
   for (const name of readdirSync(dir).sort()) {
     const full = path.join(dir, name);
     if (!statSync(full).isFile()) continue;
-    hash.update(name).update("\0").update(readFileSync(full));
+    hashes.set(name, createHash("sha256").update(readFileSync(full)).digest("hex"));
   }
-  return hash.digest("hex");
+  return hashes;
+}
+
+/**
+ * Name the files that moved, and both things that could have moved them.
+ *
+ * A bare hash-vs-hash comparison fails with two hex strings and no way to tell
+ * a scenario that wrote to `config/` — the defect this exists for — from a
+ * `npm run perf` someone started in the same tree while the suite was running,
+ * which is harmless and was observed during development. The second is possible
+ * for `history/` only: `run.ts` writes it exclusively on a canonical run (no
+ * `--iterations`, no `--warmups`), and this guard's driver always passes both,
+ * so its own children provably cannot be the cause.
+ */
+function describeTreeDrift(
+  dir: string,
+  before: Map<string, string>,
+  after: Map<string, string>
+): string {
+  const changed = [...new Set([...before.keys(), ...after.keys()])]
+    .filter((name) => before.get(name) !== after.get(name))
+    .map((name) => {
+      if (!before.has(name)) return `${name} (created)`;
+      if (!after.has(name)) return `${name} (deleted)`;
+      return `${name} (rewritten)`;
+    });
+  if (changed.length === 0) return "";
+  return (
+    `${path.basename(dir)}/ changed while the guard ran: ${changed.join(", ")}. ` +
+    "Either a scenario wrote to it — which no scenario may do — or someone ran " +
+    "`npm run perf` in this tree concurrently. Re-run alone to tell them apart."
+  );
 }
 
 const CONFIG_DIR = path.join(PERF_ROOT, "config");
@@ -533,7 +564,10 @@ describe("perf scenario liveness", () => {
     expect(failures.join("\n")).toBe("");
 
     // The guard measures; it must never write a reference or a history entry.
-    expect(hashTree(CONFIG_DIR)).toBe(configBefore);
-    expect(hashTree(HISTORY_DIR)).toBe(historyBefore);
+    const drift = [
+      describeTreeDrift(CONFIG_DIR, configBefore, hashTree(CONFIG_DIR)),
+      describeTreeDrift(HISTORY_DIR, historyBefore, hashTree(HISTORY_DIR)),
+    ].filter(Boolean);
+    expect(drift.join("\n")).toBe("");
   }, 900_000);
 });
