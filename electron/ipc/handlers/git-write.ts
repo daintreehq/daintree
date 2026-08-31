@@ -635,10 +635,29 @@ async function readOid(
  */
 async function requireUnmovedSince(
   git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
-  payload: { expectedHeadOid?: string; expectedBaseOid?: string; cwd: string },
+  payload: {
+    expectedBranch?: string;
+    expectedHeadOid?: string;
+    expectedBaseOid?: string;
+    cwd: string;
+  },
+  branch: string,
   target: ExistingBaseCompareTarget,
   op: string
 ): Promise<void> {
+  // The branch NAME, not only its tip. Pinning the OID alone leaves a hole:
+  // checking out a different branch that happens to sit on the same commit
+  // passes every OID check while the operation goes on to rewrite a branch the
+  // user never saw named.
+  if (payload.expectedBranch && payload.expectedBranch !== branch) {
+    const message = `This worktree is now on '${branch}' rather than '${payload.expectedBranch}', so this operation would act on a different branch than the one previewed. Try again to see the current state.`;
+    throw new GitOperationError(
+      "conflict-unresolved",
+      encodeGitOperationErrorMessage("conflict-unresolved", message, { branchName: branch }),
+      { cwd: payload.cwd, op, rawMessage: message, branchName: branch }
+    );
+  }
+
   const checks: Array<{ expected: string | undefined; ref: string; what: string }> = [
     { expected: payload.expectedHeadOid, ref: "HEAD", what: "This branch has new commits" },
     {
@@ -682,7 +701,13 @@ const baseIntegratingCwds = new Set<string>();
  * classified and rethrown with the operation left exactly where git left it.
  */
 async function runBaseIntegration(
-  payload: { cwd: string; baseBranch: string; expectedHeadOid?: string; expectedBaseOid?: string },
+  payload: {
+    cwd: string;
+    baseBranch: string;
+    expectedBranch?: string;
+    expectedHeadOid?: string;
+    expectedBaseOid?: string;
+  },
   kind: GitBaseIntegrationKind
 ): Promise<void> {
   validateCwd(payload?.cwd);
@@ -722,7 +747,7 @@ async function runBaseIntegration(
     await requireNoOperationInProgress(git, payload.cwd, op);
     await requireCleanTree(git, payload.cwd, op);
     const target = await requireBaseTarget(git, baseBranch, payload.cwd);
-    await requireUnmovedSince(git, payload, target, op);
+    await requireUnmovedSince(git, payload, branch, target, op);
 
     // `-c` overrides rather than command-line flags, deliberately. Git ignores a
     // config key it does not know, so these degrade to a no-op on an older git;
@@ -889,6 +914,7 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
       async (payload: {
         cwd: string;
         baseBranch: string;
+        expectedBranch?: string;
         expectedHeadOid?: string;
         expectedBaseOid?: string;
       }): Promise<void> => {
@@ -902,6 +928,7 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
       async (payload: {
         cwd: string;
         baseBranch: string;
+        expectedBranch?: string;
         expectedHeadOid?: string;
         expectedBaseOid?: string;
       }): Promise<void> => {

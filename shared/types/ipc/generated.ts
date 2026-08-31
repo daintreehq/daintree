@@ -676,6 +676,7 @@ export interface GeneratedIpcInvokeMap {
       payload: {
         cwd: string;
         baseBranch: string;
+        expectedBranch?: string | undefined;
         expectedHeadOid?: string | undefined;
         expectedBaseOid?: string | undefined;
       },
@@ -687,6 +688,7 @@ export interface GeneratedIpcInvokeMap {
       payload: {
         cwd: string;
         baseBranch: string;
+        expectedBranch?: string | undefined;
         expectedHeadOid?: string | undefined;
         expectedBaseOid?: string | undefined;
       },

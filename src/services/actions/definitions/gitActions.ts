@@ -789,7 +789,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       // The commits the dialog previewed. Handed to the write so it refuses if
       // either has moved since — an agent committing into the worktree while
       // the dialog is open is ordinary in this product, not a corner case.
-      let pinned: { headOid?: string; baseOid?: string } | null = null;
+      let pinned: { branch?: string; headOid?: string; baseOid?: string } | null = null;
       if (ctx.dispatchSource !== "agent") {
         const result = await useGitWorktreeOperationConfirmStore
           .getState()
@@ -822,7 +822,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         baseBranch: string;
       };
       const resolvedCwd = requireWorktreePath(location, ctx);
-      let pinned: { headOid?: string; baseOid?: string } | null = null;
+      let pinned: { branch?: string; headOid?: string; baseOid?: string } | null = null;
       if (ctx.dispatchSource !== "agent") {
         const result = await useGitWorktreeOperationConfirmStore
           .getState()

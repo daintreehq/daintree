@@ -71,7 +71,7 @@ function setupActions() {
 /** Resolve the deferred confirm the way a mounted dialog would. */
 async function settleConfirm(
   ok: boolean,
-  pinned?: { headOid?: string; baseOid?: string }
+  pinned?: { branch?: string; headOid?: string; baseOid?: string }
 ): Promise<void> {
   await vi.waitFor(() => {
     expect(useGitWorktreeOperationConfirmStore.getState().pendingConfirm).not.toBeNull();
@@ -319,9 +319,10 @@ describe("the write is bound to what the dialog previewed", () => {
   it("forwards the pinned commits to the IPC", async () => {
     const { run, git } = setupActions();
     const pending = run("git.rebaseOntoBase", { worktreeId: WT_ID, baseBranch: "develop" });
-    await settleConfirm(true, { headOid: "aaa", baseOid: "bbb" });
+    await settleConfirm(true, { branch: "feature/topic", headOid: "aaa", baseOid: "bbb" });
     await pending;
     expect(git.rebaseOntoBase).toHaveBeenCalledWith(WT_PATH, "develop", {
+      branch: "feature/topic",
       headOid: "aaa",
       baseOid: "bbb",
     });

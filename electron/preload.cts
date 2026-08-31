@@ -2144,22 +2144,24 @@ function buildElectronApi(): ElectronAPI {
       rebaseOntoBase: (
         cwd: string,
         baseBranch: string,
-        expected?: { headOid?: string; baseOid?: string }
+        expected?: { branch?: string; headOid?: string; baseOid?: string }
       ) =>
         _unwrappingInvoke(CHANNELS.GIT_REBASE_ONTO_BASE, {
           cwd,
           baseBranch,
+          expectedBranch: expected?.branch,
           expectedHeadOid: expected?.headOid,
           expectedBaseOid: expected?.baseOid,
         }),
       mergeBaseIntoBranch: (
         cwd: string,
         baseBranch: string,
-        expected?: { headOid?: string; baseOid?: string }
+        expected?: { branch?: string; headOid?: string; baseOid?: string }
       ) =>
         _unwrappingInvoke(CHANNELS.GIT_MERGE_BASE_INTO_BRANCH, {
           cwd,
           baseBranch,
+          expectedBranch: expected?.branch,
           expectedHeadOid: expected?.headOid,
           expectedBaseOid: expected?.baseOid,
         }),

@@ -968,13 +968,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     rebaseOntoBase(
       cwd: string,
       baseBranch: string,
-      expected?: { headOid?: string; baseOid?: string }
+      expected?: { branch?: string; headOid?: string; baseOid?: string }
     ): Promise<void>;
     /** Merge the base branch's ref into this worktree's branch. */
     mergeBaseIntoBranch(
       cwd: string,
       baseBranch: string,
-      expected?: { headOid?: string; baseOid?: string }
+      expected?: { branch?: string; headOid?: string; baseOid?: string }
     ): Promise<void>;
     onPushProgress(callback: (event: PushProgressEvent) => void): () => void;
     getStagingStatus(cwd: string): Promise<StagingStatus>;

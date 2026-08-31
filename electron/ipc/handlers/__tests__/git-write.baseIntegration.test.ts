@@ -501,6 +501,47 @@ describe("git:rebase-onto-base — bound to what was previewed", () => {
     expect(callsTo(git, "merge")).toEqual([]);
   });
 
+  it("refuses when the worktree switched to a DIFFERENT branch at the same commit", async () => {
+    // The hole an OID-only pin leaves: checking out another branch that happens
+    // to sit on the previewed commit passes every OID check, and the operation
+    // then rewrites a branch the user never saw named.
+    const git = gitWithOids({ HEAD: HEAD_OID, [BASE_TRACKING_REF]: BASE_OID });
+    createHardenedGitMock.mockResolvedValue(git);
+    registerGitWriteHandlers({} as never);
+
+    await expect(
+      registeredHandlers().get(CHANNELS.GIT_REBASE_ONTO_BASE)!(
+        {},
+        {
+          cwd: CWD,
+          baseBranch: BASE,
+          expectedBranch: "feature/something-else",
+          expectedHeadOid: HEAD_OID,
+          expectedBaseOid: BASE_OID,
+        }
+      )
+    ).rejects.toMatchObject({ reason: "conflict-unresolved" });
+    expect(callsTo(git, "rebase")).toEqual([]);
+  });
+
+  it("proceeds when the branch name still matches", async () => {
+    const git = gitWithOids({ HEAD: HEAD_OID, [BASE_TRACKING_REF]: BASE_OID });
+    createHardenedGitMock.mockResolvedValue(git);
+    registerGitWriteHandlers({} as never);
+
+    await registeredHandlers().get(CHANNELS.GIT_REBASE_ONTO_BASE)!(
+      {},
+      {
+        cwd: CWD,
+        baseBranch: BASE,
+        expectedBranch: BRANCH,
+        expectedHeadOid: HEAD_OID,
+        expectedBaseOid: BASE_OID,
+      }
+    );
+    expect(callsTo(git, "rebase")).toHaveLength(1);
+  });
+
   it("runs unpinned when no expectation is supplied", async () => {
     // A keybinding, plugin or agent dispatch has no preview to bind to. It gets
     // today's behaviour rather than a hard failure.

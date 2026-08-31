@@ -41,7 +41,7 @@ export type GitWorktreeOperationConfirmRequest =
  */
 export interface GitWorktreeOperationConfirmResult {
   confirmed: boolean;
-  pinned: { headOid?: string; baseOid?: string } | null;
+  pinned: { branch?: string; headOid?: string; baseOid?: string } | null;
 }
 
 const DECLINED: GitWorktreeOperationConfirmResult = { confirmed: false, pinned: null };
@@ -65,7 +65,7 @@ interface GitWorktreeOperationConfirmState {
   ) => Promise<GitWorktreeOperationConfirmResult>;
   resolveConfirmation: (
     ok: boolean,
-    pinned?: { headOid?: string; baseOid?: string } | null
+    pinned?: { branch?: string; headOid?: string; baseOid?: string } | null
   ) => void;
 }
 
@@ -92,7 +92,7 @@ export const useGitWorktreeOperationConfirmStore = create<GitWorktreeOperationCo
 
     resolveConfirmation: (
       ok: boolean,
-      pinned: { headOid?: string; baseOid?: string } | null = null
+      pinned: { branch?: string; headOid?: string; baseOid?: string } | null = null
     ) => {
       const pending = get().pendingConfirm;
       if (pending) {

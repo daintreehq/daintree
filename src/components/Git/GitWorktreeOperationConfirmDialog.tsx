@@ -334,6 +334,7 @@ function GitWorktreeOperationConfirmDialogInner() {
       // — not whatever the refs point at by the time the click lands.
       onConfirm={() =>
         resolveConfirmation(true, {
+          ...(preview?.branch ? { branch: preview.branch } : {}),
           ...(preview?.headOid ? { headOid: preview.headOid } : {}),
           ...(preview?.baseOid ? { baseOid: preview.baseOid } : {}),
         })
