@@ -33,6 +33,7 @@ import type { CommitItem, HeatCell } from "@shared/types/pulse";
 import { z } from "zod";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isClientGitError } from "@/utils/clientGitError";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(Math.trunc(value) || min, min), max);
@@ -556,14 +557,24 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     // Own the toast here instead, and it reaches every surface.
     selfNotifiesOnExecutionError: true,
     run: async (args: unknown, ctx: ActionContext) => {
-      const { prune, ...location } = (args ?? {}) as WorktreeLocationArgs & { prune?: boolean };
-      const resolvedCwd = requireWorktreePath(location, ctx);
-      // No confirm, unlike its push/pull-rebase neighbours: a fetch writes only
-      // remote-tracking refs, so there is no local work it can destroy and
-      // nothing a confirm would protect.
+      // Everything is inside the try, including `requireWorktreePath`. The
+      // action advertises `selfNotifiesOnExecutionError`, which tells the
+      // palette to stand its own toast down — so anything that escapes
+      // un-notified is silently swallowed, and "no worktree in context" is
+      // exactly the failure a user most needs told about.
       try {
+        const { prune, ...location } = (args ?? {}) as WorktreeLocationArgs & { prune?: boolean };
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        // No confirm, unlike its push/pull-rebase neighbours: a fetch writes
+        // only remote-tracking refs, so there is no local work it can destroy
+        // and nothing a confirm would protect.
         await window.electron.git.fetch({ cwd: resolvedCwd, prune: prune === true });
       } catch (err) {
+        // Decode first: a `GitOperationError` crossing the contextBridge carries
+        // its reason as a `[GitError|…]` message prefix and `formatErrorMessage`
+        // hands the message back verbatim, so a toast built without this shows
+        // the transport prefix to the user. The guard strips it in place.
+        isClientGitError(err);
         const message = formatErrorMessage(err, "Could not reach the remote.");
         notify({
           type: "error",

@@ -223,24 +223,6 @@ describe("WorkspaceService.fetchWorktree", () => {
     expect(event.error).toContain("/test/wt-missing");
   });
 
-  it("finds the monitor by path when its id was minted differently", async () => {
-    // Creation mints an id from `realpath()`; enumeration from `pathResolve()`.
-    // Those diverge across a symlink, and the renderer reaches us holding the
-    // worktree's PATH — an id-only lookup would fail on exactly the symlinked
-    // checkouts that are hardest to debug.
-    const monitor = createMonitor("/real/wt-symlinked");
-    monitor.start();
-    Object.defineProperty(monitor, "path", { value: "/link/wt", configurable: true });
-    const trigger = vi
-      .spyOn(monitor, "triggerFetchNow")
-      .mockResolvedValue({ status: "success", remote: "origin" });
-
-    await service.fetchWorktree("req-path", "/link/wt", false);
-
-    expect(trigger).toHaveBeenCalledWith(false);
-    expect(lastResultEvent().error).toBeUndefined();
-  });
-
   it("answers with a transport error for a monitor that exists but is stopped", async () => {
     createMonitor("/test/wt-stopped");
 

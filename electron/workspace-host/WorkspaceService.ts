@@ -1754,26 +1754,6 @@ export class WorkspaceService {
   }
 
   /**
-   * Find a monitor by worktree id, falling back to its path.
-   *
-   * The two are usually the same string, but not always: creation mints an id
-   * from `realpath()` while enumeration mints one from `pathResolve()` off
-   * `git worktree list --porcelain`, and those diverge across a symlink. The
-   * renderer reaches us holding a worktree's `path`, so an id-only lookup would
-   * make "Fetch" fail on exactly the symlinked checkouts that are hardest to
-   * debug. Path comparison is a scan, but it runs once per user click over a
-   * handful of monitors.
-   */
-  private resolveMonitorByIdOrPath(idOrPath: string): WorktreeMonitor | undefined {
-    const direct = this.monitors.get(idOrPath);
-    if (direct) return direct;
-    for (const monitor of this.monitors.values()) {
-      if (monitor.path === idOrPath) return monitor;
-    }
-    return undefined;
-  }
-
-  /**
    * User-triggered `git fetch` for one worktree (#12091). Always forced — the
    * user asked for it, so the failure backoff must not silently swallow the
    * click — and always answered, so the renderer's action reports the real
@@ -1782,7 +1762,7 @@ export class WorkspaceService {
    * `prune` false is the plain "Fetch" row; true is "Fetch and prune".
    */
   async fetchWorktree(requestId: string, worktreeId: string, prune: boolean): Promise<void> {
-    const monitor = this.resolveMonitorByIdOrPath(worktreeId);
+    const monitor = this.monitors.get(worktreeId);
     if (!monitor || !monitor.isRunning) {
       this.sendEvent({
         type: "fetch-worktree-result",

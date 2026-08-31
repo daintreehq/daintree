@@ -16,17 +16,22 @@ function skipReason(skip: WorkspaceFetchResult["skipReason"]): GitOperationReaso
   return skip === "auth-suspended" ? "auth-failed" : "unknown";
 }
 
+/**
+ * Every branch describes what was OBSERVED, never a cause we did not see.
+ * `no-common-dir` is any failure to resolve the repository, not proof the path
+ * stopped being a worktree; a skip is a skip, not a diagnosis of the remote.
+ */
 function describeUnsuccessfulFetch(result: WorkspaceFetchResult): string {
   if (result.status === "failed") return "Could not fetch from the remote.";
   switch (result.skipReason) {
     case "auth-suspended":
       return "Fetch skipped — authentication to the remote is failing.";
     case "no-common-dir":
-      return "Fetch skipped — this path is no longer a git worktree.";
+      return "Fetch skipped — could not resolve this worktree's repository.";
     case "stale-generation":
-      return "Fetch cancelled — the worktree was closed while it was running.";
+      return "Fetch cancelled before it ran.";
     default:
-      return "Fetch skipped — the remote was recently unreachable.";
+      return "Fetch skipped — a recent attempt on this repository failed.";
   }
 }
 
@@ -88,7 +93,7 @@ export function registerGitFetchHandlers(deps: HandlerDependencies): () => void 
           // a partial refresh — say so rather than let half-stale counts read
           // as freshly confirmed.
           if (result.auxiliaryFailed === true) {
-            throw new GitOperationError("unknown", "Some remotes could not be reached.", {
+            throw new GitOperationError("unknown", "Some remotes failed to fetch.", {
               cwd: payload.cwd,
               op: "fetch",
             });

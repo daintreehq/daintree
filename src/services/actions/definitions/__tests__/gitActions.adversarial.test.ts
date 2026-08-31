@@ -258,6 +258,31 @@ describe("gitActions adversarial", () => {
     );
   });
 
+  it("git.fetch notifies when there is no worktree to fetch, not only on IPC failure", async () => {
+    // `selfNotifiesOnExecutionError` stands the palette's own toast down, so an
+    // un-notified throw from location resolution is swallowed everywhere.
+    const { run, git } = setupActions();
+
+    await expect(run("git.fetch", {})).rejects.toThrow();
+    expect(git.fetch).not.toHaveBeenCalled();
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", title: "Fetch failed" })
+    );
+  });
+
+  it("git.fetch strips the GitError transport prefix out of the toast", async () => {
+    // A GitOperationError crossing the contextBridge arrives as
+    // `[GitError|<reason>||] <message>`, and `formatErrorMessage` returns that
+    // verbatim — so without decoding, the user reads the wire format.
+    const { run, git } = setupActions();
+    git.fetch.mockRejectedValue(new Error("[GitError|network-unavailable||] Could not fetch"));
+
+    await expect(run("git.fetch", { cwd: "/repo" })).rejects.toThrow();
+    const payload = notifyMock.mock.calls.at(-1)![0] as { message: string };
+    expect(payload.message).toBe("Could not fetch");
+    expect(payload.message).not.toContain("[GitError|");
+  });
+
   it("git.pullRebase fires IPC only after the confirm gate is accepted", async () => {
     const { run, git } = setupActions();
     const p = run("git.pullRebase", { cwd: "/repo" });
