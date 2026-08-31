@@ -193,6 +193,39 @@ describe("formatAlarmDetail", () => {
       ).toBe("Base (upstream/develop): 4 commits behind");
     });
 
+    it("keeps the upstream pair when the two refs match but the base has no name", () => {
+      // `UpstreamSyncBadge` gates its own dedupe on the base name. An
+      // unlabelled `Base:` is not the labelled half, so deduping onto it would
+      // trade the clearer line for a vaguer one.
+      expect(
+        formatAlarmDetail("behind", {
+          behindCount: 4,
+          baseBehindCount: 4,
+          baseMatchesUpstream: true,
+        })
+      ).toBe("Upstream: 4 commits behind");
+    });
+
+    it("names an unnamed base count rather than leaving the alarm unexplained", () => {
+      // Wider than the expanded badge, deliberately: this tooltip is the only
+      // place a collapsed row says anything about the drift.
+      expect(formatAlarmDetail("behind", { baseBehindCount: 4 })).toBe("Base: 4 commits behind");
+    });
+
+    it("carries a base-ahead count alongside an upstream-behind one", () => {
+      expect(
+        formatAlarmDetail("behind", {
+          behindCount: 2,
+          baseAheadCount: 5,
+          baseBranchName: "develop",
+        })
+      ).toBe("Upstream: 2 commits behind · Base (develop): 5 ahead");
+    });
+
+    it("ignores counts below zero rather than rendering them", () => {
+      expect(formatAlarmDetail("behind", { behindCount: -1, aheadCount: -2 })).toBeUndefined();
+    });
+
     it("keeps the upstream pair when the base counts raced to zero", () => {
       // `baseMatchesUpstream` with nothing to dedupe onto must not render
       // nothing — the upstream pair is the fresher of the two.
@@ -225,6 +258,20 @@ describe("formatAlarmDetail", () => {
     it("still says what happened when it has no counts to give", () => {
       expect(formatAlarmDetail("ci-failed", {})).toBe("Checks failed on the linked pull request");
       expect(formatAlarmDetail("ci-failed", { ciFailed: 0, ciTotal: 0 })).toBe(
+        "Checks failed on the linked pull request"
+      );
+    });
+
+    it("needs BOTH counts before it states a ratio", () => {
+      // Half a pair is not a ratio. Either half missing has to fall back, or
+      // the tooltip invents a number the forge never reported.
+      expect(formatAlarmDetail("ci-failed", { ciTotal: 7 })).toBe(
+        "Checks failed on the linked pull request"
+      );
+      expect(formatAlarmDetail("ci-failed", { ciFailed: 2 })).toBe(
+        "Checks failed on the linked pull request"
+      );
+      expect(formatAlarmDetail("ci-failed", { ciFailed: -1, ciTotal: 7 })).toBe(
         "Checks failed on the linked pull request"
       );
     });

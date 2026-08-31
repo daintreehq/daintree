@@ -1052,7 +1052,10 @@ describe("WorktreeHeader collapsed alarm pill", () => {
     // The label moved into the tooltip and the accessible name; the mark on the
     // row is a glyph, so it carries no text of its own.
     expect(pill.textContent).toBe("");
-    expect(pill.getAttribute("aria-label")).toContain("CI failed");
+    // The whole name, not a substring: the fixture reports 1 of 1 check
+    // failing, so a `contains` would still pass if the counts stopped being
+    // forwarded and the detail fell back to its countless wording.
+    expect(pill.getAttribute("aria-label")).toBe("CI failed — 1 of 1 check failing");
   });
 
   it("renders the pill with warning treatment for GitHub auth-failed remote", () => {

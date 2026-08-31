@@ -3,6 +3,8 @@
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   CHIP_LABELS,
   CHIP_SEGMENTS,
@@ -79,6 +81,18 @@ function expectWholePixelPieces(tick: HTMLElement, divisor: (count: number) => n
     ).toBe(true);
     expect(piece, `${state}: pieces too thin to read`).toBeGreaterThanOrEqual(2);
   }
+}
+
+/**
+ * The gap in px on whichever axis is asked for. `gap-*` sets both, so the
+ * collapsed grid's rows and columns are the same number — but reading them
+ * separately is what makes an axis-scoped `gap-x-*`/`gap-y-*` show up as the
+ * closed encoding it would be rather than passing on the other axis's value.
+ */
+function readGap(tick: HTMLElement, axis: "x" | "y"): number {
+  const gap = [...tick.classList].find((c) => new RegExp(`^gap-(${axis}-)?\\d`).test(c));
+  expect(gap, `no ${axis} gap on the tick: ${tick.className}`).toBeDefined();
+  return readScalePx(gap!);
 }
 
 /** The tick's corner inset in px, read off whichever axis is asked for. */
@@ -304,17 +318,60 @@ describe("WorktreeStatusTick — collapsed", () => {
   });
 
   it("cuts its square into whole pixels on both axes", () => {
-    // Two tracks each way whatever the count, because the states differ by how
+    // Two tracks each way whatever the state, because the states differ by how
     // many cells they fill rather than by how finely the slot is divided —
     // which is what lets the square be 6px instead of the 10px three stacked
-    // segments would have needed.
+    // segments would have needed. Asserted once per axis rather than once per
+    // state: the tracks do not vary with the state, and a loop over states
+    // here would repeat one sum three times under three different labels.
     const { tick } = renderTick("waiting", "sidebar", true);
     expect(tick.classList.contains("grid"), `not a grid: ${tick.className}`).toBe(true);
-    expectWholePixelPieces(tick, () => 2);
-    expect(
-      readVerticalGap(tick),
-      "the gap is too small to survive antialiasing"
-    ).toBeGreaterThanOrEqual(2);
+    for (const [axis, size] of [
+      ["y", readAxis(tick, "h")],
+      ["x", readAxis(tick, "w")],
+    ] as const) {
+      const gap = readGap(tick, axis);
+      const track = (size - gap) / 2;
+      expect(
+        Number.isInteger(track),
+        `${axis}: two tracks of a ${size}px slot are ${track}px`
+      ).toBe(true);
+      expect(track, `${axis}: tracks too thin to read`).toBeGreaterThanOrEqual(2);
+      expect(gap, `${axis}: the gap is too small to survive antialiasing`).toBeGreaterThanOrEqual(
+        2
+      );
+    }
+  });
+
+  it("lays the pieces out without letting any two of them share a cell", () => {
+    // The count only reads as a count while the pieces occupy DIFFERENT cells.
+    // Pinning them with explicit `col-start-*`/`row-start-*` would stack three
+    // spans on one corner: the sibling-element and segment-count assertions
+    // above would all still pass, and forced colors would render one square
+    // where it should render three. Auto-placement in reading order is what
+    // keeps them apart, so nothing may override it.
+    const cells = 4;
+    for (const state of STATES) {
+      const { segments } = renderTick(state, "sidebar", true);
+      const covered = segments.reduce((total, segment) => {
+        const cols = segment.classList.contains("col-span-2") ? 2 : 1;
+        const rows = segment.classList.contains("row-span-2") ? 2 : 1;
+        for (const placement of segment.classList) {
+          expect(
+            /^(col|row)-start-/.test(placement),
+            `${state}: ${placement} pins a piece instead of letting it flow`
+          ).toBe(false);
+        }
+        return total + cols * rows;
+      }, 0);
+      expect(covered, `${state}: its pieces cover ${covered} of ${cells} cells`).toBe(
+        state === "complete" ? CHIP_SEGMENTS[state] : cells
+      );
+      expect(covered, `${state}: its pieces need more cells than the grid has`).toBeLessThanOrEqual(
+        cells
+      );
+      cleanup();
+    }
   });
 
   it("spends less ink the less the state wants, and less than the bar at every state", () => {
@@ -366,6 +423,23 @@ describe("WorktreeStatusTick — collapsed", () => {
       Number(layer!.slice(2)),
       `${layer} lets the z-20 card overlays paint across the mark`
     ).toBeGreaterThan(20);
+  });
+});
+
+/**
+ * The square only reaches a collapsed row if the card asks for it, and nothing
+ * that renders the tick directly can see that it stopped. Dropping the prop at
+ * the call site would leave every test above green while the shipped rows kept
+ * the bar — so the hand-off is asserted where it is made.
+ */
+describe("WorktreeStatusTick — the card's call site", () => {
+  it("hands the row's collapsed state to the mark", () => {
+    const source = readFileSync(resolve(__dirname, "../../WorktreeCard.tsx"), "utf-8");
+    const call = source.match(/<WorktreeStatusTick[\s\S]*?\/>/);
+    expect(call?.[0], "WorktreeCard no longer renders the status tick").toBeDefined();
+    expect(call![0], `the tick is rendered without the row's collapsed state: ${call![0]}`).toMatch(
+      /collapsed=\{effectiveIsCollapsed\}/
+    );
   });
 });
 

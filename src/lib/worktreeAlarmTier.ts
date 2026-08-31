@@ -121,14 +121,26 @@ export function formatAlarmDetail(kind: AlarmKind, input: AlarmDetailInput): str
       const base = describeDrift(input.baseBehindCount ?? 0, input.baseAheadCount ?? 0);
       const ref = input.baseCompareRef || input.baseBranchName;
       const baseLine = base === undefined ? undefined : `Base${ref ? ` (${ref})` : ""}: ${base}`;
+      const upstreamLine = upstream === undefined ? undefined : `Upstream: ${upstream}`;
       // The same dedupe the expanded badge does: when `@{u}` and the base
       // compare ref are the same commit the two pairs are one measurement, and
-      // the labelled half is the only one that says what it was counted
-      // against. Drop the unlabelled pair, never the label.
-      if (input.baseMatchesUpstream === true && baseLine !== undefined) return baseLine;
-      const lines = [upstream === undefined ? undefined : `Upstream: ${upstream}`, baseLine].filter(
-        (line): line is string => line !== undefined
-      );
+      // only one of them should be stated. Keep the half that says what it was
+      // counted against — which is the base line ONLY while it has a ref to
+      // name. `UpstreamSyncBadge` gates its own `dedupeToBase` on the base
+      // name for the same reason: an unlabelled `Base:` is not the labelled
+      // half, and deduping onto it would drop the clearer line for a vaguer
+      // one. Where neither is named the upstream pair keeps the line, as it
+      // does there.
+      if (input.baseMatchesUpstream === true) {
+        if (ref && baseLine !== undefined) return baseLine;
+        return upstreamLine ?? baseLine;
+      }
+      // Outside the dedupe an unnamed base count still gets stated, which is
+      // wider than the expanded badge goes — it drops a base relationship it
+      // cannot name because the row around it has other lines to fall back on.
+      // This tooltip is the only place a collapsed row says anything about the
+      // drift, so a nameless count beats leaving the alarm unexplained.
+      const lines = [upstreamLine, baseLine].filter((line): line is string => line !== undefined);
       return lines.length > 0 ? lines.join(" · ") : undefined;
     }
     case "none":

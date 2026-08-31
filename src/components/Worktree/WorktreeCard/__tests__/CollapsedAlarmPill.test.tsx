@@ -1,53 +1,21 @@
 /**
  * @vitest-environment jsdom
  */
-import * as React from "react";
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, cleanup } from "@testing-library/react";
+import { describe, it, expect, afterEach } from "vitest";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { CollapsedAlarmPill } from "../CollapsedAlarmPill";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { AlarmDescriptor } from "@/lib/worktreeAlarmTier";
 
 /**
- * The overlay primitives load from a deferred chunk, so an unmocked render
- * settles asynchronously and the tooltip's content is portalled behind an open
- * state no assertion here cares about. This stub is the shape the real Radix
- * trigger has — `asChild` composes onto the child through `Slot`, exactly as
- * `Primitive.button` does — with the Portal and Content rendered inline so the
- * tooltip's copy is readable without driving a hover.
+ * Rendered against the REAL overlay primitives — `vitest.setup.ts` primes the
+ * deferred chunk before any suite runs, so there is nothing to stub. That
+ * matters more than the convenience: a fake trigger renders whatever it is
+ * told to, and the two things most worth proving here are that the badge stays
+ * the whole trigger under `asChild` (no button wrapped around it to steal the
+ * row's click) and that hover still opens the tooltip now the label lives
+ * behind one.
  */
-vi.mock("@/components/ui/radix-loader", async () => {
-  const { Slot } = await import("@radix-ui/react-slot");
-  return {
-    primeRadix: vi.fn().mockResolvedValue({}),
-    getRadixPrimitives: () => null,
-    primeOnEvent: vi.fn(),
-    composeHandlers: (a: unknown, b: unknown) => a ?? b,
-    useRadixPrimitives: () => ({
-      TooltipPrimitive: {
-        Provider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-        Root: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-        // Always the Slot half: the pill only ever uses `asChild`, and that is
-        // the branch whose prop and ref merging this suite depends on.
-        Trigger: ({
-          asChild: _asChild,
-          children,
-          ref,
-          ...rest
-        }: React.HTMLAttributes<HTMLElement> & {
-          asChild?: boolean;
-          children: React.ReactNode;
-          ref?: React.Ref<HTMLElement>;
-        }) => (
-          <Slot ref={ref} {...rest}>
-            {children}
-          </Slot>
-        ),
-        Portal: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-        Content: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-      },
-    }),
-  };
-});
 
 afterEach(cleanup);
 
@@ -69,15 +37,21 @@ const ciFailed: AlarmDescriptor = {
 const KINDS = [behind, authFailed, ciFailed];
 
 function renderPill(alarm: AlarmDescriptor, detail?: string) {
-  const { getByTestId, queryByText, container } = render(
-    <CollapsedAlarmPill alarm={alarm} detail={detail} />
+  const { container } = render(
+    <TooltipProvider delayDuration={0}>
+      <CollapsedAlarmPill alarm={alarm} detail={detail} />
+    </TooltipProvider>
   );
-  return { pill: getByTestId("collapsed-alarm-pill"), queryByText, container };
+  return { pill: screen.getByTestId("collapsed-alarm-pill"), container };
 }
 
 describe("CollapsedAlarmPill", () => {
   it("renders nothing for tier 0", () => {
-    const { container } = render(<CollapsedAlarmPill alarm={none} />);
+    const { container } = render(
+      <TooltipProvider delayDuration={0}>
+        <CollapsedAlarmPill alarm={none} />
+      </TooltipProvider>
+    );
     expect(container.firstChild).toBeNull();
   });
 
@@ -137,10 +111,19 @@ describe("CollapsedAlarmPill", () => {
     expect(pill.getAttribute("aria-label")).toBe("Behind");
   });
 
-  it("puts the label and the detail in the tooltip", () => {
-    const { queryByText } = renderPill(ciFailed, "2 of 7 checks failing");
-    expect(queryByText("CI failed")).not.toBeNull();
-    expect(queryByText("2 of 7 checks failing")).not.toBeNull();
+  it("opens on hover and puts the label and the detail in the tooltip", async () => {
+    // The regression this guards is the one the issue names: the pill was
+    // `pointer-events-none`, and Radix opens from pointer events on the
+    // trigger, so the words it now hides behind a hover would be unreachable.
+    const { pill } = renderPill(ciFailed, "2 of 7 checks failing");
+    expect(screen.queryByRole("tooltip"), "the tooltip is open before any hover").toBeNull();
+
+    fireEvent.pointerEnter(pill, { pointerType: "mouse" });
+    fireEvent.pointerMove(pill, { pointerType: "mouse" });
+
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toContain("CI failed");
+    expect(tip.textContent).toContain("2 of 7 checks failing");
   });
 
   it("does not use accent classes", () => {
@@ -154,6 +137,18 @@ describe("CollapsedAlarmPill", () => {
     expect(pill.hasAttribute("tabindex")).toBe(false);
     expect(pill.getAttribute("role")).not.toBe("button");
     expect(pill.hasAttribute("type")).toBe(false);
+  });
+
+  it("puts no interactive element around itself either", () => {
+    // `asChild` is what keeps the badge as the whole trigger. Drop it and
+    // Radix renders its own <button> around this span — a control inside a row
+    // that is already the click target, swallowing the click that should
+    // select the worktree. An assertion on the badge alone would not see it.
+    const { pill } = renderPill(ciFailed, "2 of 7 checks failing");
+    expect(
+      pill.closest("button, a, [role='button'], [tabindex]"),
+      "something interactive wraps the alarm mark"
+    ).toBeNull();
   });
 
   it("takes pointer events, which is what the tooltip runs on", () => {
