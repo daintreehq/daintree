@@ -152,7 +152,8 @@ const REGISTRY: Record<string, Command> = {
     runner: tsxScript("compare.ts"),
   },
   "verify-baselines": {
-    summary: "Assert all four committed baselines are fresh, complete, and non-degenerate",
+    summary:
+      "Assert the committed baseline files are usable — shape, provenance, no degenerate references",
     runner: tsxScript("verify-baselines.ts"),
   },
   "cold-start": {

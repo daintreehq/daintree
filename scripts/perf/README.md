@@ -206,7 +206,31 @@ npm run perf ci -- --scenario PERF-105 --update-baseline
 
 Baselines are **machine-specific, and that is now the point**. The old rule — regenerate on the runner class, never commit one from a laptop — existed because a baseline was a shared gate, and a laptop number would have become the threshold every platform was judged against. Nothing gates now, and there is no CI to harvest from. A reference value is context for reading one number, so the right reference for your machine is one measured on your machine.
 
-`--update-baseline` **merges**. Every run measures one scenario, so writing the file wholesale would leave a baseline holding a single reference and looking complete. Entries for scenarios the run did not touch are carried through untouched, as are entries for a scenario that is `diagnostic` or `unsupported` on this platform — regenerating where a scenario cannot be measured must not delete the reference from a platform where it can. The results history under `history/` merges on the same rule and for the same reason.
+**Every entry carries its own provenance**, because the merge below made a file-wide date a lie:
+
+```json
+{
+  "generatedAt": "…",
+  "mode": "smoke",
+  "scenarios": {
+    "PERF-105": {
+      "p95Ms": 13.4,
+      "measuredAt": "…",
+      "machine": { "machineLabel": "…", "platform": "darwin", "arch": "arm64" }
+    }
+  }
+}
+```
+
+`generatedAt` is now only when the file was last written and dates nothing in it. Freshness is judged per entry against a 30-day threshold and stays advisory: a stale reference for the scenario you are running is named on its own line, the rest collapse into a count.
+
+`--update-baseline` **merges, and re-dates only the scenario it measured**. Every run measures one scenario, so writing the file wholesale would leave a baseline holding a single reference and looking complete — and stamping the whole file with today's date would make forty six-month-old references read as measured this morning. Inherited entries keep their original date and machine, including entries for a scenario that is `diagnostic` or `unsupported` here: regenerating where a scenario cannot be measured must not delete, or re-date, the reference from a platform where it can. The results history under `history/` merges on the same rule.
+
+**A reference from another machine is reported but not compared.** A p95 is a `duration`, so a drift verdict against a number measured on a different laptop is a claim about two laptops. The value is still shown — it is often the only reference a scenario has — and the verdict is replaced with `reference 5.5ms not compared: different machines (greg-thinkpad vs gregs-mac-studio-2)`. Without this guard a Windows reference against a Mac run produced a fabricated 2200% regression.
+
+The four committed baselines are still in the **pre-provenance** shape (`p95ByScenario`, a bare number per scenario). They are read, not migrated: each entry is lifted with the file's own date, which is honest for that shape because the whole-matrix writer that produced it wrote every entry in one pass — and with a **null machine**, which is treated as "measured elsewhere". Unknown resolved in the convenient direction is exactly how another machine's number ends up annotating your run. The practical consequence: **until you re-measure a scenario here, its drift verdict is withheld and the row says why.** One `--update-baseline` for that scenario fixes it and rewrites the file into the new shape.
+
+`npm run perf verify-baselines` asserts the committed files are **usable** — parseable, correctly moded, well-formed entries, provenance complete where present, no zero or non-finite reference (the `durationMs: 0` sentinel trap). It no longer asserts fresh-and-complete, because neither claim has a whole-matrix run behind it any more; coverage, age, machine mix and orphaned ids are reported as notes that cannot fail it. It remains the one script here that exits non-zero.
 
 ## Manual cold-start
 
