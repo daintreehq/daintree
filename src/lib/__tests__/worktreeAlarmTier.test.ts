@@ -187,6 +187,10 @@ describe("formatAlarmDetail", () => {
         formatAlarmDetail("behind", {
           behindCount: 4,
           baseBehindCount: 4,
+          // Both names, as the producer emits them — the expanded badge gates
+          // its own dedupe on `baseBranchName`, so a fixture carrying only the
+          // compare ref would not be testing the same state it sees.
+          baseBranchName: "develop",
           baseCompareRef: "upstream/develop",
           baseMatchesUpstream: true,
         })

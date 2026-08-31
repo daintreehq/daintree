@@ -72,8 +72,14 @@ export interface AlarmDetailInput {
   behindCount?: number;
   baseAheadCount?: number | null;
   baseBehindCount?: number | null;
+  /**
+   * The base branch's name and the ref its counts were measured against. The
+   * producer emits the pair together (`BaseDivergence` never resolves one
+   * without the other), which is what keeps this tooltip and the expanded
+   * `UpstreamSyncBadge` — whose own base gate reads `baseBranchName` — from
+   * disagreeing about the same measurement.
+   */
   baseBranchName?: string | null;
-  /** The ref the base counts were measured against — named in full here. */
   baseCompareRef?: string | null;
   /** True when `@{u}` and the base compare ref are the same commit. */
   baseMatchesUpstream?: boolean;
