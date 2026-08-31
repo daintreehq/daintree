@@ -26,6 +26,8 @@ import { supervisionScenarios } from "./supervision";
 import { mcpSessionScenarios } from "./mcpSession";
 import { themeScenarios } from "./theme";
 import { notificationScenarios } from "./notifications";
+import { forgeRegistryScenarios } from "./forgeRegistry";
+import { agentRosterScenarios } from "./agentRoster";
 
 export const allScenarios: PerfScenario[] = [
   ...startupScenarios,
@@ -55,6 +57,8 @@ export const allScenarios: PerfScenario[] = [
   ...mcpSessionScenarios,
   ...themeScenarios,
   ...notificationScenarios,
+  ...forgeRegistryScenarios,
+  ...agentRosterScenarios,
 ];
 
 export function getScenariosForMode(mode: PerfMode): PerfScenario[] {
@@ -192,6 +196,14 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-323",
   "PERF-324",
   "PERF-325",
+  "PERF-340",
+  "PERF-341",
+  "PERF-342",
+  "PERF-343",
+  "PERF-350",
+  "PERF-351",
+  "PERF-352",
+  "PERF-353",
 ]);
 
 /**
