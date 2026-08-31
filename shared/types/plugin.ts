@@ -2679,3 +2679,49 @@ export interface PluginActionDescriptor extends PluginActionContribution {
    */
   effectiveDanger: "safe" | "confirm";
 }
+
+/**
+ * Durable scope a plugin's persisted per-plugin state belongs to. `"global"`
+ * covers installed and builtin plugins, which are app-wide by design; a
+ * project-scoped plugin uses its app-minted `projectId` (see `mintProjectId`),
+ * which is derived from the normalized folder path and stored outside the
+ * repository — so a repository cannot forge or address another project's key.
+ */
+export type PluginScopeKey = "global" | (string & {});
+
+/**
+ * Hostname segment of a `plugin://` URL. Minted per loaded plugin instance and
+ * invalidated on unload, so a URL captured before an unload resolves to
+ * nothing rather than into whatever now occupies that plugin id.
+ *
+ * Not a secret. It is a namespace, not a capability — never build
+ * authorization on possession of one.
+ */
+export type PluginProtocolAuthority = string & {
+  readonly __brand: "PluginProtocolAuthority";
+};
+
+/**
+ * Binds a plugin's host API to one project. Built once per plugin instance and
+ * captured by every closure in the host object, so "which project?" is
+ * answerable from the binding instead of from whichever window happens to be
+ * focused when the plugin calls.
+ *
+ * `projectId: null` marks an unbound plugin — installed and builtin plugins,
+ * which stay app-global. Unbound host surfaces still resolve their target from
+ * focus; each such site says so explicitly at the call site. A bound plugin
+ * never consults focus, because a plugin acting on a project it does not
+ * belong to is never right.
+ */
+export interface PluginHostBinding {
+  /** Owning project, or null for an app-global (installed/builtin) plugin. */
+  readonly projectId: string | null;
+  /** Absolute, realpath-resolved project root. Null iff `projectId` is null. */
+  readonly projectRoot: string | null;
+}
+
+/** An unbound binding — the app-global default for installed and builtin plugins. */
+export const UNBOUND_PLUGIN_HOST_BINDING: PluginHostBinding = {
+  projectId: null,
+  projectRoot: null,
+};
