@@ -20,15 +20,33 @@ import type {
  * different corpus (the action catalog), with no typo tier, no activity keys
  * and no two-kind row model — so nothing here duplicates it.
  *
- * Four subjects, four accumulators:
+ * Four subjects, five accumulators — one per OPERATION on the timed path, not
+ * one per export, because `isFilterMatch` is called twice per row:
  *
  * - `rankSwitcherMatches` — the per-keystroke re-rank (`rankMisses`).
  * - `scoreProjectQuery` — its inner per-row scoring loop, priced directly
  *   (`scoreMisses`).
- * - `isFilterMatch` — the same module's filter-only matcher, whose production
- *   caller is `filterPilotGroups` in the Pilot overview (`filterMatchMisses`).
+ * - `isFilterMatch` over each project's NAME — the same module's filter-only
+ *   matcher, whose production caller is `filterPilotGroups` in the Pilot
+ *   overview (`filterMatchMisses`).
+ * - `isFilterMatch` over each project's `displayPath` — `filterPilotGroups`
+ *   tests both fields per row, so the second call is a second operation with its
+ *   own cost, and it gets its own term (`pathFilterMatchMisses`). It was priced
+ *   and ungraded until #12093: deleting the whole per-project call was free.
  * - `computeSearchActivityKey` — the palette session's activity freeze, which
  *   `captureSearchActivity` runs over every row once per open (`activityMisses`).
+ *
+ * ## What the timed bracket contains
+ *
+ * {@link runSwitcherSession} is what the scenarios wrap in `performance.now()`,
+ * and it calls the four subjects and appends what they returned. Corpus
+ * construction ({@link getSwitcherFixture}), step construction
+ * ({@link progressiveTypingSteps}, {@link correctionPathSteps}) and every oracle
+ * ({@link gradeSwitcherSession}) run outside it. A keystroke observation holds
+ * the ranker's own result array by REFERENCE — the id list the rank predicate
+ * compares is projected out of it after the clock stops — while the filter and
+ * score loops record an id at the call site, which is the only place a per-row
+ * verdict can be observed at all.
  *
  * ## How the oracle avoids grading itself
  *
@@ -373,6 +391,9 @@ export interface SwitcherSubjects {
   computeSearchActivityKey: typeof realComputeSearchActivityKey;
 }
 
+/** One row of `rankSwitcherMatches`'s own return type, named so an observation can hold it. */
+export type SwitcherResultRow = ReturnType<typeof realRankSwitcherMatches>[number];
+
 export const REAL_SWITCHER_SUBJECTS: SwitcherSubjects = {
   rankSwitcherMatches: realRankSwitcherMatches,
   scoreProjectQuery: realScoreProjectQuery,
@@ -510,15 +531,20 @@ export function correctionPathSteps(): KeystrokeStep[] {
 
 export interface KeystrokeObservation {
   readonly step: KeystrokeStep;
-  readonly resultIds: string[];
+  /**
+   * The ranker's own return value, held by REFERENCE. The id list
+   * {@link gradeSwitcherSession} compares is projected out of it once the clock
+   * has stopped, so recording a keystroke never copies the result set.
+   */
+  readonly results: readonly SwitcherResultRow[];
   /** Project ids whose NAME `isFilterMatch` admitted. */
   readonly nameFilterMatchedIds: string[];
+  /** Project ids whose `displayPath` `isFilterMatch` admitted. */
+  readonly displayPathFilterMatchedIds: string[];
   /** Whether a blank query was (wrongly) admitted. */
   readonly blankQueryAdmitted: boolean;
   /** Project ids `scoreProjectQuery` scored above zero. */
   readonly scoredPositiveIds: string[];
-  /** Priced, not graded — the second field the Pilot filter tests per row. */
-  readonly displayPathMatchCount: number;
   readonly nameWeightScore: number;
   readonly pathWeightScore: number;
   readonly rankMs: number;
@@ -542,16 +568,20 @@ export function runKeystroke(
   const rankMs = performance.now() - rankStart;
 
   // The Pilot overview's filter-only pass over the same labels. Both fields are
-  // exercised for cost; only the name result is graded, because that is the one
-  // the generator planted an answer for.
+  // tested per row, as `filterPilotGroups` does, and both verdicts are recorded
+  // at the call site — a per-row boolean cannot be recovered anywhere else — so
+  // each has its own predicate rather than the path call being priced and
+  // ignored.
   const filterStart = performance.now();
   const nameFilterMatchedIds: string[] = [];
-  let displayPathMatches = 0;
+  const displayPathFilterMatchedIds: string[] = [];
   for (const project of fixture.projects) {
     if (subjects.isFilterMatch(keystroke.query, project.name)) {
       nameFilterMatchedIds.push(project.id);
     }
-    if (subjects.isFilterMatch(keystroke.query, project.displayPath)) displayPathMatches += 1;
+    if (subjects.isFilterMatch(keystroke.query, project.displayPath)) {
+      displayPathFilterMatchedIds.push(project.id);
+    }
   }
   const blankQueryAdmitted = subjects.isFilterMatch("   ", fixture.projects[0].name);
   const filterMs = performance.now() - filterStart;
@@ -577,11 +607,11 @@ export function runKeystroke(
 
   return {
     step: keystroke,
-    resultIds: results.map((row) => row.id),
+    results,
     nameFilterMatchedIds,
+    displayPathFilterMatchedIds,
     blankQueryAdmitted,
     scoredPositiveIds,
-    displayPathMatchCount: displayPathMatches,
     nameWeightScore,
     pathWeightScore,
     rankMs,
@@ -594,6 +624,7 @@ export interface KeystrokeMisses {
   rankMisses: number;
   scoreMisses: number;
   filterMatchMisses: number;
+  pathFilterMatchMisses: number;
 }
 
 function setOf(ids: readonly string[]): Set<string> {
@@ -603,24 +634,30 @@ function setOf(ids: readonly string[]): Set<string> {
 /**
  * Grade one keystroke against the plant.
  *
- * Three accumulators here plus `activityMisses` from the freeze — one per
- * subject, because a single aggregate cannot see one of the four stop working.
+ * Four accumulators here plus `activityMisses` from the freeze — one per
+ * operation on the timed path, because a single aggregate cannot see one of them
+ * stop working.
+ *
+ * **Nothing here is inside a timed bracket.** The ranker's result ids are
+ * projected out of the recorded reference at this point, not while the keystroke
+ * was being measured.
  */
 export function gradeKeystroke(
   fixture: SwitcherFixture,
   observation: KeystrokeObservation
 ): KeystrokeMisses {
   const kind = observation.step.kind;
-  const resultIds = setOf(observation.resultIds);
+  const orderedResultIds = observation.results.map((row) => row.id);
+  const resultIds = setOf(orderedResultIds);
   let rankMisses = 0;
 
   // Never more rows out than in, and never the same row twice.
-  if (observation.resultIds.length > fixture.rowCount) rankMisses += 1;
-  if (resultIds.size !== observation.resultIds.length) rankMisses += 1;
+  if (orderedResultIds.length > fixture.rowCount) rankMisses += 1;
+  if (resultIds.size !== orderedResultIds.length) rankMisses += 1;
 
   const nameNeedlePositions = new Map<string, number>();
-  for (let i = 0; i < observation.resultIds.length; i += 1) {
-    const planted = fixture.plantedById.get(observation.resultIds[i]);
+  for (let i = 0; i < orderedResultIds.length; i += 1) {
+    const planted = fixture.plantedById.get(orderedResultIds[i]);
     if (planted === undefined) {
       rankMisses += 1;
       continue;
@@ -648,14 +685,14 @@ export function gradeKeystroke(
   if (kind === "clean") {
     // Name relevance outranks path relevance for every pair, so no path-only
     // row may sit above a name row.
-    for (let i = 0; i < observation.resultIds.length; i += 1) {
-      const planted = fixture.plantedById.get(observation.resultIds[i]);
+    for (let i = 0; i < orderedResultIds.length; i += 1) {
+      const planted = fixture.plantedById.get(orderedResultIds[i]);
       if (planted && !planted.needleInName && planted.needleInPath) {
         if (i < lastNameNeedleIndex) rankMisses += 1;
       }
     }
     // Typing a workspace's whole name has to land on that workspace.
-    if (observation.step.isExactQuery && observation.resultIds[0] !== fixture.exactProjectId) {
+    if (observation.step.isExactQuery && orderedResultIds[0] !== fixture.exactProjectId) {
       rankMisses += 1;
     }
   }
@@ -676,8 +713,8 @@ export function gradeKeystroke(
     if (!(observation.nameWeightScore > observation.pathWeightScore)) scoreMisses += 1;
   }
 
-  // isFilterMatch: admits exactly the names the needle was planted in, and
-  // never a blank query (whitespace is a substring of every field).
+  // isFilterMatch over NAME: admits exactly the names the needle was planted in,
+  // and never a blank query (whitespace is a substring of every field).
   let filterMatchMisses = 0;
   const filtered = setOf(observation.nameFilterMatchedIds);
   if (kind === "clean") {
@@ -688,11 +725,38 @@ export function gradeKeystroke(
   }
   if (observation.blankQueryAdmitted) filterMatchMisses += 1;
 
-  return { rankMisses, scoreMisses, filterMatchMisses };
+  // isFilterMatch over DISPLAY PATH: the second field `filterPilotGroups` tests
+  // per row, and its own term. `displayPath` is the row's path with the home
+  // prefix swapped for `~`, so the needle survives that rewrite intact and
+  // `needleInPath` — planted by the generator — is exactly the expected verdict:
+  // a path-only row carries it in the directory, every name row carries it in
+  // the leaf, and nothing else in the corpus contains the needle's first
+  // character at all. Two-sided by construction: a matcher stuck open admits the
+  // rows the needle never reached, one stuck shut loses the ones it did, and
+  // DELETING the call leaves an empty list that loses all of them.
+  //
+  // Graded on clean steps only, for the same reason the name term is. A typo
+  // query is not a subsequence of the needle, but it can still be a subsequence
+  // of a longer planted string once the trailing word is counted, so "no row may
+  // match" is not a claim the plant supports on those steps.
+  let pathFilterMatchMisses = 0;
+  const pathFiltered = setOf(observation.displayPathFilterMatchedIds);
+  if (kind === "clean") {
+    for (const planted of fixture.planted) {
+      if (planted.kind !== "project") continue;
+      if (pathFiltered.has(planted.id) !== planted.needleInPath) pathFilterMatchMisses += 1;
+    }
+  }
+
+  return { rankMisses, scoreMisses, filterMatchMisses, pathFilterMatchMisses };
 }
 
-export interface SwitcherSessionResult {
+export interface SwitcherSessionRun {
+  readonly freeze: FreezeObservation;
   readonly keystrokes: KeystrokeObservation[];
+}
+
+export interface SwitcherSessionSummary {
   readonly misses: KeystrokeMisses & { activityMisses: number };
   readonly keystrokeCount: number;
   readonly resultRowCount: number;
@@ -707,32 +771,55 @@ export interface SwitcherSessionResult {
  * One palette session: freeze the activity snapshot once, then run the typed
  * sequence against it — the order `useProjectSwitcherPalette` does it in.
  *
- * Grading happens between passes, never inside a bracket, so no oracle work is
- * priced as subject work.
+ * **This is the timed bracket, and it contains the subjects and nothing else.**
+ * The loop calls {@link runKeystroke} and appends the observation it returns; no
+ * oracle runs here, nothing is compared and no tally is kept. Grading and the
+ * per-keystroke sums are {@link gradeSwitcherSession}, which the scenarios call
+ * after they have read `performance.now()` a second time.
+ *
+ * The recording cost that could not be moved out is the per-row id append inside
+ * the filter and score loops, which is where a per-row verdict is observable at
+ * all, plus one array push per keystroke.
  */
 export function runSwitcherSession(
   fixture: SwitcherFixture,
   steps: readonly KeystrokeStep[],
   subjects: SwitcherSubjects = REAL_SWITCHER_SUBJECTS
-): SwitcherSessionResult {
+): SwitcherSessionRun {
   const freeze = runActivityFreeze(fixture, subjects);
-  const activityMisses = gradeActivityFreeze(fixture, freeze);
-
   const keystrokes: KeystrokeObservation[] = [];
+  for (const keystroke of steps) {
+    keystrokes.push(runKeystroke(fixture, keystroke, freeze.keys, subjects));
+  }
+  return { freeze, keystrokes };
+}
+
+/**
+ * Tally and grade a finished session — **after the clock has stopped**.
+ *
+ * The activity freeze is graded here too: `captureSearchActivity` runs once per
+ * open, but reading its map back against the planted demand ladder is oracle
+ * work either way.
+ */
+export function gradeSwitcherSession(
+  fixture: SwitcherFixture,
+  run: SwitcherSessionRun
+): SwitcherSessionSummary {
+  const activityMisses = gradeActivityFreeze(fixture, run.freeze);
+
   const perKeystrokeMs: number[] = [];
   let rankMisses = 0;
   let scoreMisses = 0;
   let filterMatchMisses = 0;
+  let pathFilterMatchMisses = 0;
   let resultRowCount = 0;
   let rankMs = 0;
   let filterMs = 0;
   let scoreMs = 0;
 
-  for (const keystroke of steps) {
-    const observation = runKeystroke(fixture, keystroke, freeze.keys, subjects);
-    keystrokes.push(observation);
+  for (const observation of run.keystrokes) {
     perKeystrokeMs.push(observation.rankMs + observation.filterMs + observation.scoreMs);
-    resultRowCount += observation.resultIds.length;
+    resultRowCount += observation.results.length;
     rankMs += observation.rankMs;
     filterMs += observation.filterMs;
     scoreMs += observation.scoreMs;
@@ -741,18 +828,24 @@ export function runSwitcherSession(
     rankMisses += graded.rankMisses;
     scoreMisses += graded.scoreMisses;
     filterMatchMisses += graded.filterMatchMisses;
+    pathFilterMatchMisses += graded.pathFilterMatchMisses;
   }
 
   return {
-    keystrokes,
-    misses: { rankMisses, scoreMisses, filterMatchMisses, activityMisses },
-    keystrokeCount: keystrokes.length,
+    misses: {
+      rankMisses,
+      scoreMisses,
+      filterMatchMisses,
+      pathFilterMatchMisses,
+      activityMisses,
+    },
+    keystrokeCount: run.keystrokes.length,
     resultRowCount,
     perKeystrokeMs,
     rankMs,
     filterMs,
     scoreMs,
-    freezeMs: freeze.freezeMs,
+    freezeMs: run.freeze.freezeMs,
   };
 }
 

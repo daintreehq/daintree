@@ -4,6 +4,7 @@ import { percentile } from "../lib/stats";
 import {
   buildStepMatrix,
   getSidebarDerivationFixture,
+  gradeDerivationSweep,
   runDerivationSweep,
   SIDEBAR_NEEDLE,
 } from "../lib/sidebarDerivationFixture";
@@ -26,6 +27,14 @@ import {
  * All four subjects load with a plain import: they are pure and reach nothing
  * renderer-only, so no esbuild bundle or stub plugin is involved.
  *
+ * **What `durationMs` contains.** The bracket wraps `runDerivationSweep` and
+ * nothing else, and that call runs the four subjects and appends what they
+ * returned. The corpus is built once and cached, the step matrix — including
+ * each step's resolved `FilterState` — is built before the clock starts, and
+ * every oracle runs in `gradeDerivationSweep` after it stops. Until #12093 the
+ * grader ran inside the loop, so `durationMs` was subject plus oracle while the
+ * comment here claimed otherwise.
+ *
  * Four predicates, one per operation. A single aggregate could not tell which
  * of the four went missing, and three of the four are cheaper to skip than to
  * perform — dropping `computeChipCounts`'s six group-excluded base sets for one
@@ -42,8 +51,10 @@ function sweepMetrics(size: number): { durationMs: number; metrics: Record<strin
   const steps = buildStepMatrix();
 
   const start = performance.now();
-  const result = runDerivationSweep(fixture, steps);
+  const passes = runDerivationSweep(fixture, steps);
   const durationMs = performance.now() - start;
+
+  const result = gradeDerivationSweep(fixture, passes);
 
   return {
     durationMs,
@@ -72,7 +83,8 @@ export const sidebarFilterScenarios: PerfScenario[] = [
       "The four sidebar derivation functions over a 50-worktree project: filter, relevance sort, " +
       "type grouping and chip-count recompute, run 18 times per iteration across progressive " +
       `typing of "${SIDEBAR_NEEDLE}" (0-5 characters) crossed with 0, 2 and 5 active filter ` +
-      "groups. durationMs is the whole sweep; worstPassMs is the single keystroke a user feels.",
+      "groups. durationMs is the whole sweep with the oracle outside it; worstPassMs is the " +
+      "single keystroke a user feels.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 18, nightly: 24 },
@@ -117,8 +129,10 @@ export const sidebarFilterScenarios: PerfScenario[] = [
       const steps = buildStepMatrix();
 
       const start = performance.now();
-      const result = runDerivationSweep(fixture, steps);
+      const passes = runDerivationSweep(fixture, steps);
       const durationMs = performance.now() - start;
+
+      const result = gradeDerivationSweep(fixture, passes);
 
       return {
         durationMs,

@@ -5,7 +5,10 @@ import type { CliAvailability } from "../../../shared/types/ipc";
 import {
   ALWAYS_ABSENT_AGENT_ID,
   addRefreshGrade,
+  authEnvVars,
+  duplicateMilestoneKey,
   emptyRefreshGrade,
+  expectedAuthState,
   expectedSpawnsFor,
   foundAgentIds,
   gradeRefresh,
@@ -115,6 +118,9 @@ describe("perf cli-availability graders", () => {
       absentAgentMisses: 0,
       stateCoverageMisses: 0,
       spawnCountMisses: 0,
+      authStateMisses: 0,
+      authHermeticityMisses: 0,
+      authSplitMisses: 0,
       pathRefreshMisses: 0,
       pathHermeticityMisses: 0,
     });
@@ -185,6 +191,153 @@ describe("perf cli-availability graders", () => {
     addRefreshGrade(total, { ...emptyRefreshGrade(), spawnCountMisses: 4 });
     addRefreshGrade(total, { ...emptyRefreshGrade(), spawnCountMisses: -1 });
     expect(total.spawnCountMisses).toBe(3);
+  });
+});
+
+/**
+ * The auth half of the oracle, on a roster this test controls.
+ *
+ * `expectedAuthState` is the whole expectation `authStateMisses` grades
+ * against, and its one subtlety is that two agents can share a credential file
+ * — `antigravity` and `gemini` both read `.gemini/oauth_creds.json` in the real
+ * roster — so the expectation is derived from the PATHS planted rather than
+ * from the agents chosen.
+ */
+describe("perf cli-availability auth expectations", () => {
+  const withAuth = (paths: string[], envVar?: string | string[]): AgentConfig =>
+    agent({ authCheck: { configPathsAll: paths, ...(envVar ? { envVar } : {}) } });
+
+  it("calls an agent with no auth check ready, whatever was planted", () => {
+    expect(expectedAuthState(agent(), new Set())).toBe("ready");
+    expect(expectedAuthState(agent(), new Set([".claude.json"]))).toBe("ready");
+  });
+
+  it("calls an agent ready only when one of its own paths was planted", () => {
+    const config = withAuth([".alpha/auth.json", ".alpharc"]);
+    expect(expectedAuthState(config, new Set())).toBe("unauthenticated");
+    expect(expectedAuthState(config, new Set([".beta/auth.json"]))).toBe("unauthenticated");
+    expect(expectedAuthState(config, new Set([".alpharc"]))).toBe("ready");
+  });
+
+  it("authenticates an agent through a credential file planted for a sibling", () => {
+    // The shape `antigravity` and `gemini` have in the shipped roster.
+    const shared = ".shared/oauth_creds.json";
+    const planted = new Set([shared]);
+    expect(expectedAuthState(withAuth([shared]), planted)).toBe("ready");
+    expect(expectedAuthState(withAuth([shared, ".other.json"]), planted)).toBe("ready");
+  });
+
+  it("collects every credential env var the roster recognises", () => {
+    const registry: Record<string, AgentConfig> = {
+      one: withAuth([".one"], "ONE_KEY"),
+      two: withAuth([".two"], ["TWO_KEY", "ONE_KEY"]),
+      three: agent(),
+    };
+    expect(authEnvVars(registry).sort()).toEqual(["ONE_KEY", "TWO_KEY"]);
+  });
+
+  it("names the milestone key notifyDuplicateInstalls writes", () => {
+    expect(duplicateMilestoneKey("claude")).toBe("duplicate-cli-warning:claude");
+  });
+});
+
+/**
+ * `authStateMisses` in both directions on one roster, which is the property the
+ * scenario relies on: half the planted agents are expected `ready` and half
+ * `unauthenticated`, so neither "everything ready" nor "everything
+ * unauthenticated" passes.
+ */
+describe("perf cli-availability auth grading", () => {
+  const AUTH_REGISTRY: Record<string, AgentConfig> = {
+    alpha: agent({
+      name: "Alpha",
+      command: "alpha",
+      authCheck: { configPathsAll: [".alpha/auth.json"] },
+    }),
+    beta: agent({
+      name: "Beta",
+      command: "beta",
+      packages: { npm: "@scope/beta" },
+      authCheck: { configPathsAll: [".beta/auth.json"] },
+    }),
+    [ALWAYS_ABSENT_AGENT_ID]: agent({ name: "Kiro", command: "kiro-cli" }),
+  };
+
+  const AUTH_MODULES: CliModules = {
+    registry: AUTH_REGISTRY,
+    agentIds: Object.keys(AUTH_REGISTRY),
+    CliAvailabilityService: class {} as unknown as CliModules["CliAvailabilityService"],
+  };
+
+  function authArm(): CliArm {
+    return {
+      label: "allHit",
+      plantedIds: ["alpha", "beta"],
+      path: "/daintree-perf-nonexistent-a:/daintree-perf-nonexistent-b",
+      prepend: null,
+      expectedSpawns: expectedSpawnsFor(AUTH_REGISTRY, ["alpha", "beta"], false),
+      hasDuplicate: false,
+    };
+  }
+
+  function grade(states: Record<string, string>): ReturnType<typeof gradeRefresh> {
+    const arm = authArm();
+    process.env.PATH = arm.path;
+    const availability = { ...states, [ALWAYS_ABSENT_AGENT_ID]: "missing" };
+    return gradeRefresh(AUTH_MODULES, arm, {
+      availability: availability as unknown as CliAvailability,
+      spawns: arm.expectedSpawns,
+      refreshPathCalls: 1,
+      expectedRefreshPathCalls: 1,
+    });
+  }
+
+  // Nothing is planted under Vitest (the credential planting runs from
+  // `buildArms`, which needs the module hooks), so every agent that declares an
+  // auth check is expected `unauthenticated` here. That is enough to drive the
+  // term in both directions and to prove the split check fires.
+  it("scores a probe that reports ready where no credential was planted", () => {
+    expect(grade({ alpha: "ready", beta: "ready" }).authStateMisses).toBe(2);
+  });
+
+  it("scores nothing when every state matches the plant", () => {
+    const result = grade({ alpha: "unauthenticated", beta: "unauthenticated" });
+    expect(result.authStateMisses).toBe(0);
+  });
+
+  it("flags a one-sided roster on the split term", () => {
+    // Both planted agents land in the same class, so the arm cannot catch a
+    // probe that answers that class for everything.
+    expect(grade({ alpha: "unauthenticated", beta: "unauthenticated" }).authSplitMisses).toBe(1);
+  });
+
+  it("leaves the split term alone once both classes are present", () => {
+    const arm = authArm();
+    process.env.PATH = arm.path;
+    const modules: CliModules = {
+      ...AUTH_MODULES,
+      registry: {
+        ...AUTH_REGISTRY,
+        // A planted credential path for alpha only exists when the fixture
+        // wrote one; simulate the mixed roster by giving beta no auth check at
+        // all, which makes it expected-ready.
+        beta: agent({ name: "Beta", command: "beta", packages: { npm: "@scope/beta" } }),
+      },
+    };
+    const result = gradeRefresh(modules, arm, {
+      availability: {
+        alpha: "unauthenticated",
+        beta: "ready",
+        [ALWAYS_ABSENT_AGENT_ID]: "missing",
+      } as unknown as CliAvailability,
+      spawns: arm.expectedSpawns,
+      refreshPathCalls: 1,
+      expectedRefreshPathCalls: 1,
+    });
+    expect(result.authStateMisses).toBe(0);
+    // Only one planted agent declares an auth check now, so there is no split
+    // to claim and the term must stay silent rather than firing spuriously.
+    expect(result.authSplitMisses).toBe(0);
   });
 });
 

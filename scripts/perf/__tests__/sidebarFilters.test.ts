@@ -3,6 +3,7 @@ import {
   buildStepMatrix,
   describeFixtureCoverage,
   getSidebarDerivationFixture,
+  gradeDerivationSweep,
   REAL_SIDEBAR_SUBJECTS,
   runDerivationSweep,
   SIDEBAR_NEEDLE,
@@ -24,7 +25,8 @@ const SIZE = 200;
 
 function sweepWith(subjects?: SidebarDerivationSubjects) {
   const fixture = getSidebarDerivationFixture(SIZE);
-  return runDerivationSweep(fixture, buildStepMatrix(), subjects).misses;
+  const passes = runDerivationSweep(fixture, buildStepMatrix(), subjects);
+  return gradeDerivationSweep(fixture, passes).misses;
 }
 
 describe("sidebar derivation fixture", () => {
@@ -54,6 +56,31 @@ describe("sidebar derivation fixture", () => {
     }
     const unfilteredQuery = coverage.find((r) => r.queryLength === 5 && r.activeGroups === 0);
     expect(unfilteredQuery?.expectedKept).toBeGreaterThan(10);
+  });
+
+  it("resolves each step's filter state before the bracket opens", () => {
+    // A pass must not pay to assemble its own subject arguments.
+    for (const step of buildStepMatrix()) {
+      expect(step.filters.query).toBe(step.query);
+      expect(step.query.length).toBe(step.queryLength);
+    }
+  });
+
+  it("records the subjects' own arrays by reference rather than copying them", () => {
+    // The recording a timed pass does has to be a pointer store: an id list
+    // projected inside the bracket would put O(rows) of oracle prep back into
+    // durationMs, which is the defect this split exists to close. A sort that
+    // hands its input straight back proves it — the observation holds the very
+    // array the subject returned.
+    const fixture = getSidebarDerivationFixture(SIZE);
+    const passes = runDerivationSweep(fixture, buildStepMatrix(), {
+      ...REAL_SIDEBAR_SUBJECTS,
+      sortWorktreesByRelevance: (worktrees) => worktrees,
+    });
+    expect(passes.length).toBe(18);
+    for (const pass of passes) {
+      expect(pass.sorted).toBe(pass.kept);
+    }
   });
 
   it("clears every predicate on the real subjects", () => {

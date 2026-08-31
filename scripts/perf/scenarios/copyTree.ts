@@ -4,6 +4,7 @@ import type { PerfScenario, ScenarioSample } from "../types";
 import type { CopyTreeOptions, CopyTreeResult } from "../../../shared/types/ipc/copyTree";
 import {
   addBundleGrade,
+  addProgressGrade,
   bundleDirectory,
   bundleMisses,
   bundlePath,
@@ -11,16 +12,21 @@ import {
   createWorkerFactoryProbe,
   discardBundle,
   emptyBundleGrade,
+  emptyProgressGrade,
   gradeBundle,
   gradeInMemory,
+  gradeProgress,
   getTree,
   loadCopyTreeModules,
   partialFilesLeftBehind,
+  progressMisses,
   scopeSelection,
   type BundleExpectation,
   type BundleGrade,
   type CopyTreeModules,
   type CopyTreeTree,
+  type ProgressGrade,
+  type ProgressRecord,
 } from "../lib/copyTreeFixture";
 
 /**
@@ -68,11 +74,42 @@ const BUNDLE_CORRECTNESS = [
   "partialFileMisses",
 ] as const;
 
+/**
+ * Declared by the two scenarios that install a progress callback inside the
+ * timed bracket. PERF-392 installs none — both of its arms pass `undefined` —
+ * so it has no emission work to grade.
+ */
+const PROGRESS_CORRECTNESS = ["progressMonotonicityMisses", "progressTerminalMisses"] as const;
+
 interface ArmResult {
   ms: number;
   bytes: number;
   files: number;
   progressEvents: number;
+}
+
+/** Record each event at the call site, as a structural copy. */
+function progressRecorder(): {
+  events: ProgressRecord[];
+  onProgress: (progress: {
+    stage: string;
+    progress: number;
+    message: string;
+    traceId?: string;
+  }) => void;
+} {
+  const events: ProgressRecord[] = [];
+  return {
+    events,
+    onProgress: (progress) => {
+      events.push({
+        stage: progress.stage,
+        progress: progress.progress,
+        message: progress.message,
+        traceId: progress.traceId,
+      });
+    },
+  };
 }
 
 /**
@@ -88,17 +125,16 @@ async function generateToFile(
   expectation: BundleExpectation,
   label: string,
   options: CopyTreeOptions = {}
-): Promise<{ arm: ArmResult; grade: BundleGrade }> {
+): Promise<{ arm: ArmResult; grade: BundleGrade; progress: ProgressGrade }> {
   const outputPath = bundlePath(label);
-  let progressEvents = 0;
+  const traceId = `perf-${label}`;
+  const recorder = progressRecorder();
   const start = performance.now();
   const result: CopyTreeResult = await modules.copyTreeService.generate(
     tree.root,
     options,
-    () => {
-      progressEvents += 1;
-    },
-    `perf-${label}`,
+    recorder.onProgress,
+    traceId,
     outputPath
   );
   const ms = performance.now() - start;
@@ -109,8 +145,9 @@ async function generateToFile(
   discardBundle(outputPath);
 
   return {
-    arm: { ms, bytes, files: result.fileCount, progressEvents },
+    arm: { ms, bytes, files: result.fileCount, progressEvents: recorder.events.length },
     grade,
+    progress: gradeProgress(traceId, recorder.events),
   };
 }
 
@@ -123,30 +160,32 @@ export const copyTreeScenarios: PerfScenario[] = [
     id: "PERF-390",
     name: "CopyTree Context Generation by Repo Scale",
     description:
-      "Wall clock of the real CopyTreeService.generate() streaming a context bundle to a file, across synthetic trees of 120, 700 and 2200 files plus a scopePaths-narrowed run over 8 of the large tree's directories. This is the wait behind the Copy Context menu action and the copyTree.generate MCP tool, and it had no coverage. Graded from the artifact rather than the result object: file elements counted in the XML on disk must equal the planted count, a distinct sentinel token planted in every source file must reappear in the bundle, the reported outputBytes must equal the bytes actually on disk, and no .part file may survive.",
+      "Wall clock of the real CopyTreeService.generate() streaming a context bundle to a file, across synthetic trees of 120, 700 and 2200 files plus a scopePaths-narrowed run over 8 of the large tree's directories. This is the wait behind the Copy Context menu action and the copyTree.generate MCP tool, and it had no coverage. Graded from the artifact rather than the result object: file elements counted in the XML on disk must equal the planted count, a distinct sentinel token planted in every source file must reappear in the bundle, the reported outputBytes must equal the bytes actually on disk, and no .part file may survive. Progress delivery is graded rather than counted, because the callback is installed inside the bracket and deleting the emissions makes every arm faster with every bundle predicate untouched: the sequence must open at 0, never go backwards, land on 1, carry more than one value, and carry at least one SDK-sourced stage label.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     warmups: WARMUPS,
-    correctness: [...BUNDLE_CORRECTNESS],
+    correctness: [...BUNDLE_CORRECTNESS, ...PROGRESS_CORRECTNESS],
     async run(): Promise<ScenarioSample> {
       const modules = await loadCopyTreeModules();
       const grade = emptyBundleGrade();
+      const progress = emptyProgressGrade();
       const metrics: Record<string, number> = {};
       let totalMs = 0;
 
       for (const scale of COPY_TREE_SCALES) {
         const tree = getTree(scale.label);
-        const { arm, grade: armGrade } = await generateToFile(
-          modules,
-          tree,
-          expectationFor(tree),
-          scale.label
-        );
+        const {
+          arm,
+          grade: armGrade,
+          progress: armProgress,
+        } = await generateToFile(modules, tree, expectationFor(tree), scale.label);
         addBundleGrade(grade, armGrade);
+        addProgressGrade(progress, armProgress);
         totalMs += arm.ms;
         metrics[`${scale.label}Ms`] = arm.ms;
         metrics[`${scale.label}Files`] = arm.files;
         metrics[`${scale.label}BundleBytes`] = arm.bytes;
+        metrics[`${scale.label}ProgressEvents`] = arm.progressEvents;
       }
 
       // Scope narrowing: the same tree, a subset of its directories. The walk
@@ -154,7 +193,11 @@ export const copyTreeScenarios: PerfScenario[] = [
       // "generate a smaller tree" — it is what a folder-scoped Copy Context does.
       const large = getTree("large");
       const selection = scopeSelection(large, SCOPE_DIRECTORY_COUNT);
-      const { arm: scoped, grade: scopedGrade } = await generateToFile(
+      const {
+        arm: scoped,
+        grade: scopedGrade,
+        progress: scopedProgress,
+      } = await generateToFile(
         modules,
         large,
         { plantedFiles: selection.plantedFiles, sentinelTokens: selection.sentinelTokens },
@@ -162,6 +205,7 @@ export const copyTreeScenarios: PerfScenario[] = [
         { scopePaths: selection.scopePaths }
       );
       addBundleGrade(grade, scopedGrade);
+      addProgressGrade(progress, scopedProgress);
       totalMs += scoped.ms;
       metrics.scopedMs = scoped.ms;
       metrics.scopedFiles = scoped.files;
@@ -173,7 +217,12 @@ export const copyTreeScenarios: PerfScenario[] = [
 
       return {
         durationMs: totalMs,
-        metrics: { ...metrics, ...bundleMisses(grade) },
+        metrics: {
+          ...metrics,
+          progressEventCount: progress.progressEventCount,
+          ...bundleMisses(grade),
+          ...progressMisses(progress),
+        },
         notes: `scales ${COPY_TREE_SCALES.map((s) => s.files).join("/")} files, scoped ${selection.plantedFiles}`,
       };
     },
@@ -182,16 +231,17 @@ export const copyTreeScenarios: PerfScenario[] = [
     id: "PERF-391",
     name: "CopyTree Worker Offload A/B",
     description:
-      "The same 700-file generation driven through the real CopytreeWorkerClient three ways on one pass: in-thread with DAINTREE_DISABLE_COPYTREE_WORKER=1 (the shipped kill switch), then on a cold worker_threads worker, then on that worker once warm. Answers what the worker offload costs on its first request and what it saves afterwards. Routing is graded in BOTH directions from a creation counter incremented at the factory call site: the disabled arm must leave it at 0 and must report the client state as not-spawned, and the worker arm must take it to exactly 1 with a live threadId — so a client that ignored the kill switch and one that never reached its worker are separately caught.",
+      "The same 700-file generation driven through the real CopytreeWorkerClient three ways on one pass: in-thread with DAINTREE_DISABLE_COPYTREE_WORKER=1 (the shipped kill switch), then on a cold worker_threads worker, then on that worker once warm. Answers what the worker offload costs on its first request and what it saves afterwards. Routing is graded in BOTH directions from a creation counter incremented at the factory call site: the disabled arm must leave it at 0 and must report the client state as not-spawned, and the worker arm must take it to exactly 1 with a live threadId — so a client that ignored the kill switch and one that never reached its worker are separately caught. Progress delivery is graded on all three arms — including across the worker's message port, which is where a dropped `progress` message would otherwise be invisible.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     warmups: WARMUPS,
-    correctness: [...BUNDLE_CORRECTNESS, "workerRoutingMisses"],
+    correctness: [...BUNDLE_CORRECTNESS, ...PROGRESS_CORRECTNESS, "workerRoutingMisses"],
     async run(): Promise<ScenarioSample> {
       const modules = await loadCopyTreeModules();
       const tree = getTree(AB_SCALE);
       const expectation = expectationFor(tree);
       const grade = emptyBundleGrade();
+      const progress = emptyProgressGrade();
       let workerRoutingMisses = 0;
 
       const probe = createWorkerFactoryProbe();
@@ -211,6 +261,7 @@ export const copyTreeScenarios: PerfScenario[] = [
         const disabledClient = new modules.CopytreeWorkerClient(probe.factory);
         const disabled = await runThroughClient(disabledClient, tree, expectation, "worker-off");
         addBundleGrade(grade, disabled.grade);
+        addProgressGrade(progress, disabled.progress);
         inProcessMs = disabled.ms;
         progressEvents += disabled.progressEvents;
         if (probe.creations() !== 0) workerRoutingMisses += 1;
@@ -224,6 +275,7 @@ export const copyTreeScenarios: PerfScenario[] = [
         const workerClient = new modules.CopytreeWorkerClient(probe.factory);
         const cold = await runThroughClient(workerClient, tree, expectation, "worker-cold");
         addBundleGrade(grade, cold.grade);
+        addProgressGrade(progress, cold.progress);
         coldMs = cold.ms;
         progressEvents += cold.progressEvents;
 
@@ -236,6 +288,7 @@ export const copyTreeScenarios: PerfScenario[] = [
         // --- Arm 3: the same worker, warm.
         const warm = await runThroughClient(workerClient, tree, expectation, "worker-warm");
         addBundleGrade(grade, warm.grade);
+        addProgressGrade(progress, warm.progress);
         warmMs = warm.ms;
         progressEvents += warm.progressEvents;
         if (probe.creations() !== 1) workerRoutingMisses += 1;
@@ -260,8 +313,10 @@ export const copyTreeScenarios: PerfScenario[] = [
           workerCreations,
           workerThreadId: threadId,
           progressCallbacks: progressEvents,
+          progressEventCount: progress.progressEventCount,
           workerRoutingMisses,
           ...bundleMisses(grade),
+          ...progressMisses(progress),
         },
         notes: `${tree.plantedFiles} files per arm`,
       };
@@ -383,6 +438,7 @@ interface ClientArmResult {
   ms: number;
   progressEvents: number;
   grade: BundleGrade;
+  progress: ProgressGrade;
 }
 
 type WorkerClient = InstanceType<CopyTreeModules["CopytreeWorkerClient"]>;
@@ -394,20 +450,18 @@ async function runThroughClient(
   label: string
 ): Promise<ClientArmResult> {
   const outputPath = bundlePath(label);
-  let progressEvents = 0;
+  const traceId = `perf-${label}`;
+  const recorder = progressRecorder();
   const start = performance.now();
-  const result = await client.generate(
-    tree.root,
-    {},
-    () => {
-      progressEvents += 1;
-    },
-    `perf-${label}`,
-    outputPath
-  );
+  const result = await client.generate(tree.root, {}, recorder.onProgress, traceId, outputPath);
   const ms = performance.now() - start;
   const grade = gradeBundle(expectation, result, outputPath);
   grade.partialFileMisses += partialFilesLeftBehind(bundleDirectory());
   discardBundle(outputPath);
-  return { ms, progressEvents, grade };
+  return {
+    ms,
+    progressEvents: recorder.events.length,
+    grade,
+    progress: gradeProgress(traceId, recorder.events),
+  };
 }

@@ -13,9 +13,12 @@ import {
   FOCUSED_ID,
   GOVERNOR_LIMIT_PERCENT,
   GOVERNOR_WARMUP_TICKS,
+  gradeFlushCadence,
   HEAP_BUDGET_MB,
   heldByToken,
+  ipcFallbackSequenceMisses,
   loadFlowControlModules,
+  measureTimerOverheadNs,
   orderMisses,
   predictGovernorSchedule,
   runDrain,
@@ -227,7 +230,7 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
     id: "PERF-370",
     name: "PTY Flow-Control Decision Cost per Output Chunk",
     description:
-      "Per-chunk cost of the real pty-host flow-control path — PortBatcher.write, its cadence machine, mergeChunks, PortQueueManager.addBytes and applyBackpressure, and PtyPauseCoordinator — across 4, 12, 24 and 48 terminals with one flooder crossing its own 67% watermark, one focused quiet terminal, and background agents kept under every gate. This runs once per output chunk per terminal per window in production and had no coverage. Graded as a SET rather than a tally, because a controller that pauses nothing and one that pauses everything both post excellent durations: the victim set is compared by symmetric difference against the set this fixture derives from its own byte ledger and the shipped 3 MiB / 67% constants, bytes delivered downstream must equal bytes written in on all three counters, and the flooder must be paused exactly once while every quiet terminal is paused exactly zero times.",
+      "Per-chunk cost of the real pty-host flow-control path — PortBatcher.write, its cadence machine, mergeChunks, PortQueueManager.addBytes and applyBackpressure, and PtyPauseCoordinator — across 4, 12, 24 and 48 terminals with one flooder crossing its own 67% watermark, one focused quiet terminal, and background agents kept under every gate. This runs once per output chunk per terminal per window in production and had no coverage. The clock is opened and closed around the write calls themselves, so this fixture's chunk allocation, byte ledger and counters are outside the reading. Graded as a SET rather than a tally, because a controller that pauses nothing and one that pauses everything both post excellent durations: the victim set is compared by symmetric difference against the set this fixture derives from its own byte ledger and the shipped 3 MiB / 67% constants, bytes delivered downstream must equal bytes written in on all three counters, and the flooder must be paused exactly once while every quiet terminal is paused exactly zero times. The (idle → latency → throughput) cadence machine every write runs is graded on its own probe, because the synchronous drive loop always ends in a forced flush and would otherwise pay for scheduling nothing reads back.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     warmups: WARMUPS,
@@ -239,11 +242,17 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
       "coordinatorHoldMisses",
       "pauseSignalMisses",
       "queueAccountingMisses",
+      "immediateFlushMisses",
+      "throughputFlushMisses",
+      "cadenceShortfallCount",
       "floodShortfallCount",
     ],
     async run() {
       const modules = await loadFlowControlModules();
       const marks = watermarks(modules);
+      // Outside every duration below: it waits on real timers by construction.
+      const cadence = await gradeFlushCadence(modules, CHUNK_BYTES);
+      const timerOverheadNs = measureTimerOverheadNs();
 
       const arms: DecisionArm[] = [];
       const total = emptyArmGrade();
@@ -253,6 +262,8 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
       let quietTerminalMisses = 0;
       let shortfall = 0;
       let totalMs = 0;
+      let totalWallMs = 0;
+      let timerSampleCount = 0;
       let chunkCount = 0;
       let writtenBytes = 0;
       let logCount = 0;
@@ -316,6 +327,8 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
 
         arms.push({ size, ms: flood.ms, chunks: flood.acceptedWriteCount });
         totalMs += flood.ms;
+        totalWallMs += flood.wallMs;
+        timerSampleCount += flood.timerSampleCount;
         chunkCount += flood.acceptedWriteCount;
         writtenBytes += fleet.ledgerTotal;
         fleet.dispose();
@@ -332,6 +345,9 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
           coordinatorHoldMisses: 1,
           pauseSignalMisses: 1,
           queueAccountingMisses: 1,
+          immediateFlushMisses: cadence.immediateFlushMisses,
+          throughputFlushMisses: cadence.throughputFlushMisses,
+          cadenceShortfallCount: cadence.cadenceShortfallCount,
           floodShortfallCount: DECISION_FLEET_SIZES.length,
         });
       }
@@ -351,11 +367,28 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
           perChunkUsAt24: perChunkUs(arms[2]?.ms ?? 0, arms[2]?.chunks ?? 0),
           perChunkUsAt48: perChunkUs(arms[3]?.ms ?? 0, arms[3]?.chunks ?? 0),
           fleetScalingOverheadRatio: ratio(largeUs, smallUs),
+          // What the fixture's own chunk allocation, ledger and counters cost
+          // around the subject. Reported so the exclusion is auditable rather
+          // than asserted.
+          floodWallMs: totalWallMs,
+          fixtureOverheadRatio: ratio(totalWallMs, totalMs),
+          // What that isolation costs in clock reads. Two samples per bracketed
+          // write, each carrying about one call's overhead, so this is the
+          // residual a reader should subtract from the per-chunk figures.
+          timerSampleCount,
+          timerSampleNs: timerOverheadNs,
+          timerOverheadMs: (timerSampleCount / 2) * (timerOverheadNs / 1e6),
+          cadenceImmediateDeliveryCount: cadence.immediateDeliveryCount,
+          cadenceThroughputDeliveryCount: cadence.throughputDeliveryCount,
+          cadenceWaitedMs: cadence.waitedMs,
           suppressedLogCount: logCount,
           deliveryMisses,
           queueAccountingMisses,
           flooderPauseMisses,
           quietTerminalMisses,
+          immediateFlushMisses: cadence.immediateFlushMisses,
+          throughputFlushMisses: cadence.throughputFlushMisses,
+          cadenceShortfallCount: cadence.cadenceShortfallCount,
           floodShortfallCount: shortfall,
           victimSetMisses: total.victimSetMisses,
           coordinatorHoldMisses: total.coordinatorHoldMisses,
@@ -369,7 +402,7 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
     id: "PERF-371",
     name: "Window Aggregate Watermark and the Focused-Terminal Exemption",
     description:
-      "The window-level gate: 18 MiB of agent output across 12 terminals, none of them over its own 3 MiB queue, against the real 16 MiB IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES. Three arms on one pass. The port path WITH a focused terminal must pause every sibling and exempt the focused pane; the same flood with no terminal focused must pause all twelve, which is what proves the exemption is the focus and not something else about that terminal; and the IPC fallback path — whose IpcQueueDeps has no focused-terminal member at all — must pause all twelve including the focused one. Every arm's victim set is compared by symmetric difference against the set derived from this fixture's own ledger, so pausing nothing and pausing everything are separately caught, and the third arm records a real product asymmetry rather than asserting the two paths agree.",
+      "The window-level gate: 18 MiB of agent output across 12 terminals, none of them over its own 3 MiB queue, against the real 16 MiB IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES. Three arms on one pass. The port path WITH a focused terminal must pause every sibling and exempt the focused pane; the same flood with no terminal focused must pause all twelve, which is what proves the exemption is the focus and not something else about that terminal; and the IPC fallback path — whose IpcQueueDeps has no focused-terminal member at all — must pause all twelve including the focused one. Every arm's victim set is compared by symmetric difference against the set derived from this fixture's own ledger, so pausing nothing and pausing everything are separately caught, and the third arm records a real product asymmetry rather than asserting the two paths agree. The fallback arm cannot import its orchestration — pty-host.ts exports nothing and refuses to evaluate outside a UtilityProcess — so the call sequence is mirrored here and the mirror is graded: ipcFallbackSequenceMisses reads the ordered ipcQueueManager calls back out of the host's own source and compares them positionally.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     warmups: WARMUPS,
@@ -379,13 +412,21 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
       "focusExemptionMisses",
       "focusControlMisses",
       "ipcPathMisses",
+      "ipcFallbackSequenceMisses",
       "coordinatorHoldMisses",
       "pauseSignalMisses",
+      "immediateFlushMisses",
+      "throughputFlushMisses",
+      "cadenceShortfallCount",
       "aggregateShortfallCount",
     ],
     async run() {
       const modules = await loadFlowControlModules();
       const marks = watermarks(modules);
+      const cadence = await gradeFlushCadence(modules, CHUNK_BYTES);
+      const timerOverheadNs = measureTimerOverheadNs();
+      // Read off `pty-host.ts` itself, outside every bracket below.
+      const fallbackSequenceMisses = ipcFallbackSequenceMisses();
       const perTerminalBytes = Math.floor(AGGREGATE_TOTAL_BYTES / AGGREGATE_FLEET_SIZE);
       const chunksPerTerminal = chunkPlanFor(CHUNK_BYTES, perTerminalBytes);
 
@@ -396,6 +437,8 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
       let focusControlMisses = 0;
       let ipcPathMisses = 0;
       let totalMs = 0;
+      let totalWallMs = 0;
+      let timerSampleCount = 0;
       let logCount = 0;
       let portArmMs = 0;
       let ipcArmMs = 0;
@@ -437,6 +480,8 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
           });
           portArmMs += flood.ms;
           totalMs += flood.ms;
+          totalWallMs += flood.wallMs;
+          timerSampleCount += flood.timerSampleCount;
           chunkCount += flood.acceptedWriteCount;
           if (flood.rejectedWriteCount !== 0) shortfall += 1;
           const settle = runFlood(fleet, {
@@ -447,6 +492,8 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
             flushEveryWrite: true,
           });
           totalMs += settle.ms;
+          totalWallMs += settle.wallMs;
+          timerSampleCount += settle.timerSampleCount;
         } finally {
           logCount += restore();
         }
@@ -511,6 +558,8 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
         });
         ipcArmMs += flood.ms;
         totalMs += flood.ms;
+        totalWallMs += flood.wallMs;
+        timerSampleCount += flood.timerSampleCount;
         chunkCount += flood.acceptedWriteCount;
         if (flood.rejectedWriteCount !== 0) shortfall += 1;
       } finally {
@@ -539,11 +588,22 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
           perTerminalQueueBytes: perTerminalBytes,
           perChunkUsPort: perChunkUs(portArmMs, chunksPerTerminal * AGGREGATE_FLEET_SIZE * 2),
           perChunkUsIpcFallback: perChunkUs(ipcArmMs, chunksPerTerminal * AGGREGATE_FLEET_SIZE),
+          cadenceImmediateDeliveryCount: cadence.immediateDeliveryCount,
+          cadenceThroughputDeliveryCount: cadence.throughputDeliveryCount,
+          floodWallMs: totalWallMs,
+          fixtureOverheadRatio: ratio(totalWallMs, totalMs),
+          timerSampleCount,
+          timerSampleNs: timerOverheadNs,
+          timerOverheadMs: (timerSampleCount / 2) * (timerOverheadNs / 1e6),
           suppressedLogCount: logCount,
           deliveryMisses,
           focusExemptionMisses,
           focusControlMisses,
           ipcPathMisses,
+          ipcFallbackSequenceMisses: fallbackSequenceMisses,
+          immediateFlushMisses: cadence.immediateFlushMisses,
+          throughputFlushMisses: cadence.throughputFlushMisses,
+          cadenceShortfallCount: cadence.cadenceShortfallCount,
           aggregateShortfallCount: shortfall,
           victimSetMisses: total.victimSetMisses,
           coordinatorHoldMisses: total.coordinatorHoldMisses,

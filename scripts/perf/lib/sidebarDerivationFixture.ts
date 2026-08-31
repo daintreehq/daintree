@@ -54,6 +54,17 @@ import type { WorktreeState } from "../../../shared/types/worktree";
  * appears NOWHERE else in the generated corpus, so every prefix of it matches
  * exactly the rows the generator planted it into, and nothing else.
  *
+ * ## What the timed bracket contains
+ *
+ * {@link runDerivationSweep} is what the scenarios wrap in `performance.now()`,
+ * and it calls the four subjects and appends what they returned. Corpus
+ * construction ({@link getSidebarDerivationFixture}), step construction
+ * ({@link buildStepMatrix}, which resolves each step's query and `FilterState`)
+ * and every oracle ({@link gradeDerivationSweep}) run outside it. The
+ * observation a pass records holds REFERENCES to the arrays the subjects
+ * returned, so recording is a pointer store rather than a copy, and the id lists
+ * the predicates compare are projected out of them once the clock has stopped.
+ *
  * ## Scope limits
  *
  * `SidebarContent` also applies a quick-state filter and two always-show
@@ -570,14 +581,29 @@ export interface DerivationStep {
   /** Characters of {@link SIDEBAR_NEEDLE} typed so far. 0 is the browse pass. */
   readonly queryLength: number;
   readonly facets: FacetLevel;
+  /** The typed prefix, sliced once at matrix-build time. */
+  readonly query: string;
+  /**
+   * The exact `FilterState` the component would hand the subjects on this step,
+   * assembled here rather than per pass so that building a subject's argument is
+   * never priced as the subject.
+   */
+  readonly filters: FilterState;
 }
 
-/** The full sweep: every facet level crossed with progressive typing. */
+/**
+ * The full sweep: every facet level crossed with progressive typing.
+ *
+ * The scenarios call this BEFORE the clock starts. Each step carries its own
+ * resolved query and `FilterState`, so a timed pass allocates nothing of its own
+ * before it begins measuring.
+ */
 export function buildStepMatrix(): DerivationStep[] {
   const steps: DerivationStep[] = [];
   for (const facets of FACET_LEVELS) {
     for (let queryLength = 0; queryLength <= SIDEBAR_NEEDLE.length; queryLength += 1) {
-      steps.push({ queryLength, facets });
+      const query = SIDEBAR_NEEDLE.slice(0, queryLength);
+      steps.push({ queryLength, facets, query, filters: { query, ...facets.selection } });
     }
   }
   return steps;
@@ -585,8 +611,17 @@ export function buildStepMatrix(): DerivationStep[] {
 
 export interface PassObservation {
   readonly step: DerivationStep;
-  readonly keptIds: string[];
-  readonly sortedIds: string[];
+  /**
+   * What the pass produced, held by REFERENCE.
+   *
+   * `kept` is the array the filter loop built — the component builds the same
+   * one — while `sorted`, `sections` and `chipCounts` are the subjects' own
+   * return values. Recording a pass is therefore a handful of pointer stores;
+   * the id lists the oracle compares are projected out of these afterwards, in
+   * {@link gradeDerivationSweep}, so no copy is made inside the bracket.
+   */
+  readonly kept: readonly WorktreeState[];
+  readonly sorted: readonly WorktreeState[];
   readonly sections: GroupedSection<WorktreeState>[] | null;
   readonly chipCounts: ChipCounts;
   /** Per-operation brackets, in the order the component runs them. */
@@ -600,14 +635,18 @@ export interface PassObservation {
  * One render's worth of derivation, exactly as `SidebarContent` orders it:
  * filter every row, sort the survivors, group them when grouped mode applies,
  * and recompute the chip counts over the whole set.
+ *
+ * Each bracket holds a subject call and the append its result goes into. The
+ * step's query and `FilterState` were built by {@link buildStepMatrix}, and
+ * nothing on this path is graded, tallied or copied — {@link
+ * gradeDerivationSweep} is where the oracle runs.
  */
 export function runDerivationPass(
   fixture: SidebarDerivationFixture,
   step: DerivationStep,
   subjects: SidebarDerivationSubjects = REAL_SIDEBAR_SUBJECTS
 ): PassObservation {
-  const query = SIDEBAR_NEEDLE.slice(0, step.queryLength);
-  const filters: FilterState = { query, ...step.facets.selection };
+  const filters = step.filters;
 
   const filterStart = performance.now();
   const kept: WorktreeState[] = [];
@@ -630,7 +669,7 @@ export function runDerivationPass(
   const sortStart = performance.now();
   const sorted = subjects.sortWorktreesByRelevance(
     kept,
-    query,
+    step.query,
     SIDEBAR_ORDER_BY,
     fixture.pinnedWorktreeIds,
     []
@@ -658,8 +697,8 @@ export function runDerivationPass(
 
   return {
     step,
-    keptIds: kept.map((w) => w.id),
-    sortedIds: sorted.map((w) => w.id),
+    kept,
+    sorted,
     sections,
     chipCounts,
     matchesFiltersMs,
@@ -835,6 +874,10 @@ function keyBefore(a: readonly number[], b: readonly number[]): number {
  * Four accumulators, one per operation the component ran — a single aggregate
  * cannot notice one of the four going missing, and three of the four are
  * cheaper to skip than to perform.
+ *
+ * **Nothing here is inside a timed bracket.** The id lists it compares are
+ * projected out of the recorded references at this point, not while the pass was
+ * being measured.
  */
 export function gradeDerivationPass(
   fixture: SidebarDerivationFixture,
@@ -842,9 +885,11 @@ export function gradeDerivationPass(
 ): PassMisses {
   const step = observation.step;
   const expectedKept = expectedKeptIds(fixture, step);
+  const keptIds = observation.kept.map((worktree) => worktree.id);
+  const sortedIds = observation.sorted.map((worktree) => worktree.id);
 
   // matchesFilters: the survivor set, by identity and not merely by size.
-  const keptMisses = multisetMisses(observation.keptIds, expectedKept);
+  const keptMisses = multisetMisses(keptIds, expectedKept);
 
   // computeChipCounts: every one of the 39 chip keys, against the planted
   // distribution for this step's six group-excluded base sets.
@@ -868,10 +913,10 @@ export function gradeDerivationPass(
 
   // sortWorktreesByRelevance: a multiset permutation of ITS OWN input (nothing
   // invented, nothing dropped), monotone in the planted key.
-  let sortMisses = multisetMisses(observation.sortedIds, new Set(observation.keptIds));
-  for (let i = 1; i < observation.sortedIds.length; i += 1) {
-    const previous = fixture.plantedById.get(observation.sortedIds[i - 1]);
-    const current = fixture.plantedById.get(observation.sortedIds[i]);
+  let sortMisses = multisetMisses(sortedIds, new Set(keptIds));
+  for (let i = 1; i < sortedIds.length; i += 1) {
+    const previous = fixture.plantedById.get(sortedIds[i - 1]);
+    const current = fixture.plantedById.get(sortedIds[i]);
     if (!previous || !current) {
       sortMisses += 1;
       continue;
@@ -916,7 +961,7 @@ export function gradeDerivationPass(
           }
         }
       }
-      groupMisses += multisetMisses(memberIds, new Set(observation.sortedIds));
+      groupMisses += multisetMisses(memberIds, new Set(sortedIds));
     }
   } else if (observation.sections !== null) {
     // Grouping a query pass is work the component never asks for.
@@ -926,8 +971,7 @@ export function gradeDerivationPass(
   return { keptMisses, chipCountMisses, sortMisses, groupMisses };
 }
 
-export interface SweepResult {
-  readonly passes: PassObservation[];
+export interface SweepSummary {
   readonly misses: PassMisses;
   readonly passCount: number;
   readonly keptRowCount: number;
@@ -939,17 +983,42 @@ export interface SweepResult {
 }
 
 /**
- * Run and grade the whole step matrix.
+ * Run the whole step matrix. **This is the timed bracket, and it contains the
+ * four subjects and nothing else.**
  *
- * Grading happens after each pass rather than inside its bracket, so no oracle
- * work is priced as subject work.
+ * The loop calls {@link runDerivationPass} and appends the observation it
+ * returns. No oracle runs here, nothing is compared, no id list is projected and
+ * no tally is kept — an observation is a few references to arrays the subjects
+ * had already produced. Everything else is {@link gradeDerivationSweep}, which
+ * the scenarios call after they have read `performance.now()` a second time.
+ *
+ * The recording cost that could not be moved out is one array push per pass —
+ * 18 of them per iteration, beside a 200-worktree pass that costs milliseconds.
  */
 export function runDerivationSweep(
   fixture: SidebarDerivationFixture,
   steps: readonly DerivationStep[],
   subjects: SidebarDerivationSubjects = REAL_SIDEBAR_SUBJECTS
-): SweepResult {
+): PassObservation[] {
   const passes: PassObservation[] = [];
+  for (const step of steps) {
+    passes.push(runDerivationPass(fixture, step, subjects));
+  }
+  return passes;
+}
+
+/**
+ * Tally and grade a finished sweep — **after the clock has stopped**.
+ *
+ * Both halves live here for the same reason. The per-operation totals and the
+ * per-pass sums are arithmetic over what the passes recorded, and the four
+ * predicates are oracle work; neither is the subject, so neither belongs in
+ * `durationMs`.
+ */
+export function gradeDerivationSweep(
+  fixture: SidebarDerivationFixture,
+  passes: readonly PassObservation[]
+): SweepSummary {
   const perPassMs: number[] = [];
   const misses: PassMisses = {
     keptMisses: 0,
@@ -963,16 +1032,14 @@ export function runDerivationSweep(
   let groupMs = 0;
   let chipCountsMs = 0;
 
-  for (const step of steps) {
-    const observation = runDerivationPass(fixture, step, subjects);
-    passes.push(observation);
+  for (const observation of passes) {
     perPassMs.push(
       observation.matchesFiltersMs +
         observation.sortMs +
         observation.groupMs +
         observation.chipCountsMs
     );
-    keptRowCount += observation.keptIds.length;
+    keptRowCount += observation.kept.length;
     matchesFiltersMs += observation.matchesFiltersMs;
     sortMs += observation.sortMs;
     groupMs += observation.groupMs;
@@ -986,7 +1053,6 @@ export function runDerivationSweep(
   }
 
   return {
-    passes,
     misses,
     passCount: passes.length,
     keptRowCount,

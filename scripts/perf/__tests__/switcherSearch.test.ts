@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   correctionPathSteps,
   getSwitcherFixture,
+  gradeSwitcherSession,
   progressiveTypingSteps,
   REAL_SWITCHER_SUBJECTS,
   runSwitcherSession,
@@ -24,11 +25,9 @@ const PROJECTS = 240;
 const SCRATCHES = 60;
 
 function typingMisses(subjects?: SwitcherSubjects) {
-  return runSwitcherSession(
-    getSwitcherFixture(PROJECTS, SCRATCHES),
-    progressiveTypingSteps(),
-    subjects
-  ).misses;
+  const fixture = getSwitcherFixture(PROJECTS, SCRATCHES);
+  const run = runSwitcherSession(fixture, progressiveTypingSteps(), subjects);
+  return gradeSwitcherSession(fixture, run).misses;
 }
 
 describe("switcher search fixture", () => {
@@ -53,11 +52,33 @@ describe("switcher search fixture", () => {
   });
 
   it("clears every predicate on the real subjects, on both paths", () => {
-    const clean = { rankMisses: 0, scoreMisses: 0, filterMatchMisses: 0, activityMisses: 0 };
+    const clean = {
+      rankMisses: 0,
+      scoreMisses: 0,
+      filterMatchMisses: 0,
+      pathFilterMatchMisses: 0,
+      activityMisses: 0,
+    };
     expect(typingMisses()).toEqual(clean);
+    const fixture = getSwitcherFixture(PROJECTS, SCRATCHES);
     expect(
-      runSwitcherSession(getSwitcherFixture(PROJECTS, SCRATCHES), correctionPathSteps()).misses
+      gradeSwitcherSession(fixture, runSwitcherSession(fixture, correctionPathSteps())).misses
     ).toEqual(clean);
+  });
+
+  it("records the ranker's own result array by reference rather than copying it", () => {
+    // Projecting result ids inside the bracket would put O(rows) of oracle prep
+    // back into durationMs, which is the defect this split exists to close.
+    const fixture = getSwitcherFixture(PROJECTS, SCRATCHES);
+    const sentinel: ReturnType<SwitcherSubjects["rankSwitcherMatches"]> = [];
+    const run = runSwitcherSession(fixture, progressiveTypingSteps(), {
+      ...REAL_SWITCHER_SUBJECTS,
+      rankSwitcherMatches: () => sentinel,
+    });
+    expect(run.keystrokes.length).toBe(SWITCHER_NEEDLE.length);
+    for (const keystroke of run.keystrokes) {
+      expect(keystroke.results).toBe(sentinel);
+    }
   });
 
   it("degrades and recovers across the one-edit correction", () => {
@@ -68,12 +89,12 @@ describe("switcher search fixture", () => {
     expect(typo.length).toBeGreaterThan(0);
     // The typo tier keeps the name matches and loses the path-only ones — the
     // point of the tier is that the list narrows rather than emptying.
-    const typoRows = typo[0].resultIds.length;
-    const cleanRows = clean[clean.length - 1].resultIds.length;
+    const typoRows = typo[0].results.length;
+    const cleanRows = clean[clean.length - 1].results.length;
     expect(typoRows).toBeGreaterThan(0);
     expect(typoRows).toBeLessThan(cleanRows);
     // And the last keystroke is back on the clean path.
-    expect(clean[clean.length - 1].resultIds[0]).toBe(fixture.exactProjectId);
+    expect(clean[clean.length - 1].results[0].id).toBe(fixture.exactProjectId);
   });
 });
 
@@ -108,12 +129,38 @@ describe("switcher search predicates", () => {
   });
 
   it("scores a filter matcher stuck open, and one stuck shut", () => {
-    expect(
-      typingMisses({ ...REAL_SWITCHER_SUBJECTS, isFilterMatch: () => true }).filterMatchMisses
-    ).toBeGreaterThan(0);
-    expect(
-      typingMisses({ ...REAL_SWITCHER_SUBJECTS, isFilterMatch: () => false }).filterMatchMisses
-    ).toBeGreaterThan(0);
+    const open = typingMisses({ ...REAL_SWITCHER_SUBJECTS, isFilterMatch: () => true });
+    expect(open.filterMatchMisses).toBeGreaterThan(0);
+    expect(open.pathFilterMatchMisses).toBeGreaterThan(0);
+    const shut = typingMisses({ ...REAL_SWITCHER_SUBJECTS, isFilterMatch: () => false });
+    expect(shut.filterMatchMisses).toBeGreaterThan(0);
+    expect(shut.pathFilterMatchMisses).toBeGreaterThan(0);
+  });
+
+  it("scores the display-path filter call being dropped, and only that term", () => {
+    // The stub experiment the display-path term exists for: every per-project
+    // isFilterMatch over displayPath returns false, which is what deleting the
+    // call outright would record. The name term stays clean, so a single
+    // aggregate would have called the deletion free.
+    const misses = typingMisses({
+      ...REAL_SWITCHER_SUBJECTS,
+      isFilterMatch: (query, field) =>
+        field.startsWith("~/") ? false : REAL_SWITCHER_SUBJECTS.isFilterMatch(query, field),
+    });
+    expect(misses.pathFilterMatchMisses).toBeGreaterThan(0);
+    expect(misses.filterMatchMisses).toBe(0);
+    expect(misses.rankMisses).toBe(0);
+    expect(misses.scoreMisses).toBe(0);
+  });
+
+  it("scores the name filter call being dropped, and only that term", () => {
+    const misses = typingMisses({
+      ...REAL_SWITCHER_SUBJECTS,
+      isFilterMatch: (query, field) =>
+        field.startsWith("~/") ? REAL_SWITCHER_SUBJECTS.isFilterMatch(query, field) : false,
+    });
+    expect(misses.filterMatchMisses).toBeGreaterThan(0);
+    expect(misses.pathFilterMatchMisses).toBe(0);
   });
 
   it("scores an activity classifier that returned a constant", () => {
@@ -152,6 +199,7 @@ describe("PERF-403/404", () => {
     expect(metrics.rankMisses).toBe(0);
     expect(metrics.scoreMisses).toBe(0);
     expect(metrics.filterMatchMisses).toBe(0);
+    expect(metrics.pathFilterMatchMisses).toBe(0);
     expect(metrics.activityMisses).toBe(0);
   });
 
@@ -169,6 +217,7 @@ describe("PERF-403/404", () => {
     expect(metrics.rankMisses).toBe(0);
     expect(metrics.scoreMisses).toBe(0);
     expect(metrics.filterMatchMisses).toBe(0);
+    expect(metrics.pathFilterMatchMisses).toBe(0);
     expect(metrics.activityMisses).toBe(0);
   });
 });

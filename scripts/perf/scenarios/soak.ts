@@ -20,6 +20,8 @@ import {
   buildFleetSpec,
   captureConsole,
   createFleet,
+  gradeFlushCadence,
+  loadFlowControlModules,
   runFlood,
   type FleetSpec,
 } from "../lib/ptyFlowControlFixture";
@@ -391,14 +393,27 @@ export const soakScenarios: PerfScenario[] = [
     id: "PERF-063",
     name: "PortBatcher Flush Allocation: Zero-Copy vs Copy",
     description:
-      "The real PortBatcher's flush allocation under a 400 MiB agent-output flood, in both of the shapes production actually produces. pty-host.ts sets `owned = targets.length === 1`, so a one-window app takes mergeChunks' zero-copy fast path on every single-chunk flush and a two-window app takes the allocate-and-copy on every flush of the same bytes for both of its batchers. Minor-GC count and pause are reported per arm, so the number is what the second window costs rather than what a retired code path used to cost. Graded in BOTH directions on the merge branch, which is also the PR #4639 invariant: the one-window arm's payload must be the exact object that was written (a batcher that copies anyway scores zeroCopyMisses) and the two-window arm's payload must never be (a batcher that hands on a shared chunk for transfer would detach a node-pty slab under its sibling, and scores copyPathMisses).",
+      "The real PortBatcher's flush allocation under a 400 MiB agent-output flood, in both of the shapes production actually produces. pty-host.ts sets `owned = targets.length === 1`, so a one-window app takes mergeChunks' zero-copy fast path on every single-chunk flush and a two-window app takes the allocate-and-copy on every flush of the same bytes for both of its batchers. Minor-GC count and pause are reported per arm, so the number is what the second window costs rather than what a retired code path used to cost. Graded in BOTH directions on the merge branch, which is also the PR #4639 invariant: the one-window arm's payload must be the exact object that was written (a batcher that copies anyway scores zeroCopyMisses) and the two-window arm's payload must never be (a batcher that hands on a shared chunk for transfer would detach a node-pty slab under its sibling, and scores copyPathMisses). The reported duration is the two arms' own write-and-flush time, not the outer wall clock: fleet construction, the queue acknowledgements between batches, the GC observer's timer turns and disposal are none of them the subject.",
     tier: "soak",
     modes: ["nightly", "soak"],
     iterations: { nightly: 3, soak: 6 },
     warmups: 1,
-    correctness: ["deliveryMisses", "zeroCopyMisses", "copyPathMisses", "batcherShortfallCount"],
+    correctness: [
+      "deliveryMisses",
+      "zeroCopyMisses",
+      "copyPathMisses",
+      "immediateFlushMisses",
+      "throughputFlushMisses",
+      "cadenceShortfallCount",
+      "batcherShortfallCount",
+    ],
     async run() {
       maybeRunGc();
+      // Outside every duration below: the cadence probe waits on real timers.
+      // It is here because the batcher's (idle → latency → throughput)
+      // scheduling runs on every write in the arms below and nothing else in
+      // this scenario can see it — both arms end in a forced flush.
+      const cadence = await gradeFlushCadence(await loadFlowControlModules(), 2048);
 
       // 32 terminals x 2 KiB is exactly PORT_BATCH_THRESHOLD_BYTES, so every
       // round ends in one synchronous flush in which each terminal holds
@@ -419,6 +434,7 @@ export const soakScenarios: PerfScenario[] = [
         let accepted = 0;
         let rejected = 0;
         let ms = 0;
+        let wallMs = 0;
         try {
           const gc = await measureMinorGc(() => {
             for (let batch = 0; batch < batches; batch += 1) {
@@ -434,6 +450,7 @@ export const soakScenarios: PerfScenario[] = [
               accepted += flood.acceptedWriteCount;
               rejected += flood.rejectedWriteCount;
               ms += flood.ms;
+              wallMs += flood.wallMs;
               // Acknowledge so no watermark is ever reached: a pause on either
               // arm would put different work in the two brackets.
               ackAllQueues(fleet);
@@ -442,6 +459,7 @@ export const soakScenarios: PerfScenario[] = [
           return {
             gc,
             ms,
+            wallMs,
             accepted,
             rejected,
             windowCount,
@@ -459,10 +477,15 @@ export const soakScenarios: PerfScenario[] = [
         }
       };
 
-      const startedAt = performance.now();
+      const outerStartedAt = performance.now();
       const single = await armResult(1);
       const dual = await armResult(2);
-      const durationMs = performance.now() - startedAt;
+      // Kept as a metric, never as the headline. The two arms already measure
+      // themselves; the outer clock additionally holds two fleet constructions,
+      // 100 `ackAllQueues` sweeps, the GC observer's own timer turns and two
+      // disposals, none of which is the flush allocation this prices.
+      const outerWallMs = performance.now() - outerStartedAt;
+      const durationMs = single.ms + dual.ms;
 
       const expectedWrites = terminals * roundsPerBatch * batches;
       const expectedBytes = expectedWrites * chunkBytes;
@@ -514,15 +537,25 @@ export const soakScenarios: PerfScenario[] = [
           zeroCopyDeliveryCount: single.zeroCopy,
           copiedDeliveryCount: dual.copied,
           copyPathGcOverheadRatio: gcRatio,
+          zeroCopyArmMs: single.ms,
+          copyPathArmMs: dual.ms,
+          floodWallMs: single.wallMs + dual.wallMs,
+          outerWallMs,
+          cadenceImmediateDeliveryCount: cadence.immediateDeliveryCount,
+          cadenceThroughputDeliveryCount: cadence.throughputDeliveryCount,
           deliveryMisses,
           zeroCopyMisses,
           copyPathMisses,
+          immediateFlushMisses: cadence.immediateFlushMisses,
+          throughputFlushMisses: cadence.throughputFlushMisses,
+          cadenceShortfallCount: cadence.cadenceShortfallCount,
           batcherShortfallCount,
         },
         notes:
           `${(expectedBytes / (1024 * 1024)).toFixed(0)} MiB per arm: ` +
-          `${single.gc.minorGcCount} minor GCs (${single.gc.minorGcPauseMs.toFixed(1)}ms) on the ` +
-          `one-window zero-copy path against ${dual.gc.minorGcCount} ` +
+          `${single.ms.toFixed(0)}ms and ${single.gc.minorGcCount} minor GCs ` +
+          `(${single.gc.minorGcPauseMs.toFixed(1)}ms) on the one-window zero-copy path ` +
+          `against ${dual.ms.toFixed(0)}ms and ${dual.gc.minorGcCount} ` +
           `(${dual.gc.minorGcPauseMs.toFixed(1)}ms) once a second window forces the ` +
           `allocate-and-copy on every flush`,
       };

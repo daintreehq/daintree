@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 
 import { SCROLLBACK_MIN } from "../../../shared/config/scrollback";
@@ -727,11 +728,46 @@ export interface FloodPlan {
 }
 
 export interface FloodResult {
+  /**
+   * SUBJECT time only: the sum of the `PortBatcher.write` calls and the closing
+   * `flush`, with this fixture's own chunk allocation, ledger arithmetic and
+   * counters excluded. This is the number every scenario reports.
+   */
   ms: number;
+  /**
+   * Wall clock of the whole drive loop, bookkeeping included. Reported
+   * alongside `ms` so the size of the fixture's own overhead stays visible
+   * rather than being silently folded into the headline.
+   */
+  wallMs: number;
   writeCount: number;
   acceptedWriteCount: number;
   rejectedWriteCount: number;
   chunkBytes: number;
+  /**
+   * `performance.now()` samples taken to isolate the subject.
+   *
+   * Two per bracketed region. Each region's reading carries roughly one call's
+   * worth of clock-read overhead, so at these per-chunk magnitudes the residual
+   * is worth knowing: `timerSampleCount / 2 × ` {@link measureTimerOverheadNs}
+   * is its upper bound, and the scenarios report both.
+   */
+  timerSampleCount: number;
+}
+
+/**
+ * What one `performance.now()` costs on this machine, in nanoseconds.
+ *
+ * The bracketing that keeps fixture bookkeeping out of the flood readings pays
+ * for itself in clock reads, and at ~0.2 µs per chunk that is not negligible.
+ * Measured rather than assumed, and reported beside the sample count so the
+ * residual in a per-chunk figure is auditable instead of hidden.
+ */
+export function measureTimerOverheadNs(samples = 20_000): number {
+  for (let index = 0; index < 1_000; index += 1) performance.now();
+  const started = performance.now();
+  for (let index = 0; index < samples; index += 1) performance.now();
+  return ((performance.now() - started) * 1e6) / samples;
 }
 
 /**
@@ -741,7 +777,13 @@ export interface FloodResult {
  * The ledger entry is recorded BEFORE `write()` and rolled back on rejection,
  * because `write()` can flush synchronously and the pause emission that flush
  * triggers must be stamped with a ledger that already includes the chunk in
- * flight.
+ * flight. That ordering is not negotiable — but the ledger write is this
+ * FIXTURE'S work, not the subject's, so the clock is opened and closed around
+ * the `write()` calls themselves and the bookkeeping sits between brackets.
+ * Two `performance.now()` calls per write is the same per-operation bracketing
+ * {@link runDrain} uses, and it is what keeps chunk allocation, `noteChunk`,
+ * the ledger `Map` updates and the accept/reject counters out of a number
+ * reported as per-chunk decision cost.
  */
 export function runFlood(fleet: FlowControlFleet, plan: FloodPlan): FloodResult {
   const ids = [...plan.chunksById.keys()];
@@ -755,8 +797,10 @@ export function runFlood(fleet: FlowControlFleet, plan: FloodPlan): FloodResult 
   let writeCount = 0;
   let acceptedWriteCount = 0;
   let rejectedWriteCount = 0;
+  let subjectMs = 0;
+  let timerSampleCount = 0;
 
-  const started = performance.now();
+  const wallStart = performance.now();
   for (let round = 0; round < maxRounds; round += 1) {
     for (const id of ids) {
       if ((plan.chunksById.get(id) ?? 0) <= round) continue;
@@ -767,30 +811,228 @@ export function runFlood(fleet: FlowControlFleet, plan: FloodPlan): FloodResult 
       fleet.recordWrite(id, plan.chunkBytes);
       writeCount += 1;
       let accepted = true;
+      const at = performance.now();
       for (const batcher of fleet.batchers) {
         if (!batcher.write(id, chunk, plan.chunkBytes, plan.owned)) accepted = false;
       }
+      subjectMs += performance.now() - at;
+      timerSampleCount += 2;
       if (accepted) {
         acceptedWriteCount += 1;
       } else {
         rejectedWriteCount += 1;
         fleet.unrecordWrite(id, plan.chunkBytes);
       }
-      if (plan.flushEveryWrite === true) fleet.flushAll();
+      if (plan.flushEveryWrite === true) {
+        const flushAt = performance.now();
+        fleet.flushAll();
+        subjectMs += performance.now() - flushAt;
+        timerSampleCount += 2;
+      }
     }
   }
+  const finalFlushAt = performance.now();
   fleet.flushAll();
-  const ms = performance.now() - started;
+  subjectMs += performance.now() - finalFlushAt;
+  timerSampleCount += 2;
+  const wallMs = performance.now() - wallStart;
 
-  return { ms, writeCount, acceptedWriteCount, rejectedWriteCount, chunkBytes: plan.chunkBytes };
+  return {
+    ms: subjectMs,
+    wallMs,
+    writeCount,
+    acceptedWriteCount,
+    rejectedWriteCount,
+    chunkBytes: plan.chunkBytes,
+    timerSampleCount,
+  };
+}
+
+// --- Flush cadence oracle ----------------------------------------------------
+
+/**
+ * The per-terminal `(idle → latency → throughput)` cadence machine, graded.
+ *
+ * Every `runFlood` write runs it — `write()` arms a `setImmediate` on a
+ * terminal's first pending chunk and swaps it for a `setTimeout` on the second
+ * — and NOTHING ELSE IN THIS FAMILY CAN SEE IT. The synchronous drive loops
+ * always end in a threshold flush or a forced `flushAll()`, so deleting the
+ * scheduling outright leaves delivery, the victim sets, the queue accounting
+ * and every other declared term exactly as they were: the timers are armed,
+ * cancelled at the next flush, and never fire. That is the shape this whole
+ * family exists to catch, so the cadence gets a term of its own.
+ *
+ * Two probe fleets rather than one, because `flush()` drains the WHOLE pending
+ * map: one terminal's immediate firing would deliver the other's entry too, and
+ * the two transitions would not be separable.
+ *
+ *   fleet I — ONE sub-threshold write. `entry.mode` goes `idle → latency`, so a
+ *             `setImmediate` is armed. Nothing may be delivered before the
+ *             event loop turns; exactly one delivery must arrive when it does.
+ *   fleet T — TWO sub-threshold writes in one tick. The second takes
+ *             `latency → throughput`, which CANCELS the immediate and arms a
+ *             `PORT_BATCH_THROUGHPUT_DELAY_MS` timeout. So nothing may be
+ *             delivered on the immediate turn, and exactly one merged delivery
+ *             must arrive after the delay.
+ *
+ * Both directions are inside each term. A batcher that schedules nothing never
+ * delivers and scores; one that flushes synchronously on every write delivers
+ * too early and scores; one that kept the immediate but lost the throughput
+ * swap delivers fleet T a turn too soon and scores.
+ *
+ * The waiting is real wall clock and is reported separately — it is never added
+ * to a scenario's `durationMs`, which is decision cost.
+ */
+export interface CadenceGrade {
+  immediateFlushMisses: number;
+  throughputFlushMisses: number;
+  /** Corpus validity: the probe writes really did stay under the sync threshold. */
+  cadenceShortfallCount: number;
+  immediateDeliveryCount: number;
+  throughputDeliveryCount: number;
+  /** Wall clock spent waiting for the two scheduled turns. */
+  waitedMs: number;
+}
+
+export function emptyCadenceGrade(): CadenceGrade {
+  return {
+    immediateFlushMisses: 0,
+    throughputFlushMisses: 0,
+    cadenceShortfallCount: 0,
+    immediateDeliveryCount: 0,
+    throughputDeliveryCount: 0,
+    waitedMs: 0,
+  };
+}
+
+export function addCadenceGrade(into: CadenceGrade, from: CadenceGrade): CadenceGrade {
+  into.immediateFlushMisses += from.immediateFlushMisses;
+  into.throughputFlushMisses += from.throughputFlushMisses;
+  into.cadenceShortfallCount += from.cadenceShortfallCount;
+  into.immediateDeliveryCount += from.immediateDeliveryCount;
+  into.throughputDeliveryCount += from.throughputDeliveryCount;
+  into.waitedMs += from.waitedMs;
+  return into;
+}
+
+/** One single-terminal fleet, for a cadence probe that owns its own batcher. */
+function cadenceFleet(modules: FlowControlModules, id: string): FlowControlFleet {
+  return new FlowControlFleet(modules, {
+    terminals: [
+      {
+        id,
+        agentActive: false,
+        lastOutputTime: 1_700_000_000_000,
+        scrollbackLines: SCROLLBACK_MIN,
+        cols: 80,
+      },
+    ],
+    focusedId: null,
+  });
+}
+
+/** Yield past whatever the batcher armed with `setImmediate`. */
+async function nextImmediateTurn(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+export async function gradeFlushCadence(
+  modules: FlowControlModules,
+  chunkBytes = 2048
+): Promise<CadenceGrade> {
+  const grade = emptyCadenceGrade();
+  const threshold = modules.constants.PORT_BATCH_THRESHOLD_BYTES;
+  const delayMs = modules.constants.PORT_BATCH_THROUGHPUT_DELAY_MS;
+
+  const immediateId = "cadence-immediate";
+  const throughputId = "cadence-throughput";
+  const immediateFleet = cadenceFleet(modules, immediateId);
+  const throughputFleet = cadenceFleet(modules, throughputId);
+
+  // One write on I, two on T, all sub-threshold on their own batcher — so the
+  // only thing that can deliver either is the cadence machine.
+  if (chunkBytes >= threshold) grade.cadenceShortfallCount += 1;
+  if (chunkBytes * 2 >= threshold) grade.cadenceShortfallCount += 1;
+
+  try {
+    const startedAt = performance.now();
+
+    const immediateChunk = makeChunk(immediateId, chunkBytes);
+    immediateFleet.noteChunk(immediateId, immediateChunk);
+    immediateFleet.recordWrite(immediateId, chunkBytes);
+    immediateFleet.batchers[0]?.write(immediateId, immediateChunk, chunkBytes, true);
+
+    for (let index = 0; index < 2; index += 1) {
+      const chunk = makeChunk(throughputId, chunkBytes);
+      throughputFleet.noteChunk(throughputId, chunk);
+      throughputFleet.recordWrite(throughputId, chunkBytes);
+      throughputFleet.batchers[0]?.write(throughputId, chunk, chunkBytes, true);
+    }
+
+    // Nothing may have crossed the sink yet: both entries are under the
+    // synchronous threshold, so a delivery here is a batcher that ignored its
+    // own cadence and flushed on write.
+    if (immediateFleet.deliveredChunkCount !== 0) grade.immediateFlushMisses += 1;
+    if (throughputFleet.deliveredChunkCount !== 0) grade.throughputFlushMisses += 1;
+
+    await nextImmediateTurn();
+
+    // The `idle → latency` immediate must have fired, delivering I exactly once
+    // and all of its bytes.
+    if (immediateFleet.deliveredChunkCount !== 1) grade.immediateFlushMisses += 1;
+    if (immediateFleet.deliveredBytes !== chunkBytes) grade.immediateFlushMisses += 1;
+    // T's immediate was CANCELLED by its second write, so T must still be
+    // holding. A batcher that lost the latency → throughput swap delivers here.
+    if (throughputFleet.deliveredChunkCount !== 0) grade.throughputFlushMisses += 1;
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs * 2 + 8);
+    });
+    grade.waitedMs = performance.now() - startedAt;
+
+    // The throughput timeout must have fired, delivering both chunks as one
+    // merged entry — and I must not have been delivered a second time.
+    if (throughputFleet.deliveredChunkCount !== 1) grade.throughputFlushMisses += 1;
+    if (throughputFleet.deliveredBytes !== chunkBytes * 2) grade.throughputFlushMisses += 1;
+    if (immediateFleet.deliveredChunkCount !== 1) grade.immediateFlushMisses += 1;
+
+    grade.immediateDeliveryCount = immediateFleet.deliveredChunkCount;
+    grade.throughputDeliveryCount = throughputFleet.deliveredChunkCount;
+  } finally {
+    immediateFleet.dispose();
+    throughputFleet.dispose();
+  }
+
+  return grade;
 }
 
 /**
- * The IPC fallback's own drive shape, mirroring `pty-host.ts:1164-1216`
- * exactly: the capacity gate first, then `addBytes`, then `getUtilization`,
- * then `applyBackpressure`. There is no batcher on this path — the fallback
- * writes chunk by chunk — and `IpcQueueDeps` has no focused-terminal member, so
- * this arm is where the focus exemption's absence becomes observable.
+ * The IPC fallback's own drive shape.
+ *
+ * **This is a MIRROR of `electron/pty-host.ts`'s fallback block, not a call
+ * into it.** `pty-host.ts` is a UtilityProcess entry point: it has zero
+ * exports, and its module body throws at line 89 when `process.parentPort` is
+ * absent, which it is in every plain Node process. There is no seam to import,
+ * so the ordered call sequence below is reproduced here — the manager methods
+ * are the real ones, but the ORDER they are called in is this fixture's copy of
+ * the host's.
+ *
+ * What can therefore drift without any queue-manager change: the capacity gate
+ * moving after `addBytes`, the utilization read being hoisted or dropped, an
+ * `applyBackpressure` call being added or removed, or the drop branch growing a
+ * step. {@link ipcFallbackSequenceMisses} reads that ordered sequence back out
+ * of `pty-host.ts`'s own source and compares it to what this function does, so
+ * the drift is graded rather than trusted — see PERF-371's
+ * `ipcFallbackSequenceMisses`.
+ *
+ * There is no batcher on this path — the fallback writes chunk by chunk — and
+ * `IpcQueueDeps` has no focused-terminal member, so this arm is where the focus
+ * exemption's absence becomes observable.
  */
 export function runIpcFlood(fleet: FlowControlFleet, plan: FloodPlan): FloodResult {
   const ids = [...plan.chunksById.keys()];
@@ -800,25 +1042,137 @@ export function runIpcFlood(fleet: FlowControlFleet, plan: FloodPlan): FloodResu
   let writeCount = 0;
   let acceptedWriteCount = 0;
   let rejectedWriteCount = 0;
+  let subjectMs = 0;
+  let timerSampleCount = 0;
 
-  const started = performance.now();
+  const wallStart = performance.now();
   for (let round = 0; round < maxRounds; round += 1) {
     for (const id of ids) {
       if ((plan.chunksById.get(id) ?? 0) <= round) continue;
       writeCount += 1;
-      if (fleet.ipcQueue.isAtCapacity(id, plan.chunkBytes)) {
+      const gateAt = performance.now();
+      const atCapacity = fleet.ipcQueue.isAtCapacity(id, plan.chunkBytes);
+      subjectMs += performance.now() - gateAt;
+      timerSampleCount += 2;
+      if (atCapacity) {
         rejectedWriteCount += 1;
         continue;
       }
+      // Ledger first, and OUTSIDE the bracket: `applyBackpressure` can emit,
+      // and an emission must be stamped with a ledger that already holds the
+      // chunk in flight.
       fleet.recordWrite(id, plan.chunkBytes);
       acceptedWriteCount += 1;
+      const at = performance.now();
       fleet.ipcQueue.addBytes(id, plan.chunkBytes);
       fleet.ipcQueue.applyBackpressure(id, fleet.ipcQueue.getUtilization(id));
+      subjectMs += performance.now() - at;
+      timerSampleCount += 2;
     }
   }
-  const ms = performance.now() - started;
+  const wallMs = performance.now() - wallStart;
 
-  return { ms, writeCount, acceptedWriteCount, rejectedWriteCount, chunkBytes: plan.chunkBytes };
+  return {
+    ms: subjectMs,
+    wallMs,
+    writeCount,
+    acceptedWriteCount,
+    rejectedWriteCount,
+    chunkBytes: plan.chunkBytes,
+    timerSampleCount,
+  };
+}
+
+/**
+ * The ordered `ipcQueueManager` calls `electron/pty-host.ts`'s IPC-fallback
+ * block makes, as {@link runIpcFlood} mirrors them.
+ *
+ * Source order, including the drop branch's utilization read, which the arms
+ * here never reach because nothing in them is at capacity:
+ *
+ *   isAtCapacity → getUtilization (drop) → addBytes → getUtilization → applyBackpressure
+ */
+export const IPC_FALLBACK_HOST_SEQUENCE: readonly string[] = [
+  "isAtCapacity",
+  "getUtilization",
+  "addBytes",
+  "getUtilization",
+  "applyBackpressure",
+];
+
+const PTY_HOST_SOURCE_URL = new URL("../../../electron/pty-host.ts", import.meta.url);
+
+/** The `if` that opens the IPC fallback block in `pty-host.ts`. */
+const IPC_FALLBACK_BLOCK_MARKER = "if (!visualWritten && !isBackgrounded && !isSuspended) {";
+
+/**
+ * Whether the host sequence {@link runIpcFlood} mirrors is still the sequence
+ * `pty-host.ts` performs. 0 = no drift.
+ *
+ * `pty-host.ts` exports nothing and refuses to evaluate outside a
+ * UtilityProcess, so its fallback path cannot be imported and driven — the
+ * mirror in {@link runIpcFlood} is unavoidable. What IS avoidable is trusting
+ * it: this reads the ordered `ipcQueueManager.<method>` calls straight out of
+ * the host's own source and compares them positionally against
+ * {@link IPC_FALLBACK_HOST_SEQUENCE}. A gate that moves, a utilization read
+ * that is dropped or hoisted, or an added step scores, and so does a block this
+ * cannot find at all — the failure is reported, never resolved in the
+ * convenient direction.
+ */
+export function ipcFallbackSequenceMisses(): number {
+  let source: string;
+  try {
+    source = readFileSync(PTY_HOST_SOURCE_URL, "utf8");
+  } catch {
+    return IPC_FALLBACK_HOST_SEQUENCE.length;
+  }
+  return ipcFallbackSequenceMissesIn(source);
+}
+
+/**
+ * {@link ipcFallbackSequenceMisses} over a supplied source, so the unit test can
+ * drive the drift cases — a moved gate, a dropped read, an added step, a block
+ * that cannot be found — without editing product code.
+ */
+export function ipcFallbackSequenceMissesIn(source: string): number {
+  const calls = extractIpcFallbackSequence(source);
+  if (calls === null) return IPC_FALLBACK_HOST_SEQUENCE.length;
+
+  let misses = Math.abs(calls.length - IPC_FALLBACK_HOST_SEQUENCE.length);
+  const shared = Math.min(calls.length, IPC_FALLBACK_HOST_SEQUENCE.length);
+  for (let index = 0; index < shared; index += 1) {
+    if (calls[index] !== IPC_FALLBACK_HOST_SEQUENCE[index]) misses += 1;
+  }
+  return misses;
+}
+
+/**
+ * The ordered `ipcQueueManager.<method>` calls inside the host's IPC-fallback
+ * block, or null when the block cannot be located or its braces do not balance.
+ */
+export function extractIpcFallbackSequence(source: string): string[] | null {
+  const markerAt = source.indexOf(IPC_FALLBACK_BLOCK_MARKER);
+  if (markerAt === -1) return null;
+
+  let cursor = markerAt + IPC_FALLBACK_BLOCK_MARKER.length;
+  let depth = 1;
+  while (cursor < source.length && depth > 0) {
+    const char = source[cursor];
+    if (char === "{") depth += 1;
+    else if (char === "}") depth -= 1;
+    cursor += 1;
+  }
+  if (depth !== 0) return null;
+
+  const block = source.slice(markerAt, cursor);
+  const calls: string[] = [];
+  const pattern = /ipcQueueManager\.([A-Za-z0-9_]+)\s*\(/g;
+  let match = pattern.exec(block);
+  while (match !== null) {
+    calls.push(match[1] as string);
+    match = pattern.exec(block);
+  }
+  return calls;
 }
 
 /**

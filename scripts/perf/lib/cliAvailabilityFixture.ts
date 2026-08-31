@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import nodeModule from "node:module";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 import type { AgentConfig } from "../../../shared/config/agentRegistry";
 import type { CliAvailability } from "../../../shared/types/ipc";
@@ -91,16 +91,21 @@ interface CliBridge {
   /** `refreshPath()` calls, incremented inside the stub itself. */
   refreshCalls: number;
   /**
-   * Keys the stubbed store persisted.
+   * Keys the stubbed store persisted, in write order.
    *
    * `notifyDuplicateInstalls` writes a `duplicate-cli-warning:<agentId>`
-   * milestone the first time it sees an agent with two installs, and never
-   * again — so this is deliberately NOT a predicate: it is non-zero on the
-   * first iteration and zero on every one after, which is exactly the shape a
-   * predicate must not have. Kept because it makes the write observable while
-   * debugging.
+   * milestone the first time it sees an agent with two installs and never
+   * again, so a raw tally across iterations is non-zero on the first and zero on
+   * every one after — the one shape a predicate must not have. That is why the
+   * store is RESET at the top of every iteration ({@link resetMilestoneStore}):
+   * with the transition put back, "written exactly once, then suppressed" is a
+   * stable claim that holds on every iteration and is graded as
+   * `milestonePersistenceMisses`.
    */
   storedKeys: string[];
+  /** Installed by the store stub at its own module evaluation. */
+  resetStore?: () => void;
+  readStore?: (key: string) => unknown;
 }
 
 const BRIDGE_KEY = "__daintreePerfCliAvailabilityBridge";
@@ -186,7 +191,7 @@ export const isSmokeTest = false;
 
 const STORE_STUB_SOURCE = `
 const bridge = globalThis[${JSON.stringify(BRIDGE_KEY)}];
-const data = {};
+let data = {};
 export const store = {
   get: (key) => data[key],
   set: (key, value) => { data[key] = value; bridge.storedKeys.push(key); },
@@ -194,6 +199,8 @@ export const store = {
   has: (key) => Object.hasOwn(data, key),
   onDidChange: () => () => undefined,
 };
+bridge.resetStore = () => { data = {}; bridge.storedKeys.length = 0; };
+bridge.readStore = (key) => data[key];
 export default store;
 `;
 
@@ -276,7 +283,15 @@ function installModuleStubs(): void {
   nodeModule.register(dataUrl(HOOKS_SOURCE));
 }
 
-installModuleStubs();
+// NOT called at module scope. `scenarios/index.ts` imports every scenario
+// module, so a hook registered here would be live in every run of every family
+// — and this one rewrites the bare `electron` specifier for the whole process.
+// It ran LAST at import time and therefore FIRST in Node's chain, which served
+// `lib/ipcEnvelopeFixture.ts`'s in-memory `ipcMain` graph an inert stand-in
+// whose `handle` is a no-op: PERF-360..364 died on "no handler registered for
+// perf:envelope-probe" before measuring anything. Registering from
+// `loadCliModules()` instead keeps the seam to the runs that asked for it, and
+// still puts it ahead of every module-scope hook in the ones that did.
 
 // --- Registry ----------------------------------------------------------------
 
@@ -308,6 +323,7 @@ let modulesPromise: Promise<CliModules> | null = null;
 export function loadCliModules(): Promise<CliModules> {
   if (modulesPromise === null) {
     ensureCliEnv();
+    installModuleStubs();
     modulesPromise = (async () => {
       const registryModule: RegistryModule = await import("../../../shared/config/agentRegistry");
       const serviceModule: ServiceModule =
@@ -348,6 +364,165 @@ function plantShim(dir: string, command: string): void {
     writeFileSync(path, isWindows ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n");
     if (!isWindows) chmodSync(path, 0o755);
   }
+}
+
+// --- Credential planting -----------------------------------------------------
+
+/**
+ * The auth half of a probe, planted so it can be graded.
+ *
+ * `checkAgent` runs the real `checkAuth` for every agent whose binary it found,
+ * and that walk — env vars, then the platform config paths, then the
+ * platform-independent ones, each an `fs.access` under HOME — is inside every
+ * measured refresh. With an empty synthetic HOME and no credential env vars,
+ * EVERY found agent came back `unauthenticated`, and `gradeRefresh` collapsed
+ * every non-`missing` state into one found set: deleting the auth walk turned
+ * all of them `ready`, removed the work, and left the found-set, coverage,
+ * spawn, PATH-hermeticity and duplicate terms untouched.
+ *
+ * So the fixture plants credentials for HALF the roster and grades the
+ * distinction per agent. Both directions are then live on the same arm: a probe
+ * that skips `checkAuth` reports `ready` for agents this fixture left without
+ * credentials, and one whose credential discovery always fails reports
+ * `unauthenticated` for agents it planted files for.
+ *
+ * The expectation is derived from the PATHS this fixture wrote, not from the
+ * agents it chose, because two agents share a credential file: `antigravity`
+ * and `gemini` both read `.gemini/oauth_creds.json`, so planting for one
+ * authenticates the other. Deriving from the path set makes that fall out of
+ * the arithmetic instead of becoming a wrong expectation.
+ */
+function candidateAuthPaths(config: AgentConfig): string[] {
+  const check = config.authCheck;
+  if (check === undefined) return [];
+  const platform = process.platform as "darwin" | "linux" | "win32";
+  return [...(check.configPaths?.[platform] ?? []), ...(check.configPathsAll ?? [])];
+}
+
+/** Every env var any agent treats as proof of auth. */
+export function authEnvVars(registry: Record<string, AgentConfig>): string[] {
+  const names = new Set<string>();
+  for (const config of Object.values(registry)) {
+    const envVar = config.authCheck?.envVar;
+    if (envVar === undefined) continue;
+    for (const name of Array.isArray(envVar) ? envVar : [envVar]) names.add(name);
+  }
+  return [...names];
+}
+
+/**
+ * Relative paths this fixture wrote a credential file to, under the synthetic
+ * HOME. The oracle's own record.
+ */
+let plantedAuthPaths: Set<string> | null = null;
+
+/**
+ * Clear every credential environment variable the roster recognises.
+ *
+ * `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are routinely set on a developer's
+ * machine, and `checkAuth` checks env vars FIRST and returns true on the first
+ * hit — so without this, several agents would report `ready` here because of
+ * the measuring machine's shell rather than anything this fixture planted. That
+ * was already true before the states were graded; it was simply invisible,
+ * because every state above `missing` was treated as the same answer.
+ */
+function clearAuthEnvironment(registry: Record<string, AgentConfig>): void {
+  for (const name of authEnvVars(registry)) delete process.env[name];
+}
+
+/**
+ * Plant credentials for every second agent that declares config paths, and
+ * record what was written.
+ *
+ * Parity over registry order rather than a hand-written id list, so a roster
+ * change cannot silently empty one half — {@link authSplitMisses} fails if it
+ * ever does. {@link ALWAYS_ABSENT_AGENT_ID} is skipped: its binary is never
+ * planted, so it has no auth state to grade and a credential for it would only
+ * be noise.
+ */
+function plantAuthCredentials(registry: Record<string, AgentConfig>): Set<string> {
+  if (plantedAuthPaths !== null) return plantedAuthPaths;
+  const home = join(ensureCliEnv(), "home");
+  const planted = new Set<string>();
+
+  let index = 0;
+  for (const [id, config] of Object.entries(registry)) {
+    if (id === ALWAYS_ABSENT_AGENT_ID) continue;
+    const paths = candidateAuthPaths(config);
+    if (paths.length === 0) continue;
+    const authenticate = index % 2 === 0;
+    index += 1;
+    if (!authenticate) continue;
+    for (const relative of paths) {
+      const full = join(home, relative);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, "{}\n");
+      planted.add(relative);
+    }
+  }
+
+  plantedAuthPaths = planted;
+  return planted;
+}
+
+/**
+ * Prepare the auth environment: no inherited credential env vars, and the
+ * fixture's own credential files on disk. Idempotent, and run before the first
+ * arm is built.
+ */
+export function prepareAuthEnvironment(registry: Record<string, AgentConfig>): Set<string> {
+  clearAuthEnvironment(registry);
+  return plantAuthCredentials(registry);
+}
+
+/**
+ * What state each found agent must report, given the credentials this fixture
+ * wrote. Arithmetic over the fixture's own plant record; nothing here asks the
+ * service.
+ */
+export function expectedAuthState(
+  config: AgentConfig,
+  planted: ReadonlySet<string>
+): "ready" | "unauthenticated" {
+  if (config.authCheck === undefined) return "ready";
+  const paths = candidateAuthPaths(config);
+  if (paths.length === 0) return "unauthenticated";
+  return paths.some((relative) => planted.has(relative)) ? "ready" : "unauthenticated";
+}
+
+// --- Milestone persistence ---------------------------------------------------
+
+/**
+ * Put the duplicate-install milestone transition back, so it can be graded.
+ *
+ * `notifyDuplicateInstalls` writes `orchestrationMilestones` once per agent and
+ * then skips forever, so across iterations of one process the write happens on
+ * the first and never again. Resetting the stubbed store at the top of every
+ * iteration restores the transition, which is what makes "written exactly once,
+ * and suppressed on the re-probe that follows" a claim that holds on every
+ * iteration rather than only the first.
+ *
+ * A no-op under Vitest, where the store stub is never installed.
+ */
+export function resetMilestoneStore(): void {
+  bridge.resetStore?.();
+}
+
+/** Store writes recorded so far, by key, in write order. */
+export function storeWriteKeys(): readonly string[] {
+  return bridge.storedKeys;
+}
+
+/** The `orchestrationMilestones` keys currently persisted in the stubbed store. */
+export function persistedMilestoneKeys(): string[] {
+  const value = bridge.readStore?.("orchestrationMilestones");
+  if (typeof value !== "object" || value === null) return [];
+  return Object.keys(value as Record<string, unknown>);
+}
+
+/** The milestone key `notifyDuplicateInstalls` writes for one agent. */
+export function duplicateMilestoneKey(agentId: string): string {
+  return `duplicate-cli-warning:${agentId}`;
 }
 
 // --- Arms --------------------------------------------------------------------
@@ -424,9 +599,17 @@ export function expectedSpawnsFor(
 
 let arms: Map<CliArmLabel, CliArm> | null = null;
 
+/** The credential paths {@link prepareAuthEnvironment} wrote, for the oracle. */
+export function plantedCredentialPaths(): ReadonlySet<string> {
+  return plantedAuthPaths ?? new Set<string>();
+}
+
 function buildArms(modules: CliModules): Map<CliArmLabel, CliArm> {
   const root = ensureCliEnv();
   const registry = modules.registry;
+  // Before any arm exists, and therefore before any refresh: no inherited
+  // credential env vars, and this fixture's own credential files on disk.
+  prepareAuthEnvironment(registry);
   const ids = modules.agentIds;
   const forced = forcedPlantIds(registry);
   const eligible = ids.filter((id) => id !== ALWAYS_ABSENT_AGENT_ID);
@@ -570,6 +753,9 @@ export interface RefreshGrade {
   spawnCountMisses: number;
   pathRefreshMisses: number;
   pathHermeticityMisses: number;
+  authStateMisses: number;
+  authHermeticityMisses: number;
+  authSplitMisses: number;
 }
 
 export function emptyRefreshGrade(): RefreshGrade {
@@ -580,6 +766,9 @@ export function emptyRefreshGrade(): RefreshGrade {
     spawnCountMisses: 0,
     pathRefreshMisses: 0,
     pathHermeticityMisses: 0,
+    authStateMisses: 0,
+    authHermeticityMisses: 0,
+    authSplitMisses: 0,
   };
 }
 
@@ -590,6 +779,9 @@ export function addRefreshGrade(into: RefreshGrade, from: RefreshGrade): Refresh
   into.spawnCountMisses += from.spawnCountMisses;
   into.pathRefreshMisses += from.pathRefreshMisses;
   into.pathHermeticityMisses += from.pathHermeticityMisses;
+  into.authStateMisses += from.authStateMisses;
+  into.authHermeticityMisses += from.authHermeticityMisses;
+  into.authSplitMisses += from.authSplitMisses;
   return into;
 }
 
@@ -601,6 +793,9 @@ export function refreshMisses(grade: RefreshGrade): Record<string, number> {
     spawnCountMisses: grade.spawnCountMisses,
     pathRefreshMisses: grade.pathRefreshMisses,
     pathHermeticityMisses: grade.pathHermeticityMisses,
+    authStateMisses: grade.authStateMisses,
+    authHermeticityMisses: grade.authHermeticityMisses,
+    authSplitMisses: grade.authSplitMisses,
   };
 }
 
@@ -644,7 +839,65 @@ export function gradeRefresh(
   );
   grade.pathHermeticityMisses += pathHermeticityMisses(modules, arm);
 
+  // Auth discovery, graded per agent against the fixture's own credential
+  // planting. Only agents whose binary this arm planted have an auth state at
+  // all; a missing binary is the found-set term's business, not this one.
+  const credentials = plantedCredentialPaths();
+  let expectedReady = 0;
+  let expectedUnauthenticated = 0;
+  let checkedAgents = 0;
+  for (const id of arm.plantedIds) {
+    const config = modules.registry[id];
+    if (config === undefined) continue;
+    const expected = expectedAuthState(config, credentials);
+    if (config.authCheck !== undefined) checkedAgents += 1;
+    if (expected === "ready") expectedReady += 1;
+    else expectedUnauthenticated += 1;
+    const actual = observation.availability[id];
+    if (actual === undefined || actual === "missing") continue;
+    if (actual !== expected) grade.authStateMisses += 1;
+  }
+  // Only a roster with auth checks on its planted agents has a split to claim.
+  if (checkedAgents >= 2 && (expectedReady === 0 || expectedUnauthenticated === 0)) {
+    grade.authSplitMisses += 1;
+  }
+  grade.authHermeticityMisses += authHermeticityMisses(modules);
+
   return grade;
+}
+
+/**
+ * Whether the auth half of the probe environment can still produce an honest
+ * answer. 0 = hermetic.
+ *
+ * Three ways it stops being one, and each is reported rather than resolved in
+ * the convenient direction: a credential env var survived into this process
+ * (`checkAuth` reads env FIRST and returns true on the first hit, so a
+ * developer's own `ANTHROPIC_API_KEY` would authenticate six agents this
+ * fixture deliberately left unauthenticated); a file this fixture planted is no
+ * longer there, which would flip an expected `ready` the other way; or a
+ * credential exists under the synthetic HOME for an agent this fixture chose
+ * NOT to authenticate, which is the direction a leaked real home would take.
+ */
+export function authHermeticityMisses(modules: CliModules): number {
+  const home = join(fixtureRoot ?? "\u0000", "home");
+  const planted = plantedCredentialPaths();
+  let misses = 0;
+
+  for (const name of authEnvVars(modules.registry)) {
+    if (process.env[name] !== undefined) misses += 1;
+  }
+  for (const relative of planted) {
+    if (!existsSync(join(home, relative))) misses += 1;
+  }
+  for (const [id, config] of Object.entries(modules.registry)) {
+    if (id === ALWAYS_ABSENT_AGENT_ID) continue;
+    if (expectedAuthState(config, planted) !== "unauthenticated") continue;
+    for (const relative of candidateAuthPaths(config)) {
+      if (existsSync(join(home, relative))) misses += 1;
+    }
+  }
+  return misses;
 }
 
 // --- Console quieting --------------------------------------------------------

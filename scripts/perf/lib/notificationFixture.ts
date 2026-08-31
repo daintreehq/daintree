@@ -1,6 +1,8 @@
+import { existsSync } from "node:fs";
 import nodeModule from "node:module";
 import { tmpdir } from "node:os";
 import { resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { NotificationSettings } from "../../../shared/types/ipc/api";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent";
@@ -317,6 +319,33 @@ const STUB_TABLE: ReadonlyArray<[string, string]> = MODULE_STUBS.map(
   ({ suffix, source }) => [suffix, dataUrl(source)] as [string, string]
 );
 
+/**
+ * Product modules this graph must have FOR REAL, even though another fixture in
+ * the same matrix stubs them process-wide.
+ *
+ * `lib/cliAvailabilityFixture.ts` calls its own `installModuleStubs()` at module
+ * evaluation, and `scenarios/index.ts` imports every scenario module eagerly —
+ * so PERF-393/394's resolve hook is live in EVERY perf run, whichever id
+ * `--scenario` names. Its table remaps `/electron/store` to a four-method stub
+ * with no `path` and no `initializeStore`.
+ *
+ * Resolve hooks chain, and this file's hook delegated straight through
+ * `nextResolve`, so the chain handed back that stub and the real electron-store
+ * never loaded: `store.path` came back `undefined` and PERF-320..325 died in the
+ * user-data guard below before a single iteration ran. Short-circuiting these
+ * paths to the real file, computed from the importing module's own URL rather
+ * than taken from the chain, is what makes this family independent of whatever
+ * else the matrix has installed.
+ *
+ * `/electron/setup/environment` is the sibling entry in that same foreign table.
+ * It is listed here for the same reason, not because the notification graph is
+ * known to reach it — a fixture must not depend on the load order of a module
+ * it does not own.
+ */
+const FORCE_REAL_SUFFIXES: readonly string[] = ["/electron/store", "/electron/setup/environment"];
+
+const SOURCE_EXTENSIONS: readonly string[] = [".ts", ".js", ".mts", ".mjs"];
+
 function stubUrlFor(resolvedUrl: string): string | null {
   const withoutQuery = resolvedUrl.split("?")[0] ?? resolvedUrl;
   const withoutExt = withoutQuery.replace(/\.(ts|js|mts|mjs)$/, "");
@@ -326,11 +355,54 @@ function stubUrlFor(resolvedUrl: string): string | null {
   return null;
 }
 
+/**
+ * Resolve a relative specifier against its importer WITHOUT entering the hook
+ * chain, so a foreign stub registered by another fixture cannot answer for a
+ * module this family owns. Returns null unless the target is on
+ * `FORCE_REAL_SUFFIXES` and a real source file exists for it.
+ */
+function forcedRealUrlFor(specifier: string, parentURL: string | undefined): string | null {
+  if (parentURL === undefined || !specifier.startsWith(".")) return null;
+  let joined: string;
+  try {
+    joined = new URL(specifier, parentURL).href;
+  } catch {
+    return null;
+  }
+  if (!joined.startsWith("file:")) return null;
+  const withoutExt = (joined.split("?")[0] ?? joined).replace(/\.(ts|js|mts|mjs)$/, "");
+  if (!FORCE_REAL_SUFFIXES.some((suffix) => withoutExt.endsWith(suffix))) return null;
+  for (const extension of SOURCE_EXTENSIONS) {
+    const candidate = `${withoutExt}${extension}`;
+    if (existsSync(fileURLToPath(candidate))) return candidate;
+  }
+  return null;
+}
+
 const HOOKS_SOURCE = `
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 const ELECTRON_STUB_URL = ${JSON.stringify(ELECTRON_STUB_URL)};
 const STUB_TABLE = ${JSON.stringify(STUB_TABLE)};
+const FORCE_REAL_SUFFIXES = ${JSON.stringify(FORCE_REAL_SUFFIXES)};
+const SOURCE_EXTENSIONS = ${JSON.stringify(SOURCE_EXTENSIONS)};
+function forcedRealUrlFor(specifier, parentURL) {
+  if (parentURL === undefined || !specifier.startsWith(".")) return null;
+  let joined;
+  try { joined = new URL(specifier, parentURL).href; } catch { return null; }
+  if (!joined.startsWith("file:")) return null;
+  const withoutExt = String(joined).split("?")[0].replace(/\\.(ts|js|mts|mjs)$/, "");
+  if (!FORCE_REAL_SUFFIXES.some((suffix) => withoutExt.endsWith(suffix))) return null;
+  for (const extension of SOURCE_EXTENSIONS) {
+    const candidate = withoutExt + extension;
+    if (existsSync(fileURLToPath(candidate))) return candidate;
+  }
+  return null;
+}
 export async function resolve(specifier, context, nextResolve) {
   if (specifier === "electron") return { url: ELECTRON_STUB_URL, shortCircuit: true };
+  const forced = forcedRealUrlFor(specifier, context && context.parentURL);
+  if (forced) return { url: forced, shortCircuit: true };
   const resolved = await nextResolve(specifier, context);
   const withoutExt = String(resolved.url).split("?")[0].replace(/\\.(ts|js|mts|mjs)$/, "");
   for (const [suffix, url] of STUB_TABLE) {
@@ -339,6 +411,13 @@ export async function resolve(specifier, context, nextResolve) {
   return resolved;
 }
 `;
+
+/** The subset of Node's resolve-hook context this fixture reads. */
+interface ResolveHookContext {
+  parentURL?: string;
+  conditions?: readonly string[];
+  importAttributes?: Record<string, string>;
+}
 
 let hooksInstalled = false;
 
@@ -360,8 +439,8 @@ function installModuleStubs(): void {
       registerHooks?: (hooks: {
         resolve: (
           specifier: string,
-          context: unknown,
-          next: (s: string, c: unknown) => { url: string }
+          context: ResolveHookContext,
+          next: (s: string, c: ResolveHookContext) => { url: string }
         ) => { url: string; shortCircuit?: boolean };
       }) => void;
     }
@@ -371,6 +450,8 @@ function installModuleStubs(): void {
     registerHooks({
       resolve(specifier, context, nextResolve) {
         if (specifier === "electron") return { url: ELECTRON_STUB_URL, shortCircuit: true };
+        const forced = forcedRealUrlFor(specifier, context?.parentURL);
+        if (forced) return { url: forced, shortCircuit: true };
         const resolved = nextResolve(specifier, context);
         const stub = stubUrlFor(resolved.url);
         return stub ? { url: stub, shortCircuit: true } : resolved;
@@ -463,7 +544,19 @@ export function loadNotificationModules(): Promise<NotificationModules> {
       notificationBus();
 
       const storeModule = await import("../../../electron/store");
-      const storePath = storeModule.store.path;
+      const storePath: unknown = storeModule.store.path;
+      // Not `!storePath.startsWith(...)`: when a foreign resolve hook answers
+      // for `electron/store` the export is a stub with no `path` at all, and
+      // reading through it threw a bare TypeError that named neither this
+      // fixture's real problem nor the scenario. Say what happened instead.
+      if (typeof storePath !== "string" || storePath === "") {
+        throw new Error(
+          "electron/store did not resolve to the real electron-store module " +
+            `(store.path is ${typeof storePath === "undefined" ? "undefined" : JSON.stringify(storePath)}). ` +
+            "Another perf fixture's resolve hook is answering for it — see FORCE_REAL_SUFFIXES " +
+            "in lib/notificationFixture.ts."
+        );
+      }
       if (!storePath.startsWith(userData)) {
         throw new Error(
           `electron-store resolved to ${storePath}, outside the benchmark user-data dir ` +

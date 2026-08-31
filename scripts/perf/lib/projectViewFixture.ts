@@ -1,7 +1,9 @@
 import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
 import nodeModule from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ProjectViewManager as ProjectViewManagerType } from "../../../electron/window/ProjectViewManager";
 import type { ViewEntry } from "../../../electron/window/ProjectViewManagerTypes";
 import { createPerfTempRoot } from "./tempRoots";
@@ -109,13 +111,65 @@ export default bridge;
 const ELECTRON_STUB_URL = `data:text/javascript,${encodeURIComponent(ELECTRON_STUB_SOURCE)}`;
 
 /**
+ * The repository root, as a URL prefix. Every product module this family's
+ * graph reaches lives under it.
+ */
+const REPO_ROOT_URL = new URL("../../../", import.meta.url).href;
+
+/**
+ * The real file behind a relative product import, or null when the specifier is
+ * not one.
+ *
+ * This exists to un-shadow product modules another fixture in this harness has
+ * replaced PROCESS-WIDE. `lib/ipcEnvelopeFixture.ts` installs its resolve hook
+ * at MODULE SCOPE, and `scenarios/index.ts` imports every scenario module, so
+ * that hook is live in every run of every family — including this one, which
+ * never asked for it. Its `TelemetryService` stub exports two names;
+ * `GpuCrashMonitorService.ts`, which this family's graph reaches through
+ * `ProjectViewManager`, imports a third (`closeTelemetry`). PERF-074..077 died
+ * at link time on `does not provide an export named 'closeTelemetry'` before a
+ * single iteration ran, and had done since that fixture landed.
+ *
+ * Product source is NodeNext-spelled (`./TelemetryService.js`), so the mapping
+ * back to the file on disk is exact rather than a guess: swap the extension and
+ * require the `.ts` to exist. Anything else — a bare specifier, a parent
+ * outside the repository, a `.js` with no `.ts` sibling — falls through to the
+ * rest of the chain untouched.
+ */
+function realProductModuleUrl(specifier: string, parentUrl: unknown): string | null {
+  if (typeof parentUrl !== "string" || !parentUrl.startsWith(REPO_ROOT_URL)) return null;
+  if (!specifier.startsWith("./") && !specifier.startsWith("../")) return null;
+  if (!specifier.endsWith(".js")) return null;
+  const target = new URL(specifier, parentUrl).href;
+  if (!target.startsWith(REPO_ROOT_URL)) return null;
+  const source = `${target.slice(0, -3)}.ts`;
+  return existsSync(fileURLToPath(source)) ? source : null;
+}
+
+/**
  * Hook module for the older `module.register()` path. Inlined as a data URL so
  * the whole seam stays in this one file rather than needing a sidecar loader.
  */
 const ELECTRON_HOOKS_SOURCE = `
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 const STUB_URL = ${JSON.stringify(ELECTRON_STUB_URL)};
+const REPO_ROOT_URL = ${JSON.stringify(REPO_ROOT_URL)};
 export async function resolve(specifier, context, nextResolve) {
   if (specifier === "electron") return { url: STUB_URL, shortCircuit: true };
+  const parentUrl = context && context.parentURL;
+  if (
+    typeof parentUrl === "string" &&
+    parentUrl.startsWith(REPO_ROOT_URL) &&
+    (specifier.startsWith("./") || specifier.startsWith("../")) &&
+    specifier.endsWith(".js")
+  ) {
+    const target = new URL(specifier, parentUrl).href;
+    if (target.startsWith(REPO_ROOT_URL)) {
+      const source = target.slice(0, -3) + ".ts";
+      if (existsSync(fileURLToPath(source))) return { url: source, shortCircuit: true };
+    }
+  }
   return nextResolve(specifier, context);
 }
 `;
@@ -132,6 +186,14 @@ let hooksInstalled = false;
  * `module.register` is the fallback. Under Vitest neither runs the product
  * graph — Vite's module runner resolves imports itself — so tests mock
  * `electron` with {@link perfElectronStub} instead.
+ *
+ * The hook also pins relative product imports onto the real files
+ * ({@link realProductModuleUrl}). Node runs resolve hooks
+ * most-recently-registered first, and this one registers LAZILY — from
+ * `loadProjectViewModules()`, during the run — so it is installed after every
+ * module-scope registration in the harness and gets the first look. That
+ * ordering is load-bearing: it is what lets `shortCircuit` keep another
+ * family's process-wide stub out of this family's graph.
  */
 function installElectronStub(): void {
   if (hooksInstalled) return;
@@ -147,7 +209,7 @@ function installElectronStub(): void {
       registerHooks?: (hooks: {
         resolve: (
           specifier: string,
-          context: unknown,
+          context: { parentURL?: string },
           next: (s: string, c: unknown) => unknown
         ) => unknown;
       }) => void;
@@ -160,6 +222,8 @@ function installElectronStub(): void {
         if (specifier === "electron") {
           return { url: ELECTRON_STUB_URL, shortCircuit: true };
         }
+        const real = realProductModuleUrl(specifier, context.parentURL);
+        if (real !== null) return { url: real, shortCircuit: true };
         return nextResolve(specifier, context);
       },
     });

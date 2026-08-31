@@ -8,8 +8,14 @@ import {
   expectedEngageOrder,
   expectedTrimOrder,
   expectedVictimSet,
+  extractIpcFallbackSequence,
   FOCUSED_ID,
+  gradeFlushCadence,
+  ipcFallbackSequenceMisses,
+  ipcFallbackSequenceMissesIn,
+  IPC_FALLBACK_HOST_SEQUENCE,
   loadFlowControlModules,
+  measureTimerOverheadNs,
   orderMisses,
   predictGovernorSchedule,
   setDifferenceCount,
@@ -251,5 +257,102 @@ describe("triage orderings are recomputed, not read back", () => {
   it("keeps the focused terminal out of the trim ranking's identity", () => {
     // Guards a fixture edit that renamed the focused terminal out of the fleet.
     expect(spec.terminals.some((terminal) => terminal.id === FOCUSED_ID)).toBe(true);
+  });
+});
+
+/**
+ * The IPC fallback arm mirrors `pty-host.ts`'s call sequence because that file
+ * has no seam to import — zero exports, and a module body that throws outside a
+ * UtilityProcess. The mirror is only worth having if drift in the original is
+ * caught, so the extraction is driven against synthetic sources here and
+ * against the real file below.
+ */
+describe("pty-host IPC fallback drift guard", () => {
+  const block = (body: string): string =>
+    `      if (!visualWritten && !isBackgrounded && !isSuspended) {\n${body}\n      }\n`;
+
+  const SHIPPED = block(`        if (ipcQueueManager.isAtCapacity(id, dataBytes)) {
+          const utilization = ipcQueueManager.getUtilization(id);
+          console.warn(\`full (\${utilization}%)\`);
+          return;
+        }
+        ipcQueueManager.addBytes(id, dataBytes);
+        const utilization = ipcQueueManager.getUtilization(id);
+        ipcQueueManager.applyBackpressure(id, utilization);`);
+
+  it("reads the ordered calls out of a block shaped like the shipped one", () => {
+    expect(extractIpcFallbackSequence(SHIPPED)).toEqual([...IPC_FALLBACK_HOST_SEQUENCE]);
+    expect(ipcFallbackSequenceMissesIn(SHIPPED)).toBe(0);
+  });
+
+  it("scores a gate that moved after the accounting", () => {
+    const moved = block(`        ipcQueueManager.addBytes(id, dataBytes);
+        if (ipcQueueManager.isAtCapacity(id, dataBytes)) return;
+        const utilization = ipcQueueManager.getUtilization(id);
+        ipcQueueManager.applyBackpressure(id, utilization);`);
+    expect(ipcFallbackSequenceMissesIn(moved)).toBeGreaterThan(0);
+  });
+
+  it("scores a dropped step and an added one", () => {
+    const dropped = block(`        if (ipcQueueManager.isAtCapacity(id, dataBytes)) return;
+        ipcQueueManager.addBytes(id, dataBytes);
+        ipcQueueManager.applyBackpressure(id, 0);`);
+    expect(ipcFallbackSequenceMissesIn(dropped)).toBeGreaterThan(0);
+
+    const added = block(`        if (ipcQueueManager.isAtCapacity(id, dataBytes)) {
+          const utilization = ipcQueueManager.getUtilization(id);
+          return;
+        }
+        ipcQueueManager.addBytes(id, dataBytes);
+        const utilization = ipcQueueManager.getUtilization(id);
+        ipcQueueManager.clearQueue(id);
+        ipcQueueManager.applyBackpressure(id, utilization);`);
+    expect(ipcFallbackSequenceMissesIn(added)).toBeGreaterThan(0);
+  });
+
+  it("fails closed when the block cannot be found or its braces do not balance", () => {
+    expect(extractIpcFallbackSequence("nothing here")).toBeNull();
+    expect(ipcFallbackSequenceMissesIn("nothing here")).toBe(IPC_FALLBACK_HOST_SEQUENCE.length);
+    const unbalanced = "if (!visualWritten && !isBackgrounded && !isSuspended) {\n  foo(";
+    expect(extractIpcFallbackSequence(unbalanced)).toBeNull();
+  });
+
+  it("agrees with the shipped pty-host.ts today", () => {
+    expect(ipcFallbackSequenceMisses()).toBe(0);
+  });
+});
+
+/**
+ * The batcher's `(idle → latency → throughput)` cadence machine runs on every
+ * flood write and nothing else in this family can see it: the drive loops all
+ * end in a threshold or forced flush, so the timers are armed, cancelled and
+ * never fire. These are the terms that make deleting the scheduling score.
+ */
+describe("PortBatcher flush cadence", () => {
+  it("delivers on the scheduled turns and not before", async () => {
+    const modules = await loadFlowControlModules();
+    const grade = await gradeFlushCadence(modules, 2048);
+    expect(grade.immediateFlushMisses).toBe(0);
+    expect(grade.throughputFlushMisses).toBe(0);
+    expect(grade.cadenceShortfallCount).toBe(0);
+    expect(grade.immediateDeliveryCount).toBe(1);
+    expect(grade.throughputDeliveryCount).toBe(1);
+    expect(grade.waitedMs).toBeGreaterThan(0);
+  }, 20_000);
+
+  it("flags a probe whose writes would reach the synchronous threshold", async () => {
+    const modules = await loadFlowControlModules();
+    // Over `PORT_BATCH_THRESHOLD_BYTES`, so a delivery would prove nothing about
+    // the cadence — the corpus term says so rather than the run passing.
+    const grade = await gradeFlushCadence(modules, modules.constants.PORT_BATCH_THRESHOLD_BYTES);
+    expect(grade.cadenceShortfallCount).toBeGreaterThan(0);
+  }, 20_000);
+});
+
+describe("timer overhead calibration", () => {
+  it("reports a positive per-call cost", () => {
+    const ns = measureTimerOverheadNs(2_000);
+    expect(ns).toBeGreaterThan(0);
+    expect(Number.isFinite(ns)).toBe(true);
   });
 });

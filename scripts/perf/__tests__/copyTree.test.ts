@@ -6,13 +6,18 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { CopyTreeResult } from "../../../shared/types/ipc/copyTree";
 import {
   addBundleGrade,
+  addProgressGrade,
   bundleMisses,
   countBundleFileEntries,
   emptyBundleGrade,
+  emptyProgressGrade,
   gradeBundle,
   gradeInMemory,
+  gradeProgress,
+  progressMisses,
   symmetricDifferenceSize,
   tokensInBundle,
+  type ProgressRecord,
 } from "../lib/copyTreeFixture";
 import { classifyMetric } from "../lib/comparability";
 import { allScenarios } from "../scenarios";
@@ -222,6 +227,97 @@ describe("perf copytree fixture graders", () => {
   });
 });
 
+/**
+ * Progress delivery, in both directions.
+ *
+ * The sequence pinned here is the one the shipped SDK actually produces through
+ * `CopyTreeService`'s wrapper — 0, 0, 0.8, 0.8, 1, with `format` as the one
+ * SDK-sourced stage label — so the healthy case is a real reading rather than a
+ * shape invented to fit the grader.
+ */
+describe("perf copytree progress grading", () => {
+  const TRACE = "perf-medium";
+
+  function event(overrides: Partial<ProgressRecord> = {}): ProgressRecord {
+    return {
+      stage: "unknown",
+      progress: 0,
+      message: "Starting...",
+      traceId: TRACE,
+      ...overrides,
+    };
+  }
+
+  const HEALTHY: ProgressRecord[] = [
+    event(),
+    event(),
+    event({ progress: 0.8, message: "Selection complete" }),
+    event({ progress: 0.8, stage: "format", message: "Formatting output..." }),
+    event({ progress: 1, message: "Complete" }),
+  ];
+
+  it("scores a real delivered sequence at zero on both terms", () => {
+    expect(progressMisses(gradeProgress(TRACE, HEALTHY))).toEqual({
+      progressMonotonicityMisses: 0,
+      progressTerminalMisses: 0,
+    });
+  });
+
+  it("catches emissions that were deleted outright", () => {
+    const grade = gradeProgress(TRACE, []);
+    expect(grade.progressTerminalMisses).toBe(4);
+    expect(grade.progressEventCount).toBe(0);
+  });
+
+  it("catches a sequence that goes backwards", () => {
+    const backwards = [
+      ...HEALTHY.slice(0, 4),
+      event({ progress: 0.5 }),
+      HEALTHY[4] as ProgressRecord,
+    ];
+    expect(gradeProgress(TRACE, backwards).progressMonotonicityMisses).toBe(1);
+  });
+
+  it("catches a percentage outside its range and an empty message", () => {
+    expect(gradeProgress(TRACE, [event({ progress: 1.5 })]).progressMonotonicityMisses).toBe(1);
+    expect(gradeProgress(TRACE, [event({ message: "" })]).progressMonotonicityMisses).toBe(1);
+  });
+
+  it("catches a wrapper that stopped stamping the caller's traceId", () => {
+    const wrong = HEALTHY.map((item) => ({ ...item, traceId: "somebody-elses" }));
+    expect(gradeProgress(TRACE, wrong).progressMonotonicityMisses).toBe(HEALTHY.length);
+  });
+
+  it("catches a sequence that never completes", () => {
+    expect(gradeProgress(TRACE, HEALTHY.slice(0, 4)).progressTerminalMisses).toBe(1);
+  });
+
+  it("catches a sequence that starts part-way through", () => {
+    expect(gradeProgress(TRACE, HEALTHY.slice(2)).progressTerminalMisses).toBe(1);
+  });
+
+  it("catches a constant emitter that satisfies monotonicity trivially", () => {
+    const constant = [event({ progress: 1, stage: "format" }), event({ progress: 1 })];
+    const grade = gradeProgress(TRACE, constant);
+    expect(grade.progressMonotonicityMisses).toBe(0);
+    // First is not 0, and there is only one distinct value.
+    expect(grade.progressTerminalMisses).toBe(2);
+  });
+
+  it("catches a sequence that never entered the SDK's own pipeline reporting", () => {
+    const noStage = HEALTHY.map((item) => ({ ...item, stage: "unknown" }));
+    expect(gradeProgress(TRACE, noStage).progressTerminalMisses).toBe(1);
+  });
+
+  it("sums progress grades across arms", () => {
+    const total = emptyProgressGrade();
+    addProgressGrade(total, gradeProgress(TRACE, HEALTHY));
+    addProgressGrade(total, gradeProgress(TRACE, []));
+    expect(total.progressTerminalMisses).toBe(4);
+    expect(total.progressEventCount).toBe(HEALTHY.length);
+  });
+});
+
 describe("perf copytree scenarios", () => {
   const ids = ["PERF-390", "PERF-391", "PERF-392"];
 
@@ -244,6 +340,8 @@ describe("perf copytree scenarios", () => {
       "generateErrorMisses",
       "outputSizeMisses",
       "partialFileMisses",
+      "progressMonotonicityMisses",
+      "progressTerminalMisses",
       "reportedFileCountMisses",
       "sentinelContentMisses",
     ]);

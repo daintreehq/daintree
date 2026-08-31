@@ -582,6 +582,119 @@ export function gradeInMemory(expectation: BundleExpectation, result: CopyTreeRe
   return grade;
 }
 
+// --- Progress delivery -------------------------------------------------------
+
+/**
+ * Progress delivery, graded.
+ *
+ * Both timed generations install an `onProgress` callback, so every one of them
+ * pays for the SDK's progress plumbing and for `CopyTreeService`'s own wrapper
+ * (the abort check, the percent clamp, the stage fallback and the traceId
+ * stamp) inside the bracket. Counting the callbacks and reporting the number
+ * grades none of it: delete the emissions and both arms get FASTER while every
+ * bundle predicate and `workerRoutingMisses` stay at zero. It is the same
+ * ungraded-operation shape the bundle terms exist to catch, on the cheap half
+ * of the call.
+ *
+ * The plan graded against is this fixture's own, not the subject's: it chose the
+ * traceId, and it knows the generation it asked for is a complete run over a
+ * tree it planted, so the sequence must open at 0, never go backwards, and land
+ * on 1.
+ *
+ *   `progressMonotonicityMisses` — per event: a decrease against the event
+ *                                  before it, a `progress` outside [0,1] or not
+ *                                  finite, an empty message, or a traceId that
+ *                                  is not the one this fixture passed in.
+ *   `progressTerminalMisses`     — per arm: nothing delivered at all, a first
+ *                                  event that is not 0, a last event that is not
+ *                                  1, a single repeated value (a constant
+ *                                  emitter satisfies monotonicity trivially),
+ *                                  and no SDK-sourced stage label anywhere —
+ *                                  `CopyTreeService` writes `"unknown"` when the
+ *                                  SDK supplied none, so a sequence that carries
+ *                                  only `"unknown"` never entered the SDK's own
+ *                                  pipeline reporting.
+ */
+export interface ProgressGrade {
+  progressMonotonicityMisses: number;
+  progressTerminalMisses: number;
+  progressEventCount: number;
+}
+
+export function emptyProgressGrade(): ProgressGrade {
+  return {
+    progressMonotonicityMisses: 0,
+    progressTerminalMisses: 0,
+    progressEventCount: 0,
+  };
+}
+
+export function addProgressGrade(into: ProgressGrade, from: ProgressGrade): ProgressGrade {
+  into.progressMonotonicityMisses += from.progressMonotonicityMisses;
+  into.progressTerminalMisses += from.progressTerminalMisses;
+  into.progressEventCount += from.progressEventCount;
+  return into;
+}
+
+export function progressMisses(grade: ProgressGrade): Record<string, number> {
+  return {
+    progressMonotonicityMisses: grade.progressMonotonicityMisses,
+    progressTerminalMisses: grade.progressTerminalMisses,
+  };
+}
+
+/**
+ * One progress event as it reached the callback, recorded at the call site.
+ *
+ * Deliberately a structural copy rather than the object itself: nothing here
+ * asks the subject to confirm what it sent.
+ */
+export interface ProgressRecord {
+  stage: string;
+  progress: number;
+  message: string;
+  traceId: string | undefined;
+}
+
+export function gradeProgress(
+  expectedTraceId: string,
+  events: readonly ProgressRecord[]
+): ProgressGrade {
+  const grade = emptyProgressGrade();
+  grade.progressEventCount = events.length;
+
+  let previous = Number.NEGATIVE_INFINITY;
+  let sawSdkStage = false;
+  const distinct = new Set<number>();
+  for (const event of events) {
+    if (!Number.isFinite(event.progress) || event.progress < 0 || event.progress > 1) {
+      grade.progressMonotonicityMisses += 1;
+    } else if (event.progress < previous) {
+      grade.progressMonotonicityMisses += 1;
+    }
+    if (event.message.length === 0) grade.progressMonotonicityMisses += 1;
+    if (event.traceId !== expectedTraceId) grade.progressMonotonicityMisses += 1;
+    if (event.stage !== "unknown" && event.stage.length > 0) sawSdkStage = true;
+    distinct.add(event.progress);
+    previous = event.progress;
+  }
+
+  const first = events[0];
+  const last = events[events.length - 1];
+  if (first === undefined || last === undefined) {
+    // Nothing was delivered: the first, last and spread claims all have no
+    // subject, so this is the whole term rather than one quarter of it.
+    grade.progressTerminalMisses += 4;
+    return grade;
+  }
+  if (first.progress !== 0) grade.progressTerminalMisses += 1;
+  if (last.progress !== 1) grade.progressTerminalMisses += 1;
+  if (distinct.size < 2) grade.progressTerminalMisses += 1;
+  if (!sawSdkStage) grade.progressTerminalMisses += 1;
+
+  return grade;
+}
+
 /** Directory bundles are written into, for the partial-file sweep. */
 export function bundleDirectory(): string {
   const dir = join(ensureCopyTreeEnv(), "bundles");
