@@ -86,7 +86,15 @@ describe("WorktreeMenuItems — real Radix primitives", () => {
     // A map missing an entry throws on render, so reaching these at all is most
     // of the assertion. The order is the contract the redesign establishes.
     const rows = screen.getAllByRole("menuitem").map((el) => el.textContent?.trim());
-    expect(rows).toEqual(["Launch", "Open", "Sessions", "Runtime", "Copy", "Delete worktree…"]);
+    expect(rows).toEqual([
+      "Launch",
+      "Open",
+      "Git",
+      "Sessions",
+      "Runtime",
+      "Copy",
+      "Delete worktree…",
+    ]);
   });
 
   it.each(SURFACES)("$name never leads, trails or doubles a root separator", ({ render }) => {

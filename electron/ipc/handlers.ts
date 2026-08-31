@@ -48,6 +48,7 @@ import { registerCliHandlers } from "./handlers/cli.js";
 import { registerHelpHandlers } from "./handlers/help.js";
 import { registerClipboardHandlers } from "./handlers/clipboard.js";
 import { registerGitWriteHandlers } from "./handlers/git-write.js";
+import { registerGitFetchHandlers } from "./handlers/gitFetch.js";
 import { registerGitReadHandlers } from "./handlers/git-read.js";
 import { registerTelemetryHandlers } from "./handlers/telemetry.js";
 import { registerPrivacyHandlers } from "./handlers/privacy.js";
@@ -179,6 +180,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerHelpHandlers());
     register(() => registerClipboardHandlers());
     register(() => registerGitWriteHandlers(deps));
+    register(() => registerGitFetchHandlers(deps));
     register(() => registerGitReadHandlers(deps));
     register(() => registerTelemetryHandlers());
     register(() => registerPrivacyHandlers());

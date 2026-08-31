@@ -898,7 +898,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onStateChanged(callback: (data: DevPreviewStateChangedPayload) => void): () => void;
     onAllSessionsChanged(callback: (data: DevPreviewAllSessionsPayload) => void): () => void;
   };
-  git: {
+  git: GeneratedElectronAPI["git"] & {
     getFileDiff(
       cwd: string,
       filePath: string,

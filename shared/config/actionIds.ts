@@ -185,6 +185,7 @@ export const BUILT_IN_ACTION_IDS = [
   "git.commit",
   "git.push",
   "git.pullRebase",
+  "git.fetch",
   "git.markSafeDirectory",
   "git.getStagingStatus",
 

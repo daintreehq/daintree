@@ -134,6 +134,7 @@ vi.mock("../ProjectStore.js", () => ({
 }));
 
 import path from "path";
+import { resolve as pathResolve } from "path";
 import { WorkspaceClient } from "../WorkspaceClient.js";
 import { projectStore } from "../ProjectStore.js";
 
@@ -186,6 +187,68 @@ describe("WorkspaceClient multi-process manager", () => {
     h(hostIndex).resolveRequest(req.requestId);
     await tick();
   }
+
+  describe("fetchWorktree (#12091)", () => {
+    /** Load a project and settle its init round-trip so the pool can route. */
+    async function loadedProject(rootPath: string): Promise<MockHost> {
+      const load = client.loadProject(rootPath, 1);
+      await readyAndResolveLoad(0);
+      await load;
+      return h(0);
+    }
+
+    it("routes to the owning host and sends the normalized worktree id", async () => {
+      // Monitor ids are `path.resolve`d, so an un-normalized spelling would
+      // route correctly and then miss `monitors.get()` on the far side.
+      const host = await loadedProject("/project-a");
+      host.sendWithResponse.mockClear();
+
+      const pending = client.fetchWorktree("/project-a/./wt-1/", false);
+      await tick();
+
+      const request = host.sendWithResponse.mock.calls.at(-1)![0] as {
+        requestId: string;
+        type: string;
+        worktreeId: string;
+        prune: boolean;
+      };
+      expect(request.type).toBe("fetch-worktree");
+      expect(request.worktreeId).toBe(pathResolve("/project-a/wt-1"));
+      expect(request.prune).toBe(false);
+
+      host.resolveRequest(request.requestId, { result: { status: "success", remote: "origin" } });
+      await expect(pending).resolves.toEqual({ status: "success", remote: "origin" });
+    });
+
+    it("budgets far above the broker default — a fetch can queue behind another repo-wide batch", async () => {
+      const host = await loadedProject("/project-a");
+      host.sendWithResponse.mockClear();
+
+      void client.fetchWorktree("/project-a/wt-1", true).catch(() => {});
+      await tick();
+
+      const timeoutMs = host.sendWithResponse.mock.calls.at(-1)![1] as number;
+      expect(timeoutMs).toBeGreaterThan(30_000);
+    });
+
+    it("rejects rather than hanging when no host owns the path", async () => {
+      await expect(client.fetchWorktree("/nowhere/wt", false)).rejects.toThrow(/No workspace host/);
+    });
+
+    it("rejects when the host answered but no fetch ran", async () => {
+      // A result-less answer means the monitor was gone; resolving would report
+      // a refresh that never happened.
+      const host = await loadedProject("/project-a");
+      host.sendWithResponse.mockClear();
+
+      const pending = client.fetchWorktree("/project-a/wt-1", false);
+      await tick();
+      const request = host.sendWithResponse.mock.calls.at(-1)![0] as { requestId: string };
+      host.resolveRequest(request.requestId, {});
+
+      await expect(pending).rejects.toThrow(/did not run/);
+    });
+  });
 
   describe("loadProject", () => {
     it("creates a new host process for a new project", async () => {

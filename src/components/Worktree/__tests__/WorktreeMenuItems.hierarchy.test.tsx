@@ -71,13 +71,14 @@ function fullyPopulated(): Parameters<typeof renderWorktreeMenu>[0] {
 }
 
 describe("WorktreeMenuItems — root hierarchy", () => {
-  it("renders the eleven intent groups in the specified order", () => {
+  it("renders the twelve intent groups in the specified order", () => {
     const { container } = renderWorktreeMenu(fullyPopulated());
 
     expect(rootRowLabels(container)).toEqual([
       "Launch",
       "Open",
       "Review",
+      "Git",
       "Sessions",
       "Recipes",
       "Runtime",
@@ -114,6 +115,7 @@ describe("WorktreeMenuItems — root hierarchy", () => {
       "Launch",
       "Open",
       "Review",
+      "Git",
       "Sessions",
       "Copy",
       "Organize",
@@ -202,6 +204,56 @@ describe("WorktreeMenuItems — Launch", () => {
     fireEvent.click(screen.getByText("More agents and panels…"));
 
     expect(onOpenPanelPalette).toHaveBeenCalledWith("menu");
+  });
+});
+
+describe("WorktreeMenuItems — Git", () => {
+  it("offers Fetch and Fetch and prune as two distinct rows", () => {
+    const { container } = renderWorktreeMenu({});
+
+    const git = Array.from(container.querySelectorAll("[data-menu-sub]")).find(
+      (sub) => sub.firstElementChild?.textContent?.trim() === "Git"
+    );
+    const rows = Array.from(git?.querySelectorAll("[data-menu-item]") ?? []).map((n) =>
+      n.textContent?.trim()
+    );
+    expect(rows).toEqual(["Fetch", "Fetch and prune"]);
+  });
+
+  it("dispatches git.fetch without prune from the plain row", () => {
+    renderWorktreeMenu({ worktree: makeWorktree({ id: "/wt/a" }) }, "context-menu");
+
+    fireEvent.click(screen.getByText("Fetch"));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "git.fetch",
+      { worktreeId: "/wt/a" },
+      { source: "context-menu" }
+    );
+  });
+
+  it("dispatches git.fetch with prune from the prune row", () => {
+    renderWorktreeMenu({ worktree: makeWorktree({ id: "/wt/a" }) }, "menu");
+
+    fireEvent.click(screen.getByText("Fetch and prune"));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "git.fetch",
+      { worktreeId: "/wt/a", prune: true },
+      { source: "menu" }
+    );
+  });
+
+  it("targets the row's own worktree, not whichever card happens to be focused", () => {
+    renderWorktreeMenu({ worktree: makeWorktree({ id: "/wt/other" }) });
+
+    fireEvent.click(screen.getByText("Fetch"));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "git.fetch",
+      { worktreeId: "/wt/other" },
+      expect.anything()
+    );
   });
 });
 

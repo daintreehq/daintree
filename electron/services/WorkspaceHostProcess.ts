@@ -1011,6 +1011,7 @@ export class WorkspaceHostProcess extends EventEmitter {
         this.handleRequestResult(this.toResult(event, true));
         break;
 
+      case "fetch-worktree-result":
       case "list-branches-result":
       case "get-recent-branches-result":
       case "get-file-diff-result":

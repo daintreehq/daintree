@@ -10,7 +10,7 @@ import type {
   WslGitEligibility,
 } from "../../shared/types/worktree.js";
 import type { CIStatusState } from "../../shared/types/forge.js";
-import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
+import type { WorktreeSnapshot, WorkspaceFetchResult } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
 import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
 import { deriveIssueTitleFromBranch } from "../services/issueExtractor.js";
@@ -91,13 +91,15 @@ export interface WorktreeMonitorCallbacks {
    * Schedule a background `git fetch` for this worktree's repo. Routed through
    * `WorkspaceService` so per-repo serialization and failure-cache state are
    * shared across sibling monitors. Resolves regardless of fetch outcome.
-   * `force` bypasses the per-repo failure cache (manual user-triggered refresh).
+   * `force` bypasses the per-repo failure cache (manual user-triggered refresh);
+   * `prune` is left undefined on scheduled paths, which prunes (#12091).
    */
   onScheduleFetch?: (
     worktreeId: string,
     isCurrent: boolean,
-    force: boolean
-  ) => Promise<void> | void;
+    force: boolean,
+    prune?: boolean
+  ) => Promise<WorkspaceFetchResult | void> | WorkspaceFetchResult | void;
 }
 
 export class WorktreeMonitor {
@@ -342,10 +344,10 @@ export class WorktreeMonitor {
       get hasFetchCallback() {
         return Boolean(monitor.callbacks.onScheduleFetch);
       },
-      onExecuteFetch: (force: boolean) => {
+      onExecuteFetch: (force: boolean, prune?: boolean) => {
         const cb = monitor.callbacks.onScheduleFetch;
         if (!cb) return;
-        return cb(monitor.id, monitor._isCurrent, force);
+        return cb(monitor.id, monitor._isCurrent, force, prune);
       },
       onUpdate: () => monitor.emitUpdate(),
     };
@@ -1475,9 +1477,14 @@ export class WorktreeMonitor {
    * Trigger an immediate background fetch, bypassing the per-repo failure
    * cache. Used by wake handlers and explicit user refresh paths. The
    * coordinator still serializes against any in-flight fetch on the same repo.
+   *
+   * `prune` is undefined for every automatic caller, which prunes as it always
+   * has; the "Fetch" menu row passes `false` to leave remote-tracking refs
+   * alone (#12091). Resolves with the primary remote's result so a
+   * user-triggered fetch can report what actually happened.
    */
-  triggerFetchNow(): Promise<void> {
-    return this.fetchScheduler.triggerNow();
+  triggerFetchNow(prune?: boolean): Promise<WorkspaceFetchResult | void> {
+    return this.fetchScheduler.triggerNow(prune);
   }
 
   /**

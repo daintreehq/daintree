@@ -35,6 +35,7 @@ import {
   encodeBrokerError,
 } from "./services/rpc/RequestResponseBroker.js";
 import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.js";
+import { buildGitFetchPreloadBindings } from "./ipc/handlers/gitFetch.preload.js";
 import { buildSlashCommandsPreloadBindings } from "./ipc/handlers/slashCommands.preload.js";
 import { buildGlobalEnvPreloadBindings } from "./ipc/handlers/globalEnv.preload.js";
 import { buildAccessibilityPreloadBindings } from "./ipc/handlers/accessibility.preload.js";
@@ -2116,6 +2117,8 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.GIT_PUSH, { cwd, setUpstream }),
 
       pullRebase: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_PULL_REBASE, { cwd }),
+
+      ...buildGitFetchPreloadBindings(_unwrappingInvoke),
 
       forcePushWithLease: (cwd: string, branchName: string, leaseSha: string) =>
         _unwrappingInvoke(CHANNELS.GIT_FORCE_PUSH_WITH_LEASE, { cwd, branchName, leaseSha }),

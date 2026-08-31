@@ -483,6 +483,10 @@ port.on("message", async (rawMsg: any) => {
         void workspaceService.reprobeWslForWorktree(request.worktreeId);
         break;
 
+      case "fetch-worktree":
+        await workspaceService.fetchWorktree(request.requestId, request.worktreeId, request.prune);
+        break;
+
       case "sync":
         try {
           await workspaceService.syncMonitors(

@@ -317,7 +317,11 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // recipe-editor handoffs). Each sits under the 400 B per-description ceiling
   // in `mcpWireBudget.test.ts`; the total simply reflects seven more of them.
   // #11909's two owned-cleanup tools land in the same cohort on top of that.
-  const MAX_COHORT_TOTAL_BYTES = 50_400;
+  // 50_400 → 50_600 for #12091's `git.fetch`. The floor above is 120 B, so a
+  // new tool cannot land inside the old ceiling's 79 B of headroom at any
+  // wording — the raise is the cost of the tool, not of its prose, and its
+  // description is 151 B against the 400 B per-description ceiling.
+  const MAX_COHORT_TOTAL_BYTES = 50_600;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

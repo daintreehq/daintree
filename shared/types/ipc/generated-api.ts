@@ -252,6 +252,9 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["gemini:get-status"]["args"]
     ): Promise<IpcInvokeMap["gemini:get-status"]["result"]>;
   };
+  git: {
+    fetch(...args: IpcInvokeMap["git:fetch"]["args"]): Promise<IpcInvokeMap["git:fetch"]["result"]>;
+  };
   help: {
     getFolderPath(
       ...args: IpcInvokeMap["help:get-folder-path"]["args"]

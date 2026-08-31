@@ -11,6 +11,7 @@
  */
 
 import { EventEmitter } from "events";
+import { resolve as pathResolve } from "path";
 import { CHANNELS } from "../ipc/channels.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { type ProcessEntry, sendToEntryWindows } from "./workspace-client/types.js";
@@ -28,6 +29,7 @@ import type {
   CreateWorktreeOptions,
   BranchInfo,
   WorkspaceHostGovernanceSnapshot,
+  WorkspaceFetchResult,
 } from "../../shared/types/workspace-host.js";
 import type {
   CopyTreeOptions,
@@ -91,6 +93,14 @@ function dedupeSnapshotsById(states: WorktreeSnapshot[]): WorktreeSnapshot[] {
   }
   return deduped;
 }
+
+/**
+ * Ceiling for a user-triggered fetch round-trip. A request can wait behind an
+ * in-flight fetch on the same repo and then run its own remotes, each with the
+ * coordinator's 60s abort, so the broker's 30s default would time out over work
+ * that is still healthy (#12091).
+ */
+const FETCH_WORKTREE_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * A host's worktree snapshot read plus its own "is there a repository here"
@@ -362,6 +372,42 @@ export class WorkspaceClient extends EventEmitter {
     for (const entry of this.pool.entries.values()) {
       entry.host.send({ type: "reprobe-wsl", worktreeId });
     }
+  }
+
+  /**
+   * User-triggered `git fetch` for one worktree (#12091). Path-routed rather
+   * than broadcast like the WSL sends above: a broadcast would produce one real
+   * answer plus N "no such monitor" errors with nothing to distinguish them,
+   * and the pool's reverse worktree→project map already routes linked and
+   * external worktrees to their owning host.
+   *
+   * The timeout is deliberately far above the 30s default. One request can queue
+   * behind an in-flight fetch on the same repo and then run its own multi-remote
+   * batch, each remote carrying the coordinator's own 60s abort — a 30s ceiling
+   * would report a timeout over a fetch that is still working.
+   */
+  async fetchWorktree(worktreePath: string, prune: boolean): Promise<WorkspaceFetchResult> {
+    const host = this.pool.resolveHostForPath(worktreePath);
+    if (!host) throw new Error("No workspace host for path");
+
+    const requestId = host.generateRequestId();
+    const response = await host.sendWithResponse<{ result?: WorkspaceFetchResult }>(
+      {
+        type: "fetch-worktree",
+        requestId,
+        // Monitor ids are `path.resolve`d worktree paths, and so is the pool's
+        // routing key — but the caller's `worktreePath` is whatever the renderer
+        // sent. Normalizing here is what keeps a `/repo/./wt` or trailing-slash
+        // spelling from routing to the right host and then missing its monitor.
+        worktreeId: pathResolve(worktreePath),
+        prune,
+      },
+      FETCH_WORKTREE_TIMEOUT_MS
+    );
+    if (!response.result) {
+      throw new Error("Fetch did not run for this worktree");
+    }
+    return response.result;
   }
 
   updateMonitorConfig(config: MonitorConfig): void {

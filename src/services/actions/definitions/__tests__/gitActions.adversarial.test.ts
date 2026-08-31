@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const notifyMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import { registerGitActions } from "../gitActions";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -48,6 +52,7 @@ type GitStub = {
       | "commit"
       | "push"
       | "pullRebase"
+      | "fetch"
       | "getFileDiff"
       | "listCommits"
       | "getStagingStatus"
@@ -64,6 +69,7 @@ function makeGitStub(): GitStub {
     commit: vi.fn().mockResolvedValue({ sha: "abc" }),
     push: vi.fn().mockResolvedValue({ ok: true }),
     pullRebase: vi.fn().mockResolvedValue(undefined),
+    fetch: vi.fn().mockResolvedValue(undefined),
     getFileDiff: vi.fn().mockResolvedValue({
       content: "diff",
       offset: 0,
@@ -129,6 +135,7 @@ function setupActions(): {
 beforeEach(() => {
   // Lets the shared location resolver turn a `worktreeId` into its path.
   setWorktreePathIndexAccessor(() => new Map([["wt-1", "/repo/one"]]));
+  notifyMock.mockClear();
 });
 
 afterEach(() => {
@@ -203,6 +210,77 @@ describe("gitActions adversarial", () => {
     await resolvePushConfirm(false);
     await p;
     expect(git.push).not.toHaveBeenCalled();
+  });
+
+  it("git.fetch fires IPC immediately — a fetch has no local work to protect", async () => {
+    const { run, git } = setupActions();
+    await run("git.fetch", { cwd: "/repo" });
+    expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: false });
+    expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).toBeNull();
+    expect(useGitPushConfirmStore.getState().pendingConfirm).toBeNull();
+  });
+
+  it("git.fetch passes prune through only when explicitly requested", async () => {
+    const { run, git } = setupActions();
+    await run("git.fetch", { cwd: "/repo", prune: true });
+    expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: true });
+  });
+
+  it("git.fetch treats an absent prune as false, never as truthy", async () => {
+    const { run, git } = setupActions();
+    await run("git.fetch", { cwd: "/repo", prune: undefined });
+    expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: false });
+  });
+
+  it("git.fetch's schema rejects a non-boolean prune instead of coercing it", async () => {
+    // The args schema is the MCP surface too: a client sending `prune: 1` must
+    // be refused, not quietly handed the ref-deleting variant. Goes through
+    // `runParsed`, because plain `run()` never sees `argsSchema` at all.
+    const { runParsed, git } = setupActions();
+
+    await expect(runParsed("git.fetch", { cwd: "/repo", prune: 1 })).rejects.toThrow();
+    expect(git.fetch).not.toHaveBeenCalled();
+
+    await runParsed("git.fetch", { cwd: "/repo", prune: true });
+    expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: true });
+  });
+
+  it("git.fetch surfaces a failure itself — the menu drops the dispatch result", async () => {
+    // ActionService's only fallback toast lives in the action palette, so an
+    // action dispatched from a context menu that does not own its own error
+    // fails in total silence.
+    const { run, git } = setupActions();
+    git.fetch.mockRejectedValue(new Error("Authentication failed"));
+
+    await expect(run("git.fetch", { cwd: "/repo" })).rejects.toThrow("Authentication failed");
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", title: "Fetch failed" })
+    );
+  });
+
+  it("git.fetch notifies when there is no worktree to fetch, not only on IPC failure", async () => {
+    // `selfNotifiesOnExecutionError` stands the palette's own toast down, so an
+    // un-notified throw from location resolution is swallowed everywhere.
+    const { run, git } = setupActions();
+
+    await expect(run("git.fetch", {})).rejects.toThrow();
+    expect(git.fetch).not.toHaveBeenCalled();
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", title: "Fetch failed" })
+    );
+  });
+
+  it("git.fetch strips the GitError transport prefix out of the toast", async () => {
+    // A GitOperationError crossing the contextBridge arrives as
+    // `[GitError|<reason>||] <message>`, and `formatErrorMessage` returns that
+    // verbatim — so without decoding, the user reads the wire format.
+    const { run, git } = setupActions();
+    git.fetch.mockRejectedValue(new Error("[GitError|network-unavailable||] Could not fetch"));
+
+    await expect(run("git.fetch", { cwd: "/repo" })).rejects.toThrow();
+    const payload = notifyMock.mock.calls.at(-1)![0] as { message: string };
+    expect(payload.message).toBe("Could not fetch");
+    expect(payload.message).not.toContain("[GitError|");
   });
 
   it("git.pullRebase fires IPC only after the confirm gate is accepted", async () => {

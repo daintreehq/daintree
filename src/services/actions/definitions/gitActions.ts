@@ -31,6 +31,9 @@ import {
 import type { ConflictedFileEntry, StagingFileEntry } from "@shared/types/git";
 import type { CommitItem, HeatCell } from "@shared/types/pulse";
 import { z } from "zod";
+import { notify } from "@/lib/notify";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isClientGitError } from "@/utils/clientGitError";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(Math.trunc(value) || min, min), max);
@@ -527,6 +530,75 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         if (!confirmed) return;
       }
       await window.electron.git.pullRebase(resolvedCwd);
+    },
+  }));
+
+  actions.set("git.fetch", () => ({
+    id: "git.fetch",
+    title: "Fetch",
+    description:
+      "Update this worktree's remote-tracking refs so its ahead/behind counts match the remote. HEAD, the working tree, and local branches are left untouched.",
+    category: "git",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: withWorktreeLocation(
+      {
+        prune: z
+          .boolean()
+          .optional()
+          .describe("Also delete remote-tracking refs for branches gone from the remote."),
+      },
+      { legacy: ["cwd"] }
+    ).optional(),
+    // The context-menu rows dispatch this and drop the result on the floor, and
+    // the palette's fallback toast is the only one ActionService has — so a
+    // fetch that hit an auth wall from the menu would fail in total silence.
+    // Own the toast here instead, and it reaches every surface.
+    selfNotifiesOnExecutionError: true,
+    run: async (args: unknown, ctx: ActionContext) => {
+      // Everything is inside the try, including `requireWorktreePath`. The
+      // action advertises `selfNotifiesOnExecutionError`, which tells the
+      // palette to stand its own toast down — so anything that escapes
+      // un-notified is silently swallowed, and "no worktree in context" is
+      // exactly the failure a user most needs told about.
+      try {
+        const { prune, ...location } = (args ?? {}) as WorktreeLocationArgs & { prune?: boolean };
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        // No confirm, unlike its push/pull-rebase neighbours: a fetch writes
+        // only remote-tracking refs, so there is no local work it can destroy
+        // and nothing a confirm would protect.
+        await window.electron.git.fetch({ cwd: resolvedCwd, prune: prune === true });
+      } catch (err) {
+        // Decode first: a `GitOperationError` crossing the contextBridge carries
+        // its reason as a `[GitError|…]` message prefix and `formatErrorMessage`
+        // hands the message back verbatim, so a toast built without this shows
+        // the transport prefix to the user. The guard strips it in place.
+        isClientGitError(err);
+        const message = formatErrorMessage(err, "Could not reach the remote.");
+        notify({
+          type: "error",
+          priority: "high",
+          title: "Fetch failed",
+          message,
+          action: {
+            label: "Copy details",
+            successLabel: "Copied",
+            onClick: async () => {
+              try {
+                await navigator.clipboard.writeText(message);
+              } catch {
+                // Clipboard write is non-critical; the message is on screen.
+              }
+            },
+          },
+          // `git`, not `uiFeedback`: the latter is a silencing kind and would
+          // suppress this toast entirely, which is the one outcome a failed
+          // fetch must not have.
+          context: { eventKind: "git" },
+        });
+        throw err;
+      }
     },
   }));
 

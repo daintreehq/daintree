@@ -218,6 +218,7 @@ export const SYSTEM_TIER_ADDONS = [
   "git.unstageAll",
   "git.commit",
   "git.push",
+  "git.fetch",
 
   "forge.openIssues",
   "forge.openPRs",
