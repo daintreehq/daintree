@@ -883,6 +883,11 @@ describe("McpServerService", () => {
         description: "Push commits to a remote",
       }),
       createManifestEntry({
+        id: "git.fetch" as ActionId,
+        title: "Fetch",
+        description: "Update remote-tracking refs from the remote",
+      }),
+      createManifestEntry({
         id: "worktree.delete" as ActionId,
         title: "Delete Worktree",
         description: "Permanently remove a worktree",
