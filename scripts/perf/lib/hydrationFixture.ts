@@ -258,6 +258,17 @@ export interface HydrationPlan {
   orphans: BackendRecord[];
   agentSettings: AgentSettingsShape;
   clipboardDirectory: string;
+  /**
+   * Own keys per saved panel that survive a JSON round trip, in plan order.
+   *
+   * The in-memory snapshots carry keys whose value is `undefined` — a panel
+   * with no `titleMode`, no `agentModelId`, no `lastActiveAt` still has those
+   * three keys. `JSON.stringify` drops them, which is why a panel read back
+   * from disk is a DIFFERENT object shape from the one the plan builder made,
+   * and why this count is the arithmetic {@link hydrationRoundTripMisses} uses
+   * to tell a real deserialize from a skipped one.
+   */
+  savedKeyCounts: number[];
 }
 
 const AGENT_IDS = ["claude", "codex", "gemini"] as const;
@@ -361,6 +372,7 @@ export function buildHydrationPlan(
     label,
     projectRoot,
     panels,
+    savedKeyCounts: panels.map((planned) => definedKeyCount(planned.saved)),
     orphans,
     agentSettings: {
       agents: {
@@ -373,6 +385,80 @@ export function buildHydrationPlan(
     },
     clipboardDirectory: "/tmp/daintree-clipboard",
   };
+}
+
+/** Own keys with a defined value — exactly what `JSON.stringify` keeps. */
+function definedKeyCount(saved: SavedPanel): number {
+  let count = 0;
+  for (const value of Object.values(saved)) {
+    if (value !== undefined) count += 1;
+  }
+  return count;
+}
+
+/**
+ * The on-disk round trip a cold start pays before hydration.
+ *
+ * Both halves exist so the parse can be LOAD-BEARING rather than decorative.
+ * PERF-001/002 used to time a `JSON.parse` and throw the result away, hydrating
+ * from the in-memory plan instead — so deleting the parse made the benchmark
+ * faster and moved no correctness term. `withParsedPanels` below rebuilds the
+ * plan around whatever came back, so hydration consumes the parsed snapshots
+ * and nothing else.
+ */
+export function serializeHydrationPanels(plan: HydrationPlan): string {
+  return JSON.stringify({ panels: plan.panels.map((planned) => planned.saved) });
+}
+
+export function parseHydrationPanels(payload: string): SavedPanel[] {
+  return (JSON.parse(payload) as { panels: SavedPanel[] }).panels;
+}
+
+/**
+ * The plan hydration actually runs against: the same routes and expectations,
+ * with every `saved` snapshot replaced by the object the parse produced.
+ *
+ * Sliced to what came back rather than padded from the original, so a parse
+ * that returned fewer panels hydrates fewer panels — visible to the oracle,
+ * which is graded against the ORIGINAL plan, instead of being silently papered
+ * over with the in-memory copy the round trip was supposed to replace.
+ */
+export function withParsedPanels(plan: HydrationPlan, parsed: SavedPanel[]): HydrationPlan {
+  return {
+    ...plan,
+    panels: plan.panels
+      .slice(0, parsed.length)
+      .map((planned, index) => ({ ...planned, saved: parsed[index] })),
+  };
+}
+
+/**
+ * One accumulator for the round trip, over four things a skipped or stubbed
+ * parse cannot all satisfy at once.
+ *
+ * - The panel count came back.
+ * - Each panel is the panel the plan planted, by id.
+ * - Each panel is a DISTINCT object graph. The in-memory snapshot is the one
+ *   thing a deleted parse would hand on, and it is the same reference.
+ * - Each panel has the on-disk key shape. `structuredClone` clears the
+ *   identity check but keeps `undefined`-valued keys; `JSON.parse` cannot.
+ *
+ * All four are arithmetic over the plan the fixture built. Nothing here parses
+ * the payload a second time to see what the first parse should have said.
+ */
+export function hydrationRoundTripMisses(plan: HydrationPlan, parsed: SavedPanel[]): number {
+  let misses = Math.abs(plan.panels.length - parsed.length);
+
+  const paired = Math.min(plan.panels.length, parsed.length);
+  for (let i = 0; i < paired; i += 1) {
+    const planted = plan.panels[i].saved;
+    const restored = parsed[i];
+    if (restored === planted) misses += 1;
+    if (restored.id !== planted.id) misses += 1;
+    if (Object.keys(restored).length !== plan.savedKeyCounts[i]) misses += 1;
+  }
+
+  return misses;
 }
 
 function makeNonPtyPanel(

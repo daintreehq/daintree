@@ -118,12 +118,21 @@ export function createPersistedLayout(
  *   the workspace host (measured for real by PERF-100..104 and PERF-130..141).
  *   What runs below fills a Map.
  *
- * The durations these report are therefore floors of the wrong shape, not
- * measurements, and the counts are the only readings worth anything — which is
- * why each one is graded by {@link unreachablePhaseMisses}. They are kept
- * because dropping them would silently shorten the switch the phased scenarios
- * describe; they are labelled because the previous version of this file
- * presented the same loops as "the project switch".
+ * NO DURATION LEAVES THIS FUNCTION, and that is the point of its current
+ * shape. It used to time each of the four loops and hand the four numbers back,
+ * and `projectSwitch.ts` added them into `visibleMs`, `hydrateMs` and
+ * `totalMs` — so a headline a reader would optimise against was part fiction:
+ * four hand-written loops reported as project-switch latency. Cutting a
+ * simulated loop would have "improved" the switch. The loops still run, because
+ * a count incremented at the call site is the only reading here worth anything
+ * and a literal cannot be one, but the clock is not started around any of them
+ * and no caller can sum what it is not given.
+ *
+ * The counts are therefore the whole output, and each is graded by
+ * {@link unreachablePhaseMisses}. The phases are kept because dropping them
+ * would silently shorten the switch the phased scenarios describe; they are
+ * labelled because an earlier version of this file presented the same loops as
+ * "the project switch".
  */
 export interface UnreachableSwitchPhases {
   checksum: number;
@@ -135,13 +144,9 @@ export interface UnreachableSwitchPhases {
   ptyDescriptors: number;
   /** File status entries aggregated. */
   fileStatuses: number;
-  ptyHibernateMs: number;
-  storeResetMs: number;
-  ptyWarmupMs: number;
-  gitFetchMs: number;
 }
 
-export function simulateUnreachableSwitchPhases(params: {
+export function countUnreachableSwitchPhases(params: {
   outgoingTerminalCount: number;
   incomingPanelCount: number;
   worktreeCount: number;
@@ -149,16 +154,13 @@ export function simulateUnreachableSwitchPhases(params: {
   let checksum = 0;
 
   // Phase: PTY hibernate (object mapping)
-  const ptyHibernateStart = performance.now();
   const hibernated = new Map<string, { id: string; cwd: string }>();
   for (let index = 0; index < params.outgoingTerminalCount; index += 1) {
     hibernated.set(`term-${index}`, { id: `term-${index}`, cwd: `/repo/switch/${index}` });
   }
   checksum += hibernated.size;
-  const ptyHibernateMs = Math.max(0, performance.now() - ptyHibernateStart);
 
   // Phase: store reset (clear maps + arrays)
-  const storeResetStart = performance.now();
   const stores = Array.from({ length: 17 }, () => new Map<string, unknown>());
   for (const store of stores) {
     for (let i = 0; i < params.outgoingTerminalCount; i++) {
@@ -167,19 +169,15 @@ export function simulateUnreachableSwitchPhases(params: {
     store.clear();
   }
   checksum += stores.length;
-  const storeResetMs = Math.max(0, performance.now() - storeResetStart);
 
   // Phase: PTY warmup (descriptor allocation)
-  const ptyWarmupStart = performance.now();
   const descriptors = new Array(params.incomingPanelCount);
   for (let i = 0; i < descriptors.length; i++) {
     descriptors[i] = { fd: i, pid: 1000 + i };
   }
   checksum += descriptors.length;
-  const ptyWarmupMs = Math.max(0, performance.now() - ptyWarmupStart);
 
   // Phase: git status fetch (file status aggregation)
-  const gitFetchStart = performance.now();
   const fileStatuses = new Map<string, string>();
   for (let w = 0; w < params.worktreeCount; w += 1) {
     for (let j = 0; j < 10; j++) {
@@ -187,7 +185,6 @@ export function simulateUnreachableSwitchPhases(params: {
     }
   }
   checksum += fileStatuses.size;
-  const gitFetchMs = Math.max(0, performance.now() - gitFetchStart);
 
   return {
     checksum,
@@ -195,19 +192,14 @@ export function simulateUnreachableSwitchPhases(params: {
     resetStores: stores.length,
     ptyDescriptors: descriptors.length,
     fileStatuses: fileStatuses.size,
-    ptyHibernateMs,
-    storeResetMs,
-    ptyWarmupMs,
-    gitFetchMs,
   };
 }
 
 /**
  * One term per simulated phase, derived from the sizes each was asked for.
  *
- * These phases report only durations, and a phase reduced to a no-op posts the
- * best duration the harness has ever recorded — which is the whole reason the
- * counts above exist.
+ * These phases report no duration at all, so the counts are the only evidence
+ * they ran — a phase reduced to a no-op is invisible without them.
  */
 export function unreachablePhaseMisses(
   expected: { outgoingTerminalCount: number; incomingPanelCount: number; worktreeCount: number },

@@ -1,6 +1,5 @@
-import { performance } from "node:perf_hooks";
 import type { PerfScenario } from "../types";
-import { simulateUnreachableSwitchPhases, unreachablePhaseMisses } from "../lib/workloads";
+import { countUnreachableSwitchPhases, unreachablePhaseMisses } from "../lib/workloads";
 import {
   buildLayoutMergePlan,
   layoutMergeMisses,
@@ -20,26 +19,43 @@ import { ProjectViewHarness, flushImmediates } from "../lib/projectViewFixture";
  * PERF-070..073 — the phase-instrumented project switch.
  *
  * These four used to run `simulateProjectSwitchPhased`, seven hand-written
- * loops that built objects and timed the transform. Five of the seven now run
- * the production code the phase names claim:
+ * loops that built objects and timed the transform. Three of the seven phases
+ * now run the production code the phase names claim, and those three are the
+ * ONLY phases any duration here covers:
  *
  * | Phase                | Subject                                                     |
  * | -------------------- | ----------------------------------------------------------- |
  * | `serializeMs`        | REAL — `computeIdArrayDelta` x2 + `computeRecordDelta` over  |
  * |                      | `deepEqualIgnoringUndefined`, then the outgoing JSON payload |
- * | `ptyHibernateMs`     | simulated — see `simulateUnreachableSwitchPhases`            |
- * | `storeResetMs`       | simulated — no React here, so no subscriber fan-out          |
+ * | `ptyHibernateMs`     | UNAVAILABLE — no pty-host, so no duration is reported        |
+ * | `storeResetMs`       | UNAVAILABLE — no React, so no subscriber fan-out to price    |
  * | `projectLoadMs`      | REAL — `mergeIdArray` x2 + `mergeRecord`, Main's side of the |
  * |                      | switch (`projectCrud/switch.ts` 373/391/423)                 |
  * | `terminalRestoreMs`  | REAL — the `statePatcher` restore builders, per panel        |
- * | `ptyWarmupMs`        | simulated — no pty-host                                      |
- * | `gitFetchMs`         | simulated — no git subprocess (PERF-100..104 measure that)   |
+ * | `ptyWarmupMs`        | UNAVAILABLE — no pty-host, so nothing spawns                 |
+ * | `gitFetchMs`         | UNAVAILABLE — no git subprocess (PERF-100..104 measure that) |
  *
- * `visibleMs` is the pre-swap half (serialize + hibernate + store reset +
- * project load) and `hydrateMs` the post-visible half, as before. Both now
- * carry two simulated terms each, so read them as a switch's SHAPE rather than
- * as a latency a user experiences — and read the counts, which are what a
- * skipped phase cannot post.
+ * WHAT THE HEADLINE COVERS. `visibleMs` is the pre-swap real work (the
+ * outgoing delta capture plus Main's three-way merge) and `hydrateMs` the
+ * post-visible real work (the per-panel restore builders); `totalMs` is their
+ * sum, and `durationMs` is `totalMs`. Nothing simulated is inside any of them.
+ *
+ * That is the fix for a defect worth naming, because the harness has been
+ * caught by this shape before. The four unavailable phases used to be TIMED —
+ * a `Map.set` loop, a fill-and-clear over 17 plain Maps, a descriptor
+ * allocation and another `Map.set` loop — and their durations were added into
+ * `visibleMs`, `hydrateMs` and `totalMs`. A reader optimising against the
+ * headline was optimising partly against the benchmark's own loops, and
+ * deleting one of those loops would have shown up as a faster project switch.
+ * `countUnreachableSwitchPhases` now returns counts and no durations at all,
+ * so no headline can sum one.
+ *
+ * The four phases still RUN, and each still reports the count only it can
+ * post — `hibernatedTerminals`, `resetStores`, `ptyDescriptors`,
+ * `fileStatuses` — graded by `unreachablePhaseMisses`. Those counts are the
+ * whole of what this scenario can say about them: there is no latency figure
+ * for PTY hibernate, store reset, PTY warmup or git fetch anywhere in this
+ * file, and the four are unavailable rather than fast.
  */
 
 const SMALL_MERGE_PLAN = buildLayoutMergePlan("small", 60, 310);
@@ -72,8 +88,8 @@ const PHASE_CORRECTNESS = [
   "sanitizerMisses",
   "orphanMisses",
   "routeCoverageMisses",
-  // The four phases that are still simulations — they report only durations,
-  // so a phase reduced to a no-op posts the best number here without these.
+  // The four phases that are still simulations. They report NO duration, so
+  // these counts are the only evidence they ran at all.
   "hibernateMisses",
   "storeResetMisses",
   "ptyWarmupMisses",
@@ -104,26 +120,30 @@ async function runPhasedSwitch(
   };
 
   const merge = runLayoutMergePass(mergePlan);
-  const residual = simulateUnreachableSwitchPhases(residualSpec);
+  // Runs between the two real halves, where the real switch runs it — and
+  // contributes counts only. It has no clock around it and returns no
+  // duration, so nothing it does can reach a headline below.
+  const residual = countUnreachableSwitchPhases(residualSpec);
   const hydration = runHydrationPass(mod, hydrationPlan);
 
   const serializeMs = merge.captureMs;
   const projectLoadMs = merge.mergeMs;
   const terminalRestoreMs = hydration.elapsedMs;
-  const visibleMs = serializeMs + residual.ptyHibernateMs + residual.storeResetMs + projectLoadMs;
-  const hydrateMs = terminalRestoreMs + residual.ptyWarmupMs + residual.gitFetchMs;
+  // Real work only. PTY hibernate and store reset sit between these two in a
+  // real switch and are unavailable here, so `visibleMs` is a floor over the
+  // two phases this process can actually run, not a switch's visible latency.
+  const visibleMs = serializeMs + projectLoadMs;
+  // Same rule: PTY warmup and the git fetch are unavailable, so this is the
+  // restore-builder half alone.
+  const hydrateMs = terminalRestoreMs;
   const totalMs = visibleMs + hydrateMs;
 
   return {
     durationMs: totalMs,
     metrics: {
       serializeMs,
-      ptyHibernateMs: residual.ptyHibernateMs,
-      storeResetMs: residual.storeResetMs,
       projectLoadMs,
       terminalRestoreMs,
-      ptyWarmupMs: residual.ptyWarmupMs,
-      gitFetchMs: residual.gitFetchMs,
       totalMs,
       visibleMs,
       hydrateMs,
@@ -134,7 +154,12 @@ async function runPhasedSwitch(
       deepEqualCalls: merge.deepEqualCalls,
       mergedEntries: merge.mergedTerminals.length,
       restoredPanels: hydration.builtPanelCount,
+      // The four unavailable phases, as counts. There is deliberately no
+      // `ptyHibernateMs`/`storeResetMs`/`ptyWarmupMs`/`gitFetchMs` beside
+      // them: a simulated loop's wall-clock is not that phase's latency, and
+      // reporting one under that name is how it ends up summed.
       hibernatedTerminals: residual.hibernatedTerminals,
+      resetStores: residual.resetStores,
       ptyDescriptors: residual.ptyDescriptors,
       fileStatuses: residual.fileStatuses,
       ...layoutMergeMisses(mergePlan, merge),
@@ -149,7 +174,7 @@ const phasedSwitchScenarios: PerfScenario[] = [
     id: "PERF-070",
     name: "Project Switch Phases - Small",
     description:
-      "Phase-instrumented project switch with a small layout (60 panels, 6 worktrees). Serialize, project-load and terminal-restore drive the real layout merge and the real restore builders; PTY hibernate/warmup, store reset and git fetch remain simulations and are labelled as such.",
+      "Phase-instrumented project switch with a small layout (60 panels, 6 worktrees). Every duration here covers exactly three phases, all real: serialize (the outgoing delta), project-load (Main's three-way merge) and terminal-restore (the per-panel restore builders). PTY hibernate, store reset, PTY warmup and git fetch are UNAVAILABLE in a plain Node process — they run as simulations for their counts and report no duration, so totalMs/visibleMs/hydrateMs contain no simulated work.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 20, nightly: 28 },
@@ -161,7 +186,7 @@ const phasedSwitchScenarios: PerfScenario[] = [
     id: "PERF-071",
     name: "Project Switch Phases - Medium",
     description:
-      "Phase-instrumented project switch with a medium layout (90 panels, 6 worktrees). Same real/simulated phase split as PERF-070.",
+      "Phase-instrumented project switch with a medium layout (90 panels, 6 worktrees). Same three-real-phase headline and same four unavailable phases as PERF-070.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 20, nightly: 28 },
@@ -173,7 +198,7 @@ const phasedSwitchScenarios: PerfScenario[] = [
     id: "PERF-072",
     name: "Project Switch Phases - Large",
     description:
-      "Phase-instrumented project switch with a large layout (140 panels, 10 worktrees). Same real/simulated phase split as PERF-070.",
+      "Phase-instrumented project switch with a large layout (140 panels, 10 worktrees). Same three-real-phase headline and same four unavailable phases as PERF-070.",
     tier: "fast",
     modes: ["ci", "nightly"],
     iterations: { ci: 16, nightly: 24 },
@@ -185,7 +210,7 @@ const phasedSwitchScenarios: PerfScenario[] = [
     id: "PERF-073",
     name: "Project Switch Phase Regression - Serialize Heavy",
     description:
-      "Sweeps three layout sizes in one iteration so the real delta+merge cost can be read against panel count — the shape a superlinear regression in deepEqualIgnoringUndefined or mergeIdArray would show up as.",
+      "Sweeps three layout sizes in one iteration so the real delta+merge cost can be read against panel count — the shape a superlinear regression in deepEqualIgnoringUndefined or mergeIdArray would show up as. The reported duration is the sum of the three real phases across the sweep, not the sweep's wall-clock.",
     tier: "heavy",
     modes: ["ci", "nightly"],
     iterations: { ci: 6, nightly: 10 },
@@ -201,7 +226,6 @@ const phasedSwitchScenarios: PerfScenario[] = [
       const totals: Record<string, number> = {};
       let serializeTotalMs = 0;
       let totalSwitchWorkMs = 0;
-      const startedAt = performance.now();
 
       for (const [mergePlan, hydrationPlan, outgoing] of sweep) {
         const sample = await runPhasedSwitch(mergePlan, hydrationPlan, outgoing);
@@ -213,7 +237,11 @@ const phasedSwitchScenarios: PerfScenario[] = [
       }
 
       return {
-        durationMs: performance.now() - startedAt,
+        // The sum of the three REAL phases across the sweep, not the sweep's
+        // wall-clock. Wall-clock here would put the four simulated phases and
+        // the oracle passes back inside the headline by the back door, which is
+        // the defect the rest of this file exists to keep out of it.
+        durationMs: totalSwitchWorkMs,
         metrics: {
           ...totals,
           serializeTotalMs,

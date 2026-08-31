@@ -25,12 +25,12 @@ function scenario(id: string) {
  * counts, which is exactly what the lower bounds here reject.
  */
 /**
- * PERF-070..073 used to run `simulateProjectSwitchPhased` end to end. Five of
+ * PERF-070..073 used to run `simulateProjectSwitchPhased` end to end. Three of
  * its seven phases now drive the real layout merge and the real restore
- * builders; the remaining four are still simulations and say so. These pin the
- * split: the real phases must produce their real outputs, and the simulated
- * ones must still produce the counts that stop a skipped phase reading as the
- * fastest phase on record.
+ * builders; the other four cannot run here at all. These pin the split: the
+ * real phases must produce their real outputs, the unavailable ones must still
+ * produce the counts that stop a skipped phase reading as the fastest phase on
+ * record, and no headline may contain a simulated duration.
  */
 describe("PERF-070..073 phase split", () => {
   it.each(["PERF-070", "PERF-071", "PERF-072", "PERF-073"])(
@@ -48,15 +48,45 @@ describe("PERF-070..073 phase split", () => {
       expect(metrics.deepEqualCalls).toBeGreaterThan(0);
       expect(metrics.mergedEntries).toBeGreaterThan(0);
       expect(metrics.restoredPanels).toBeGreaterThan(0);
-      // The simulated halves still report their counts.
+      // The four unavailable phases still report their counts, which is the
+      // whole of what they can say.
       expect(metrics.hibernatedTerminals).toBeGreaterThan(0);
+      expect(metrics.resetStores).toBeGreaterThan(0);
       expect(metrics.ptyDescriptors).toBeGreaterThan(0);
       expect(metrics.fileStatuses).toBeGreaterThan(0);
-      // The budget file references these three by name; a rename would drop
-      // them from the report as a silent measurement issue.
       expect(Number.isFinite(metrics.serializeMs)).toBe(true);
       expect(Number.isFinite(metrics.totalMs)).toBe(true);
       expect(sample.durationMs).toBeGreaterThan(0);
+    },
+    30_000
+  );
+
+  it.each(["PERF-070", "PERF-071", "PERF-072", "PERF-073"])(
+    "%s reports no duration for a phase it only simulates",
+    async (id) => {
+      // The defect this guards: the four simulated loops used to be timed and
+      // their durations summed into visibleMs/hydrateMs/totalMs, so a headline
+      // a reader optimises against was part fiction. A duration under any of
+      // these names is that defect coming back.
+      const metrics = (await scenario(id).run(context)).metrics!;
+      for (const name of ["ptyHibernateMs", "storeResetMs", "ptyWarmupMs", "gitFetchMs"]) {
+        expect(name in metrics, `${id} still reports ${name}`).toBe(false);
+      }
+    },
+    30_000
+  );
+
+  it.each(["PERF-070", "PERF-071", "PERF-072"])(
+    "%s headline is exactly the three real phases",
+    async (id) => {
+      const sample = await scenario(id).run(context);
+      const metrics = sample.metrics!;
+      // Arithmetic, not an approximation: any simulated term inside the
+      // headline would break these identities rather than merely inflate them.
+      expect(metrics.visibleMs).toBe(metrics.serializeMs + metrics.projectLoadMs);
+      expect(metrics.hydrateMs).toBe(metrics.terminalRestoreMs);
+      expect(metrics.totalMs).toBe(metrics.visibleMs + metrics.hydrateMs);
+      expect(sample.durationMs).toBe(metrics.totalMs);
     },
     30_000
   );
@@ -65,6 +95,10 @@ describe("PERF-070..073 phase split", () => {
     const sample = await scenario("PERF-073").run(context);
     expect(sample.metrics!.sweepSteps).toBe(3);
     expect(sample.metrics!.serializeTotalMs).toBeGreaterThan(0);
+    // The sweep's headline is the summed real work, not its wall-clock — which
+    // would carry the simulated phases and the oracle passes back in.
+    expect(sample.durationMs).toBe(sample.metrics!.totalSwitchWorkMs);
+    expect(sample.durationMs).toBe(sample.metrics!.totalMs);
   }, 30_000);
 });
 

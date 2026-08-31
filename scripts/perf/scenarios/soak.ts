@@ -16,6 +16,14 @@ import {
   type LayoutMergeMisses,
 } from "../lib/layoutMergeFixture";
 import {
+  ackAllQueues,
+  buildFleetSpec,
+  captureConsole,
+  createFleet,
+  runFlood,
+  type FleetSpec,
+} from "../lib/ptyFlowControlFixture";
+import {
   addHydrationMisses,
   buildHydrationPlan,
   hydrationPassMisses,
@@ -45,48 +53,7 @@ interface GcStats {
   minorGcPauseMs: number;
 }
 
-// Mirrors PortBatcher.mergeChunks' non-owned path: allocate a fresh
-// Uint8Array(totalBytes) per flush and copy the chunk in. This is the exact
-// allocation #8367 set out to retire; the GC observer below quantifies the
-// minor-GC pressure it generates so the fast path's benefit is measurable.
-// NOTE: this scenario baselines the *cost being retired* (the old allocate +
-// copy), not the new zero-copy fast path itself — it is the gate evidence
-// (#8367 instrument-first), not a fast-path regression guard. Fast-path
-// correctness is covered by the portBatcher unit suite.
-function simulatePortBatcherFlushFlood(flushes: number, chunkBytes: number): number {
-  const source = new Uint8Array(chunkBytes);
-  for (let i = 0; i < source.length; i += 1) {
-    source[i] = (i * 31 + 7) & 0xff;
-  }
-  let checksum = 0;
-  for (let f = 0; f < flushes; f += 1) {
-    const merged = new Uint8Array(chunkBytes);
-    merged.set(source, 0);
-    // Touch a rotating byte so the allocation can't be optimized away.
-    checksum = (checksum + merged[f % chunkBytes]) & 0xffff;
-  }
-  return checksum;
-}
-
-/**
- * The checksum the flood MUST produce, derived from the byte-generation rule
- * rather than from the flood.
- *
- * `simulatePortBatcherFlushFlood` is the subject: a version that skipped the
- * allocate-and-copy entirely would burn no CPU, trigger no GC and post the
- * best numbers this scenario can record. Recomputing the expected sum without
- * allocating anything is the independent half — the running `& 0xffff` is
- * addition mod 2^16, so the total is just the sum of the touched source bytes.
- */
-function expectedFlushChecksum(flushes: number, chunkBytes: number): number {
-  let checksum = 0;
-  for (let f = 0; f < flushes; f += 1) {
-    checksum = (checksum + (((f % chunkBytes) * 31 + 7) & 0xff)) & 0xffff;
-  }
-  return checksum;
-}
-
-async function measureMinorGc(body: () => void): Promise<GcStats> {
+async function measureMinorGc(body: () => void | Promise<void>): Promise<GcStats> {
   const stats: GcStats = { minorGcCount: 0, minorGcPauseMs: 0 };
   const record = (entries: PerformanceEntryList): void => {
     for (const entry of entries) {
@@ -100,7 +67,7 @@ async function measureMinorGc(body: () => void): Promise<GcStats> {
   const observer = new PerformanceObserver((list) => record(list.getEntries()));
   try {
     observer.observe({ type: "gc", buffered: true });
-    body();
+    await body();
     // GC entries are flushed to the observer on a macrotask turn, not a
     // microtask — a Promise.resolve() spin would never surface them. Yield a
     // real timer turn, then sweep any still-pending records before disconnect.
@@ -422,47 +389,142 @@ export const soakScenarios: PerfScenario[] = [
   },
   {
     id: "PERF-063",
-    name: "PortBatcher Flush-Allocation Minor-GC Pressure",
+    name: "PortBatcher Flush Allocation: Zero-Copy vs Copy",
     description:
-      "Floods PortBatcher's per-flush allocate-and-copy path and reports minor-GC count/pause to baseline the #8367 zero-copy fast path.",
+      "The real PortBatcher's flush allocation under a 400 MiB agent-output flood, in both of the shapes production actually produces. pty-host.ts sets `owned = targets.length === 1`, so a one-window app takes mergeChunks' zero-copy fast path on every single-chunk flush and a two-window app takes the allocate-and-copy on every flush of the same bytes for both of its batchers. Minor-GC count and pause are reported per arm, so the number is what the second window costs rather than what a retired code path used to cost. Graded in BOTH directions on the merge branch, which is also the PR #4639 invariant: the one-window arm's payload must be the exact object that was written (a batcher that copies anyway scores zeroCopyMisses) and the two-window arm's payload must never be (a batcher that hands on a shared chunk for transfer would detach a node-pty slab under its sibling, and scores copyPathMisses).",
     tier: "soak",
     modes: ["nightly", "soak"],
     iterations: { nightly: 3, soak: 6 },
     warmups: 1,
-    correctness: ["floodMisses"],
+    correctness: ["deliveryMisses", "zeroCopyMisses", "copyPathMisses", "batcherShortfallCount"],
     async run() {
       maybeRunGc();
-      // ~2KB single-chunk flushes are the dominant latency-mode case under an
-      // agent-output flood. 400k of them (~800MB transient churn) is far more
-      // than any realistic inter-flush burst — sized so a pathological future
-      // allocation regression is unmissable while a clean baseline stays low.
-      const flushes = 400000;
+
+      // 32 terminals x 2 KiB is exactly PORT_BATCH_THRESHOLD_BYTES, so every
+      // round ends in one synchronous flush in which each terminal holds
+      // exactly ONE chunk. That is the shape the zero-copy fast path is
+      // defined over, and the only shape in which the two arms differ solely
+      // by `owned`.
+      const terminals = 32;
       const chunkBytes = 2048;
-      // Derived before the bracket opens so the oracle is never in the timing.
-      const expectedChecksum = expectedFlushChecksum(flushes, chunkBytes);
+      const roundsPerBatch = 128;
+      const batches = 50;
+      const spec = buildFleetSpec(terminals, { focusedId: null });
+      const chunksById = new Map<string, number>();
+      for (const terminal of spec.terminals) chunksById.set(terminal.id, roundsPerBatch);
+
+      const armResult = async (windowCount: number) => {
+        const fleet = await createFleet({ ...spec, windowCount } as FleetSpec);
+        const restore = captureConsole();
+        let accepted = 0;
+        let rejected = 0;
+        let ms = 0;
+        try {
+          const gc = await measureMinorGc(() => {
+            for (let batch = 0; batch < batches; batch += 1) {
+              const flood = runFlood(fleet, {
+                chunksById,
+                chunkBytes,
+                // Production's own rule: sole target owns the chunk.
+                owned: windowCount === 1,
+                // The ingestion site allocates one standalone Uint8Array per
+                // chunk on both arms, so the delta is the FLUSH allocation.
+                freshChunks: true,
+              });
+              accepted += flood.acceptedWriteCount;
+              rejected += flood.rejectedWriteCount;
+              ms += flood.ms;
+              // Acknowledge so no watermark is ever reached: a pause on either
+              // arm would put different work in the two brackets.
+              ackAllQueues(fleet);
+            }
+          });
+          return {
+            gc,
+            ms,
+            accepted,
+            rejected,
+            windowCount,
+            deliveredBytes: fleet.deliveredBytes,
+            reportedBytes: fleet.reportedBytes,
+            deliveredChunkCount: fleet.deliveredChunkCount,
+            zeroCopy: fleet.zeroCopyDeliveryCount,
+            copied: fleet.copiedDeliveryCount,
+            corrupt: fleet.corruptDeliveryCount,
+            rawPauses: fleet.totalRawPauseCalls(),
+          };
+        } finally {
+          restore();
+          fleet.dispose();
+        }
+      };
+
       const startedAt = performance.now();
-      let checksum = 0;
-      const gc = await measureMinorGc(() => {
-        checksum = simulatePortBatcherFlushFlood(flushes, chunkBytes);
-      });
+      const single = await armResult(1);
+      const dual = await armResult(2);
       const durationMs = performance.now() - startedAt;
+
+      const expectedWrites = terminals * roundsPerBatch * batches;
+      const expectedBytes = expectedWrites * chunkBytes;
+
+      // Bytes in must equal bytes out, on both counters, on both arms.
+      let deliveryMisses = 0;
+      for (const arm of [single, dual]) {
+        if (arm.deliveredBytes !== expectedBytes * arm.windowCount) deliveryMisses += 1;
+        if (arm.reportedBytes !== expectedBytes * arm.windowCount) deliveryMisses += 1;
+        if (arm.deliveredChunkCount !== expectedWrites * arm.windowCount) deliveryMisses += 1;
+        deliveryMisses += arm.corrupt;
+      }
+
+      // The merge branch, both directions. A batcher that always copies fails
+      // the first; one that always transfers fails the second, which is the
+      // slab-aliasing defect PR #4639 exists to prevent.
+      let zeroCopyMisses = 0;
+      if (single.zeroCopy !== expectedWrites) zeroCopyMisses += 1;
+      zeroCopyMisses += single.copied;
+
+      let copyPathMisses = 0;
+      if (dual.copied !== expectedWrites * 2) copyPathMisses += 1;
+      copyPathMisses += dual.zeroCopy;
+
+      // Corpus validity: nothing was rejected, no watermark was reached, and
+      // the GC observer actually saw the churn it exists to count.
+      let batcherShortfallCount = 0;
+      for (const arm of [single, dual]) {
+        if (arm.accepted !== expectedWrites) batcherShortfallCount += 1;
+        if (arm.rejected !== 0) batcherShortfallCount += 1;
+        if (arm.rawPauses !== 0) batcherShortfallCount += 1;
+        if (arm.gc.minorGcCount === 0) batcherShortfallCount += 1;
+      }
+
+      const gcRatio =
+        single.gc.minorGcCount > 0 ? dual.gc.minorGcCount / single.gc.minorGcCount : 0;
 
       return {
         durationMs,
         metrics: {
-          minorGcCount: gc.minorGcCount,
-          minorGcPauseMs: gc.minorGcPauseMs,
-          meanMinorGcPauseMs: gc.minorGcCount > 0 ? gc.minorGcPauseMs / gc.minorGcCount : 0,
-          flushes,
-          checksum,
-          floodMisses: checksum === expectedChecksum ? 0 : 1,
+          terminalCount: terminals,
+          chunkPayloadBytes: chunkBytes,
+          writtenBytes: expectedBytes,
+          flushDeliveryCount: single.deliveredChunkCount + dual.deliveredChunkCount,
+          minorGcCountZeroCopy: single.gc.minorGcCount,
+          minorGcCountCopyPath: dual.gc.minorGcCount,
+          minorGcPauseMsZeroCopy: single.gc.minorGcPauseMs,
+          minorGcPauseMsCopyPath: dual.gc.minorGcPauseMs,
+          zeroCopyDeliveryCount: single.zeroCopy,
+          copiedDeliveryCount: dual.copied,
+          copyPathGcOverheadRatio: gcRatio,
+          deliveryMisses,
+          zeroCopyMisses,
+          copyPathMisses,
+          batcherShortfallCount,
         },
         notes:
-          `minor-GC for ${flushes} flushes: ${gc.minorGcCount} pauses, ` +
-          `${gc.minorGcPauseMs.toFixed(3)}ms total. Sub-millisecond/zero ` +
-          `confirms the per-flush allocation is not a retire-worthy pause ` +
-          `(#8367 instrument-first gate) — zero-copy fast path is sufficient; ` +
-          `the arena pool is not justified.`,
+          `${(expectedBytes / (1024 * 1024)).toFixed(0)} MiB per arm: ` +
+          `${single.gc.minorGcCount} minor GCs (${single.gc.minorGcPauseMs.toFixed(1)}ms) on the ` +
+          `one-window zero-copy path against ${dual.gc.minorGcCount} ` +
+          `(${dual.gc.minorGcPauseMs.toFixed(1)}ms) once a second window forces the ` +
+          `allocate-and-copy on every flush`,
       };
     },
   },

@@ -29,6 +29,12 @@ import { notificationScenarios } from "./notifications";
 import { forgeRegistryScenarios } from "./forgeRegistry";
 import { agentRosterScenarios } from "./agentRoster";
 import { ipcEnvelopeScenarios } from "./ipcEnvelope";
+import { loggingScenarios } from "./logging";
+import { ptyFlowControlScenarios } from "./ptyFlowControl";
+import { copyTreeScenarios } from "./copyTree";
+import { cliAvailabilityScenarios } from "./cliAvailability";
+import { sidebarFilterScenarios } from "./sidebarFilters";
+import { switcherSearchScenarios } from "./switcherSearch";
 
 export const allScenarios: PerfScenario[] = [
   ...startupScenarios,
@@ -61,6 +67,12 @@ export const allScenarios: PerfScenario[] = [
   ...forgeRegistryScenarios,
   ...agentRosterScenarios,
   ...ipcEnvelopeScenarios,
+  ...loggingScenarios,
+  ...ptyFlowControlScenarios,
+  ...copyTreeScenarios,
+  ...cliAvailabilityScenarios,
+  ...sidebarFilterScenarios,
+  ...switcherSearchScenarios,
 ];
 
 export function getScenariosForMode(mode: PerfMode): PerfScenario[] {
@@ -211,6 +223,25 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-362",
   "PERF-363",
   "PERF-364",
+  "PERF-370",
+  "PERF-371",
+  "PERF-372",
+  "PERF-373",
+  "PERF-380",
+  "PERF-381",
+  "PERF-382",
+  "PERF-383",
+  "PERF-384",
+  "PERF-390",
+  "PERF-391",
+  "PERF-392",
+  "PERF-393",
+  "PERF-394",
+  "PERF-400",
+  "PERF-401",
+  "PERF-402",
+  "PERF-403",
+  "PERF-404",
 ]);
 
 /**

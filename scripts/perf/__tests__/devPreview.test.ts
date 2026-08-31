@@ -108,18 +108,38 @@ describe("dev-preview correctness predicate", () => {
   });
 
   it("scores zero against the real detector", () => {
+    const shared = createSharedDevPreviewDeps();
     const session = createDevPreviewSession("panel", "project");
-    const result = runDevPreviewOutputPass(plan, session, createSharedDevPreviewDeps());
+    const result = runDevPreviewOutputPass(plan, session, shared);
     disposeDevPreviewSession(session);
-    const misses = devPreviewPassMisses(plan, result);
+    const misses = devPreviewPassMisses(plan, result, shared.rings);
     expect(Object.values(misses).every((value) => value === 0)).toBe(true);
   });
 
-  it("catches a detector that finds nothing", () => {
+  it("grades the real diagnostics ring, not the count of calls into it", () => {
+    // The deletion this closes: `recordSessionDiagnostic` did real ring work
+    // inside the measured bracket and appeared in no predicate, so dropping the
+    // write was a free speedup. An empty ring map is what that pass leaves.
+    const shared = createSharedDevPreviewDeps();
     const session = createDevPreviewSession("panel", "project");
-    const result = runDevPreviewOutputPass(plan, session, blindDetector());
+    const result = runDevPreviewOutputPass(plan, session, shared);
     disposeDevPreviewSession(session);
-    const misses = devPreviewPassMisses(plan, result);
+
+    expect(plan.expectedDiagnostics.length).toBeGreaterThan(0);
+    expect(shared.rings.get(result.ringKey)?.events.length).toBe(plan.expectedDiagnostics.length);
+    expect(devPreviewPassMisses(plan, result, shared.rings).diagnosticRingMisses).toBe(0);
+    // A ring that recorded nothing.
+    expect(devPreviewPassMisses(plan, result, new Map()).diagnosticRingMisses).toBe(
+      plan.expectedDiagnostics.length
+    );
+  });
+
+  it("catches a detector that finds nothing", () => {
+    const shared = blindDetector();
+    const session = createDevPreviewSession("panel", "project");
+    const result = runDevPreviewOutputPass(plan, session, shared);
+    disposeDevPreviewSession(session);
+    const misses = devPreviewPassMisses(plan, result, shared.rings);
     expect(misses.urlMisses).toBe(plan.expectedPolls.length);
     expect(misses.readyMarkerMisses).toBe(plan.expectedReadyAccelerations);
     expect(misses.compileArmMisses).toBe(plan.expectedCompileArms);
@@ -128,20 +148,24 @@ describe("dev-preview correctness predicate", () => {
   it("catches a detector that finds a URL in everything", () => {
     // The half a one-sided predicate misses entirely: every plant is
     // "covered", and the counter that has to speak is `decoyHits`.
+    const shared = greedyDetector();
     const session = createDevPreviewSession("panel", "project");
-    const result = runDevPreviewOutputPass(plan, session, greedyDetector());
+    const result = runDevPreviewOutputPass(plan, session, shared);
     disposeDevPreviewSession(session);
-    const misses = devPreviewPassMisses(plan, result);
+    const misses = devPreviewPassMisses(plan, result, shared.rings);
     expect(misses.decoyHits).toBeGreaterThan(0);
     expect(misses.urlMisses).toBeGreaterThan(0);
   });
 
   it("catches a failure classifier that stops classifying", () => {
     const failurePlan = buildFailureStreamPlans(1)[0]!;
+    const shared = blindDetector();
     const session = createDevPreviewSession("panel", "project");
-    const result = runDevPreviewOutputPass(failurePlan, session, blindDetector());
+    const result = runDevPreviewOutputPass(failurePlan, session, shared);
     disposeDevPreviewSession(session);
-    expect(devPreviewPassMisses(failurePlan, result).errorClassMisses).toBeGreaterThan(0);
+    expect(
+      devPreviewPassMisses(failurePlan, result, shared.rings).errorClassMisses
+    ).toBeGreaterThan(0);
   });
 });
 

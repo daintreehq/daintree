@@ -41,6 +41,12 @@ import type { DevServerErrorType } from "../../../shared/utils/devServerErrors";
  * No process is started, no port is bound and no PTY exists, so none of these
  * numbers include dev-server startup. They are per-chunk parse cost, and the
  * counts are the readings that travel.
+ *
+ * The diagnostics ring is real product code inside the measured bracket, so it
+ * is graded rather than merely counted: `diagnosticRingMisses` reads the ring
+ * back and compares its contents, in order, with what the corpus planted.
+ * `diagnosticEvents` alone was informational and appeared in no predicate,
+ * which made `recordSessionDiagnostic` a free deletion.
  */
 
 export type DevPreviewSessionState = OutputProcessorSession & {
@@ -69,6 +75,20 @@ export interface DevPreviewFrame {
   expectsErrorType?: DevServerErrorType;
 }
 
+/**
+ * One entry the real diagnostics ring must hold after the pass, in order.
+ *
+ * Composed where the frame is planted, from the same host/port/error the frame
+ * carries, so a corpus that stopped planting a bind also stops expecting its
+ * event. `detail` is the URL for a bind and the error type for a fault — the
+ * one field of the event that says WHICH plant it came from, so a ring that
+ * recorded the right number of the wrong events still scores.
+ */
+export interface DevPreviewDiagnosticExpectation {
+  type: "url-detected" | "output-error";
+  detail: string;
+}
+
 export interface DevPreviewStreamPlan {
   frames: DevPreviewFrame[];
   /** Distinct port bindings planted, in order. */
@@ -88,6 +108,16 @@ export interface DevPreviewStreamPlan {
   expectedCompileArms: number;
   expectedCompileClears: number;
   expectedErrorTypes: DevServerErrorType[];
+  /**
+   * The diagnostics-ring writes the pass must leave behind, in order.
+   *
+   * Only the two the per-chunk handler makes synchronously: `url-detected` on
+   * a new bind and `output-error` on a newly-classified fault. The compile
+   * events are written from `setTimeout` callbacks (COMPILE_ARM_MS /
+   * COMPILE_CLEAR_MS) that cannot fire inside a synchronous feed loop, so
+   * expecting them would grade a healthy pass as broken.
+   */
+  expectedDiagnostics: DevPreviewDiagnosticExpectation[];
   decoyFrames: number;
   totalChars: number;
 }
@@ -103,6 +133,7 @@ class PlanBuilder {
   private readonly expectedPolls: string[] = [];
   private pendingUrl: string | null = null;
   private readonly expectedErrorTypes: DevServerErrorType[] = [];
+  private readonly expectedDiagnostics: DevPreviewDiagnosticExpectation[] = [];
   private readyAccelerations = 0;
   private compileArms = 0;
   private compileClears = 0;
@@ -116,6 +147,7 @@ class PlanBuilder {
       this.expectedUrls.push(frame.expectsUrl);
       this.expectedPolls.push(frame.expectsUrl);
       this.pendingUrl = frame.expectsUrl;
+      this.expectedDiagnostics.push({ type: "url-detected", detail: frame.expectsUrl });
     }
     if (frame.isDecoy) this.decoys += 1;
     if (frame.expectsReadyAcceleration) {
@@ -124,7 +156,10 @@ class PlanBuilder {
     }
     if (frame.expectsCompileArm) this.compileArms += 1;
     if (frame.expectsCompileClear) this.compileClears += 1;
-    if (frame.expectsErrorType !== undefined) this.expectedErrorTypes.push(frame.expectsErrorType);
+    if (frame.expectsErrorType !== undefined) {
+      this.expectedErrorTypes.push(frame.expectsErrorType);
+      this.expectedDiagnostics.push({ type: "output-error", detail: frame.expectsErrorType });
+    }
     return this;
   }
 
@@ -137,6 +172,7 @@ class PlanBuilder {
       expectedCompileArms: this.compileArms,
       expectedCompileClears: this.compileClears,
       expectedErrorTypes: this.expectedErrorTypes,
+      expectedDiagnostics: this.expectedDiagnostics,
       decoyFrames: this.decoys,
       totalChars: this.chars,
     };
@@ -481,7 +517,10 @@ export interface DevPreviewPassResult {
   compileClears: number;
   errorUpdates: Array<{ type: DevServerErrorType; status: string }>;
   chunksProcessed: number;
+  /** `recordSessionDiagnostic` invocations, counted at the dep we supplied. */
   diagnosticEvents: number;
+  /** The ring key the product's writes landed under, for the read-back oracle. */
+  ringKey: string;
   /** Frame index of the first poll, or -1. Reported as a detection depth. */
   firstPolledFrameIndex: number;
 }
@@ -517,6 +556,7 @@ export class DevPreviewPassDriver {
   private chunksProcessed = 0;
   private firstPolledFrameIndex = -1;
   private cursor = 0;
+  private readonly ringKey: string;
   private readonly deps: Parameters<typeof processDevPreviewOutput<DevPreviewSessionState>>[3];
 
   constructor(
@@ -526,6 +566,7 @@ export class DevPreviewPassDriver {
     private readonly terminalId = "dev-preview-terminal"
   ) {
     const key = `${session.projectId}::${session.panelId}`;
+    this.ringKey = key;
     this.deps = {
       detector: shared.detector,
       textDecoder: shared.textDecoder,
@@ -597,6 +638,7 @@ export class DevPreviewPassDriver {
       errorUpdates: this.errorUpdates,
       chunksProcessed: this.chunksProcessed,
       diagnosticEvents: this.diagnosticEvents,
+      ringKey: this.ringKey,
       firstPolledFrameIndex: this.firstPolledFrameIndex,
     };
   }
@@ -643,6 +685,16 @@ export interface DevPreviewMissCounts {
   compileClearMisses: number;
   /** Signed, over the classified failure types in order. */
   errorClassMisses: number;
+  /**
+   * The real bounded diagnostics ring, read back after the pass.
+   *
+   * `diagnosticEvents` counts the calls the product made into the dep we
+   * supplied, which is not the same claim: the ring write itself is real
+   * product code inside the measured bracket, and deleting it left every
+   * predicate at zero while the pass got faster. This grades what
+   * `recordDevPreviewDiagnostic` actually stored.
+   */
+  diagnosticRingMisses: number;
 }
 
 /**
@@ -661,7 +713,8 @@ export interface DevPreviewMissCounts {
  */
 export function devPreviewPassMisses(
   plan: DevPreviewStreamPlan,
-  result: DevPreviewPassResult
+  result: DevPreviewPassResult,
+  rings: DevPreviewDiagnosticsRingMap
 ): DevPreviewMissCounts {
   const planted = new Set(plan.expectedUrls);
   // Positional against the planned call sequence: a detector that reported the
@@ -703,7 +756,53 @@ export function devPreviewPassMisses(
     compileArmMisses: plan.expectedCompileArms - result.compileArms,
     compileClearMisses: plan.expectedCompileClears - result.compileClears,
     errorClassMisses,
+    diagnosticRingMisses: diagnosticRingMisses(plan, rings, result.ringKey),
   };
+}
+
+/**
+ * Read the session's ring back and compare it, in order, with what the corpus
+ * planted.
+ *
+ * Two-sided over one operation. A ring that stopped recording holds fewer
+ * events than were planted; a ring that stopped bounding or stopped coalescing
+ * holds more; a ring that recorded the wrong thing fails the per-index detail.
+ * The expectations are the fixture's own — the URL it composed from the host
+ * and port it chose, and the error type it planted — never a second read of
+ * `UrlDetector` or `detectDevServerError`.
+ *
+ * The session key is the product's own (`projectId::panelId`), taken from the
+ * driver that supplied the dep, so a write filed under the wrong key reads here
+ * as a ring that recorded nothing.
+ *
+ * TWO BOUNDS THIS DOES NOT REACH, so nobody reads more into it than is there.
+ * No corpus plants more than `DIAGNOSTIC_RING_MAX` (100) events on one session,
+ * so the per-session trim is never exercised; and the heaviest scenario opens
+ * 30 sessions against a `DIAGNOSTIC_SESSIONS_MAX` of 50, so the key LRU never
+ * evicts. A corpus that grew past either would start reporting misses on a
+ * healthy run — `diagnosticRingCount` is emitted beside these for that reason.
+ */
+function diagnosticRingMisses(
+  plan: DevPreviewStreamPlan,
+  rings: DevPreviewDiagnosticsRingMap,
+  ringKey: string
+): number {
+  const events = rings.get(ringKey)?.events ?? [];
+  let misses = Math.abs(plan.expectedDiagnostics.length - events.length);
+
+  const paired = Math.min(plan.expectedDiagnostics.length, events.length);
+  for (let i = 0; i < paired; i += 1) {
+    const expected = plan.expectedDiagnostics[i]!;
+    const event = events[i]!;
+    if (event.type !== expected.type) {
+      misses += 1;
+      continue;
+    }
+    if (event.type === "url-detected" && event.url !== expected.detail) misses += 1;
+    if (event.type === "output-error" && event.errorType !== expected.detail) misses += 1;
+  }
+
+  return misses;
 }
 
 export function emptyMissCounts(): DevPreviewMissCounts {
@@ -714,6 +813,7 @@ export function emptyMissCounts(): DevPreviewMissCounts {
     compileArmMisses: 0,
     compileClearMisses: 0,
     errorClassMisses: 0,
+    diagnosticRingMisses: 0,
   };
 }
 
@@ -727,6 +827,7 @@ export function addMissCounts(
   into.compileArmMisses += from.compileArmMisses;
   into.compileClearMisses += from.compileClearMisses;
   into.errorClassMisses += from.errorClassMisses;
+  into.diagnosticRingMisses += from.diagnosticRingMisses;
   return into;
 }
 

@@ -7,6 +7,13 @@ vi.mock("../lib/packagedLaunch", () => ({
 
 import { findPackagedExecutable, launchPackagedAndMeasure } from "../lib/packagedLaunch";
 import { startupScenarios } from "../scenarios/startup";
+import {
+  buildHydrationPlan,
+  hydrationRoundTripMisses,
+  parseHydrationPanels,
+  serializeHydrationPanels,
+  withParsedPanels,
+} from "../lib/hydrationFixture";
 
 const mockedFind = vi.mocked(findPackagedExecutable);
 const mockedLaunch = vi.mocked(launchPackagedAndMeasure);
@@ -111,4 +118,61 @@ describe("PERF-001..003 drive the real hydration builders", () => {
     },
     30_000
   );
+});
+
+/**
+ * PERF-001/002 time a deserialize. It used to be discarded — hydration read the
+ * in-memory plan — so deleting `JSON.parse` was a free speedup that moved no
+ * correctness term. These pin the round trip as load-bearing.
+ */
+describe("the startup deserialize feeds hydration", () => {
+  const plan = buildHydrationPlan("round-trip", 40, 4);
+
+  it("scores zero for a real round trip and feeds hydration the parsed panels", () => {
+    const parsed = parseHydrationPanels(serializeHydrationPanels(plan));
+    expect(hydrationRoundTripMisses(plan, parsed)).toBe(0);
+
+    const runtime = withParsedPanels(plan, parsed);
+    expect(runtime.panels).toHaveLength(plan.panels.length);
+    for (let i = 0; i < runtime.panels.length; i += 1) {
+      // The subject reads these. They are the parse's objects, not the plan's.
+      expect(runtime.panels[i].saved).toBe(parsed[i]);
+      expect(runtime.panels[i].saved).not.toBe(plan.panels[i].saved);
+    }
+  });
+
+  it("scores a parse that was skipped, which is what a deletion leaves behind", () => {
+    // Exactly the reviewer's deletion: hydration hands on the in-memory
+    // snapshots. Same ids, same count — and the term still has to speak.
+    const skipped = plan.panels.map((planned) => planned.saved);
+    expect(hydrationRoundTripMisses(plan, skipped)).toBeGreaterThan(0);
+  });
+
+  it("scores a clone that kept the in-memory key shape", () => {
+    // structuredClone clears the identity half; only the on-disk key shape
+    // separates it from a real deserialize, and undefined-valued keys are the
+    // difference.
+    const cloned = plan.panels.map((planned) => structuredClone(planned.saved));
+    expect(hydrationRoundTripMisses(plan, cloned)).toBeGreaterThan(0);
+  });
+
+  it("scores a parse that came back short or came back wrong", () => {
+    const parsed = parseHydrationPanels(serializeHydrationPanels(plan));
+    expect(hydrationRoundTripMisses(plan, parsed.slice(0, 10))).toBeGreaterThan(0);
+    expect(hydrationRoundTripMisses(plan, [])).toBe(plan.panels.length);
+    // Two panels swapped: both fail the id check, and both fail the key-shape
+    // check as well because their snapshots carry different optional fields.
+    const shuffled = [parsed[1], parsed[0], ...parsed.slice(2)];
+    expect(hydrationRoundTripMisses(plan, shuffled)).toBeGreaterThanOrEqual(2);
+  });
+
+  it("PERF-001/002 declare parseMisses and PERF-003 does not", () => {
+    const declares = (id: string): boolean =>
+      (startupScenarios.find((s) => s.id === id)?.correctness ?? []).includes("parseMisses");
+    expect(declares("PERF-001")).toBe(true);
+    expect(declares("PERF-002")).toBe(true);
+    // PERF-003 is the warm path with the deserialize removed on purpose; a
+    // predicate for an operation it does not perform would be a decorative 0.
+    expect(declares("PERF-003")).toBe(false);
+  });
 });

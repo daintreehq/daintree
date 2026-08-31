@@ -34,6 +34,10 @@ function deadPipeline(plan: PipelinePlan): PipelineObservation {
     analysisFeeds: 0,
     snapshotSchedules: 0,
     agentQueueCalls: 0,
+    agentQueueChars: 0,
+    agentQueueIdMisses: 0,
+    firstByteStampMisses: plan.frames.length,
+    lastOutputStampMisses: plan.frames.length,
     oscResponses: 0,
     oscStripLeaks: 0,
     oscOverStrips: 0,
@@ -87,6 +91,10 @@ describe("pipeline correctness predicate", () => {
     expect(misses.analysisFeedMisses).toBe(plan.frames.length);
     expect(misses.snapshotScheduleMisses).toBe(plan.frames.length);
     expect(misses.agentQueueMisses).toBe(plan.frames.length);
+    // The agent ring's payload and the timestamp bookkeeping, both of which a
+    // dead pipeline stops producing entirely.
+    expect(misses.agentQueuePayloadMisses).toBe(plan.totalChars);
+    expect(misses.outputStampMisses).toBe(plan.frames.length * 2);
     expect(misses.oscResponseMisses).toBe(plan.expectedOscResponses);
     expect(misses.promptReturnMisses).toBe(plan.expectedPromptReturns);
     expect(misses.forensicRingMisses).toBe(1);
@@ -116,6 +124,43 @@ describe("pipeline correctness predicate", () => {
     const misses = pipelinePassMisses(plan, stale);
     expect(misses.forensicRingMisses).toBe(1);
     expect(misses.outputRingMisses).toBe(1);
+  });
+});
+
+describe("the agent output queue and the timestamp marks are graded", () => {
+  it("grades getLiveAgentId's answer, not just that it was called", () => {
+    // The plan plants a detected agent that disagrees with launch affinity, so
+    // the id the pipeline queued is evidence of the precedence rule rather than
+    // of a constant. A queue callback that discarded the id — which is what it
+    // used to do — leaves this term unable to see the difference.
+    const plan = smallPlan();
+    const observed = runPipelinePlan(plan);
+    expect(observed.agentQueueIdMisses).toBe(0);
+    expect(observed.agentQueueChars).toBe(plan.totalChars);
+    expect(pipelinePassMisses(plan, observed).agentQueuePayloadMisses).toBe(0);
+
+    // A pipeline that queued the launch id instead of the detected one.
+    const wrongAgent = { ...observed, agentQueueIdMisses: plan.frames.length };
+    expect(pipelinePassMisses(plan, wrongAgent).agentQueuePayloadMisses).toBe(plan.frames.length);
+    // One that queued the renderer-bound copy, short by every stripped query.
+    const strippedCopy = { ...observed, agentQueueChars: observed.agentQueueChars - 42 };
+    expect(pipelinePassMisses(plan, strippedCopy).agentQueuePayloadMisses).toBe(42);
+  });
+
+  it("grades firstByteAt as one-shot and lastOutputTime as per-chunk", () => {
+    const plan = smallPlan();
+    const observed = runPipelinePlan(plan);
+    expect(observed.firstByteStampMisses).toBe(0);
+    expect(observed.lastOutputStampMisses).toBe(0);
+    expect(pipelinePassMisses(plan, observed).outputStampMisses).toBe(0);
+
+    // A mark that is never stamped, and one that is re-stamped every chunk:
+    // the fixture reports both as firstByteStampMisses, and either is a
+    // deletion of the bookkeeping `handlePtyData` does before the pipeline.
+    const noMark = { ...observed, firstByteStampMisses: 1 };
+    expect(pipelinePassMisses(plan, noMark).outputStampMisses).toBe(1);
+    const noStamp = { ...observed, lastOutputStampMisses: plan.frames.length };
+    expect(pipelinePassMisses(plan, noStamp).outputStampMisses).toBe(plan.frames.length);
   });
 });
 

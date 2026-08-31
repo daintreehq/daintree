@@ -29,7 +29,9 @@ import type { ProcessDetector } from "../../../electron/services/ProcessDetector
  *  - `SemanticBufferManager`, the 50-line semantic ring with its 1,000-char
  *    per-line truncation,
  *  - the inline agent output ring (`OUTPUT_BUFFER_SIZE`, 2,000 chars) and
- *    `getLiveAgentId`,
+ *    `getLiveAgentId`, whose ANSWER is graded rather than merely counted: the
+ *    fixture plants a `detectedAgentId` that disagrees with `launchAgentId`, so
+ *    the precedence rule ("detection wins") is what the queued id proves,
  *  - `IdentityWatcher.observeOutput`, the prompt-return demotion scan.
  *
  * These three scenarios previously called `simulateTerminalOutputPass`, a
@@ -51,6 +53,15 @@ import type { ProcessDetector } from "../../../electron/services/ProcessDetector
  * Both are still counted, so a pipeline that stopped calling them is a miss
  * rather than a speedup.
  *
+ * THE TIMESTAMP BOOKKEEPING is graded too, because it is inside
+ * `handlePtyData` and used to be invisible: `firstByteAt` is the one-shot
+ * startup mark `getPublicState()` and the `[AgentStartup]` log report, and
+ * `lastOutputTime` is re-stamped on every chunk. Deleting either was free.
+ * `feed()` blanks `lastOutputTime` before each chunk and requires the product
+ * to have re-stamped it from a clock read taken inside the call, and it
+ * requires `firstByteAt` to be stamped on the FIRST chunk and never again —
+ * a one-shot mark re-stamped every chunk is not a startup mark.
+ *
  * FIDELITY GAP. `IdentityWatcherDelegate.getLastNLines`/`getCursorLine` read
  * the viewport of a headless xterm in production; here they read the tail of
  * the real forensics buffer. The prompt matching, the command-failure scan and
@@ -59,6 +70,21 @@ import type { ProcessDetector } from "../../../electron/services/ProcessDetector
  */
 
 const TERMINAL_ID = "perf-terminal";
+
+/**
+ * Detection and launch affinity deliberately disagree.
+ *
+ * `getLiveAgentId` is `detectedAgentId ?? launchAgentId`, so planting the same
+ * id in both would have graded nothing: every wrong answer a stub could give
+ * would still be "claude". With these two the queued id proves the precedence
+ * rule, and a pipeline that queued the launch id instead scores.
+ */
+const DETECTED_AGENT_ID = "claude";
+const LAUNCH_AGENT_ID = "codex";
+/** What `getLiveAgentId` must therefore return on every chunk. */
+const EXPECTED_LIVE_AGENT_ID = DETECTED_AGENT_ID;
+/** Blanked before every chunk, so a re-stamp is the only way back to now. */
+const STALE_OUTPUT_STAMP = 0;
 
 /** One chunk plus what the pipeline must make of it. */
 export interface PipelineFrame {
@@ -244,6 +270,14 @@ export interface PipelineObservation {
   analysisFeeds: number;
   snapshotSchedules: number;
   agentQueueCalls: number;
+  /** Characters handed to the agent output queue, summed at the call site. */
+  agentQueueChars: number;
+  /** Queue calls carrying an id `getLiveAgentId` should not have produced. */
+  agentQueueIdMisses: number;
+  /** Chunks where `firstByteAt` was unstamped, late, or re-stamped. */
+  firstByteStampMisses: number;
+  /** Chunks where `lastOutputTime` was not re-stamped from this call's clock. */
+  lastOutputStampMisses: number;
   oscResponses: number;
   /** Forwarded payloads that still carried a query the product answered. */
   oscStripLeaks: number;
@@ -285,6 +319,10 @@ export function createPipelineHarness(terminalId = TERMINAL_ID): PipelineHarness
   let promptReturns = 0;
   let chunksFed = 0;
   let lastEmitted = "";
+  let agentQueueChars = 0;
+  let agentQueueIdMisses = 0;
+  let firstByteStampMisses = 0;
+  let lastOutputStampMisses = 0;
 
   const fakePty = {
     write: (): void => {
@@ -297,10 +335,13 @@ export function createPipelineHarness(terminalId = TERMINAL_ID): PipelineHarness
     ptyProcess: fakePty,
     outputBuffer: "",
     semanticBuffer: [] as string[],
-    detectedAgentId: "claude",
-    launchAgentId: "claude",
+    detectedAgentId: DETECTED_AGENT_ID,
+    launchAgentId: LAUNCH_AGENT_ID,
     agentState: "working",
-    lastOutputTime: Date.now(),
+    // Both start where a freshly spawned terminal starts them: no byte has
+    // arrived yet, so `firstByteAt` is absent and there is no output stamp.
+    firstByteAt: undefined,
+    lastOutputTime: STALE_OUTPUT_STAMP,
     contentEpoch: 0,
   } as unknown as TerminalInfo;
 
@@ -368,8 +409,14 @@ export function createPipelineHarness(terminalId = TERMINAL_ID): PipelineHarness
       lastEmitted = typeof data === "string" ? data : "";
       emittedChars += lastEmitted.length;
     },
-    queueAgentOutput: (): void => {
+    queueAgentOutput: (agentId: string, data: string): void => {
       agentQueueCalls += 1;
+      // The queue callback used to discard both arguments, so `getLiveAgentId`
+      // ran inside the measured path with its answer graded nowhere. Counted
+      // at the call site, in the two directions the argument can be wrong:
+      // the wrong agent, and the wrong bytes.
+      if (agentId !== EXPECTED_LIVE_AGENT_ID) agentQueueIdMisses += 1;
+      agentQueueChars += data.length;
     },
   });
 
@@ -382,8 +429,30 @@ export function createPipelineHarness(terminalId = TERMINAL_ID): PipelineHarness
     feed(frame: PipelineFrame): void {
       const responsesBefore = oscResponses;
       const promptsBefore = promptReturns;
+      const firstByteBefore = terminalInfo.firstByteAt;
+      // Blanked so the only way back to a live reading is the product's own
+      // `Date.now()` inside `handlePtyData`. A pipeline that stopped stamping
+      // leaves the sentinel behind, which no clock read can produce.
+      terminalInfo.lastOutputTime = STALE_OUTPUT_STAMP;
+      const stampBefore = Date.now();
       pipeline.handlePtyData(fakePty, frame.text);
+      const stampAfter = Date.now();
       chunksFed += 1;
+
+      if (terminalInfo.lastOutputTime < stampBefore || terminalInfo.lastOutputTime > stampAfter) {
+        lastOutputStampMisses += 1;
+      }
+      if (firstByteBefore === undefined) {
+        // The first chunk: stamped, and stamped from this call's clock read.
+        const firstByteAt = terminalInfo.firstByteAt;
+        if (firstByteAt === undefined || firstByteAt < stampBefore || firstByteAt > stampAfter) {
+          firstByteStampMisses += 1;
+        }
+      } else if (terminalInfo.firstByteAt !== firstByteBefore) {
+        // Every chunk after it: one-shot means one shot. A mark re-stamped on
+        // every chunk is `lastOutputTime` under another name.
+        firstByteStampMisses += 1;
+      }
       // Attributed per frame rather than compared as two totals: a missed
       // plant and a spurious demotion cancel in an aggregate, and those are
       // the two failures this half of the corpus exists to tell apart.
@@ -414,6 +483,10 @@ export function createPipelineHarness(terminalId = TERMINAL_ID): PipelineHarness
         analysisFeeds,
         snapshotSchedules,
         agentQueueCalls,
+        agentQueueChars,
+        agentQueueIdMisses,
+        firstByteStampMisses,
+        lastOutputStampMisses,
         oscResponses,
         oscStripLeaks,
         oscOverStrips,
@@ -477,6 +550,22 @@ export interface PipelineMissCounts {
   snapshotScheduleMisses: number;
   /** Signed. Chunks that did not reach the agent output queue. */
   agentQueueMisses: number;
+  /**
+   * Two-sided over `getLiveAgentId`'s answer and the bytes it was queued with.
+   *
+   * The id half fails a pipeline that queued the launch affinity instead of the
+   * detected agent; the byte half fails one that queued the renderer-bound copy
+   * (short by every stripped OSC query) or nothing at all. The queue callback
+   * discarded both arguments before this existed, so the call was counted and
+   * its result graded nowhere.
+   */
+  agentQueuePayloadMisses: number;
+  /**
+   * Two-sided over the timestamp bookkeeping `handlePtyData` does before the
+   * pipeline: `firstByteAt` stamped once and never re-stamped, `lastOutputTime`
+   * re-stamped on every chunk.
+   */
+  outputStampMisses: number;
   /** Signed. OSC colour queries the backend failed to answer. */
   oscResponseMisses: number;
   /** Two-sided: answered queries that leaked, plus non-queries stripped anyway. */
@@ -525,6 +614,9 @@ export function pipelinePassMisses(
     analysisFeedMisses: chunks - observed.analysisFeeds,
     snapshotScheduleMisses: chunks - observed.snapshotSchedules,
     agentQueueMisses: chunks - observed.agentQueueCalls,
+    agentQueuePayloadMisses:
+      observed.agentQueueIdMisses + Math.abs(plan.totalChars - observed.agentQueueChars),
+    outputStampMisses: observed.firstByteStampMisses + observed.lastOutputStampMisses,
     oscResponseMisses: plan.expectedOscResponses - observed.oscResponses,
     oscStripMisses: observed.oscStripLeaks + observed.oscOverStrips,
     promptReturnMisses: observed.promptReturnsMissed + observed.promptReturnsSpurious,
@@ -540,6 +632,8 @@ export function emptyPipelineMisses(): PipelineMissCounts {
     analysisFeedMisses: 0,
     snapshotScheduleMisses: 0,
     agentQueueMisses: 0,
+    agentQueuePayloadMisses: 0,
+    outputStampMisses: 0,
     oscResponseMisses: 0,
     oscStripMisses: 0,
     promptReturnMisses: 0,
@@ -557,6 +651,8 @@ export function addPipelineMisses(
   into.analysisFeedMisses += from.analysisFeedMisses;
   into.snapshotScheduleMisses += from.snapshotScheduleMisses;
   into.agentQueueMisses += from.agentQueueMisses;
+  into.agentQueuePayloadMisses += from.agentQueuePayloadMisses;
+  into.outputStampMisses += from.outputStampMisses;
   into.oscResponseMisses += from.oscResponseMisses;
   into.oscStripMisses += from.oscStripMisses;
   into.promptReturnMisses += from.promptReturnMisses;

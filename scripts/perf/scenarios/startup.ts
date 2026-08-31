@@ -2,8 +2,12 @@ import type { PerfScenario } from "../types";
 import {
   buildHydrationPlan,
   hydrationPassMisses,
+  hydrationRoundTripMisses,
   loadStatePatcherModule,
+  parseHydrationPanels,
   runHydrationPass,
+  serializeHydrationPanels,
+  withParsedPanels,
   type HydrationPlan,
 } from "../lib/hydrationFixture";
 import { findPackagedExecutable, launchPackagedAndMeasure } from "../lib/packagedLaunch";
@@ -24,6 +28,13 @@ import { findPackagedExecutable, launchPackagedAndMeasure } from "../lib/package
  * deserializers, and orphan adoption. `lib/hydrationFixture.ts` states exactly
  * where the real code stops.
  *
+ * PERF-001/002 deserialize first, and the parsed panels are what hydration
+ * consumes — `withParsedPanels` rebuilds the plan around them. The two used to
+ * time a `JSON.parse` and discard the result while hydrating the in-memory
+ * plan, which made deleting the parse a free speedup; `parseMisses` grades the
+ * round trip against the plan's own arithmetic, including the key shape only a
+ * real JSON round trip produces.
+ *
  * WHAT THESE ARE NOT. Not a binary launch — PERF-004 below is the only real
  * cold start here. And not wall-clock restore: `restorePanelsPhase` awaits a
  * terminal-instance attach per panel against a real DOM and a live PTY host,
@@ -34,9 +45,8 @@ import { findPackagedExecutable, launchPackagedAndMeasure } from "../lib/package
 
 const EMPTY_PLAN = buildHydrationPlan("empty", 10, 2);
 const HEAVY_PLAN = buildHydrationPlan("heavy", 260, 16);
-const HEAVY_PLAN_SERIALIZED = JSON.stringify({
-  panels: HEAVY_PLAN.panels.map((planned) => planned.saved),
-});
+/** PERF-002's payload is already on disk when the app starts, so it is built once. */
+const HEAVY_PLAN_SERIALIZED = serializeHydrationPanels(HEAVY_PLAN);
 
 /** Metric names for one graded hydration pass, flattened for the report. */
 function hydrationMetrics(plan: HydrationPlan, observed: ReturnType<typeof runHydrationPass>) {
@@ -65,26 +75,40 @@ const HYDRATION_CORRECTNESS = [
   "routeCoverageMisses",
 ] as const;
 
+/**
+ * PERF-001/002 additionally deserialize, and PERF-003 deliberately does not.
+ *
+ * `parseMisses` is the term that makes the round trip load-bearing. Before it,
+ * the parse ran inside the timed bracket and its result was discarded —
+ * hydration read the in-memory plan — so deleting `JSON.parse` was a free
+ * speedup that moved nothing.
+ */
+const HYDRATION_WITH_PARSE_CORRECTNESS = [...HYDRATION_CORRECTNESS, "parseMisses"] as const;
+
 export const startupScenarios: PerfScenario[] = [
   {
     id: "PERF-001",
     name: "Startup Hydration - Empty Project",
     description:
-      "Deserialize a near-empty saved layout and run the real statePatcher restore builders over every panel (NOT a binary launch — see PERF-004; and NOT wall-clock restore, since the per-panel terminal attach needs a DOM).",
+      "Deserialize a near-empty saved layout and run the real statePatcher restore builders over the panels the parse produced (NOT a binary launch — see PERF-004; and NOT wall-clock restore, since the per-panel terminal attach needs a DOM).",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 20, nightly: 30 },
     warmups: 2,
-    correctness: HYDRATION_CORRECTNESS,
+    correctness: HYDRATION_WITH_PARSE_CORRECTNESS,
     async run() {
       const mod = await loadStatePatcherModule();
-      // The on-disk round trip a cold start actually pays before hydration.
+      // The on-disk round trip a cold start actually pays before hydration —
+      // and the panels it produces are the ONLY panels hydrated below, so
+      // deleting either half breaks the pass rather than speeding it up.
       const parseStartedAt = performance.now();
-      const payload = JSON.stringify({ panels: EMPTY_PLAN.panels.map((p) => p.saved) });
-      JSON.parse(payload);
+      const payload = serializeHydrationPanels(EMPTY_PLAN);
+      const parsed = parseHydrationPanels(payload);
       const parseMs = performance.now() - parseStartedAt;
 
-      const observed = runHydrationPass(mod, EMPTY_PLAN);
+      // Untimed: rewiring the plan around the parsed snapshots is fixture
+      // bookkeeping, not deserialize cost.
+      const observed = runHydrationPass(mod, withParsedPanels(EMPTY_PLAN, parsed));
 
       return {
         durationMs: parseMs + observed.elapsedMs,
@@ -92,6 +116,10 @@ export const startupScenarios: PerfScenario[] = [
           parseMs,
           hydrateMs: observed.elapsedMs,
           payloadBytes: payload.length,
+          // Graded against the ORIGINAL plan, not the parsed one: the
+          // expectations are the fixture's own arithmetic, and the subject
+          // consumed the deserialized copies.
+          parseMisses: hydrationRoundTripMisses(EMPTY_PLAN, parsed),
           ...hydrationMetrics(EMPTY_PLAN, observed),
         },
       };
@@ -101,19 +129,19 @@ export const startupScenarios: PerfScenario[] = [
     id: "PERF-002",
     name: "Startup Hydration - Heavy Layout",
     description:
-      "Deserialize a 260-panel, 16-worktree saved layout and run the real statePatcher restore builders over all of it, including the agent preset/flag/resume resolution each agent pane pays (NOT a binary launch — see PERF-004).",
+      "Deserialize a 260-panel, 16-worktree saved layout and run the real statePatcher restore builders over the panels the parse produced, including the agent preset/flag/resume resolution each agent pane pays (NOT a binary launch — see PERF-004).",
     tier: "heavy",
     modes: ["ci", "nightly"],
     iterations: { ci: 8, nightly: 12 },
     warmups: 1,
-    correctness: HYDRATION_CORRECTNESS,
+    correctness: HYDRATION_WITH_PARSE_CORRECTNESS,
     async run() {
       const mod = await loadStatePatcherModule();
       const parseStartedAt = performance.now();
-      JSON.parse(HEAVY_PLAN_SERIALIZED);
+      const parsed = parseHydrationPanels(HEAVY_PLAN_SERIALIZED);
       const parseMs = performance.now() - parseStartedAt;
 
-      const observed = runHydrationPass(mod, HEAVY_PLAN);
+      const observed = runHydrationPass(mod, withParsedPanels(HEAVY_PLAN, parsed));
 
       return {
         durationMs: parseMs + observed.elapsedMs,
@@ -121,6 +149,7 @@ export const startupScenarios: PerfScenario[] = [
           parseMs,
           hydrateMs: observed.elapsedMs,
           payloadBytes: HEAVY_PLAN_SERIALIZED.length,
+          parseMisses: hydrationRoundTripMisses(HEAVY_PLAN, parsed),
           ...hydrationMetrics(HEAVY_PLAN, observed),
         },
       };

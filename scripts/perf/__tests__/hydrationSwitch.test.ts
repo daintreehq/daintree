@@ -340,6 +340,36 @@ describe("worktree scope fixture drives the real panel index", () => {
     expect(misses.indexBuildMisses).toBe(0);
     expect(misses.mutationMisses).toBe(0);
   });
+
+  it("scores a probe whose add never happened, which churns no bucket at all", () => {
+    // The half the term used to be missing. Deleting `addToWorktreeIndex` from
+    // the probe leaves every OTHER bucket holding its original array, so the
+    // identity half is perfect — `churnedBuckets` is 0 — while nothing was
+    // added. This is what that pass reports.
+    const observed = runWorktreeScopePass(plan);
+    const misses = worktreeScopeMisses(plan, {
+      ...observed,
+      churnedBuckets: 0,
+      probeIdLanded: false,
+      probeBucketGrowth: 0,
+      probeBucketReplaced: false,
+    });
+    expect(misses.referenceStabilityMisses).toBeGreaterThan(0);
+    // Every other accumulator stays clean, which is why this one has to speak.
+    expect(misses.indexBuildMisses).toBe(0);
+    expect(misses.pendingIndexMisses).toBe(0);
+    expect(misses.mutationMisses).toBe(0);
+    expect(misses.candidateMisses).toBe(0);
+  });
+
+  it("scores a bucket mutated in place, which every membership check would pass", () => {
+    // A `push` onto the existing array lands the id and grows the bucket, so
+    // both of the landing checks are satisfied — and the per-row selector for
+    // that worktree never re-fires, because the array is the same reference.
+    const observed = runWorktreeScopePass(plan);
+    const misses = worktreeScopeMisses(plan, { ...observed, probeBucketReplaced: false });
+    expect(misses.referenceStabilityMisses).toBe(1);
+  });
 });
 
 describe("PERF-010..013 scenario output", () => {

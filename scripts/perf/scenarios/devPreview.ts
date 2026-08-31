@@ -140,6 +140,7 @@ export const devPreviewScenarios: PerfScenario[] = [
       "readyMarkerMisses",
       "compileArmMisses",
       "compileClearMisses",
+      "diagnosticRingMisses",
     ],
     run() {
       const plan = plans().startup;
@@ -147,7 +148,7 @@ export const devPreviewScenarios: PerfScenario[] = [
       const session = createDevPreviewSession("panel-020", "project-020");
       const result = runDevPreviewOutputPass(plan, session, shared);
       disposeDevPreviewSession(session);
-      const misses = devPreviewPassMisses(plan, result);
+      const misses = devPreviewPassMisses(plan, result, shared.rings);
 
       return {
         durationMs: -1,
@@ -182,6 +183,7 @@ export const devPreviewScenarios: PerfScenario[] = [
       "readyMarkerMisses",
       "compileArmMisses",
       "compileClearMisses",
+      "diagnosticRingMisses",
     ],
     run() {
       const { concurrentA, concurrentB } = plans();
@@ -196,8 +198,8 @@ export const devPreviewScenarios: PerfScenario[] = [
       disposeDevPreviewSession(sessionB);
 
       const misses = addMissCounts(
-        devPreviewPassMisses(concurrentA, resultA!),
-        devPreviewPassMisses(concurrentB, resultB!)
+        devPreviewPassMisses(concurrentA, resultA!, shared.rings),
+        devPreviewPassMisses(concurrentB, resultB!, shared.rings)
       );
 
       return {
@@ -230,7 +232,7 @@ export const devPreviewScenarios: PerfScenario[] = [
     modes: ["ci", "nightly"],
     iterations: { ci: 6, nightly: 10 },
     warmups: 1,
-    correctness: ["urlMisses", "decoyHits", "readyMarkerMisses"],
+    correctness: ["urlMisses", "decoyHits", "readyMarkerMisses", "diagnosticRingMisses"],
     run() {
       const { switchDelivered, switchSuperseded } = plans();
       const shared = createSharedDevPreviewDeps();
@@ -243,7 +245,7 @@ export const devPreviewScenarios: PerfScenario[] = [
         const session = createDevPreviewSession(`panel-022-d${completedSessions}`, "project-022");
         const result = runDevPreviewOutputPass(plan, session, shared);
         disposeDevPreviewSession(session);
-        addMissCounts(misses, devPreviewPassMisses(plan, result));
+        addMissCounts(misses, devPreviewPassMisses(plan, result, shared.rings));
         chunksProcessed += result.chunksProcessed;
         completedSessions += 1;
       }
@@ -254,7 +256,7 @@ export const devPreviewScenarios: PerfScenario[] = [
         disposeDevPreviewSession(session);
         // `plan.expectedPolls` is empty for these, so every poll the product
         // made lands in `decoyHits`. That is the whole point of the half.
-        addMissCounts(misses, devPreviewPassMisses(plan, result));
+        addMissCounts(misses, devPreviewPassMisses(plan, result, shared.rings));
         chunksProcessed += result.chunksProcessed;
         supersededSessions += 1;
       }
@@ -265,6 +267,7 @@ export const devPreviewScenarios: PerfScenario[] = [
           completedSessionCount: completedSessions,
           supersededSessionCount: supersededSessions,
           chunkCount: chunksProcessed,
+          diagnosticRingCount: shared.rings.size,
           ...misses,
         },
       };
@@ -290,6 +293,7 @@ export const devPreviewScenarios: PerfScenario[] = [
       "readyMarkerMisses",
       "compileArmMisses",
       "compileClearMisses",
+      "diagnosticRingMisses",
     ],
     run() {
       const restartPlans = plans().restart;
@@ -303,7 +307,7 @@ export const devPreviewScenarios: PerfScenario[] = [
         const session = createDevPreviewSession(`panel-023-${restarts}`, "project-023");
         const result = runDevPreviewOutputPass(plan, session, shared);
         disposeDevPreviewSession(session);
-        addMissCounts(misses, devPreviewPassMisses(plan, result));
+        addMissCounts(misses, devPreviewPassMisses(plan, result, shared.rings));
         chunksProcessed += result.chunksProcessed;
         maxChunksToUrl = Math.max(maxChunksToUrl, result.firstPolledFrameIndex);
         restarts += 1;
@@ -336,7 +340,7 @@ export const devPreviewScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 16, nightly: 22 },
     warmups: 1,
-    correctness: ["exitClassMisses", "errorClassMisses", "decoyHits"],
+    correctness: ["exitClassMisses", "errorClassMisses", "decoyHits", "diagnosticRingMisses"],
     run() {
       const failurePlans = plans().failures;
       const shared = createSharedDevPreviewDeps();
@@ -348,7 +352,7 @@ export const devPreviewScenarios: PerfScenario[] = [
         const session = createDevPreviewSession(`panel-024-${faults}`, "project-024");
         const result = runDevPreviewOutputPass(plan, session, shared);
         disposeDevPreviewSession(session);
-        addMissCounts(misses, devPreviewPassMisses(plan, result));
+        addMissCounts(misses, devPreviewPassMisses(plan, result, shared.rings));
         chunksProcessed += result.chunksProcessed;
         faults += 1;
       }
@@ -367,6 +371,7 @@ export const devPreviewScenarios: PerfScenario[] = [
           exitClassMisses: exit.exitClassMisses,
           errorClassMisses: misses.errorClassMisses,
           decoyHits: misses.decoyHits,
+          diagnosticRingMisses: misses.diagnosticRingMisses,
         },
       };
     },

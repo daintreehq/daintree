@@ -201,6 +201,12 @@ export interface WorktreeScopeObservation {
   /** Buckets whose array identity survived the probe add, and those that did not. */
   stableBuckets: number;
   churnedBuckets: number;
+  /** The probe id is in the bucket the add named. */
+  probeIdLanded: boolean;
+  /** Entries the probed bucket gained. Exactly one add, so exactly one. */
+  probeBucketGrowth: number;
+  /** The probed bucket came back as a NEW array, not mutated in place. */
+  probeBucketReplaced: boolean;
   /** Panels the target worktree's grid and dock ended up holding. */
   visiblePanels: number;
   visibleDockPanels: number;
@@ -247,8 +253,8 @@ export function runWorktreeScopePass(plan: WorktreeScopePlan): WorktreeScopeObse
     mutatedIndex = removeFromWorktreeIndex(mutatedIndex, removal.worktreeId, removal.id);
   }
 
-  // 6. Reference stability: one add to one bucket must leave every other
-  //    bucket's array identity untouched.
+  // 6. Reference stability: one add to one bucket must land in that bucket and
+  //    leave every other bucket's array identity untouched.
   const before = new Map(Object.entries(mutatedIndex));
   const probedIndex = addToWorktreeIndex(mutatedIndex, plan.probe.worktreeId, plan.probe.id);
   let stableBuckets = 0;
@@ -261,6 +267,14 @@ export function runWorktreeScopePass(plan: WorktreeScopePlan): WorktreeScopeObse
 
   const elapsedMs = performance.now() - startedAt;
 
+  // The other half of the same invariant, read after the clock stops so the
+  // membership scan is not priced as index maintenance. Without it the probe
+  // graded only the buckets it did NOT touch: deleting the add entirely left
+  // every other bucket holding its original array, so `churnedBuckets` stayed
+  // 0 and the term passed a pass in which nothing was added at all.
+  const probeBucketBefore = before.get(plan.probe.worktreeId) ?? [];
+  const probeBucketAfter = probedIndex[plan.probe.worktreeId] ?? [];
+
   return {
     elapsedMs,
     scopeChecks,
@@ -272,6 +286,11 @@ export function runWorktreeScopePass(plan: WorktreeScopePlan): WorktreeScopeObse
     mutatedIndex,
     stableBuckets,
     churnedBuckets,
+    probeIdLanded: probeBucketAfter.includes(plan.probe.id),
+    probeBucketGrowth: probeBucketAfter.length - probeBucketBefore.length,
+    // An in-place `push` answers every membership question correctly and is the
+    // exact regression the stability half exists for, one bucket over.
+    probeBucketReplaced: probeBucketAfter !== probeBucketBefore,
     visiblePanels: gridIds.length,
     visibleDockPanels: dockIds.length,
   };
@@ -290,7 +309,7 @@ export interface WorktreeScopeMisses {
   dockScopeMisses: number;
   /** Step 5: `transfer`/`remove` membership after the maintenance pass. */
   mutationMisses: number;
-  /** Step 6: the documented bucket-identity invariant. */
+  /** Step 6: the add landed, and the documented bucket-identity invariant held. */
   referenceStabilityMisses: number;
   /** The predicate was consulted once per candidate per surface. */
   scopeProbeMisses: number;
@@ -337,10 +356,18 @@ export function worktreeScopeMisses(
     gridScopeMisses: listMisses(observed.gridIds, plan.expectedGridIds),
     dockScopeMisses: listMisses(observed.dockIds, plan.expectedDockIds),
     mutationMisses: bucketMisses(observed.mutatedIndex, plan.expectedMutatedBuckets),
-    // Every bucket other than the probed one must come back by identity. A
-    // rebuild-everything index answers every membership question correctly and
-    // fails only here.
-    referenceStabilityMisses: observed.churnedBuckets,
+    // Two-sided over one operation. The add must LAND — the probe id present
+    // in the bucket it named, that bucket one entry longer and returned as a
+    // fresh array — and every other bucket must come back by identity. Only
+    // the second half used to be here, so deleting the `addToWorktreeIndex`
+    // call outright scored a perfect zero: no add, no churn. A
+    // rebuild-everything index still fails the identity half, and an index
+    // that stopped adding now fails the landing half.
+    referenceStabilityMisses:
+      observed.churnedBuckets +
+      (observed.probeIdLanded ? 0 : 1) +
+      Math.abs(1 - observed.probeBucketGrowth) +
+      (observed.probeBucketReplaced ? 0 : 1),
     scopeProbeMisses: Math.abs(observed.candidateIds.length * 2 - observed.scopeChecks),
   };
 }
