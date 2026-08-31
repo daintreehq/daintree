@@ -1008,7 +1008,11 @@ describe("HelpPanel — resume from main-captured hibernation (eviction recovery
     // observes the entry the controller just merged. Default mock just
     // tracks the call; here we also write through to the in-memory state.
     helpPanelState.setHibernateSession = vi.fn(
-      (projectId: string, slot: number, entry: { sessionId: string; cwd: string; agentId: string }) => {
+      (
+        projectId: string,
+        slot: number,
+        entry: { sessionId: string; cwd: string; agentId: string }
+      ) => {
         helpPanelState.hibernateSessions[slotKey(projectId, slot)] = entry;
       }
     );
@@ -1079,7 +1083,11 @@ describe("HelpPanel — resume from main-captured hibernation (eviction recovery
       cwd: "/help/session-dir",
     });
     helpPanelState.setHibernateSession = vi.fn(
-      (projectId: string, slot: number, entry: { sessionId: string; cwd: string; agentId: string }) => {
+      (
+        projectId: string,
+        slot: number,
+        entry: { sessionId: string; cwd: string; agentId: string }
+      ) => {
         helpPanelState.hibernateSessions[slotKey(projectId, slot)] = entry;
       }
     );

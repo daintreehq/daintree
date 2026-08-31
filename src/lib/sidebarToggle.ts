@@ -1,10 +1,6 @@
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
 import { isDocumentHidden, revealUntilStable } from "@/services/terminal/revealUntilStable";
-import {
-  useHelpPanelStore,
-  selectActiveSlot,
-  selectSlotTerminalIds,
-} from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectActiveSlot, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { lockSidebarLayoutTransition } from "./layoutTransitionLock";

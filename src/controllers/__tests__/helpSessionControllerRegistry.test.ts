@@ -8,8 +8,7 @@ import {
 
 vi.mock("@/store/helpPanelStore", () => {
   const state = { sessions: {}, activeSlot: 0 };
-  const store = (selector?: (s: typeof state) => unknown) =>
-    selector ? selector(state) : state;
+  const store = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state);
   store.getState = () => state;
   return { useHelpPanelStore: store, selectSlot: (s: typeof state) => s };
 });

@@ -452,9 +452,7 @@ export async function initGlobalServices(
         // Any live lane floors the project (#12108) — hibernating it would
         // revoke every lane, taking running siblings with it.
         const backends = helpSessionService.getAssistantBackends(projectId);
-        return backends.some(
-          (backend) => getPtyClient()?.hasTerminal(backend.terminalId) === true
-        );
+        return backends.some((backend) => getPtyClient()?.hasTerminal(backend.terminalId) === true);
       });
     },
   });

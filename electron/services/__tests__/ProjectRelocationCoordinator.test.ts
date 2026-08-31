@@ -71,7 +71,9 @@ const mockBroadcast = vi.hoisted(() => vi.fn());
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: mockBroadcast }));
 
 const mockAssistant = vi.hoisted(() => ({
-  getAssistantBackends: vi.fn(() => [] as Array<{ terminalId: string; webContentsId: number; slot: number }>),
+  getAssistantBackends: vi.fn(
+    () => [] as Array<{ terminalId: string; webContentsId: number; slot: number }>
+  ),
 }));
 vi.mock("../HelpSessionService.js", () => ({ helpSessionService: mockAssistant }));
 

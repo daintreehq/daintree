@@ -667,10 +667,13 @@ export class ProjectViewHarness {
       warmPaintGateHardTimeoutMs: 600,
       viewLoadTimeoutMs: 500,
       viewLoadHardTimeoutMs: 2_000,
-      assistantBackendForProject: (projectId) =>
+      // Plural since #12108: a project can run concurrent assistant lanes, and
+      // the eviction floor reads every one so a dead lane can't mask a live
+      // sibling. This fixture models a single lane.
+      assistantBackendsForProject: (projectId: string) =>
         projectId === assistantProject
-          ? { terminalId: ASSISTANT_TERMINAL_ID, webContentsId: assistantPin.webContentsId }
-          : null,
+          ? [{ terminalId: ASSISTANT_TERMINAL_ID, webContentsId: assistantPin.webContentsId }]
+          : [],
       isTerminalLive: (terminalId) => terminalId === ASSISTANT_TERMINAL_ID,
     });
 

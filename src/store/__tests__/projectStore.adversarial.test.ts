@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // @vitest-environment-options {"url":"http://localhost/"}
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ASSISTANT_SLOTS, assistantSlotKey } from "@shared/config/assistantSlots";
 
 type ProjectShape = {
   id: string;
@@ -551,8 +552,10 @@ describe("projectStore adversarial", () => {
     const { useProjectStore } = await import("../projectStore");
     await useProjectStore.getState().removeProject(projectA.id);
 
-    expect(clearHibernateSessionMock).toHaveBeenCalledTimes(1);
-    expect(clearHibernateSessionMock).toHaveBeenCalledWith(projectA.id);
+    // Once per lane since #12108 — a removed project must not leave a sibling
+    // lane's resume token keyed to an id nothing will look up again.
+    expect(clearHibernateSessionMock).toHaveBeenCalledTimes(ASSISTANT_SLOTS.length);
+    expect(clearHibernateSessionMock).toHaveBeenCalledWith(projectA.id, 0);
   });
 
   it("does not GC the hibernate session when project removal fails", async () => {
@@ -570,7 +573,7 @@ describe("projectStore adversarial", () => {
   it("carries the hibernate session over if locating still changes the id", async () => {
     installProjectApi({});
     installLocalStorage(createStorageMock());
-    hibernateSessionsMock[projectA.id] = {
+    hibernateSessionsMock[assistantSlotKey(projectA.id, 0)] = {
       sessionId: "session-1",
       cwd: "/tmp/project-a",
       agentId: "claude",
@@ -584,12 +587,12 @@ describe("projectStore adversarial", () => {
 
     // Preserved under the new id and repointed at the new folder — the whole
     // point of #11282 is that relocating never costs the user a conversation.
-    expect(setHibernateSessionMock).toHaveBeenCalledWith("project-a-relocated", {
+    expect(setHibernateSessionMock).toHaveBeenCalledWith("project-a-relocated", 0, {
       sessionId: "session-1",
       cwd: "/tmp/project-a-moved",
       agentId: "claude",
     });
-    expect(clearHibernateSessionMock).toHaveBeenCalledWith(projectA.id);
+    expect(clearHibernateSessionMock).toHaveBeenCalledWith(projectA.id, 0);
   });
 
   it("still refreshes the project list when hibernate migration fails", async () => {
@@ -598,7 +601,7 @@ describe("projectStore adversarial", () => {
     setHibernateSessionMock.mockImplementationOnce(() => {
       throw new Error("store unavailable");
     });
-    hibernateSessionsMock[projectA.id] = {
+    hibernateSessionsMock[assistantSlotKey(projectA.id, 0)] = {
       sessionId: "session-1",
       cwd: "/tmp/project-a",
       agentId: "claude",
@@ -649,7 +652,7 @@ describe("projectStore adversarial", () => {
       },
     });
     installLocalStorage(createStorageMock());
-    hibernateSessionsMock[projectA.id] = {
+    hibernateSessionsMock[assistantSlotKey(projectA.id, 0)] = {
       sessionId: "session-1",
       cwd: `${projectA.path}/sub`,
       agentId: "claude",
@@ -662,7 +665,7 @@ describe("projectStore adversarial", () => {
     await vi.dynamicImportSettled();
 
     // Same id, new folder: the resume pointer is repointed in place, never GC'd.
-    expect(setHibernateSessionMock).toHaveBeenCalledWith(projectA.id, {
+    expect(setHibernateSessionMock).toHaveBeenCalledWith(projectA.id, 0, {
       sessionId: "session-1",
       cwd: "/tmp/project-a-moved/sub",
       agentId: "claude",
@@ -679,7 +682,7 @@ describe("projectStore adversarial", () => {
       },
     });
     installLocalStorage(createStorageMock());
-    hibernateSessionsMock[projectA.id] = {
+    hibernateSessionsMock[assistantSlotKey(projectA.id, 0)] = {
       sessionId: "session-1",
       cwd: projectA.path,
       agentId: "claude",

@@ -839,8 +839,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
     "grant.revoked with reason %s clears the grant silently (no notice)",
     (revokedReason) => {
       // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
+      helpPanelState.sessionId = "s1";
+      const ctrl = new HelpSessionController();
       ctrl.start();
       grantLifecycleListeners[0]?.({
         type: "grant.issued",

@@ -1656,7 +1656,9 @@ export class HelpSessionService {
     // clamp landed on, which is exactly the cross-lane kill the slot key
     // exists to prevent.
     if (input.slot !== undefined && !isValidAssistantSlot(input.slot)) {
-      throw new Error(`slot must be an integer in [0, ${ASSISTANT_SLOTS.length}) — got ${String(input.slot)}`);
+      throw new Error(
+        `slot must be an integer in [0, ${ASSISTANT_SLOTS.length}) — got ${String(input.slot)}`
+      );
     }
     if (!path.isAbsolute(input.projectPath)) {
       throw new Error("projectPath must be absolute");
@@ -2169,7 +2171,8 @@ export class HelpSessionService {
     // a leftover Copilot entry legitimate, and keeping one would leave Claude
     // with a stale server it cannot authenticate against.
     const ownedByLiveCopilot = [...this.sessionsByToken.values()].some(
-      (record) => !record.revoked && record.agentId === "copilot" && record.sessionPath === sessionPath
+      (record) =>
+        !record.revoked && record.agentId === "copilot" && record.sessionPath === sessionPath
     );
     if (token === COPILOT_BEARER_PLACEHOLDER && ownedByLiveCopilot) return;
 

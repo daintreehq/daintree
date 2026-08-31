@@ -1274,7 +1274,11 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     helpPanelState.terminalId = null;
     helpPanelState.hibernateSessions = {};
     helpPanelState.setHibernateSession = vi.fn(
-      (projectId: string, slot: number, entry: { sessionId: string; cwd: string; agentId: string }) => {
+      (
+        projectId: string,
+        slot: number,
+        entry: { sessionId: string; cwd: string; agentId: string }
+      ) => {
         helpPanelState.hibernateSessions[slotKey(projectId, slot)] = entry;
       }
     );
@@ -1340,7 +1344,11 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     helpPanelState.terminalId = null;
     helpPanelState.hibernateSessions = {};
     helpPanelState.setHibernateSession = vi.fn(
-      (projectId: string, slot: number, entry: { sessionId: string; cwd: string; agentId: string }) => {
+      (
+        projectId: string,
+        slot: number,
+        entry: { sessionId: string; cwd: string; agentId: string }
+      ) => {
         helpPanelState.hibernateSessions[slotKey(projectId, slot)] = entry;
       }
     );
@@ -1386,7 +1394,11 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     helpPanelState.terminalId = null;
     helpPanelState.hibernateSessions = {};
     helpPanelState.setHibernateSession = vi.fn(
-      (workspaceId: string, slot: number, entry: { sessionId: string; cwd: string; agentId: string }) => {
+      (
+        workspaceId: string,
+        slot: number,
+        entry: { sessionId: string; cwd: string; agentId: string }
+      ) => {
         helpPanelState.hibernateSessions[slotKey(workspaceId, slot)] = entry;
       }
     );

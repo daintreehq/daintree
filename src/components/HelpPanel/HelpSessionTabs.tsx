@@ -22,7 +22,9 @@ function TabStateIndicator({ agentState }: { agentState: AgentState | null | und
     );
   }
   if (agentState === "directing") {
-    return <InteractingCircle className="w-3 h-3 shrink-0 text-category-blue" aria-label="directing" />;
+    return (
+      <InteractingCircle className="w-3 h-3 shrink-0 text-category-blue" aria-label="directing" />
+    );
   }
   if (agentState === "waiting") {
     return <HollowCircle className="w-3 h-3 shrink-0 text-state-waiting" aria-label="waiting" />;

@@ -631,4 +631,3 @@ export function selectSlotTerminalIds(state: HelpPanelState): string[] {
   }
   return ids;
 }
-

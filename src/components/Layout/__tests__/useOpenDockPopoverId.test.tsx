@@ -44,13 +44,13 @@ function seedVisibleDockPopover() {
 
 function emptyLane() {
   return {
-  terminalId: null,
-  agentId: null,
-  sessionId: null,
-  conversationTouched: false,
-  figures: [],
-  activeFigureNumber: null,
-};
+    terminalId: null,
+    agentId: null,
+    sessionId: null,
+    conversationTouched: false,
+    figures: [],
+    activeFigureNumber: null,
+  };
 }
 
 beforeEach(() => {

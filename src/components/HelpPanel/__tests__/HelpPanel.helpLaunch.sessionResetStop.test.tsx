@@ -1136,7 +1136,12 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
 
     // The superseded launch bailed: it never bound the fresh session and cleaned
     // up the orphaned terminal instead.
-    expect(helpPanelState.setTerminal).not.toHaveBeenCalledWith(0, reservedId, "claude", "sess-fresh");
+    expect(helpPanelState.setTerminal).not.toHaveBeenCalledWith(
+      0,
+      reservedId,
+      "claude",
+      "sess-fresh"
+    );
     expect(panelStoreState.removePanel).toHaveBeenCalledWith(reservedId);
   });
 });

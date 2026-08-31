@@ -1343,20 +1343,18 @@ describe("HelpSessionService", () => {
       // Lane 0 keeps the historical bare-hash directory, so an existing
       // install's Claude workspace-trust acceptance survives this change.
       expect(path.basename(laneZero.sessionPath)).toMatch(/^[0-9a-f]{16}$/);
-      expect(path.basename(laneOne.sessionPath)).toBe(
-        `${path.basename(laneZero.sessionPath)}-s1`
-      );
+      expect(path.basename(laneOne.sessionPath)).toBe(`${path.basename(laneZero.sessionPath)}-s1`);
     });
 
     it("rejects an out-of-range lane instead of clamping it onto a neighbour", async () => {
       // Clamping would displace whichever lane the clamp landed on — a session
       // the caller never named.
-      await expect(
-        service.provisionSession({ ...provisionInput(), slot: 99 })
-      ).rejects.toThrow(/slot/);
-      await expect(
-        service.provisionSession({ ...provisionInput(), slot: -1 })
-      ).rejects.toThrow(/slot/);
+      await expect(service.provisionSession({ ...provisionInput(), slot: 99 })).rejects.toThrow(
+        /slot/
+      );
+      await expect(service.provisionSession({ ...provisionInput(), slot: -1 })).rejects.toThrow(
+        /slot/
+      );
     });
 
     it("reports every live lane so a dead one can't mask a live sibling", async () => {
@@ -1527,7 +1525,9 @@ describe("HelpSessionService", () => {
       // #9639: an empty-sentinel placeholder is written SYNCHRONOUSLY before
       // gracefulKill so a racing switch-back resumes rather than fresh-launches;
       // the real resume ID overwrites it once gracefulKill resolves.
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === slotKey("proj-evicted", 0));
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-evicted", 0)
+      );
       expect(setCalls[0][1].agentSessionId).toBe("");
       expect(setCalls[setCalls.length - 1][1]).toEqual(
         expect.objectContaining({
@@ -1557,7 +1557,9 @@ describe("HelpSessionService", () => {
       // #9639: with no real resume ID, the empty-sentinel placeholder stays —
       // resume-latest on next open beats a fresh launch. Exactly one write
       // (the placeholder), never overwritten.
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === slotKey("proj-no-resume", 0));
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-no-resume", 0)
+      );
       expect(setCalls).toHaveLength(1);
       expect(setCalls[0][1].agentSessionId).toBe("");
     });
@@ -1812,15 +1814,15 @@ describe("HelpSessionService", () => {
         hibernationStore.get.mockReturnValue(null);
         hibernationStore.set.mockClear();
 
-        await expect(service.restorePendingHibernation("proj-A", 0, taken!.claimId, 22)).resolves.toBe(
-          false
-        );
+        await expect(
+          service.restorePendingHibernation("proj-A", 0, taken!.claimId, 22)
+        ).resolves.toBe(false);
         expect(hibernationStore.set).not.toHaveBeenCalled();
 
         // The rightful owner can still put it back.
-        await expect(service.restorePendingHibernation("proj-A", 0, taken!.claimId, 11)).resolves.toBe(
-          true
-        );
+        await expect(
+          service.restorePendingHibernation("proj-A", 0, taken!.claimId, 11)
+        ).resolves.toBe(true);
       });
 
       it("restores the empty-string resume-latest sentinel unchanged (#9639)", async () => {
@@ -1912,7 +1914,9 @@ describe("HelpSessionService", () => {
       await service.revokeByWebContentsId(99);
       await Promise.resolve();
 
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === slotKey("proj-open", 0));
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-open", 0)
+      );
       // Both the synchronous placeholder and the real-resume-id overwrite carry
       // the open flag so a switch-back at any point auto-resumes.
       expect(setCalls[0][1].panelWasOpen).toBe(true);
@@ -1939,7 +1943,9 @@ describe("HelpSessionService", () => {
       await service.revokeByWebContentsId(98);
       await Promise.resolve();
 
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === slotKey("proj-closed", 0));
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-closed", 0)
+      );
       expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
     });
 
@@ -1961,7 +1967,9 @@ describe("HelpSessionService", () => {
       await service.revokeByWebContentsId(97);
       await Promise.resolve();
 
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === slotKey("proj-toggle", 0));
+      const setCalls = hibernationStore.set.mock.calls.filter(
+        (c) => c[0] === slotKey("proj-toggle", 0)
+      );
       expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
     });
 

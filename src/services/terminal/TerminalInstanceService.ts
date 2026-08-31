@@ -58,11 +58,7 @@ import { isValidTerminalGeometry, type TerminalGeometry } from "@shared/types/te
 import type { TerminalResizeResult } from "@shared/types/pty-host";
 import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
-import {
-  useHelpPanelStore,
-  selectSlot,
-  selectSlotForTerminal,
-} from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectSlot, selectSlotForTerminal } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { getErrorMessage } from "@/utils/errorContext";
 import { PaintFabricCompositor } from "./paintFabric/PaintFabricCompositor";

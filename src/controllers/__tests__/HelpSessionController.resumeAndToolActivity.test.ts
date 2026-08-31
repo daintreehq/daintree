@@ -409,7 +409,11 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
   // it a pure spy; this writes through to helpPanelState.hibernateSessions.
   const seedThroughSetHibernate = () => {
     helpPanelState.setHibernateSession = vi.fn(
-      (projectId: string, slot: number, entry: { sessionId: string; cwd: string; agentId: string }) => {
+      (
+        projectId: string,
+        slot: number,
+        entry: { sessionId: string; cwd: string; agentId: string }
+      ) => {
         helpPanelState.hibernateSessions[slotKey(projectId, slot)] = entry;
       }
     );

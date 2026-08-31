@@ -957,7 +957,12 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
       }),
       { source: "user" }
     );
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(0, "codex-term-1", "codex", "sess-codex");
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
+      "codex-term-1",
+      "codex",
+      "sess-codex"
+    );
   });
 });
 

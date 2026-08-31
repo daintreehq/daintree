@@ -434,6 +434,7 @@ export function HelpPanel({
     isOpen,
     terminalId,
     activeWorkspaceId,
+    activeSlot,
     supportedInstalledAgentIdsKey,
     supportedInstalledAgentIds,
   ]);
@@ -514,7 +515,7 @@ export function HelpPanel({
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId, terminalId, isReadyToLaunch, setOpen]);
+  }, [activeWorkspaceId, activeSlot, terminalId, isReadyToLaunch, setOpen]);
 
   // Fire the captured resume once the panel has opened. The `!terminalId` guard
   // covers two cases: a DevTools reload that still holds a live session, and the
@@ -1358,18 +1359,18 @@ export function HelpPanel({
           hibernates when idle; the ACTIVE lane needs one too, so that switching
           tabs never disarms a live lane (see the lifecycle note above). */}
       {openSlots.map((slot) => (
-          <HelpSessionLaneRuntime
-            key={slot}
-            slot={slot}
-            isActive={slot === activeSlot}
-            isOpen={isOpen}
-            isReadyToLaunch={isReadyToLaunch}
-            currentProject={activeWorkspace}
-            preferredAgentId={preferredAgentId}
-            supportedInstalledAgentIds={supportedInstalledAgentIds}
-            autoLaunchEnabled={autoLaunchEnabled}
-            visibilityEpoch={visibilityEpoch}
-          />
+        <HelpSessionLaneRuntime
+          key={slot}
+          slot={slot}
+          isActive={slot === activeSlot}
+          isOpen={isOpen}
+          isReadyToLaunch={isReadyToLaunch}
+          currentProject={activeWorkspace}
+          preferredAgentId={preferredAgentId}
+          supportedInstalledAgentIds={supportedInstalledAgentIds}
+          autoLaunchEnabled={autoLaunchEnabled}
+          visibilityEpoch={visibilityEpoch}
+        />
       ))}
 
       {/* Content */}

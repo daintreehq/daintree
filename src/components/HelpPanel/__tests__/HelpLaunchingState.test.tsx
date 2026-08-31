@@ -7,9 +7,9 @@ import { __resetHelpSessionControllersForTests } from "@/controllers/helpSession
 
 describe("HelpLaunchingState", () => {
   beforeEach(() => {
-  // #12108: controllers live in a per-view registry, not component
-  // state, so they outlive a render and must be reset between tests.
-  __resetHelpSessionControllersForTests();
+    // #12108: controllers live in a per-view registry, not component
+    // state, so they outlive a render and must be reset between tests.
+    __resetHelpSessionControllersForTests();
     vi.useFakeTimers();
   });
 

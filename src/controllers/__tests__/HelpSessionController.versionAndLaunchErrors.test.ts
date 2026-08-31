@@ -854,7 +854,12 @@ describe("HelpSessionController — launch error routing", () => {
     // against is the re-eval's launch() being swallowed by the still-held
     // re-entrancy guard, leaving _hasAutoLaunched stuck and codex unlaunched.
     await vi.waitFor(() => {
-      expect(helpPanelState.setTerminal).toHaveBeenCalledWith(0, "term-codex", "codex", "sess-codex");
+      expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+        0,
+        "term-codex",
+        "codex",
+        "sess-codex"
+      );
     });
     // The superseded claude attempt is cleaned up: orphan terminal removed,
     // stale session token revoked.
