@@ -40,6 +40,17 @@ interface PluginStorageManagerDeps {
 }
 
 /**
+ * The project / worktree a storage call belongs to, when the caller knows it —
+ * a project-bound plugin host pins its own target here so a project or worktree
+ * switch can't move its file. An absent or `null` member means unbound, and that
+ * scope falls back to the app-global active project / worktree.
+ */
+export interface ExplicitStorageTarget {
+  readonly projectRoot?: string | null;
+  readonly worktreePath?: string | null;
+}
+
+/**
  * Owns the per-(plugin, scope, path) {@link PluginSettingsStore} cache, scope and
  * file-path resolution, the subscriber set and notification, and serializability
  * guards for the private {@link import("../../../shared/types/plugin.js").StorageApi}.
@@ -48,9 +59,10 @@ interface PluginStorageManagerDeps {
  * deliberately stripped of every settings-specific concern (declared-key gating,
  * secret routing, the settings-UI bridge). Storage values are plaintext JSON,
  * never declared, never surfaced in the settings UI. The `"worktree"` scope —
- * which settings has no analog for — resolves the active worktree at call time
- * through the injected `getActiveWorktreePath` callback, so storage paths track
- * worktree switches exactly as the `"project"` scope tracks project switches.
+ * which settings has no analog for — resolves through the injected
+ * `getActiveWorktreePath` callback when the caller supplies no explicit target,
+ * so an unbound plugin's storage paths track worktree switches exactly as its
+ * `"project"` scope tracks project switches.
  */
 export class PluginStorageManager {
   private readonly deps: PluginStorageManagerDeps;
@@ -89,21 +101,31 @@ export class PluginStorageManager {
 
   /**
    * Resolve the JSON file backing a plugin's storage for a scope. User scope is
-   * fixed; project scope resolves the active project at call time; worktree scope
-   * resolves the active worktree (async) via the injected callback. Returns
-   * `undefined` when the `"project"` / `"worktree"` target is not active.
+   * fixed. Project and worktree scope resolve `target` when the caller supplies
+   * the matching root, and otherwise the app-global active project / active
+   * worktree at call time. Returns `undefined` when there is no target.
    */
   async resolveStorageFilePath(
     pluginId: string,
-    scope: PluginStorageScope
+    scope: PluginStorageScope,
+    target?: ExplicitStorageTarget
   ): Promise<string | undefined> {
     if (scope === "worktree") {
-      const root = await this.deps.getActiveWorktreePath();
+      // Nullish, not falsy: an empty-string path is a caller bug, and treating it
+      // as "unbound" would silently target whatever worktree is active instead.
+      // Unbound (installed/builtin) plugins have no project of their own, so the
+      // app-global active worktree is the only target they can mean.
+      const root =
+        target?.worktreePath == null
+          ? await this.deps.getActiveWorktreePath()
+          : target.worktreePath;
       if (!root) return undefined;
       return path.join(root, ".daintree", "plugin-storage", `${pluginId}.json`);
     }
     if (scope === "project") {
-      const root = projectStore.getCurrentProject()?.path;
+      // Same nullish rule, and the same app-global fallback for an unbound plugin.
+      const root =
+        target?.projectRoot == null ? projectStore.getCurrentProject()?.path : target.projectRoot;
       if (!root) return undefined;
       return path.join(root, ".daintree", "plugin-storage", `${pluginId}.json`);
     }
@@ -191,6 +213,10 @@ export class PluginStorageManager {
    * each `worktree-activated` forces a fresh read on the next access. `"user"` and
    * `"project"` scoped stores are untouched: user state is process-global and
    * project switches already change the resolved path (a fresh store).
+   *
+   * The cache records no provenance, so a store pinned to an explicit worktree is
+   * evicted by an unrelated worktree activation too. Over-eager, not wrong: the
+   * cost is one re-read from the same file.
    */
   evictWorktreeScopedStores(): void {
     const marker = "\x00worktree\x00";

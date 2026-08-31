@@ -81,12 +81,27 @@ export class PluginSettingsManager {
 
   /**
    * Resolve the JSON file backing a plugin's settings for a scope. User scope is
-   * fixed; project scope resolves the active project at call time and returns
-   * `undefined` when none is active.
+   * fixed. Project scope resolves `projectRoot` when the caller supplies one and
+   * otherwise the app-global active project at call time; returns `undefined`
+   * when there is no target.
+   *
+   * `projectRoot` is how a project-bound host pins its own project: once supplied
+   * the active project is never consulted, so a plugin owned by project A cannot
+   * write into project B's file when the user switches. Mirrors
+   * {@link resolveUiSettingsFilePath}, which pins a renderer form to its own
+   * project by id for the same reason.
    */
-  resolveSettingsFilePath(pluginId: string, scope: PluginSettingsScope): string | undefined {
+  resolveSettingsFilePath(
+    pluginId: string,
+    scope: PluginSettingsScope,
+    projectRoot?: string | null
+  ): string | undefined {
     if (scope === "project") {
-      const root = projectStore.getCurrentProject()?.path;
+      // Nullish, not falsy: an empty-string root is a caller bug, and treating it
+      // as "unbound" would silently target whatever project is active instead.
+      // Unbound (installed/builtin) plugins have no project of their own, so the
+      // app-global active project is the only target they can mean.
+      const root = projectRoot == null ? projectStore.getCurrentProject()?.path : projectRoot;
       if (!root) return undefined;
       return path.join(root, ".daintree", "plugin-settings", `${pluginId}.json`);
     }
