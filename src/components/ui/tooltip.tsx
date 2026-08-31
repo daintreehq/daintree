@@ -2,6 +2,7 @@ import * as React from "react";
 import type * as TooltipPrimitiveType from "@radix-ui/react-tooltip";
 import { Slot } from "@radix-ui/react-slot";
 import { cn } from "@/lib/utils";
+import { TOOLTIP_MOTION_CLASS } from "./overlayMotion";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { FixedDropdownVisibleContext } from "./fixed-dropdown";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
@@ -372,7 +373,7 @@ const TooltipContent = React.forwardRef<
           style={{ transformOrigin: "var(--radix-tooltip-content-transform-origin)", ...style }}
           className={cn(
             "z-[var(--z-popover)] max-w-xs overflow-hidden rounded-[var(--radius-md)] surface-overlay shadow-overlay px-3 py-1.5 text-xs text-text-primary",
-            "animate-in fade-in-0 duration-150 data-[state=closed]:animate-out data-[state=closed]:duration-100 data-[state=closed]:fade-out-0 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
+            TOOLTIP_MOTION_CLASS,
             className
           )}
           {...props}
