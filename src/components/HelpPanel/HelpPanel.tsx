@@ -537,42 +537,13 @@ export function HelpPanel({
     setAutoResumeAgentId(null);
   }, [autoResumeAgentId, isOpen, terminalId, controller]);
 
-  // Lifecycle — arms IPC subscriptions on mount, clears all timers on
-  // unmount. `start()` is idempotent across StrictMode's double-mount.
-  useEffect(() => {
-    controller.start();
-    return () => controller.stop();
-  }, [controller]);
-
-  // Sync the controller's inputs whenever the upstream state changes. The
-  // controller decides what to do (clear version block, arm hibernate,
-  // attempt auto-launch). Centralizing the inputs means the controller can
-  // reason about transitions (e.g. preferredAgentId changing mid-launch)
-  // without scattering effects across the component.
-  useEffect(() => {
-    controller.syncInputs({
-      isOpen,
-      isReadyToLaunch,
-      // Legacy field name — carries the active workspace, project or scratch.
-      currentProject: activeWorkspace,
-      terminalId,
-      preferredAgentId,
-      supportedInstalledAgentIds,
-      autoLaunchEnabled,
-      visibilityEpoch,
-    });
-  }, [
-    controller,
-    isOpen,
-    isReadyToLaunch,
-    activeWorkspace,
-    terminalId,
-    preferredAgentId,
-    supportedInstalledAgentIdsKey,
-    supportedInstalledAgentIds,
-    autoLaunchEnabled,
-    visibilityEpoch,
-  ]);
+  // Lifecycle is NOT driven from here (#12108). Every open lane — the active
+  // one included — is armed by its own `HelpSessionLaneRuntime` below.
+  //
+  // Keying an arm/disarm effect on `controller` would tear the OUTGOING lane
+  // down on every tab switch, and `stop()` is not a neutral pause: it bumps
+  // `_launchGen`, which makes an in-flight launch bail at its next checkpoint.
+  // Switching tabs mid-launch would silently abandon that launch.
 
   // The renderer being hidden is NOT a teardown signal. A hidden renderer
   // means one of: project-switch cached, project-switch about-to-be-evicted,
@@ -1382,16 +1353,15 @@ export function HelpPanel({
         onClose={handleCloseSlot}
       />
 
-      {/* Background lanes: no body, but their controllers must keep running so
-          a session the user has tabbed away from still surfaces approvals and
-          still hibernates when idle. */}
-      {openSlots
-        .filter((slot) => slot !== activeSlot)
-        .map((slot) => (
+      {/* One runtime per open lane. Background lanes need theirs so a session
+          the user has tabbed away from still surfaces approvals and still
+          hibernates when idle; the ACTIVE lane needs one too, so that switching
+          tabs never disarms a live lane (see the lifecycle note above). */}
+      {openSlots.map((slot) => (
           <HelpSessionLaneRuntime
             key={slot}
             slot={slot}
-            isActive={false}
+            isActive={slot === activeSlot}
             isOpen={isOpen}
             isReadyToLaunch={isReadyToLaunch}
             currentProject={activeWorkspace}
@@ -1400,7 +1370,7 @@ export function HelpPanel({
             autoLaunchEnabled={autoLaunchEnabled}
             visibilityEpoch={visibilityEpoch}
           />
-        ))}
+      ))}
 
       {/* Content */}
       <div className="flex-1 flex flex-col min-h-0 relative">
