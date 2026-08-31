@@ -11,7 +11,10 @@ import {
   permittedCallSample,
   probeCall,
   readResultPayload,
+  requiredOutputKeys,
+  RESOURCE_TAG_ARG,
   SELF_GATED_TOOLS,
+  taggedTerminalId,
   type CallOutcome,
   type ListedTool,
   type ManifestBundle,
@@ -293,12 +296,18 @@ export const mcpSessionScenarios: PerfScenario[] = [
     id: "PERF-282",
     name: "MCP tools/call Round Trip - Dispatch, Result and Client Schema Validation",
     description:
-      "Every tool a system-tier session can reach, called through the real CallTool handler: parseToolArguments strips the protocol-only fields, the gate chain admits, the result is assembled by buildToolCallResult and buildStructuredContent, and the SDK client compiles each advertised outputSchema and validates the structuredContent with AJV. The renderer is not here, so the dispatch leg is a counting stand-in that answers with a minimal instance of the action's own advertised schema — which is what makes the client's validation pass load-bearing rather than decorative.",
+      "Every tool a system-tier session can reach, called through the real CallTool handler: parseToolArguments strips the protocol-only fields, the gate chain admits, the result is assembled by buildToolCallResult and buildStructuredContent, and the SDK client compiles each advertised outputSchema and validates the structuredContent with AJV. The renderer is not here, so the dispatch leg is a counting stand-in that answers with a minimal instance of the action's own advertised schema. One final call is answered with a payload that schema rejects, so the client's AJV pass is observed refusing it rather than assumed to have run — a client that skipped validation would be faster and otherwise indistinguishable.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 10 },
     warmups: 2,
-    correctness: ["callMisses", "structuredContentMisses", "argsMisses", "auditRecordMisses"],
+    correctness: [
+      "callMisses",
+      "structuredContentMisses",
+      "argsMisses",
+      "auditRecordMisses",
+      "schemaValidationMisses",
+    ],
     async run() {
       const { mods, manifest } = await fixture();
       const session = await openSession(mods, manifest, { tier: "system" });
@@ -384,6 +393,39 @@ export const mcpSessionScenarios: PerfScenario[] = [
 
       const responseWireBytes = session.serverOutBytes - bytesBefore;
       const requestWireBytes = session.clientOutBytes - requestBytesBefore;
+
+      // Every reply above satisfied the schema it was advertised under, so all
+      // of them are equally consistent with a client that never validated
+      // anything — and that client would be faster, which is the direction this
+      // scenario's number is read in. The arm below is the only reading that
+      // separates the two: one call answered with a payload the tool's own
+      // advertised schema rejects, which nothing on the server checks.
+      //
+      // The tool is chosen from what the battery actually dispatched, so this
+      // can never quietly grade a call the stand-in dispatcher never served.
+      // Dedup-allowlisted tools are excluded: a cached replay would answer
+      // without dispatching, and the poisoned reply would never be built.
+      const poisonTool = dispatched
+        .map((record) => record.actionId)
+        .find(
+          (id) =>
+            schemaCarrying.has(id) &&
+            !mods.MCP_DEDUP_ALLOWLIST.has(id) &&
+            requiredOutputKeys(manifest.byId.get(id)?.outputSchema).length > 0
+        );
+      let schemaValidationMisses = 1;
+      if (poisonTool !== undefined) {
+        const beforePoison = session.dispatches.length;
+        session.poisonNextResult(poisonTool);
+        const rejected = await probeCall(session, poisonTool, { perfNonce: "perf-282-poison" });
+        const servedByDispatch = session.dispatches.length === beforePoison + 1;
+        // The client raises `Structured content does not match the tool's
+        // output schema`; anything else refused it for another reason and is
+        // not evidence the validator ran.
+        const refusedByValidator = !rejected.ok && (rejected.code ?? "").includes("output schema");
+        schemaValidationMisses = servedByDispatch && refusedByValidator ? 0 : 1;
+      }
+
       const durationMs = performance.now() - start;
       const sorted = [...latencies].sort((a, b) => a - b);
       await session.close();
@@ -405,6 +447,7 @@ export const mcpSessionScenarios: PerfScenario[] = [
           structuredContentMisses,
           argsMisses,
           auditRecordMisses,
+          schemaValidationMisses,
         },
       };
     },
@@ -712,12 +755,12 @@ export const mcpSessionScenarios: PerfScenario[] = [
     id: "PERF-285",
     name: "MCP Concurrent Session Fanout",
     description:
-      "Twelve sessions at rotating tiers on one SessionStore, each completing a handshake, a tools/list and a call. Reports what a fleet of external agents costs the host in transport bytes and how much of the store each session leaves behind. Each session's listing must match its own tier exactly — an external session that sees a workbench tool is a leak, not a performance result — and revoking must clear the ownership ledger it really wrote.",
+      "Twelve sessions at rotating tiers on one SessionStore, each completing a handshake, a tools/list and a call. Reports what a fleet of external agents costs the host in transport bytes and how much of the store each session leaves behind. Each session's listing must match its own tier exactly — an external session that sees a workbench tool is a leak, not a performance result. Each creating session also names the resource it asks for, so the ownership ledger is graded, after the whole fanout has run, against what the sessions requested rather than against what the ledger itself reports — then revoking must clear every one of those records.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 6, nightly: 8 },
     warmups: 2,
-    correctness: ["fanoutMisses", "crossSessionLeakMisses", "teardownMisses"],
+    correctness: ["fanoutMisses", "crossSessionLeakMisses", "ownershipMisses", "teardownMisses"],
     async run() {
       const { mods, manifest } = await fixture();
       const store = new mods.SessionStore(() => {});
@@ -726,9 +769,14 @@ export const mcpSessionScenarios: PerfScenario[] = [
       const sessions: McpSession[] = [];
       let crossSessionLeakMisses = 0;
       let fanoutMisses = 0;
+      let ownershipMisses = 0;
       let listedToolTotal = 0;
-      let ownershipRecordedCount = 0;
-      const ownedIds: Array<{ sessionId: string; terminalId: string }> = [];
+      // What each session was ASKED to create, decided by this scenario before
+      // the call goes out. Grading against ids read back off the replies (or off
+      // the ledger) is what let a fanout of twelve minting one shared id score
+      // clean: the ledger's newest-creator-wins eviction left a single live
+      // record, and a self-derived expectation agreed with it.
+      const requested: Array<{ sessionId: string; terminalId: string }> = [];
 
       const fanoutStart = performance.now();
       for (let index = 0; index < FANOUT_SESSIONS; index += 1) {
@@ -750,20 +798,35 @@ export const mcpSessionScenarios: PerfScenario[] = [
         // One creation per session that can make one, so the teardown check
         // has a ledger entry to lose rather than an empty map to agree with.
         if (manifest.actionModules.getTierPermittedActionIds(tier).has("terminal.new")) {
+          const tag = `${session.sessionId}-fanout-${index}`;
+          const terminalId = taggedTerminalId(tag);
+          requested.push({ sessionId: session.sessionId, terminalId });
           const created = await session.client.callTool({
             name: "terminal.new",
-            arguments: { cwd: "/tmp/daintree-perf", requestKey: `fanout-${index}` },
+            arguments: {
+              cwd: "/tmp/daintree-perf",
+              [RESOURCE_TAG_ARG]: tag,
+              requestKey: `fanout-${index}`,
+            },
           });
-          const terminalId = readResultPayload(created).terminalId;
-          if (typeof terminalId === "string") {
-            ownedIds.push({ sessionId: session.sessionId, terminalId });
-            if (store.resourceOwnership.owns(session.sessionId, "terminal", terminalId)) {
-              ownershipRecordedCount += 1;
-            }
-          }
+          if (readResultPayload(created).terminalId !== terminalId) ownershipMisses += 1;
         }
       }
       const fanoutMs = performance.now() - fanoutStart;
+
+      // Read once the whole fleet has created, never as each session goes: a
+      // ledger holding one record at a time satisfies an inline check on every
+      // iteration and still ends with eleven sessions owning nothing.
+      let ownershipRecordedCount = 0;
+      for (const owned of requested) {
+        if (store.resourceOwnership.owns(owned.sessionId, "terminal", owned.terminalId)) {
+          ownershipRecordedCount += 1;
+        } else {
+          ownershipMisses += 1;
+        }
+      }
+      // A fanout that asked for nothing proves nothing about a fanout.
+      if (requested.length === 0) ownershipMisses += 1;
 
       const totalServerWireBytes = sessions.reduce(
         (total, session) => total + session.serverOutBytes,
@@ -777,16 +840,14 @@ export const mcpSessionScenarios: PerfScenario[] = [
 
       let teardownMisses = store.sessions.size + store.sessionTierMap.size;
       teardownMisses += store.dedupResultCache.size + store.dedupInFlight.size;
-      for (const owned of ownedIds) {
+      for (const owned of requested) {
         if (store.resourceOwnership.owns(owned.sessionId, "terminal", owned.terminalId)) {
           teardownMisses += 1;
         }
       }
-      // A ledger that never recorded anything clears perfectly. Grade the
-      // recording half too, or the teardown reading is satisfied by inaction.
-      if (ownershipRecordedCount !== ownedIds.length || ownedIds.length === 0) {
-        teardownMisses += 1;
-      }
+      // A ledger that never recorded anything clears perfectly, so the count it
+      // was holding before the revoke is part of this reading.
+      if (ownershipRecordedCount === 0) teardownMisses += 1;
 
       const durationMs = performance.now() - start;
       disposeStore(store);
@@ -798,11 +859,13 @@ export const mcpSessionScenarios: PerfScenario[] = [
           listedToolTotal,
           totalServerWireBytes,
           bytesPerSession: Math.round(totalServerWireBytes / FANOUT_SESSIONS),
+          requestedResourceCount: requested.length,
           ownershipRecordedCount,
           residualSessionCount: store.sessions.size,
           fanoutMs,
           fanoutMisses,
           crossSessionLeakMisses,
+          ownershipMisses,
           teardownMisses,
         },
       };

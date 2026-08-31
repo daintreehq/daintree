@@ -384,7 +384,34 @@ export function instantiateSchema(schema: unknown, depth = 0): unknown {
   }
 }
 
+/** The `required` property names an advertised object schema declares. */
+export function requiredOutputKeys(schema: unknown): string[] {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return [];
+  const node = schema as Record<string, unknown>;
+  if (node["type"] !== "object") return [];
+  return Array.isArray(node.required) ? (node.required as string[]) : [];
+}
+
 // --- Harness -----------------------------------------------------------------
+
+/**
+ * Argument a caller uses to NAME the resource a creation must produce.
+ *
+ * Ordinary tool arguments reach `dispatchAction` untouched — `parseToolArguments`
+ * strips only `_meta` and `requestKey`, which PERF-282 grades — so the caller,
+ * not the stand-in dispatcher, decides the id. That is what lets a multi-session
+ * ownership oracle be written against what each session ASKED for: an id the
+ * dispatcher mints from its own counters is per-session at best, and two
+ * sessions that mint the same id collide in a ledger where the newest creation
+ * evicts the older one, leaving a fanout of twelve with a single live record
+ * that still agrees with a self-derived expectation.
+ */
+export const RESOURCE_TAG_ARG = "perfResourceTag";
+
+/** The terminal id a creation tagged `tag` must come back with. */
+export function taggedTerminalId(tag: string): string {
+  return `perf-terminal-${tag}`;
+}
 
 export interface DispatchRecord {
   actionId: string;
@@ -428,6 +455,17 @@ export interface McpSession {
   /** True once the abuse policy tripped and the store revoked the session. */
   revokedByPolicy: boolean;
   revoke: () => void;
+  /**
+   * Make the next dispatch of `actionId` answer with a payload its own
+   * advertised `outputSchema` rejects.
+   *
+   * The client's AJV pass over `structuredContent` is otherwise unobservable:
+   * every reply this fixture builds is valid, so a client that skipped
+   * validation entirely would be faster and look identical. One deliberately
+   * invalid reply is what turns "the validation runs" from a claim in a
+   * scenario description into a reading.
+   */
+  poisonNextResult: (actionId: string) => void;
   /** Bytes emitted by the server while `body` ran. */
   measureServerBytes: <T>(body: () => Promise<T>) => Promise<{ value: T; bytes: number }>;
   close: () => Promise<void>;
@@ -467,6 +505,7 @@ export async function openSession(
   const dispatches: DispatchRecord[] = [];
   const audits: AuditRecord[] = [];
   const state = { revokedByPolicy: false };
+  const poisoned = new Set<string>();
 
   /**
    * Answer a dispatch with a minimal instance of the action's own advertised
@@ -476,9 +515,22 @@ export async function openSession(
    */
   const respond = (actionId: string, args: unknown): DispatchEnvelope => {
     const entry = manifest.byId.get(actionId);
+    if (poisoned.delete(actionId)) {
+      // Every required property missing. `buildStructuredContent` forwards a
+      // dispatch result verbatim and nothing on the server checks it, so this
+      // arrives at the client intact and only its AJV pass can refuse it.
+      return { result: { ok: true, result: {} } };
+    }
     const result = (instantiateSchema(entry?.outputSchema) ?? {}) as Record<string, unknown>;
     if (actionId === "terminal.new" || actionId === "agent.launch") {
-      result.terminalId = `perf-terminal-${dispatches.length}`;
+      const tag = (args as Record<string, unknown> | undefined)?.[RESOURCE_TAG_ARG];
+      // Untagged ids stay session-scoped: two sessions minting the same id
+      // would collide in the ownership ledger, where the newer creation evicts
+      // the older one.
+      result.terminalId =
+        typeof tag === "string"
+          ? taggedTerminalId(tag)
+          : `perf-terminal-${sessionId}-${dispatches.length}`;
     }
     if (actionId === "terminal.close") {
       const requested = (args as { terminalId?: unknown } | undefined)?.terminalId;
@@ -574,6 +626,9 @@ export async function openSession(
     },
     revoke: () => {
       store.revokeSession(sessionId);
+    },
+    poisonNextResult: (actionId) => {
+      poisoned.add(actionId);
     },
     measureServerBytes: async (body) => {
       const before = counters.serverOut;

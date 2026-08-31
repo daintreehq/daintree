@@ -5,6 +5,7 @@ import {
   EXPECTED_CONSENT_LADDER,
   EXPECTED_STATIC_GATE,
   FIXTURE_ACTION_COUNT,
+  FIXTURE_DECORATION_PROVIDER_ID,
   FORGE_PLUGIN_ID,
   FORGE_PROVIDER_ID,
   HOST_CALL_ACTION,
@@ -79,11 +80,13 @@ describe("worker fixture plugin", () => {
     const source = readFileSync(bundle, "utf8");
 
     const keys = expectedRegistrationKeys("acme.demo");
-    // Two named actions plus one bulk action and one bulk handler per slot.
-    expect(keys.size).toBe(2 + FIXTURE_ACTION_COUNT * 2);
+    // Two named actions, one bulk action and one bulk handler per slot, and the
+    // file-decoration provider.
+    expect(keys.size).toBe(2 + FIXTURE_ACTION_COUNT * 2 + 1);
     expect(keys.has(`action:acme.demo.${ECHO_ACTION}`)).toBe(true);
     expect(keys.has(`action:acme.demo.${HOST_CALL_ACTION}`)).toBe(true);
     expect(keys.has(`handler:bulk-channel-0`)).toBe(true);
+    expect(keys.has(`fileDecorationProvider:${FIXTURE_DECORATION_PROVIDER_ID}`)).toBe(true);
 
     // The keys are the product's own `action:`/`handler:` registrationKey form,
     // so they only match if the bundle really registers those surfaces.
@@ -92,6 +95,41 @@ describe("worker fixture plugin", () => {
     expect(source).toContain("registerFileDecorationProvider");
     expect(source).toContain(ECHO_ACTION);
     expect(source).toContain(HOST_CALL_ACTION);
+  });
+
+  it("names every registration surface the bundle actually uses", () => {
+    // The gap this closes: the bundle registered a file-decoration provider
+    // that the expected set never mentioned, so dropping that one forward in
+    // `pluginDevWorkerHostProxy` left `registrationMisses` at 0. Counting calls
+    // is no good — the bulk registrations sit in a loop — so the check is on
+    // the SURFACE: every `host.registerX` in the bundle must contribute at
+    // least one key, and every key prefix must trace back to a call.
+    const prefixByMethod: Record<string, string> = {
+      registerAction: "action:",
+      registerHandler: "handler:",
+      registerFileDecorationProvider: "fileDecorationProvider:",
+    };
+    const source = readFileSync(workerFixtureBundle(), "utf8");
+    const used = new Set([...source.matchAll(/host\.(register\w+)\(/g)].map((m) => m[1]!));
+    expect(used.size).toBeGreaterThan(0);
+
+    const keys = [...expectedRegistrationKeys("acme.demo")];
+    for (const method of used) {
+      // An unmapped method is a new surface nobody taught this test about,
+      // which is the same failure wearing a different hat.
+      const prefix = prefixByMethod[method];
+      expect(prefix, `no registrationKey prefix known for host.${method}`).toBeTypeOf("string");
+      expect(keys.some((key) => key.startsWith(prefix!))).toBe(true);
+    }
+    // And the other way: a prefix nothing registers would be an oracle padded
+    // with keys that can never arrive, which reads as a permanent miss.
+    for (const key of keys) {
+      const method = Object.keys(prefixByMethod).find((name) =>
+        key.startsWith(prefixByMethod[name]!)
+      );
+      expect(method, `no host.register* call produces "${key}"`).toBeTypeOf("string");
+      expect(used.has(method!)).toBe(true);
+    }
   });
 
   it("scores a registration forward that never arrived", () => {

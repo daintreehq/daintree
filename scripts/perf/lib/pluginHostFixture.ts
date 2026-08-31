@@ -495,6 +495,15 @@ export const ECHO_ACTION = "echo";
  */
 export const HOST_CALL_ACTION = "hostcalls";
 
+/**
+ * Provider id the fixture plugin's file-decoration registration claims.
+ *
+ * A third registration surface beside actions and IPC handlers, and the one a
+ * proxy is most likely to drop quietly: nothing invokes it during these
+ * scenarios, so only the registration key it forwards can show it happened.
+ */
+export const FIXTURE_DECORATION_PROVIDER_ID = "perf-decorations";
+
 let workerBundlePath: string | null = null;
 
 /**
@@ -533,7 +542,7 @@ export async function activate(host) {
     host.registerHandler("bulk-channel-" + i, async () => i);
   }
   host.registerFileDecorationProvider(
-    { id: "perf-decorations", scopes: ["perf:*"] },
+    { id: ${JSON.stringify(FIXTURE_DECORATION_PROVIDER_ID)}, scopes: ["perf:*"] },
     { provideDecorations: async () => [] }
   );
   return () => {};
@@ -546,17 +555,24 @@ export async function activate(host) {
 
 /**
  * Registration keys the fixture plugin's `activate()` must produce, in the
- * product's own `action:<pluginId>.<id>` / `handler:<channel>` form.
+ * product's own `action:<pluginId>.<id>` / `handler:<channel>` /
+ * `fileDecorationProvider:<id>` form.
  *
  * This is the independent oracle for activation: a plugin host that boots and
  * contributes nothing is instant, and instant is the best-looking result the
  * harness can record. Comparing what arrived against this set is what makes
  * "activated" mean something.
+ *
+ * Every registering call the bundle makes has to be named here — a set that
+ * covers only two of the three surfaces grades only two of them, and the
+ * uncovered forward is free to stop carrying anything. `pluginHost.test.ts`
+ * reads the bundle source back and fails on a surface this set does not name.
  */
 export function expectedRegistrationKeys(pluginId: string): Set<string> {
   const keys = new Set<string>([
     `action:${pluginId}.${ECHO_ACTION}`,
     `action:${pluginId}.${HOST_CALL_ACTION}`,
+    `fileDecorationProvider:${FIXTURE_DECORATION_PROVIDER_ID}`,
   ]);
   for (let i = 0; i < FIXTURE_ACTION_COUNT; i += 1) {
     keys.add(`action:${pluginId}.bulk${i}`);
