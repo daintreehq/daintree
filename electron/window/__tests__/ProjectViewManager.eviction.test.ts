@@ -200,7 +200,12 @@ const mockPtyClient = {
 // project reads as assistant-free.
 const assistantBackends = new Map<string, { terminalId: string; webContentsId: number }>();
 const liveTerminals = new Set<string>();
-const assistantBackendForProject = (projectId: string) => assistantBackends.get(projectId) ?? null;
+// Plural since #12108: the manager asks for every lane so a dead one can't
+// mask a live sibling. These cases seed at most one, which is the old shape.
+const assistantBackendsForProject = (projectId: string) => {
+  const backend = assistantBackends.get(projectId);
+  return backend ? [backend] : [];
+};
 const isTerminalLive = (terminalId: string): boolean => liveTerminals.has(terminalId);
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
@@ -266,7 +271,7 @@ describe("ProjectViewManager — eviction safety", () => {
       warmPaintGateTimeoutMs: 0,
       warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
-      assistantBackendForProject,
+      assistantBackendsForProject,
       isTerminalLive,
     });
   });
@@ -692,7 +697,7 @@ describe("ProjectViewManager — eviction safety", () => {
         warmPaintGateTimeoutMs: 0,
         warmPaintGateHardTimeoutMs: 0,
         cachedProjectViews,
-        assistantBackendForProject,
+        assistantBackendsForProject,
         isTerminalLive,
       });
     }
@@ -811,7 +816,7 @@ describe("ProjectViewManager — eviction safety", () => {
       // The assistant's PTY exits: PtyClient drops it from the spawn registry,
       // while HelpSessionService's binding survives.
       liveTerminals.delete("t-help-a");
-      expect(assistantBackendForProject("proj-a")).not.toBeNull();
+      expect(assistantBackendsForProject("proj-a")).not.toHaveLength(0);
 
       await managerWithLimit.switchTo("proj-c", "/path/c");
       await flushImmediates();
@@ -2469,7 +2474,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
       warmPaintGateTimeoutMs: 0,
       warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
-      assistantBackendForProject,
+      assistantBackendsForProject,
       isTerminalLive,
     });
   });
@@ -2958,7 +2963,7 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
       warmPaintGateTimeoutMs: 0,
       warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews,
-      assistantBackendForProject,
+      assistantBackendsForProject,
       isTerminalLive,
     });
   }
@@ -3371,7 +3376,7 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       warmPaintGateTimeoutMs: 0,
       warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews,
-      assistantBackendForProject,
+      assistantBackendsForProject,
       isTerminalLive,
       mcpViewActivity: (workspaceId: string, webContentsId: number) => {
         if (activityThrowsFor.has(workspaceId)) throw new Error("MCP service mid-teardown");
@@ -3686,7 +3691,7 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       warmPaintGateTimeoutMs: 0,
       warmPaintGateHardTimeoutMs: 0,
       cachedProjectViews: 3,
-      assistantBackendForProject,
+      assistantBackendsForProject,
       isTerminalLive,
     });
     // Built directly rather than via makeManager (the point is the missing

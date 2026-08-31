@@ -57,6 +57,21 @@ const {
   grantLifecycleListeners: [] as Array<(payload: unknown) => void>,
   outcomeAlertListeners: [] as Array<(payload: unknown) => void>,
   helpPanelState: {
+    clearDroppedPreferredAgent: vi.fn(),
+    dismissIntro: vi.fn(),
+    setAutoLaunchEnabled: vi.fn(),
+    setWidth: vi.fn(),
+    requestFocus: vi.fn(),
+    setActiveFigureNumber: vi.fn(),
+    addFigure: vi.fn(),
+    markConversationStarted: vi.fn(),
+    setActiveSlot: vi.fn(),
+    closeSlot: vi.fn(),
+    openSlot: vi.fn(),
+    // #12108: the panel reads its lane pointer; the mocked selectors
+    // above project this same flat object as that lane.
+    activeSlot: 0,
+    sessions: {} as Record<number, unknown>,
     isOpen: false,
     terminalId: null as string | null,
     agentId: null as string | null,
@@ -97,7 +112,17 @@ vi.mock("@/store/helpPanelStore", () => {
   const store = (selector?: (s: typeof helpPanelState) => unknown) =>
     selector ? selector(helpPanelState) : helpPanelState;
   store.getState = () => helpPanelState;
-  return { useHelpPanelStore: store };
+  return {
+    useHelpPanelStore: store,
+    // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
+    // and these project that same object as the lane, so every existing
+    // assertion keeps driving the controller unchanged.
+    selectSlot: (s) => s,
+    selectActiveSlot: (s) => s,
+    selectOpenSlots: () => [0],
+    selectSlotTerminalIds: (s) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s, id) => (s.terminalId === id && id ? 0 : null),
+  };
 });
 
 vi.mock("@/store", () => {
@@ -341,7 +366,7 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
     expect(ctrl.getSnapshot().showResumeBanner).toBe(false);
     // The hibernate entry is still consumed so a future auto-launch doesn't
     // loop on the same --continue attempt.
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
     // The spawn still happened — the renderer attempted the agent heuristic.
     expect(panelStoreState.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "terminal" })
@@ -368,7 +393,7 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
 
     expect(ctrl.getSnapshot().phase).toBe("live");
     expect(ctrl.getSnapshot().showResumeBanner).toBe(true);
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
     ctrl.stop();
   });
 });
@@ -496,7 +521,7 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
     expect(provisionOrder).toBeDefined();
     expect(takeOrder!).toBeLessThan(provisionOrder!);
     // The taken entry seeds the local store the resume block reads.
-    expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("p1", {
+    expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("p1", 0, {
       sessionId: "abc-123",
       cwd: "/repo",
       agentId: "claude",
@@ -509,7 +534,7 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
       expect.anything(),
       expect.anything()
     );
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
     expect(ctrl.getSnapshot().phase).toBe("live");
     ctrl.stop();
   });
@@ -633,7 +658,7 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
     // _seedHibernateFromMain ran (the take is its only caller on this path).
     expect(takeMock).toHaveBeenCalledWith("p1");
     expect(panelStoreState.addPanel).toHaveBeenCalled();
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
     expect(ctrl.getSnapshot().phase).toBe("live");
     ctrl.stop();
   });

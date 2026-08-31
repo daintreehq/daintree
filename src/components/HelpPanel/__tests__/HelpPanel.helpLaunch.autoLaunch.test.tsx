@@ -68,6 +68,16 @@ const {
     wake: [] as Array<(sleepDurationMs: number) => void>,
   },
   helpPanelState: {
+    clearDroppedPreferredAgent: vi.fn(),
+    requestFocus: vi.fn(),
+    setActiveFigureNumber: vi.fn(),
+    setActiveSlot: vi.fn(),
+    closeSlot: vi.fn(),
+    openSlot: vi.fn(),
+    // #12108: the panel reads its lane pointer; the mocked selectors
+    // above project this same flat object as that lane.
+    activeSlot: 0,
+    sessions: {} as Record<number, unknown>,
     isOpen: true,
     width: 380,
     terminalId: null as string | null,
@@ -291,6 +301,14 @@ vi.mock("@/store/helpPanelStore", () => {
   store.getState = () => helpPanelState;
   return {
     useHelpPanelStore: store,
+    // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
+    // and these project that same object as the lane, so every existing
+    // assertion keeps driving the controller unchanged.
+    selectSlot: (s) => s,
+    selectActiveSlot: (s) => s,
+    selectOpenSlots: () => [0],
+    selectSlotTerminalIds: (s) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s, id) => (s.terminalId === id && id ? 0 : null),
     HELP_PANEL_MIN_WIDTH: 320,
     HELP_PANEL_MAX_WIDTH: 800,
   };
@@ -930,7 +948,7 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
       }),
       { source: "user" }
     );
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("codex-term-1", "codex", "sess-codex");
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(0, "codex-term-1", "codex", "sess-codex");
   });
 });
 

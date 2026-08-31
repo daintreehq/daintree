@@ -67,6 +67,16 @@ const {
     wake: [] as Array<(sleepDurationMs: number) => void>,
   },
   helpPanelState: {
+    clearDroppedPreferredAgent: vi.fn(),
+    requestFocus: vi.fn(),
+    setActiveFigureNumber: vi.fn(),
+    setActiveSlot: vi.fn(),
+    closeSlot: vi.fn(),
+    openSlot: vi.fn(),
+    // #12108: the panel reads its lane pointer; the mocked selectors
+    // above project this same flat object as that lane.
+    activeSlot: 0,
+    sessions: {} as Record<number, unknown>,
     isOpen: true,
     width: 380,
     terminalId: null as string | null,
@@ -287,6 +297,14 @@ vi.mock("@/store/helpPanelStore", () => {
   store.getState = () => helpPanelState;
   return {
     useHelpPanelStore: store,
+    // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
+    // and these project that same object as the lane, so every existing
+    // assertion keeps driving the controller unchanged.
+    selectSlot: (s) => s,
+    selectActiveSlot: (s) => s,
+    selectOpenSlots: () => [0],
+    selectSlotTerminalIds: (s) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s, id) => (s.terminalId === id && id ? 0 : null),
     HELP_PANEL_MIN_WIDTH: 320,
     HELP_PANEL_MAX_WIDTH: 800,
   };
@@ -664,6 +682,7 @@ describe("HelpPanel — + New session destructive reset", () => {
       { source: "user" }
     );
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
       "terminal-fresh",
       "claude",
       "sess-fresh"
@@ -730,6 +749,7 @@ describe("HelpPanel — + New session destructive reset", () => {
     expect(mockRevokeSession).toHaveBeenCalledWith("sess-bound");
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
       "terminal-fresh",
       "claude",
       "sess-fresh"
@@ -764,7 +784,7 @@ describe("HelpPanel — + New session destructive reset", () => {
       mockDispatch.mock.calls[0]?.[1] as { requestedId?: string } | undefined
     )?.requestedId;
     expect(capturedRequestedId).toMatch(/^terminal-/);
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(capturedRequestedId, "claude", null);
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(0, capturedRequestedId, "claude", null);
 
     await act(async () => {
       resolveDispatch({ ok: true, result: { terminalId: capturedRequestedId! } });
@@ -998,7 +1018,7 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
     expect(helpPanelState.clearFigures).toHaveBeenCalled();
     // …the persisted hibernate entry is dropped so a stop can't be resumed…
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     // …and, unlike + New session, no fresh agent is launched.
     expect(mockDispatch).not.toHaveBeenCalledWith(
       "agent.launch",
@@ -1058,7 +1078,7 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
     expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-1");
     expect(mockRevokeSession).toHaveBeenCalledWith("sess-bound");
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     expect(mockDispatch).not.toHaveBeenCalledWith(
       "agent.launch",
       expect.anything(),
@@ -1111,7 +1131,7 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
 
     // The superseded launch bailed: it never bound the fresh session and cleaned
     // up the orphaned terminal instead.
-    expect(helpPanelState.setTerminal).not.toHaveBeenCalledWith(reservedId, "claude", "sess-fresh");
+    expect(helpPanelState.setTerminal).not.toHaveBeenCalledWith(0, reservedId, "claude", "sess-fresh");
     expect(panelStoreState.removePanel).toHaveBeenCalledWith(reservedId);
   });
 });

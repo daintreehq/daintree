@@ -512,8 +512,8 @@ export class HelpSessionController {
     // never clear hibernate, close the panel, or suppress relaunch here.
     const hibernating = this._snapshot.phase === "hibernating";
 
-    revokeHelpSession(store.sessionId);
-    store.clearTerminal();
+    revokeHelpSession(this._slotState().sessionId);
+    useHelpPanelStore.getState().clearTerminal(this.slot);
     // The bound session is gone — drop any lingering activity row so the strip
     // doesn't show stale tool calls for a dead session (#9759), clear the
     // grant countdown/notice so they don't outlive the session (#10042), and
@@ -534,7 +534,7 @@ export class HelpSessionController {
     // slide the sidebar out. The user ended the session from inside the
     // terminal, so hide the panel rather than lingering on the empty state.
     this._applyStopSuppression();
-    store.setOpen(false);
+    useHelpPanelStore.getState().setOpen(false);
   }
 
   /**

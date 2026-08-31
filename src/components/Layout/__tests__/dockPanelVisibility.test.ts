@@ -30,7 +30,7 @@ function createScope(overrides: Partial<DockPanelScope> = {}): DockPanelScope {
   return {
     // The store keeps trash as a Map; `has` is all the predicate needs.
     trashedTerminals: new Map<string, unknown>(),
-    helpTerminalId: null,
+    helpTerminalIds: new Set<string>(),
     activeWorktreeId: "wt-a",
     ...overrides,
   };
@@ -66,7 +66,7 @@ describe("isDockPanelRendered", () => {
   });
 
   it("does not render the help panel, which owns its own surface", () => {
-    const scope = createScope({ helpTerminalId: "dock-1" });
+    const scope = createScope({ helpTerminalIds: new Set(["dock-1"]) });
 
     expect(isDockPanelRendered(createDockPanel("dock-1"), scope)).toBe(false);
   });
@@ -112,7 +112,7 @@ describe("selectOpenDockPopoverId", () => {
     };
   }
 
-  const scope = { helpTerminalId: null, activeWorktreeId: "wt-a" };
+  const scope = { helpTerminalIds: new Set<string>(), activeWorktreeId: "wt-a" };
 
   it("returns the id of a dock panel the dock actually renders", () => {
     expect(selectOpenDockPopoverId(createState(), scope)).toBe("dock-1");
@@ -145,7 +145,7 @@ describe("selectOpenDockPopoverId", () => {
 
   it("returns null for the help panel, which owns its own surface", () => {
     expect(
-      selectOpenDockPopoverId(createState(), { ...scope, helpTerminalId: "dock-1" })
+      selectOpenDockPopoverId(createState(), { ...scope, helpTerminalIds: new Set(["dock-1"]) })
     ).toBeNull();
   });
 

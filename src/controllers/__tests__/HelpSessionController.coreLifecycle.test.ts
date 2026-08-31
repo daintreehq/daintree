@@ -57,6 +57,21 @@ const {
   grantLifecycleListeners: [] as Array<(payload: unknown) => void>,
   outcomeAlertListeners: [] as Array<(payload: unknown) => void>,
   helpPanelState: {
+    clearDroppedPreferredAgent: vi.fn(),
+    dismissIntro: vi.fn(),
+    setAutoLaunchEnabled: vi.fn(),
+    setWidth: vi.fn(),
+    requestFocus: vi.fn(),
+    setActiveFigureNumber: vi.fn(),
+    addFigure: vi.fn(),
+    markConversationStarted: vi.fn(),
+    setActiveSlot: vi.fn(),
+    closeSlot: vi.fn(),
+    openSlot: vi.fn(),
+    // #12108: the panel reads its lane pointer; the mocked selectors
+    // above project this same flat object as that lane.
+    activeSlot: 0,
+    sessions: {} as Record<number, unknown>,
     isOpen: false,
     terminalId: null as string | null,
     agentId: null as string | null,
@@ -97,7 +112,17 @@ vi.mock("@/store/helpPanelStore", () => {
   const store = (selector?: (s: typeof helpPanelState) => unknown) =>
     selector ? selector(helpPanelState) : helpPanelState;
   store.getState = () => helpPanelState;
-  return { useHelpPanelStore: store };
+  return {
+    useHelpPanelStore: store,
+    // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
+    // and these project that same object as the lane, so every existing
+    // assertion keeps driving the controller unchanged.
+    selectSlot: (s) => s,
+    selectActiveSlot: (s) => s,
+    selectOpenSlots: () => [0],
+    selectSlotTerminalIds: (s) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s, id) => (s.terminalId === id && id ? 0 : null),
+  };
 });
 
 vi.mock("@/store", () => {
@@ -392,6 +417,8 @@ describe("HelpSessionController — subscribe / getSnapshot", () => {
   });
 
   it("notifies listeners when state changes via patch", () => {
+    // #12108: pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     const listener = vi.fn();
@@ -448,6 +475,7 @@ describe("HelpSessionController — turn-outcome alert pip", () => {
   }
 
   it("surfaces agent-stuck as outcomeAlert and notifies listeners", () => {
+    helpPanelState.sessionId = "help-1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     const listener = vi.fn();
@@ -461,6 +489,7 @@ describe("HelpSessionController — turn-outcome alert pip", () => {
   });
 
   it("surfaces reasoning-loop and clears on user dismiss", () => {
+    helpPanelState.sessionId = "help-1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     fireOutcome({ helpSessionId: "help-1", outcome: "reasoning-loop", turnId: "turn-1" });
@@ -472,6 +501,7 @@ describe("HelpSessionController — turn-outcome alert pip", () => {
   });
 
   it("auto-clears the pip when a tool call from a different turn starts", () => {
+    helpPanelState.sessionId = "help-1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     fireOutcome({ helpSessionId: "help-1", outcome: "reasoning-loop", turnId: "turn-1" });
@@ -488,6 +518,7 @@ describe("HelpSessionController — turn-outcome alert pip", () => {
   });
 
   it("auto-clears an agent-stuck pip (no turn id) on the next turn-stamped call", () => {
+    helpPanelState.sessionId = "help-1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     fireOutcome({ helpSessionId: "help-1", outcome: "agent-stuck" });
@@ -499,6 +530,7 @@ describe("HelpSessionController — turn-outcome alert pip", () => {
   });
 
   it("does not clear the pip for a call with no turn id", () => {
+    helpPanelState.sessionId = "help-1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     fireOutcome({ helpSessionId: "help-1", outcome: "reasoning-loop", turnId: "turn-1" });
@@ -578,7 +610,7 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
     expect(helpPanelState.clearFigures).toHaveBeenCalled();
     // Stop is destructive, not pause: the persisted hibernate slot is dropped so
     // the discarded conversation can't resume on next open.
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     // No fresh terminal is reserved — unlike newSession(), stop does not relaunch.
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
     // #11833: Stop slides the sidebar out rather than lingering on the empty
@@ -598,7 +630,7 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
 
     ctrl.endSession();
 
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("scratch-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("scratch-1", 0);
   });
 
   it("revokes the bearer before killing the PTY (revoke-before-kill, #7522)", () => {
@@ -732,7 +764,7 @@ describe("HelpSessionController — terminal PTY exit slides the sidebar out (#1
     expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-bound");
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
     // Full stop: the hibernate slot is dropped and the sidebar slides out.
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
     expect(ctrl.getSnapshot().phase).toBe("idle");
   });
@@ -820,7 +852,7 @@ describe("HelpSessionController — handleAgentExited (agent /exit inside a live
     expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-bound");
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
     // Full stop, and the sidebar slides out — same as the Stop button (#11833).
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
     expect(ctrl["_hasAutoLaunched"]).toBe(true);
     expect(ctrl.getSnapshot().phase).toBe("idle");

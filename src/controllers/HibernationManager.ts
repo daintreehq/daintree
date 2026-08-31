@@ -280,7 +280,7 @@ export class HibernationManager {
             if (this.host.getSnapshot().phase === "hibernating") this.host.resetPhase();
             return;
           }
-          if (after.isOpen) {
+          if (useHelpPanelStore.getState().isOpen) {
             this.host.patch({ phase: "live" });
             return;
           }

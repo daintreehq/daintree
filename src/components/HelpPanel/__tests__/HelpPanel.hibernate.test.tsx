@@ -75,6 +75,16 @@ const {
     wake: [] as Array<(sleepDurationMs: number) => void>,
   },
   helpPanelState: {
+    clearDroppedPreferredAgent: vi.fn(),
+    requestFocus: vi.fn(),
+    setActiveFigureNumber: vi.fn(),
+    setActiveSlot: vi.fn(),
+    closeSlot: vi.fn(),
+    openSlot: vi.fn(),
+    // #12108: the panel reads its lane pointer; the mocked selectors
+    // above project this same flat object as that lane.
+    activeSlot: 0,
+    sessions: {} as Record<number, unknown>,
     isOpen: true,
     width: 380,
     terminalId: null as string | null,
@@ -253,6 +263,14 @@ vi.mock("@/store/helpPanelStore", () => {
   store.getState = () => helpPanelState;
   return {
     useHelpPanelStore: store,
+    // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
+    // and these project that same object as the lane, so every existing
+    // assertion keeps driving the controller unchanged.
+    selectSlot: (s) => s,
+    selectActiveSlot: (s) => s,
+    selectOpenSlots: () => [0],
+    selectSlotTerminalIds: (s) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s, id) => (s.terminalId === id && id ? 0 : null),
     HELP_PANEL_MIN_WIDTH: 320,
     HELP_PANEL_MAX_WIDTH: 800,
   };
@@ -632,8 +650,9 @@ describe("HelpPanel — resume from hibernated session", () => {
       expect.anything(),
       expect.anything()
     );
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
       "resumed-term-1",
       "claude",
       "fresh-session"
@@ -777,7 +796,7 @@ describe("HelpPanel — resume from hibernated session", () => {
       render(<HelpPanel width={380} />);
     });
 
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
       expect.objectContaining({ agentId: "claude" }),
@@ -806,7 +825,7 @@ describe("HelpPanel — resume from hibernated session", () => {
       render(<HelpPanel width={380} />);
     });
 
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
       expect.objectContaining({ agentId: "claude" }),
@@ -1148,7 +1167,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     await flushAsyncWork();
 
     expect(mockRestorePendingHibernation).toHaveBeenCalledWith("proj-1", "claim-mismatch");
-    expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalledWith("proj-1", 0);
     expect(helpPanelState.hibernateSessions["proj-1"]).toEqual(preExisting);
   });
 
@@ -1349,7 +1368,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     // entry into hibernateSessions, and leaving that behind while main hands
     // the entry to another window would let two windows resume one
     // conversation — the single-winner invariant the atomic take holds.
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
   });
 
   // #11068: the same cold-resume handoff, but the active workspace is a scratch
@@ -1750,7 +1769,7 @@ describe("HelpPanel — idle hibernation timer", () => {
       });
 
       expect(mockGracefulKill).toHaveBeenCalledWith("t1");
-      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("proj-1", {
+      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("proj-1", 0, {
         sessionId: "resume-token-xyz",
         cwd: "/help",
         agentId: "claude",
@@ -1798,7 +1817,7 @@ describe("HelpPanel — idle hibernation timer", () => {
       });
 
       expect(mockGracefulKill).toHaveBeenCalledWith("t1");
-      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("scratch-1", {
+      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("scratch-1", 0, {
         sessionId: "resume-token-scratch",
         cwd: "/scratches/scratch-1",
         agentId: "claude",
@@ -1860,7 +1879,7 @@ describe("HelpPanel — idle hibernation timer", () => {
       });
 
       expect(mockGracefulKill).toHaveBeenCalledWith("t1");
-      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("scratch-1", {
+      expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith("scratch-1", 0, {
         sessionId: "resume-token-scratch",
         cwd: "/scratches/scratch-1",
         agentId: "claude",
@@ -1987,7 +2006,7 @@ describe("HelpPanel — idle hibernation timer", () => {
       });
 
       expect(helpPanelState.setHibernateSession).not.toHaveBeenCalled();
-      expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+      expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     } finally {
       vi.useRealTimers();
     }
@@ -2097,6 +2116,6 @@ describe("HelpPanel — + New session clears hibernated entry", () => {
       fireEvent.click(newSessionBtn);
     });
 
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
   });
 });

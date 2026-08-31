@@ -67,6 +67,16 @@ const {
     wake: [] as Array<(sleepDurationMs: number) => void>,
   },
   helpPanelState: {
+    clearDroppedPreferredAgent: vi.fn(),
+    requestFocus: vi.fn(),
+    setActiveFigureNumber: vi.fn(),
+    setActiveSlot: vi.fn(),
+    closeSlot: vi.fn(),
+    openSlot: vi.fn(),
+    // #12108: the panel reads its lane pointer; the mocked selectors
+    // above project this same flat object as that lane.
+    activeSlot: 0,
+    sessions: {} as Record<number, unknown>,
     isOpen: true,
     width: 380,
     terminalId: null as string | null,
@@ -287,6 +297,14 @@ vi.mock("@/store/helpPanelStore", () => {
   store.getState = () => helpPanelState;
   return {
     useHelpPanelStore: store,
+    // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
+    // and these project that same object as the lane, so every existing
+    // assertion keeps driving the controller unchanged.
+    selectSlot: (s) => s,
+    selectActiveSlot: (s) => s,
+    selectOpenSlots: () => [0],
+    selectSlotTerminalIds: (s) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s, id) => (s.terminalId === id && id ? 0 : null),
     HELP_PANEL_MIN_WIDTH: 320,
     HELP_PANEL_MAX_WIDTH: 800,
   };
@@ -640,6 +658,7 @@ describe("HelpPanel — handleRunAnyway", () => {
       { source: "user" }
     );
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
       "terminal-restarted",
       "claude",
       "sess-default"
@@ -676,6 +695,7 @@ describe("HelpPanel — handleRunAnyway", () => {
     // when dispatch returned !ok — so no second setTerminal call carrying a session id.
     expect(helpPanelState.setTerminal).toHaveBeenCalledTimes(1);
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
       expect.stringMatching(/^terminal-/),
       "claude",
       null
@@ -724,7 +744,7 @@ describe("HelpPanel — handleRunAnyway", () => {
 
     // setTerminal fired with the pre-generated id while dispatch is still pending.
     expect(capturedRequestedId).toMatch(/^terminal-/);
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(capturedRequestedId, "claude", null);
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(0, capturedRequestedId, "claude", null);
 
     await act(async () => {
       resolveDispatch({ ok: true, result: { terminalId: capturedRequestedId! } });
@@ -884,7 +904,7 @@ describe("HelpPanel — session provisioning", () => {
       }),
       { source: "user" }
     );
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-1", "claude", "sess-1");
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(0, "term-1", "claude", "sess-1");
   });
 
   it("omits DAINTREE_MCP_URL when mcpUrl is null (daintreeControl=false)", async () => {
@@ -982,6 +1002,7 @@ describe("HelpPanel — hasAutoLaunched stale reset (regression)", () => {
     });
 
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
       "term-gemini",
       "gemini",
       "sess-default"
@@ -1007,6 +1028,7 @@ describe("HelpPanel — single-supported-agent auto-skip (issue #6612)", () => {
       { source: "user" }
     );
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
       "auto-skip-term",
       "claude",
       "sess-default"

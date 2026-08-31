@@ -72,6 +72,11 @@ vi.mock("@/store/scratchStore", () => ({
 vi.mock("@/store/helpPanelStore", () => ({
   useHelpPanelStore: (selector: (s: { terminalId: null }) => unknown) =>
     selector({ terminalId: null }),
+  // #12108: the dock filters against every lane, so it reads this selector.
+  selectSlotTerminalIds: () => [],
+  selectSlot: (s: unknown) => s,
+  selectActiveSlot: (s: unknown) => s,
+  selectOpenSlots: () => [0],
 }));
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: (selector: (s: { settings: null }) => unknown) =>

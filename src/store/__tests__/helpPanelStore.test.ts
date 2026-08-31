@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots";
   HELP_PANEL_DEFAULT_WIDTH,
   HELP_PANEL_MAX_WIDTH,
   HELP_PANEL_MIN_WIDTH,
 } from "../helpPanelStore";
+import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots";
 
 describe("helpPanelStore persistence migration", () => {
   const STORAGE_KEY = "help-panel-storage";
@@ -788,7 +788,7 @@ describe("helpPanelStore persistence migration", () => {
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
       expect(store.getState().hibernateSessions).toEqual({
-        "good-proj": { sessionId: "abc", cwd: "/tmp", agentId: "claude" },
+        [slotKey("good-proj", 0)]: { sessionId: "abc", cwd: "/tmp", agentId: "claude" },
       });
     });
 
@@ -813,7 +813,7 @@ describe("helpPanelStore persistence migration", () => {
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
       expect(store.getState().hibernateSessions).toEqual({
-        "resume-latest-proj": { sessionId: "", cwd: "/tmp", agentId: "claude" },
+        [slotKey("resume-latest-proj", 0)]: { sessionId: "", cwd: "/tmp", agentId: "claude" },
       });
     });
 

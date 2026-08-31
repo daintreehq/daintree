@@ -300,7 +300,7 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     startOrphanSweep: vi.fn(),
     validateToken: vi.fn(),
     gcStaleSessions: vi.fn(async () => {}),
-    getAssistantBackend: vi.fn(() => null),
+    getAssistantBackends: vi.fn(() => []),
   },
 }));
 
@@ -871,18 +871,18 @@ describe("initGlobalServices task ordering", () => {
     ) => boolean;
     expect(typeof predicate).toBe("function");
 
-    const getAssistantBackend = helpSessionService.getAssistantBackend as unknown as Mock;
+    const getAssistantBackends = helpSessionService.getAssistantBackends as unknown as Mock;
     const hasTerminal = vi.fn<(terminalId: string) => boolean>(() => true);
 
     // No backend bound: nothing to protect, and resolving it must not throw
     // before the PtyClient exists (the predicate is wired lazily).
-    getAssistantBackend.mockReturnValue(null);
+    getAssistantBackends.mockReturnValue([]);
     expect(predicate("proj-1")).toBe(false);
 
     // Bound but the PtyClient isn't up yet — still false. Binding alone is NOT
     // liveness: it outlives an assistant that exited under its own steam
     // (#11162), so a stale binding must not pin the project forever.
-    getAssistantBackend.mockReturnValue({ terminalId: "t-help", webContentsId: 5 });
+    getAssistantBackends.mockReturnValue([{ terminalId: "t-help", webContentsId: 5, slot: 0 }]);
     expect(predicate("proj-1")).toBe(false);
 
     // Both halves satisfied.
@@ -897,7 +897,7 @@ describe("initGlobalServices task ordering", () => {
       expect(predicate("proj-1")).toBe(false);
     } finally {
       setPtyClientRef(null);
-      getAssistantBackend.mockReturnValue(null);
+      getAssistantBackends.mockReturnValue([]);
     }
   });
 
