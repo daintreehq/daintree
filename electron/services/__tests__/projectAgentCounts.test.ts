@@ -155,6 +155,107 @@ describe("computeProjectAgentCounts", () => {
     expect(p1.assistantState).toBe("waiting");
   });
 
+  // #12108
+  describe("choosing which assistant speaks for a project across lanes", () => {
+    const laneOf = (map: Record<string, number>) => (id: string) => map[id] ?? null;
+
+    it("lets a lane that needs the user outrank a busy sibling", () => {
+      availabilityMock.isHelpTerminal.mockImplementation((id) => id.startsWith("help"));
+
+      const counts = computeProjectAgentCounts(
+        ["p1"],
+        [
+          agent({ id: "help-a", agentState: "working", spawnedAt: 100 }),
+          agent({ id: "help-b", agentState: "waiting", spawnedAt: 200 }),
+        ],
+        undefined,
+        undefined,
+        undefined,
+        laneOf({ "help-a": 0, "help-b": 1 })
+      );
+
+      // The row exists to surface attention: a lane blocked on the user must
+      // not be silenced by a sibling that is merely busy.
+      expect(counts.get("p1")!.assistantState).toBe("waiting");
+      expect(counts.get("p1")!.helpTerminals).toBe(2);
+    });
+
+    it("still lets the newest record win a displacement inside one lane", () => {
+      availabilityMock.isHelpTerminal.mockImplementation((id) => id.startsWith("help"));
+
+      const counts = computeProjectAgentCounts(
+        ["p1"],
+        [
+          // The corpse: kill not landed, so it still reads "working".
+          agent({ id: "help-old", agentState: "working", spawnedAt: 100 }),
+          agent({ id: "help-new", agentState: "waiting", spawnedAt: 300 }),
+        ],
+        undefined,
+        undefined,
+        undefined,
+        laneOf({ "help-old": 0, "help-new": 0 })
+      );
+
+      // Within a lane spawn time leads, so the corpse cannot keep reporting
+      // over the session that replaced it.
+      expect(counts.get("p1")!.assistantState).toBe("waiting");
+    });
+
+    it("gives the same answer whichever order the host lists the terminals in", () => {
+      // The cycle a single mixed comparator produces: A beats B on same-lane
+      // spawn time, B beats C on cross-lane liveness, C beats A on cross-lane
+      // liveness. Reducing per lane first and only then across lanes removes it.
+      availabilityMock.isHelpTerminal.mockImplementation((id) => id.startsWith("help"));
+      const lanes = laneOf({ "help-a": 0, "help-b": 0, "help-c": 1 });
+      const terminals = [
+        agent({ id: "help-a", agentState: "idle", spawnedAt: 300 }),
+        agent({ id: "help-b", agentState: "working", spawnedAt: 100 }),
+        agent({ id: "help-c", agentState: "waiting", spawnedAt: 200 }),
+      ];
+
+      const forward = computeProjectAgentCounts(
+        ["p1"],
+        terminals,
+        undefined,
+        undefined,
+        undefined,
+        lanes
+      );
+      const reversed = computeProjectAgentCounts(
+        ["p1"],
+        [...terminals].reverse(),
+        undefined,
+        undefined,
+        undefined,
+        lanes
+      );
+
+      expect(forward.get("p1")!.assistantState).toBe(reversed.get("p1")!.assistantState);
+      // Lane 0 reduces to help-a (newest), then lane 1's waiting help-c wins on
+      // attention.
+      expect(forward.get("p1")!.assistantState).toBe("waiting");
+    });
+
+    it("never lets a displaced corpse outrank a lane that still has a record", () => {
+      availabilityMock.isHelpTerminal.mockImplementation((id) => id.startsWith("help"));
+
+      const counts = computeProjectAgentCounts(
+        ["p1"],
+        [
+          // Unslotted: displacePriorSessions already dropped its record.
+          agent({ id: "help-corpse", agentState: "working", spawnedAt: 900 }),
+          agent({ id: "help-live", agentState: "idle", spawnedAt: 100 }),
+        ],
+        undefined,
+        undefined,
+        undefined,
+        laneOf({ "help-live": 0 })
+      );
+
+      expect(counts.get("p1")!.assistantState).toBe("idle");
+    });
+  });
+
   it("excludes trashed, dev-preview, PTY-less, and non-agent terminals", () => {
     const counts = computeProjectAgentCounts(
       ["p1"],

@@ -20,7 +20,10 @@ import {
  * backend or consumes a resume token.
  */
 function resolveSlot(value: unknown): number | null {
-  if (value === undefined || value === null) return DEFAULT_ASSISTANT_SLOT;
+  // Only ABSENT means slot 0. An explicit `null` from an untyped renderer is a
+  // supplied-but-invalid lane, and treating it as 0 would displace lane 0's
+  // backend or consume its resume token on a caller that never named a lane.
+  if (value === undefined) return DEFAULT_ASSISTANT_SLOT;
   return isValidAssistantSlot(value) ? value : null;
 }
 

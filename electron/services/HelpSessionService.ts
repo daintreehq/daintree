@@ -42,6 +42,9 @@ const SESSION_TOKEN_BYTES = 32;
 // in 64 bits of project-path-derived entropy are not a real concern for a
 // machine-local set of projects.
 const PROJECT_HASH_LEN = 16;
+// Copilot substitutes this from PTY env at spawn rather than baking a literal
+// bearer into `.mcp.json`, so the stale-entry sweep has to recognize it.
+const COPILOT_BEARER_PLACEHOLDER = "$DAINTREE_MCP_TOKEN";
 // Stamp file written into the per-project session dir after a successful
 // `fs.cp` of the bundled help template. Lives inside the session dir (not
 // inside `helpFolder`), so it's never part of the source being hashed and
@@ -696,13 +699,16 @@ export class HelpSessionService {
       return null;
     }
 
-    // Lock on the LANE's directory, not the project's: the race the lock
-    // exists for is the `.mcp.json` overwrite, and each lane writes its own
-    // file. Two lanes of one project therefore provision in parallel, while a
-    // same-lane re-provision still serializes — which is what makes
-    // `displacePriorSessions` below an atomic step.
+    // Lock on the LANE ITSELF — `(projectId, slot)` — because that is the
+    // identity the single-backend invariant is stated in. A path-derived key
+    // would not serialize two callers that spell the same project differently
+    // (`/work/p` vs `/work/p/`): they would hash apart, both run
+    // `displacePriorSessions` before either registered its record, and both
+    // end up live in one lane. Different lanes and different projects still
+    // provision in parallel, which is all the parallelism this needs — each
+    // lane writes its own `.mcp.json` in its own directory.
     const pathHash = projectPathHash(input.projectPath);
-    const lockKey = assistantSlotDirName(pathHash, input.slot ?? 0);
+    const lockKey = assistantSlotKey(input.projectId, input.slot ?? 0);
     const previous = this.provisionLocks.get(lockKey);
     let resolveLock!: () => void;
     const next = new Promise<void>((resolve) => {
@@ -1922,7 +1928,7 @@ export class HelpSessionService {
       mcpServers["daintree"] = {
         type: "http",
         url: `http://127.0.0.1:${port}/mcp`,
-        headers: { Authorization: "Bearer $DAINTREE_MCP_TOKEN" },
+        headers: { Authorization: `Bearer ${COPILOT_BEARER_PLACEHOLDER}` },
       };
     }
     const target = path.join(sessionPath, ".mcp.json");
@@ -2152,11 +2158,21 @@ export class HelpSessionService {
     const auth = entry.headers?.Authorization ?? "";
     const match = /^Bearer\s+(.+)$/.exec(auth);
     const token = match?.[1]?.trim();
-    // A token is only live FOR THIS DIRECTORY. Once lanes each own a session
-    // dir (#12108), a bearer that is valid for another lane sitting in this
-    // one is misplaced, not live — keeping it would leave a working credential
-    // in a directory its session never owned, which is the stray-`claude`-in-
-    // cwd hole this strip exists to close.
+    // Copilot never writes a literal bearer — `writeCopilotMcpConfig` emits the
+    // `$DAINTREE_MCP_TOKEN` placeholder, which is substituted from PTY env at
+    // spawn. Matching it against the token map always misses, so an unrevoked
+    // Copilot session owning this exact directory would have its own live
+    // config stripped out from under it.
+    const ownedByLiveSession = [...this.sessionsByToken.values()].some(
+      (record) => !record.revoked && record.sessionPath === sessionPath
+    );
+    if (token === COPILOT_BEARER_PLACEHOLDER && ownedByLiveSession) return;
+
+    // Otherwise a token is only live FOR THIS DIRECTORY. Once lanes each own a
+    // session dir (#12108), a bearer that is valid for another lane sitting in
+    // this one is misplaced, not live — keeping it would leave a working
+    // credential in a directory its session never owned, which is the
+    // stray-`claude`-in-cwd hole this strip exists to close.
     const live = token ? this.sessionsByToken.get(token) : undefined;
     if (live && live.sessionPath === sessionPath) return;
 
