@@ -140,6 +140,28 @@ describe("useSidebarVirtuosoReset — issue #12094", () => {
     expect(result.current.resetKey).toBe(1);
   });
 
+  it("still honours a shrink that landed on the same commit as a keystroke", () => {
+    // A deletion arriving mid-search is structural, and nothing later reports
+    // it again — so the exempted shrink is owed, not forgiven.
+    const { result, rerender } = renderReset({ itemCount: 9, searchQuery: "" });
+    rerender({ itemCount: 4, searchQuery: "feat" });
+    expect(result.current.resetKey).toBe(0);
+    // Query holds still and the list does not shrink again; the owed reset
+    // fires anyway.
+    rerender({ itemCount: 4, searchQuery: "feat" });
+    expect(result.current.resetKey).toBe(1);
+  });
+
+  it("collapses a whole typing burst into one owed reset", () => {
+    const { result, rerender } = renderReset({ itemCount: 9, searchQuery: "" });
+    rerender({ itemCount: 7, searchQuery: "f" });
+    rerender({ itemCount: 5, searchQuery: "fe" });
+    rerender({ itemCount: 3, searchQuery: "fea" });
+    expect(result.current.resetKey).toBe(0);
+    rerender({ itemCount: 3, searchQuery: "fea" });
+    expect(result.current.resetKey).toBe(1);
+  });
+
   it("resets once per shrink, not on every subsequent render", () => {
     const { result, rerender } = renderReset({ itemCount: 5, searchQuery: "" });
     rerender({ itemCount: 2, searchQuery: "" });

@@ -53,7 +53,9 @@ const INITIAL_STATE: ResetState = { key: 0, scrollTop: undefined };
  * The single exception is typing. Narrowing a search shrinks the list on most
  * keystrokes, and a full teardown per keystroke would put exactly the work this
  * file defers out of the input path (#10908) back into it — for a list the user
- * is about to change again anyway.
+ * is about to change again anyway. That shrink is deferred, not forgiven: it
+ * stays owed and fires on the first commit the query holds still, so a deletion
+ * that merely coincided with a keystroke still gets its reset.
  */
 function useSidebarVirtuosoReset({
   itemCount,
@@ -95,16 +97,23 @@ function useSidebarVirtuosoReset({
     }));
   }, [scrollerRef]);
 
+  // Deliberately un-gated: an owed reset has to be retried on plain commits
+  // too. Keying this to the inputs would strand a shrink that arrived on the
+  // same commit as the user's last keystroke, because the next commit that
+  // could pay it off often changes neither the count nor the query.
   useLayoutEffect(() => {
     const prevCount = prevItemCountRef.current;
     const prevQuery = prevQueryRef.current;
     prevItemCountRef.current = itemCount;
     prevQueryRef.current = searchQuery;
-    if (prevCount === null || itemCount >= prevCount) return;
+    if (prevCount === null) return;
+    if (itemCount < prevCount) pendingRef.current = true;
+    // Hold while the query is still moving, but keep the shrink owed rather
+    // than dropping it: a deletion that happens to land in the same commit as
+    // a keystroke is structural, and nothing later would report it again.
     if (searchQuery !== prevQuery) return;
-    pendingRef.current = true;
     flush();
-  }, [itemCount, searchQuery, flush]);
+  });
 
   const releaseAfterDrag = useCallback(() => {
     draggingRef.current = false;
