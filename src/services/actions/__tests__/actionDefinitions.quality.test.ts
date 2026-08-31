@@ -666,6 +666,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "git.rebaseOntoBase",
   "git.mergeBaseIntoBranch",
   "git.abortRepositoryOperation",
+  "git.forcePushWithLease",
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",
@@ -763,6 +764,10 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   "git.rebaseOntoBase",
   "git.mergeBaseIntoBranch",
   "git.abortRepositoryOperation",
+  // Deferred-promise via gitForcePushStore; action run() awaits confirmation
+  // before calling IPC; GitForcePushConfirmDialog resolves the Promise. Same
+  // shape as git.push, and the action ID is not co-located with the dialog.
+  "git.forcePushWithLease",
   // Confirm in ProjectSwitcherPalette.tsx via removeConfirmProject state;
   // action ID not co-located with the ConfirmDialog in that file.
   "project.remove",

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { useGitWorktreeOperationConfirmStore } from "@/store/gitWorktreeOperationConfirmStore";
+import { useGitForcePushStore } from "@/store/gitForcePushStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { useRecipeConflictStore } from "@/store/recipeConflictStore";
 import { useMcpConfirmStore } from "@/store/mcpConfirmStore";
@@ -15,6 +16,7 @@ export interface ModalResetKeys {
   gitPushResetKey: number;
   gitPullRebaseResetKey: number;
   gitWorktreeOperationResetKey: number;
+  gitForcePushResetKey: number;
   panelLimitResetKey: number;
   recipeConflictResetKey: number;
   mcpConfirmResetKey: string;
@@ -43,6 +45,7 @@ export function useModalResetKeys(): ModalResetKeys {
   const gitPushResetKey = useGitPushConfirmStore((s) => s.requestSeq);
   const gitPullRebaseResetKey = useGitPullRebaseConfirmStore((s) => s.requestSeq);
   const gitWorktreeOperationResetKey = useGitWorktreeOperationConfirmStore((s) => s.requestSeq);
+  const gitForcePushResetKey = useGitForcePushStore((s) => s.requestSeq);
   const panelLimitResetKey = usePanelLimitStore((s) => s.requestSeq);
   const recipeConflictResetKey = useRecipeConflictStore((s) => s.requestSeq);
   const mcpConfirmResetKey = useMcpConfirmStore((s) => s.current?.requestId ?? "");
@@ -68,6 +71,7 @@ export function useModalResetKeys(): ModalResetKeys {
     gitPushResetKey,
     gitPullRebaseResetKey,
     gitWorktreeOperationResetKey,
+    gitForcePushResetKey,
     panelLimitResetKey,
     recipeConflictResetKey,
     mcpConfirmResetKey,

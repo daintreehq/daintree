@@ -5,6 +5,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 const gitPushState = vi.hoisted(() => ({ requestSeq: 1 }));
 const gitPullRebaseState = vi.hoisted(() => ({ requestSeq: 2 }));
 const gitWorktreeOperationState = vi.hoisted(() => ({ requestSeq: 6 }));
+const gitForcePushState = vi.hoisted(() => ({ requestSeq: 7 }));
 const panelLimitState = vi.hoisted(() => ({ requestSeq: 3 }));
 const recipeConflictState = vi.hoisted(() => ({ requestSeq: 4 }));
 const mcpConfirmState = vi.hoisted(() => ({ current: { requestId: "mcp-1" } }));
@@ -25,6 +26,9 @@ vi.mock("@/store/gitPullRebaseConfirmStore", () => ({
 }));
 vi.mock("@/store/gitWorktreeOperationConfirmStore", () => ({
   useGitWorktreeOperationConfirmStore: selectorMock(gitWorktreeOperationState),
+}));
+vi.mock("@/store/gitForcePushStore", () => ({
+  useGitForcePushStore: selectorMock(gitForcePushState),
 }));
 vi.mock("@/store/panelLimitStore", () => ({
   usePanelLimitStore: selectorMock(panelLimitState),
@@ -62,6 +66,7 @@ describe("useModalResetKeys", () => {
       gitPushResetKey: 1,
       gitPullRebaseResetKey: 2,
       gitWorktreeOperationResetKey: 6,
+      gitForcePushResetKey: 7,
       panelLimitResetKey: 3,
       recipeConflictResetKey: 4,
       mcpConfirmResetKey: "mcp-1",

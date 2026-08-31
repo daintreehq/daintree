@@ -31,6 +31,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "git.rebaseOntoBase",
   "git.mergeBaseIntoBranch",
   "git.abortRepositoryOperation",
+  "git.forcePushWithLease",
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",
@@ -110,6 +111,7 @@ const BYPASS_WIRED = new Set([
   "git.rebaseOntoBase",
   "git.mergeBaseIntoBranch",
   "git.abortRepositoryOperation",
+  "git.forcePushWithLease", // deferred-promise via gitForcePushStore; GitForcePushConfirmDialog resolves it
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located
   "terminal.arm", // agent/MCP-only confirm gate (#11346); palette-hidden, user arming goes through the fleet ribbon (not ActionService), so no user-side ConfirmDialog to co-locate
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)

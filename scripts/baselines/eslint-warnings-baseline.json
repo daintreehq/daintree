@@ -1,20 +1,20 @@
 {
-  "count": 3126,
+  "count": 3055,
   "byRule": {
     "@typescript-eslint/no-explicit-any": 51,
     "@typescript-eslint/no-floating-promises": 80,
-    "@typescript-eslint/no-unsafe-type-assertion": 476,
+    "@typescript-eslint/no-unsafe-type-assertion": 477,
     "component-contract/no-arbitrary-text-size": 6,
-    "component-contract/no-legacy-daintree-utilities": 916,
-    "component-contract/no-raw-radius": 525,
-    "component-contract/no-text-color-slash-alpha": 557,
+    "component-contract/no-legacy-daintree-utilities": 895,
+    "component-contract/no-raw-radius": 502,
+    "component-contract/no-text-color-slash-alpha": 530,
     "component-contract/no-unpaired-outline-suppression": 35,
     "no-restricted-imports": 5,
-    "no-restricted-syntax": 368,
+    "no-restricted-syntax": 367,
     "no-useless-assignment": 16,
     "preserve-caught-error": 40,
     "react-compiler/react-compiler": 16,
     "react-hooks/exhaustive-deps": 34
   },
-  "updatedAt": "2026-08-28T06:22:43.742Z"
+  "updatedAt": "2026-08-31T07:58:01.405Z"
 }

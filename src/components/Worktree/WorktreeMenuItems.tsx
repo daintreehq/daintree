@@ -17,6 +17,7 @@ import {
   Activity,
   ArrowDown,
   ArrowUp,
+  ArrowUpFromLine,
   CheckSquare,
   Clock,
   Code,
@@ -159,6 +160,21 @@ export interface WorktreeMenuItemsProps {
   /** Omitted when the worktree has no changes, so the item is absent then. */
   onOpenChanges?: () => void;
   onOpenReviewHub?: () => void;
+  /**
+   * Git rows take the resolved surface source for the same reason
+   * `onOpenPanelPalette` does: the callback lives in the card body, outside any
+   * menu Root, so it cannot tell `menu` from `context-menu` itself (#8322).
+   */
+  onGitPullRebase?: (source: MenuActionSourceValue) => void;
+  onGitPush?: (source: MenuActionSourceValue) => void;
+  onGitForcePush?: (source: MenuActionSourceValue) => void;
+  /**
+   * True only while a lease captured from a real push rejection is held for
+   * this worktree. The force-push row is absent otherwise — a lease cannot be
+   * derived from branch divergence, so a permanently disabled row would imply
+   * a capability that does not exist.
+   */
+  canForcePush?: boolean;
   onOpenFileBrowser?: () => void;
   onCompareDiff?: () => void;
   onRunRecipe: (recipeId: string) => void;
@@ -257,6 +273,10 @@ export function WorktreeMenuItems({
   onViewPlan,
   onOpenChanges,
   onOpenReviewHub,
+  onGitPullRebase,
+  onGitPush,
+  onGitForcePush,
+  canForcePush,
   onOpenFileBrowser,
   onCompareDiff,
   onRunRecipe,
@@ -419,10 +439,34 @@ export function WorktreeMenuItems({
   );
 
   // ------------------------------------------------------------------- Git
-  // Shared submenu: #12090 adds pull/push rows to this same `gitRows` array.
-  // Kept as an array rather than inlined children so those land as additional
-  // entries instead of a conflict over one JSX block.
-  //
+  // Shared submenu: #12090 adds pull/push rows and #12092 adds base-branch and
+  // recovery rows to this same `gitRows` array. Kept as an array rather than
+  // inlined children so those land as additional entries instead of a conflict
+  // over one JSX block.
+
+  // Branch-bearing rows only. `copyableBranchName` pairs `branch` with
+  // `isDetached` because the status pass leaves a stale branch name behind when
+  // a worktree detaches — a pull/push row would name a branch that is not
+  // checked out. Fetch has no such problem: it only moves remote-tracking refs.
+  const gitBranch = copyableBranchName(worktree);
+  // `aheadCount`/`behindCount` are populated only when an upstream exists
+  // (`GitStatusPass` sets them from `tracking`), so `undefined` IS the
+  // no-upstream signal — the same condition `requireRemoteTarget` throws on
+  // server-side for pull-rebase.
+  const hasUpstream = worktree.aheadCount !== undefined;
+  // Stays live even at `behindCount === 0`: the snapshot is a cached read, and
+  // pulling is how you find out it was stale. Push is the asymmetric one below
+  // because a push with nothing ahead genuinely does nothing.
+  const canPullRebase = Boolean(onGitPullRebase) && hasUpstream;
+  // Measured against the UPSTREAM, while a triangular setup can push somewhere
+  // else entirely (`branch.pushRemote`/`remote.pushDefault`), so zero-ahead can
+  // in principle still have commits to publish. Accepted: the row stays live
+  // whenever the count is unknown, and the push dialog resolves the real
+  // destination, so the worst case is a disabled row on a config where
+  // ReviewHub and the palette still push.
+  const nothingToPush = worktree.aheadCount === 0;
+  const showForcePush = gitBranch !== null && Boolean(onGitForcePush) && Boolean(canForcePush);
+
   // Acting on the base branch the card already measures itself against
   // (#12092). Rows dispatch through ActionService rather than taking callback
   // props: the confirm, the halt routing and the refresh all live in the action
@@ -468,6 +512,30 @@ export function WorktreeMenuItems({
     void actionService.dispatch(actionId, { worktreeId: worktree.id, ...args }, { source });
 
   const gitRows = [
+    gitBranch !== null && onGitPullRebase && (
+      <C.Item
+        key="pull-rebase"
+        onSelect={() => onGitPullRebase(source)}
+        disabled={!canPullRebase}
+        aria-label={canPullRebase ? "Pull and rebase" : "Pull and rebase, no upstream"}
+      >
+        <ArrowDown className={ICON} />
+        Pull and rebase
+        {!canPullRebase && <C.Meta>No upstream</C.Meta>}
+      </C.Item>
+    ),
+    gitBranch !== null && onGitPush && (
+      <C.Item
+        key="push"
+        onSelect={() => onGitPush(source)}
+        disabled={nothingToPush}
+        aria-label={nothingToPush ? "Push, nothing to push" : "Push"}
+      >
+        <ArrowUp className={ICON} />
+        Push
+        {nothingToPush && <C.Meta>Nothing to push</C.Meta>}
+      </C.Item>
+    ),
     <C.Item
       key="fetch"
       onSelect={() =>
@@ -536,6 +604,16 @@ export function WorktreeMenuItems({
             {baseBlockedReason && <C.Meta>{baseBlockedReason}</C.Meta>}
           </C.Item>,
         ]),
+    // Rules off the one row here that discards published commits. The
+    // separator rides with the row so it can never strand when the lease is
+    // absent, which is the common case.
+    showForcePush && <C.Separator key="force-push-rule" />,
+    showForcePush && (
+      <C.Item key="force-push" onSelect={() => onGitForcePush?.(source)} destructive>
+        <ArrowUpFromLine className={ICON} />
+        Force push with lease…
+      </C.Item>
+    ),
   ].filter(Boolean);
 
   const gitSub = gitRows.length > 0 && (

@@ -1,8 +1,8 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
+import { cleanup, screen } from "@testing-library/react";
 import type { WorktreeState } from "../../../types";
 import { makeWorktree, renderWorktreeMenu, rootRowLabels } from "./worktreeMenuHarness";
 
@@ -69,6 +69,12 @@ beforeEach(() => {
   // otherwise poison every test after it.
   dispatch.mockReset();
   dispatch.mockResolvedValue({ ok: true });
+});
+
+// The regex-based row finder below queries the whole document, so a render
+// left standing by an earlier test would be in its way.
+afterEach(() => {
+  cleanup();
 });
 
 describe("Git submenu — root placement", () => {
@@ -264,5 +270,192 @@ describe("Git submenu — accessibility", () => {
   it("renders the submenu trigger as a labelled control", () => {
     renderWorktreeMenu({ worktree: integrable() });
     expect(screen.getByText("Git")).toBeDefined();
+  });
+});
+
+function gitRowMatching(name: RegExp): HTMLElement {
+  const row = screen.getAllByRole("button").find((node) => name.test(node.textContent ?? ""));
+  if (!row) throw new Error(`no Git row matching ${name.source}`);
+  return row;
+}
+
+/** The harness renders menu items as plain `<button disabled>`. */
+function isDisabled(row: HTMLElement): boolean {
+  return row.hasAttribute("disabled");
+}
+
+const gitCallbacks = () => ({
+  onGitPullRebase: vi.fn(),
+  onGitPush: vi.fn(),
+  onGitForcePush: vi.fn(),
+});
+
+describe("WorktreeMenuItems Git submenu", () => {
+  it("sits beside Review in the first root band", () => {
+    const { container } = renderWorktreeMenu({
+      ...gitCallbacks(),
+      onOpenReviewHub: vi.fn(),
+      worktree: makeWorktree({ aheadCount: 2, behindCount: 0 }),
+    });
+
+    const labels = rootRowLabels(container);
+    // Both describe the worktree's git state, so they belong to one band —
+    // a separator between them would read as a topic change.
+    expect(labels.indexOf("Git")).toBe(labels.indexOf("Review") + 1);
+  });
+
+  it("offers pull and push when the branch tracks an upstream", () => {
+    const { container } = renderWorktreeMenu({
+      ...gitCallbacks(),
+      worktree: makeWorktree({ aheadCount: 3, behindCount: 1 }),
+    });
+
+    expect(gitRowLabels(container)).toEqual([
+      "Pull and rebase",
+      "Push",
+      "Fetch",
+      "Fetch and prune",
+      expect.stringContaining("Rebase onto base branch"),
+      expect.stringContaining("Merge base branch in"),
+    ]);
+    expect(isDisabled(gitRowMatching(/Pull and rebase/))).toBe(false);
+    expect(isDisabled(gitRowMatching(/^Push$/))).toBe(false);
+  });
+
+  it("says why pull is unavailable rather than dropping the row", () => {
+    // `GitStatusPass` leaves ahead/behind undefined when there is no tracking
+    // branch, which is the same condition `requireRemoteTarget` throws on
+    // server-side — so the row states it instead of offering a failing action.
+    const { container } = renderWorktreeMenu({
+      ...gitCallbacks(),
+      worktree: makeWorktree({ aheadCount: undefined, behindCount: undefined }),
+    });
+
+    const pull = gitRowMatching(/Pull and rebase/);
+    expect(isDisabled(pull)).toBe(true);
+    expect(pull.textContent).toContain("No upstream");
+    // The reason is part of what the row says, so it reaches the accessible
+    // name too — the Meta slot itself is aria-hidden decoration.
+    expect(pull.getAttribute("aria-label")).toBe("Pull and rebase, no upstream");
+    // The row states the reason instead of vanishing, so it is still one of the
+    // rows alongside push, the two fetch rows and the two base-branch rows.
+    expect(gitRowLabels(container)).toHaveLength(6);
+  });
+
+  it("keeps push live with no upstream, because the push establishes one", () => {
+    // `handlePush` retries with `--set-upstream` on "no upstream branch", so
+    // the first push of a new worktree branch is exactly the case this row has
+    // to serve.
+    renderWorktreeMenu({
+      ...gitCallbacks(),
+      worktree: makeWorktree({ aheadCount: undefined }),
+    });
+
+    expect(isDisabled(gitRowMatching(/^Push$/))).toBe(false);
+  });
+
+  it("disables push when nothing is ahead", () => {
+    renderWorktreeMenu({
+      ...gitCallbacks(),
+      worktree: makeWorktree({ aheadCount: 0, behindCount: 4 }),
+    });
+
+    const push = gitRowMatching(/Push/);
+    expect(isDisabled(push)).toBe(true);
+    expect(push.textContent).toContain("Nothing to push");
+    expect(push.getAttribute("aria-label")).toBe("Push, nothing to push");
+    // Pull is what this worktree can actually do, and it stays live — which is
+    // also what keeps the trigger from opening onto an all-disabled submenu.
+    expect(isDisabled(gitRowMatching(/Pull and rebase/))).toBe(false);
+  });
+
+  it("hides the force-push row until a lease has been captured", () => {
+    const { container } = renderWorktreeMenu({
+      ...gitCallbacks(),
+      worktree: makeWorktree({ aheadCount: 2 }),
+    });
+
+    // A lease cannot be derived from divergence — only a real push rejection
+    // produces one — so a disabled row here would advertise a capability that
+    // does not exist.
+    expect(gitRowLabels(container).some((label) => /Force push/.test(label))).toBe(false);
+  });
+
+  it("offers force push once a lease is held", () => {
+    const callbacks = gitCallbacks();
+    const { container } = renderWorktreeMenu({
+      ...callbacks,
+      canForcePush: true,
+      worktree: makeWorktree({ aheadCount: 2 }),
+    });
+
+    expect(gitRowLabels(container)).toEqual([
+      "Pull and rebase",
+      "Push",
+      "Fetch",
+      "Fetch and prune",
+      expect.stringContaining("Rebase onto base branch"),
+      expect.stringContaining("Merge base branch in"),
+      "Force push with lease…",
+    ]);
+    gitRowMatching(/Force push/).click();
+    expect(callbacks.onGitForcePush).toHaveBeenCalledWith("menu");
+  });
+
+  it("passes the resolved surface source to every row", () => {
+    const callbacks = gitCallbacks();
+    renderWorktreeMenu({ ...callbacks, worktree: makeWorktree({ aheadCount: 1 }) }, "context-menu");
+
+    gitRowMatching(/Pull and rebase/).click();
+    gitRowMatching(/^Push$/).click();
+    expect(callbacks.onGitPullRebase).toHaveBeenCalledWith("context-menu");
+    expect(callbacks.onGitPush).toHaveBeenCalledWith("context-menu");
+  });
+
+  it("is absent on a detached worktree", () => {
+    // The status pass only overwrites `branch` when it reads a new one, so a
+    // detached worktree keeps the name it had before — every row here would
+    // name a branch that is not checked out.
+    const { container } = renderWorktreeMenu({
+      ...gitCallbacks(),
+      worktree: makeWorktree({ branch: "feature", isDetached: true, aheadCount: 2 }),
+    });
+
+    // Fetch survives — it only moves remote-tracking refs, so it needs no
+    // checked-out branch — which is why the group itself stays (#12099).
+    expect(rootRowLabels(container)).toContain("Git");
+    expect(gitRowLabels(container)).toEqual([
+      "Fetch",
+      "Fetch and prune",
+      expect.stringContaining("Rebase onto base branch"),
+      expect.stringContaining("Merge base branch in"),
+    ]);
+  });
+
+  it("drops the branch rows when the card wires no git callbacks", () => {
+    const { container } = renderWorktreeMenu({ worktree: makeWorktree({ aheadCount: 2 }) });
+    expect(gitRowLabels(container)).toEqual([
+      "Fetch",
+      "Fetch and prune",
+      expect.stringContaining("Rebase onto base branch"),
+      expect.stringContaining("Merge base branch in"),
+    ]);
+  });
+
+  it("gives the main worktree the same rows", () => {
+    // It is a real checkout on a real branch; nothing about pushing it differs.
+    const { container } = renderWorktreeMenu({
+      ...gitCallbacks(),
+      worktree: makeWorktree({ isMainWorktree: true, aheadCount: 2, behindCount: 1 }),
+    });
+
+    expect(gitRowLabels(container)).toEqual([
+      "Pull and rebase",
+      "Push",
+      "Fetch",
+      "Fetch and prune",
+      expect.stringContaining("Rebase onto base branch"),
+      expect.stringContaining("Merge base branch in"),
+    ]);
   });
 });

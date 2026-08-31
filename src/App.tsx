@@ -281,6 +281,7 @@ function AppInner() {
 
   const {
     gitPushResetKey,
+    gitForcePushResetKey,
     gitPullRebaseResetKey,
     gitWorktreeOperationResetKey,
     panelLimitResetKey,
@@ -594,6 +595,7 @@ function AppInner() {
                 panelLimitResetKey={panelLimitResetKey}
                 diagnosticsReviewResetKey={diagnosticsReviewResetKey}
                 gitPushResetKey={gitPushResetKey}
+                gitForcePushResetKey={gitForcePushResetKey}
                 gitPullRebaseResetKey={gitPullRebaseResetKey}
                 gitWorktreeOperationResetKey={gitWorktreeOperationResetKey}
                 recipeConflictResetKey={recipeConflictResetKey}

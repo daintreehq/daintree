@@ -15,6 +15,10 @@ export const RISK_BAND_OPEN_WORLD_CATEGORIES: ReadonlySet<string> = new Set([
  */
 export const BAND_OVERRIDES: Readonly<Record<string, RiskBand>> = {
   "git.push": "external-effect",
+  // Rewrites a published branch. The mechanical derivation would land on
+  // "destructive-local" because `git` is not an open-world category, which
+  // understates an operation that discards commits from a shared remote.
+  "git.forcePushWithLease": "destructive-network",
   "copyTree.generateAndCopyFile": "destructive-local",
 };
 
