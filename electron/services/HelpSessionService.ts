@@ -714,10 +714,12 @@ export class HelpSessionService {
     const next = new Promise<void>((resolve) => {
       resolveLock = resolve;
     });
-    this.provisionLocks.set(
-      lockKey,
-      (previous ?? Promise.resolve()).then(() => next)
-    );
+    // Keep the CHAINED promise, which is what actually lands in the map — the
+    // cleanup below compares against it to decide whether this call is still
+    // the tail of the queue. Comparing against `next` never matched, so the
+    // entry was never dropped and the map grew for the life of the process.
+    const tail = (previous ?? Promise.resolve()).then(() => next);
+    this.provisionLocks.set(lockKey, tail);
     if (previous) await previous;
 
     try {
@@ -726,7 +728,7 @@ export class HelpSessionService {
       resolveLock();
       // Drop the lock entry once it resolves so the map doesn't grow without
       // bound. Anyone awaiting `previous` already has the resolved promise.
-      if (this.provisionLocks.get(lockKey) === next) {
+      if (this.provisionLocks.get(lockKey) === tail) {
         this.provisionLocks.delete(lockKey);
       }
     }
@@ -2163,10 +2165,13 @@ export class HelpSessionService {
     // spawn. Matching it against the token map always misses, so an unrevoked
     // Copilot session owning this exact directory would have its own live
     // config stripped out from under it.
-    const ownedByLiveSession = [...this.sessionsByToken.values()].some(
-      (record) => !record.revoked && record.sessionPath === sessionPath
+    // Narrowed to Copilot: a Claude session owning the directory does not make
+    // a leftover Copilot entry legitimate, and keeping one would leave Claude
+    // with a stale server it cannot authenticate against.
+    const ownedByLiveCopilot = [...this.sessionsByToken.values()].some(
+      (record) => !record.revoked && record.agentId === "copilot" && record.sessionPath === sessionPath
     );
-    if (token === COPILOT_BEARER_PLACEHOLDER && ownedByLiveSession) return;
+    if (token === COPILOT_BEARER_PLACEHOLDER && ownedByLiveCopilot) return;
 
     // Otherwise a token is only live FOR THIS DIRECTORY. Once lanes each own a
     // session dir (#12108), a bearer that is valid for another lane sitting in
