@@ -70,6 +70,130 @@ describe("RepoFetchCoordinator", () => {
     expect(args).toEqual(["fetch", "origin", "--no-auto-gc", "--prune", "--no-write-fetch-head"]);
   });
 
+  it("omits --prune when the caller explicitly asks not to prune", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    const mockGit = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+    const coord = new RepoFetchCoordinator();
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo", prune: false });
+
+    expect(mockGit.raw.mock.calls[0][0]).toEqual([
+      "fetch",
+      "origin",
+      "--no-auto-gc",
+      "--no-write-fetch-head",
+    ]);
+  });
+
+  it("prunes on an explicit prune request, matching the omitted default", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    const mockGit = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+    const coord = new RepoFetchCoordinator();
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo", prune: true });
+
+    expect(mockGit.raw.mock.calls[0][0]).toContain("--prune");
+  });
+
+  it("re-runs git for a prune request the recent success did not prune for", async () => {
+    // "Fetch" then "Fetch and prune" seconds later: reusing the non-pruned
+    // success inside the recency window would drop the prune the user asked
+    // for, and nothing on the card would say so.
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    const mockGit = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+    const coord = new RepoFetchCoordinator();
+    await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+      prune: false,
+    });
+    expect(mockGit.raw).toHaveBeenCalledTimes(1);
+
+    const second = await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+      prune: true,
+    });
+
+    expect(mockGit.raw).toHaveBeenCalledTimes(2);
+    expect(mockGit.raw.mock.calls[1][0]).toContain("--prune");
+    expect(second.status).toBe("success");
+  });
+
+  it("reuses a recent pruned success for a later plain fetch", async () => {
+    // The reverse direction is a genuine superset: a pruned fetch already did
+    // everything a plain one would, so re-spawning git buys nothing.
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    const mockGit = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+    const coord = new RepoFetchCoordinator();
+    await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+      prune: true,
+    });
+    const second = await coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+      prune: false,
+    });
+
+    expect(mockGit.raw).toHaveBeenCalledTimes(1);
+    expect(second.status).toBe("success");
+  });
+
+  it("serializes a prune request behind an in-flight sibling fetch on the same repo", async () => {
+    // Linked worktrees share packed-refs; two concurrent fetches race its lock.
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    let inFlight = 0;
+    let maxConcurrent = 0;
+    let release: (() => void) | null = null;
+    const mockGit = makeMockGit(() => {
+      inFlight += 1;
+      maxConcurrent = Math.max(maxConcurrent, inFlight);
+      return new Promise<void>((resolve) => {
+        release = () => {
+          inFlight -= 1;
+          resolve();
+        };
+      });
+    });
+    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+    const coord = new RepoFetchCoordinator();
+    const first = coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      force: true,
+      prune: false,
+    });
+    await vi.waitFor(() => expect(release).not.toBeNull());
+    const second = coord.fetchForWorktree({
+      worktreeId: "wt2",
+      worktreePath: "/repo-linked",
+      force: true,
+      prune: true,
+    });
+
+    release!();
+    await first;
+    await vi.waitFor(() => expect(mockGit.raw).toHaveBeenCalledTimes(2));
+    release!();
+    await second;
+
+    expect(maxConcurrent).toBe(1);
+    expect(mockGit.raw.mock.calls[1][0]).toContain("--prune");
+  });
+
   it("suppresses the per-card auth stripe until an auth failure is confirmed", async () => {
     mockGetGitCommonDir.mockReturnValue("/repo/.git");
     mockCreateBackgroundFetchGit.mockReturnValue(

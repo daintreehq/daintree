@@ -24,6 +24,7 @@ import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import type { Worktree, WslGitEligibility } from "../../shared/types/worktree.js";
 import type {
   WorkspaceHostEvent,
+  WorkspaceFetchResult,
   WorktreeSnapshot,
   MonitorConfig,
   CreateWorktreeOptions,
@@ -1481,36 +1482,8 @@ export class WorkspaceService {
         onEmfileLimitReached: () => this.handleEmfileLimitReached(),
         onWatcherRecovered: () => this.handleWatcherRecovered(),
         onGitConfigChanged: () => this.scheduleForgeRemoteReprobe({ observedConfigWrite: true }),
-        onScheduleFetch: async (worktreeId, _isCurrent, force) => {
-          const target = this.monitors.get(worktreeId);
-          if (!target || !target.isRunning) return;
-          const { remotes, primaryRemote } = planFetchRemotes({
-            baseRemote: target.baseRemote,
-            availableRemotes: target.availableRemotes,
-          });
-          const result = await this.fetchCoordinator.fetchForWorktree({
-            worktreeId,
-            worktreePath: target.path,
-            force,
-            remotes,
-            primaryRemote,
-          });
-          // Skipped for "no-common-dir" (e.g. path was just removed) means we
-          // have no commondir to fan out on — bail.
-          if (
-            result.lastFetchedAt === undefined &&
-            result.authFailed === undefined &&
-            result.networkFailed === undefined
-          ) {
-            return;
-          }
-          await this.applyFetchResultToSiblings(target, {
-            lastFetchedAt: result.lastFetchedAt ?? null,
-            authFailed: result.authFailed ?? false,
-            networkFailed: result.networkFailed ?? false,
-            remote: result.remote,
-          });
-        },
+        onScheduleFetch: (worktreeId, _isCurrent, force, prune) =>
+          this.executeFetchForWorktree(worktreeId, force, prune),
       },
       this.mainBranch,
       this.pollQueue,
@@ -1723,6 +1696,95 @@ export class WorkspaceService {
       seq: this.nextSeq(),
     });
     events.emit("sys:worktree:update", snapshot);
+  }
+
+  /**
+   * Run one fetch for a worktree through the shared coordinator and fan the
+   * outcome out to the cards that read it. The single execution path behind
+   * both the background cadence and the user-triggered "Fetch" rows (#12091) —
+   * routing the manual trigger anywhere else would lose the per-commondir
+   * serialization, the failure backoff, and the sibling status refresh that are
+   * the entire reason this coordinator exists.
+   *
+   * Returns the primary remote's result so a user-triggered fetch can report
+   * what actually happened instead of assuming success.
+   */
+  private async executeFetchForWorktree(
+    worktreeId: string,
+    force: boolean,
+    prune?: boolean
+  ): Promise<WorkspaceFetchResult | undefined> {
+    const target = this.monitors.get(worktreeId);
+    if (!target || !target.isRunning) return undefined;
+    const { remotes, primaryRemote } = planFetchRemotes({
+      baseRemote: target.baseRemote,
+      availableRemotes: target.availableRemotes,
+    });
+    const result = await this.fetchCoordinator.fetchForWorktree({
+      worktreeId,
+      worktreePath: target.path,
+      force,
+      prune,
+      remotes,
+      primaryRemote,
+    });
+    // Re-read after the await: a worktree removed mid-fetch leaves `target`
+    // pointing at a stopped monitor, and stamping fetch state onto it would
+    // resurrect a card that is already gone (#5147). Identity, not just
+    // presence — a same-path monitor recreated during the fetch is a different
+    // incarnation and must not inherit this result.
+    const live = this.monitors.get(worktreeId);
+    if (!live || !live.isRunning || live.generation !== target.generation) return result;
+    // Skipped for "no-common-dir" (e.g. path was just removed) means we
+    // have no commondir to fan out on — bail.
+    if (
+      result.lastFetchedAt === undefined &&
+      result.authFailed === undefined &&
+      result.networkFailed === undefined
+    ) {
+      return result;
+    }
+    await this.applyFetchResultToSiblings(live, {
+      lastFetchedAt: result.lastFetchedAt ?? null,
+      authFailed: result.authFailed ?? false,
+      networkFailed: result.networkFailed ?? false,
+      remote: result.remote,
+    });
+    return result;
+  }
+
+  /**
+   * User-triggered `git fetch` for one worktree (#12091). Always forced — the
+   * user asked for it, so the failure backoff must not silently swallow the
+   * click — and always answered, so the renderer's action reports the real
+   * outcome rather than assuming the fetch landed.
+   *
+   * `prune` false is the plain "Fetch" row; true is "Fetch and prune".
+   */
+  async fetchWorktree(requestId: string, worktreeId: string, prune: boolean): Promise<void> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor || !monitor.isRunning) {
+      this.sendEvent({
+        type: "fetch-worktree-result",
+        requestId,
+        error: `No active worktree monitor for ${worktreeId}`,
+      });
+      return;
+    }
+    try {
+      const result = await monitor.triggerFetchNow(prune);
+      this.sendEvent({
+        type: "fetch-worktree-result",
+        requestId,
+        result: result ?? undefined,
+      });
+    } catch (error) {
+      this.sendEvent({
+        type: "fetch-worktree-result",
+        requestId,
+        error: formatErrorMessage(error, "Fetch failed"),
+      });
+    }
   }
 
   /**

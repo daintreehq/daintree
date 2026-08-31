@@ -82,6 +82,44 @@ describe("UpstreamSyncBadge — base compare ref (#11747)", () => {
     expect(document.body.textContent).toContain("6 ahead of upstream/main");
   });
 
+  it("says the comparison is local when the base fell back to the local branch", () => {
+    // `BaseDivergence` sets the compare ref to the BARE base name when the
+    // remote ref won't resolve — which is what "Fetch and prune" leaves behind
+    // once the base branch is gone from the remote (#12091). Rendering that as
+    // a plain "200 behind main" passes a local measurement off as a remote one.
+    renderBadge({ baseCompareRef: "main" });
+
+    expect(document.body.textContent).toContain("200 behind local main");
+    expect(screen.getByTestId("upstream-sync-local-base")).toBeTruthy();
+  });
+
+  it("says nothing about a local base when the remote compare ref resolved", () => {
+    renderBadge({ baseCompareRef: "origin/main" });
+
+    expect(document.body.textContent).toContain("200 behind origin/main");
+    expect(screen.queryByTestId("upstream-sync-local-base")).toBeNull();
+  });
+
+  it("does not claim a local fallback when no compare ref was resolved at all", () => {
+    // A null compare ref is "we never resolved one", not "the remote ref was
+    // pruned away" — asserting the second from the first would be a guess.
+    renderBadge({ baseCompareRef: null });
+
+    expect(screen.queryByTestId("upstream-sync-local-base")).toBeNull();
+  });
+
+  it("labels the ahead line as local too", () => {
+    renderBadge({ baseBehindCount: 0, baseAheadCount: 6, baseCompareRef: "main" });
+
+    expect(document.body.textContent).toContain("6 ahead of local main");
+  });
+
+  it("labels the resting line as local", () => {
+    renderBadge({ baseBehindCount: 0, baseAheadCount: 0, baseCompareRef: "main" });
+
+    expect(document.body.textContent).toContain("In sync with local main");
+  });
+
   it("does not name a specific remote in the unreachable-remote warning", () => {
     // The fetch that failed may not have been origin at all once a repo
     // refreshes more than one remote.

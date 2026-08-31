@@ -325,6 +325,52 @@ export interface MonitorConfig {
 }
 
 /**
+ * Result of one `RepoFetchCoordinator` fetch, as it crosses the workspace-host
+ * boundary. Shared rather than host-local because a user-triggered fetch has to
+ * report its real outcome back to the main process (#12091) — a manual "Fetch"
+ * that hit an auth wall must not read as a success.
+ */
+export interface WorkspaceFetchResult {
+  status: "success" | "skipped" | "failed";
+  /** Present when status === "failed". */
+  reason?: import("./ipc/errors.js").GitOperationReason;
+  /** Why we skipped — for logging / diagnostics. */
+  skipReason?: "no-common-dir" | "in-failure-window" | "auth-suspended" | "stale-generation";
+  /**
+   * `RepoFetchCoordinator`'s `lastSuccessfulFetch` for the primary
+   * (commondir, remote)
+   * after this call settled. Set on success (the timestamp just written) and
+   * on skipped/failed outcomes (the prior timestamp, if any). Lets
+   * `WorkspaceService` propagate the freshest known value to monitors without
+   * reaching into coordinator internals.
+   *
+   * Scoped to the primary remote on purpose: taking the newest timestamp
+   * across every fetched remote would let a healthy auxiliary `origin` vouch
+   * for counts measured against a base remote that failed, which is a
+   * fresh-looking badge over stale data — the same class of bug #11747 exists
+   * to fix.
+   */
+  lastFetchedAt?: number | null;
+  /**
+   * True when this call ended in (or remained in) an auth-class failure for
+   * the primary remote. Includes the `auth-suspended` skip case so the
+   * renderer keeps showing the "Sign in to refresh" affordance instead of
+   * flashing stale counts when a sibling's force-fetch is rate-cached.
+   */
+  authFailed?: boolean;
+  /**
+   * True when this call ended in (or remained in) a transient (network /
+   * repo-not-found-first / generic transient) failure for the primary remote.
+   * Drives the "Couldn't reach the remote" tooltip line on the worktree card.
+   * False on success, on auth-class failures (those use `authFailed`), and on
+   * the `no-common-dir` skip path where we have no state to report.
+   */
+  networkFailed?: boolean;
+  /** Remote this result describes. Absent only on the `no-common-dir` skip. */
+  remote?: string;
+}
+
+/**
  * Requests sent from Main → Workspace Host.
  * Each request is a discriminated union type for compile-time safety.
  * Request IDs enable tracking responses for async operations.
@@ -447,6 +493,13 @@ export type WorkspaceHostRequest =
     }
   // Re-probe the WSL default distro on demand and refresh eligibility (Windows only)
   | { type: "reprobe-wsl"; worktreeId: string }
+  /**
+   * User-triggered `git fetch` for one worktree's repo (#12091). Carries a
+   * `requestId` because, unlike the scheduled cadence, the caller is a menu row
+   * whose action must report the real outcome — `prune` false is the plain
+   * "Fetch" row, true is "Fetch and prune".
+   */
+  | { type: "fetch-worktree"; requestId: string; worktreeId: string; prune: boolean }
   // Background/foreground lifecycle
   | { type: "background" }
   | { type: "foreground" }
@@ -654,6 +707,17 @@ export type WorkspaceHostEvent =
   | { type: "delete-worktree-result"; requestId: string; success: boolean; error?: string }
   // Branch operation responses
   | { type: "list-branches-result"; requestId: string; branches: BranchInfo[]; error?: string }
+  /**
+   * Outcome of a `fetch-worktree` request. `error` marks a TRANSPORT failure
+   * (no such monitor, host torn down); a fetch that ran and failed comes back
+   * with `result.status === "failed"` so its git classification survives.
+   */
+  | {
+      type: "fetch-worktree-result";
+      requestId: string;
+      result?: WorkspaceFetchResult;
+      error?: string;
+    }
   | { type: "get-recent-branches-result"; requestId: string; branches: string[]; error?: string }
   | {
       type: "fetch-pr-branch-result";

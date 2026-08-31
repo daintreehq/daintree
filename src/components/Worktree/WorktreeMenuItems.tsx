@@ -43,6 +43,7 @@ import {
   Plug,
   RefreshCw,
   Save,
+  Scissors,
   Server,
   Square,
   SquareTerminal,
@@ -411,6 +412,46 @@ export function WorktreeMenuItems({
         Review
       </C.SubTrigger>
       <C.SubContent>{reviewRows}</C.SubContent>
+    </C.Sub>
+  );
+
+  // ------------------------------------------------------------------- Git
+  // Shared submenu: #12090 adds pull/push rows and #12092 adds base-branch and
+  // recovery rows to this same `gitRows` array. Kept as an array rather than
+  // inlined children so those land as additional entries instead of a conflict
+  // over one JSX block.
+  const gitRows = [
+    <C.Item
+      key="fetch"
+      onSelect={() =>
+        void actionService.dispatch("git.fetch", { worktreeId: worktree.id }, { source })
+      }
+    >
+      <RefreshCw className={ICON} />
+      Fetch
+    </C.Item>,
+    <C.Item
+      key="fetch-prune"
+      onSelect={() =>
+        void actionService.dispatch(
+          "git.fetch",
+          { worktreeId: worktree.id, prune: true },
+          { source }
+        )
+      }
+    >
+      <Scissors className={ICON} />
+      Fetch and prune
+    </C.Item>,
+  ].filter(Boolean);
+
+  const gitSub = gitRows.length > 0 && (
+    <C.Sub key="git">
+      <C.SubTrigger>
+        <GitBranch className={ICON} />
+        Git
+      </C.SubTrigger>
+      <C.SubContent>{gitRows}</C.SubContent>
     </C.Sub>
   );
 
@@ -886,7 +927,7 @@ export function WorktreeMenuItems({
 
   const rows = joinGroups(
     [
-      compact(launchSub, openSub, reviewSub),
+      compact(launchSub, openSub, reviewSub, gitSub),
       compact(sessionsSub, recipesSub, runtimeSub),
       compact(linkedWorkSub, copySub, organizeSub, extensionsSub),
       compact(deleteItem),

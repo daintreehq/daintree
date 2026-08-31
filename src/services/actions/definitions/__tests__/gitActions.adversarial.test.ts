@@ -48,6 +48,7 @@ type GitStub = {
       | "commit"
       | "push"
       | "pullRebase"
+      | "fetch"
       | "getFileDiff"
       | "listCommits"
       | "getStagingStatus"
@@ -64,6 +65,7 @@ function makeGitStub(): GitStub {
     commit: vi.fn().mockResolvedValue({ sha: "abc" }),
     push: vi.fn().mockResolvedValue({ ok: true }),
     pullRebase: vi.fn().mockResolvedValue(undefined),
+    fetch: vi.fn().mockResolvedValue(undefined),
     getFileDiff: vi.fn().mockResolvedValue({
       content: "diff",
       offset: 0,
@@ -203,6 +205,28 @@ describe("gitActions adversarial", () => {
     await resolvePushConfirm(false);
     await p;
     expect(git.push).not.toHaveBeenCalled();
+  });
+
+  it("git.fetch fires IPC immediately — a fetch has no local work to protect", async () => {
+    const { run, git } = setupActions();
+    await run("git.fetch", { cwd: "/repo" });
+    expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: false });
+    expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).toBeNull();
+    expect(useGitPushConfirmStore.getState().pendingConfirm).toBeNull();
+  });
+
+  it("git.fetch passes prune through only when explicitly requested", async () => {
+    const { run, git } = setupActions();
+    await run("git.fetch", { cwd: "/repo", prune: true });
+    expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: true });
+  });
+
+  it("git.fetch treats a non-boolean prune as absent rather than truthy", async () => {
+    // The args schema is the MCP surface too, so a client sending `prune: 1`
+    // must not silently get the destructive-looking variant.
+    const { run, git } = setupActions();
+    await run("git.fetch", { cwd: "/repo", prune: undefined });
+    expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: false });
   });
 
   it("git.pullRebase fires IPC only after the confirm gate is accepted", async () => {

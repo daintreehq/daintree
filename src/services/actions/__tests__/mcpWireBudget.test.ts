@@ -301,7 +301,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // totals moved by the identical amount. Only this one needed the ratchet
   // raised: #11908's seven in-app tools had already taken the cohort to
   // 189_743, leaving 257 B of headroom that #11909 could not fit under.
-  const MAX_COHORT_PAYLOAD_BYTES = 192_700;
+  // 192_700 → 193_100 for #12091's `git.fetch`. In-app only — it is deliberately
+  // absent from the external tier, which is why the external ceiling above did
+  // not move. Its 149 B description sits well under the per-tool ceiling; the
+  // rest is the `withWorktreeLocation` schema every git tool already carries.
+  const MAX_COHORT_PAYLOAD_BYTES = 193_100;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

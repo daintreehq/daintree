@@ -39,7 +39,7 @@ describe("FetchScheduler", () => {
     await vi.advanceTimersByTimeAsync(5_001);
 
     expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
-    expect(host.onExecuteFetch).toHaveBeenCalledWith(false);
+    expect(host.onExecuteFetch).toHaveBeenCalledWith(false, undefined);
   });
 
   it("uses focused cadence (~22-38s) when isCurrent is true", async () => {
@@ -135,7 +135,7 @@ describe("FetchScheduler", () => {
     await scheduler.triggerNow();
 
     expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
-    expect(host.onExecuteFetch).toHaveBeenCalledWith(true);
+    expect(host.onExecuteFetch).toHaveBeenCalledWith(true, undefined);
   });
 
   it("emits onUpdate twice per fetch — once on start, once on completion", async () => {
@@ -199,7 +199,7 @@ describe("FetchScheduler", () => {
     scheduler.schedule(true);
     await vi.advanceTimersByTimeAsync(6_000);
     expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
-    expect(host.onExecuteFetch).toHaveBeenCalledWith(false);
+    expect(host.onExecuteFetch).toHaveBeenCalledWith(false, undefined);
 
     // Trigger force while the first is in-flight — should defer.
     const forced = scheduler.triggerNow();
@@ -209,7 +209,7 @@ describe("FetchScheduler", () => {
     resolveFirst();
     await forced;
     expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
-    expect(host.onExecuteFetch).toHaveBeenLastCalledWith(true);
+    expect(host.onExecuteFetch).toHaveBeenLastCalledWith(true, undefined);
   });
 
   it("triggerNow() while non-force fetch is in-flight does not stack a duplicate force call", async () => {
@@ -232,7 +232,7 @@ describe("FetchScheduler", () => {
     scheduler.schedule(true);
     await vi.advanceTimersByTimeAsync(6_000);
     expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
-    expect(host.onExecuteFetch).toHaveBeenCalledWith(false);
+    expect(host.onExecuteFetch).toHaveBeenCalledWith(false, undefined);
 
     // While in-flight, a second triggerNow defers (sets _pendingForceFetch).
     const forced = scheduler.triggerNow();
@@ -243,7 +243,102 @@ describe("FetchScheduler", () => {
     await forced;
     // Now the deferred force ran exactly once after the first completed.
     expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
-    expect(host.onExecuteFetch).toHaveBeenLastCalledWith(true);
+    expect(host.onExecuteFetch).toHaveBeenLastCalledWith(true, undefined);
+  });
+
+  it("threads prune through triggerNow to the host", async () => {
+    const host = makeHost();
+    const scheduler = new FetchScheduler(host as FetchSchedulerHost);
+
+    await scheduler.triggerNow(false);
+
+    expect(host.onExecuteFetch).toHaveBeenCalledWith(true, false);
+  });
+
+  it("resolves triggerNow with the result of the fetch it queued, not the in-flight one", async () => {
+    // A bare pending flag resolved the caller off the ALREADY-RUNNING fetch, so
+    // a user-triggered "Fetch" reported the previous fetch's outcome (#12091).
+    let resolveFirst: () => void = () => {};
+    let callCount = 0;
+    const host = makeHost({
+      onExecuteFetch: vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return new Promise<void>((resolve) => {
+            resolveFirst = () => resolve();
+          }).then(() => ({ status: "skipped" as const }));
+        }
+        return Promise.resolve({ status: "success" as const, remote: "origin" });
+      }),
+    });
+    const scheduler = new FetchScheduler(host as FetchSchedulerHost);
+
+    scheduler.schedule(true);
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    const forced = scheduler.triggerNow(true);
+    resolveFirst();
+
+    await expect(forced).resolves.toEqual({ status: "success", remote: "origin" });
+  });
+
+  it("coalesces queued force requests and keeps the pruning one", async () => {
+    // Two clicks land while a fetch is in flight. They share one deferred run,
+    // and "Fetch and prune" must not be satisfied by a queued plain "Fetch".
+    let resolveFirst: () => void = () => {};
+    let callCount = 0;
+    const host = makeHost({
+      onExecuteFetch: vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return new Promise<void>((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        return Promise.resolve();
+      }),
+    });
+    const scheduler = new FetchScheduler(host as FetchSchedulerHost);
+
+    scheduler.schedule(true);
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    const plain = scheduler.triggerNow(false);
+    const pruning = scheduler.triggerNow(true);
+
+    resolveFirst();
+    await Promise.all([plain, pruning]);
+
+    expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
+    expect(host.onExecuteFetch).toHaveBeenLastCalledWith(true, true);
+  });
+
+  it("settles a queued force request even when the scheduler stops first", async () => {
+    // A stranded promise would leave the renderer's action hanging forever.
+    let resolveFirst: () => void = () => {};
+    let callCount = 0;
+    const host = makeHost({
+      onExecuteFetch: vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return new Promise<void>((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        return Promise.resolve();
+      }),
+    });
+    const scheduler = new FetchScheduler(host as FetchSchedulerHost);
+
+    scheduler.schedule(true);
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    const forced = scheduler.triggerNow(true);
+    host.isRunning = false;
+    resolveFirst();
+
+    await expect(forced).resolves.toBeUndefined();
+    expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
   });
 
   it("does not execute fetch when host is not running", async () => {

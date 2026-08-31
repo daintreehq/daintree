@@ -530,6 +530,34 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     },
   }));
 
+  actions.set("git.fetch", () => ({
+    id: "git.fetch",
+    title: "Fetch",
+    description:
+      "Update this worktree's remote-tracking refs so its ahead/behind counts match the remote. HEAD, the working tree, and local branches are left untouched.",
+    category: "git",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: withWorktreeLocation(
+      {
+        prune: z
+          .boolean()
+          .optional()
+          .describe("Also delete remote-tracking refs for branches gone from the remote."),
+      },
+      { legacy: ["cwd"] }
+    ).optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { prune, ...location } = (args ?? {}) as WorktreeLocationArgs & { prune?: boolean };
+      const resolvedCwd = requireWorktreePath(location, ctx);
+      // No confirm, unlike its push/pull-rebase neighbours: a fetch writes only
+      // remote-tracking refs, so there is no local work it can destroy and
+      // nothing a confirm would protect.
+      await window.electron.git.fetch({ cwd: resolvedCwd, prune: prune === true });
+    },
+  }));
+
   actions.set("git.markSafeDirectory", () => ({
     id: "git.markSafeDirectory",
     title: "Trust Repository",
