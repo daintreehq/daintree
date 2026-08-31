@@ -1,6 +1,6 @@
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
-import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
@@ -1280,7 +1280,9 @@ class VoiceRecordingService {
   }
 
   private getAssistantTarget(): VoiceRecordingTarget | null {
-    const terminalId = useHelpPanelStore.getState().terminalId;
+    // The ACTIVE lane (#12108): dictation is aimed at the session on screen,
+    // not at whichever one happens to be running in the background.
+    const terminalId = selectActiveSlot(useHelpPanelStore.getState()).terminalId;
     if (!terminalId) return null;
 
     // Guard the brief window where the assistant terminal has been trashed (or

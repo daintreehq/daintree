@@ -19,6 +19,13 @@ import type {
   PendingHelpHibernation,
   PendingHelpHibernationStore,
 } from "./PendingHelpHibernationStore.js";
+import {
+  ASSISTANT_SLOTS,
+  assistantSlotDirName,
+  assistantSlotKey,
+  isValidAssistantSlot,
+  parseAssistantSlotDirName,
+} from "../../shared/config/assistantSlots.js";
 
 // Narrow type so the test suite (and any future caller) can satisfy this
 // dependency without instantiating a full PtyClient. `kill` is the original
@@ -82,6 +89,14 @@ interface ProvisionInput {
   windowId: number;
   projectViewWebContentsId: number;
   /**
+   * Which assistant lane this session occupies (#12108). Optional on the way
+   * in so pre-slot callers and fixtures still mean slot 0, but an explicitly
+   * supplied out-of-range slot is rejected by `validateProvisionInput` rather
+   * than clamped — silently landing in a neighbouring lane would displace a
+   * session the caller never named.
+   */
+  slot?: number;
+  /**
    * Snapshot of the renderer's `ActionContext` captured synchronously when
    * the user launched the assistant, before any `await`. Bound to the MCP
    * session at handshake and replayed as `contextOverride` on every tool
@@ -107,6 +122,14 @@ interface HelpSessionRecord {
   windowId: number;
   projectViewWebContentsId: number;
   projectId: string;
+  /**
+   * The assistant lane this record owns (#12108). Required — every internal
+   * lookup that used to key on `projectId` alone now keys on
+   * `assistantSlotKey(projectId, slot)`, and a record whose lane were unknown
+   * could neither be displaced by its successor nor protected from its
+   * siblings.
+   */
+  slot: number;
   projectPath: string;
   sessionPath: string;
   agentId: string;
@@ -268,25 +291,33 @@ export class HelpSessionService {
   // otherwise race the .mcp.json overwrite, producing a Claude instance
   // authenticating with the wrong session record.
   private readonly provisionLocks = new Map<string, Promise<void>>();
-  // Single-backend invariant (#7509): at most one assistant PTY per project
-  // at any given time. The renderer's cooperative cleanup paths (removePanel,
-  // gracefulKill on hibernate, visibilitychange tearDown) are fire-and-forget
-  // and can drop the kill IPC, leaving an orphan PTY that keeps dispatching
-  // MCP tool calls under a still-valid bearer. These maps let the main process
-  // displace prior backends regardless of what the renderer did.
-  private readonly activeHelpTerminalByProjectId = new Map<string, string>();
+  // Single-backend invariant (#7509), scoped to a lane since #12108: at most
+  // one assistant PTY per (project, slot) at any given time. The renderer's
+  // cooperative cleanup paths (removePanel, gracefulKill on hibernate,
+  // visibilitychange tearDown) are fire-and-forget and can drop the kill IPC,
+  // leaving an orphan PTY that keeps dispatching MCP tool calls under a
+  // still-valid bearer. These maps let the main process displace prior
+  // backends regardless of what the renderer did.
+  //
+  // Narrowing the key from project to lane does not weaken the property: the
+  // decisive step is removing the record from `sessionsByToken` BEFORE the
+  // fire-and-forget kill, so a lost kill IPC still leaves an orphan whose
+  // bearer no longer validates. What changes is only which sessions count as
+  // priors — a sibling in another lane is a live session the user asked for,
+  // not an orphan.
+  private readonly activeHelpTerminalBySlotKey = new Map<string, string>();
   private readonly terminalBySessionId = new Map<string, string>();
   private mcpRegistry: WindowRegistry | null = null;
   private ptyClient: PtyKillClient | null = null;
   private pendingHibernationStore: PendingHelpHibernationStore | null = null;
-  // #9639: tracks the in-flight capture owner per project (projectId →
+  // #9639: tracks the in-flight capture owner per lane (slot key →
   // sessionId) while `gracefulKill` is outstanding. A placeholder
   // pending-hibernation entry is written synchronously before the kill so a
   // racing project switch-back resumes instead of fresh-launching; this map
   // decides who is allowed to overwrite/clear that placeholder afterwards so a
   // mid-kill displacement can't let a stale resume ID shadow the new session.
   // In-memory only — no in-flight capture is meaningful across an app restart.
-  private readonly pendingCapturesByProject = new Map<string, string>();
+  private readonly pendingCapturesBySlotKey = new Map<string, string>();
   // #11477: the entry most recently handed out by `takePendingHibernation`, per
   // project, so a taker whose launch aborts can put it back verbatim via
   // `restorePendingHibernation` — original `capturedAt` intact, `panelWasOpen`
@@ -303,7 +334,7 @@ export class HelpSessionService {
   //
   // In-memory only, one deep per project: a take that is never answered is
   // dropped, and a later take supersedes the stash outright.
-  private readonly lastTakenByProject = new Map<
+  private readonly lastTakenBySlotKey = new Map<
     string,
     { entry: PendingHelpHibernation; claimId: string; ownerWebContentsId: number | null }
   >();
@@ -438,13 +469,17 @@ export class HelpSessionService {
     const record = this.sessionsByToken.get(token);
     if (!record || record.revoked) return false;
 
-    const existingTerminal = this.activeHelpTerminalByProjectId.get(record.projectId);
+    // The lane comes from the authenticated record, never from the caller — a
+    // renderer-supplied slot here could evict a sibling lane's PTY using a
+    // bearer that was only ever issued for its own.
+    const slotKey = assistantSlotKey(record.projectId, record.slot);
+    const existingTerminal = this.activeHelpTerminalBySlotKey.get(slotKey);
     if (existingTerminal && existingTerminal !== terminalId) {
       this.killTerminal(existingTerminal, "help-session-displaced");
       this.removeTerminalFromMaps(existingTerminal);
     }
 
-    this.activeHelpTerminalByProjectId.set(record.projectId, terminalId);
+    this.activeHelpTerminalBySlotKey.set(slotKey, terminalId);
     this.terminalBySessionId.set(record.sessionId, terminalId);
     return true;
   }
@@ -461,8 +496,27 @@ export class HelpSessionService {
   }
 
   /**
+   * The lane `terminalId` currently serves, or null when it serves none.
+   *
+   * Null is the meaningful answer for a displaced backend whose kill has not
+   * landed yet: `displacePriorSessions` drops the record synchronously, so a
+   * corpse resolves to no lane while its live successor resolves to one. That
+   * is what lets project status rank concurrent assistants by attention
+   * without a mid-kill corpse outranking them (see `projectAgentCounts`).
+   */
+  getSlotForTerminal(terminalId: string): number | null {
+    if (!terminalId) return null;
+    for (const [sessionId, boundId] of this.terminalBySessionId.entries()) {
+      if (boundId !== terminalId) continue;
+      const record = this.sessionsById.get(sessionId);
+      if (record && !record.revoked) return record.slot;
+    }
+    return null;
+  }
+
+  /**
    * Reports whether `terminalId` is currently the active help-session PTY
-   * for any project. The PtyEventRouter's `terminal-pid` callback uses this
+   * for any lane. The PtyEventRouter's `terminal-pid` callback uses this
    * to filter help-session terminals into the Windows Job Object so the OS
    * reaps the agent tree on a hard Daintree crash (#7526). Returns false
    * once the binding is dropped (revoke / displace / unbind) — a late PID
@@ -470,16 +524,22 @@ export class HelpSessionService {
    */
   isHelpTerminal(terminalId: string): boolean {
     if (!terminalId) return false;
-    for (const boundId of this.activeHelpTerminalByProjectId.values()) {
+    for (const boundId of this.activeHelpTerminalBySlotKey.values()) {
       if (boundId === terminalId) return true;
     }
     return false;
   }
 
   /**
-   * The assistant backend bound to `projectId` — its PTY and the WebContents
-   * the session pinned at provision time — or null when the project has no
-   * unrevoked help session with a spawned terminal.
+   * Every assistant backend bound to `projectId` — each one's PTY, the
+   * WebContents the session pinned at provision time, and its lane — in slot
+   * order. Empty when the project has no unrevoked help session with a spawned
+   * terminal.
+   *
+   * Returns all lanes rather than a single winner (#12108) because callers use
+   * this as a floor: with concurrent sessions a lane whose PTY has exited must
+   * not mask a live sibling, or reclaiming the project would kill the sibling
+   * — the #11807 regression in a new shape.
    *
    * ProjectViewManager's eviction policy reads this synchronously to keep the
    * view hosting a running assistant out of the routine LRU candidate pool
@@ -501,21 +561,28 @@ export class HelpSessionService {
    * must cross-check `terminalId` against a registry that tracks PTY exits, or
    * an assistant the user quit would pin its view forever.
    */
-  getAssistantBackend(projectId: string): { terminalId: string; webContentsId: number } | null {
-    if (!projectId) return null;
-    const terminalId = this.activeHelpTerminalByProjectId.get(projectId);
-    if (!terminalId) return null;
-    for (const record of this.sessionsById.values()) {
-      if (record.revoked) continue;
-      // Match on the project too, not just the terminal id: nothing enforces
-      // terminal-id uniqueness across projects, and picking up another
-      // project's record would return the wrong pin — which reads as "this view
-      // isn't the pinned one" and hands the running assistant back to the LRU.
-      if (record.projectId !== projectId) continue;
-      if (this.terminalBySessionId.get(record.sessionId) !== terminalId) continue;
-      return { terminalId, webContentsId: record.projectViewWebContentsId };
+  getAssistantBackends(
+    projectId: string
+  ): Array<{ terminalId: string; webContentsId: number; slot: number }> {
+    if (!projectId) return [];
+    const backends: Array<{ terminalId: string; webContentsId: number; slot: number }> = [];
+    for (const slot of ASSISTANT_SLOTS) {
+      const terminalId = this.activeHelpTerminalBySlotKey.get(assistantSlotKey(projectId, slot));
+      if (!terminalId) continue;
+      for (const record of this.sessionsById.values()) {
+        if (record.revoked) continue;
+        // Match on the project and lane too, not just the terminal id: nothing
+        // enforces terminal-id uniqueness across projects, and picking up
+        // another project's record would return the wrong pin — which reads as
+        // "this view isn't the pinned one" and hands the running assistant
+        // back to the LRU.
+        if (record.projectId !== projectId || record.slot !== slot) continue;
+        if (this.terminalBySessionId.get(record.sessionId) !== terminalId) continue;
+        backends.push({ terminalId, webContentsId: record.projectViewWebContentsId, slot });
+        break;
+      }
     }
-    return null;
+    return backends;
   }
 
   /**
@@ -629,14 +696,20 @@ export class HelpSessionService {
       return null;
     }
 
+    // Lock on the LANE's directory, not the project's: the race the lock
+    // exists for is the `.mcp.json` overwrite, and each lane writes its own
+    // file. Two lanes of one project therefore provision in parallel, while a
+    // same-lane re-provision still serializes — which is what makes
+    // `displacePriorSessions` below an atomic step.
     const pathHash = projectPathHash(input.projectPath);
-    const previous = this.provisionLocks.get(pathHash);
+    const lockKey = assistantSlotDirName(pathHash, input.slot ?? 0);
+    const previous = this.provisionLocks.get(lockKey);
     let resolveLock!: () => void;
     const next = new Promise<void>((resolve) => {
       resolveLock = resolve;
     });
     this.provisionLocks.set(
-      pathHash,
+      lockKey,
       (previous ?? Promise.resolve()).then(() => next)
     );
     if (previous) await previous;
@@ -647,8 +720,8 @@ export class HelpSessionService {
       resolveLock();
       // Drop the lock entry once it resolves so the map doesn't grow without
       // bound. Anyone awaiting `previous` already has the resolved promise.
-      if (this.provisionLocks.get(pathHash) === next) {
-        this.provisionLocks.delete(pathHash);
+      if (this.provisionLocks.get(lockKey) === next) {
+        this.provisionLocks.delete(lockKey);
       }
     }
   }
@@ -668,10 +741,11 @@ export class HelpSessionService {
     // the Settings tier selector lie about the surface it hands out (#11907).
     // What each tier permits is locked in `mcp-server/__tests__/tierAuth.test.ts`.
     const tier: HelpAssistantTier = settings.tier;
+    const slot = input.slot ?? 0;
     const sessionId = randomUUID();
     const token = randomBytes(SESSION_TOKEN_BYTES).toString("hex");
     const sessionsRoot = this.getSessionsRoot();
-    const sessionPath = path.join(sessionsRoot, pathHash);
+    const sessionPath = path.join(sessionsRoot, assistantSlotDirName(pathHash, slot));
 
     if (settings.daintreeControl) {
       try {
@@ -691,15 +765,15 @@ export class HelpSessionService {
     }
 
     // Single-backend invariant (#7509): displace any prior unrevoked record
-    // for this project BEFORE writing a fresh `.mcp.json`. The bearer is
+    // for this LANE BEFORE writing a fresh `.mcp.json`. The bearer is
     // marked revoked first so any in-flight MCP call from the orphan 401s
     // before the kill IPC reaches the PTY host. Runs inside `provisionLocks`
-    // (per pathHash), so concurrent provisions for the same project see this
-    // as an atomic step. The renderer still calls `revokeHelpSession` from
-    // its cooperative cleanup paths — this enforcement is defense-in-depth
+    // (per lane directory), so concurrent provisions for the same lane see
+    // this as an atomic step. The renderer still calls `revokeHelpSession`
+    // from its cooperative cleanup paths — this enforcement is defense-in-depth
     // for when those paths drop the kill or never fire (crash, project
     // switch, hibernate race).
-    this.displacePriorSessions(input.projectId);
+    this.displacePriorSessions(input.projectId, slot);
 
     await fs.mkdir(sessionsRoot, { recursive: true, mode: 0o700 });
     await fs.chmod(sessionsRoot, 0o700).catch(() => {});
@@ -843,6 +917,7 @@ export class HelpSessionService {
       windowId: input.windowId,
       projectViewWebContentsId: input.projectViewWebContentsId,
       projectId: input.projectId,
+      slot,
       projectPath: input.projectPath,
       sessionPath,
       agentId: input.agentId,
@@ -1011,6 +1086,7 @@ export class HelpSessionService {
     if (!record || record.revoked) return;
 
     const terminalId = this.terminalBySessionId.get(sessionId);
+    const slotKey = assistantSlotKey(record.projectId, record.slot);
 
     // Capture FIRST (while the session record is still valid for token
     // lookups by the agent process). gracefulKill resolves with the agent's
@@ -1032,10 +1108,10 @@ export class HelpSessionService {
       // resume-latest path instead; once gracefulKill returns we overwrite the
       // placeholder with the agent's real resume ID (below).
       if (this.pendingHibernationStore) {
-        this.pendingCapturesByProject.set(record.projectId, sessionId);
+        this.pendingCapturesBySlotKey.set(slotKey, sessionId);
         const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
-          .set(record.projectId, {
+          .set(slotKey, {
             agentId: record.agentId,
             agentSessionId: "",
             cwd: record.sessionPath,
@@ -1084,11 +1160,8 @@ export class HelpSessionService {
       this.terminalBySessionId.delete(sessionId);
       // If displaced, the new provision already cleared the active slot (and
       // may have set it to a new terminal id) — never touch it here.
-      if (
-        !displacedDuringCapture &&
-        this.activeHelpTerminalByProjectId.get(record.projectId) === terminalId
-      ) {
-        this.activeHelpTerminalByProjectId.delete(record.projectId);
+      if (!displacedDuringCapture && this.activeHelpTerminalBySlotKey.get(slotKey) === terminalId) {
+        this.activeHelpTerminalBySlotKey.delete(slotKey);
       }
       if (!capturedAgentSessionId) {
         this.killTerminal(terminalId, "help-session-revoked");
@@ -1113,20 +1186,17 @@ export class HelpSessionService {
     }
 
     // #9639: finalize the placeholder written before gracefulKill. Only act if
-    // we still own the capture — a same-project re-provision that ran
+    // we still own the capture — a same-lane re-provision that ran
     // `displacePriorSessions` during the await clears our ownership and the
     // placeholder, so the old resume ID can't shadow the fresh session that
-    // took the slot. When we still own it: overwrite with the real resume ID
+    // took the lane. When we still own it: overwrite with the real resume ID
     // if gracefulKill yielded one, otherwise leave the empty-sentinel in place
     // (resume-latest beats a fresh launch). Then release ownership.
-    if (
-      this.pendingHibernationStore &&
-      this.pendingCapturesByProject.get(record.projectId) === sessionId
-    ) {
+    if (this.pendingHibernationStore && this.pendingCapturesBySlotKey.get(slotKey) === sessionId) {
       if (capturedAgentSessionId) {
         const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
-          .set(record.projectId, {
+          .set(slotKey, {
             agentId: record.agentId,
             agentSessionId: capturedAgentSessionId,
             cwd: record.sessionPath,
@@ -1141,7 +1211,7 @@ export class HelpSessionService {
             );
           });
       }
-      this.pendingCapturesByProject.delete(record.projectId);
+      this.pendingCapturesBySlotKey.delete(slotKey);
     }
 
     // Claude bakes a literal session bearer into `.mcp.json`; Copilot
@@ -1163,14 +1233,17 @@ export class HelpSessionService {
    * before the user commits to a launch. The actual resume still goes through
    * `takePendingHibernation` (atomic take) inside the launch flow.
    */
-  peekPendingHibernation(projectId: string): {
+  peekPendingHibernation(
+    projectId: string,
+    slot: number
+  ): {
     agentId: string;
     agentSessionId: string;
     cwd: string;
     panelWasOpen: boolean;
   } | null {
     if (!this.pendingHibernationStore) return null;
-    const entry = this.pendingHibernationStore.get(projectId);
+    const entry = this.pendingHibernationStore.get(assistantSlotKey(projectId, slot));
     if (!entry) return null;
     return {
       agentId: entry.agentId,
@@ -1197,6 +1270,7 @@ export class HelpSessionService {
    */
   async takePendingHibernation(
     projectId: string,
+    slot: number,
     ownerWebContentsId?: number
   ): Promise<{
     agentId: string;
@@ -1205,25 +1279,30 @@ export class HelpSessionService {
     claimId: string;
   } | null> {
     if (!this.pendingHibernationStore) return null;
-    const entry = this.pendingHibernationStore.get(projectId);
+    const slotKey = assistantSlotKey(projectId, slot);
+    const entry = this.pendingHibernationStore.get(slotKey);
     if (!entry) return null;
     // #10048: invalidate the in-flight capture owner before the await so the
     // post-gracefulKill finalize block's ownership guard fails and the
     // already-killed agent's (now-stale) resume ID cannot overwrite the
     // placeholder the renderer just claimed. Mirrors displacePriorSessions.
-    this.pendingCapturesByProject.delete(projectId);
+    this.pendingCapturesBySlotKey.delete(slotKey);
     // Stash the exact entry (original `capturedAt` and all) so a taker that
     // aborts can hand it back via `restorePendingHibernation` (#11477).
-    // Overwrites any prior stash: only the most recent take is restorable, and
-    // an earlier taker's put-back must not resurrect a superseded entry.
+    // Overwrites any prior stash for this lane: only the most recent take is
+    // restorable, and an earlier taker's put-back must not resurrect a
+    // superseded entry. Stashes are per lane, so one view holding claims on
+    // several lanes keeps them independent — the CAS identity is
+    // (slotKey, claimId, ownerWebContentsId), and the same owner appearing in
+    // more than one bucket is expected rather than ambiguous.
     const { panelWasOpen: _panelWasOpen, ...restorable } = entry;
     const claimId = randomUUID();
-    this.lastTakenByProject.set(projectId, {
+    this.lastTakenBySlotKey.set(slotKey, {
       entry: restorable,
       claimId,
       ownerWebContentsId: ownerWebContentsId ?? null,
     });
-    await this.pendingHibernationStore.clear(projectId);
+    await this.pendingHibernationStore.clear(slotKey);
     return {
       agentId: entry.agentId,
       agentSessionId: entry.agentSessionId,
@@ -1268,11 +1347,13 @@ export class HelpSessionService {
    */
   async restorePendingHibernation(
     projectId: string,
+    slot: number,
     claimId: string,
     ownerWebContentsId?: number
   ): Promise<boolean> {
     if (!this.pendingHibernationStore) return false;
-    const stashed = this.lastTakenByProject.get(projectId);
+    const slotKey = assistantSlotKey(projectId, slot);
+    const stashed = this.lastTakenBySlotKey.get(slotKey);
     if (!stashed) return false;
     // Compare-and-swap on the specific take. A release quoting a superseded
     // claim (a later take replaced the stash) or arriving from a view other
@@ -1288,16 +1369,46 @@ export class HelpSessionService {
     }
     // One-shot from here: the claim is now spent either way, so a duplicate
     // release can't re-resurrect an entry a subsequent take consumed.
-    this.lastTakenByProject.delete(projectId);
-    if (this.pendingHibernationStore.get(projectId)) return false;
-    if (this.pendingCapturesByProject.has(projectId)) return false;
-    await this.pendingHibernationStore.set(projectId, stashed.entry);
+    this.lastTakenBySlotKey.delete(slotKey);
+    if (this.pendingHibernationStore.get(slotKey)) return false;
+    if (this.pendingCapturesBySlotKey.has(slotKey)) return false;
+    await this.pendingHibernationStore.set(slotKey, stashed.entry);
     return true;
   }
 
-  private displacePriorSessions(projectId: string): void {
+  /**
+   * Which lanes of `projectId` hold an eviction-captured resume entry.
+   *
+   * A cold renderer knows nothing about lanes 1+ — the ephemeral per-slot
+   * state is gone and only the persisted entries survive — so without this the
+   * tabs for those lanes would never be recreated and their captured
+   * conversations would be unreachable despite still being on disk. Returns
+   * lanes in slot order.
+   */
+  listPendingHibernationSlots(projectId: string): number[] {
+    if (!this.pendingHibernationStore || !projectId) return [];
+    return ASSISTANT_SLOTS.filter((slot) =>
+      Boolean(this.pendingHibernationStore?.get(assistantSlotKey(projectId, slot)))
+    );
+  }
+
+  /**
+   * Revoke every prior session occupying `(projectId, slot)`.
+   *
+   * Scoped to the lane since #12108. The #7509 property is unchanged and lives
+   * in the ORDER below, not in the breadth of the filter: the record leaves
+   * `sessionsByToken` before the fire-and-forget PTY kill, so even a dropped
+   * kill IPC leaves an orphan whose bearer no longer validates. Narrowing the
+   * filter only stops us killing sessions in other lanes, which are live
+   * sessions the user asked for rather than orphans.
+   *
+   * This is why `record.slot` is required rather than optional: a record whose
+   * lane were unknown would be displaced by nobody and would protect nobody.
+   */
+  private displacePriorSessions(projectId: string, slot: number): void {
+    const slotKey = assistantSlotKey(projectId, slot);
     const priors = [...this.sessionsById.values()].filter(
-      (record) => record.projectId === projectId && !record.revoked
+      (record) => record.projectId === projectId && record.slot === slot && !record.revoked
     );
     for (const prior of priors) {
       prior.revoked = true;
@@ -1305,10 +1416,10 @@ export class HelpSessionService {
       this.sessionsById.delete(prior.sessionId);
       // #9639: if this displaced session owns an in-flight capture placeholder,
       // drop it (and release ownership) so the old, soon-to-be-stale resume ID
-      // can't shadow the fresh session now taking the project's slot.
-      if (this.pendingCapturesByProject.get(projectId) === prior.sessionId) {
-        this.pendingCapturesByProject.delete(projectId);
-        void this.pendingHibernationStore?.clear(projectId).catch((err) => {
+      // can't shadow the fresh session now taking this lane.
+      if (this.pendingCapturesBySlotKey.get(slotKey) === prior.sessionId) {
+        this.pendingCapturesBySlotKey.delete(slotKey);
+        void this.pendingHibernationStore?.clear(slotKey).catch((err) => {
           console.warn(
             "[HelpSessionService] Failed to clear displaced pending hibernation:",
             projectId,
@@ -1322,7 +1433,7 @@ export class HelpSessionService {
         this.killTerminal(terminalId, "help-session-displaced");
       }
       // Tear down the displaced session's live MCP transport too (#9151).
-      // Displacement is just a same-project re-provision flavour of revoke —
+      // Displacement is just a same-lane re-provision flavour of revoke —
       // without this the old bearer keeps its tier/grants/pin until the
       // 30-minute idle reaper, exactly the stale state this issue closes on
       // the `revokeSession` path.
@@ -1337,10 +1448,10 @@ export class HelpSessionService {
       }
     }
     // Also clear any stale active-terminal binding the renderer never
-    // confirmed via `markTerminalForToken` — leaving it would leak the
-    // project's slot and cause the next `markTerminalForToken` to kill
+    // confirmed via `markTerminalForToken` — leaving it would leak this
+    // lane's binding and cause the next `markTerminalForToken` to kill
     // the wrong PTY.
-    this.activeHelpTerminalByProjectId.delete(projectId);
+    this.activeHelpTerminalBySlotKey.delete(slotKey);
   }
 
   private killTerminal(terminalId: string, reason: string): void {
@@ -1358,8 +1469,8 @@ export class HelpSessionService {
   }
 
   private removeTerminalFromMaps(terminalId: string): void {
-    for (const [pid, tid] of this.activeHelpTerminalByProjectId.entries()) {
-      if (tid === terminalId) this.activeHelpTerminalByProjectId.delete(pid);
+    for (const [pid, tid] of this.activeHelpTerminalBySlotKey.entries()) {
+      if (tid === terminalId) this.activeHelpTerminalBySlotKey.delete(pid);
     }
     for (const [sid, tid] of this.terminalBySessionId.entries()) {
       if (tid === terminalId) this.terminalBySessionId.delete(sid);
@@ -1423,7 +1534,7 @@ export class HelpSessionService {
     // Take-side stashes are launch-scoped and hold a resume id; nothing can
     // release one across a restart, so drop them rather than carry them to
     // shutdown. The persisted entries themselves are untouched (#11477).
-    this.lastTakenByProject.clear();
+    this.lastTakenBySlotKey.clear();
   }
 
   /**
@@ -1508,8 +1619,18 @@ export class HelpSessionService {
     void this.revokeAll();
   }
 
+  /**
+   * Whether `name` is a session directory we own and must keep.
+   *
+   * Load-bearing: `gcStaleSessions` recursively DELETES every directory this
+   * rejects, so a lane directory that failed to parse here would have its
+   * workspace trust and its transcripts collected out from under a live
+   * session. `parseAssistantSlotDirName` accepts the bare hash (slot 0) and
+   * exactly the in-range `-s<n>` suffixes, so legacy per-launch UUID dirs are
+   * still collected while lanes 1+ survive.
+   */
   private isProjectHashDirName(name: string): boolean {
-    return name.length === PROJECT_HASH_LEN && /^[0-9a-f]+$/.test(name);
+    return parseAssistantSlotDirName(name, PROJECT_HASH_LEN) !== null;
   }
 
   private validateProvisionInput(input: ProvisionInput): void {
@@ -1521,6 +1642,13 @@ export class HelpSessionService {
     }
     if (typeof input.projectPath !== "string" || !input.projectPath.trim()) {
       throw new Error("projectPath is required");
+    }
+    // Absent means slot 0 (pre-slot callers and fixtures). Present but invalid
+    // is a caller bug: clamping it would silently displace whichever lane the
+    // clamp landed on, which is exactly the cross-lane kill the slot key
+    // exists to prevent.
+    if (input.slot !== undefined && !isValidAssistantSlot(input.slot)) {
+      throw new Error(`slot must be an integer in [0, ${ASSISTANT_SLOTS.length}) — got ${String(input.slot)}`);
     }
     if (!path.isAbsolute(input.projectPath)) {
       throw new Error("projectPath must be absolute");
@@ -2024,7 +2152,13 @@ export class HelpSessionService {
     const auth = entry.headers?.Authorization ?? "";
     const match = /^Bearer\s+(.+)$/.exec(auth);
     const token = match?.[1]?.trim();
-    if (token && this.sessionsByToken.has(token)) return;
+    // A token is only live FOR THIS DIRECTORY. Once lanes each own a session
+    // dir (#12108), a bearer that is valid for another lane sitting in this
+    // one is misplaced, not live — keeping it would leave a working credential
+    // in a directory its session never owned, which is the stray-`claude`-in-
+    // cwd hole this strip exists to close.
+    const live = token ? this.sessionsByToken.get(token) : undefined;
+    if (live && live.sessionPath === sessionPath) return;
 
     delete servers["daintree"];
     try {

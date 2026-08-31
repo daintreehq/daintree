@@ -105,6 +105,13 @@ export interface CountableTerminal {
    * overlapping records is the current one.
    */
   spawnedAt?: number;
+  /**
+   * Which assistant lane this help terminal serves (#12108), or undefined when
+   * it serves none — an ordinary terminal, or a displaced assistant backend
+   * whose record has already been dropped. Resolved from `HelpSessionService`
+   * rather than stored on the panel, so it tracks displacement synchronously.
+   */
+  assistantSlot?: number;
 }
 
 /**
@@ -200,21 +207,27 @@ function assistantLiveness(state: AgentState | undefined): number {
  * Whether `candidate` should replace `incumbent` as the project's reported
  * assistant.
  *
- * `HelpSessionService` enforces at most one assistant PTY per project, so in
- * steady state there is nothing to choose between. The window this exists for
- * is displacement: a new backend is provisioned while the old one is still
- * being killed, and for those moments two terminals answer to the same
- * project.
+ * Two terminals answer to one project for two very different reasons, and the
+ * lane (`assistantSlot`) is what tells them apart (#12108):
  *
- * Spawn time decides it, because that is the fact that actually identifies the
- * session — `AgentStateService` uses the same stamp to reject state updates
- * from a superseded run. Liveness cannot lead here: a displaced PTY whose kill
- * has not landed yet still reads `working`, so ranking activity first would let
- * the corpse keep reporting over a new session that is genuinely blocked.
+ * - DIFFERENT lanes are concurrent sessions the user deliberately started.
+ *   Whichever one needs the user leads, because the project row exists to
+ *   surface attention — a freshly spawned idle lane must not silence a sibling
+ *   that is blocked on a question.
+ * - The SAME lane (or no lane at all) is displacement: a new backend is
+ *   provisioned while the old one is still being killed. There, spawn time has
+ *   to lead, exactly as it did before lanes existed — a displaced PTY whose
+ *   kill has not landed still reads `working`, so ranking activity first would
+ *   let the corpse keep reporting over a genuinely blocked new session.
  *
- * The remaining tie-breaks only matter when spawn times are missing or equal,
- * and terminal id closes the last gap, so the answer never depends on listing
- * order.
+ * A displaced record resolves to `assistantSlot: undefined`, because
+ * `displacePriorSessions` drops it from the session map synchronously. That is
+ * what keeps a mid-kill corpse from outranking a live lane: an unslotted
+ * candidate never beats a slotted incumbent.
+ *
+ * The remaining tie-breaks only matter when the leading facts are missing or
+ * equal, and terminal id closes the last gap, so the answer never depends on
+ * listing order.
  */
 function beatsIncumbent(
   candidate: CountableTerminal,
@@ -222,13 +235,27 @@ function beatsIncumbent(
 ): boolean {
   if (incumbent === null) return true;
 
-  const candidateSpawn = usableTimestamp(candidate.spawnedAt);
-  const incumbentSpawn = usableTimestamp(incumbent.spawnedAt);
-  if (candidateSpawn !== incumbentSpawn) return candidateSpawn > incumbentSpawn;
+  // A backend still bound to a lane always outranks one that is not — the
+  // unslotted side is a corpse mid-teardown, not a session.
+  const candidateSlotted = candidate.assistantSlot !== undefined;
+  const incumbentSlotted = incumbent.assistantSlot !== undefined;
+  if (candidateSlotted !== incumbentSlotted) return candidateSlotted;
+
+  const concurrentLanes =
+    candidateSlotted && incumbentSlotted && candidate.assistantSlot !== incumbent.assistantSlot;
 
   const candidateRank = assistantLiveness(candidate.agentState);
   const incumbentRank = assistantLiveness(incumbent.agentState);
-  if (candidateRank !== incumbentRank) return candidateRank < incumbentRank;
+  const candidateSpawn = usableTimestamp(candidate.spawnedAt);
+  const incumbentSpawn = usableTimestamp(incumbent.spawnedAt);
+
+  if (concurrentLanes) {
+    if (candidateRank !== incumbentRank) return candidateRank < incumbentRank;
+    if (candidateSpawn !== incumbentSpawn) return candidateSpawn > incumbentSpawn;
+  } else {
+    if (candidateSpawn !== incumbentSpawn) return candidateSpawn > incumbentSpawn;
+    if (candidateRank !== incumbentRank) return candidateRank < incumbentRank;
+  }
 
   const candidateSince = usableTimestamp(candidate.lastStateChange);
   const incumbentSince = usableTimestamp(incumbent.lastStateChange);
@@ -285,7 +312,22 @@ export function computeProjectAgentCounts(
    * every live assistant reports, which is what a harness computing raw tallies
    * wants.
    */
-  isAssistantVisible?: (workspaceId: string) => boolean
+  isAssistantVisible?: (workspaceId: string) => boolean,
+  /**
+   * Which assistant lane a help terminal serves, or null when it serves none
+   * (#12108). `HelpSessionService.getSlotForTerminal` is the intended source.
+   *
+   * Needed once a project can run concurrent assistants, because "two
+   * terminals answer to this project" stops meaning "one is a corpse". See
+   * {@link beatsIncumbent}: without a lane, concurrent sessions are ranked by
+   * spawn time and a freshly started one silences a sibling that is blocked on
+   * the user.
+   *
+   * Omitting the resolver leaves every candidate unslotted, which is exactly
+   * the pre-lane spawn-time ordering — the right answer for a harness
+   * computing raw tallies, and for any caller that has no session service.
+   */
+  assistantSlotForTerminal?: (terminalId: string) => number | null
 ): Map<string, ProjectAgentCounts> {
   const counts = new Map<string, ProjectAgentCounts>();
   for (const id of projectIds) counts.set(id, empty());
@@ -307,8 +349,12 @@ export function computeProjectAgentCounts(
       // subtracted from the host's count nor speak for the project.
       if (terminal.hasPty !== false) {
         entry.helpTerminals += 1;
-        if (beatsIncumbent(terminal, assistantByProject.get(terminal.projectId) ?? null)) {
-          assistantByProject.set(terminal.projectId, terminal);
+        const slot =
+          terminal.id !== undefined ? (assistantSlotForTerminal?.(terminal.id) ?? null) : null;
+        const candidate: CountableTerminal =
+          slot === null ? terminal : { ...terminal, assistantSlot: slot };
+        if (beatsIncumbent(candidate, assistantByProject.get(terminal.projectId) ?? null)) {
+          assistantByProject.set(terminal.projectId, candidate);
         }
       }
       continue;

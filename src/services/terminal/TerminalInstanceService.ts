@@ -58,7 +58,11 @@ import { isValidTerminalGeometry, type TerminalGeometry } from "@shared/types/te
 import type { TerminalResizeResult } from "@shared/types/pty-host";
 import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
-import { useHelpPanelStore } from "@/store/helpPanelStore";
+import {
+  useHelpPanelStore,
+  selectSlot,
+  selectSlotForTerminal,
+} from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { getErrorMessage } from "@/utils/errorContext";
 import { PaintFabricCompositor } from "./paintFabric/PaintFabricCompositor";
@@ -1371,13 +1375,28 @@ class TerminalInstanceService {
     // where the help session owns the figure state (#9830). Gating on the
     // bound help terminal keeps grid terminals that happen to print the token
     // inert, and the provider rebuilds with the rest on tier promotion.
-    if (!managed.imageLinksDisposable && useHelpPanelStore.getState().terminalId === id) {
+    // Resolve the lane at build time, then re-resolve on every read: a terminal
+    // belongs to exactly one lane, but which one can change if the lane is
+    // relaunched, and reading a sibling lane's figures would make `[image #N]`
+    // point at another conversation's picture (#12108).
+    if (
+      !managed.imageLinksDisposable &&
+      selectSlotForTerminal(useHelpPanelStore.getState(), id) !== null
+    ) {
       try {
         managed.imageLinksDisposable = createImageLinksAddon(
           managed.terminal,
-          () => useHelpPanelStore.getState().figures.map((f) => f.figureNumber),
+          () => {
+            const state = useHelpPanelStore.getState();
+            const slot = selectSlotForTerminal(state, id);
+            if (slot === null) return [];
+            return selectSlot(state, slot).figures.map((f) => f.figureNumber);
+          },
           (figureNumber, openLightbox) => {
-            useHelpPanelStore.getState().setActiveFigureNumber(figureNumber);
+            const state = useHelpPanelStore.getState();
+            const slot = selectSlotForTerminal(state, id);
+            if (slot === null) return;
+            state.setActiveFigureNumber(slot, figureNumber);
             // Lightbox open on modified-click lands with the figure rail
             // (#9829); the highlight is the interim affordance until then.
             void openLightbox;

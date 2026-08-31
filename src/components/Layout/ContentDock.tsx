@@ -58,7 +58,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 
-import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { buildDockRenderItems, type DockRenderItem } from "./dockRenderItems";
 import { usePreferencesStore, type DockDensity } from "@/store/preferencesStore";
 
@@ -102,7 +102,9 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
   const trashedTerminals = usePanelStore((state) => state.trashedTerminals);
   const storeTabGroups = usePanelStore((state) => state.tabGroups);
-  const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
+  // Every lane, not the focused one (#12108): all assistant terminals render
+  // inside HelpPanel, so all must stay out of the dock.
+  const helpTerminalIdList = useHelpPanelStore(useShallow(selectSlotTerminalIds));
   const setDockDensity = usePreferencesStore((s) => s.setDockDensity);
 
   // Narrow dock subscription (#10908). Subscribing to the whole `panelsById`
@@ -163,14 +165,14 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     const result: DockPanelData[] = [];
     for (const terminal of dockTerminalsRaw) {
       if (
-        terminal.id !== helpTerminalId &&
+        !helpTerminalIdList.includes(terminal.id) &&
         panelMatchesWorktreeScope(terminal.worktreeId, activeWorktreeId, "dock")
       ) {
         result.push(terminal);
       }
     }
     return result;
-  }, [dockTerminalsRaw, helpTerminalId, activeWorktreeId]);
+  }, [dockTerminalsRaw, helpTerminalIdList, activeWorktreeId]);
 
   // Trashed panels resolved from the store, keyed by id. Values are the actual
   // store panel references (not freshly constructed), so `useShallow` bails

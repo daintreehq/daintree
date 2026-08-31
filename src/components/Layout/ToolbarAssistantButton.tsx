@@ -6,7 +6,7 @@ import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from 
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { useFocusStore } from "@/store/focusStore";
-import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
@@ -88,14 +88,27 @@ export function ToolbarAssistantButton({
   // actually sees.
   const gestureAssistantHidden = useFocusStore((s) => s.gestureAssistantHidden);
   const isVisible = !gestureAssistantHidden && isOpen;
-  // Two-step primitive selectors so the button only re-renders when the
-  // assistant terminal id changes, then when its agentState transitions.
-  // Returning a primitive avoids needing useShallow.
-  const assistantTerminalId = useHelpPanelStore((s) => s.terminalId);
+  // Two-step selectors so the button only re-renders when the set of assistant
+  // terminals changes, then when the reported agentState transitions.
+  // Aggregate across lanes (#12108). The button is the one place a background
+  // assistant can ask for the user, so it reports the most demanding lane
+  // rather than the focused one — surfacing "one of your assistants is
+  // waiting" is the whole point of the pip, and reporting only the active lane
+  // would hide exactly the session the user has navigated away from.
+  const assistantTerminalIds = useHelpPanelStore(useShallow(selectSlotTerminalIds));
   const agentState = usePanelStore((s) => {
-    if (!assistantTerminalId) return null;
-    const p = s.panelsById[assistantTerminalId];
-    return p && isPtyPanel(p) ? (p.agentState ?? null) : null;
+    let best: AgentState | null = null;
+    for (const terminalId of assistantTerminalIds) {
+      const p = s.panelsById[terminalId];
+      if (!p || !isPtyPanel(p)) continue;
+      const state = p.agentState ?? null;
+      if (state === null) continue;
+      // "waiting" outranks everything: it is the only state that is a request
+      // for the user. Otherwise first live lane wins.
+      if (state === "waiting") return state;
+      best ??= state;
+    }
+    return best;
   });
   const mcp = useMcpReadiness();
   const hasAnomaly = useMcpAnomalyStore((s) => s.hasAnomaly);
@@ -112,14 +125,18 @@ export function ToolbarAssistantButton({
   // whatever the user just saw and closing without further change leaves the
   // pip hidden.
   const [lastSeenMarker, setLastSeenMarker] = useState<{
-    terminalId: string | null;
+    terminalKey: string;
     state: AgentState | null;
   } | null>(null);
+  // Identity is the whole set of lanes, not one id (#12108): opening or closing
+  // a session changes what the pip is reporting on, so a marker taken against
+  // the old set must stop counting as "already read".
+  const assistantTerminalKey = assistantTerminalIds.join("\u0000");
   useEffect(() => {
     if (isVisible) {
-      setLastSeenMarker({ terminalId: assistantTerminalId, state: agentState });
+      setLastSeenMarker({ terminalKey: assistantTerminalKey, state: agentState });
     }
-  }, [isVisible, assistantTerminalId, agentState]);
+  }, [isVisible, assistantTerminalKey, agentState]);
 
   const handleClick = useCallback(() => {
     suppressSidebarResizes();
@@ -144,7 +161,7 @@ export function ToolbarAssistantButton({
   // stays quiet until a real state change.
   const isAcknowledged =
     lastSeenMarker !== null &&
-    lastSeenMarker.terminalId === assistantTerminalId &&
+    lastSeenMarker.terminalKey === assistantTerminalKey &&
     lastSeenMarker.state === agentState;
   const showAgentPip = !pip && agentPip !== null && !isVisible && !isAcknowledged;
   // Lowest-precedence ambient signal: an MCP audit anomaly fired (#10022). Only

@@ -16,7 +16,7 @@ import {
   getPanelKindRegistrySnapshot,
 } from "@shared/config/panelKindRegistry";
 import { isDockPanel, isPtyPanel, type DockPanelData } from "@shared/types/panel";
-import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { DockedPanel } from "@/components/Terminal/DockedPanel";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { logError } from "@/utils/logger";
@@ -98,7 +98,9 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
 
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const activeDockTerminalId = usePanelStore((s) => s.activeDockTerminalId);
-  const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
+  // All lanes (#12108) — a background assistant is still rendered by HelpPanel
+  // and must not be mirrored into the offscreen dock container too.
+  const helpTerminalIdList = useHelpPanelStore(useShallow(selectSlotTerminalIds));
   const dockTerminals = usePanelStore(
     useShallow((s) => {
       const result: DockPanelData[] = [];
@@ -109,7 +111,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
           isDockPanel(t) &&
           t.location === "dock" &&
           !s.trashedTerminals.has(t.id) &&
-          t.id !== helpTerminalId &&
+          !helpTerminalIdList.includes(t.id) &&
           // Show terminals that match active worktree OR have no worktree (global terminals)
           (t.worktreeId == null || t.worktreeId === activeWorktreeId)
         ) {

@@ -244,7 +244,10 @@ export class ProjectStatsService {
         // side is the drift the shared helper exists to prevent: the push
         // suppresses unchanged payloads, so a row hydrated with a hidden
         // assistant would keep reporting it until agent state next moved.
-        (id) => helpSessionService.isPanelVisible(id)
+        (id) => helpSessionService.isPanelVisible(id),
+        // Lets concurrent assistants be ranked by who needs the user,
+        // rather than by whichever started last (#12108).
+        (terminalId) => helpSessionService.getSlotForTerminal(terminalId)
       );
 
       const statusMap: ProjectStatusMap = {};

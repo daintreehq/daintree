@@ -44,7 +44,7 @@ import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
 import type { AgentModelConfig } from "@shared/config/agentRegistry";
-import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import type {
   HelpAssistantIdleHibernateMinutes,
   HelpAssistantSettings,
@@ -1520,7 +1520,7 @@ interface SessionLiveStatusCardProps {
 // tier field — covered by #10027); the snapshot refreshes on mount and on any
 // grant-lifecycle event for this session.
 function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
-  const sessionId = useHelpPanelStore((s) => s.sessionId);
+  const sessionId = useHelpPanelStore((s) => selectActiveSlot(s).sessionId);
   const { connected, tier, activeGrants } = useHelpSessionLiveStatus(sessionId);
   const perToolGrants = activeGrants.filter((g) => g.kind !== "native");
   const nativeGrants = activeGrants.filter((g) => g.kind === "native");

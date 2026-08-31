@@ -378,7 +378,8 @@ if (!gotTheLock) {
       // electron/window/ so the eviction controller stays free of both services.
       // The static import is free: PtyClient already value-imports
       // HelpSessionService, so it is in the eager graph either way.
-      assistantBackendForProject: (projectId) => helpSessionService.getAssistantBackend(projectId),
+      assistantBackendsForProject: (projectId) =>
+        helpSessionService.getAssistantBackends(projectId),
       // The liveness half. PtyClient's spawn registry is main-local and
       // synchronous — written by spawn() before the host round-trip, dropped on
       // exit and on kill — so it is authoritative from the assistant's first

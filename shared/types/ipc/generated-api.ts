@@ -262,6 +262,9 @@ export interface GeneratedElectronAPI {
     getPinnedActionContext(
       ...args: IpcInvokeMap["help:get-pinned-action-context"]["args"]
     ): Promise<IpcInvokeMap["help:get-pinned-action-context"]["result"]>;
+    listPendingHibernationSlots(
+      ...args: IpcInvokeMap["help:list-pending-hibernation-slots"]["args"]
+    ): Promise<IpcInvokeMap["help:list-pending-hibernation-slots"]["result"]>;
     markTerminal(
       ...args: IpcInvokeMap["help:mark-terminal"]["args"]
     ): Promise<IpcInvokeMap["help:mark-terminal"]["result"]>;

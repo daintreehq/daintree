@@ -81,7 +81,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { terminalClient } from "@/clients";
 import { logWarn } from "@/utils/logger";
-import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { openSendToAgentPaletteWithText } from "@/hooks/useSendToAgentPalette";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
@@ -1130,7 +1130,7 @@ function TerminalPaneComponent({
   // assistant session. It's only offered when the assistant terminal exists
   // and is idle/waiting — writing into a working or directing agent would
   // corrupt its input mid-stream.
-  const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
+  const helpTerminalId = useHelpPanelStore((s) => selectActiveSlot(s).terminalId);
   const helpAgentState = usePanelStore((s) => {
     if (!helpTerminalId) return undefined;
     const p = s.panelsById[helpTerminalId];
@@ -1169,8 +1169,7 @@ function TerminalPaneComponent({
   );
 
   const handleSendToAssistant = useCallback(() => {
-    const help = useHelpPanelStore.getState();
-    const helpTid = help.terminalId;
+    const helpTid = selectActiveSlot(useHelpPanelStore.getState()).terminalId;
     if (!helpTid || helpTid === id) return;
     const state = terminalInstanceService.getAgentState(helpTid);
     if (state !== "idle" && state !== "waiting") return;
@@ -1186,6 +1185,7 @@ function TerminalPaneComponent({
       terminalClient.write(helpTid, formatWithBracketedPaste(text));
     }
     terminalInstanceService.notifyUserInput(helpTid);
+    const help = useHelpPanelStore.getState();
     help.setOpen(true);
     help.requestFocus();
   }, [id]);

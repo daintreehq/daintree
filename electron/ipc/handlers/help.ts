@@ -7,6 +7,22 @@ import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../../shared/types/actions.js";
 import type { PinnedActionContextSnapshot } from "../../../shared/types/ipc/help.js";
+import {
+  DEFAULT_ASSISTANT_SLOT,
+  isValidAssistantSlot,
+} from "../../../shared/config/assistantSlots.js";
+
+/**
+ * Resolve a renderer-supplied slot (#12108). Absent means slot 0 — an older
+ * renderer, or a caller that only ever had the one lane. Present but invalid
+ * returns null so the handler refuses: clamping would silently act on a lane
+ * the caller never named, and every one of these ops either displaces a
+ * backend or consumes a resume token.
+ */
+function resolveSlot(value: unknown): number | null {
+  if (value === undefined || value === null) return DEFAULT_ASSISTANT_SLOT;
+  return isValidAssistantSlot(value) ? value : null;
+}
 
 let cachedHelpService: typeof HelpServiceModule | null = null;
 async function getHelpService(): Promise<typeof HelpServiceModule> {
@@ -76,6 +92,8 @@ async function handleProvisionSession(
      * dispatch targets the worktree/terminal focused at launch (#8317).
      */
     context?: ActionContext;
+    /** Assistant lane to provision into (#12108). Absent means slot 0. */
+    slot?: number;
   }
 ): Promise<{
   sessionId: string;
@@ -89,6 +107,11 @@ async function handleProvisionSession(
     console.warn("[help] provisionSession invoked without a senderWindow — skipping");
     return null;
   }
+  const slot = resolveSlot(input.slot);
+  if (slot === null) {
+    console.warn("[help] provisionSession: slot out of range — refusing", { slot: input.slot });
+    return null;
+  }
   const { helpSessionService } = await getHelpSessionService();
   return helpSessionService.provisionSession({
     projectId: input.projectId,
@@ -97,6 +120,7 @@ async function handleProvisionSession(
     windowId: ctx.senderWindow.id,
     projectViewWebContentsId: ctx.webContentsId,
     actionContext: input.context,
+    slot,
   });
 }
 
@@ -149,7 +173,8 @@ async function handleRevokeSession(sessionId: string): Promise<void> {
 
 async function handlePeekPendingHibernation(
   ctx: import("../types.js").IpcContext,
-  projectId: string
+  projectId: string,
+  rawSlot?: number
 ): Promise<{
   agentId: string;
   agentSessionId: string;
@@ -170,13 +195,40 @@ async function handlePeekPendingHibernation(
     );
     return null;
   }
+  const slot = resolveSlot(rawSlot);
+  if (slot === null) return null;
   const { helpSessionService } = await getHelpSessionService();
-  return helpSessionService.peekPendingHibernation(projectId);
+  return helpSessionService.peekPendingHibernation(projectId, slot);
+}
+
+/**
+ * Which lanes of this project hold an eviction-captured resume entry (#12108).
+ *
+ * A cold renderer has no memory of lanes 1+, so without this their captured
+ * conversations would be stranded on disk with no tab to reach them from.
+ * Same cross-project guard as the rest of the hibernation namespace; the reply
+ * carries only slot numbers, never entry data.
+ */
+async function handleListPendingHibernationSlots(
+  ctx: import("../types.js").IpcContext,
+  projectId: string
+): Promise<number[]> {
+  if (typeof projectId !== "string" || !projectId) return [];
+  if (!ctx.projectId || ctx.projectId !== projectId) {
+    console.warn(
+      "[help] listPendingHibernationSlots: projectId mismatch — refusing cross-project read",
+      { requested: projectId, fromView: ctx.projectId, webContentsId: ctx.webContentsId }
+    );
+    return [];
+  }
+  const { helpSessionService } = await getHelpSessionService();
+  return helpSessionService.listPendingHibernationSlots(projectId);
 }
 
 async function handleTakePendingHibernation(
   ctx: import("../types.js").IpcContext,
-  projectId: string
+  projectId: string,
+  rawSlot?: number
 ): Promise<{
   agentId: string;
   agentSessionId: string;
@@ -198,16 +250,21 @@ async function handleTakePendingHibernation(
     );
     return null;
   }
+  const slot = resolveSlot(rawSlot);
+  if (slot === null) return null;
   const { helpSessionService } = await getHelpSessionService();
   // The owner is the view's own id from context, never renderer-supplied — it
   // binds the resulting claim to this view so no other can release it (#11477).
-  return helpSessionService.takePendingHibernation(projectId, ctx.webContentsId);
+  // With lanes the claim is keyed by (slot, claimId, owner), so one view
+  // holding claims on several lanes keeps them independent.
+  return helpSessionService.takePendingHibernation(projectId, slot, ctx.webContentsId);
 }
 
 async function handleRestorePendingHibernation(
   ctx: import("../types.js").IpcContext,
   projectId: string,
-  claimId: string
+  claimId: string,
+  rawSlot?: number
 ): Promise<boolean> {
   if (typeof projectId !== "string" || !projectId) return false;
   if (typeof claimId !== "string" || !claimId) return false;
@@ -221,8 +278,10 @@ async function handleRestorePendingHibernation(
     );
     return false;
   }
+  const slot = resolveSlot(rawSlot);
+  if (slot === null) return false;
   const { helpSessionService } = await getHelpSessionService();
-  return helpSessionService.restorePendingHibernation(projectId, claimId, ctx.webContentsId);
+  return helpSessionService.restorePendingHibernation(projectId, slot, claimId, ctx.webContentsId);
 }
 
 async function handleReportPanelOpen(
@@ -291,6 +350,11 @@ export const helpNamespace = defineIpcNamespace({
     takePendingHibernation: op(
       HELP_METHOD_CHANNELS.takePendingHibernation,
       handleTakePendingHibernation,
+      { withContext: true }
+    ),
+    listPendingHibernationSlots: op(
+      HELP_METHOD_CHANNELS.listPendingHibernationSlots,
+      handleListPendingHibernationSlots,
       { withContext: true }
     ),
     restorePendingHibernation: op(

@@ -3,9 +3,19 @@ import path from "node:path";
 import { app } from "electron";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { rebaseAbsolutePath } from "../../shared/utils/projectPathRelocation.js";
+import {
+  DEFAULT_ASSISTANT_SLOT,
+  assistantSlotKey,
+  projectIdFromSlotKey,
+} from "../../shared/config/assistantSlots.js";
 
 const FILE_NAME = "help-pending-hibernation.json";
-const FILE_VERSION = 1;
+// v2 keys entries by `assistantSlotKey(projectId, slot)` instead of bare
+// projectId (#12108). v1 files are migrated on read rather than dropped —
+// `load()` discards anything whose version it doesn't recognize, so skipping
+// the migration would silently destroy every existing user's resume tokens.
+const FILE_VERSION = 2;
+const LEGACY_UNSLOTTED_FILE_VERSION = 1;
 // Anything older than this on read is treated as stale and dropped. The
 // hibernation token is the agent's resume ID; stale tokens point at a
 // transcript file the agent may have rotated or pruned, so resume would
@@ -62,12 +72,16 @@ export class PendingHelpHibernationStore {
       const raw = await fs.readFile(this.filePath, "utf-8");
       const parsed = JSON.parse(raw) as Partial<FileShape>;
       if (!parsed || typeof parsed !== "object") return;
-      if (parsed.version !== FILE_VERSION) return;
+      const legacyUnslotted = parsed.version === LEGACY_UNSLOTTED_FILE_VERSION;
+      if (parsed.version !== FILE_VERSION && !legacyUnslotted) return;
       const entries = parsed.entries;
       if (!entries || typeof entries !== "object") return;
       const cutoff = Date.now() - STALE_AFTER_MS;
-      for (const [projectId, entry] of Object.entries(entries)) {
-        if (!projectId) continue;
+      for (const [rawKey, entry] of Object.entries(entries)) {
+        if (!rawKey) continue;
+        // A v1 key is a bare project id, which by definition described the one
+        // lane that existed then — slot 0.
+        const key = legacyUnslotted ? assistantSlotKey(rawKey, DEFAULT_ASSISTANT_SLOT) : rawKey;
         if (!this.isValid(entry)) continue;
         if (entry.capturedAt < cutoff) continue;
         // Defensively strip any `panelWasOpen` that reached disk (manual edit,
@@ -75,7 +89,7 @@ export class PendingHelpHibernationStore {
         // only and a disk-loaded `true` would auto-resume a prior-session token
         // on app restart — the exact invariant this feature must never break.
         const { panelWasOpen: _panelWasOpen, ...safeEntry } = entry as PendingHelpHibernation;
-        this.entries.set(projectId, safeEntry);
+        this.entries.set(key, safeEntry);
       }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
@@ -83,18 +97,19 @@ export class PendingHelpHibernationStore {
     }
   }
 
-  get(projectId: string): PendingHelpHibernation | null {
-    return this.entries.get(projectId) ?? null;
+  /** `slotKey` is `assistantSlotKey(projectId, slot)` — see #12108. */
+  get(slotKey: string): PendingHelpHibernation | null {
+    return this.entries.get(slotKey) ?? null;
   }
 
-  set(projectId: string, entry: PendingHelpHibernation): Promise<void> {
-    this.entries.set(projectId, entry);
+  set(slotKey: string, entry: PendingHelpHibernation): Promise<void> {
+    this.entries.set(slotKey, entry);
     return this.persist();
   }
 
-  clear(projectId: string): Promise<void> {
-    if (!this.entries.has(projectId)) return Promise.resolve();
-    this.entries.delete(projectId);
+  clear(slotKey: string): Promise<void> {
+    if (!this.entries.has(slotKey)) return Promise.resolve();
+    this.entries.delete(slotKey);
     return this.persist();
   }
 
@@ -106,12 +121,18 @@ export class PendingHelpHibernationStore {
    */
   async rewriteProjectPath(projectId: string, oldRoot: string, newRoot: string): Promise<void> {
     await this.load();
-    const entry = this.entries.get(projectId);
-    if (!entry) return;
-    const nextCwd = rebaseAbsolutePath(entry.cwd, oldRoot, newRoot);
-    if (nextCwd === entry.cwd) return;
-    this.entries.set(projectId, { ...entry, cwd: nextCwd });
-    await this.persist();
+    // Every lane of the project, not one key (#12108): each lane captured its
+    // own cwd under the old root, and leaving a sibling behind would resume it
+    // in a folder that no longer exists.
+    let changed = false;
+    for (const [slotKey, entry] of this.entries) {
+      if (projectIdFromSlotKey(slotKey) !== projectId) continue;
+      const nextCwd = rebaseAbsolutePath(entry.cwd, oldRoot, newRoot);
+      if (nextCwd === entry.cwd) continue;
+      this.entries.set(slotKey, { ...entry, cwd: nextCwd });
+      changed = true;
+    }
+    if (changed) await this.persist();
   }
 
   private isValid(value: unknown): value is PendingHelpHibernation {
@@ -139,9 +160,9 @@ export class PendingHelpHibernationStore {
     // Strip `panelWasOpen` (in-memory only) so reloaded entries on app restart
     // are treated as prior-session tokens that never auto-resume.
     const persistedEntries: Record<string, PersistedHelpHibernation> = {};
-    for (const [projectId, entry] of this.entries.entries()) {
+    for (const [slotKey, entry] of this.entries.entries()) {
       const { panelWasOpen: _panelWasOpen, ...persisted } = entry;
-      persistedEntries[projectId] = persisted;
+      persistedEntries[slotKey] = persisted;
     }
     const snapshot: FileShape = {
       version: FILE_VERSION,
