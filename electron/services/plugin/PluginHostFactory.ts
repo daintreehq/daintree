@@ -383,8 +383,13 @@ export function createHost(
    * path: the snapshots the callback then delivers are already project-scoped,
    * so an unrecognised payload costs a redundant callback, never another
    * project's data.
+   *
+   * A bound-but-rootless binding is malformed and drops every event, matching
+   * `fetchWorktreeSnapshots` — waking the plugin app-wide to hand it the empty
+   * list that path already returns would be pure noise.
    */
   const isEventForBoundProject = (payload?: PluginWorktreeEventPayload): boolean => {
+    if (boundProjectId !== null && boundProjectRoot === null) return false;
     if (boundProjectRoot === null) return true;
     const projectPath = payload?.projectPath;
     if (typeof projectPath !== "string" || projectPath.length === 0) return true;
