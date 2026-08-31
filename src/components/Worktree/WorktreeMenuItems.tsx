@@ -491,49 +491,51 @@ export function WorktreeMenuItems({
       Fetch and prune
     </C.Item>,
     ...(baseOperation
-    ? [
-        <C.Item
-          key="git-continue"
-          onSelect={() => dispatchGit("git.continueRepositoryOperation", {})}
-        >
-          <Play className={ICON} />
-          Continue {OPERATION_LABEL[baseOperation].toLowerCase()}
-        </C.Item>,
-        <C.Item
-          key="git-abort"
-          onSelect={() => dispatchGit("git.abortRepositoryOperation", { operation: baseOperation })}
-          destructive
-        >
-          <OctagonX className={ICON} />
-          Abort {OPERATION_LABEL[baseOperation].toLowerCase()}…
-        </C.Item>,
-      ]
-    : [
-        <C.Item
-          key="git-rebase-onto-base"
-          onSelect={() => dispatchGit("git.rebaseOntoBase", { baseBranch: baseBranchName ?? "" })}
-          disabled={baseBlockedReason !== null}
-        >
-          <GitBranch className={ICON} />
-          {baseBranchName ? `Rebase onto ${baseBranchName}…` : "Rebase onto base branch…"}
-          {baseBlockedReason ? (
-            <C.Meta>{baseBlockedReason}</C.Meta>
-          ) : (
-            baseBehind != null && baseBehind > 0 && <C.Meta>{baseBehind}</C.Meta>
-          )}
-        </C.Item>,
-        <C.Item
-          key="git-merge-base"
-          onSelect={() =>
-            dispatchGit("git.mergeBaseIntoBranch", { baseBranch: baseBranchName ?? "" })
-          }
-          disabled={baseBlockedReason !== null}
-        >
-          <GitMerge className={ICON} />
-          {baseBranchName ? `Merge ${baseBranchName} in…` : "Merge base branch in…"}
-          {baseBlockedReason && <C.Meta>{baseBlockedReason}</C.Meta>}
-        </C.Item>,
-      ]),
+      ? [
+          <C.Item
+            key="git-continue"
+            onSelect={() => dispatchGit("git.continueRepositoryOperation", {})}
+          >
+            <Play className={ICON} />
+            Continue {OPERATION_LABEL[baseOperation].toLowerCase()}
+          </C.Item>,
+          <C.Item
+            key="git-abort"
+            onSelect={() =>
+              dispatchGit("git.abortRepositoryOperation", { operation: baseOperation })
+            }
+            destructive
+          >
+            <OctagonX className={ICON} />
+            Abort {OPERATION_LABEL[baseOperation].toLowerCase()}…
+          </C.Item>,
+        ]
+      : [
+          <C.Item
+            key="git-rebase-onto-base"
+            onSelect={() => dispatchGit("git.rebaseOntoBase", { baseBranch: baseBranchName ?? "" })}
+            disabled={baseBlockedReason !== null}
+          >
+            <GitBranch className={ICON} />
+            {baseBranchName ? `Rebase onto ${baseBranchName}…` : "Rebase onto base branch…"}
+            {baseBlockedReason ? (
+              <C.Meta>{baseBlockedReason}</C.Meta>
+            ) : (
+              baseBehind != null && baseBehind > 0 && <C.Meta>{baseBehind}</C.Meta>
+            )}
+          </C.Item>,
+          <C.Item
+            key="git-merge-base"
+            onSelect={() =>
+              dispatchGit("git.mergeBaseIntoBranch", { baseBranch: baseBranchName ?? "" })
+            }
+            disabled={baseBlockedReason !== null}
+          >
+            <GitMerge className={ICON} />
+            {baseBranchName ? `Merge ${baseBranchName} in…` : "Merge base branch in…"}
+            {baseBlockedReason && <C.Meta>{baseBlockedReason}</C.Meta>}
+          </C.Item>,
+        ]),
   ].filter(Boolean);
 
   const gitSub = gitRows.length > 0 && (

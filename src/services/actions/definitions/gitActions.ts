@@ -38,9 +38,6 @@ import {
 import type { ConflictedFileEntry, StagingFileEntry } from "@shared/types/git";
 import type { CommitItem, HeatCell } from "@shared/types/pulse";
 import { z } from "zod";
-import { notify } from "@/lib/notify";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { isClientGitError } from "@/utils/clientGitError";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(Math.trunc(value) || min, min), max);

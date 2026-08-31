@@ -95,7 +95,11 @@ describe("Git submenu — root placement", () => {
 describe("Git submenu — start rows", () => {
   it("names the base branch on both rows", () => {
     const { container } = renderWorktreeMenu({ worktree: integrable() });
+    // Fetch and Fetch and prune lead the submenu (#12091) — the base-integration
+    // rows are appended to that same array, not a submenu of their own.
     expect(gitRowLabels(container)).toEqual([
+      "Fetch",
+      "Fetch and prune",
       expect.stringContaining("Rebase onto develop"),
       expect.stringContaining("Merge develop in"),
     ]);
@@ -187,7 +191,9 @@ describe("Git submenu — recovery rows", () => {
       worktree: integrable({ repoState } as Partial<WorktreeState>),
     });
     const rows = gitRowLabels(container);
-    expect(rows).toEqual([`Continue ${label}`, `Abort ${label}…`]);
+    // Fetch survives: it writes only remote-tracking refs, so it is safe and
+    // useful mid-operation. Only the start rows are replaced.
+    expect(rows).toEqual(["Fetch", "Fetch and prune", `Continue ${label}`, `Abort ${label}…`]);
     expect(rows.some((r) => r.includes("Rebase onto develop"))).toBe(false);
   });
 
