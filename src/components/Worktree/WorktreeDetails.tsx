@@ -26,7 +26,7 @@ const MAX_VISIBLE_FILES = 100;
 // `border-default` it measured ~1.05:1 against the well on the dark palettes —
 // present in the light themes, invisible in the dark ones. It is the only
 // thing binding the label to the prose under it.
-const NARRATIVE_RAIL = "border-l-2 border-border-strong pl-2.5";
+const NARRATIVE_RAIL = "border-l-2 border-border-strong py-1.5 pl-2.5";
 // The rail's centre belongs on the point of the Details chevron above it, so
 // the two read as one hanging line. Measured from the well's inner edge (both
 // the trigger and this panel are its children, so its border cancels):
