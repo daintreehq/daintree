@@ -18,6 +18,7 @@ import latin400Woff2Url from "@fontsource/jetbrains-mono/files/jetbrains-mono-la
 import "@fontsource/jetbrains-mono/latin-700.css";
 import "./index.css";
 import { applyDefaultAppTheme } from "./theme/applyAppTheme";
+import { publishScrollbarGutter } from "./lib/scrollbarGutter";
 import { ensureLatin400Preload } from "./lib/fontPreload";
 // Importing this module has the side effect of starting the font load (via
 // the eagerly-initialised `terminalFontReady` singleton). Terminals open
@@ -54,6 +55,12 @@ async function bootstrap() {
   cleanupGlobalErrorHandlers = registerRendererGlobalErrorHandlers();
 
   applyDefaultAppTheme(document.documentElement);
+
+  // Publish the platform's reserved scrollbar gutter before the first render,
+  // so dialogs paint on the right column from their first frame rather than
+  // settling onto it. AppDialog re-measures on each open to track a mid-session
+  // change; this is only the seed.
+  publishScrollbarGutter();
 
   // Paint-fabric surface view (Phase 1V): the preload seeds the surface-host
   // role from additionalArguments. A surface view hosts terminals only —

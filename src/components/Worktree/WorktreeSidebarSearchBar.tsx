@@ -221,7 +221,7 @@ export function WorktreeSidebarSearchBar({
         // the footer and the rows below all sit on AppDialog's chrome inset
         // (24px plus the 11px scrollbar gutter `AppDialog.Body` reserves), so
         // the bar carries that one instead of the rail's 12px.
-        variant === "modal" && "pt-3 px-[calc(1.5rem+11px)]",
+        variant === "modal" && "pt-3 px-6",
         variant === "sidebar" && "worktree-filter-bar"
       )}
     >

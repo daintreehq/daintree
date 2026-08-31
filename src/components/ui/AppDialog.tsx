@@ -25,6 +25,7 @@ import {
   ESCAPE_BACKSTOP_DIALOG_ATTR,
 } from "@/lib/dialogEscapeBackstop";
 import { APP_DIALOG_SURFACE_ATTR } from "@/lib/appDialogSurface";
+import { publishScrollbarGutter } from "@/lib/scrollbarGutter";
 import { useDockPopoverOpen } from "@/lib/dockPopoverLayer";
 import { usePortalStore } from "@/store";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
@@ -204,6 +205,19 @@ export function AppDialog({
   });
 
   useOverlayState(isOpen || shouldRender);
+
+  // Re-measure the platform's reserved scrollbar gutter as the dialog opens.
+  // It is a UA/OS property, not a stylesheet value — and one the user can
+  // change under a running app (macOS System Settings › Appearance › Show
+  // scroll bars), which would otherwise leave the body's column and the
+  // chrome's disagreeing until the next restart. Layout effect, not passive:
+  // the figure has to be published before this dialog's first paint or the
+  // column visibly settles. Cheap to repeat — one off-screen probe, and the
+  // custom property is only written when the number actually moved.
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    publishScrollbarGutter();
+  }, [isOpen]);
 
   // Clear stranded tooltips and shortcut hints on every open and close
   // transition (issue #11030): on open before the RAF-deferred autofocus
@@ -475,27 +489,22 @@ export function AppDialog({
 interface AppDialogHeaderProps {
   children: React.ReactNode;
   className?: string;
-  /** This dialog pads its own body rather than using `AppDialog.Body` — see {@link CHROME_INSET}. */
-  plainBody?: boolean;
 }
 
 /**
- * Header and footer sit outside the body's scroll box, so a bare `px-6` leaves
- * them 11px short of it: `AppDialog.Body` reserves a scrollbar gutter on both
- * edges, which pushes every field in the form that much further in. Padding the
- * chrome by the same gutter puts the title, the fields and the buttons on one
- * column instead of three that nearly agree.
+ * One column for the whole dialog: title, fields and buttons all sit 1.5rem
+ * from the card's inner edge.
  *
- * The 11px is the same figure `AppDialog.Body` reserves — `scrollbar-width:
- * thin` in `index.css`. It has to be a literal: Tailwind only sees class names
- * it can find in the source, so this cannot be built from a shared constant.
- *
- * Dialogs that pad their own body instead (`AppDialog.BodyScroll`, a custom
- * scroller) have no gutter to line up with and pass `plainBody` — for them this
- * inset would be the misalignment rather than the fix.
+ * The chrome used to add the body's reserved scrollbar gutter back on
+ * (`calc(1.5rem + 11px)`) so the two would meet. That figure was a guess at a
+ * platform property — macOS reserves nothing for an overlay scrollbar — so the
+ * compensation landed on top of a gutter that wasn't there and pushed the
+ * header and footer 11px inside the form (#12101). The body now absorbs
+ * whatever the platform actually reserves out of its own padding
+ * (`.dialog-body-inset` in `index.css`), which leaves the chrome with nothing
+ * to compensate for and no reason to know what a scrollbar costs.
  */
-const CHROME_INSET = "px-[calc(1.5rem+11px)]";
-const PLAIN_INSET = "px-6";
+const DIALOG_INSET = "px-6";
 
 // Footer actions announce unavailability with `aria-disabled`, never the native
 // attribute — a natively-disabled button leaves the tab order and refuses focus,
@@ -509,18 +518,10 @@ const PLAIN_INSET = "px-6";
 // suppress hover and put the control back out of reach.
 const DISABLED_ACTION_CLASSES = "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed";
 
-AppDialog.Header = function AppDialogHeader({
-  children,
-  className,
-  plainBody,
-}: AppDialogHeaderProps) {
+AppDialog.Header = function AppDialogHeader({ children, className }: AppDialogHeaderProps) {
   // `density` is deliberately not forwarded: every dialog header is comfortable,
   // and exposing it would widen AppDialog's public surface for no caller.
-  return (
-    <SurfaceHeader className={cn(plainBody ? PLAIN_INSET : CHROME_INSET, className)}>
-      {children}
-    </SurfaceHeader>
-  );
+  return <SurfaceHeader className={cn(DIALOG_INSET, className)}>{children}</SurfaceHeader>;
 };
 
 interface AppDialogTitleProps {
@@ -597,17 +598,16 @@ AppDialog.Body = function AppDialogBody({
     // hung a stray margin off the scroll box while the actual fields got no
     // spacing at all. Matches where `BodyScroll` puts it.
     //
-    // The gutter is reserved, and on both edges. The app's scrollbar is 11px of
-    // real layout (`scrollbar-width: thin` in `index.css`, which outranks the
-    // 6px `::-webkit-scrollbar` rule), so without this every control in a
-    // dialog resizes by 11px the moment its body crosses the overflow
-    // threshold — a hint row appearing, a validation banner clearing, a form
-    // swapping sections. `both-edges` keeps the padding symmetric; reserving
-    // one side only trades a jump for a permanent lopsided inset.
+    // `dialog-body-inset` reserves the gutter on both edges and takes it back
+    // out of the horizontal padding, so the fields land on the chrome's column
+    // whatever the platform charges for a scrollbar. Reserving it at all is
+    // what stops every control resizing the moment the body crosses the
+    // overflow threshold — a hint row appearing, a validation banner clearing,
+    // a form swapping sections; `both-edges` is what keeps that symmetric.
     <ScrollShadow
       ref={scrollRef}
       className="flex-1 min-h-0"
-      scrollClassName={cn("p-6 [scrollbar-gutter:stable_both-edges]", className)}
+      scrollClassName={cn("py-6 dialog-body-inset", className)}
     >
       {children}
     </ScrollShadow>
@@ -623,12 +623,16 @@ AppDialog.BodyScroll = function AppDialogBodyScroll({
   children,
   className,
 }: AppDialogBodyScrollProps) {
-  // Deliberately NOT carrying `Body`'s reserved gutter. This variant is the
-  // escape hatch for callers that own their own scrolling and padding, and
-  // `scrollbar-gutter` reserves its space on an `overflow: hidden` box too — so
-  // it would put 22px of dead inset inside `PanelDialogHost`'s edge-to-edge
-  // panel host, which sets `overflow-hidden p-0` precisely to fill the dialog.
-  return <div className={cn("flex-1 overflow-auto min-h-0 p-6", className)}>{children}</div>;
+  // Same column as `Body`, without the scroll shadows — that is the whole
+  // difference between the two. A surface that wants no column at all wants a
+  // plain element, not this: `scrollbar-gutter` reserves its space on an
+  // `overflow: hidden` box too, so a `p-0` here would cancel the padding and
+  // leave the reservation behind as dead inset.
+  return (
+    <div className={cn("flex-1 overflow-auto min-h-0 py-6 dialog-body-inset", className)}>
+      {children}
+    </div>
+  );
 };
 
 export interface DialogAction {
@@ -650,8 +654,6 @@ interface AppDialogFooterProps {
   primaryAction?: DialogAction;
   secondaryAction?: DialogAction;
   hint?: React.ReactNode;
-  /** This dialog pads its own body rather than using `AppDialog.Body` — see {@link CHROME_INSET}. */
-  plainBody?: boolean;
 }
 
 AppDialog.Footer = function AppDialogFooter({
@@ -660,7 +662,6 @@ AppDialog.Footer = function AppDialogFooter({
   primaryAction,
   secondaryAction,
   hint,
-  plainBody,
 }: AppDialogFooterProps) {
   const context = useContext(AppDialogContext);
   const dialogVariant = context?.variant ?? "default";
@@ -680,7 +681,7 @@ AppDialog.Footer = function AppDialogFooter({
   return (
     <div
       className={cn(
-        plainBody ? PLAIN_INSET : CHROME_INSET,
+        DIALOG_INSET,
         "py-4 border-t border-border-strong bg-surface-panel flex items-center gap-3 shrink-0",
         hint ? "justify-between" : "justify-end",
         className

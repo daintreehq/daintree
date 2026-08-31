@@ -115,7 +115,7 @@ function PanelDialogFrame({
       zIndex={isNested ? "nested" : "modal"}
       data-testid="panel-dialog"
     >
-      <AppDialog.Header plainBody>
+      <AppDialog.Header>
         <AppDialog.Title>{panel.title}</AppDialog.Title>
         <div className="flex items-center gap-1">
           {/* Promotion always targets the topmost dialog, so it is only offered
@@ -134,10 +134,13 @@ function PanelDialogFrame({
           <AppDialog.CloseButton />
         </div>
       </AppDialog.Header>
-      {/* BodyScroll, not Body: Body puts its padding on an inner scroll
-          element (scrollClassName="p-6"), so a p-0 on the outer wrapper would
-          not reach it and the panel would sit inside a 24px inset. */}
-      <AppDialog.BodyScroll className="flex min-h-0 flex-1 flex-col overflow-hidden p-0">
+      {/* A plain element, not `AppDialog.Body`/`BodyScroll`: a hosted panel
+          fills the dialog edge to edge and wants none of the dialog column.
+          Both body variants reserve a scrollbar gutter, and `scrollbar-gutter`
+          reserves its space on an `overflow: hidden` box too — so cancelling
+          their padding would still leave the reservation behind as dead inset
+          down both sides of the panel. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <ErrorBoundary
           variant="component"
           componentName={`PanelDialog:${panel.kind ?? "terminal"}`}
@@ -153,7 +156,7 @@ function PanelDialogFrame({
             onClose={handleClose}
           />
         </ErrorBoundary>
-      </AppDialog.BodyScroll>
+      </div>
     </AppDialog>
   );
 }
