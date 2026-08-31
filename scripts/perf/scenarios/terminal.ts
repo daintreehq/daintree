@@ -1,6 +1,7 @@
 import type { PerfScenario } from "../types";
 import {
   makeTerminalChunks,
+  makeTerminalStream,
   simulateTerminalOutputPass,
   terminalOutputPassMisses,
   spinEventLoop,
@@ -19,9 +20,9 @@ function isWorkerIngestPerfMode(): boolean {
   return process.env.DAINTREE_PAINT_FABRIC_WORKER_INGEST === "1";
 }
 
-const BURST_CHUNKS = makeTerminalChunks(6000, 96);
-const SUSTAINED_CHUNKS = makeTerminalChunks(3500, 180);
-const LARGE_SCROLL_CHUNKS = makeTerminalChunks(9000, 200);
+const BURST_STREAM = makeTerminalStream(6000, 96);
+const SUSTAINED_STREAM = makeTerminalStream(3500, 180);
+const LARGE_SCROLL_STREAM = makeTerminalStream(9000, 200);
 
 // Scrollback caps, named so the oracle and the pass are given the same one.
 const BURST_SCROLLBACK = 4000;
@@ -29,6 +30,18 @@ const SUSTAINED_SCROLLBACK = 5000;
 const LARGE_SCROLL_SCROLLBACK = 12000;
 const MULTI_STREAM_COUNT = 6;
 const SCROLL_SLICE_COUNT = 300;
+
+/**
+ * PERF-031's six streams, built once at module load.
+ *
+ * They used to be generated inside `run()`, which is wall-clocked — so ~9k
+ * chunks of fixture construction, more than twice the cost of the passes being
+ * measured, were reported as multi-terminal throughput.
+ */
+const MULTI_STREAMS = Array.from({ length: MULTI_STREAM_COUNT }, (_, index) => ({
+  stream: makeTerminalStream(1200 + index * 120, 80 + index * 5),
+  scrollback: 3000 + index * 500,
+}));
 
 // One byte past the Daintree-side incremental-restore slice boundary —
 // the scenario must cover both sides of `chunkBytes` to catch regressions
@@ -50,8 +63,8 @@ export const terminalScenarios: PerfScenario[] = [
     warmups: 2,
     correctness: ["outputMisses"],
     async run() {
-      const burst = simulateTerminalOutputPass(BURST_CHUNKS, BURST_SCROLLBACK);
-      const sustained = simulateTerminalOutputPass(SUSTAINED_CHUNKS, SUSTAINED_SCROLLBACK);
+      const burst = simulateTerminalOutputPass(BURST_STREAM.chunks, BURST_SCROLLBACK);
+      const sustained = simulateTerminalOutputPass(SUSTAINED_STREAM.chunks, SUSTAINED_SCROLLBACK);
       await spinEventLoop(0.75);
 
       return {
@@ -61,8 +74,8 @@ export const terminalScenarios: PerfScenario[] = [
           retainedBytes: sustained.retainedBytes,
           checksum: burst.checksum + sustained.checksum,
           outputMisses:
-            terminalOutputPassMisses(BURST_CHUNKS, BURST_SCROLLBACK, burst) +
-            terminalOutputPassMisses(SUSTAINED_CHUNKS, SUSTAINED_SCROLLBACK, sustained),
+            terminalOutputPassMisses(BURST_STREAM, BURST_SCROLLBACK, burst) +
+            terminalOutputPassMisses(SUSTAINED_STREAM, SUSTAINED_SCROLLBACK, sustained),
         },
       };
     },
@@ -82,13 +95,11 @@ export const terminalScenarios: PerfScenario[] = [
       let renderedBytes = 0;
       let outputMisses = 0;
 
-      for (let streamIndex = 0; streamIndex < MULTI_STREAM_COUNT; streamIndex += 1) {
-        const chunks = makeTerminalChunks(1200 + streamIndex * 120, 80 + streamIndex * 5);
-        const scrollback = 3000 + streamIndex * 500;
-        const result = simulateTerminalOutputPass(chunks, scrollback);
+      for (const { stream, scrollback } of MULTI_STREAMS) {
+        const result = simulateTerminalOutputPass(stream.chunks, scrollback);
         renderedBytes += result.renderedBytes;
         checksum += result.checksum;
-        outputMisses += terminalOutputPassMisses(chunks, scrollback, result);
+        outputMisses += terminalOutputPassMisses(stream, scrollback, result);
 
         // Focus changes trigger extra view work.
         if (rng() > 0.4) {
@@ -116,7 +127,10 @@ export const terminalScenarios: PerfScenario[] = [
     warmups: 1,
     correctness: ["outputMisses"],
     async run() {
-      const result = simulateTerminalOutputPass(LARGE_SCROLL_CHUNKS, LARGE_SCROLL_SCROLLBACK);
+      const result = simulateTerminalOutputPass(
+        LARGE_SCROLL_STREAM.chunks,
+        LARGE_SCROLL_SCROLLBACK
+      );
 
       // Simulate repeated scrollback slicing and viewport updates.
       let scrollChecksum = 0;
@@ -140,7 +154,7 @@ export const terminalScenarios: PerfScenario[] = [
           // The scroll loop is the second half of this scenario's work and
           // produces nothing but a checksum, so its slice tally rides along.
           outputMisses:
-            terminalOutputPassMisses(LARGE_SCROLL_CHUNKS, LARGE_SCROLL_SCROLLBACK, result) +
+            terminalOutputPassMisses(LARGE_SCROLL_STREAM, LARGE_SCROLL_SCROLLBACK, result) +
             Math.abs(SCROLL_SLICE_COUNT - scrollSlices),
         },
       };

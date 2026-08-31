@@ -5,7 +5,7 @@ import {
   projectSwitchCycleMisses,
   simulateLayoutHydration,
   simulateProjectSwitchCycle,
-  makeTerminalChunks,
+  makeTerminalStream,
   simulateTerminalOutputPass,
   terminalOutputPassMisses,
   createLargeStateSnapshot,
@@ -101,13 +101,69 @@ async function measureMinorGc(body: () => void): Promise<GcStats> {
 
 const SOAK_LAYOUT_A = createPersistedLayout(110, 8, 601);
 const SOAK_LAYOUT_B = createPersistedLayout(140, 10, 602);
-const SOAK_CHUNKS = makeTerminalChunks(2500, 130);
+const SOAK_STREAM = makeTerminalStream(2500, 130);
 const SOAK_SCROLLBACK = 6000;
 /** Cycles per iteration. Named so the oracles can hold the loops to them. */
 const MIXED_SOAK_CYCLES = 120;
 const CHURN_SOAK_CYCLES = 180;
 const LEAK_SAMPLE_CYCLES = 40;
-const LEAK_TRANSIENTS_PER_CYCLE = 600;
+const LEAK_RECORDS_PER_CYCLE = 600;
+/** Fixed width, so the expected payload volume is arithmetic over the loop bounds. */
+const LEAK_PAYLOAD_CHARS = 64;
+const LEAK_HEAP_SAMPLE_EVERY = 4;
+const LEAK_EXPECTED_HEAP_SAMPLES = Math.ceil(LEAK_SAMPLE_CYCLES / LEAK_HEAP_SAMPLE_EVERY);
+const LEAK_EXPECTED_PAYLOAD_CHARS =
+  LEAK_SAMPLE_CYCLES * LEAK_RECORDS_PER_CYCLE * LEAK_PAYLOAD_CHARS;
+
+interface LeakRecord {
+  id: string;
+  data: string;
+}
+
+/**
+ * What PERF-062's workload must have left behind for its growth envelope to
+ * mean anything.
+ *
+ * The scenario reports memory growth, so every way of doing less work posts a
+ * better number: allocating nothing, allocating records that hold a pointer
+ * into a constant table instead of their own bytes, dropping each cycle's
+ * records before the next reading, or reporting a heap sample without taking
+ * one. Each term below is a reading only the real workload can produce —
+ * payload volume accumulated per record as it was built (an empty record adds
+ * nothing), the retained head of every cycle still holding its own bytes at the
+ * end, and the sample values themselves rather than a counter incremented
+ * beside the call. A constant sampler yields one distinct reading.
+ *
+ * There is deliberately no floor on the growth figure itself: heapUsed at the
+ * start of an iteration still carries the previous one's garbage, so a GC
+ * landing mid-run can cancel out real retention. That makes a floor a flake,
+ * not an oracle.
+ */
+export function leakWorkloadMisses(observed: {
+  retained: ReadonlyArray<LeakRecord | undefined>;
+  payloadChars: number;
+  heapSamples: readonly number[];
+}): number {
+  let unretained = 0;
+  for (let cycle = 0; cycle < LEAK_SAMPLE_CYCLES; cycle += 1) {
+    const head = observed.retained[cycle * LEAK_RECORDS_PER_CYCLE];
+    if (
+      !head ||
+      head.id !== `${cycle}-0` ||
+      head.data.length !== LEAK_PAYLOAD_CHARS ||
+      !head.data.startsWith(head.id)
+    ) {
+      unretained += 1;
+    }
+  }
+
+  return (
+    Math.abs(LEAK_EXPECTED_PAYLOAD_CHARS - observed.payloadChars) +
+    Math.abs(LEAK_EXPECTED_HEAP_SAMPLES - observed.heapSamples.length) +
+    (new Set(observed.heapSamples).size > 1 ? 0 : 1) +
+    unretained
+  );
+}
 
 export const soakScenarios: PerfScenario[] = [
   {
@@ -136,7 +192,7 @@ export const soakScenarios: PerfScenario[] = [
           iterations: 1,
         };
         const switched = simulateProjectSwitchCycle(spec);
-        const terminal = simulateTerminalOutputPass(SOAK_CHUNKS, SOAK_SCROLLBACK);
+        const terminal = simulateTerminalOutputPass(SOAK_STREAM.chunks, SOAK_SCROLLBACK);
 
         checksum += hydrated.checksum + switched.checksum + terminal.checksum;
         cycles += 1;
@@ -144,7 +200,7 @@ export const soakScenarios: PerfScenario[] = [
           Math.abs(layout.panels.length - hydrated.restoredPanels) +
           Math.abs(layout.tabGroups.length - hydrated.restoredGroups) +
           projectSwitchCycleMisses(spec, switched) +
-          terminalOutputPassMisses(SOAK_CHUNKS, SOAK_SCROLLBACK, terminal);
+          terminalOutputPassMisses(SOAK_STREAM, SOAK_SCROLLBACK, terminal);
 
         if (i % 15 === 0) {
           await spinEventLoop(0.8);
@@ -241,24 +297,27 @@ export const soakScenarios: PerfScenario[] = [
       maybeRunGc();
       const baselineMb = memoryUsedMb();
       const startedAt = performance.now();
-      let peakMb = baselineMb;
       let checksum = 0;
-      let allocatedRecords = 0;
-      let heapSamples = 0;
-      const stablePayloads = Array.from({ length: 256 }, (_, index) => `payload-${index}`);
+      let payloadChars = 0;
+      const heapSamples: number[] = [];
+      // Held for the whole run. Records dropped at the end of each cycle leave
+      // the growth envelope reading its own baseline, so a workload that
+      // allocated nothing would be indistinguishable from a healthy one.
+      const retained: LeakRecord[] = [];
 
       for (let i = 0; i < LEAK_SAMPLE_CYCLES; i += 1) {
-        const transient = Array.from({ length: LEAK_TRANSIENTS_PER_CYCLE }, (_, index) => ({
-          id: `${i}-${index}`,
-          data: stablePayloads[index % stablePayloads.length],
-        }));
+        for (let index = 0; index < LEAK_RECORDS_PER_CYCLE; index += 1) {
+          const id = `${i}-${index}`;
+          // Bytes of its own, not a reference into a shared table: a record
+          // that borrows its payload costs nothing to keep alive.
+          const data = id.padEnd(LEAK_PAYLOAD_CHARS, "-leak-payload");
+          retained.push({ id, data });
+          payloadChars += data.length;
+          checksum += data.charCodeAt(LEAK_PAYLOAD_CHARS - 1);
+        }
 
-        checksum += transient.length;
-        allocatedRecords += transient.length;
-
-        if (i % 4 === 0) {
-          peakMb = Math.max(peakMb, memoryUsedMb());
-          heapSamples += 1;
+        if (i % LEAK_HEAP_SAMPLE_EVERY === 0) {
+          heapSamples.push(memoryUsedMb());
         }
 
         await spinEventLoop(0.2);
@@ -267,7 +326,7 @@ export const soakScenarios: PerfScenario[] = [
       const durationMs = performance.now() - startedAt;
       maybeRunGc();
       const finalMb = memoryUsedMb();
-      peakMb = Math.max(peakMb, finalMb);
+      const peakMb = Math.max(baselineMb, finalMb, ...heapSamples);
       const memoryGrowthMb = Math.max(0, finalMb - baselineMb);
       const peakMemoryGrowthMb = Math.max(0, peakMb - baselineMb);
       const normalizedBaselineMb = normalizeBaselineMb(baselineMb);
@@ -281,12 +340,7 @@ export const soakScenarios: PerfScenario[] = [
           peakMemoryGrowthPct: (peakMemoryGrowthMb / normalizedBaselineMb) * 100,
           peakMemoryGrowthMb,
           checksum,
-          // Both halves of the scenario are gameable by doing nothing: skipping
-          // the transient allocations holds growth at zero, and skipping the
-          // interval samples leaves the peak envelope reading its baseline.
-          leakMisses:
-            Math.abs(LEAK_SAMPLE_CYCLES * LEAK_TRANSIENTS_PER_CYCLE - allocatedRecords) +
-            Math.abs(Math.ceil(LEAK_SAMPLE_CYCLES / 4) - heapSamples),
+          leakMisses: leakWorkloadMisses({ retained, payloadChars, heapSamples }),
         },
       };
     },

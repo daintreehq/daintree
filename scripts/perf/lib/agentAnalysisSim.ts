@@ -369,6 +369,15 @@ export interface AgentAnalysisSimResult {
   stateChangeRecords: number;
   agentsWithWaitFlip: number;
   agentsWithResumeFlip: number;
+  /**
+   * Bytes the workload scripts contain, totalled as they were built.
+   *
+   * `fedBytes` is the feed loop's own tally and it is the denominator of every
+   * rate this sim reports, so the two agreeing is what proves the fleet was
+   * charged for the whole workload. A feed loop that quietly stopped short
+   * would report a lower tax over a smaller job.
+   */
+  scriptedBytes: number;
 }
 
 interface FsmRecord {
@@ -416,6 +425,7 @@ export async function runAgentAnalysisSim(
 
     const slots: AgentSlot[] = [];
     const byTerminalId = new Map<string, AgentSlot>();
+    let scriptedBytes = 0;
 
     const onStateChanged = (payload: { terminalId?: string; state: AgentState }): void => {
       const slot = payload.terminalId ? byTerminalId.get(payload.terminalId) : undefined;
@@ -467,6 +477,7 @@ export async function runAgentAnalysisSim(
         };
         slots.push(slot);
         byTerminalId.set(terminalId, slot);
+        scriptedBytes += slot.script.totalBytes;
 
         runtime.handleMessage({
           type: "create",
@@ -590,6 +601,7 @@ export async function runAgentAnalysisSim(
         stateChangeRecords,
         agentsWithWaitFlip: waitLatencies.length,
         agentsWithResumeFlip: resumeLatencies.length,
+        scriptedBytes,
       };
     } finally {
       for (const slot of slots) {

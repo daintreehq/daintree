@@ -499,44 +499,61 @@ export function simulateTerminalOutputPass(
 }
 
 /**
- * Post-conditions of an output pass, checked against the chunks it was handed.
+ * Generated chunks carrying their own byte total.
+ *
+ * The total is the oracle's half of the comparison, so it comes from the
+ * generator — the one thing in the picture that is not the subject — and is
+ * accumulated as the chunks are built rather than re-summed afterwards.
+ */
+export interface TerminalChunkStream {
+  chunks: string[];
+  totalBytes: number;
+}
+
+/**
+ * Post-conditions of an output pass, checked against the stream it was handed.
  *
  * A pass reduced to `return { renderedBytes: 0 }` is instant and reports the
  * best `renderedBytes`/`checksum` the harness would ever record; it scores every
- * term here. The byte total is summed from the input rather than read off the
- * result, and the ring depth is the scrollback rule applied independently of the
- * ring — `makeTerminalChunks` puts exactly one line in each chunk, which is what
- * makes the expected depth `min(chunks, cap)`.
+ * term here. The expected byte total rides in on the stream, and the ring depth
+ * is the scrollback rule applied independently of the ring —
+ * `makeTerminalStream` puts exactly one line in each chunk, which is what makes
+ * the expected depth `min(chunks, cap)`.
  *
- * Deliberately arithmetic over lengths and never a second `split()` pass: the
- * scenarios wall-clock the whole `run()`, so an oracle that re-walked the text
- * would land inside the bracket it is there to validate.
+ * Every term is O(1): the scenarios wall-clock the whole `run()`, so an oracle
+ * that walked the chunks again — to re-`split()` them or merely to re-sum their
+ * lengths — would report its own traversal as terminal throughput.
  */
 export function terminalOutputPassMisses(
-  chunks: readonly string[],
+  stream: TerminalChunkStream,
   retainedLines: number,
   result: TerminalOutputPassResult
 ): number {
-  let expectedBytes = 0;
-  for (const chunk of chunks) expectedBytes += chunk.length;
+  const chunkCount = stream.chunks.length;
   return (
-    Math.abs(chunks.length - result.consumedChunks) +
-    (expectedBytes === result.renderedBytes ? 0 : 1) +
-    Math.abs(Math.min(chunks.length, retainedLines) - result.retainedLineCount)
+    Math.abs(chunkCount - result.consumedChunks) +
+    (stream.totalBytes === result.renderedBytes ? 0 : 1) +
+    Math.abs(Math.min(chunkCount, retainedLines) - result.retainedLineCount)
   );
 }
 
-export function makeTerminalChunks(count: number, avgLength = 120): string[] {
+export function makeTerminalStream(count: number, avgLength = 120): TerminalChunkStream {
   const rng = createRng(424242 + count + avgLength);
   const chunks: string[] = [];
+  let totalBytes = 0;
 
   for (let i = 0; i < count; i += 1) {
     const len = Math.max(24, Math.floor(avgLength * (0.7 + rng() * 0.6)));
-    const payload = randomToken(rng, len);
-    chunks.push(`${payload}\n`);
+    const chunk = `${randomToken(rng, len)}\n`;
+    chunks.push(chunk);
+    totalBytes += chunk.length;
   }
 
-  return chunks;
+  return { chunks, totalBytes };
+}
+
+export function makeTerminalChunks(count: number, avgLength = 120): string[] {
+  return makeTerminalStream(count, avgLength).chunks;
 }
 
 export interface LargeStateSnapshot {
