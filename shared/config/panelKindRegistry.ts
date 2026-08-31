@@ -146,6 +146,19 @@ export interface PanelKindConfig {
   /** Extension ID if this is an extension-provided panel kind */
   extensionId?: string;
   /**
+   * Owning project, or `null`/absent for global plugin and built-in kinds. Set
+   * only for kinds contributed by a project-local plugin, whose `id` is the
+   * project-qualified runtime form (`project:{projectId}/{manifestId}/{kindId}`).
+   */
+  projectId?: string | null;
+  /**
+   * Manifest id of the owning plugin, split out from the qualified runtime id
+   * so persistence never has to re-derive it from the `id` string. Equals
+   * `extensionId` for global kinds; for project kinds it is the bare manifest
+   * id, while `extensionId` may carry the scoped registration key.
+   */
+  pluginManifestId?: string;
+  /**
    * Fully-resolved `plugin://{pluginId}/{path}` URL of the React module that
    * renders this kind. Set during `loadPlugin` when a `views`
    * entry matches a panel by bare id. Travels through the existing
@@ -870,4 +883,159 @@ export function clearPanelKindRegistry(): void {
   if (removed.length > 0) {
     notifyPanelKindRegistry();
   }
+}
+
+/**
+ * Prefix that marks a runtime panel kind id as project-qualified. Chosen
+ * because a colon cannot appear in a plugin manifest id or a
+ * `contributes.panels[].id` (both are validated against
+ * `[a-zA-Z0-9._-]` / the scoped-name pattern in
+ * `electron/schemas/pluginIdentifiers.ts`), so no global kind can ever collide
+ * with the qualified namespace.
+ */
+const PROJECT_PANEL_KIND_PREFIX = "project:";
+
+/**
+ * Local mirror of `SCOPED_PLUGIN_NAME_PATTERN`
+ * (`electron/schemas/pluginIdentifiers.ts`), which validates every plugin
+ * manifest `name`: exactly two lowercase segments joined by a single dot
+ * (`acme.dashboard`, `daintree.github`). `shared/` cannot import from
+ * `electron/`, so the shape is duplicated here — keep the two in sync.
+ *
+ * This is what makes the global runtime form parseable: a manifest id holds
+ * exactly one dot, so `acme.dashboard.overview` splits deterministically into
+ * `acme.dashboard` + `overview` even though BOTH halves may contain dots in
+ * principle (`contributes.panels[].id` allows them).
+ */
+const SCOPED_MANIFEST_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * What a saved layout stores for a plugin-contributed panel kind.
+ *
+ * Deliberately excludes `projectId`: layouts are already project-associated,
+ * and embedding the project's identity here would orphan every panel when a
+ * repo is re-cloned to a different path. The qualified runtime id
+ * (`project:{projectId}/…`) MUST NOT reach persistence for the same reason —
+ * see {@link isProjectQualifiedPanelKindId}.
+ */
+export interface PersistedPanelKindRef {
+  /** `"project"` for a `.daintree/plugins` contribution, `"global"` otherwise. */
+  origin: "global" | "project";
+  /** Plugin manifest id, e.g. `"acme.dashboard"`. */
+  pluginId: string;
+  /** Bare id from `contributes.panels`, e.g. `"overview"`. */
+  kindId: string;
+}
+
+/**
+ * Qualify a persisted ref into the runtime panel kind id used as the registry
+ * key and as `TerminalInstance.kind`.
+ *
+ * - `origin: "global"` → `{pluginId}.{kindId}`, byte-identical to the id
+ *   `PluginService` registers today. Global kinds ignore `projectId`.
+ * - `origin: "project"` → `project:{projectId}/{pluginId}/{kindId}`, so two
+ *   projects can each contribute `acme.dashboard/overview` without colliding.
+ *
+ * Returns `null` for a project ref with no owning project: that ref cannot be
+ * resolved in this context, and inventing an unqualified id for it would alias
+ * a project kind onto a global one. Callers treat `null` the same way they
+ * treat an unregistered kind — the panel renders `PluginMissingPanel` and is
+ * retained, never dropped.
+ */
+export function toRuntimePanelKindId(
+  ref: PersistedPanelKindRef,
+  projectId: string | null
+): string | null {
+  if (ref.pluginId.length === 0 || ref.kindId.length === 0) return null;
+  // A slash is the project form's delimiter and cannot appear in a validated
+  // manifest id or panel id. Qualifying a ref that contains one would emit an
+  // id that parses back into a different ref (the extra slash steals a
+  // segment), so refuse it rather than mint a corrupt id.
+  if (ref.pluginId.includes("/") || ref.kindId.includes("/")) return null;
+  if (ref.origin !== "project") return `${ref.pluginId}.${ref.kindId}`;
+  if (projectId === null || projectId.length === 0) return null;
+  return `${PROJECT_PANEL_KIND_PREFIX}${projectId}/${ref.pluginId}/${ref.kindId}`;
+}
+
+/**
+ * Whether a runtime panel kind id carries a project qualification. The one
+ * assertion persistence needs: a `true` here means the id must be converted
+ * with {@link toPersistedPanelKindRef} before it is written to disk.
+ */
+export function isProjectQualifiedPanelKindId(kind: PanelKind): boolean {
+  return typeof kind === "string" && kind.startsWith(PROJECT_PANEL_KIND_PREFIX);
+}
+
+/**
+ * Unqualify a runtime panel kind id back into the form a layout persists.
+ * Returns `null` for anything that is not a plugin-contributed kind (a
+ * built-in like `"terminal"`, or a malformed id).
+ *
+ * Pass `pluginManifestId` whenever the caller already knows it —
+ * `PanelKindConfig.extensionId` at registration, `PanelSnapshot.pluginId` at
+ * save/restore. It is authoritative and makes the split exact for any manifest
+ * id, including shapes that predate the scoped-name rule.
+ *
+ * Without the hint the parse is still deterministic:
+ * - Project form: manifest ids and panel ids cannot contain `/`, so the last
+ *   two slashes delimit `{pluginId}/{kindId}` and everything before them is the
+ *   project id (which may itself contain slashes — a project id is "UUID or
+ *   path hash").
+ * - Global form: a validated manifest id holds exactly one dot, so the first
+ *   two dot-segments are the plugin id when they match
+ *   {@link SCOPED_MANIFEST_ID_PATTERN}. Splitting on the FIRST dot
+ *   (`daintree` + `github.prs`) or the LAST (`acme.dashboard.sales` +
+ *   `report` for kind id `sales.report`) both silently corrupt the id.
+ *
+ * The string round-trip is lossless in both directions for the global form
+ * regardless of where the split lands, because re-qualifying rejoins on the
+ * same dot. The ref round-trip (`ref → id → ref`) needs the hint only for a
+ * kind id that itself contains a dot under a non-scoped manifest id.
+ */
+export function toPersistedPanelKindRef(
+  runtimeId: string,
+  pluginManifestId?: string
+): PersistedPanelKindRef | null {
+  if (typeof runtimeId !== "string" || runtimeId.length === 0) return null;
+
+  if (runtimeId.startsWith(PROJECT_PANEL_KIND_PREFIX)) {
+    const rest = runtimeId.slice(PROJECT_PANEL_KIND_PREFIX.length);
+    const lastSlash = rest.lastIndexOf("/");
+    if (lastSlash <= 0) return null;
+    const pluginSlash = rest.lastIndexOf("/", lastSlash - 1);
+    if (pluginSlash <= 0) return null;
+    const pluginId = rest.slice(pluginSlash + 1, lastSlash);
+    const kindId = rest.slice(lastSlash + 1);
+    if (pluginId.length === 0 || kindId.length === 0) return null;
+    return { origin: "project", pluginId, kindId };
+  }
+
+  if (
+    pluginManifestId !== undefined &&
+    pluginManifestId.length > 0 &&
+    runtimeId.startsWith(`${pluginManifestId}.`)
+  ) {
+    const kindId = runtimeId.slice(pluginManifestId.length + 1);
+    if (kindId.length > 0) {
+      return { origin: "global", pluginId: pluginManifestId, kindId };
+    }
+  }
+
+  const segments = runtimeId.split(".");
+  const [scopeSegment, nameSegment] = segments;
+  if (scopeSegment === undefined || nameSegment === undefined) return null;
+  if (segments.length > 2 && SCOPED_MANIFEST_ID_PATTERN.test(`${scopeSegment}.${nameSegment}`)) {
+    return {
+      origin: "global",
+      pluginId: `${scopeSegment}.${nameSegment}`,
+      kindId: segments.slice(2).join("."),
+    };
+  }
+  // `SAFE_ID_PATTERN` permits leading, trailing and repeated dots in a panel
+  // id, so an empty segment after the plugin id is legal and must survive the
+  // round-trip (`acme.dashboard..overview`). Only an empty plugin id or an
+  // empty kind id is unparseable.
+  const kindId = segments.slice(1).join(".");
+  if (scopeSegment.length === 0 || kindId.length === 0) return null;
+  return { origin: "global", pluginId: scopeSegment, kindId };
 }

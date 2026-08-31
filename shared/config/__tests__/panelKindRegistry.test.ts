@@ -22,7 +22,11 @@ import {
   getFirstRenderSeeds,
   getFirstRenderPreloadSeeds,
   FIRST_RENDER_ROOT_SEED,
+  isProjectQualifiedPanelKindId,
+  toPersistedPanelKindRef,
+  toRuntimePanelKindId,
   type PanelKindConfig,
+  type PersistedPanelKindRef,
 } from "../panelKindRegistry.js";
 
 describe("panelKindRegistry metadata", () => {
@@ -703,5 +707,208 @@ describe("panel kind registry external store", () => {
     unregisterPluginPanelKinds("never-loaded");
     expect(listener).not.toHaveBeenCalled();
     unsubscribe();
+  });
+});
+
+describe("panel kind identity split", () => {
+  it("keeps the global runtime form byte-identical to what PluginService registers", () => {
+    // PluginService builds `${manifest.name}.${panel.id}` — this form must not
+    // change, or every saved layout orphans.
+    expect(
+      toRuntimePanelKindId(
+        { origin: "global", pluginId: "acme.dashboard", kindId: "overview" },
+        null
+      )
+    ).toBe("acme.dashboard.overview");
+    expect(
+      toRuntimePanelKindId(
+        { origin: "global", pluginId: "daintree.github", kindId: "prs" },
+        "project-7"
+      )
+    ).toBe("daintree.github.prs");
+  });
+
+  it("qualifies a project ref with the owning project", () => {
+    expect(
+      toRuntimePanelKindId(
+        { origin: "project", pluginId: "acme.dashboard", kindId: "overview" },
+        "project-7"
+      )
+    ).toBe("project:project-7/acme.dashboard/overview");
+  });
+
+  it("refuses to qualify a project ref with no owning project", () => {
+    // Falling back to the unqualified form would alias a project kind onto a
+    // global one; callers treat null like an unregistered kind.
+    expect(
+      toRuntimePanelKindId(
+        { origin: "project", pluginId: "acme.dashboard", kindId: "overview" },
+        null
+      )
+    ).toBeNull();
+    expect(
+      toRuntimePanelKindId(
+        { origin: "project", pluginId: "acme.dashboard", kindId: "overview" },
+        ""
+      )
+    ).toBeNull();
+  });
+
+  it("splits a dotted manifest id at the manifest boundary, not the first or last dot", () => {
+    // `daintree.github` is a real manifest id. Splitting on the first dot gives
+    // `daintree` + `github.prs`; on the last it happens to work here but breaks
+    // the dotted-kind case below. Neither is the manifest boundary.
+    expect(toPersistedPanelKindRef("daintree.github.prs")).toEqual({
+      origin: "global",
+      pluginId: "daintree.github",
+      kindId: "prs",
+    });
+    expect(toPersistedPanelKindRef("acme.dashboard.sales.report")).toEqual({
+      origin: "global",
+      pluginId: "acme.dashboard",
+      kindId: "sales.report",
+    });
+  });
+
+  it("round-trips both origins losslessly", () => {
+    const refs: PersistedPanelKindRef[] = [
+      { origin: "global", pluginId: "acme.dashboard", kindId: "overview" },
+      { origin: "global", pluginId: "daintree.github", kindId: "prs" },
+      // `contributes.panels[].id` allows dots, so a dotted kind id is legal.
+      { origin: "global", pluginId: "acme.dashboard", kindId: "sales.report" },
+      { origin: "project", pluginId: "acme.dashboard", kindId: "overview" },
+      { origin: "project", pluginId: "acme.dashboard", kindId: "sales.report" },
+    ];
+    for (const ref of refs) {
+      const runtimeId = toRuntimePanelKindId(ref, "project-7");
+      expect(runtimeId).not.toBeNull();
+      expect(toPersistedPanelKindRef(runtimeId as string)).toEqual(ref);
+    }
+  });
+
+  it("re-qualifies a parsed ref to the exact id it came from", () => {
+    const ids = [
+      "acme.dashboard.overview",
+      "daintree.github.prs",
+      "acme.dashboard.sales.report",
+      "project:project-7/acme.dashboard/overview",
+      // A project id is "UUID or path hash" — a path-shaped one carries slashes
+      // of its own, so the parse walks in from the right.
+      "project:/Users/dev/repos/app/acme.dashboard/overview",
+    ];
+    for (const id of ids) {
+      const ref = toPersistedPanelKindRef(id);
+      expect(ref).not.toBeNull();
+      const projectId = id.startsWith("project:")
+        ? id.slice("project:".length, id.lastIndexOf("/", id.lastIndexOf("/") - 1))
+        : null;
+      expect(toRuntimePanelKindId(ref as PersistedPanelKindRef, projectId)).toBe(id);
+    }
+  });
+
+  it("uses the manifest id hint as authoritative when the parse would guess", () => {
+    // A legacy single-segment manifest id with a dotted kind id: no structural
+    // rule can find the boundary, but every real caller knows the plugin id
+    // (PanelKindConfig.extensionId at registration, PanelSnapshot.pluginId at
+    // save/restore).
+    expect(toPersistedPanelKindRef("myplugin.sales.report", "myplugin")).toEqual({
+      origin: "global",
+      pluginId: "myplugin",
+      kindId: "sales.report",
+    });
+    // The hint never overrides the project form.
+    expect(
+      toPersistedPanelKindRef("project:project-7/acme.dashboard/overview", "acme.dashboard")
+    ).toEqual({
+      origin: "project",
+      pluginId: "acme.dashboard",
+      kindId: "overview",
+    });
+    // A hint that does not prefix the id is ignored rather than trusted.
+    expect(toPersistedPanelKindRef("acme.dashboard.overview", "other.plugin")).toEqual({
+      origin: "global",
+      pluginId: "acme.dashboard",
+      kindId: "overview",
+    });
+  });
+
+  it("parses a legacy unscoped plugin kind", () => {
+    expect(toPersistedPanelKindRef("my-plugin.custom-panel")).toEqual({
+      origin: "global",
+      pluginId: "my-plugin",
+      kindId: "custom-panel",
+    });
+  });
+
+  it("returns null for kinds that are not plugin-contributed", () => {
+    for (const kind of BUILT_IN_PANEL_KINDS) {
+      expect(toPersistedPanelKindRef(kind)).toBeNull();
+    }
+    expect(toPersistedPanelKindRef("")).toBeNull();
+    expect(toPersistedPanelKindRef("singleword")).toBeNull();
+    expect(toPersistedPanelKindRef(".leading")).toBeNull();
+    expect(toPersistedPanelKindRef("trailing.")).toBeNull();
+  });
+
+  it("keeps a panel id with empty dot segments parseable", () => {
+    // SAFE_ID_PATTERN permits leading, trailing and repeated dots in
+    // `contributes.panels[].id`, so these are schema-valid kinds and must
+    // round-trip rather than fail to unqualify.
+    for (const kindId of [".overview", "overview.", "sales..report"]) {
+      const ref: PersistedPanelKindRef = { origin: "global", pluginId: "acme.dashboard", kindId };
+      const runtimeId = toRuntimePanelKindId(ref, null);
+      expect(runtimeId).not.toBeNull();
+      expect(toPersistedPanelKindRef(runtimeId as string)).toEqual(ref);
+    }
+    expect(toPersistedPanelKindRef("double..dot")).toEqual({
+      origin: "global",
+      pluginId: "double",
+      kindId: ".dot",
+    });
+  });
+
+  it("refuses to qualify a ref carrying the project form's delimiter", () => {
+    // A slash cannot appear in a validated manifest or panel id. Minting the
+    // id anyway would produce a string that parses back into a different ref
+    // — the stray slash steals a segment from the project id.
+    expect(
+      toRuntimePanelKindId(
+        { origin: "project", pluginId: "acme.dashboard", kindId: "sales/report" },
+        "project-7"
+      )
+    ).toBeNull();
+    expect(
+      toRuntimePanelKindId(
+        { origin: "global", pluginId: "acme/dashboard", kindId: "overview" },
+        null
+      )
+    ).toBeNull();
+  });
+
+  it("returns null for a malformed project-qualified id", () => {
+    expect(toPersistedPanelKindRef("project:")).toBeNull();
+    expect(toPersistedPanelKindRef("project:project-7")).toBeNull();
+    expect(toPersistedPanelKindRef("project:project-7/acme.dashboard")).toBeNull();
+    expect(toPersistedPanelKindRef("project:/acme.dashboard/overview")).toBeNull();
+    expect(toPersistedPanelKindRef("project:project-7/acme.dashboard/")).toBeNull();
+  });
+
+  it("flags the qualified form so it cannot reach persistence", () => {
+    expect(isProjectQualifiedPanelKindId("project:project-7/acme.dashboard/overview")).toBe(true);
+    expect(isProjectQualifiedPanelKindId("acme.dashboard.overview")).toBe(false);
+    for (const kind of BUILT_IN_PANEL_KINDS) {
+      expect(isProjectQualifiedPanelKindId(kind)).toBe(false);
+    }
+  });
+
+  it("no id a plugin can register collides with the qualified namespace", () => {
+    // Manifest ids and panel ids are validated against `[a-zA-Z0-9._-]` /
+    // the scoped-name pattern, so neither can contain a colon.
+    const registered = toRuntimePanelKindId(
+      { origin: "global", pluginId: "project.dashboard", kindId: "overview" },
+      null
+    );
+    expect(registered).toBe("project.dashboard.overview");
+    expect(isProjectQualifiedPanelKindId(registered as string)).toBe(false);
   });
 });
