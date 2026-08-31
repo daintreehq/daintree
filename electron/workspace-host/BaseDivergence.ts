@@ -3,6 +3,7 @@ import { createHardenedGit, createWslHardenedGit } from "../utils/hardenedGit.js
 import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import { getGitDir } from "../utils/gitUtils.js";
 import { resolveBaseCompareRef } from "../../shared/utils/baseRemoteSelection.js";
+import { gatherBaseCompareRefInputs, readSymbolicRef } from "../utils/baseCompareRef.js";
 import type { StatPrecheck } from "./StatPrecheck.js";
 
 /**
@@ -17,8 +18,6 @@ import type { StatPrecheck } from "./StatPrecheck.js";
  * worktree per interval.
  */
 const RESOLUTION_MAX_AGE_MS = 5 * 60_000;
-
-const REMOTE_REF_PREFIX = "refs/remotes/";
 
 interface BaseDivergenceResult {
   baseBranchName: string | null;
@@ -247,19 +246,13 @@ export class BaseDivergence {
     }
 
     const git = await this.createGit();
-    const availableRemotes = await this.readRemotes(git);
-    const trackedRef = await this.readSymbolicRef(git, `${baseBranch}@{upstream}`);
-    const remotesWithBaseRef = trackedRef
-      ? []
-      : await this.readRemotesCarrying(git, baseBranch, availableRemotes);
-    const upstreamRef = hasUpstream ? await this.readSymbolicRef(git, "@{u}") : null;
+    // Shared with the rebase/merge handlers (#12092) so the ref an operation
+    // acts on is the ref the behind count was measured against.
+    const inputs = await gatherBaseCompareRefInputs(git, baseBranch);
+    const { availableRemotes } = inputs;
+    const upstreamRef = hasUpstream ? await readSymbolicRef(git, "@{u}") : null;
 
-    const { compareRef, remote } = resolveBaseCompareRef({
-      baseBranch,
-      trackedRef,
-      remotesWithBaseRef,
-      availableRemotes,
-    });
+    const { compareRef, remote } = resolveBaseCompareRef(inputs);
 
     this.resolution = { compareRef, remote, upstreamRef, availableRemotes };
     this.resolutionAt = Date.now();
@@ -268,76 +261,6 @@ export class BaseDivergence {
     // resolving covered fewer paths than the one that must match next poll.
     this.resolutionStamp = await this.buildResolutionStamp(branch, baseBranch, hasUpstream, dirs);
     return this.resolution;
-  }
-
-  /** `git remote` — names only, no URLs, no network. */
-  private async readRemotes(git: GitRunner): Promise<string[]> {
-    try {
-      const out = await git.raw(["remote"]);
-      return out
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
-    } catch {
-      return [];
-    }
-  }
-
-  /**
-   * Resolve a revision to its full symbolic ref. Returns `null` when the
-   * revision has no upstream (git exits non-zero), which is the normal case
-   * for an unpushed branch.
-   */
-  private async readSymbolicRef(git: GitRunner, rev: string): Promise<string | null> {
-    try {
-      const out = await git.raw(["rev-parse", "--symbolic-full-name", rev]);
-      const trimmed = out.trim();
-      return trimmed.length > 0 ? trimmed : null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Which remotes carry `<baseBranch>`. Uses `for-each-ref` rather than a
-   * readdir so packed refs are found too.
-   *
-   * One literal pattern per known remote rather than a single
-   * `refs/remotes/*` glob: git's ref-filter wildcard does not cross `/`, so a
-   * remote whose own name contains a slash (`team/fork`) would never appear in
-   * the glob's output, and the exact cross-reference below cannot recover a ref
-   * that was never listed.
-   */
-  private async readRemotesCarrying(
-    git: GitRunner,
-    baseBranch: string,
-    availableRemotes: readonly string[]
-  ): Promise<string[]> {
-    if (availableRemotes.length === 0) return [];
-    try {
-      const out = await git.raw([
-        "for-each-ref",
-        "--format=%(refname)",
-        "--",
-        ...availableRemotes.map((remote) => `${REMOTE_REF_PREFIX}${remote}/${baseBranch}`),
-      ]);
-      const found: string[] = [];
-      for (const line of out.split("\n")) {
-        const ref = line.trim();
-        if (!ref.startsWith(REMOTE_REF_PREFIX)) continue;
-        const shortRef = ref.slice(REMOTE_REF_PREFIX.length);
-        // Remote names may contain `/`, so match against the known names
-        // rather than splitting on the first separator.
-        for (const remote of availableRemotes) {
-          if (shortRef === `${remote}/${baseBranch}` && !found.includes(remote)) {
-            found.push(remote);
-          }
-        }
-      }
-      return found;
-    } catch {
-      return [];
-    }
   }
 
   /**

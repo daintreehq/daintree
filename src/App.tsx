@@ -282,6 +282,7 @@ function AppInner() {
   const {
     gitPushResetKey,
     gitPullRebaseResetKey,
+    gitWorktreeOperationResetKey,
     panelLimitResetKey,
     recipeConflictResetKey,
     mcpConfirmResetKey,
@@ -594,6 +595,7 @@ function AppInner() {
                 diagnosticsReviewResetKey={diagnosticsReviewResetKey}
                 gitPushResetKey={gitPushResetKey}
                 gitPullRebaseResetKey={gitPullRebaseResetKey}
+                gitWorktreeOperationResetKey={gitWorktreeOperationResetKey}
                 recipeConflictResetKey={recipeConflictResetKey}
                 gitInitDialogOpen={gitInitDialogOpen}
                 shouldMountGitInitDialog={shouldMountGitInitDialog}

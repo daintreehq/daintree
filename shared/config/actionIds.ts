@@ -186,6 +186,10 @@ export const BUILT_IN_ACTION_IDS = [
   "git.push",
   "git.pullRebase",
   "git.fetch",
+  "git.rebaseOntoBase",
+  "git.mergeBaseIntoBranch",
+  "git.abortRepositoryOperation",
+  "git.continueRepositoryOperation",
   "git.markSafeDirectory",
   "git.getStagingStatus",
 

@@ -663,6 +663,9 @@ describe("duplicate registrations", () => {
 const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "git.push",
   "git.pullRebase",
+  "git.rebaseOntoBase",
+  "git.mergeBaseIntoBranch",
+  "git.abortRepositoryOperation",
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",
@@ -752,6 +755,14 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // IPC bypass in ReviewHubContent.tsx; ConfirmDialog wired there but the action
   // ID string is not present in that file (direct IPC call, not ActionService dispatch).
   "git.pullRebase",
+  // Deferred-promise via gitWorktreeOperationConfirmStore (#12092); the action
+  // run() awaits confirmation before calling IPC, and
+  // GitWorktreeOperationConfirmDialog resolves the Promise. The dialog is
+  // mounted globally in ModalHostLayer, so the action ID is not co-located with
+  // it — the same shape as git.push above.
+  "git.rebaseOntoBase",
+  "git.mergeBaseIntoBranch",
+  "git.abortRepositoryOperation",
   // Confirm in ProjectSwitcherPalette.tsx via removeConfirmProject state;
   // action ID not co-located with the ConfirmDialog in that file.
   "project.remove",
@@ -876,6 +887,11 @@ describe("destructive-action danger metadata", () => {
       // validation and reach the confirm gate.
       label: "placeholder",
       sessionId: "session-placeholder",
+      // git.rebaseOntoBase/mergeBaseIntoBranch require the base branch before
+      // their confirm gate runs (#12092). It is deliberately NOT optional: a
+      // base-branch default resolved inside a destructive submit is exactly the
+      // silent fallback the D-tier rules call a review blocker.
+      baseBranch: "develop",
     };
 
     // Some listed actions (e.g. worktree.resource.teardown) gate availability

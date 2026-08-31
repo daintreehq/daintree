@@ -208,7 +208,7 @@ describe("WorktreeMenuItems — Launch", () => {
 });
 
 describe("WorktreeMenuItems — Git", () => {
-  it("offers Fetch and Fetch and prune as two distinct rows", () => {
+  it("leads with Fetch and Fetch and prune, then the base-integration rows", () => {
     const { container } = renderWorktreeMenu({});
 
     const git = Array.from(container.querySelectorAll("[data-menu-sub]")).find(
@@ -217,7 +217,12 @@ describe("WorktreeMenuItems — Git", () => {
     const rows = Array.from(git?.querySelectorAll("[data-menu-item]") ?? []).map((n) =>
       n.textContent?.trim()
     );
-    expect(rows).toEqual(["Fetch", "Fetch and prune"]);
+    expect(rows).toEqual([
+      "Fetch",
+      "Fetch and prune",
+      "Rebase onto base branch…No base branch",
+      "Merge base branch in…No base branch",
+    ]);
   });
 
   it("dispatches git.fetch without prune from the plain row", () => {

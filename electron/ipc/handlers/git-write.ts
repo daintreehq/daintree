@@ -11,6 +11,8 @@ import type { HandlerDependencies, IpcContext } from "../types.js";
 import type { PushProgressEvent } from "../../../shared/types/ipc/gitPush.js";
 import type {
   ConflictedFileEntry,
+  GitBaseIntegrationCommitPreview,
+  GitBaseIntegrationKind,
   GitPushCommitPreview,
   GitRebaseCommitPreview,
   GitRemoteCommitPreview,
@@ -27,6 +29,10 @@ import {
   buildContinueEnv,
 } from "../../utils/hardenedGit.js";
 import { getPerFileDiffStats, invalidateStagingDiffStatCache } from "../../utils/git.js";
+import {
+  resolveExistingBaseCompareTarget,
+  type ExistingBaseCompareTarget,
+} from "../../utils/baseCompareRef.js";
 import { store } from "../../store.js";
 import { getSoundService } from "../../services/getSoundService.js";
 import type * as SoundServiceModule from "../../services/SoundService.js";
@@ -439,6 +445,495 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
             }
           );
         }
+      }
+    ),
+  },
+});
+
+/**
+ * Base-branch names arrive from the renderer's worktree snapshot, not from a
+ * user text field — but they still reach argv, so they are validated with the
+ * same suspicion as any other write input. `git check-ref-format` rules are not
+ * restated here: the branch is only ever spelled as a fully-qualified
+ * `refs/heads/…` or `refs/remotes/…` ref downstream, which makes a leading `-`
+ * unrepresentable. What is rejected is what would break that guarantee.
+ */
+function requireBaseBranch(value: unknown): string {
+  if (typeof value !== "string") throw new Error("Invalid base branch");
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith("-") || /[\s~^:?*[\\]|\.\.|@\{/.test(trimmed)) {
+    throw new Error("Invalid base branch");
+  }
+  // `@` and `HEAD` are legal branch names AND git revision shorthands, and the
+  // shorthand wins wherever a revision is expected. `@` is the sharp one: it is
+  // shorthand for HEAD, so a base named `@` turns any `<base>@{upstream}` read
+  // into "the CURRENT branch's upstream" — "rebase onto @" would then target
+  // the feature branch's own upstream. Refusing both is cheaper than auditing
+  // every downstream read for revision-vs-ref context.
+  if (trimmed === "@" || trimmed === "HEAD") throw new Error("Invalid base branch");
+  return trimmed;
+}
+
+/**
+ * The branch the operation acts on, refused on a detached HEAD.
+ *
+ * A detached worktree has no branch to rewrite or extend, and rebasing one
+ * produces commits reachable from nothing once HEAD moves again.
+ */
+async function requireCheckedOutBranch(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "revparse">
+): Promise<string> {
+  const branch = (await git.revparse(["--abbrev-ref", "HEAD"])).trim();
+  if (!branch || branch === "HEAD") {
+    // A plain Error, deliberately: no `GitOperationReason` describes a detached
+    // HEAD, and the nearest bucket (`config-missing`) carries a hint telling
+    // the user to set an upstream — which would not fix this and is not what
+    // they did wrong. The sentence below is the whole diagnosis.
+    throw new Error(
+      "This worktree has no branch checked out, so there is nothing to integrate the base branch into."
+    );
+  }
+  return branch;
+}
+
+/**
+ * Resolve the base ref, or refuse the operation (#12092).
+ *
+ * The twin of `requireRemoteTarget` and fail-closed for the same reason: a base
+ * ref nobody can name must never degrade into `origin/<base>` on faith. Here
+ * the stakes are a local history rewrite rather than a wrong-repo push, but the
+ * failure mode is the same shape — an operation that reports success against a
+ * target the user never sanctioned.
+ */
+async function requireBaseTarget(
+  git: Parameters<typeof resolveExistingBaseCompareTarget>[0],
+  baseBranch: string,
+  cwd: string
+): Promise<ExistingBaseCompareTarget> {
+  const target = await resolveExistingBaseCompareTarget(git, baseBranch);
+  if (target) return target;
+  // Worded to land in the existing `config-missing` bucket, which already
+  // carries a recovery hint, rather than inventing a reason for one call site.
+  const message = `Could not resolve a ref for base branch '${baseBranch}'. No remote carries it and there is no local branch of that name — fetch the remote or check out the base branch once.`;
+  throw new GitOperationError(
+    "config-missing",
+    encodeGitOperationErrorMessage("config-missing", message),
+    { cwd, op: "base-integration", rawMessage: message }
+  );
+}
+
+/**
+ * Refuse to start on a tree that has anything in it.
+ *
+ * git would refuse most of this on its own, but not all of it and not legibly:
+ * `git merge` happily proceeds over untracked files right up until one collides
+ * with an incoming path, and the raw refusals it does emit ("error: cannot
+ * rebase: You have unstaged changes.") are classified after the fact from a
+ * message. Checking first turns every one of those into the same up-front,
+ * already-classified answer, and — the part that matters — guarantees nothing
+ * has been rewritten by the time the user sees it.
+ *
+ * Untracked files count. A merge that would write over one fails partway
+ * through with the worktree already modified, which is precisely the halt this
+ * operation is supposed to make recoverable rather than cause.
+ */
+async function requireCleanTree(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "status">,
+  cwd: string,
+  op: string
+): Promise<void> {
+  const status = await git.status();
+  if (status.isClean() && status.conflicted.length === 0) return;
+  const message =
+    "This worktree has uncommitted changes. Commit or stash them before integrating the base branch.";
+  throw new GitOperationError(
+    "worktree-dirty",
+    encodeGitOperationErrorMessage("worktree-dirty", message),
+    { cwd, op, rawMessage: message }
+  );
+}
+
+/**
+ * Refuse to start a second operation on top of a halted one.
+ *
+ * Starting a rebase mid-rebase is refused by git anyway, but the message is
+ * about `.git/rebase-merge` rather than about what the user should do — and the
+ * recovery they need (Abort or Continue) is one menu row away. Saying so
+ * directly is the difference between a dead end and a next step.
+ */
+async function requireNoOperationInProgress(
+  git: Awaited<ReturnType<typeof createHardenedGit>>,
+  cwd: string,
+  op: string
+): Promise<void> {
+  const gitDir = await resolveGitDir(git, cwd);
+  const { state } = await detectRepoOperationState(gitDir, false);
+  if (state === "CLEAN" || state === "DIRTY") return;
+  const message = `This worktree is already mid-operation (${state.toLowerCase().replace("_", "-")}). Continue or abort it before starting another.`;
+  throw new GitOperationError(
+    "conflict-unresolved",
+    encodeGitOperationErrorMessage("conflict-unresolved", message),
+    { cwd, op, rawMessage: message }
+  );
+}
+
+/** Classify anything a base-integration read or write throws, once. */
+function asBaseIntegrationError(error: unknown, cwd: string, op: string): unknown {
+  // An already-classified, already-encoded refusal — re-wrapping would
+  // double-encode its message.
+  if (error instanceof GitOperationError) return error;
+  const errorMessage = formatErrorMessage(error, `git ${op} failed`);
+  const gitReason = classifyGitFailure(error, errorMessage);
+  return new GitOperationError(gitReason, encodeGitOperationErrorMessage(gitReason, errorMessage), {
+    cwd,
+    op,
+    cause: error instanceof Error ? error : undefined,
+    rawMessage: errorMessage,
+  });
+}
+
+/**
+ * Resolve a ref to its commit OID, or `null` when it does not resolve.
+ *
+ * Shared by the preview (which records the OIDs it measured against) and the
+ * write (which checks they still hold), so the two cannot read the ref two
+ * different ways.
+ */
+async function readOid(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  fullRef: string
+): Promise<string | null> {
+  try {
+    const out = await git.raw(["rev-parse", "--verify", "--quiet", `${fullRef}^{commit}`]);
+    const oid = out.trim();
+    return /^[0-9a-f]{40,64}$/i.test(oid) ? oid : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Refuse the write if anything moved between the preview and the approval.
+ *
+ * The confirm dialog is a promise about specific commits: *these* get replayed,
+ * *onto that*. In this product that promise has a genuinely short shelf life —
+ * Daintree exists to run many agents in parallel across worktrees, so an agent
+ * committing into the worktree while the dialog sits open is the ordinary case
+ * rather than a race to shrug at. Background fetch moving the remote-tracking
+ * ref is the same story from the other end.
+ *
+ * So the preview reports the two OIDs it measured against and the write checks
+ * them. A mismatch is refused rather than reconciled: re-previewing silently
+ * would be the "if X changed, use Y" substitution the destructive-action rules
+ * call a review blocker, and the operation the user actually sanctioned no
+ * longer exists.
+ *
+ * Both are OPTIONAL. A caller that supplies neither — an agent dispatch, a
+ * keybinding, a plugin — gets today's unpinned behaviour rather than a hard
+ * failure, because there was no preview to bind to in the first place. What
+ * must never happen is a supplied expectation being ignored.
+ */
+async function requireUnmovedSince(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  payload: {
+    expectedBranch?: string;
+    expectedHeadOid?: string;
+    expectedBaseOid?: string;
+    cwd: string;
+  },
+  branch: string,
+  target: ExistingBaseCompareTarget,
+  op: string
+): Promise<void> {
+  // The branch NAME, not only its tip. Pinning the OID alone leaves a hole:
+  // checking out a different branch that happens to sit on the same commit
+  // passes every OID check while the operation goes on to rewrite a branch the
+  // user never saw named.
+  if (payload.expectedBranch && payload.expectedBranch !== branch) {
+    const message = `This worktree is now on '${branch}' rather than '${payload.expectedBranch}', so this operation would act on a different branch than the one previewed. Try again to see the current state.`;
+    throw new GitOperationError(
+      "conflict-unresolved",
+      encodeGitOperationErrorMessage("conflict-unresolved", message, { branchName: branch }),
+      { cwd: payload.cwd, op, rawMessage: message, branchName: branch }
+    );
+  }
+
+  const checks: Array<{ expected: string | undefined; ref: string; what: string }> = [
+    { expected: payload.expectedHeadOid, ref: "HEAD", what: "This branch has new commits" },
+    {
+      expected: payload.expectedBaseOid,
+      ref: target.fullRef,
+      what: `${target.compareRef} has moved`,
+    },
+  ];
+
+  for (const { expected, ref, what } of checks) {
+    if (!expected) continue;
+    const actual = await readOid(git, ref);
+    if (actual === expected) continue;
+    const message = `${what} since this operation was previewed, so it would no longer do what was approved. Try again to see the current state.`;
+    throw new GitOperationError(
+      "conflict-unresolved",
+      encodeGitOperationErrorMessage("conflict-unresolved", message),
+      { cwd: payload.cwd, op, rawMessage: message }
+    );
+  }
+}
+
+/**
+ * Worktrees with a base integration in flight.
+ *
+ * A second start against the same worktree while the first is still running
+ * would race the sentinel check above — `requireNoOperationInProgress` reads
+ * `.git/` state that the in-flight operation has not written yet. Mirrors the
+ * `pushingCwds` guard the push path already uses.
+ */
+const baseIntegratingCwds = new Set<string>();
+
+/**
+ * Run a base integration end to end: preflight, then exactly one git command.
+ *
+ * A halt is NOT an error to clean up. `git rebase` stopping on a conflict
+ * leaves the worktree mid-rebase on purpose, and `repoState` flipping to
+ * `REBASING` is what routes the user to Review Hub's ConflictPanel, where Abort
+ * and Continue live. Auto-aborting here would delete the conflict the user is
+ * about to resolve and report a plain failure instead — so the error is
+ * classified and rethrown with the operation left exactly where git left it.
+ */
+async function runBaseIntegration(
+  payload: {
+    cwd: string;
+    baseBranch: string;
+    expectedBranch?: string;
+    expectedHeadOid?: string;
+    expectedBaseOid?: string;
+  },
+  kind: GitBaseIntegrationKind
+): Promise<void> {
+  validateCwd(payload?.cwd);
+  const baseBranch = requireBaseBranch(payload?.baseBranch);
+  const op = kind === "rebase-onto-base" ? "rebase-onto-base" : "merge-base";
+
+  if (baseIntegratingCwds.has(payload.cwd)) {
+    const message = "A base-branch integration is already running in this worktree.";
+    throw new GitOperationError(
+      "conflict-unresolved",
+      encodeGitOperationErrorMessage("conflict-unresolved", message),
+      { cwd: payload.cwd, op, rawMessage: message }
+    );
+  }
+  // Claimed INSIDE the try, so the `finally` that releases it dominates every
+  // path that could have claimed it. Adding before `createHardenedGit` left the
+  // cwd marked forever if that factory rejected — a deleted worktree would then
+  // report "already running" until the main process restarted.
+  baseIntegratingCwds.add(payload.cwd);
+  try {
+    const git = await createHardenedGit(payload.cwd);
+    const branch = await requireCheckedOutBranch(git);
+    // THE invariant, enforced rather than assumed. Everything else in this file
+    // arranges for the operation to read the base ref and write only this
+    // worktree's HEAD — but if HEAD *is* the base branch, "write only HEAD"
+    // and "write refs/heads/<base>" are the same sentence. Possible whenever a
+    // worktree has the base checked out: a fork layout where the feature branch
+    // is also called `develop`, or a hand-arranged tree.
+    if (branch === baseBranch) {
+      const message = `This worktree has '${baseBranch}' itself checked out, so integrating the base branch would rewrite it. Check out the branch you want to update first.`;
+      throw new GitOperationError(
+        "config-missing",
+        encodeGitOperationErrorMessage("config-missing", message, { branchName: branch }),
+        { cwd: payload.cwd, op, rawMessage: message, branchName: branch }
+      );
+    }
+    await requireNoOperationInProgress(git, payload.cwd, op);
+    await requireCleanTree(git, payload.cwd, op);
+    const target = await requireBaseTarget(git, baseBranch, payload.cwd);
+    await requireUnmovedSince(git, payload, branch, target, op);
+
+    // `-c` overrides rather than command-line flags, deliberately. Git ignores a
+    // config key it does not know, so these degrade to a no-op on an older git;
+    // the equivalent `--no-update-refs` / `--no-rebase-merges` flags are hard
+    // errors there instead. Each pin closes a gap between what the confirm
+    // dialog described and what git would actually do under a user's config:
+    //
+    //  - `rebase.updateRefs=true` force-updates OTHER local branches that point
+    //    into the replayed range. `refs/heads/<base>` can be one of them, which
+    //    is the exact write this whole path exists to avoid.
+    //  - `rebase.rebaseMerges=true` recreates merge commits the preview omitted
+    //    (it measures with `--no-merges`, matching a default rebase).
+    //  - `*.autoStash=true` would stash and re-apply the user's changes, which
+    //    contradicts the refusal this handler just performed and can strand
+    //    them in a stash-pop conflict on top of the rebase.
+    const pins =
+      kind === "rebase-onto-base"
+        ? [
+            "-c",
+            "rebase.updateRefs=false",
+            "-c",
+            "rebase.rebaseMerges=false",
+            "-c",
+            "rebase.autoStash=false",
+          ]
+        : ["-c", "merge.autoStash=false"];
+
+    if (kind === "rebase-onto-base") {
+      await git.raw([...pins, "rebase", target.fullRef]);
+    } else {
+      // `--no-edit` is load-bearing, not tidiness: a real (non-fast-forward)
+      // merge opens an editor for the commit message, and there is no TTY in a
+      // utility process for it to open on. Without this the spawn hangs.
+      //
+      // `--no-squash` overrides a `branch.<name>.mergeOptions = --squash`, which
+      // git applies BEFORE command-line args. Under that config the merge would
+      // report success having created no commit and left everything staged —
+      // the opposite of what the dialog promised.
+      await git.raw([...pins, "merge", "--no-edit", "--no-squash", target.fullRef]);
+    }
+
+    if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
+      playSoundFireAndForget("git-push");
+    }
+  } catch (error) {
+    if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
+      playSoundFireAndForget("git-push-error");
+    }
+    throw asBaseIntegrationError(error, payload.cwd, op);
+  } finally {
+    baseIntegratingCwds.delete(payload.cwd);
+  }
+}
+
+/**
+ * Integrating the BASE branch into a worktree (#12092).
+ *
+ * The distinction from `gitRemotePreviewNamespace` above is the ref, and it is
+ * the whole point: those ops act on the branch's own push destination or
+ * upstream, which on a never-pushed feature branch does not exist and on a
+ * pushed one says nothing about `develop` having moved. These act on the base
+ * branch the worktree card already measures itself against.
+ *
+ * Three rules hold across all of them:
+ *
+ * 1. **Never write `refs/heads/<base>`.** Daintree's base branch is normally
+ *    checked out in the main worktree, and git refuses to update a branch
+ *    checked out somewhere else — `git fetch origin develop:develop` fails with
+ *    `refuse to fetch into current branch`. Rebasing or merging the
+ *    remote-tracking ref DIRECTLY sidesteps that entirely: it reads the ref and
+ *    writes only this worktree's own HEAD.
+ * 2. **Never fetch.** These operate on whatever the base ref points at right
+ *    now. Background fetch is what keeps it fresh (#12091); folding a network
+ *    read in here would make a confirm dialog's preview and the operation it
+ *    describes measure two different tips.
+ * 3. **Refuse a dirty tree rather than autostash.** Matching `handlePullRebase`
+ *    and the convention every desktop git client follows: an autostash whose
+ *    pop conflicts strands the user in a worse state than the clean upfront
+ *    refusal, on top of a halt they now also have to resolve.
+ */
+const gitBaseIntegrationNamespace = defineIpcNamespace({
+  name: "gitBaseIntegration",
+  ops: {
+    listBaseIntegrationCommits: op(
+      CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS,
+      async (payload: {
+        cwd: string;
+        baseBranch: string;
+        kind: GitBaseIntegrationKind;
+        limit?: number;
+      }): Promise<GitBaseIntegrationCommitPreview> => {
+        checkRateLimit(CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS, 10, 10_000);
+        validateCwd(payload?.cwd);
+        const baseBranch = requireBaseBranch(payload?.baseBranch);
+        const kind = payload?.kind;
+        if (kind !== "rebase-onto-base" && kind !== "merge-base") {
+          throw new Error("Invalid integration kind");
+        }
+        const limit = Math.max(1, Math.min(100, payload.limit ?? 20));
+
+        const git = await createHardenedGit(payload.cwd);
+        try {
+          const branchName = await requireCheckedOutBranch(git);
+          const target = await requireBaseTarget(git, baseBranch, payload.cwd);
+          const localRef = `refs/heads/${branchName}`;
+
+          // Rebase and merge describe OPPOSITE ranges, so each gets the range
+          // git itself would use rather than one shared approximation.
+          //
+          // Rebase replays with `--no-merges --cherry-pick --right-only` over
+          // the symmetric difference — that is rebase's own todo-list
+          // selection, and each flag drops rows a two-dot range would have
+          // promised to rewrite (a default rebase recreates no merge commits,
+          // and skips commits the base already holds as equivalent patches).
+          //
+          // Merge brings in `<local>..<base>` and KEEPS merges: a merge commit
+          // on the base is genuinely one of the commits that arrives.
+          const revArgs =
+            kind === "rebase-onto-base"
+              ? ["--no-merges", "--cherry-pick", "--right-only", `${target.fullRef}...${localRef}`]
+              : [`${localRef}..${target.fullRef}`];
+
+          const log = await git.log([`--max-count=${limit}`, ...revArgs]);
+          const total = await countCommitsInRange(git, revArgs);
+          // Measured separately and always in the base→branch direction. For a
+          // rebase an empty replay set is produced both by a branch level with
+          // the base and by one purely behind it, and only the second is moved
+          // by the operation; for a merge this IS the incoming count, and
+          // restating it costs one cheap local rev-list.
+          const behind = await countCommitsInRange(git, [`${localRef}..${target.fullRef}`]);
+          // Read LAST, so they describe the repository at the end of the
+          // measurement rather than the start. The rows above are still a
+          // best-effort snapshot across several invocations, but these two are
+          // what the write is held to — so anything that moved mid-read shows
+          // up as a refusal on submit instead of an unnoticed substitution.
+          const headOid = await readOid(git, localRef);
+          const baseOid = await readOid(git, target.fullRef);
+
+          return {
+            kind,
+            branch: branchName,
+            baseBranch,
+            compareRef: target.compareRef,
+            remote: target.remote,
+            headOid,
+            baseOid,
+            total,
+            behind,
+            commits: log.all.map((commit) => ({
+              hash: commit.hash,
+              date: commit.date,
+              message: commit.message,
+              author: commit.author_name,
+            })),
+          };
+        } catch (error) {
+          throw asBaseIntegrationError(error, payload.cwd, "list-base-integration-commits");
+        }
+      }
+    ),
+
+    rebaseOntoBase: op(
+      CHANNELS.GIT_REBASE_ONTO_BASE,
+      async (payload: {
+        cwd: string;
+        baseBranch: string;
+        expectedBranch?: string;
+        expectedHeadOid?: string;
+        expectedBaseOid?: string;
+      }): Promise<void> => {
+        checkRateLimit(CHANNELS.GIT_REBASE_ONTO_BASE, 3, 10_000);
+        await runBaseIntegration(payload, "rebase-onto-base");
+      }
+    ),
+
+    mergeBaseIntoBranch: op(
+      CHANNELS.GIT_MERGE_BASE_INTO_BRANCH,
+      async (payload: {
+        cwd: string;
+        baseBranch: string;
+        expectedBranch?: string;
+        expectedHeadOid?: string;
+        expectedBaseOid?: string;
+      }): Promise<void> => {
+        checkRateLimit(CHANNELS.GIT_MERGE_BASE_INTO_BRANCH, 3, 10_000);
+        await runBaseIntegration(payload, "merge-base");
       }
     ),
   },
@@ -905,6 +1400,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   handlers.push(typedHandle(CHANNELS.GIT_LIST_REMOTE_COMMITS, handleListRemoteCommits));
 
   handlers.push(gitRemotePreviewNamespace.register());
+  handlers.push(gitBaseIntegrationNamespace.register());
 
   const handleGetUsername = async (cwd: string): Promise<string | null> => {
     checkRateLimit(CHANNELS.GIT_GET_USERNAME, 20, 10_000);

@@ -90,6 +90,14 @@ describe("classifyGitError — table-driven", () => {
       "worktree-dirty",
       "error: Your local changes to the following files would be overwritten by merge:\n\tfoo.ts",
     ],
+    // A RAW `git rebase <ref>` refuses differently from `git pull --rebase`,
+    // and the base-branch integration issues the raw form (#12092). Without
+    // these arms both fell through to `unknown` and the user got a generic
+    // failure where the diagnosis is the whole fix.
+    ["worktree-dirty", "error: cannot rebase: You have unstaged changes."],
+    ["worktree-dirty", "error: cannot rebase: Your index contains uncommitted changes."],
+    // Git for Windows writes CRLF, and normalization runs before matching.
+    ["worktree-dirty", "error: cannot rebase: You have unstaged changes.\r\n"],
     ["pathspec-invalid", "fatal: bad revision 'HEAD~999'"],
     ["pathspec-invalid", "fatal: pathspec 'nonexistent' did not match any file(s) known to git"],
     ["pathspec-invalid", "fatal: couldn't find remote ref pull/99999/head"],
@@ -118,6 +126,11 @@ describe("classifyGitError — table-driven", () => {
     ["system-io-error", "could not create work tree dir '/path/to/wt': Permission denied"],
     ["unknown", "some completely unrecognized git message"],
     ["unknown", ""],
+    // NOT `worktree-dirty`. Git reuses the `cannot rebase:` prefix for
+    // refusals that have nothing to do with local changes, and telling the
+    // user to commit or stash is a worse answer than no answer (#12092).
+    ["unknown", "error: cannot rebase: HEAD is not a valid commit"],
+    ["unknown", "error: cannot rebase: It seems that there is already a rebase-merge directory"],
   ])("maps %s from %j", (expected, input) => {
     expect(classifyGitError(input)).toBe(expected);
   });

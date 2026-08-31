@@ -28,6 +28,9 @@ const TSCONFIG_PATH = path.join(REPO_ROOT, "tsconfig.json");
 const EXPECTED_CONFIRM_DANGER = new Set([
   "git.push",
   "git.pullRebase",
+  "git.rebaseOntoBase",
+  "git.mergeBaseIntoBranch",
+  "git.abortRepositoryOperation",
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",
@@ -102,6 +105,11 @@ const CONFIRMED_WIRED = [
 const BYPASS_WIRED = new Set([
   "git.push", // deferred-promise via gitPushConfirmStore; GitPushConfirmDialog resolves it
   "git.pullRebase", // IPC bypass in ReviewHubContent.tsx; ConfirmDialog wired but ID not co-located
+  // Deferred-promise via gitWorktreeOperationConfirmStore (#12092); the dialog
+  // is mounted globally in ModalHostLayer, so the ID is not co-located with it.
+  "git.rebaseOntoBase",
+  "git.mergeBaseIntoBranch",
+  "git.abortRepositoryOperation",
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located
   "terminal.arm", // agent/MCP-only confirm gate (#11346); palette-hidden, user arming goes through the fleet ribbon (not ActionService), so no user-side ConfirmDialog to co-locate
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)

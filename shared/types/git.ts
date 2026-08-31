@@ -244,6 +244,66 @@ export interface GitRebaseCommitPreview {
   behind: number;
 }
 
+/**
+ * Which direction a base-branch integration runs (#12092).
+ *
+ * A rebase REPLAYS the branch's own commits on top of the base; a merge brings
+ * the BASE's commits into the branch. The two describe opposite ranges, so the
+ * kind travels with the preview rather than being inferred from it — an empty
+ * commit list means something different for each.
+ */
+export type GitBaseIntegrationKind = "rebase-onto-base" | "merge-base";
+
+/**
+ * What a rebase-onto-base or merge-base would actually act on.
+ *
+ * Separate from {@link GitRebaseCommitPreview}, which is measured against the
+ * branch's OWN upstream and can therefore always name a `GitPushDestination`.
+ * A base target may be a purely local branch in a repo with no remote at all,
+ * which that shape cannot describe truthfully — so this one carries the short
+ * ref as a string and names the remote only when there is one.
+ */
+export interface GitBaseIntegrationCommitPreview {
+  kind: GitBaseIntegrationKind;
+  /** The branch the operation would act on, as git resolved it. */
+  branch: string;
+  /** The base branch the worktree measures itself against. */
+  baseBranch: string;
+  /** Short ref the operation targets — `upstream/develop`, or a bare `develop`. */
+  compareRef: string;
+  /** Remote `compareRef` lives on, or `null` on the local-branch fallback. */
+  remote: string | null;
+  /**
+   * The two commits this preview describes: the branch tip and the base tip.
+   *
+   * Carried so the confirm can hand them back to the write, which refuses if
+   * either has moved. Daintree runs many agents in parallel across worktrees,
+   * so a commit landing while the dialog is open is ordinary rather than a
+   * race to shrug at — without these the user could approve one replay set and
+   * get another. `null` when the ref did not resolve, which the caller treats
+   * as "nothing to pin" rather than as a match.
+   */
+  headOid: string | null;
+  baseOid: string | null;
+  /**
+   * For `rebase-onto-base`, the commits that would be REPLAYED (the branch's
+   * own, measured `--cherry-pick --right-only` so commits the base already
+   * holds as equivalent patches are excluded). For `merge-base`, the commits
+   * that would be BROUGHT IN from the base.
+   */
+  commits: GitRemoteCommit[];
+  /** Commits in the whole set, which may exceed the returned `commits`. */
+  total: number;
+  /**
+   * Commits the base has that the branch does not.
+   *
+   * Carried for the same reason {@link GitRebaseCommitPreview.behind} is: an
+   * empty replay set alone cannot tell "level with the base" from "purely
+   * behind it". Both replay nothing; only the second one moves the branch.
+   */
+  behind: number;
+}
+
 export interface StagingStatus {
   staged: StagingFileEntry[];
   unstaged: StagingFileEntry[];

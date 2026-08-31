@@ -945,6 +945,37 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       branchName: string,
       limit?: number
     ): Promise<import("../git.js").GitRebaseCommitPreview>;
+    /**
+     * The commits a base-branch integration would act on (#12092).
+     *
+     * Distinct from `listRebaseCommits`, which measures against the branch's
+     * OWN upstream: this measures against the base branch the worktree card
+     * shows a behind count for, and `kind` decides the direction.
+     */
+    listBaseIntegrationCommits(
+      cwd: string,
+      baseBranch: string,
+      kind: import("../git.js").GitBaseIntegrationKind,
+      limit?: number
+    ): Promise<import("../git.js").GitBaseIntegrationCommitPreview>;
+    /**
+     * Replay this worktree's commits on top of the base branch's ref.
+     *
+     * `expected*Oid` pin the operation to the commits a confirm dialog
+     * previewed: the write refuses if either moved. Omit both when there was no
+     * preview to bind to.
+     */
+    rebaseOntoBase(
+      cwd: string,
+      baseBranch: string,
+      expected?: { branch?: string; headOid?: string; baseOid?: string }
+    ): Promise<void>;
+    /** Merge the base branch's ref into this worktree's branch. */
+    mergeBaseIntoBranch(
+      cwd: string,
+      baseBranch: string,
+      expected?: { branch?: string; headOid?: string; baseOid?: string }
+    ): Promise<void>;
     onPushProgress(callback: (event: PushProgressEvent) => void): () => void;
     getStagingStatus(cwd: string): Promise<StagingStatus>;
     abortRepositoryOperation(cwd: string): Promise<void>;

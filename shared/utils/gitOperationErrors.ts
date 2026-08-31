@@ -105,8 +105,22 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     /CONFLICT \(|Merge conflict in |error: (?:merge is not possible because you have unmerged files|pull is not possible because you have unmerged files)/i,
   ],
   [
+    // The `cannot rebase:` arm is NOT redundant with `cannot pull with rebase`
+    // (#12092). `git pull --rebase` refuses with its own wording, which is what
+    // `git.pullRebase` hits; a RAW `git rebase <ref>` — which the base-branch
+    // integration issues directly — refuses with "error: cannot rebase: You
+    // have unstaged changes." / "…Your index contains uncommitted changes."
+    // instead. Without the arm those fall through to `unknown`, and the user
+    // gets a generic failure where the diagnosis is the whole fix.
+    //
+    // The arm names both diagnoses rather than accepting any `cannot rebase:`
+    // suffix. Git uses that same prefix for refusals that have nothing to do
+    // with a dirty tree — "cannot rebase: HEAD is not a valid commit" among
+    // them — and bucketing one of those as `worktree-dirty` tells the user to
+    // commit or stash changes that do not exist, which is worse than the
+    // `unknown` fallback it replaced.
     "worktree-dirty",
-    /Your local changes to the following files would be overwritten by (?:merge|checkout|pull)|error: (?:cannot|Cannot) (?:pull with rebase|pull )/i,
+    /Your local changes to the following files would be overwritten by (?:merge|checkout|pull)|error: (?:cannot|Cannot) (?:pull with rebase|pull )|error: (?:cannot|Cannot) rebase: (?:You have unstaged changes|Your index contains uncommitted changes)/i,
   ],
   [
     "pathspec-invalid",
