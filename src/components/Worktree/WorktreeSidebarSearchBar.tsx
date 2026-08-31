@@ -218,10 +218,11 @@ export function WorktreeSidebarSearchBar({
         // the rule above it.
         "px-3 pb-3 border-b border-divider shrink-0",
         // In the dialog the horizontal neighbours are different too: the header,
-        // the footer and the rows below all sit on AppDialog's chrome inset
-        // (24px plus the 11px scrollbar gutter `AppDialog.Body` reserves), so
-        // the bar carries that one instead of the rail's 12px.
-        variant === "modal" && "pt-3 px-[calc(1.5rem+11px)]",
+        // the footer and the rows below all sit on AppDialog's 24px column, so
+        // the bar carries that one instead of the rail's 12px. Plain `px-6`:
+        // the body absorbs whatever the platform reserves for a scrollbar out
+        // of its own padding, so nothing out here compensates for it (#12101).
+        variant === "modal" && "pt-3 px-6",
         variant === "sidebar" && "worktree-filter-bar"
       )}
     >

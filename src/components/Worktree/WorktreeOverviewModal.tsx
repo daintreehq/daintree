@@ -1057,7 +1057,7 @@ export function WorktreeOverviewModal({
             is what keeps the title and the `N of M` count on screen while a
             destructive bulk action is one click away. */}
         {hasSelection ? (
-          <div className="flex items-center justify-between gap-3 px-[calc(1.5rem+11px)] py-2 border-b border-divider shrink-0">
+          <div className="flex items-center justify-between gap-3 px-6 py-2 border-b border-divider shrink-0">
             <div className="flex items-center gap-3 min-w-0">
               {/* Visual only — the announcement is owned by the status region
                   above, so this must not be a second live region. */}
@@ -1108,7 +1108,7 @@ export function WorktreeOverviewModal({
           // would make filtering permanently unreachable — no filter could be
           // set, so `hasActiveFilters()` could never become true.
           (hasActivitySummary || hasActiveFilters() || !hasNonMainWorktrees) && (
-            <div className="flex items-center gap-2 px-[calc(1.5rem+11px)] py-2 border-b border-divider shrink-0 flex-wrap">
+            <div className="flex items-center gap-2 px-6 py-2 border-b border-divider shrink-0 flex-wrap">
               {/* Aggregate activity statistics — clickable chips that set quickStateFilter.
                   Ordered waiting → working → finished: "something is asking me
                   for input" is the highest-value signal on this surface, so it
@@ -1237,9 +1237,10 @@ export function WorktreeOverviewModal({
 
         {/* Content. `AppDialog.Body` brings the shared scroll box: a
             ScrollShadow at both edges, so content no longer just stops
-            mid-glyph against the footer, and a reserved scrollbar gutter so
-            the grid does not shift by 11px the moment it starts to overflow. */}
-        <AppDialog.Body className="p-6">
+            mid-glyph against the footer, a reserved scrollbar gutter so the
+            grid does not shift the moment it starts to overflow, and the
+            dialog column the two bars above are aligned to. */}
+        <AppDialog.Body>
           {isLoading && worktrees.length === 0 ? (
             <Skeleton label="Loading worktrees">
               <div

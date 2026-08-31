@@ -71,7 +71,7 @@ export function FigureLightbox({
       maxHeight="max-h-[90vh]"
       data-testid="figure-lightbox"
     >
-      <AppDialog.Header plainBody>
+      <AppDialog.Header>
         <AppDialog.Title>Figure {figure.figureNumber}</AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>

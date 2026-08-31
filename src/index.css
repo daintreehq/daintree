@@ -918,6 +918,26 @@ code.hljs {
     background: var(--scrollbar-track);
   }
 
+  /* The dialog column. Header, body and footer all land 1.5rem from the card's
+     inner edge — on every platform, whether or not the body is scrolling.
+
+     The body reserves a scrollbar gutter so its content does not jump sideways
+     the moment it crosses the overflow threshold. What that gutter costs is not
+     a constant: macOS overlay scrollbars reserve nothing, classic scrollbars
+     reserve their full width, and no CSS primitive reports which happened. So
+     `publishScrollbarGutter()` measures it, and the padding here absorbs it
+     instead of asking the header and footer to add it back — a compensating
+     literal in the chrome was right on exactly one platform and wrong on the
+     rest (#12101).
+
+     `max()` floors the padding at zero if a platform ever reserves more than
+     the column itself; negative padding cannot claw space back from a native
+     scrollbar, so widening the column is the only safe overflow. */
+  .dialog-body-inset {
+    padding-inline: max(0px, calc(1.5rem - var(--app-scrollbar-gutter, 0px)));
+    scrollbar-gutter: stable both-edges;
+  }
+
   /* The agent grid draws its own scrollbar — the GridScrollbar component, a
      chunky physical handle modelled on xterm's (VS Code's) slider, sitting in
      a real reserved gutter. The native scrollbar is hidden entirely: the grid
