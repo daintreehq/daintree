@@ -626,6 +626,13 @@
   bottom: 0;
   z-index: 3;
   overflow-x: auto;
+  /* Explicit, not incidental: left at its initial `visible` this would compute
+     to `auto` (CSS Overflow 3 §3.3) and the 1px spacer would overflow the
+     strip's 12px box — which the 12px horizontal bar already fills — reserving
+     width for a vertical scrollbar. That shrinks the strip's clientWidth below
+     the scroller's, so the proxy's scroll range runs past the content's and its
+     last few pixels of travel would have nothing to scroll to. */
+  overflow-y: hidden;
   height: 0;
   background: var(--color-surface-canvas);
   /* The global `* { scrollbar-width: thin; scrollbar-color: … }` opts every

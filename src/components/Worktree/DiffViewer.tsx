@@ -5,6 +5,7 @@ import {
   useDeferredValue,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -909,19 +910,27 @@ function FileDiff({
 
   // Two-way scrollLeft mirroring between the real scroller and its proxy strip.
   // Deliberately no re-entrancy flag: a synchronously cleared flag can't guard
-  // a scroll event that arrives asynchronously anyway. Instead each direction
-  // writes only when the two are a whole pixel or more apart, so the echo event
-  // the write triggers finds them equal and stops. If one end clamps (its range
-  // is momentarily the shorter of the two) the pair settles on the clamped
-  // value one tick later instead of oscillating.
+  // a scroll event that arrives asynchronously anyway. Instead the write is
+  // skipped once the two already agree, so the echo event each write triggers
+  // finds them equal and stops there.
+  //
+  // The read-back is not belt-and-braces. If the target clamps the write — its
+  // scroll range is the shorter of the two — it lands on a *different* value
+  // and fires no scroll event at all, because from its point of view nothing
+  // moved. Waiting for an echo would leave the pair permanently out of step, so
+  // the landed value is pushed back to the source instead. That second write
+  // can never clamp in turn (it is <= the value the source already held), which
+  // is what makes this settle within the one call.
   const syncNativeHScroll = useCallback((source: "content" | "proxy") => {
     const content = nativeScrollerRef.current;
     const proxy = hScrollbarRef.current;
     if (!content || !proxy) return;
     const from = source === "content" ? content : proxy;
     const to = source === "content" ? proxy : content;
-    if (Math.abs(to.scrollLeft - from.scrollLeft) < 1) return;
-    to.scrollLeft = from.scrollLeft;
+    const target = from.scrollLeft;
+    if (to.scrollLeft === target) return;
+    to.scrollLeft = target;
+    if (to.scrollLeft !== target && from.scrollLeft === target) from.scrollLeft = to.scrollLeft;
   }, []);
 
   const handleNativeHScroll = useCallback(() => {
@@ -978,7 +987,12 @@ function FileDiff({
   // re-expanding a file remounts both elements, and `usesNativeHScrollProxy`
   // because a unified wrap toggle never changes `isCenteredSplit`.
   const [hasHOverflow, setHasHOverflow] = useState(false);
-  useEffect(() => {
+  // Layout, not passive: `hasHOverflow` carries across a mode switch, so a
+  // centered split that overflowed would render the native branch with its bar
+  // already hidden while the freshly mounted strip still has no measured width
+  // — one painted frame of a dead proxy and no scrollbar at all. Measuring
+  // before paint retires that frame.
+  useLayoutEffect(() => {
     const proxy = hScrollbarRef.current;
     const native = usesNativeHScrollProxy ? nativeScrollerRef.current : null;
     if (!proxy || (usesNativeHScrollProxy && !native)) {
