@@ -11,10 +11,13 @@ import type { PerfMode } from "./types";
 // adding one REGISTRY entry — package.json and this file never grow a per-
 // benchmark script again.
 //
-//   npm run perf list                       # show every command
-//   npm run perf ci                          # run the ci-mode harness matrix
-//   npm run perf -- ci --update-baseline     # forward flags after `--`
+//   npm run perf list                              # show every command
+//   npm run perf smoke -- --scenario PERF-105      # measure ONE benchmark
 //   npm run perf cold-start -- --runs 10
+//
+// The four mode commands each require `--scenario` with exactly one id. There
+// is no whole-matrix run: this harness exists for targeted optimisation work
+// driven by `.agents/skills/optimize`, one benchmark at a time.
 
 const perfDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(perfDir, "..", "..");
@@ -135,10 +138,15 @@ function playwrightBench({ project, spec, gate, build }: PlaywrightBench): Runne
 }
 
 const REGISTRY: Record<string, Command> = {
-  smoke: { summary: "Fast local smoke matrix (run on demand)", runner: harness("smoke") },
-  ci: { summary: "CI validation matrix (scheduled + manual dispatch)", runner: harness("ci") },
-  nightly: { summary: "Full matrix + soak coverage", runner: harness("nightly") },
-  soak: { summary: "Long-run stress matrix", runner: harness("soak") },
+  // Modes set iteration counts and which scenarios are eligible; each needs
+  // `--scenario <ONE-ID>`. Nothing schedules these — there is no perf CI.
+  smoke: { summary: "One scenario, fast sampling (--scenario required)", runner: harness("smoke") },
+  ci: { summary: "One scenario, more iterations (--scenario required)", runner: harness("ci") },
+  nightly: {
+    summary: "One scenario, heaviest sampling (--scenario required)",
+    runner: harness("nightly"),
+  },
+  soak: { summary: "One scenario, long-run stress (--scenario required)", runner: harness("soak") },
   compare: {
     summary: "Diff two run summaries into a comparability-aware delta table",
     runner: tsxScript("compare.ts"),
@@ -239,7 +247,7 @@ function printUsage(): void {
   }
   console.log(
     "\nCommon flags are forwarded to the benchmark, e.g. " +
-      "`npm run perf -- smoke --update-baseline`, `npm run perf cold-start -- --json`."
+      "`npm run perf smoke -- --scenario PERF-105`, `npm run perf cold-start -- --json`."
   );
   console.log("Details: scripts/perf/README.md");
 }

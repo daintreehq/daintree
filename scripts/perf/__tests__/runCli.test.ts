@@ -19,18 +19,32 @@ const smokeIds = getScenariosForMode("smoke").map((scenario) => scenario.id);
 const [firstId, secondId] = smokeIds;
 
 describe("parseArgs — defaults", () => {
-  it("runs the whole smoke matrix with no arguments", () => {
-    const cli = parseArgs([]);
+  it("refuses to run without a scenario, because there is no whole-matrix run", () => {
+    // The contract, not an inconvenience: this harness measures one benchmark
+    // at a time and nothing schedules it, so an unfiltered invocation has no
+    // meaning to fall back to.
+    expect(() => parseArgs([])).toThrow(UsageError);
+    expect(() => parseArgs([])).toThrow(/--scenario is required/);
+  });
+
+  it("defaults everything else, given a scenario", () => {
+    const cli = parseArgs(["--scenario", firstId]);
     expect(cli.mode).toBe("smoke");
-    expect(cli.scenarioIds).toBeNull();
+    expect(cli.scenarioIds).toEqual([firstId]);
     expect(cli.updateBaseline).toBe(false);
     expect(cli.iterations).toBeUndefined();
     expect(cli.warmups).toBeUndefined();
   });
 
   it("derives the baseline path from the mode", () => {
-    expect(parseArgs(["--mode", "nightly"]).baselinePath).toContain("baseline.nightly.json");
-    expect(parseArgs(["--mode", "ci"]).baselinePath).toContain("baseline.ci.json");
+    const nightlyId = getScenariosForMode("nightly")[0].id;
+    const ciId = getScenariosForMode("ci")[0].id;
+    expect(parseArgs(["--mode", "nightly", "--scenario", nightlyId]).baselinePath).toContain(
+      "baseline.nightly.json"
+    );
+    expect(parseArgs(["--mode", "ci", "--scenario", ciId]).baselinePath).toContain(
+      "baseline.ci.json"
+    );
   });
 });
 
@@ -73,11 +87,16 @@ describe("parseArgs — strict rejection", () => {
 });
 
 describe("parseArgs — --scenario", () => {
-  it("accepts repeated flags and comma-separated lists interchangeably", () => {
-    const repeated = parseArgs(["--scenario", firstId, "--scenario", secondId]);
-    const commas = parseArgs(["--scenario", `${firstId},${secondId}`]);
-    expect(repeated.scenarioIds).toEqual([firstId, secondId]);
-    expect(commas.scenarioIds).toEqual(repeated.scenarioIds);
+  it("takes exactly one id, however it is spelled", () => {
+    // Two ids in one process makes each one's numbers depend on the other's
+    // heap and JIT state, and `perf compare` refuses a pair whose selections
+    // differ — so a multi-scenario run could never be compared to anything.
+    expect(() => parseArgs(["--scenario", firstId, "--scenario", secondId])).toThrow(
+      /exactly one id, got 2/
+    );
+    expect(() => parseArgs(["--scenario", `${firstId},${secondId}`])).toThrow(
+      /exactly one id, got 2/
+    );
   });
 
   it("dedupes and tolerates whitespace and lowercase input", () => {
@@ -113,27 +132,29 @@ describe("parseArgs — --scenario", () => {
 
 describe("parseArgs — sample-count overrides", () => {
   it("accepts a positive iteration count", () => {
-    expect(parseArgs(["--iterations", "3"]).iterations).toBe(3);
+    expect(parseArgs(["--scenario", firstId, "--iterations", "3"]).iterations).toBe(3);
   });
 
   it("rejects an iteration count that would measure nothing", () => {
-    expect(() => parseArgs(["--iterations", "0"])).toThrow(/--iterations/);
-    expect(() => parseArgs(["--iterations", "-2"])).toThrow(/--iterations/);
+    expect(() => parseArgs(["--scenario", firstId, "--iterations", "0"])).toThrow(/--iterations/);
+    expect(() => parseArgs(["--scenario", firstId, "--iterations", "-2"])).toThrow(/--iterations/);
   });
 
   it("rejects a non-integer sample count rather than silently flooring it", () => {
-    expect(() => parseArgs(["--iterations", "2.5"])).toThrow(/--iterations/);
-    expect(() => parseArgs(["--warmups", "lots"])).toThrow(/--warmups/);
+    expect(() => parseArgs(["--scenario", firstId, "--iterations", "2.5"])).toThrow(/--iterations/);
+    expect(() => parseArgs(["--scenario", firstId, "--warmups", "lots"])).toThrow(/--warmups/);
   });
 
   it("accepts zero warmups, which is a meaningful request", () => {
-    expect(parseArgs(["--warmups", "0"]).warmups).toBe(0);
+    expect(parseArgs(["--scenario", firstId, "--warmups", "0"]).warmups).toBe(0);
   });
 });
 
 describe("parseArgs — run identity", () => {
   it("carries label, json path, and machine override", () => {
     const cli = parseArgs([
+      "--scenario",
+      firstId,
       "--label",
       "before",
       "--json",
@@ -154,19 +175,18 @@ describe("parseArgs — run identity", () => {
   });
 
   it("sets the update-baseline switch without consuming the next token", () => {
-    const cli = parseArgs(["--update-baseline", "--label", "regen"]);
+    const cli = parseArgs(["--scenario", firstId, "--update-baseline", "--label", "regen"]);
     expect(cli.updateBaseline).toBe(true);
     expect(cli.label).toBe("regen");
   });
 
-  it("refuses to write a baseline from a filtered run", () => {
-    // A baseline built from one scenario replaces every other scenario's
-    // reference with nothing, and the file it produces is indistinguishable
-    // from a complete one.
-    expect(() => parseArgs(["--scenario", firstId, "--update-baseline"])).toThrow(
-      /--update-baseline needs the whole matrix/
-    );
-    expect(() => parseArgs(["--update-baseline"])).not.toThrow();
+  it("accepts --update-baseline on the only kind of run there is", () => {
+    // This used to be refused, because a baseline built from one scenario
+    // replaced every other scenario's reference with nothing. Every run is
+    // filtered now, so refusing would make the flag unreachable — the writer
+    // merges into the existing file instead, and that is what makes it safe.
+    expect(parseArgs(["--scenario", firstId, "--update-baseline"]).updateBaseline).toBe(true);
+    expect(() => parseArgs(["--update-baseline"])).toThrow(/--scenario is required/);
   });
 
   it("rejects a repeated scalar flag rather than taking the last one", () => {

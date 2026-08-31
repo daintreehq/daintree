@@ -34,7 +34,7 @@ Restate all seven before starting, and record them.
 
 ### Only matrix scenarios
 
-This loop drives `npm run perf <mode> -- --scenario <ID>` and `npm run perf compare`. That is the whole supported surface.
+This loop drives `npm run perf <mode> -- --scenario <ID>` and `npm run perf compare`. That is the whole supported surface — and since nothing schedules a benchmark and `run.ts` refuses to run without exactly one `--scenario`, **this loop is the only way a matrix benchmark gets measured at all.** There is no whole-matrix run to fall back on and no CI producing numbers in the background: if you do not measure it here, nobody measures it.
 
 The REGISTRY commands are **not** valid targets: `launch-ab` takes `--runs` and packaged-executable operands, `memory-growth` has its own bespoke comparator, `recipe-fanout` is env-var driven. None of them speaks the `--scenario/--json` protocol this loop depends on. If the human names one, say so and stop.
 

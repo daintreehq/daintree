@@ -28,8 +28,8 @@ export interface CliOptions {
   outDir: string;
   baselinePath: string;
   updateBaseline: boolean;
-  /** Explicit scenario subset, or null for the whole matrix for this mode. */
-  scenarioIds: string[] | null;
+  /** The one scenario this run measures. Always exactly one; see resolveScenarioIds. */
+  scenarioIds: string[];
   /** Overrides the per-tier default iteration count for every scenario. */
   iterations?: number;
   /** Overrides each scenario's own warmup count. */
@@ -198,15 +198,6 @@ export function parseArgs(argv: string[]): CliOptions {
 
   const scenarioIds = resolveScenarioIds(scenarioTokens, mode);
 
-  // A baseline is a whole-matrix artifact: writing one from a filtered run
-  // replaces every other scenario's reference with nothing, and the file that
-  // results is indistinguishable from a complete one.
-  if (scenarioIds !== null && flags.has("update-baseline")) {
-    throw new UsageError(
-      "--update-baseline needs the whole matrix — drop --scenario, or write the filtered run to --json instead"
-    );
-  }
-
   const iterationsRaw = values.get("iterations");
   const warmupsRaw = values.get("warmups");
 
@@ -225,16 +216,55 @@ export function parseArgs(argv: string[]): CliOptions {
   };
 }
 
-function resolveScenarioIds(tokens: string[], mode: PerfMode): string[] | null {
-  if (tokens.length === 0) return null;
-
-  const requested = tokens
-    .flatMap((token) => token.split(","))
-    .map((id) => id.trim().toUpperCase())
-    .filter((id) => id.length > 0);
+/**
+ * Resolve the one scenario this run measures.
+ *
+ * `--scenario` is REQUIRED, and takes exactly one id. There is deliberately no
+ * way to run the matrix: this harness exists for targeted optimisation work,
+ * driven a benchmark at a time by `.agents/skills/optimize`, and a
+ * whole-matrix run serves no purpose it has. Nothing gates on these numbers,
+ * nothing schedules them, and a sweep of 112 scenarios produces a wall of
+ * figures nobody reads while taking the machine away from the one measurement
+ * somebody actually wanted.
+ *
+ * It is also the load-bearing half of the optimiser's own comparability check:
+ * a scenario measured alone and the same scenario measured beside 111 others
+ * ran under different heap, JIT and thermal conditions, and `perf compare`
+ * refuses the pair. Making the filter mandatory means every result this harness
+ * produces is comparable with every other result for that scenario.
+ */
+function resolveScenarioIds(tokens: string[], mode: PerfMode): string[] {
+  // Deduped BEFORE the count check: `--scenario PERF-105,perf-105` names one
+  // scenario twice, which is a typo to absorb, not two scenarios to refuse.
+  const requested = [
+    ...new Set(
+      tokens
+        .flatMap((token) => token.split(","))
+        .map((id) => id.trim().toUpperCase())
+        .filter((id) => id.length > 0)
+    ),
+  ];
 
   if (requested.length === 0) {
-    throw new UsageError("--scenario expects at least one scenario id");
+    const offered = getScenariosForMode(mode).map((scenario) => scenario.id);
+    // Truncated on purpose: a hundred ids scrolls the actual message off the
+    // screen, which is the opposite of helping.
+    const preview = offered.slice(0, 8).join(", ");
+    const rest = offered.length > 8 ? `, … and ${offered.length - 8} more` : "";
+    throw new UsageError(
+      "--scenario is required and takes exactly one id. This harness measures one " +
+        `benchmark at a time; there is no whole-matrix run. Mode ${mode} offers ` +
+        `${offered.length}: ${preview}${rest}. Full list: scripts/perf/scenarios/index.ts`
+    );
+  }
+
+  if (requested.length > 1) {
+    throw new UsageError(
+      `--scenario takes exactly one id, got ${requested.length} (${requested.join(", ")}). ` +
+        "Measuring several scenarios in one process makes each one's numbers depend on the " +
+        "others' heap and JIT state, and `perf compare` refuses a pair whose selections differ. " +
+        "Run them separately."
+    );
   }
 
   const available = getScenariosForMode(mode).map((scenario) => scenario.id);
@@ -247,7 +277,7 @@ function resolveScenarioIds(tokens: string[], mode: PerfMode): string[] | null {
     );
   }
 
-  return [...new Set(requested)];
+  return requested;
 }
 
 /**
@@ -512,8 +542,6 @@ function getIterationCount(
 
 function selectScenarios(cli: CliOptions): PerfScenario[] {
   const scenarios = getScenariosForMode(cli.mode);
-  if (cli.scenarioIds === null) return scenarios;
-
   const wanted = new Set(cli.scenarioIds);
   return scenarios.filter((scenario) => wanted.has(scenario.id));
 }
@@ -542,7 +570,7 @@ function buildRerunCommand(cli: CliOptions): string {
   const parts = ["npm", "run", "perf", cli.mode, "--"];
   const optionCount = parts.length;
 
-  if (cli.scenarioIds !== null) parts.push("--scenario", cli.scenarioIds.join(","));
+  parts.push("--scenario", cli.scenarioIds.join(","));
   if (cli.iterations !== undefined) parts.push("--iterations", String(cli.iterations));
   if (cli.warmups !== undefined) parts.push("--warmups", String(cli.warmups));
   if (cli.label !== undefined) parts.push("--label", quoteArg(cli.label));
@@ -610,12 +638,19 @@ function writeHistory(summary: PerfRunSummary): string {
     scenarios[aggregate.id] = entry;
   }
 
+  // Merge, never replace. Every run measures ONE scenario, so writing this file
+  // wholesale would leave a history holding a single entry and looking complete
+  // — the same shape of lie the baseline writer guards against below. Entries
+  // for scenarios this run did not touch are carried through untouched.
+  const previous = readJson<{ scenarios?: Record<string, Record<string, number>> }>(historyPath);
+  const merged = { ...(previous?.scenarios ?? {}), ...scenarios };
+
   writeJson(historyPath, {
     generatedAt: summary.generatedAt,
     mode: summary.mode,
     label: summary.label,
     environment: summary.environment,
-    scenarios,
+    scenarios: Object.fromEntries(Object.entries(merged).sort(([a], [b]) => a.localeCompare(b))),
   });
 
   return historyPath;
@@ -924,6 +959,16 @@ async function run(): Promise<void> {
         p95ByScenario[scenario.id] = inherited;
       }
     }
+    // And for every scenario this run did not select. A run measures ONE
+    // scenario, so a baseline written from just what was measured would hold a
+    // single reference and be indistinguishable from a complete file. This is
+    // the merge that makes `--update-baseline` safe now that there is no
+    // whole-matrix run to regenerate from.
+    for (const [id, value] of Object.entries(baseline?.p95ByScenario ?? {})) {
+      if (p95ByScenario[id] === undefined && Number.isFinite(value)) {
+        p95ByScenario[id] = value;
+      }
+    }
 
     const baselineOut: BaselineSummary = {
       generatedAt: new Date().toISOString(),
@@ -943,8 +988,11 @@ async function run(): Promise<void> {
   // and the file has no room to say so — either would silently replace the
   // machine's record with something that reads identically but is not
   // comparable to what came before it.
-  const isCanonicalRun =
-    cli.scenarioIds === null && cli.iterations === undefined && cli.warmups === undefined;
+  // The scenario filter is no longer part of this test: every run is filtered.
+  // What still disqualifies a run from the trend record is a sampling override,
+  // because a 3-iteration spot check is not comparable with the 8 the mode
+  // normally takes.
+  const isCanonicalRun = cli.iterations === undefined && cli.warmups === undefined;
   const historyPath = isCanonicalRun ? writeHistory(summary) : null;
 
   // The step summary is a convenience, not a result. A run whose numbers are

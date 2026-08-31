@@ -62,11 +62,25 @@ Every benchmark runs through one dispatcher, `scripts/perf/index.ts`, exposed as
 npm run perf list
 ```
 
+## One scenario at a time
+
+**`--scenario` is required and takes exactly one id. There is no whole-matrix run, and nothing schedules a run at all.** Both are deliberate.
+
+The harness exists for targeted optimisation work, driven a benchmark at a time by `.agents/skills/optimize`. A sweep of 112 scenarios produces a wall of figures nobody reads, while taking the machine away from the one measurement somebody actually wanted — and since nothing gates on these numbers, a sweep has no audience. There is no perf workflow: `performance.yml` is gone, and no cron, no pull request and no branch push runs a benchmark.
+
+Requiring the filter is also what makes results comparable. A scenario measured alone and the same scenario measured beside 111 others ran under different heap, JIT and thermal conditions; `perf compare` refuses a pair whose selections differ, so a matrix run's numbers could never be compared against a targeted one. With the filter mandatory, every result this harness produces is comparable with every other result for that scenario.
+
+```bash
+npm run perf smoke -- --scenario PERF-105
+```
+
 ## Modes
 
-- `smoke`: fast local suite — the one to use while iterating
-- `ci`: broader validation — daily schedule and manual dispatch in `performance.yml`, on **ubuntu-22.04, windows-2022 and macos-14**. Gates no pull request.
-- `nightly`: full matrix + the packaged-binary scenario, plus baseline regeneration (Linux only)
+Modes set sampling depth and which scenarios are eligible. Each still needs `--scenario`.
+
+- `smoke`: fast sampling — the one to use while iterating
+- `ci`: more iterations (the name is historical; nothing in CI runs it)
+- `nightly`: heaviest sampling, plus the packaged-binary scenario
 - `soak`: long-run stress focus
 
 A scenario declares which modes it runs in, and an id outside the chosen mode is a usage error — `--mode smoke --scenario PERF-002` fails, because PERF-002 is `ci`/`nightly` only.
@@ -118,9 +132,9 @@ Counts still compare through a refusal — that cross-machine comparison is the 
 
 ### Results history
 
-Every unfiltered run writes `scripts/perf/history/<mode>.<machineLabel>.json` — a small **tracked** file, so `git log -p scripts/perf/history/` answers "when did this get slower" months later. It records p50, p95 and each metric's max, sum and own sample count.
+Every run that does not override sampling writes `scripts/perf/history/<mode>.<machineLabel>.json` — a small **tracked** file, so `git log -p scripts/perf/history/` answers "when did this get slower" months later. It records p50, p95 and each metric's max, sum and own sample count, and **merges**: a run touches only its own scenario's entry and leaves every other one alone.
 
-CI does not commit history. Hosted runners fold the run id into the machine label because every job is a fresh VM, so a committed CI history file would be per-run noise, incomparable to the last. Hosted history ships as an artifact; the committed record comes from real, stable machines run by hand.
+A run with `--iterations` or `--warmups` is excluded, because a spot check at three iterations is not comparable with the eight the mode normally takes. The scenario filter is no longer part of that test — every run is filtered now.
 
 ## Outputs
 
@@ -184,11 +198,13 @@ Baselines are read from `scripts/perf/config/baseline.<mode>.json` and are the r
 Regenerate after accepted optimisation work:
 
 ```bash
-npm run perf smoke -- --update-baseline
-npm run perf ci -- --update-baseline
+npm run perf smoke -- --scenario PERF-105 --update-baseline
+npm run perf ci -- --scenario PERF-105 --update-baseline
 ```
 
-Baselines are runner-specific — regenerate them on the machine class they describe, and never commit one generated on a laptop. CI regenerates all four modes in `perf-nightly` and uploads them as the `perf-baselines` artifact; a human harvests and commits them, because the org blocks Actions from opening pull requests. `--update-baseline` is rejected alongside `--scenario`, since a filtered run would replace every other scenario's reference with nothing and the resulting file is indistinguishable from a complete one.
+Baselines are **machine-specific, and that is now the point**. The old rule — regenerate on the runner class, never commit one from a laptop — existed because a baseline was a shared gate, and a laptop number would have become the threshold every platform was judged against. Nothing gates now, and there is no CI to harvest from. A reference value is context for reading one number, so the right reference for your machine is one measured on your machine.
+
+`--update-baseline` **merges**. Every run measures one scenario, so writing the file wholesale would leave a baseline holding a single reference and looking complete. Entries for scenarios the run did not touch are carried through untouched, as are entries for a scenario that is `diagnostic` or `unsupported` on this platform — regenerating where a scenario cannot be measured must not delete the reference from a platform where it can. The results history under `history/` merges on the same rule and for the same reason.
 
 ## Manual cold-start
 
