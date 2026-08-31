@@ -345,6 +345,9 @@ describe("help.launchAgent", () => {
       projectPath: "/repo",
       agentId: "claude",
       context: {},
+      // #12108: the action names its lane explicitly rather than letting main
+      // default it, so the session it mints is the one it binds into.
+      slot: 0,
     });
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",

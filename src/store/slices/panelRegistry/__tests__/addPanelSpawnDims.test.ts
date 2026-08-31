@@ -65,8 +65,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 
 vi.mock("@/store/helpPanelStore", () => ({
   useHelpPanelStore: {
-    getState: () => ({ width: 500 }),
+    getState: () => ({ width: 500, sessions: {}, activeSlot: 0 }),
   },
+  // #12108: present so anything reached through this module graph resolves.
+  selectActiveSlot: () => ({ terminalId: null, sessionId: null, agentId: null }),
+  selectSlotTerminalIds: () => [],
 }));
 
 vi.mock("../persistence", async () => {
