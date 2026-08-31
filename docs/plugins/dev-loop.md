@@ -36,6 +36,25 @@ Templates:
 - **`mcp`** — skeleton MCP server plus manifest wiring (`src/index.ts` + `src/server.ts`)
 - **`full`** — command + view + MCP example (largest, for experimenting)
 
+#### `--project` — scaffold into a project
+
+`daintree-plugin new <name> --project` scaffolds a **project-local** plugin: one that lives in a project's own repository and loads only while that project is open in Daintree, instead of being installed app-wide. The name is still the positional argument; `--project` only changes where the scaffold lands and what it emits.
+
+The project root is the nearest ancestor of the current directory holding a `.daintree/` or `.git`. Outside one, the command fails rather than guessing a directory. The plugin is written to `<projectRoot>/.daintree/plugins/<publisher.name>/` — the directory is named after the manifest `name`, which is what discovery looks for.
+
+Alongside the usual template files it emits:
+
+- `plugin.json` with `"scope": "project"`
+- a `dev` script running `vite build --watch` (plus `dev:server` for the `mcp` and `full` templates, since one `vite build` runs one config at a time)
+- `vite.config.ts` with **inline** source maps and absolute `sources`, so DevTools breakpoints land in the real `.tsx` without a sidecar `.map` having to be served over `plugin://`
+- a watcher recipe in `<projectRoot>/.daintree/recipes/`, so Daintree can bring the build up with the rest of the project environment
+- a `.gitignore` that force-includes `dist/`, and a `README.md` explaining why
+- no `.dntrignore` and no `package` script — a project plugin is distributed by being committed, not as a `.dntr`
+
+**`dist/` is the load contract.** Daintree reads `plugin.json` and `dist/`. It never compiles a project plugin, never reads `src/`, and never runs its `package.json` — a project opening must not run a build. So `dist/` is committed, and the generated `.gitignore` force-includes it with `!dist/` and `!dist/**`: most repositories ignore `dist/` at the root, and that pattern would otherwise swallow the plugin's build output, leaving a plugin that silently fails to load on every other checkout. Both negations are needed — `!dist/` re-includes the directory so git descends into it at all, `!dist/**` re-includes the files against a parent rule that matches contents (`dist/*`, `**/dist/**`). Rebuild and commit `dist/` in the same commit as the source change.
+
+The one case the generated file cannot fix is a project that ignores `.daintree/` itself: git never descends far enough to read it. Un-ignore `.daintree/plugins/` at the project root instead. `git check-ignore -v .daintree/plugins/<name>/dist/index.js` answers this in one command — no output means the file is tracked.
+
 ### The edit loop
 
 For a live hot-reload loop, use [`daintree-plugin dev`](#daintree-plugin-dev) below. The manual package-and-install loop is still available — it's the right choice when you want to exercise the exact production load path, or whenever the CLI isn't on hand (it's unpublished today; see the caveat at the top of this page — package and install by hand following [Distribution → Sideload](./distribution.md#sideload)). The manual loop:

@@ -2,10 +2,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { scaffoldPlugin, runNew } from "../commands/new.js";
+import { scaffoldPlugin, runNew, findProjectRoot } from "../commands/new.js";
 import { getPluginManifestSchema } from "../../../../electron/schemas/plugin.js";
 import { isPluginIconId } from "../../../../shared/config/pluginIconIds.js";
 import { TEMPLATE_KINDS } from "../scaffold/templates.js";
+import { TerminalRecipeSchema } from "../../../../electron/schemas/ipc.js";
+import {
+  MAX_TERMINALS_PER_RECIPE,
+  RECIPE_CONTROL_CHARS,
+  sanitizeRecipeTerminals,
+} from "../../../../shared/utils/recipeSanitizer.js";
 
 let tmpDir: string;
 
@@ -413,4 +419,336 @@ describe("scaffoldPlugin", () => {
     });
     return { dir: result.dir, pkg: await readJson(path.join(result.dir, "package.json")) };
   }
+});
+
+/**
+ * Project-local scaffolding (`daintree-plugin new --project`). Same templates,
+ * different contract: the plugin is committed into the project at
+ * `.daintree/plugins/<manifest name>/`, loads from that committed `dist/`, and
+ * ships a watcher recipe next to the project's other recipes.
+ */
+describe("scaffoldPlugin --project", () => {
+  let projectRoot: string;
+
+  beforeEach(async () => {
+    projectRoot = path.join(tmpDir, "proj");
+    await fs.mkdir(path.join(projectRoot, ".daintree"), { recursive: true });
+  });
+
+  async function scaffoldProject(
+    template: (typeof TEMPLATE_KINDS)[number] = "command",
+    targetDir = "issue-helper"
+  ) {
+    return scaffoldPlugin({
+      cwd: tmpDir,
+      targetDir,
+      publisher: "acme",
+      displayName: "Issue Helper",
+      template,
+      projectRoot,
+    });
+  }
+
+  it("writes into <projectRoot>/.daintree/plugins/<manifest name>/", async () => {
+    const result = await scaffoldProject();
+    // Discovery keys a project plugin by its directory, so the directory is
+    // named after the manifest `name` — not the bare plugin segment.
+    expect(result.dir).toBe(path.join(projectRoot, ".daintree", "plugins", "acme.issue-helper"));
+    expect(path.basename(result.dir)).toBe(result.scopedName);
+    const manifest = await readJson(path.join(result.dir, "plugin.json"));
+    expect(manifest.name).toBe(path.basename(result.dir));
+  });
+
+  it("marks the manifest as project scope and is otherwise a valid manifest", async () => {
+    const result = await scaffoldProject();
+    const manifest = await readJson(path.join(result.dir, "plugin.json"));
+    expect(manifest.scope).toBe("project");
+
+    // `scope` is added to the manifest schema by the project-plugin host phase.
+    // Until that lands the schema is a strictObject that rejects the key, so
+    // validate everything else here rather than assert a failure we expect to
+    // stop being a failure.
+    const { scope: _scope, ...rest } = manifest;
+    const parsed = getPluginManifestSchema(false).safeParse(rest);
+    expect(parsed.success).toBe(true);
+  });
+
+  it("ships a .gitignore that force-includes dist/", async () => {
+    const result = await scaffoldProject();
+    const gitignore = await fs.readFile(path.join(result.dir, ".gitignore"), "utf8");
+    const rules = gitignore
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+
+    // The committed dist/ IS the load contract. Ignoring it ships a plugin that
+    // cannot load anywhere else, so no rule may exclude it...
+    expect(rules.some((rule) => /^dist\/?$/.test(rule))).toBe(false);
+    // ...and both negations must be present, because a repo that ignores
+    // `dist/` at its root would otherwise swallow this directory too. `!dist/`
+    // re-includes the directory so git descends into it; `!dist/**` re-includes
+    // the files, which a parent rule matching contents (`dist/*`, `**/dist/**`)
+    // would otherwise still exclude.
+    expect(rules).toContain("!dist/");
+    expect(rules).toContain("!dist/**");
+    // The directory negation has to come first, or git never descends.
+    expect(rules.indexOf("!dist/")).toBeLessThan(rules.indexOf("!dist/**"));
+  });
+
+  it("drops the packaging-only files an installed plugin gets", async () => {
+    const result = await scaffoldProject();
+    // A project plugin is distributed by being committed, never as a .dntr.
+    await expect(fs.access(path.join(result.dir, ".dntrignore"))).rejects.toThrow();
+    const pkg = await readJson(path.join(result.dir, "package.json"));
+    expect((pkg.scripts as Record<string, string>).package).toBeUndefined();
+  });
+
+  it("adds a dev watcher script, plus a second one for server templates", async () => {
+    for (const template of TEMPLATE_KINDS) {
+      const result = await scaffoldProject(template, `dev-${template}`);
+      const scripts = (await readJson(path.join(result.dir, "package.json"))).scripts as Record<
+        string,
+        string
+      >;
+      const hasServer = template === "mcp" || template === "full";
+      // `vite build --watch` runs one config object at a time, so a Node entry
+      // needs its own watcher rather than a chained command — and two watchers
+      // sharing dist/ both need --no-emptyOutDir, or each browser save deletes
+      // the server bundle (the same fix resolveVitePlan applies to `dev`).
+      expect(scripts.dev).toBe(
+        hasServer ? "vite build --watch --no-emptyOutDir" : "vite build --watch"
+      );
+      expect(scripts["dev:server"]).toBe(
+        hasServer ? "vite build --watch --config vite.config.server.ts --no-emptyOutDir" : undefined
+      );
+    }
+  });
+
+  it("emits inline source maps with absolute sources", async () => {
+    const result = await scaffoldProject("full", "maps");
+    for (const config of ["vite.config.ts", "vite.config.server.ts"]) {
+      const text = await fs.readFile(path.join(result.dir, config), "utf8");
+      // Sidecar .map files would have to be served over plugin://; inline
+      // avoids the route. Absolute `sources` put breakpoints in the real file.
+      expect(text).toContain('sourcemap: "inline"');
+      expect(text).toContain("sourcemapPathTransform");
+      expect(text).toContain('import path from "node:path";');
+    }
+    // The generated config imports node:path, so the types must be declared.
+    const dev = (await readJson(path.join(result.dir, "package.json"))).devDependencies as Record<
+      string,
+      string
+    >;
+    expect(dev["@types/node"]).toBeDefined();
+  });
+
+  it("writes a watcher recipe that survives the in-repo trust boundary", async () => {
+    const result = await scaffoldProject("full", "recipe-full");
+    expect(result.recipePath).toBe(
+      path.join(projectRoot, ".daintree", "recipes", "acme.recipe-full-watch.json")
+    );
+
+    const recipe = await readJson(result.recipePath!);
+    // In-repo recipes moved off name-derived ids (#9195) so a rename cannot
+    // change a recipe's identity.
+    expect(recipe.id).not.toMatch(/^inrepo-/);
+    expect(typeof recipe.id).toBe("string");
+    // `readInRepoRecipesWithHashes` parses with this schema, then content-checks
+    // every terminal. A recipe that fails either is silently dropped.
+    const parsed = TerminalRecipeSchema.safeParse(recipe);
+    expect(parsed.success).toBe(true);
+
+    const terminals = recipe.terminals as Array<Record<string, unknown>>;
+    expect(terminals.length).toBeLessThanOrEqual(MAX_TERMINALS_PER_RECIPE);
+    // Nothing is dropped: the sanitized list is the same length as the written one.
+    expect(sanitizeRecipeTerminals(terminals)).toHaveLength(terminals.length);
+    for (const terminal of terminals) {
+      expect(RECIPE_CONTROL_CHARS.test(terminal.command as string)).toBe(false);
+      // Commands are typed into an interactive shell rooted at the worktree.
+      expect(terminal.command).toContain(".daintree/plugins/acme.recipe-full");
+    }
+    // Both watchers: the browser bundle and the Node server entry.
+    expect(terminals).toHaveLength(2);
+  });
+
+  it("keeps control characters out of the committed recipe", async () => {
+    // `sanitizeRecipeTerminals` never inspects `title`, and the interactive
+    // display-name prompt does not validate, so a pasted escape sequence would
+    // otherwise be committed verbatim.
+    const result = await scaffoldPlugin({
+      cwd: tmpDir,
+      targetDir: "hostile",
+      publisher: "acme",
+      displayName: "Bad\u001b[31mName",
+      template: "command",
+      projectRoot,
+    });
+    const recipe = await readJson(result.recipePath!);
+    for (const terminal of recipe.terminals as Array<Record<string, string>>) {
+      // eslint-disable-next-line no-control-regex
+      expect(terminal.title).not.toMatch(/[\u0000-\u001F\u007F]/);
+    }
+  });
+
+  it("caps the scoped name at the manifest schema's 64 characters", async () => {
+    await expect(
+      scaffoldPlugin({
+        cwd: tmpDir,
+        targetDir: "a".repeat(60),
+        publisher: "acme",
+        displayName: "Long",
+        template: "command",
+        projectRoot,
+      })
+    ).rejects.toThrow(/at most 64/);
+  });
+
+  it("refuses to clobber an existing recipe, and writes nothing when it would", async () => {
+    const recipeDir = path.join(projectRoot, ".daintree", "recipes");
+    await fs.mkdir(recipeDir, { recursive: true });
+    const existing = path.join(recipeDir, "acme.issue-helper-watch.json");
+    await fs.writeFile(existing, "{}", "utf8");
+
+    await expect(scaffoldProject()).rejects.toThrow(/Recipe already exists/);
+    expect(await fs.readFile(existing, "utf8")).toBe("{}");
+    // The plugin directory must not be half-written either.
+    await expect(
+      fs.access(path.join(projectRoot, ".daintree", "plugins", "acme.issue-helper"))
+    ).rejects.toThrow();
+  });
+
+  it("cannot be steered outside the project root by a hostile name", async () => {
+    for (const targetDir of ["../escape", "..", ".hidden", "a/b", "a\\b"]) {
+      await expect(
+        scaffoldPlugin({
+          cwd: tmpDir,
+          targetDir,
+          publisher: "acme",
+          displayName: "x",
+          template: "command",
+          projectRoot,
+        })
+      ).rejects.toThrow(/Plugin name/);
+    }
+    for (const publisher of ["../escape", "..", "a/b"]) {
+      await expect(
+        scaffoldPlugin({
+          cwd: tmpDir,
+          targetDir: "ok-name",
+          publisher,
+          displayName: "x",
+          template: "command",
+          projectRoot,
+        })
+      ).rejects.toThrow(/Publisher/);
+    }
+  });
+});
+
+describe("findProjectRoot", () => {
+  it("finds the nearest ancestor holding .daintree/", async () => {
+    const root = path.join(tmpDir, "proj");
+    const nested = path.join(root, "packages", "thing");
+    await fs.mkdir(path.join(root, ".daintree"), { recursive: true });
+    await fs.mkdir(nested, { recursive: true });
+    expect(await findProjectRoot(nested)).toBe(root);
+  });
+
+  it("accepts a .git file, as a git worktree has", async () => {
+    const root = path.join(tmpDir, "wt");
+    await fs.mkdir(root, { recursive: true });
+    // In a worktree `.git` is a file pointing at the real git dir, not a
+    // directory — and a fresh worktree is the case this feature exists for.
+    await fs.writeFile(path.join(root, ".git"), "gitdir: /elsewhere\n", "utf8");
+    expect(await findProjectRoot(root)).toBe(root);
+  });
+
+  it("returns null when nothing above looks like a project", async () => {
+    const orphan = path.join(tmpDir, "orphan");
+    await fs.mkdir(orphan, { recursive: true });
+    expect(await findProjectRoot(orphan)).toBeNull();
+  });
+});
+
+describe("runNew --project", () => {
+  let cwdSpy: ReturnType<typeof vi.spyOn>;
+  afterEach(() => {
+    cwdSpy?.mockRestore();
+  });
+
+  it("resolves the project root from the cwd and scaffolds into it", async () => {
+    const root = path.join(tmpDir, "proj");
+    const nested = path.join(root, "src", "deep");
+    await fs.mkdir(path.join(root, ".daintree"), { recursive: true });
+    await fs.mkdir(nested, { recursive: true });
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(nested);
+
+    await runNew("dash", { yes: true, publisher: "acme", project: true });
+
+    const manifest = await readJson(
+      path.join(root, ".daintree", "plugins", "acme.dash", "plugin.json")
+    );
+    expect(manifest.name).toBe("acme.dash");
+    expect(manifest.scope).toBe("project");
+    await expect(
+      fs.access(path.join(root, ".daintree", "recipes", "acme.dash-watch.json"))
+    ).resolves.toBeUndefined();
+  });
+
+  it("fails with a clear message outside a project rather than picking a directory", async () => {
+    const orphan = path.join(tmpDir, "orphan");
+    await fs.mkdir(orphan, { recursive: true });
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(orphan);
+
+    await expect(runNew("dash", { yes: true, publisher: "acme", project: true })).rejects.toThrow(
+      /--project needs a project/
+    );
+    await expect(fs.access(path.join(orphan, ".daintree"))).rejects.toThrow();
+  });
+});
+
+/**
+ * The committed fixture the project-plugin loader phase discovers. Asserted
+ * here because this package owns the on-disk shape the scaffold produces, and
+ * a fixture nothing checks rots into a shape the loader can never load.
+ */
+describe("project-local fixture", () => {
+  const fixtureDir = path.join(
+    import.meta.dirname,
+    "..",
+    "..",
+    "..",
+    "..",
+    "plugins",
+    "fixtures",
+    "project-local",
+    ".daintree",
+    "plugins",
+    "acme.project-hello"
+  );
+
+  it("is a loadable project-local plugin with a committed dist/", async () => {
+    const manifest = await readJson(path.join(fixtureDir, "plugin.json"));
+    expect(manifest.scope).toBe("project");
+    // Discovery keys a project plugin by its directory name.
+    expect(manifest.name).toBe(path.basename(fixtureDir));
+
+    // Everything the manifest points at must actually be committed — the host
+    // never builds this, so a missing file is an unloadable plugin.
+    const views = (manifest.contributes as { views: Array<{ componentPath: string }> }).views;
+    for (const rel of [manifest.main as string, ...views.map((v) => v.componentPath)]) {
+      await expect(fs.access(path.join(fixtureDir, rel))).resolves.toBeUndefined();
+    }
+  });
+
+  it("force-includes dist/ the same way the scaffold does", async () => {
+    const gitignore = await fs.readFile(path.join(fixtureDir, ".gitignore"), "utf8");
+    const rules = gitignore
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+    expect(rules.some((rule) => /^dist\/?$/.test(rule))).toBe(false);
+    expect(rules).toContain("!dist/");
+    expect(rules).toContain("!dist/**");
+  });
 });

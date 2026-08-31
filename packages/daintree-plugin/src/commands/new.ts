@@ -1,9 +1,12 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as p from "@clack/prompts";
 import { SCOPED_PLUGIN_NAME_PATTERN } from "../../../../electron/schemas/plugin.js";
 import {
+  buildProjectRecipe,
   buildTemplateFiles,
+  projectPluginRelDir,
   TEMPLATE_KINDS,
   type ScaffoldContext,
   type TemplateKind,
@@ -12,20 +15,33 @@ import {
 /** A single publisher/plugin name segment (the half on either side of the dot). */
 const SEGMENT_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+/** Mirrors the manifest schema's `name` cap in `electron/schemas/plugin.ts`. */
+const MAX_PLUGIN_NAME_LENGTH = 64;
+
 export interface ScaffoldPluginOptions {
-  /** Parent directory the plugin folder is created under. */
+  /** Parent directory the plugin folder is created under (installed plugins). */
   cwd: string;
   /** Folder name; doubles as the plugin segment of the scoped name. */
   targetDir: string;
   publisher: string;
   displayName: string;
   template: TemplateKind;
+  /**
+   * Scaffold a project-local plugin instead. The plugin is written to
+   * `<projectRoot>/.daintree/plugins/<publisher.name>/` — named after the
+   * manifest, which is what discovery expects — and a build-watcher recipe is
+   * written to `<projectRoot>/.daintree/recipes/`. `cwd` is ignored in this mode.
+   */
+  projectRoot?: string;
 }
 
 export interface ScaffoldResult {
   dir: string;
   scopedName: string;
+  /** Paths relative to `dir`, sorted. */
   files: string[];
+  /** Absolute path of the watcher recipe, for a project-local scaffold only. */
+  recipePath?: string;
 }
 
 function segmentError(value: string, label: string): string | null {
@@ -50,8 +66,26 @@ export async function scaffoldPlugin(opts: ScaffoldPluginOptions): Promise<Scaff
   if (!SCOPED_PLUGIN_NAME_PATTERN.test(scopedName)) {
     throw new Error(`"${scopedName}" is not a valid plugin name (expected publisher.name)`);
   }
+  // The manifest schema caps `name` at 64 characters. Without this the scaffold
+  // happily writes a manifest the host would reject, and the author only finds
+  // out at `daintree-plugin validate`.
+  if (scopedName.length > MAX_PLUGIN_NAME_LENGTH) {
+    throw new Error(
+      `"${scopedName}" is ${scopedName.length} characters; a plugin name may be at most ${MAX_PLUGIN_NAME_LENGTH}`
+    );
+  }
 
-  const dir = path.resolve(opts.cwd, opts.targetDir);
+  const projectRoot = opts.projectRoot;
+  const projectLocal = projectRoot !== undefined;
+  // Project-local plugins are keyed by the manifest name, so the directory is
+  // named after it. Both name segments are already validated against
+  // SEGMENT_PATTERN (lowercase alphanumerics and single hyphens), so the scoped
+  // name cannot contain a separator, a leading dot, or `..` — the join stays
+  // inside the project root by construction.
+  const dir =
+    projectRoot !== undefined
+      ? path.resolve(projectRoot, projectPluginRelDir(scopedName))
+      : path.resolve(opts.cwd, opts.targetDir);
   const dirExists = await fs
     .access(dir)
     .then(() => true)
@@ -66,8 +100,28 @@ export async function scaffoldPlugin(opts: ScaffoldPluginOptions): Promise<Scaff
     pluginName: opts.targetDir,
     displayName: opts.displayName,
     template: opts.template,
+    projectLocal,
   };
   const files = buildTemplateFiles(ctx);
+
+  // The recipe lands outside the plugin directory, so check it before writing
+  // anything: a half-scaffolded plugin with no watcher is worse than a clean
+  // refusal, and clobbering a recipe an author already wrote is not ours to do.
+  const recipe =
+    projectRoot !== undefined
+      ? buildProjectRecipe(ctx, { id: randomUUID(), createdAt: Date.now() })
+      : null;
+  const recipePath =
+    recipe && projectRoot !== undefined ? path.resolve(projectRoot, recipe.relPath) : undefined;
+  if (recipePath) {
+    const recipeExists = await fs
+      .access(recipePath)
+      .then(() => true)
+      .catch(() => false);
+    if (recipeExists) {
+      throw new Error(`Recipe already exists: ${recipePath}`);
+    }
+  }
 
   for (const [relPath, content] of Object.entries(files)) {
     const fullPath = path.join(dir, relPath);
@@ -75,7 +129,50 @@ export async function scaffoldPlugin(opts: ScaffoldPluginOptions): Promise<Scaff
     await fs.writeFile(fullPath, content, "utf8");
   }
 
-  return { dir, scopedName, files: Object.keys(files).sort() };
+  if (recipe && recipePath) {
+    await fs.mkdir(path.dirname(recipePath), { recursive: true });
+    await fs.writeFile(recipePath, recipe.content, "utf8");
+  }
+
+  return { dir, scopedName, files: Object.keys(files).sort(), recipePath };
+}
+
+/**
+ * Find the project root for `--project`: walk up from `startDir` and return the
+ * nearest ancestor that looks like a project.
+ * A `.daintree/` directory is the strongest signal; `.git` is accepted at the
+ * same level too, because Daintree creates `.daintree/` lazily and a repo that
+ * has never had a project plugin will not have one yet. `.git` is matched as a
+ * path, not a directory: in a git worktree — the case this whole feature exists
+ * for — it is a file pointing at the real git dir.
+ *
+ * Returns `null` rather than guessing, so `--project` fails with a clear
+ * message instead of silently creating `.daintree/plugins/` in whatever
+ * directory the author happened to be standing in.
+ */
+export async function findProjectRoot(startDir: string): Promise<string | null> {
+  const isDir = async (p: string): Promise<boolean> =>
+    fs
+      .stat(p)
+      .then((stats) => stats.isDirectory())
+      .catch(() => false);
+  const exists = async (p: string): Promise<boolean> =>
+    fs
+      .access(p)
+      .then(() => true)
+      .catch(() => false);
+
+  let current = path.resolve(startDir);
+  for (;;) {
+    if (
+      (await isDir(path.join(current, ".daintree"))) ||
+      (await exists(path.join(current, ".git")))
+    )
+      return current;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
 }
 
 function cancelled<T>(value: T | symbol): value is symbol {
@@ -90,6 +187,30 @@ export interface RunNewOptions {
   template?: string;
   /** `--yes`: fully non-interactive — accept defaults, never prompt (CI/scripting). */
   yes?: boolean;
+  /**
+   * `--project`: scaffold into the enclosing project's `.daintree/plugins/`
+   * instead of a directory under the cwd. A flag rather than the spec's
+   * `--project <name>`, because `new` already takes the name positionally and
+   * the two would only ever disagree.
+   */
+  project?: boolean;
+}
+
+/**
+ * Resolve the project root for `--project`, or throw with the reason. Kept
+ * separate from the scaffold so both the interactive and `--yes` paths fail the
+ * same way.
+ */
+async function resolveProjectRootOrThrow(): Promise<string> {
+  const root = await findProjectRoot(process.cwd());
+  if (!root) {
+    throw new Error(
+      `--project needs a project to scaffold into, but no .daintree/ or .git directory was found ` +
+        `at or above ${process.cwd()}. Run this from inside the project, or drop --project to ` +
+        `create a standalone plugin here.`
+    );
+  }
+  return root;
 }
 
 /** "issue-helper" → "Issue Helper", the non-interactive display-name default. */
@@ -124,6 +245,7 @@ async function runNewNonInteractive(name: string | undefined, opts: RunNewOption
     throw new Error("--yes requires --publisher (there is no interactive prompt to fall back on)");
   }
   const template = opts.template ? parseTemplate(opts.template) : "command";
+  const projectRoot = opts.project ? await resolveProjectRootOrThrow() : undefined;
 
   // scaffoldPlugin validates the name/publisher segment grammar and throws a
   // clear message, so no pre-check is needed here.
@@ -133,9 +255,13 @@ async function runNewNonInteractive(name: string | undefined, opts: RunNewOption
     publisher: opts.publisher,
     displayName: titleCaseSegment(name),
     template,
+    projectRoot,
   });
 
   console.log(`Created ${result.scopedName} in ${path.relative(process.cwd(), result.dir) || "."}`);
+  if (result.recipePath) {
+    console.log(`Watcher recipe: ${path.relative(process.cwd(), result.recipePath)}`);
+  }
 }
 
 /**
@@ -227,16 +353,37 @@ export async function runNew(name?: string, opts: RunNewOptions = {}): Promise<v
     template = answer as TemplateKind;
   }
 
+  let projectRoot: string | undefined;
+  if (opts.project) {
+    try {
+      projectRoot = await resolveProjectRootOrThrow();
+    } catch (err) {
+      p.cancel((err as Error).message);
+      return;
+    }
+  }
+
   const result = await scaffoldPlugin({
     cwd: process.cwd(),
     targetDir,
     publisher,
     displayName: displayName || targetDir,
     template,
+    projectRoot,
   });
 
+  const relDir = path.relative(process.cwd(), result.dir) || ".";
+  if (result.recipePath) {
+    p.outro(
+      `Created ${result.scopedName} in ${relDir}\n` +
+        `Watcher recipe: ${path.relative(process.cwd(), result.recipePath)}\n` +
+        `Next: cd ${relDir} && npm install && npm run dev\n` +
+        `Commit dist/ — Daintree loads this plugin from the committed build, never from src/.`
+    );
+    return;
+  }
   p.outro(
-    `Created ${result.scopedName} in ${path.relative(process.cwd(), result.dir) || "."}\n` +
+    `Created ${result.scopedName} in ${relDir}\n` +
       `Next: cd ${targetDir} && npm install && npx daintree-plugin package\n` +
       `(The @daintreehq/plugin-sdk dev dependency must be available for npm install to succeed.)`
   );

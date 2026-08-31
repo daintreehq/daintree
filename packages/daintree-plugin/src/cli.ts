@@ -25,17 +25,22 @@ program
   .description("Scaffold a new plugin project")
   .option("--publisher <publisher>", "publisher segment (e.g. acme)")
   .option("--template <template>", "command | view | mcp | full")
+  .option(
+    "--project",
+    "scaffold into the enclosing project's .daintree/plugins/ (committed, loads with that project)"
+  )
   .option("--yes", "non-interactive: accept defaults, skip prompts (requires name + --publisher)")
   .action(
     async (
       name: string | undefined,
-      opts: { publisher?: string; template?: string; yes?: boolean }
+      opts: { publisher?: string; template?: string; yes?: boolean; project?: boolean }
     ) => {
       try {
         await runNew(name, {
           publisher: opts.publisher,
           template: opts.template,
           yes: opts.yes,
+          project: opts.project,
         });
       } catch (err) {
         fail((err as Error).message);

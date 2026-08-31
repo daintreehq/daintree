@@ -1,0 +1,29 @@
+{
+  "name": "acme.project-hello",
+  "version": "0.1.0",
+  "scope": "project",
+  "displayName": "Project Hello",
+  "description": "Minimal project-local plugin fixture — a committed dist/ for discovery and load tests.",
+  "main": "dist/index.js",
+  "engines": {
+    "daintree": ">=0.11.0"
+  },
+  "capabilities": [],
+  "contributes": {
+    "panels": [
+      {
+        "id": "main",
+        "name": "Project Hello",
+        "iconId": "puzzle",
+        "color": "var(--theme-category-orange)"
+      }
+    ],
+    "views": [
+      {
+        "id": "main",
+        "componentPath": "dist/panel.js",
+        "location": "panel"
+      }
+    ]
+  }
+}
