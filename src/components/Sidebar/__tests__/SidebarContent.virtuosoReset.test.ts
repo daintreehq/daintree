@@ -35,23 +35,28 @@ describe("SidebarContent Virtuoso reset wiring — issue #12094", () => {
   });
 
   it("keys both call sites off the reset generation", () => {
-    for (const site of virtuosoCallSites(source)) {
+    const sites = virtuosoCallSites(source);
+    expect(sites).toHaveLength(2);
+    for (const site of sites) {
       expect(site).toContain("key={virtuosoResetKey}");
     }
   });
 
   it("restores the replaced scroll offset on both call sites", () => {
-    for (const site of virtuosoCallSites(source)) {
+    const sites = virtuosoCallSites(source);
+    expect(sites).toHaveLength(2);
+    for (const site of sites) {
       expect(site).toContain("initialScrollTop={virtuosoInitialScrollTop}");
     }
   });
 
-  it("feeds the hook the unfiltered live worktree ids", () => {
-    // `dragStartOrder` is the filtered order — it would report every search
-    // keystroke as a deletion and remount the list under the user.
+  it("suppresses the remount against the deferred query, not the live one", () => {
+    // `liveQuery` updates on the keystroke, a render before the list narrows —
+    // comparing against it would let every typed character through as an
+    // uncorrelated shrink and remount the list under the user.
     expect(source).toContain("useSidebarVirtuosoReset({");
-    expect(source).toMatch(/liveWorktreeIds:\s*worktreeIdList/);
-    expect(source).not.toMatch(/liveWorktreeIds:\s*dragStartOrder/);
+    expect(source).toMatch(/searchQuery:\s*deferredQuery/);
+    expect(source).not.toMatch(/searchQuery:\s*liveQuery/);
   });
 
   it("measures the shrink against the rendered item array", () => {

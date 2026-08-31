@@ -6,12 +6,10 @@ interface UseSidebarVirtuosoResetParams {
   /** Length of the flat item array backing the Virtuoso surface. */
   itemCount: number;
   /**
-   * Unfiltered live worktree ids, read from the same deferred timeline as the
-   * items. A filtered order (`dragStartOrder`) would report every search
-   * keystroke as a removal; the raw store list would run ahead of the items and
-   * report removals a render early.
+   * The query the list is actually filtered by — the deferred one, not the live
+   * input value, so it moves in the same commit the list narrows.
    */
-  liveWorktreeIds: readonly string[];
+  searchQuery: string;
   /** The live scroller element, so the pre-remount offset can be restored. */
   scrollerRef: RefObject<HTMLElement | null>;
 }
@@ -31,40 +29,48 @@ interface ResetState {
 const INITIAL_STATE: ResetState = { key: 0, scrollTop: undefined };
 
 /**
- * Replaces the sidebar's Virtuoso instance after a worktree deletion shrinks the
- * list (#12094).
+ * Replaces the sidebar's Virtuoso instance whenever the list shrinks (#12094).
  *
  * react-virtuoso keys its size and offset trees by index, not by
  * `computeItemKey` — that only steers React reconciliation. `firstItemIndex` is
  * the sole remap path and exists for prepending, `restoreStateFrom` restores the
  * measurements rather than clearing them, and `VirtuosoHandle` has no imperative
- * reset. So when the list shrinks, the trees keep describing the pre-deletion
- * layout, and the failure is self-sustaining: a row left outside the computed
- * visible range never mounts, so its ResizeObserver never fires, so its stale
- * entry is never corrected. Remounting is the only way to discard those trees.
+ * reset. So a shrink leaves the trees describing the old layout, and the failure
+ * is self-sustaining: a row left outside the computed visible range never
+ * mounts, so its ResizeObserver never fires, so its stale entry is never
+ * corrected. Remounting is the only way to discard those trees.
  *
- * The trigger is deliberately narrow. A shrink alone is far too broad — search
- * and filter narrowing shrink the list, and so does `pruneDeletedWorktrees`
- * retiring a tombstone on its own, which would yank a scrolled user to the top
- * with no action on their part. Requiring that a live worktree id also
- * disappeared isolates real deletions: a lone deletion swaps a row for a
- * tombstone card and doesn't shrink at all, while a batch collapses several
- * tombstones into one group item and does.
+ * Growth is safe — appended entries extend an already-valid prefix-sum tree —
+ * so only shrinks are worth reacting to. Correlating a shrink with the deletion
+ * that caused it was tried and abandoned: with a quick-state filter active, a
+ * deleted worktree stops matching the filter in the urgent commit (its terminals
+ * leave `useWorktreeIds` immediately) while `deferredWorktrees` still lists it,
+ * so the shrink and the id removal land in *different* commits and no
+ * single-commit correlation holds. Treating every shrink as suspect fails open
+ * instead: a needless remount costs one frame and restores its own scroll
+ * offset, where a missed one leaves the row stranded for good.
+ *
+ * The single exception is typing. Narrowing a search shrinks the list on most
+ * keystrokes, and a full teardown per keystroke would put exactly the work this
+ * file defers out of the input path (#10908) back into it — for a list the user
+ * is about to change again anyway.
  */
 function useSidebarVirtuosoReset({
   itemCount,
-  liveWorktreeIds,
+  searchQuery,
   scrollerRef,
 }: UseSidebarVirtuosoResetParams): UseSidebarVirtuosoResetReturn {
   const [reset, setReset] = useState<ResetState>(INITIAL_STATE);
   // `null` until the first commit — there is no previous layout to have
   // stranded anything, so the first pass only records a baseline.
   const prevItemCountRef = useRef<number | null>(null);
-  // Held by reference, not copied: `liveWorktreeIds` arrives from a useMemo and
-  // is never mutated in place.
-  const prevIdsRef = useRef<readonly string[]>([]);
+  const prevQueryRef = useRef(searchQuery);
   const pendingRef = useRef(false);
   const draggingRef = useRef(false);
+  // Stays set from the drop until dnd-kit has finished restoring focus. Without
+  // it a shrink landing inside that window would flush straight through, since
+  // the drag itself is already over.
+  const settlingRef = useRef(false);
   const rafRef = useRef<number | null>(null);
 
   const cancelScheduled = useCallback(() => {
@@ -75,7 +81,7 @@ function useSidebarVirtuosoReset({
   }, []);
 
   const flush = useCallback(() => {
-    if (!pendingRef.current || draggingRef.current) return;
+    if (!pendingRef.current || draggingRef.current || settlingRef.current) return;
     pendingRef.current = false;
     const scroller = scrollerRef.current;
     // No scroller means Virtuoso is already unmounted — the empty-state branch
@@ -91,29 +97,27 @@ function useSidebarVirtuosoReset({
 
   useLayoutEffect(() => {
     const prevCount = prevItemCountRef.current;
-    const prevIds = prevIdsRef.current;
+    const prevQuery = prevQueryRef.current;
     prevItemCountRef.current = itemCount;
-    prevIdsRef.current = liveWorktreeIds;
+    prevQueryRef.current = searchQuery;
     if (prevCount === null || itemCount >= prevCount) return;
-    const live = new Set(liveWorktreeIds);
-    // Membership, not counts: a removal landing alongside an addition in the
-    // same update leaves the live id count unchanged while still deleting a
-    // worktree, and the shrunk surface strands geometry all the same.
-    if (!prevIds.some((id) => !live.has(id))) return;
+    if (searchQuery !== prevQuery) return;
     pendingRef.current = true;
     flush();
-  }, [itemCount, liveWorktreeIds, flush]);
+  }, [itemCount, searchQuery, flush]);
 
   const releaseAfterDrag = useCallback(() => {
     draggingRef.current = false;
-    if (!pendingRef.current) return;
+    settlingRef.current = true;
     cancelScheduled();
     // dnd-kit restores focus to the drag activator a frame after the drop
     // settles; remounting first would destroy the node it is about to focus
-    // (past lesson #8478). Clear that frame before swapping the list out.
+    // (past lesson #8478). Hold the swap — including one that arrives inside
+    // this window — until that frame has passed.
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null;
+        settlingRef.current = false;
         flush();
       });
     });
@@ -122,6 +126,7 @@ function useSidebarVirtuosoReset({
   useDndMonitor({
     onDragStart() {
       draggingRef.current = true;
+      settlingRef.current = false;
       cancelScheduled();
     },
     onDragEnd: releaseAfterDrag,

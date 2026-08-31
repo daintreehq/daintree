@@ -1359,13 +1359,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     [scrollIndicatorScrollerRef]
   );
 
-  // Virtuoso's size/offset trees are index-keyed, so a deletion that shrinks the
-  // list leaves them describing the old layout and strands a row that can never
-  // re-measure itself. Remounting is the only way to discard them (#12094).
+  // Virtuoso's size/offset trees are index-keyed, so any shrink leaves them
+  // describing the old layout and strands a row that can never re-measure
+  // itself. Remounting is the only way to discard them (#12094).
   const { resetKey: virtuosoResetKey, initialScrollTop: virtuosoInitialScrollTop } =
     useSidebarVirtuosoReset({
       itemCount: sidebarItems.length,
-      liveWorktreeIds: worktreeIdList,
+      searchQuery: deferredQuery,
       scrollerRef: scrollerElementRef,
     });
 
