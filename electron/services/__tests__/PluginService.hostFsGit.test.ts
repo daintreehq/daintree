@@ -631,6 +631,57 @@ describe("a bound plugin's ${project}/${worktree} allowlist roots", () => {
     await expect(host.fs.readFile(join(theirs, "a.txt"))).rejects.toThrow();
   });
 
+  it("defaults a project plugin with no declared allowedPaths to its project root", async () => {
+    // Spec §7.2: a project plugin lives inside the tree, so the tree is the
+    // only sensible default. Without it host.fs and host.git reach nothing but
+    // the plugin's own data dir.
+    const mine = join(baseDir, "defaulted");
+    await fs.mkdir(mine, { recursive: true });
+    await fs.writeFile(join(mine, "a.txt"), "mine", "utf8");
+
+    setSplitWorktrees({}, join(baseDir, "elsewhere"));
+    const seam = svc as unknown as {
+      _registerFakePluginForTests(p: BoundFakePlugin): void;
+      _createHostForTests(id: string, b?: unknown): PluginHostApi;
+    };
+    const binding = { projectId: PROJECT_A, projectRoot: mine };
+    const manifest = makeManifest(["fs:project-read"], []);
+    seam._registerFakePluginForTests({
+      manifest,
+      dir: baseDir,
+      loadedAt: 0,
+      isBuiltin: false,
+      binding,
+    });
+    const host = seam._createHostForTests("acme.fsgit", binding);
+
+    expect(await host.fs.readFile(join(mine, "a.txt"))).toBe("mine");
+  });
+
+  it("does not widen an unbound plugin with no declared allowedPaths", async () => {
+    // An installed plugin has no project of its own; defaulting it to a tree
+    // would grant reach nobody asked for.
+    const somewhere = join(baseDir, "somewhere");
+    await fs.mkdir(somewhere, { recursive: true });
+    await fs.writeFile(join(somewhere, "a.txt"), "x", "utf8");
+
+    const seam = svc as unknown as {
+      _registerFakePluginForTests(p: BoundFakePlugin): void;
+      _createHostForTests(id: string, b?: unknown): PluginHostApi;
+    };
+    const binding = { projectId: null, projectRoot: null };
+    seam._registerFakePluginForTests({
+      manifest: makeManifest(["fs:project-read"], []),
+      dir: baseDir,
+      loadedAt: 0,
+      isBuiltin: false,
+      binding,
+    });
+    const host = seam._createHostForTests("acme.fsgit", binding);
+
+    await expect(host.fs.readFile(join(somewhere, "a.txt"))).rejects.toThrow();
+  });
+
   it("expands ambiently for an unbound plugin", async () => {
     const ambient = join(baseDir, "ambient");
     await fs.mkdir(ambient, { recursive: true });

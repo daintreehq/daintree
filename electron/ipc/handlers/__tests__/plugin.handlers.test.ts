@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { markAuditedHandlerFailure } from "../../../utils/pluginAuditMarker.js";
 
+// `withContext` handlers read `event.sender.id`, so every invocation needs a
+// sender-bearing event the way a real IPC call always has one.
+const senderEvent = { sender: { id: 1 } };
+
 const mockDispatchHandler = vi.fn();
 const mockGetSettingValuesForUi = vi.fn();
 const mockRevealSecretSettingForUi = vi.fn();
@@ -394,7 +398,7 @@ describe("registerPluginHandlers", () => {
     // import. A plain activation must NOT ask for a recovery generation (#11728)
     // — that would mint a second module namespace on every first mount.
     mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
-    await expect(handler({}, "acme.demo.viewer")).resolves.toBeUndefined();
+    await expect(handler(senderEvent, "acme.demo.viewer")).resolves.toBeUndefined();
     // The behavioral half — the kind is forwarded and recovery is NOT requested.
     // Asserted as "falsy" rather than literal `false` so normalizing to
     // `undefined` stays green: what matters is that a first mount can't burn a
@@ -406,7 +410,7 @@ describe("registerPluginHandlers", () => {
     // PluginViewHost surfaces the real activation cause. The thrown message
     // carries the underlying error text.
     mockActivatePluginForView.mockResolvedValueOnce({ ok: false, error: "activate-boom" });
-    await expect(handler({}, "acme.demo.viewer")).rejects.toThrow(/activate-boom/);
+    await expect(handler(senderEvent, "acme.demo.viewer")).rejects.toThrow(/activate-boom/);
   });
 
   it("PLUGIN_ACTIVATE_FOR_VIEW forwards a recovery request and returns the minted path (#11728)", async () => {
@@ -419,7 +423,7 @@ describe("registerPluginHandlers", () => {
       ok: true,
       recoveryComponentPath: "plugin://acme.demo/__dtv-9/dist/view.js",
     });
-    await expect(handler({}, "acme.demo.viewer", true)).resolves.toBe(
+    await expect(handler(senderEvent, "acme.demo.viewer", true)).resolves.toBe(
       "plugin://acme.demo/__dtv-9/dist/view.js"
     );
     expect(mockActivatePluginForView).toHaveBeenCalledWith("acme.demo.viewer", true);
@@ -427,13 +431,13 @@ describe("registerPluginHandlers", () => {
     // A recovery request the service declines (PTY panel, view-less kind) still
     // resolves — the renderer falls back to the path it already has.
     mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
-    await expect(handler({}, "acme.demo.viewer", true)).resolves.toBeUndefined();
+    await expect(handler(senderEvent, "acme.demo.viewer", true)).resolves.toBeUndefined();
 
     // Only a real `true` requests recovery. A truthy non-boolean arriving over
     // IPC must not mint a namespace, so the flag is compared by identity rather
     // than coerced.
     mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
-    await handler({}, "acme.demo.viewer", "yes");
+    await handler(senderEvent, "acme.demo.viewer", "yes");
     expect(mockActivatePluginForView.mock.calls.at(-1)![1]).toBe(false);
   });
 
@@ -1784,7 +1788,7 @@ describe("PLUGIN_ACTIONS_GET / REGISTER / UNREGISTER handlers", () => {
       kind: "command",
       danger: "safe",
     };
-    await handler({}, "acme.my-plugin", contribution);
+    await handler(senderEvent, "acme.my-plugin", contribution);
     expect(mockRegisterPluginAction).toHaveBeenCalledWith("acme.my-plugin", contribution);
   });
 
@@ -1793,12 +1797,14 @@ describe("PLUGIN_ACTIONS_GET / REGISTER / UNREGISTER handlers", () => {
       throw new Error('Plugin action "bad.id" is invalid');
     });
     const handler = getHandler("plugin:actions-register");
-    await expect(handler({}, "acme.my-plugin", { id: "bad.id" })).rejects.toThrow(/Plugin action/);
+    await expect(handler(senderEvent, "acme.my-plugin", { id: "bad.id" })).rejects.toThrow(
+      /Plugin action/
+    );
   });
 
   it("PLUGIN_ACTIONS_UNREGISTER delegates to pluginService.unregisterPluginAction", async () => {
     const handler = getHandler("plugin:actions-unregister");
-    await handler({}, "acme.my-plugin", "acme.my-plugin.doThing");
+    await handler(senderEvent, "acme.my-plugin", "acme.my-plugin.doThing");
     expect(mockUnregisterPluginAction).toHaveBeenCalledWith(
       "acme.my-plugin",
       "acme.my-plugin.doThing"
@@ -2831,5 +2837,65 @@ describe("plugin settings project ownership", () => {
       null
     );
     expect(mockGetSettingValuesForUi).toHaveBeenCalledWith("acme.dashboard", "user", null);
+  });
+});
+
+describe("cross-project plugin control", () => {
+  const PROJECT_A = "a".repeat(64);
+  const PROJECT_B = "b".repeat(64);
+  const INSTANCE_A = `project__${PROJECT_A}__acme.dashboard`;
+  const KIND_A = `project:${PROJECT_A}/acme.dashboard/overview`;
+
+  function getHandler(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  it("refuses to activate another project's panel kind", async () => {
+    // activatePluginForView searches every loaded instance for the kind, so
+    // without the guard this would start project A's worker on B's say-so.
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:activate-for-view")({ sender: { id: 1 } }, KIND_A)
+    ).rejects.toThrow(/different project/);
+    expect(mockActivatePluginForView).not.toHaveBeenCalled();
+  });
+
+  it("activates its own project's panel kind", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_A);
+    mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
+    await getHandler("plugin:activate-for-view")({ sender: { id: 1 } }, KIND_A);
+    expect(mockActivatePluginForView).toHaveBeenCalledWith(KIND_A, false);
+  });
+
+  it("leaves a global panel kind unconstrained by the sender's project", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
+    await getHandler("plugin:activate-for-view")({ sender: { id: 1 } }, "acme.dashboard.overview");
+    expect(mockActivatePluginForView).toHaveBeenCalled();
+  });
+
+  it("refuses to unregister another project's plugin action", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:actions-unregister")({ sender: { id: 1 } }, INSTANCE_A, "refresh")
+    ).rejects.toThrow(/different project/);
+    expect(mockUnregisterPluginAction).not.toHaveBeenCalled();
+  });
+
+  it("refuses to register an action onto another project's plugin", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:actions-register")({ sender: { id: 1 } }, INSTANCE_A, { id: "x" })
+    ).rejects.toThrow(/different project/);
+    expect(mockRegisterPluginAction).not.toHaveBeenCalled();
+  });
+
+  it("allows a plugin's own project to register and unregister", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_A);
+    await getHandler("plugin:actions-unregister")({ sender: { id: 1 } }, INSTANCE_A, "refresh");
+    expect(mockUnregisterPluginAction).toHaveBeenCalledWith(INSTANCE_A, "refresh");
   });
 });

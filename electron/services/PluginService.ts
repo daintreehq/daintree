@@ -2010,7 +2010,15 @@ export class PluginService {
       owners.add(descriptor.id);
       registered = true;
 
-      const resolvedPath = await this.resolveCommandHandlerPath(plugin.dir, cmd.id);
+      // A project plugin's `src/` is authoring source the host never reads: the
+      // load contract is the committed `dist/`, and importing `src/` here would
+      // run a project's uncompiled code in Electron main, outside the worker
+      // that gives every other plugin its crash isolation. Project plugins
+      // register command handlers from their worker entry point instead.
+      const resolvedPath =
+        plugin.origin === "project"
+          ? null
+          : await this.resolveCommandHandlerPath(plugin.dir, cmd.id);
       if (resolvedPath) {
         this.commandModulePaths.set(descriptor.id, resolvedPath);
       }
@@ -2916,9 +2924,22 @@ export class PluginService {
     );
   }
 
-  /** The plugin's declared `scopes.fs.allowedPaths` (empty when none / unloaded). */
+  /**
+   * The plugin's declared `scopes.fs.allowedPaths`.
+   *
+   * A project plugin that declares none defaults to its own project root
+   * (spec §7.2): it lives inside that tree, so the tree is the only sensible
+   * default, and without it `host.fs` and `host.git` would have no root at all
+   * and the plugin could reach nothing but its own data dir. An installed or
+   * builtin plugin has no project of its own and keeps the empty default —
+   * widening those to a whole tree would grant reach nobody asked for.
+   */
   private declaredAllowedPaths(pluginId: string): readonly string[] {
-    return this.plugins.get(pluginId)?.manifest.scopes?.fs?.allowedPaths ?? [];
+    const plugin = this.plugins.get(pluginId);
+    const declared = plugin?.manifest.scopes?.fs?.allowedPaths;
+    if (declared && declared.length > 0) return declared;
+    const projectRoot = plugin?.binding?.projectRoot;
+    return projectRoot ? [projectRoot] : [];
   }
 
   /** The implicit per-plugin data dir, always an allowed `user-data` root. */

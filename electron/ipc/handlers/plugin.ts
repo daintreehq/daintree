@@ -44,6 +44,7 @@ import {
 } from "../../../shared/config/toolbarButtonRegistry.js";
 import {
   getPluginPanelKinds,
+  projectIdFromRuntimePanelKindId,
   type PanelKindConfig,
 } from "../../../shared/config/panelKindRegistry.js";
 import { isPluginInvokeOwnershipError } from "../../services/plugin/PluginInvokeErrors.js";
@@ -675,14 +676,36 @@ async function handleActionsGet(ctx: IpcContext): Promise<PluginActionDescriptor
   );
 }
 
+/**
+ * A project plugin's actions answer only to its own project's renderers.
+ *
+ * The instance key names its project and is not a secret, so without this a
+ * renderer for project B could register — or silently unregister — actions
+ * owned by project A's plugin. Same rule, and the same reason, as
+ * `plugin:invoke` and the settings bridge.
+ */
+function assertSenderOwnsPluginInstance(ctx: IpcContext, pluginId: string): void {
+  const boundProjectId = projectIdFromPluginInstanceKey(pluginId);
+  if (boundProjectId !== null && boundProjectId !== ctx.projectId) {
+    throw new Error("plugin action rejected: plugin belongs to a different project");
+  }
+}
+
 async function handleActionsRegister(
+  ctx: IpcContext,
   pluginId: string,
   contribution: PluginActionContribution
 ): Promise<void> {
+  assertSenderOwnsPluginInstance(ctx, pluginId);
   (await getPluginService()).registerPluginAction(pluginId, contribution);
 }
 
-async function handleActionsUnregister(pluginId: string, actionId: string): Promise<void> {
+async function handleActionsUnregister(
+  ctx: IpcContext,
+  pluginId: string,
+  actionId: string
+): Promise<void> {
+  assertSenderOwnsPluginInstance(ctx, pluginId);
   (await getPluginService()).unregisterPluginAction(pluginId, actionId);
 }
 
@@ -728,9 +751,22 @@ async function handleProjectSurfacesGet(ctx: IpcContext): Promise<ProjectSurface
  * unknown kind, PTY panel, or no matching view contribution).
  */
 async function handleActivateForView(
+  ctx: IpcContext,
   panelKindId: string,
   requestRecoveryPath?: boolean
 ): Promise<string | undefined> {
+  // A project-qualified kind may only be activated by a renderer belonging to
+  // the project that owns it. `activatePluginForView` searches every loaded
+  // instance for a matching kind, so without this a renderer could activate —
+  // and thereby start the worker for — another project's plugin.
+  const owningProjectId = projectIdFromRuntimePanelKindId(panelKindId);
+  if (owningProjectId !== null && owningProjectId !== ctx.projectId) {
+    throw new AppError({
+      code: "PLUGIN_ACTIVATION_FAILED",
+      message: `Plugin activation rejected for view "${panelKindId}": sender belongs to a different project`,
+      userMessage: "That panel belongs to a different project.",
+    });
+  }
   const result: PluginActivationResult = await (
     await getPluginService()
   ).activatePluginForView(panelKindId, requestRecoveryPath === true);
@@ -1352,8 +1388,12 @@ export const pluginNamespace = defineIpcNamespace({
     }),
     validateActionIds: op(PLUGIN_METHOD_CHANNELS.validateActionIds, handleValidateActionIds),
     getActions: op(PLUGIN_METHOD_CHANNELS.getActions, handleActionsGet, { withContext: true }),
-    registerAction: op(PLUGIN_METHOD_CHANNELS.registerAction, handleActionsRegister),
-    unregisterAction: op(PLUGIN_METHOD_CHANNELS.unregisterAction, handleActionsUnregister),
+    registerAction: op(PLUGIN_METHOD_CHANNELS.registerAction, handleActionsRegister, {
+      withContext: true,
+    }),
+    unregisterAction: op(PLUGIN_METHOD_CHANNELS.unregisterAction, handleActionsUnregister, {
+      withContext: true,
+    }),
     getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet, {
       withContext: true,
     }),
@@ -1378,7 +1418,9 @@ export const pluginNamespace = defineIpcNamespace({
       handleProjectPluginsReload,
       { withContext: true }
     ),
-    activateForView: op(PLUGIN_METHOD_CHANNELS.activateForView, handleActivateForView),
+    activateForView: op(PLUGIN_METHOD_CHANNELS.activateForView, handleActivateForView, {
+      withContext: true,
+    }),
     reportPanelLifecycle: op(
       PLUGIN_METHOD_CHANNELS.reportPanelLifecycle,
       handleReportPanelLifecycle,

@@ -958,6 +958,28 @@ export function toRuntimePanelKindId(
 }
 
 /**
+ * The project a runtime panel kind id belongs to, or `null` for a global kind.
+ *
+ * Manifest ids and panel ids cannot contain `/`, so the last two slashes
+ * delimit `{pluginId}/{kindId}` and everything between the prefix and them is
+ * the project id — which may itself contain slashes, since a project id is a
+ * UUID or a path hash.
+ *
+ * Main uses this to check that a renderer asking to activate a kind actually
+ * belongs to the project that owns it.
+ */
+export function projectIdFromRuntimePanelKindId(kind: PanelKind): string | null {
+  if (!isProjectQualifiedPanelKindId(kind)) return null;
+  const rest = (kind as string).slice(PROJECT_PANEL_KIND_PREFIX.length);
+  const lastSlash = rest.lastIndexOf("/");
+  if (lastSlash <= 0) return null;
+  const secondLastSlash = rest.lastIndexOf("/", lastSlash - 1);
+  if (secondLastSlash <= 0) return null;
+  const projectId = rest.slice(0, secondLastSlash);
+  return projectId.length > 0 ? projectId : null;
+}
+
+/**
  * Whether a runtime panel kind id carries a project qualification. The one
  * assertion persistence needs: a `true` here means the id must be converted
  * with {@link toPersistedPanelKindRef} before it is written to disk.
