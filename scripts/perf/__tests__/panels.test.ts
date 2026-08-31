@@ -4,11 +4,14 @@ import { classifyMetric } from "../lib/comparability";
 import {
   disposePanelFixtures,
   expectedHiddenCounts,
+  expectedReviewOrder,
   expectedVisiblePaths,
+  expectedVisibleRowOrder,
   getFileBrowserFixture,
   listDirectories,
   mutateTree,
   pickExpansion,
+  sequenceMismatchCount,
   setDifferenceCount,
 } from "../lib/panelsFixture";
 import type { PerfMode, ScenarioContext } from "../types";
@@ -63,6 +66,8 @@ describe("panel scenarios (PERF-240..246)", () => {
       const metrics = sample.metrics!;
       expect(metrics.treeRowMisses).toBe(0);
       expect(metrics.hiddenCountMisses).toBe(0);
+      expect(metrics.rowOrderMisses).toBe(0);
+      expect(metrics.resortFlattenMs).toBeGreaterThan(0);
       // A tree that produced no rows would satisfy a miss count derived from
       // its own output; these are the readings that make it impossible here.
       expect(metrics.rowCount).toBeGreaterThan(500);
@@ -73,7 +78,7 @@ describe("panel scenarios (PERF-240..246)", () => {
   );
 
   it(
-    "PERF-242 reconciles a visible write and an ignored-only write, and prices both sweeps",
+    "PERF-242 prices one sweep per write, each after its own change",
     { timeout: FIXTURE_TIMEOUT_MS },
     async () => {
       const sample = await scenarioFor("PERF-242").run(contextFor("smoke"));
@@ -81,10 +86,15 @@ describe("panel scenarios (PERF-240..246)", () => {
       expect(metrics.refreshMisses).toBe(0);
       expect(metrics.refreshTargetCount).toBeGreaterThan(1);
       expect(metrics.relistedNodeCount).toBeGreaterThan(100);
-      // The point of the scenario: a change with nothing to show still pays a
-      // full sweep, because refreshTargets is content-blind.
-      expect(metrics.ignoredOnlySweepMs).toBeGreaterThan(0);
+      // Three arms, each priced separately. The middle one is the scenario's
+      // point: a change with nothing to show still pays a full sweep, because
+      // refreshTargets is content-blind.
       expect(metrics.sweepMs).toBeGreaterThan(0);
+      expect(metrics.ignoredOnlySweepMs).toBeGreaterThan(0);
+      expect(metrics.inPlaceEditSweepMs).toBeGreaterThan(0);
+      expect(sample.durationMs).toBeGreaterThanOrEqual(
+        metrics.sweepMs! + metrics.ignoredOnlySweepMs! + metrics.inPlaceEditSweepMs!
+      );
     }
   );
 
@@ -112,10 +122,15 @@ describe("panel scenarios (PERF-240..246)", () => {
       const metrics = sample.metrics!;
       expect(metrics.fileListMisses).toBe(0);
       expect(metrics.churnMisses).toBe(0);
+      expect(metrics.churnTotalMisses).toBe(0);
+      expect(metrics.sortOrderMisses).toBe(0);
       expect(metrics.readinessMisses).toBe(0);
       expect(metrics.changedFileCount).toBeGreaterThan(30);
-      expect(metrics.insertionCount).toBeGreaterThan(0);
-      expect(metrics.deletionCount).toBeGreaterThan(0);
+      expect(metrics.insertionCount).toBe(metrics.expectedInsertionCount);
+      expect(metrics.deletionCount).toBe(metrics.expectedDeletionCount);
+      // The generated files were committed at half the length they were
+      // rewritten at, so the two totals are deliberately not the same number.
+      expect(metrics.insertionCount).toBeGreaterThan(metrics.deletionCount!);
       // The 5s staging cache is dropped before the cold read, so the two are
       // genuinely different paths rather than the same cache hit twice.
       expect(metrics.churnColdMs).toBeGreaterThan(metrics.churnWarmMs!);
@@ -174,6 +189,48 @@ describe("panel scenarios (PERF-240..246)", () => {
   );
 
   it(
+    "the row-order oracle scores an order the set comparison cannot see",
+    { timeout: FIXTURE_TIMEOUT_MS },
+    async () => {
+      const tree = getFileBrowserFixture().representative;
+      const expanded = pickExpansion(tree, 12);
+      const ascending = expectedVisibleRowOrder(tree, expanded, false, "asc");
+      const descending = expectedVisibleRowOrder(tree, expanded, false, "desc");
+
+      // Same rows either way — which is exactly why membership cannot tell a
+      // working sort from one that handed its input straight back.
+      expect(setDifferenceCount(new Set(ascending), new Set(descending))).toBe(0);
+      expect(
+        setDifferenceCount(new Set(ascending), expectedVisiblePaths(tree, expanded, false))
+      ).toBe(0);
+      expect(sequenceMismatchCount(descending, ascending)).toBeGreaterThan(0);
+      expect(sequenceMismatchCount(ascending, ascending)).toBe(0);
+
+      // Folders lead at every level, so the first row is a directory whatever
+      // the direction — the grouping is structural, not part of the sort.
+      const directories = new Set(tree.directories);
+      expect(directories.has(ascending[0]!)).toBe(true);
+      expect(directories.has(descending[0]!)).toBe(true);
+    }
+  );
+
+  it("the Review Hub order oracle puts the generated tier last", () => {
+    const paths = ["src/a.ts", "package-lock.json", "src/b.ts", "dist/bundle.js"];
+    const generated = ["package-lock.json", "dist/bundle.js"];
+    expect(expectedReviewOrder(paths, generated)).toEqual([
+      "src/a.ts",
+      "src/b.ts",
+      "dist/bundle.js",
+      "package-lock.json",
+    ]);
+    // `git status` hands paths over already sorted, so the tier boundary is the
+    // only thing separating the expectation from an untouched input.
+    expect(
+      sequenceMismatchCount(expectedReviewOrder(paths, generated), [...paths].sort())
+    ).toBeGreaterThan(0);
+  });
+
+  it(
     "mutateTree restores the tree exactly, so an iteration cannot leak into the next",
     { timeout: FIXTURE_TIMEOUT_MS },
     async () => {
@@ -186,6 +243,14 @@ describe("panel scenarios (PERF-240..246)", () => {
         { visibleDir: directories[1]!, junkDir: directories[2]!, touchDir: directories[3]! },
         "unit"
       );
+      // Nothing is written until each arm asks for it — that is what lets a
+      // sweep be measured against a change made since the last one.
+      const untouched = await listDirectories(tree.path, ["", ...directories]);
+      expect(untouched.nodes).toBe(before.nodes);
+
+      mutation.writeVisible();
+      mutation.writeJunk();
+      mutation.writeTouch();
       const during = await listDirectories(tree.path, ["", ...directories]);
       expect(during.nodes).toBe(before.nodes + 2);
 

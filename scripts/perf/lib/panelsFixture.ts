@@ -422,6 +422,80 @@ export function expectedVisiblePaths(
 }
 
 /**
+ * Same collation the service and the panel both sort by — natural-numeric with
+ * a codepoint tie-break — constructed here rather than imported so the expected
+ * order is not the product's own comparator grading its own output.
+ */
+const EXPECTED_NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true });
+
+function compareExpectedNames(a: string, b: string): number {
+  const collated = EXPECTED_NAME_COLLATOR.compare(a, b);
+  if (collated !== 0) return collated;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * Every row a correct tree must render, IN THE ORDER it must render them.
+ *
+ * A set comparison cannot see ordering, and ordering is the whole of what a
+ * sort does: an identity `sortFileNodes` produces exactly the same set of rows
+ * as a working one, so membership alone scores a no-op sort as healthy. Folders
+ * lead at every level (the grouping is structural and survives both
+ * directions), each group is name-ordered, and an expanded directory's subtree
+ * follows its own row — the depth-first walk `flattenTree` performs.
+ *
+ * Only the `name` key is modelled, in both directions. That is the key the
+ * panel opens on and the only one whose expectation is derivable from the
+ * generator alone: `size` and `modified` would have to be read back off disk,
+ * which is the product's input rather than an independent oracle.
+ */
+export function expectedVisibleRowOrder(
+  tree: BrowseTree,
+  expanded: ReadonlySet<string>,
+  hideDotfiles: boolean,
+  direction: "asc" | "desc" = "asc"
+): string[] {
+  const flip = direction === "desc" ? -1 : 1;
+  const order = (names: readonly string[]): string[] =>
+    [...names].sort((a, b) => compareExpectedNames(a, b) * flip);
+
+  const rows: string[] = [];
+  const walk = (dir: string): void => {
+    const entry = tree.manifest.get(dir);
+    if (!entry) return;
+    const here = (name: string) => (dir === "" ? name : `${dir}/${name}`);
+    for (const name of order(entry.ordinaryDirs)) {
+      const child = here(name);
+      rows.push(child);
+      if (expanded.has(child)) walk(child);
+    }
+    const files = hideDotfiles ? entry.ordinaryFiles : [...entry.ordinaryFiles, ...entry.dotfiles];
+    for (const name of order(files)) rows.push(here(name));
+  };
+  walk("");
+  return rows;
+}
+
+/**
+ * Positions at which two row sequences disagree, plus the length difference.
+ *
+ * Deliberately positional rather than a set diff: reordered rows are the same
+ * rows, and the failure being caught here is one where every path is present
+ * and the order is wrong.
+ */
+export function sequenceMismatchCount(
+  expected: readonly string[],
+  actual: readonly string[]
+): number {
+  let misses = Math.abs(expected.length - actual.length);
+  const shared = Math.min(expected.length, actual.length);
+  for (let i = 0; i < shared; i += 1) {
+    if (expected[i] !== actual[i]) misses += 1;
+  }
+  return misses;
+}
+
+/**
  * The hidden-row tallies a correct `countHiddenRows` must report. Junk wins over
  * the dotfile toggle for a name that is both, matching the product's rule that
  * a row the toggle cannot recover must not be offered as recoverable.
@@ -541,12 +615,24 @@ export interface TreeMutation {
   junkPath: string;
   /** Existing file rewritten in place. */
   touchedPath: string;
+  /** Bytes `touchedPath` holds before the edit, and after it. */
+  touchedBytesBefore: number;
+  touchedBytesAfter: number;
+  writeVisible: () => void;
+  writeJunk: () => void;
+  writeTouch: () => void;
   revert: () => void;
 }
 
 /**
- * Stage the three writes a refresh has to survive: a new visible file, a new
- * file the junk list hides, and an in-place edit of an existing one.
+ * Prepare — but do not perform — the three writes a refresh has to survive: a
+ * new visible file, a new file the junk list hides, and an in-place edit of an
+ * existing one.
+ *
+ * Each write is a separate call because a sweep can only be said to have
+ * observed a change that happened after the previous sweep. Performing all
+ * three up front leaves any sweep but the first measuring a refresh over an
+ * unchanged tree, which is a real number for a different question.
  *
  * The junk write is the interesting one. It is the shape of the staleness bug
  * this family exists to price — a change the tree's tick source can miss
@@ -554,6 +640,9 @@ export interface TreeMutation {
  * well as the rows: the listing does see the file (`FileTreeService` returns
  * every entry and leaves visibility to the caller), so a correct panel must
  * count it as hidden rather than not know about it.
+ *
+ * The in-place edit changes the file's byte length, so the listing a sweep
+ * returns carries the evidence of whether it re-read the directory at all.
  *
  * `revert` restores the directory to exactly what the manifest describes, so an
  * iteration cannot leak state into the next one or into another scenario
@@ -573,15 +662,17 @@ export function mutateTree(
   const touchName = tree.manifest.get(target.touchDir)?.ordinaryFiles[0];
   if (!touchName) throw new Error(`mutateTree: ${target.touchDir} holds no ordinary file to touch`);
   const touchedPath = target.touchDir === "" ? touchName : `${target.touchDir}/${touchName}`;
-
-  writeFileSync(join(tree.path, visiblePath), ORDINARY_FILE_CONTENT);
-  writeFileSync(join(tree.path, junkPath), "\n");
-  writeFileSync(join(tree.path, touchedPath), `// edited ${token}\n`);
+  const editedContent = `// edited ${token}\n`;
 
   return {
     visiblePath,
     junkPath,
     touchedPath,
+    touchedBytesBefore: Buffer.byteLength(ORDINARY_FILE_CONTENT),
+    touchedBytesAfter: Buffer.byteLength(editedContent),
+    writeVisible: () => writeFileSync(join(tree.path, visiblePath), ORDINARY_FILE_CONTENT),
+    writeJunk: () => writeFileSync(join(tree.path, junkPath), "\n"),
+    writeTouch: () => writeFileSync(join(tree.path, touchedPath), editedContent),
     revert: () => {
       rmSync(join(tree.path, visiblePath), { force: true });
       rmSync(join(tree.path, junkPath), { force: true });
@@ -590,12 +681,17 @@ export function mutateTree(
   };
 }
 
-/** One more junk-only write, to price a refresh nothing visible changed in. */
-export function addJunkFile(tree: BrowseTree, dirPath: string, token: string): () => void {
-  const name = `._quiet${token}`;
-  const relative = dirPath === "" ? name : `${dirPath}/${name}`;
-  writeFileSync(join(tree.path, relative), "\n");
-  return () => rmSync(join(tree.path, relative), { force: true });
+/** The listed byte size of one path, or null when the sweep never listed it. */
+export function listedSizeOf(
+  listings: ReadonlyMap<string, readonly FileTreeNode[]>,
+  relativePath: string
+): number | null {
+  const slash = relativePath.lastIndexOf("/");
+  const dir = slash === -1 ? "" : relativePath.slice(0, slash);
+  for (const node of listings.get(dir) ?? []) {
+    if (node.path === relativePath) return node.size ?? null;
+  }
+  return null;
 }
 
 // --- Review Hub fixture ------------------------------------------------------
@@ -614,6 +710,22 @@ export interface ReviewRepo {
   filterGlob: string;
   filterPrefix: string;
   changedLinesPerFile: number;
+  /**
+   * Churn the changeset was WRITTEN to contain, totalled over every tracked
+   * change on both sides.
+   *
+   * Every touched file is rewritten under a different seed, so no line survives
+   * and numstat's answer is fixed by the generator: the new length in, the
+   * committed length out. Untracked files contribute nothing — they have no
+   * numstat entry at all — which is the same set the scenario excludes from its
+   * read.
+   *
+   * This is what makes `sumChurn` answerable: a version returning `{ins: 0,
+   * del: 0}` produces a perfectly plausible churn chip, and nothing derived
+   * from the product's own output can tell it apart from a quiet changeset.
+   */
+  expectedInsertions: number;
+  expectedDeletions: number;
 }
 
 export interface ReviewFixture {
@@ -683,6 +795,13 @@ function buildReviewRepo(
     untrackedPaths.push(relative);
   }
 
+  // Ordinary tracked files are rewritten at the length they were committed at,
+  // so every line is replaced one for one. The generated ones were committed at
+  // half that length and rewritten at full length, which makes their insertions
+  // and deletions deliberately unequal — a `sumChurn` that returned the same
+  // number for both would otherwise satisfy a symmetric expectation.
+  const rewrittenLines = (stagedPaths.length + unstagedPaths.length) * spec.churn * 2;
+
   return {
     path: repoPath,
     stagedPaths: [...stagedPaths, ...generatedTracked],
@@ -692,7 +811,32 @@ function buildReviewRepo(
     filterGlob: "src/services/**",
     filterPrefix: "src/services/",
     changedLinesPerFile: spec.churn * 2,
+    expectedInsertions: rewrittenLines + generatedTracked.length * spec.churn * 2,
+    expectedDeletions: rewrittenLines + generatedTracked.length * spec.churn,
   };
+}
+
+/**
+ * The order the Review Hub must list a section in under its default sort, from
+ * the paths the generator wrote.
+ *
+ * Generated files are a tier of their own below everything else — the product's
+ * rule, restated here rather than read back from `isGeneratedFile`, because the
+ * fixture already knows which files it wrote as generated. Without an ordered
+ * expectation an identity `sortFiles` is indistinguishable from a working one:
+ * `git status` hands its files over in path order already, so only the tier
+ * boundary moves.
+ */
+export function expectedReviewOrder(
+  paths: readonly string[],
+  generatedPaths: readonly string[]
+): string[] {
+  const generated = new Set(generatedPaths);
+  const byPath = (a: string, b: string) => a.localeCompare(b);
+  return [
+    ...paths.filter((path) => !generated.has(path)).sort(byPath),
+    ...paths.filter((path) => generated.has(path)).sort(byPath),
+  ];
 }
 
 let reviewFixture: ReviewFixture | null = null;

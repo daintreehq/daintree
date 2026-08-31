@@ -4,13 +4,15 @@ import type { FileTreeNode } from "../../../shared/types/ipc";
 import type { PerfScenario } from "../types";
 import { percentile } from "../lib/stats";
 import {
-  addJunkFile,
   expectedHiddenCounts,
+  expectedReviewOrder,
   expectedVisiblePaths,
+  expectedVisibleRowOrder,
   getFileBrowserFixture,
   getReviewFixture,
   getViewerFixture,
   listDirectories,
+  listedSizeOf,
   loadAlwaysHiddenPatterns,
   loadBrowserTreeModule,
   loadReviewModules,
@@ -19,6 +21,7 @@ import {
   mutateTree,
   pickExpansion,
   rowPathSet,
+  sequenceMismatchCount,
   setDifferenceCount,
   stagingStatusFor,
 } from "../lib/panelsFixture";
@@ -51,9 +54,11 @@ const REPRESENTATIVE_EXPANSION = 60;
 const LARGE_EXPANSION = 250;
 
 interface TreeBuild {
+  buildMs: number;
   listMs: number;
   flattenMs: number;
   hiddenMs: number;
+  resortFlattenMs: number;
   nodeCount: number;
   directoryCount: number;
   rowCount: number;
@@ -61,18 +66,28 @@ interface TreeBuild {
   hiddenJunkCount: number;
   rowMisses: number;
   hiddenMisses: number;
+  orderMisses: number;
 }
+
+/** The one non-default order a panel can be put into without re-listing. */
+const NAME_DESC_SORT = { key: "name", direction: "desc" } as const;
 
 /**
  * Fetch every listing a panel with this expansion would hold, then run the real
  * row build over it.
  *
- * The two miss counts are the whole point of the return shape: `rowMisses` is
+ * The three miss counts are the whole point of the return shape. `rowMisses` is
  * the symmetric difference against the manifest, so both a tree that produced
- * too few rows and one that leaked hidden entries into the list score; and
+ * too few rows and one that leaked hidden entries into the list score;
  * `hiddenMisses` holds the two tallies to the numbers the generator wrote,
  * which is what stops a filter that silently over-hides from reading as a
- * cheaper tree build.
+ * cheaper tree build; and `orderMisses` compares the row SEQUENCE, in the
+ * default order and again under a re-sort, because a set comparison scores an
+ * identity `sortFileNodes` as healthy — the rows are the same rows, and only
+ * their order is wrong.
+ *
+ * The re-sort pass runs outside `buildMs`: it is a second question asked of the
+ * same listings, not part of the work a panel open pays.
  */
 async function buildTreeRows(
   tree: ReturnType<typeof getFileBrowserFixture>["representative"],
@@ -82,6 +97,8 @@ async function buildTreeRows(
 ): Promise<TreeBuild> {
   const browserTree = await loadBrowserTreeModule();
   const directories = ["", ...[...expanded].sort()];
+
+  const buildStart = performance.now();
 
   const listStart = performance.now();
   const { listings, nodes } = await listDirectories(tree.path, directories);
@@ -107,13 +124,28 @@ async function buildTreeRows(
   });
   const hiddenMs = performance.now() - hiddenStart;
 
+  const buildMs = performance.now() - buildStart;
+
+  const resortStart = performance.now();
+  const resortedRows = browserTree.flattenTree(
+    listings,
+    expanded,
+    new Set<string>(),
+    "",
+    isVisible,
+    NAME_DESC_SORT
+  );
+  const resortFlattenMs = performance.now() - resortStart;
+
   const expectedRows = expectedVisiblePaths(tree, expanded, hideDotfiles);
   const expectedHidden = expectedHiddenCounts(tree, expanded, hideDotfiles);
 
   return {
+    buildMs,
     listMs,
     flattenMs,
     hiddenMs,
+    resortFlattenMs,
     nodeCount: nodes,
     directoryCount: directories.length,
     rowCount: rows.length,
@@ -123,6 +155,15 @@ async function buildTreeRows(
     hiddenMisses:
       Math.abs(hidden.dotfiles - expectedHidden.dotfiles) +
       Math.abs(hidden.alwaysHidden - expectedHidden.alwaysHidden),
+    orderMisses:
+      sequenceMismatchCount(
+        expectedVisibleRowOrder(tree, expanded, hideDotfiles, "asc"),
+        rows.map((row) => row.path)
+      ) +
+      sequenceMismatchCount(
+        expectedVisibleRowOrder(tree, expanded, hideDotfiles, "desc"),
+        resortedRows.map((row) => row.path)
+      ),
   };
 }
 
@@ -141,18 +182,20 @@ export const panelScenarios: PerfScenario[] = [
       "durationMs is the whole build; listMs is the filesystem half and flattenMs the row half. " +
       "No renderer and no paint — this is the work a commit must finish before React can render. " +
       "treeRowMisses diffs the rows against what the fixture wrote, in BOTH directions, so a " +
-      "filter that over-hides is not rewarded for walking fewer rows.",
+      "filter that over-hides is not rewarded for walking fewer rows, and rowOrderMisses holds " +
+      "the row sequence — default order and a name-descending re-sort, priced as " +
+      "resortFlattenMs — to the manifest, which a set comparison cannot do and an identity sort " +
+      "would otherwise pass.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 5, ci: 10, nightly: 14 },
     warmups: 1,
-    correctness: ["treeRowMisses", "hiddenCountMisses"],
+    correctness: ["treeRowMisses", "hiddenCountMisses", "rowOrderMisses"],
     async run() {
       const fixture = getFileBrowserFixture();
       const alwaysHiddenPatterns = await loadAlwaysHiddenPatterns();
       const expanded = pickExpansion(fixture.representative, REPRESENTATIVE_EXPANSION);
 
-      const start = performance.now();
       // The product default: dotfiles shown, the junk list applied.
       const build = await buildTreeRows(
         fixture.representative,
@@ -160,14 +203,14 @@ export const panelScenarios: PerfScenario[] = [
         false,
         alwaysHiddenPatterns
       );
-      const durationMs = performance.now() - start;
 
       return {
-        durationMs,
+        durationMs: build.buildMs,
         metrics: {
           listMs: build.listMs,
           flattenMs: build.flattenMs,
           hiddenCountMs: build.hiddenMs,
+          resortFlattenMs: build.resortFlattenMs,
           directoryCount: build.directoryCount,
           nodeCount: build.nodeCount,
           rowCount: build.rowCount,
@@ -175,6 +218,7 @@ export const panelScenarios: PerfScenario[] = [
           hiddenJunkCount: build.hiddenJunkCount,
           treeRowMisses: build.rowMisses,
           hiddenCountMisses: build.hiddenMisses,
+          rowOrderMisses: build.orderMisses,
         },
         notes:
           build.rowMisses > 0
@@ -191,19 +235,20 @@ export const panelScenarios: PerfScenario[] = [
       "~11,500 in wider directories), plus a third pass over the large tree with the dotfile toggle " +
       "ON so the cost of the hiding is separable from the cost of the walk. msPerKNode normalises " +
       "the large tree's build by entries listed — the fixed-scale signal for a regression in the " +
-      "per-entry lstat path or in sortFileNodes. All three passes carry their own miss counts.",
+      "per-entry lstat path or in sortFileNodes — which every pass exercises for real, because " +
+      "each re-sorts its listings name-descending and holds the resulting sequence to the " +
+      "manifest. All three passes carry their own miss counts.",
     tier: "heavy",
     modes: ["ci", "nightly"],
     iterations: { ci: 6, nightly: 10 },
     warmups: 1,
-    correctness: ["treeRowMisses", "hiddenCountMisses"],
+    correctness: ["treeRowMisses", "hiddenCountMisses", "rowOrderMisses"],
     async run() {
       const fixture = getFileBrowserFixture();
       const alwaysHiddenPatterns = await loadAlwaysHiddenPatterns();
       const smallExpansion = pickExpansion(fixture.representative, REPRESENTATIVE_EXPANSION);
       const largeExpansion = pickExpansion(fixture.large, LARGE_EXPANSION);
 
-      const start = performance.now();
       const small = await buildTreeRows(
         fixture.representative,
         smallExpansion,
@@ -217,20 +262,18 @@ export const panelScenarios: PerfScenario[] = [
         true,
         alwaysHiddenPatterns
       );
-      const durationMs = performance.now() - start;
-
-      const largeBuildMs = large.listMs + large.flattenMs + large.hiddenMs;
 
       return {
-        durationMs,
+        durationMs: small.buildMs + large.buildMs + largeHidingDotfiles.buildMs,
         metrics: {
           smallListMs: small.listMs,
           smallFlattenMs: small.flattenMs,
           largeListMs: large.listMs,
           largeFlattenMs: large.flattenMs,
           largeHiddenCountMs: large.hiddenMs,
+          largeResortFlattenMs: large.resortFlattenMs,
           dotfilesHiddenFlattenMs: largeHidingDotfiles.flattenMs,
-          msPerKNode: largeBuildMs / (large.nodeCount / 1000),
+          msPerKNode: large.buildMs / (large.nodeCount / 1000),
           largeNodeCount: large.nodeCount,
           largeRowCount: large.rowCount,
           largeHiddenJunkCount: large.hiddenJunkCount,
@@ -239,6 +282,7 @@ export const panelScenarios: PerfScenario[] = [
           treeRowMisses: small.rowMisses + large.rowMisses + largeHidingDotfiles.rowMisses,
           hiddenCountMisses:
             small.hiddenMisses + large.hiddenMisses + largeHidingDotfiles.hiddenMisses,
+          rowOrderMisses: small.orderMisses + large.orderMisses + largeHidingDotfiles.orderMisses,
         },
       };
     },
@@ -247,14 +291,16 @@ export const panelScenarios: PerfScenario[] = [
     id: "PERF-242",
     name: "File Browser Refresh Sweep After a Change",
     description:
-      "The incremental path: a fully-expanded tree takes three writes (a new visible file, a new " +
-      "file the junk list hides, and an in-place edit), then runs the real refreshTargets → " +
-      "re-list → flattenTree/countHiddenRows sweep. refreshTargets is content-blind, so " +
-      "ignoredOnlySweepMs — a second sweep after nothing but a junk write — is deliberately " +
-      "measured beside it: the cost of a refresh that had nothing to show. refreshMisses proves " +
-      "the sweep both surfaced the new visible file AND counted the hidden one, which is the " +
-      "shape of the staleness bug this panel has already shipped: an ignored-only write that the " +
-      "tree never accounts for.",
+      "The incremental path, as three write→sweep arms over a fully-expanded tree: a new visible " +
+      "file then a sweep (sweepMs), a new file the junk list hides then a sweep " +
+      "(ignoredOnlySweepMs), an in-place edit then a sweep (inPlaceEditSweepMs). Each write lands " +
+      "between the preceding sweep and its own, so every arm prices a refresh over a change that " +
+      "had not yet happened when the last one ran. Each sweep is the real refreshTargets → " +
+      "re-list → flattenTree/countHiddenRows path. refreshTargets is content-blind, which is what " +
+      "makes the middle arm worth its own number: a junk-only write shows nothing and still pays " +
+      "a full sweep. refreshMisses proves each arm reconciled its own write — the visible file as " +
+      "a row, the junk file as a hidden tally and never a row, and the edit as the file's new " +
+      "byte length in the re-listed nodes, which a sweep that skipped the re-read cannot produce.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 5, ci: 10, nightly: 14 },
@@ -271,7 +317,8 @@ export const panelScenarios: PerfScenario[] = [
         alwaysHiddenPatterns,
       });
 
-      // Cold state a refresh starts from: every expanded listing already held.
+      // Cold state a refresh starts from: every expanded listing already held,
+      // taken before any write so the first sweep has something to discover.
       const initial = await listDirectories(tree.path, ["", ...tree.directories]);
       let listings = initial.listings;
 
@@ -286,13 +333,14 @@ export const panelScenarios: PerfScenario[] = [
         },
         token
       );
-      const removeQuietJunk = addJunkFile(tree, targetDirs[4] ?? "", token);
 
-      try {
-        const start = performance.now();
+      let refreshTargetCount = 0;
+      let relistedNodeCount = 0;
 
+      /** One full refresh over whatever is on disk now, timed end to end. */
+      const sweep = async () => {
+        const startedAt = performance.now();
         const targets = browserTree.refreshTargets(listings, expanded, "", isVisible, null);
-        const sweepStart = performance.now();
         const swept = await listDirectories(tree.path, targets);
         listings = swept.listings;
         const rows = browserTree.flattenTree(
@@ -307,60 +355,64 @@ export const panelScenarios: PerfScenario[] = [
           hideDotfiles: false,
           alwaysHiddenPatterns,
         });
-        const sweepMs = performance.now() - sweepStart;
+        refreshTargetCount = targets.length;
+        relistedNodeCount = swept.nodes;
+        return {
+          ms: performance.now() - startedAt,
+          rowPaths: rowPathSet(rows),
+          rowCount: rows.length,
+          hiddenJunk: hidden.alwaysHidden,
+          touchedSize: listedSizeOf(listings, mutation.touchedPath),
+        };
+      };
 
-        // A second sweep with only a junk file added since. Same targets, same
-        // re-listing, nothing new to render — the tax an ignored-only change
-        // levies when the tree does notice it.
-        const quietStart = performance.now();
-        const quietTargets = browserTree.refreshTargets(listings, expanded, "", isVisible, null);
-        const quiet = await listDirectories(tree.path, quietTargets);
-        const quietRows = browserTree.flattenTree(
-          quiet.listings,
-          expanded,
-          new Set<string>(),
-          "",
-          isVisible,
-          browserTree.DEFAULT_FILE_SORT
-        );
-        const quietHidden = browserTree.countHiddenRows(quiet.listings, expanded, "", {
-          hideDotfiles: false,
-          alwaysHiddenPatterns,
-        });
-        const ignoredOnlySweepMs = performance.now() - quietStart;
-
-        const durationMs = performance.now() - start;
-
-        // Both writes added this iteration are junk, so the expected hidden
-        // tally is the manifest's plus two.
+      try {
+        // Every arm's expectation, from the manifest: the added visible file is
+        // a row from the first sweep on, the added junk file is a hidden tally
+        // from the second, and the edited file's byte length is the sweep's own
+        // evidence that it re-read the directory rather than replaying a cache.
         const expectedRows = expectedVisiblePaths(tree, expanded, false);
         expectedRows.add(mutation.visiblePath);
-        const expectedHidden = expectedHiddenCounts(tree, expanded, false);
+        const baseHiddenJunk = expectedHiddenCounts(tree, expanded, false).alwaysHidden;
+
+        mutation.writeVisible();
+        const visibleSweep = await sweep();
+
+        mutation.writeJunk();
+        const ignoredOnlySweep = await sweep();
+
+        mutation.writeTouch();
+        const editSweep = await sweep();
 
         const refreshMisses =
-          setDifferenceCount(expectedRows, rowPathSet(rows)) +
-          setDifferenceCount(expectedRows, rowPathSet(quietRows)) +
-          Math.abs(hidden.alwaysHidden - (expectedHidden.alwaysHidden + 2)) +
-          Math.abs(quietHidden.alwaysHidden - (expectedHidden.alwaysHidden + 2));
+          setDifferenceCount(expectedRows, visibleSweep.rowPaths) +
+          setDifferenceCount(expectedRows, ignoredOnlySweep.rowPaths) +
+          setDifferenceCount(expectedRows, editSweep.rowPaths) +
+          Math.abs(visibleSweep.hiddenJunk - baseHiddenJunk) +
+          Math.abs(ignoredOnlySweep.hiddenJunk - (baseHiddenJunk + 1)) +
+          Math.abs(editSweep.hiddenJunk - (baseHiddenJunk + 1)) +
+          (visibleSweep.touchedSize === mutation.touchedBytesBefore ? 0 : 1) +
+          (ignoredOnlySweep.touchedSize === mutation.touchedBytesBefore ? 0 : 1) +
+          (editSweep.touchedSize === mutation.touchedBytesAfter ? 0 : 1);
 
         return {
-          durationMs,
+          durationMs: visibleSweep.ms + ignoredOnlySweep.ms + editSweep.ms,
           metrics: {
-            sweepMs,
-            ignoredOnlySweepMs,
-            refreshTargetCount: targets.length,
-            relistedNodeCount: swept.nodes,
-            rowCount: rows.length,
-            hiddenJunkCount: hidden.alwaysHidden,
+            sweepMs: visibleSweep.ms,
+            ignoredOnlySweepMs: ignoredOnlySweep.ms,
+            inPlaceEditSweepMs: editSweep.ms,
+            refreshTargetCount,
+            relistedNodeCount,
+            rowCount: visibleSweep.rowCount,
+            hiddenJunkCount: editSweep.hiddenJunk,
             refreshMisses,
           },
           notes:
             refreshMisses > 0
-              ? "the refresh sweep did not reconcile the staged writes — rows or hidden tallies disagree with disk"
+              ? "a refresh sweep did not reconcile the write that preceded it — rows, hidden tallies or the edited file's size disagree with disk"
               : undefined,
         };
       } finally {
-        removeQuietJunk();
         mutation.revert();
       }
     },
@@ -375,7 +427,10 @@ export const panelScenarios: PerfScenario[] = [
       "Three cycles, so the re-expansion after a prune is measured rather than served from a " +
       "cache the product does not keep. p99ExpandStepMs is the single click a user waits on. " +
       "expandCollapseMisses checks each cycle's fully-expanded rows against the manifest and its " +
-      "collapsed rows against the baseline, so a chain that stopped descending scores every cycle.",
+      "collapsed rows against the baseline, so a chain that stopped descending scores every " +
+      "cycle — and holds the surviving listing KEYS to the root plus whatever is still expanded, " +
+      "because the collapsed rows alone are reproduced just as well by a prune that dropped " +
+      "nothing at all.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 5, ci: 10, nightly: 14 },
@@ -445,6 +500,7 @@ export const panelScenarios: PerfScenario[] = [
         // sweep, which lives in the panel component and cannot be imported here.
         const collapseStart = performance.now();
         for (const level of spine) expanded.delete(level);
+        const loadedBeforePrune = new Set(listings.keys());
         const pruneStart = performance.now();
         listings = browserTree.pruneListings(listings, expanded, "", []);
         pruneMs += performance.now() - pruneStart;
@@ -453,9 +509,16 @@ export const panelScenarios: PerfScenario[] = [
 
         listingCountAfterPrune = listings.size;
         misses += setDifferenceCount(baselineRows, collapsedRows);
-        // The prune must keep the root; losing it empties the tree outright,
-        // which reads as a very fast collapse.
-        if (!listings.has("")) misses += 1;
+        // The rows above cannot see the prune: with the spine collapsed,
+        // `flattenTree` never reaches those listings, so a prune that returned
+        // its input untouched renders exactly the same collapsed tree. What it
+        // cannot fake is which listings survived — the root plus whatever is
+        // still expanded, and nothing else. Keeping the root matters in the
+        // other direction: losing it empties the tree outright, which reads as
+        // a very fast collapse.
+        const expectedSurviving = new Set<string>([""]);
+        for (const dir of expanded) if (loadedBeforePrune.has(dir)) expectedSurviving.add(dir);
+        misses += setDifferenceCount(expectedSurviving, new Set(listings.keys()));
       }
 
       const durationMs = performance.now() - start;
@@ -487,12 +550,21 @@ export const panelScenarios: PerfScenario[] = [
       "rendered lists. churnColdMs drops the 5s staging cache first, which is what a real refresh " +
       "pays; churnWarmMs is the cache hit beside it. The status→entry mapping lives inside an " +
       "unreachable IPC handler closure and is reproduced in the fixture — its share is reported " +
-      "as mappingMs so it can never hide inside a measured number.",
+      "as mappingMs so it can never hide inside a measured number. sortOrderMisses holds the two " +
+      "section orders to the manifest and churnTotalMisses holds the chip's totals to the churn " +
+      "the fixture wrote, so neither an identity sortFiles nor a sumChurn returning zeros can " +
+      "read as a fast, healthy open.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 5, ci: 10, nightly: 14 },
     warmups: 1,
-    correctness: ["fileListMisses", "churnMisses", "readinessMisses"],
+    correctness: [
+      "fileListMisses",
+      "churnMisses",
+      "churnTotalMisses",
+      "sortOrderMisses",
+      "readinessMisses",
+    ],
     async run() {
       const fixture = getReviewFixture();
       return runReviewHub(fixture.representative);
@@ -504,13 +576,19 @@ export const panelScenarios: PerfScenario[] = [
     description:
       "The same pipeline against a long-running branch: ~420 changed files at double the churn " +
       "per file, so both axes the Review Hub scales on move at once. msPerKFile normalises the " +
-      "whole open by changed-file count. The same three miss counts apply — a numstat that " +
+      "whole open by changed-file count. The same five miss counts apply — a numstat that " +
       "returned nothing would make this the fastest run in the table.",
     tier: "heavy",
     modes: ["ci", "nightly"],
     iterations: { ci: 6, nightly: 10 },
     warmups: 1,
-    correctness: ["fileListMisses", "churnMisses", "readinessMisses"],
+    correctness: [
+      "fileListMisses",
+      "churnMisses",
+      "churnTotalMisses",
+      "sortOrderMisses",
+      "readinessMisses",
+    ],
     async run() {
       const fixture = getReviewFixture();
       const sample = await runReviewHub(fixture.large);
@@ -724,12 +802,33 @@ async function runReviewHub(
     (filtered.length === expectedFiltered ? 0 : 1) +
     (derivedStaged.length - withoutGenerated.length === expectedGeneratedDropped ? 0 : 1);
 
+  // The sets above are blind to order, and order is all `sortFiles` produces:
+  // `git status` already hands its files over path-ordered, so a version
+  // returning its input unchanged differs from a working one only in where the
+  // generated tier sits.
+  const sortOrderMisses =
+    sequenceMismatchCount(
+      expectedReviewOrder(repo.stagedPaths, repo.generatedPaths),
+      derivedStaged.map((file) => file.path)
+    ) +
+    sequenceMismatchCount(
+      expectedReviewOrder([...repo.unstagedPaths, ...repo.untrackedPaths], repo.generatedPaths),
+      derivedUnstaged.map((file) => file.path)
+    );
+
   // Untracked files legitimately carry no numstat entry; every tracked change
   // must have one, and a numstat that returned nothing leaves them all null.
   const trackedChanged = [...derivedStaged, ...derivedUnstaged].filter(
     (file) => file.status !== "untracked"
   );
   const churnMisses = trackedChanged.filter((file) => file.insertions === null).length;
+
+  // Per-file non-null is not enough for the chip: `sumChurn` returning zeros
+  // paints a plausible changeset over a file list that is otherwise correct.
+  // The fixture generated the changeset, so the totals are known exactly.
+  const churnTotalMisses =
+    (churn.ins === repo.expectedInsertions ? 0 : 1) +
+    (churn.del === repo.expectedDeletions ? 0 : 1);
 
   const readinessMisses =
     (readiness.commitReady ? 0 : 1) +
@@ -753,13 +852,19 @@ async function runReviewHub(
       generatedFileCount: expectedGeneratedDropped,
       insertionCount: churn.ins,
       deletionCount: churn.del,
+      expectedInsertionCount: repo.expectedInsertions,
+      expectedDeletionCount: repo.expectedDeletions,
       fileListMisses,
       churnMisses,
+      churnTotalMisses,
+      sortOrderMisses,
       readinessMisses,
     },
     notes:
       churnMisses > 0
         ? `${churnMisses} changed files came back without churn — the numstat read produced nothing`
-        : undefined,
+        : churnTotalMisses > 0
+          ? `churn totalled ${churn.ins}/${churn.del} against the ${repo.expectedInsertions}/${repo.expectedDeletions} the fixture wrote`
+          : undefined,
   };
 }
