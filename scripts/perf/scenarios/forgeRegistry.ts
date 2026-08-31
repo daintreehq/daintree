@@ -10,9 +10,10 @@ import {
   GITEA_PROVIDER_ID,
   GITHUB_PROVIDER_ID,
   RESOLUTION_CASES,
-  SCALE_PROVIDER_COUNT,
   createImplRecorder,
   createProviderImpl,
+  declaredHostnames,
+  declaredProviderIds,
   drainRelayMicrotasks,
   ensureRecordingRenderer,
   loadForgeModules,
@@ -20,7 +21,6 @@ import {
   resetForgeRegistry,
   scaleProviders,
   workspaceClientRecorder,
-  type ForgeModules,
   type ForgeRpcRequestLike,
   type ImplRecorder,
 } from "../lib/forgeRegistryFixture";
@@ -36,8 +36,14 @@ import {
  *
  * The traps this family is built against, and where each is caught:
  *   - **A registry that registers nothing resolves instantly.** PERF-340 reads
- *     the descriptor and matcher tables back against the declared corpus, and
- *     PERF-341's positive rows all miss when the tables are empty.
+ *     the descriptor and matcher tables back against every provider that was
+ *     registered — corpus and scale tier alike, since both go in through the
+ *     same call and both are in the table the scenario prices — and PERF-341's
+ *     positive rows all miss when the tables are empty.
+ *   - **Dropping rows nobody grades is the cheapest win of all.** Every oracle
+ *     here is built from the declarations that went IN, never read back out of
+ *     the table being graded, and covers the whole roster rather than the
+ *     subset the expectation rows happen to name.
  *   - **A resolver that returns the first provider for every query is fast and
  *     wrong.** PERF-341 grades an expectation table in both directions: seven
  *     rows must route to NOTHING, three of them where a configured override or
@@ -59,8 +65,9 @@ interface ResolutionOutcome {
 }
 
 function gradeResolutions(
-  mods: ForgeModules,
-  outcomes: readonly ResolutionOutcome[]
+  outcomes: readonly ResolutionOutcome[],
+  registeredIds: readonly string[],
+  declaredIds: readonly string[]
 ): { resolutionMisses: number; matcherRoutingMisses: number } {
   let resolutionMisses = 0;
   let matcherRoutingMisses = 0;
@@ -80,16 +87,21 @@ function gradeResolutions(
   // Guards the table itself: a corpus edit that stopped registering a provider
   // named by an expectation would otherwise turn positive rows into a shared
   // null on both sides and read as a clean pass.
-  const registered = new Set(
-    mods
-      .getRegisteredForgeProviders()
-      .map((entry) => mods.makeForgeProviderId(entry.pluginId, entry.contribution.id))
-  );
+  const registered = new Set(registeredIds);
   for (const expectation of RESOLUTION_CASES) {
     if (expectation.expectedProviderId && !registered.has(expectation.expectedProviderId)) {
       resolutionMisses += 1;
     }
   }
+
+  // And guards the POOL the sweep was answered against, by symmetric difference
+  // against what was declared for this tier. The expectations name six corpus
+  // providers, so a scale tier that never registered leaves every row correct
+  // while the scaled sweep silently becomes a small-pool sweep — the reading
+  // this scenario exists to take.
+  const declared = new Set(declaredIds);
+  for (const id of declared) if (!registered.has(id)) resolutionMisses += 1;
+  for (const id of registered) if (!declared.has(id)) resolutionMisses += 1;
 
   return { resolutionMisses, matcherRoutingMisses };
 }
@@ -100,6 +112,16 @@ interface RpcStep {
   request: ForgeRpcRequestLike;
   /** Provider methods this request must enter. Zero for a coalesced duplicate. */
   expectedProviderCalls: number;
+  /**
+   * Implicit `activate()` calls this request must force.
+   *
+   * Declared separately from {@link expectedProviderCalls} because the two
+   * diverge exactly where the behaviour matters: a request naming a provider
+   * whose impl never bound must still activate its plugin, which is the whole
+   * point of the implicit-activation path — a dispatcher that skipped it is
+   * faster and leaves every lazily-binding plugin unreachable on first use.
+   */
+  expectedActivations: number;
   expectOk: boolean;
   /** Reads the delivered envelope value; false is a miss. */
   check: (value: unknown) => boolean;
@@ -171,6 +193,7 @@ function buildRpcGroups(): RpcGroup[] {
           ],
         },
         expectedProviderCalls: 0,
+        expectedActivations: 0,
         expectOk: true,
         check: (value) => hasStatus(value, "not-ready"),
       },
@@ -193,6 +216,7 @@ function buildRpcGroups(): RpcGroup[] {
           ],
         },
         expectedProviderCalls: 1,
+        expectedActivations: 1,
         expectOk: true,
         check: (value) => isResolved(value, GITHUB_PROVIDER_ID),
       },
@@ -210,6 +234,7 @@ function buildRpcGroups(): RpcGroup[] {
           ],
         },
         expectedProviderCalls: 1,
+        expectedActivations: 1,
         expectOk: true,
         check: (value) => isResolved(value, GITEA_PROVIDER_ID),
       },
@@ -227,6 +252,7 @@ function buildRpcGroups(): RpcGroup[] {
           ],
         },
         expectedProviderCalls: 0,
+        expectedActivations: 0,
         expectOk: true,
         check: (value) => hasStatus(value, "no-match"),
       },
@@ -246,6 +272,7 @@ function buildRpcGroups(): RpcGroup[] {
           ],
         },
         expectedProviderCalls: 0,
+        expectedActivations: 1,
         expectOk: true,
         check: (value) => hasStatus(value, "no-match"),
       },
@@ -263,6 +290,7 @@ function buildRpcGroups(): RpcGroup[] {
       },
       // Only the leader reaches the provider; the other seven join it.
       expectedProviderCalls: i === 0 ? 1 : 0,
+      expectedActivations: i === 0 ? 1 : 0,
       expectOk: true,
       check: (value) =>
         typeof value === "object" &&
@@ -279,6 +307,7 @@ function buildRpcGroups(): RpcGroup[] {
         args: [REPO_REF, `feature/distinct-${i}`],
       },
       expectedProviderCalls: 1,
+      expectedActivations: 1,
       expectOk: true,
       check: (value) => typeof value === "object" && value !== null,
     });
@@ -294,6 +323,7 @@ function buildRpcGroups(): RpcGroup[] {
           args: [REPO_REF, TRACKED_PRS.map((pr) => pr.headRefName)],
         },
         expectedProviderCalls: 1,
+        expectedActivations: 1,
         expectOk: true,
         check: (value) => value instanceof Map && value.size === TRACKED_PRS.length,
       },
@@ -305,6 +335,7 @@ function buildRpcGroups(): RpcGroup[] {
           args: [REPO_REF, TRACKED_PRS.map((pr) => pr.number)],
         },
         expectedProviderCalls: 1,
+        expectedActivations: 1,
         expectOk: true,
         check: (value) => value instanceof Map && value.size === TRACKED_PRS.length,
       },
@@ -316,6 +347,7 @@ function buildRpcGroups(): RpcGroup[] {
           args: [REPO_REF, TRACKED_PRS.map((pr) => pr.number)],
         },
         expectedProviderCalls: 1,
+        expectedActivations: 1,
         expectOk: true,
         check: (value) => value instanceof Map && value.size === TRACKED_PRS.length,
       },
@@ -327,6 +359,7 @@ function buildRpcGroups(): RpcGroup[] {
           args: [REPO_REF, TRACKED_PRS],
         },
         expectedProviderCalls: 1,
+        expectedActivations: 1,
         expectOk: true,
         check: (value) =>
           typeof value === "object" &&
@@ -341,6 +374,7 @@ function buildRpcGroups(): RpcGroup[] {
           args: [{ ...REPO_REF, host: "gitea.acme.example" }, 4242],
         },
         expectedProviderCalls: 1,
+        expectedActivations: 1,
         expectOk: true,
         check: (value) => (value as { number?: number } | null)?.number === 4242,
       },
@@ -352,6 +386,7 @@ function buildRpcGroups(): RpcGroup[] {
           args: [],
         },
         expectedProviderCalls: 1,
+        expectedActivations: 1,
         expectOk: true,
         check: (value) => (value as { limit?: number } | null)?.limit === 5000,
       },
@@ -363,6 +398,7 @@ function buildRpcGroups(): RpcGroup[] {
           args: [],
         },
         expectedProviderCalls: 1,
+        expectedActivations: 1,
         expectOk: true,
         check: (value) => value === null,
       },
@@ -375,6 +411,7 @@ function buildRpcGroups(): RpcGroup[] {
           args: [REPO_REF, 1],
         },
         expectedProviderCalls: 0,
+        expectedActivations: 1,
         expectOk: false,
         check: () => true,
       },
@@ -386,6 +423,7 @@ function buildRpcGroups(): RpcGroup[] {
           args: [REPO_REF, 1],
         },
         expectedProviderCalls: 0,
+        expectedActivations: 1,
         expectOk: false,
         check: () => true,
       },
@@ -425,21 +463,27 @@ export const forgeRegistryScenarios: PerfScenario[] = [
       "Register a forge-provider corpus through the real registerForgeProviders (which deep-freezes " +
       "every contribution), then read the descriptor table, the hostname matcher table and the impl " +
       "table back out of the product's own accessors. Scaled to 126 providers so the O(plugins x " +
-      "contributions) shape of the table builders is visible. descriptorMisses reads the tables " +
-      "against the declared corpus by symmetric difference, implBindMisses asserts the " +
-      "descriptor/impl split the shipped cold-start bug turns on (descriptors eager from the " +
-      "manifest, impls only from activate()), and unregisterMisses checks a plugin's removal takes " +
-      "its own rows and nobody else's.",
+      "contributions) shape of the table builders is visible, and graded over all 126 rather than " +
+      "the six-provider corpus: the expectation is rebuilt from the same generator the scale tier " +
+      "was registered from, so a matcher builder that omits every scale row scores its 120 missing " +
+      "rows instead of reporting a faster matcherBuildMs. descriptorMisses reads the descriptor and " +
+      "matcher tables against the declared roster by symmetric difference, implBindMisses asserts " +
+      "the descriptor/impl split the shipped cold-start bug turns on (descriptors eager from the " +
+      "manifest, impls only from activate()), unregisterMisses checks a plugin's removal takes its " +
+      "own rows and nobody else's, and registryChangeMisses is a signed count of the change " +
+      "signal that drives both relays.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 14, nightly: 20 },
     warmups: 2,
-    correctness: ["descriptorMisses", "implBindMisses", "unregisterMisses"],
+    correctness: ["descriptorMisses", "implBindMisses", "unregisterMisses", "registryChangeMisses"],
     async run() {
       const mods = await resetForgeRegistry();
       const scale = scaleProviders();
       const recorder = createImplRecorder();
       const impl = createProviderImpl(recorder, { host: "github.com" });
+      const idOf = (entry: { pluginId: string; contribution: { id: string } }): string =>
+        mods.makeForgeProviderId(entry.pluginId, entry.contribution.id);
 
       let registryChangeEvents = 0;
       const unsubscribe = mods.onForgeProviderRegistryChanged(() => {
@@ -465,7 +509,7 @@ export const forgeRegistryScenarios: PerfScenario[] = [
           mods.registerForgeProviders(plugin.pluginId, [...plugin.contributions]);
         }
         const scaleRegisterMs = performance.now() - scaleStart;
-        const scaledProviderCount = mods.getRegisteredForgeProviders().length;
+        const descriptorsAfterScale = mods.getRegisteredForgeProviders();
 
         const matcherStart = performance.now();
         const matchers = mods.listForgeProviderMatchers();
@@ -481,40 +525,56 @@ export const forgeRegistryScenarios: PerfScenario[] = [
         mods.unregisterForgeProviderImpls("daintree.github");
         const unregisterMs = performance.now() - unregisterStart;
 
-        const survivors = new Set(
-          mods
-            .getRegisteredForgeProviders()
-            .map((entry) => mods.makeForgeProviderId(entry.pluginId, entry.contribution.id))
-        );
+        const survivors = new Set(mods.getRegisteredForgeProviders().map(idOf));
         const implsAfterUnregister = mods.getForgeProviderImplEntries().length;
 
         const durationMs = performance.now() - start;
 
         const declaredIds = new Set(CORPUS_PROVIDER_IDS);
-        const observedIds = new Set(
-          descriptorsBeforeBind.map((entry) =>
-            mods.makeForgeProviderId(entry.pluginId, entry.contribution.id)
-          )
-        );
+        const observedIds = new Set(descriptorsBeforeBind.map(idOf));
         let descriptorMisses = 0;
         for (const id of declaredIds) if (!observedIds.has(id)) descriptorMisses += 1;
         for (const id of observedIds) if (!declaredIds.has(id)) descriptorMisses += 1;
 
-        // The matcher table is the routing view of the same corpus: every
-        // declared hostname must be present under its canonical id, and no id
-        // may carry a hostname nobody declared.
-        const matcherById = new Map(matchers.map((entry) => [entry.providerId, entry.hostnames]));
-        for (const [providerId, hostnames] of CORPUS_HOSTNAMES) {
-          const observed = matcherById.get(providerId);
-          if (!observed) {
-            descriptorMisses += hostnames.length;
+        // The scale tier registers through the same entry point, so it is
+        // graded the same way: its 120 rows are what `scaleRegisterMs` and
+        // everything measured after it are priced against.
+        const scaledRoster = [...FORGE_CORPUS, ...scale];
+        const declaredScaledIds = new Set(declaredProviderIds(scaledRoster));
+        const observedScaledIds = new Set(descriptorsAfterScale.map(idOf));
+        for (const id of declaredScaledIds) {
+          if (!observedScaledIds.has(id)) descriptorMisses += 1;
+        }
+        for (const id of observedScaledIds) {
+          if (!declaredScaledIds.has(id)) descriptorMisses += 1;
+        }
+
+        // The matcher table is the routing view of the WHOLE registered roster,
+        // so it is graded against every declaration that went into it. Grading
+        // only the six corpus rows let a builder that omits the 120 scale rows
+        // report a faster `matcherBuildMs` with all three predicates at zero —
+        // the table is built at 126 providers precisely to price that size.
+        const declaredMatcherHostnames = declaredHostnames(scaledRoster);
+        const seenMatcherIds = new Set<string>();
+        for (const entry of matchers) {
+          const declared = declaredMatcherHostnames.get(entry.providerId);
+          if (!declared) {
+            descriptorMisses += 1 + entry.hostnames.length;
             continue;
           }
-          const observedSet = new Set(observed);
-          for (const hostname of hostnames) if (!observedSet.has(hostname)) descriptorMisses += 1;
-          for (const hostname of observedSet) {
-            if (!hostnames.includes(hostname)) descriptorMisses += 1;
+          if (seenMatcherIds.has(entry.providerId)) {
+            descriptorMisses += 1;
+            continue;
           }
+          seenMatcherIds.add(entry.providerId);
+          const observed = new Set(entry.hostnames);
+          for (const hostname of declared) if (!observed.has(hostname)) descriptorMisses += 1;
+          for (const hostname of observed) {
+            if (!declared.includes(hostname)) descriptorMisses += 1;
+          }
+        }
+        for (const [providerId, hostnames] of declaredMatcherHostnames) {
+          if (!seenMatcherIds.has(providerId)) descriptorMisses += 1 + hostnames.length;
         }
 
         let implBindMisses = 0;
@@ -530,17 +590,31 @@ export const forgeRegistryScenarios: PerfScenario[] = [
         let unregisterMisses = 0;
         if (survivors.has(GITEA_PROVIDER_ID)) unregisterMisses += 1;
         // A removal that clears the whole table is as wrong as one that clears
-        // nothing, and equally invisible in a duration.
-        for (const id of CORPUS_PROVIDER_IDS) {
+        // nothing, and equally invisible in a duration. Graded over the scale
+        // tier as well as the corpus, since both registered through the same
+        // entry point and only the full roster shows a removal that overreached.
+        for (const id of declaredScaledIds) {
           if (id !== GITEA_PROVIDER_ID && !survivors.has(id)) unregisterMisses += 1;
         }
+        for (const id of survivors) {
+          if (!declaredScaledIds.has(id)) unregisterMisses += 1;
+        }
         if (implsAfterUnregister !== 0) unregisterMisses += 1;
+
+        // The change signal is the only thing driving the health and matcher
+        // relays, and its fan-out sits inside the registration brackets above:
+        // one notification per mutation — 126 registrations, one impl bind and
+        // the two removals. Signed, so a registry that batched or stopped
+        // notifying and a registry that notified twice per call are different
+        // readings rather than the same non-zero.
+        const expectedRegistryChangeEvents = FORGE_CORPUS.length + scale.length + 3;
+        const registryChangeMisses = expectedRegistryChangeEvents - registryChangeEvents;
 
         return {
           durationMs,
           metrics: {
             registeredProviderCount: descriptorsBeforeBind.length,
-            scaledProviderCount,
+            scaledProviderCount: descriptorsAfterScale.length,
             matcherEntryCount: matchers.length,
             matcherHostnameCount: matchers.reduce(
               (total, entry) => total + entry.hostnames.length,
@@ -555,6 +629,7 @@ export const forgeRegistryScenarios: PerfScenario[] = [
             descriptorMisses,
             implBindMisses,
             unregisterMisses,
+            registryChangeMisses,
           },
         };
       } finally {
@@ -572,7 +647,11 @@ export const forgeRegistryScenarios: PerfScenario[] = [
       "must resolve to nothing, three of them because a configured override or global default names " +
       "something unavailable and the product deliberately refuses to fall through — so a resolver " +
       "that returns the first registered provider for every query, which is the fastest wrong " +
-      "answer available, fails every one of them while getting faster. Swept again at 126 providers.",
+      "answer available, fails every one of them while getting faster. Swept again at 126 providers, " +
+      "with the pool itself read back and graded by symmetric difference against the generator that " +
+      "produced it — the expectations name only corpus providers, so a scale tier that never " +
+      "registered would otherwise turn the scaled sweep into a small-pool sweep reported as a " +
+      "scaled one.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 16, nightly: 22 },
@@ -612,11 +691,15 @@ export const forgeRegistryScenarios: PerfScenario[] = [
         outcomes = sweepOutcomes;
       }
       const smallPoolMs = performance.now() - start;
+      const idOf = (entry: { pluginId: string; contribution: { id: string } }): string =>
+        mods.makeForgeProviderId(entry.pluginId, entry.contribution.id);
+      const smallPoolIds = mods.getRegisteredForgeProviders().map(idOf);
 
       // Scale tier: the corpus expectations must be unchanged by 120 providers
       // that claim no corpus hostname, so a lookup that got faster by dropping
       // candidates shows up as a miss rather than as a win.
-      for (const plugin of scaleProviders()) {
+      const scale = scaleProviders();
+      for (const plugin of scale) {
         mods.registerForgeProviders(plugin.pluginId, [...plugin.contributions]);
       }
       const scaledStart = performance.now();
@@ -642,8 +725,13 @@ export const forgeRegistryScenarios: PerfScenario[] = [
       const scaledPoolMs = performance.now() - scaledStart;
       const durationMs = smallPoolMs + scaledPoolMs;
 
-      const small = gradeResolutions(mods, outcomes);
-      const scaled = gradeResolutions(mods, scaledOutcomes);
+      const scaledPoolIds = mods.getRegisteredForgeProviders().map(idOf);
+      const small = gradeResolutions(outcomes, smallPoolIds, CORPUS_PROVIDER_IDS);
+      const scaled = gradeResolutions(
+        scaledOutcomes,
+        scaledPoolIds,
+        declaredProviderIds([...FORGE_CORPUS, ...scale])
+      );
 
       return {
         durationMs,
@@ -652,8 +740,8 @@ export const forgeRegistryScenarios: PerfScenario[] = [
           expectationRowCount: RESOLUTION_CASES.length,
           mustRouteNowhereRowCount: RESOLUTION_CASES.filter((c) => c.expectedProviderId === null)
             .length,
-          smallPoolProviderCount: CORPUS_PROVIDER_IDS.length,
-          scaledPoolProviderCount: CORPUS_PROVIDER_IDS.length + SCALE_PROVIDER_COUNT,
+          smallPoolProviderCount: smallPoolIds.length,
+          scaledPoolProviderCount: scaledPoolIds.length,
           avgResolveMs: perResolve.reduce((sum, ms) => sum + ms, 0) / perResolve.length,
           p95ResolveMs: percentile(perResolve, 95),
           scaledSweepMs: scaledPoolMs,
@@ -674,12 +762,19 @@ export const forgeRegistryScenarios: PerfScenario[] = [
       "travel across machines, the transit time is not. Eight identical requests dispatched in one " +
       "tick must reach the provider once and come back eight times; three that differ only by " +
       "branch must not fold at all. coalescingMisses is a signed subtraction, so over-coalescing " +
-      "(which drops a caller's answer) reads as negative and under-coalescing as positive.",
+      "(which drops a caller's answer) reads as negative and under-coalescing as positive, and " +
+      "implicitActivationMisses is the same shape over the implicit activate() every request owes " +
+      "its owning plugin — including the two that name a provider with no impl bound.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 6, ci: 12, nightly: 16 },
     warmups: 2,
-    correctness: ["rpcOutcomeMisses", "coalescingMisses", "deliveryMisses"],
+    correctness: [
+      "rpcOutcomeMisses",
+      "coalescingMisses",
+      "deliveryMisses",
+      "implicitActivationMisses",
+    ],
     async run() {
       const mods = await resetForgeRegistry({ withCorpus: true });
       const recorder = createImplRecorder();
@@ -753,6 +848,13 @@ export const forgeRegistryScenarios: PerfScenario[] = [
       );
       const coalescingMisses = expectedProviderCalls - recorder.calls.length;
 
+      const expectedActivations = steps.reduce(
+        (total, step) => total + step.expectedActivations,
+        0
+      );
+      const implicitActivationMisses =
+        expectedActivations - pluginServiceRecorder.activations.length;
+
       return {
         durationMs,
         metrics: {
@@ -767,6 +869,7 @@ export const forgeRegistryScenarios: PerfScenario[] = [
           rpcOutcomeMisses,
           coalescingMisses,
           deliveryMisses,
+          implicitActivationMisses,
         },
       };
     },
@@ -944,6 +1047,11 @@ export const forgeRegistryScenarios: PerfScenario[] = [
           for (const hostname of expected) {
             if (!observed.includes(hostname)) matcherRelayMisses += 1;
           }
+        }
+        // The other direction: a relay pushing rows nobody declared is as wrong
+        // as one pushing a stale table, and just as invisible in a duration.
+        for (const providerId of pushed.keys()) {
+          if (!CORPUS_HOSTNAMES.has(providerId)) matcherRelayMisses += 1;
         }
       }
 

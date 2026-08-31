@@ -517,20 +517,38 @@ export function canonicalId(plugin: CorpusPlugin, contribution: ForgeProviderCon
   return `${plugin.pluginId}.${contribution.id}`;
 }
 
-/** Every `{pluginId}.{contributionId}` the corpus declares, in registration order. */
-export const CORPUS_PROVIDER_IDS: readonly string[] = FORGE_CORPUS.flatMap((plugin) =>
-  plugin.contributions.map((contribution) => canonicalId(plugin, contribution))
-);
+/** Every `{pluginId}.{contributionId}` a roster declares, in registration order. */
+export function declaredProviderIds(plugins: readonly CorpusPlugin[]): string[] {
+  return plugins.flatMap((plugin) =>
+    plugin.contributions.map((contribution) => canonicalId(plugin, contribution))
+  );
+}
 
-/** Hostname patterns per canonical id, as declared — the matcher-table oracle. */
-export const CORPUS_HOSTNAMES: ReadonlyMap<string, readonly string[]> = new Map(
-  FORGE_CORPUS.flatMap((plugin) =>
-    plugin.contributions.map(
-      (contribution) =>
-        [canonicalId(plugin, contribution), [...contribution.matches]] as [string, string[]]
+/**
+ * Hostname patterns per canonical id, as declared — the matcher-table oracle.
+ *
+ * Takes a roster rather than closing over {@link FORGE_CORPUS}, because the
+ * scale tier is registered through the same path and lands in the same table.
+ * An oracle covering only the corpus subset would let a builder that omits the
+ * 120 scale rows report a faster build with every predicate still at zero.
+ */
+export function declaredHostnames(
+  plugins: readonly CorpusPlugin[]
+): Map<string, readonly string[]> {
+  return new Map(
+    plugins.flatMap((plugin) =>
+      plugin.contributions.map(
+        (contribution) =>
+          [canonicalId(plugin, contribution), [...contribution.matches]] as [string, string[]]
+      )
     )
-  )
-);
+  );
+}
+
+export const CORPUS_PROVIDER_IDS: readonly string[] = declaredProviderIds(FORGE_CORPUS);
+
+export const CORPUS_HOSTNAMES: ReadonlyMap<string, readonly string[]> =
+  declaredHostnames(FORGE_CORPUS);
 
 export const GITHUB_PROVIDER_ID = "daintree.github.github";
 export const GITEA_PROVIDER_ID = "acme.gitea.gitea";

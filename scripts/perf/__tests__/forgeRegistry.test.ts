@@ -8,8 +8,12 @@ import {
   GITEA_PROVIDER_ID,
   GITHUB_PROVIDER_ID,
   RESOLUTION_CASES,
+  SCALE_PROVIDER_COUNT,
   createImplRecorder,
   createProviderImpl,
+  declaredHostnames,
+  declaredProviderIds,
+  pluginServiceRecorder,
   scaleProviders,
 } from "../lib/forgeRegistryFixture";
 import { forgeRegistryScenarios } from "../scenarios/forgeRegistry";
@@ -61,19 +65,36 @@ vi.mock("electron", () => {
   };
 });
 
-vi.mock("../../../electron/services/PluginService.js", () => ({
-  pluginService: {
-    activatePluginForForgeProvider: async (): Promise<void> => undefined,
-    isPluginScanComplete: true,
-  },
-}));
+// Both mocks delegate to the fixture's own recorders — the same objects the
+// loader-hook stubs write to under `npm run perf` — so a scenario driven from
+// here grades the same evidence it grades in a real run.
+vi.mock("../../../electron/services/PluginService.js", async () => {
+  const { pluginServiceRecorder: recorder } = await import("../lib/forgeRegistryFixture");
+  return {
+    pluginService: {
+      activatePluginForForgeProvider: async (namespacedId: string): Promise<void> => {
+        recorder.activations.push(namespacedId);
+      },
+      get isPluginScanComplete(): boolean {
+        return recorder.scanComplete;
+      },
+    },
+  };
+});
 
-vi.mock("../../../electron/services/WorkspaceClient.js", () => ({
-  getWorkspaceClient: () => ({
-    relayForgeProviderMatchers: (): void => undefined,
-    relayFetchThrottle: (): void => undefined,
-  }),
-}));
+vi.mock("../../../electron/services/WorkspaceClient.js", async () => {
+  const { workspaceClientRecorder: recorder } = await import("../lib/forgeRegistryFixture");
+  return {
+    getWorkspaceClient: () => ({
+      relayForgeProviderMatchers: (matchers: unknown[]): void => {
+        recorder.matcherPushes.push(matchers as never);
+      },
+      relayFetchThrottle: (multiplier: number): void => {
+        recorder.throttleRelays.push(multiplier);
+      },
+    }),
+  };
+});
 
 describe("forge perf corpus and expectation table", () => {
   it("declares provider ids that match the corpus it registers", () => {
@@ -135,6 +156,24 @@ describe("forge perf corpus and expectation table", () => {
     ).toBe(true);
   });
 
+  it("derives the scale tier's expectation from the generator, at full roster width", () => {
+    const sample = declaredHostnames(scaleProviders(4));
+    expect(sample.size).toBe(4);
+    expect(sample.get("perf.forge0.provider")).toEqual([
+      "forge0.perf.invalid",
+      "alt-forge0.perf.invalid",
+    ]);
+
+    // The matcher table is built from the whole roster, so the oracle has to
+    // be too: a corpus-only expectation covers six of its 126 rows and grades
+    // a builder that dropped the other 120 as perfect.
+    const roster = [...FORGE_CORPUS, ...scaleProviders()];
+    expect(declaredProviderIds(roster)).toHaveLength(
+      CORPUS_PROVIDER_IDS.length + SCALE_PROVIDER_COUNT
+    );
+    expect(declaredHostnames(roster).size).toBe(CORPUS_HOSTNAMES.size + SCALE_PROVIDER_COUNT);
+  });
+
   it("scales without colliding with any corpus hostname", () => {
     const corpusHosts = new Set([...CORPUS_HOSTNAMES.values()].flat());
     for (const plugin of scaleProviders(8)) {
@@ -159,6 +198,54 @@ describe("forge perf scenarios", () => {
       "PERF-342",
       "PERF-343",
     ]);
+  });
+});
+
+describe("forge perf scenarios grade the whole workload", () => {
+  const context = { mode: "smoke" as const, now: () => performance.now() };
+
+  const runScenario = async (
+    id: string
+  ): Promise<{ metrics: Record<string, number>; predicates: readonly string[] }> => {
+    const scenario = forgeRegistryScenarios.find((entry) => entry.id === id);
+    if (!scenario) throw new Error(`${id} is not in this family`);
+    const sample = await scenario.run(context);
+    return { metrics: sample.metrics ?? {}, predicates: scenario.correctness ?? [] };
+  };
+
+  const expectAllPredicatesZero = (
+    metrics: Record<string, number>,
+    predicates: readonly string[]
+  ): void => {
+    for (const key of predicates) {
+      expect(`${key}=${String(metrics[key])}`).toBe(`${key}=0`);
+    }
+  };
+
+  it("PERF-340 grades the matcher table over every provider that went into it", async () => {
+    const { metrics, predicates } = await runScenario("PERF-340");
+    // The size the scenario claims to be pricing, read out of the run itself:
+    // 126 rows carrying 7 corpus hostnames and two per scale provider.
+    expect(metrics.scaledProviderCount).toBe(126);
+    expect(metrics.matcherEntryCount).toBe(126);
+    expect(metrics.matcherHostnameCount).toBe(247);
+    expectAllPredicatesZero(metrics, predicates);
+  });
+
+  it("PERF-341 grades the pool the scaled sweep was answered against", async () => {
+    const { metrics, predicates } = await runScenario("PERF-341");
+    expect(metrics.smallPoolProviderCount).toBe(CORPUS_PROVIDER_IDS.length);
+    expect(metrics.scaledPoolProviderCount).toBe(CORPUS_PROVIDER_IDS.length + SCALE_PROVIDER_COUNT);
+    expectAllPredicatesZero(metrics, predicates);
+  });
+
+  it("PERF-342 grades the implicit activation every request owes its plugin", async () => {
+    const { metrics, predicates } = await runScenario("PERF-342");
+    // Counted here rather than derived from the step table, so the two
+    // statements of the same expectation have to agree.
+    expect(metrics.implicitActivationCount).toBe(16);
+    expect(pluginServiceRecorder.activations).toHaveLength(16);
+    expectAllPredicatesZero(metrics, predicates);
   });
 });
 
