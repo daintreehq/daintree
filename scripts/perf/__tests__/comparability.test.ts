@@ -88,8 +88,6 @@ describe("classifyMetric", () => {
   // proportional FORM and no runtime base, which is the half of the
   // derived-ratio conjunction that must not be enough on its own.
   const REAL_RATIOS = [
-    "detectionToIntervalRatio",
-    "coldToWarmRatio",
     "mapChangesPerApply",
     "notifiesPerApply",
     "spawnsPerWorktreeN50",
@@ -110,6 +108,17 @@ describe("classifyMetric", () => {
     "eluUtilization",
     "eventLoopUtilization",
     "echoDegradationX",
+    // Both operands are measured durations. A speedup is more portable than
+    // either duration alone, which is exactly what makes it tempting — but the
+    // contract for `ratio` is that BOTH operands are machine-independent, and
+    // cache hierarchy and core count make a 3.2x here a different number there.
+    "batchSpeedupRatio",
+    "indexSpeedupRatio",
+    "readCacheSpeedupRatio",
+    "drizzleOverheadRatio",
+    "coldToWarmRatio",
+    "largeToSmallBlockingRatio",
+    "detectionToIntervalRatio",
   ];
 
   const REAL_MEMORY = ["heapDeltaMb", "memoryGrowthMb", "peakMemoryGrowthMb"];

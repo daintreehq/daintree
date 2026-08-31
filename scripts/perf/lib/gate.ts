@@ -241,11 +241,17 @@ export function evaluateCorrectness(params: CorrectnessParams): string[] {
       );
     }
 
-    if (stat.max > 0) {
+    // The test is "every sample was zero", not "the largest was not positive".
+    // Several predicates are signed subtractions — `written - persisted` in
+    // PERF-057, for instance — where a negative means the subject produced
+    // MORE than it was asked to, which is a defect in the opposite direction.
+    // A `max > 0` test passes those, and passes a mixed [-1, 0] run outright,
+    // so `min` has to be read too.
+    if (stat.min !== 0 || stat.max !== 0) {
       issues.push(
-        `correctness predicate "${metricName}" reported misses (max ${round(stat.max)}, ` +
-          `sum ${round(stat.sum)} over ${stat.count}) — the subject misbehaved while being ` +
-          `measured, so every number from this scenario is suspect`
+        `correctness predicate "${metricName}" reported misses (min ${round(stat.min)}, ` +
+          `max ${round(stat.max)}, sum ${round(stat.sum)} over ${stat.count}) — the subject ` +
+          `misbehaved while being measured, so every number from this scenario is suspect`
       );
     }
   }

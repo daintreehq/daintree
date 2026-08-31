@@ -30,6 +30,7 @@
  *     --target metricStats.idleGitSpawns.max \
  *     --predicate detectionMisses \
  *     --threshold 5 [--higher-is-better] \
+ *     --expect-champ-sha <sha> --expect-cand-sha <sha> \
  *     --champ champ1.json --champ champ2.json --champ champ3.json \
  *     --cand cand1.json --cand cand2.json --cand cand3.json
  *
@@ -37,10 +38,22 @@
  * accepted after the numbers were on screen would only move the self-deception one
  * step later, so it has to be named on the command line that produces the verdict.
  *
+ * The verdict arithmetic is only worth anything if the six files are six runs, so
+ * `ab` establishes that before it computes: every arm a distinct file, a distinct
+ * content digest and a distinct `generatedAt`; the sides genuinely alternating in
+ * time rather than three of one then three of the other; every arm filtered to the
+ * scenario being claimed; and every arm's `sourceSha` clean and equal to the tree
+ * the caller says it measured. Six copies of one thermally biased pair otherwise
+ * produce a tidy CLAIM with a drift of zero.
+ *
  * Exit codes:
  *   0  every check passed — PAIR: comparable and healthy. AB: CLAIM.
  *   1  at least one check FAILED — the files are not a result. Fix and re-measure.
- *   2  usage error
+ *   2  usage error. The split is by what the tool had to read to know: anything
+ *      decidable from the command line alone (a missing flag, the same path passed
+ *      as two arms, an expected sha that is not a sha) is 2; anything that needed
+ *      the summaries themselves (duplicate content, a broken interleave, a dirty
+ *      or mismatched sha, the wrong scenario selection) is 1.
  *   3  everything else passed, but `sourceSha` is missing, so the files cannot be
  *      tied to a checkpoint. Only proceed when every arm was measured in this
  *      session, interleaved, and say so in the report.
@@ -51,12 +64,14 @@
  * Precedence when several apply: 1 beats 4 beats 3.
  */
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 
 const USAGE =
   "usage: check-pair.mjs --scenario ID --target PATH --predicate NAME [...] A.json B.json\n" +
   "       check-pair.mjs ab --scenario ID --target PATH --predicate NAME --threshold PCT " +
-  "--champ F [...] --cand F [...]";
+  "--expect-champ-sha SHA --expect-cand-sha SHA --champ F [...] --cand F [...]";
 
 function usageError(message) {
   console.error(`${message}\n${USAGE}`);
@@ -68,6 +83,8 @@ const SINGLE = {
   "--target": "target",
   "--expect-before-sha": "expectBeforeSha",
   "--expect-after-sha": "expectAfterSha",
+  "--expect-champ-sha": "expectChampSha",
+  "--expect-cand-sha": "expectCandSha",
   "--threshold": "threshold",
 };
 const REPEATED = {
@@ -107,9 +124,11 @@ function check(ok, label, detail) {
   checks.push({ ok, label, detail });
 }
 
+/** The digest travels with the summary: a copied arm is not a second measurement. */
 function load(path) {
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    const raw = readFileSync(path, "utf8");
+    return { summary: JSON.parse(raw), digest: createHash("sha256").update(raw).digest("hex") };
   } catch (error) {
     console.error(`cannot read ${path}: ${String(error)}`);
     process.exit(2);
@@ -236,6 +255,26 @@ function shaOf(arm) {
   return arm.summary.environment?.sourceSha ?? null;
 }
 
+// A `-dirty` sha says the measured tree was not the commit it names, so the arm
+// belongs to no checkpoint at all; `-dirty-unknown` says the probe could not even
+// tell. Both are the shape of forgetting to commit the candidate.
+const DIRTY_SHA = /-dirty(?:-unknown)?$/;
+
+/** Fail an arm whose sha cannot stand for a commit. Null means "not recorded", handled elsewhere. */
+function checkNotDirty(label, sha) {
+  if (sha === null || !DIRTY_SHA.test(sha)) return false;
+  const named = sha.replace(DIRTY_SHA, "");
+  const why = sha.endsWith("-dirty-unknown")
+    ? "the runner could not determine whether the tree was dirty"
+    : "the tree carried uncommitted changes";
+  check(
+    false,
+    `${label}: tree is the commit it names`,
+    `${sha} — ${why}, so this is not a measurement of ${named}`
+  );
+  return true;
+}
+
 function report(extraLines, exitCode, closing) {
   for (const entry of checks) {
     console.log(`${entry.ok ? "PASS" : "FAIL"}  ${entry.label} — ${entry.detail}`);
@@ -260,22 +299,34 @@ if (mode === "pair") {
   if (args.champs.length > 0 || args.cands.length > 0) {
     usageError("--champ/--cand belong to the `ab` subcommand");
   }
+  if (args.expectChampSha || args.expectCandSha) {
+    usageError(
+      "--expect-champ-sha/--expect-cand-sha belong to the `ab` subcommand; " +
+        "pair mode uses --expect-before-sha/--expect-after-sha"
+    );
+  }
   const arms = [
-    { label: "before", path: args.files[0], summary: load(args.files[0]) },
-    { label: "after", path: args.files[1], summary: load(args.files[1]) },
+    { label: "before", path: args.files[0], summary: load(args.files[0]).summary },
+    { label: "after", path: args.files[1], summary: load(args.files[1]).summary },
   ];
 
   comparabilityChecks(arms);
 
   const [beforeSha, afterSha] = arms.map(shaOf);
-  if (args.expectBeforeSha) {
+  // Checked whether or not an expectation was passed. Exact equality against an
+  // --expect-*-sha already rejects a dirty suffix, but only when the caller
+  // supplies one; a pair compared without expectations was otherwise free to be
+  // two uncommitted trees, which is the same hole `ab` closes.
+  const beforeDirty = checkNotDirty("before", beforeSha);
+  const afterDirty = checkNotDirty("after", afterSha);
+  if (args.expectBeforeSha && !beforeDirty) {
     check(
       beforeSha === args.expectBeforeSha,
       `before sourceSha is ${args.expectBeforeSha}`,
       beforeSha === null ? "(not recorded)" : beforeSha
     );
   }
-  if (args.expectAfterSha) {
+  if (args.expectAfterSha && !afterDirty) {
     check(
       afterSha === args.expectAfterSha,
       `after sourceSha is ${args.expectAfterSha}`,
@@ -306,6 +357,12 @@ const threshold = Number(args.threshold);
 if (!Number.isFinite(threshold) || threshold <= 0) {
   usageError("--threshold must be a positive number of percent");
 }
+if (args.expectBeforeSha || args.expectAfterSha) {
+  usageError(
+    "--expect-before-sha/--expect-after-sha belong to pair mode; " +
+      "`ab` uses --expect-champ-sha/--expect-cand-sha"
+  );
+}
 if (args.files.length > 0) usageError("`ab` takes arms via --champ/--cand, not positionally");
 if (args.champs.length !== args.cands.length) {
   usageError("`ab` needs the same number of --champ and --cand arms — they are paired by index");
@@ -316,31 +373,160 @@ if (args.champs.length < 3 || args.champs.length % 2 === 0) {
   usageError("`ab` needs an odd number of pairs, at least 3");
 }
 
-const champArms = args.champs.map((path, i) => ({
-  label: `champ${i + 1}`,
-  path,
-  summary: load(path),
-}));
-const candArms = args.cands.map((path, i) => ({
-  label: `cand${i + 1}`,
-  path,
-  summary: load(path),
-}));
+// Naming both trees on the command line is what ties the six arms to the two
+// checkpoints being claimed. Without it any two distinct trees pass as champion
+// and candidate, and nothing says which one the caller believed it was measuring.
+const CLEAN_SHA = /^[0-9a-f]{7,40}$/;
+for (const [flag, value] of [
+  ["--expect-champ-sha", args.expectChampSha],
+  ["--expect-cand-sha", args.expectCandSha],
+]) {
+  if (!value) {
+    usageError(`${flag} is required for \`ab\` — the sha those arms were measured at`);
+  }
+  if (!CLEAN_SHA.test(value)) {
+    usageError(
+      `${flag} must be a commit sha as \`git rev-parse\` prints it, got "${value}" — ` +
+        "a -dirty suffix is never a valid expectation"
+    );
+  }
+}
+if (args.expectChampSha === args.expectCandSha) {
+  usageError(
+    `--expect-champ-sha and --expect-cand-sha are both ${args.expectChampSha} — ` +
+      "one tree cannot be an A/B against itself"
+  );
+}
 
-comparabilityChecks([...champArms, ...candArms]);
+const armPaths = new Map();
+function abArm(side, index, path) {
+  const label = `${side}${index + 1}`;
+  const key = resolvePath(path);
+  const seen = armPaths.get(key);
+  if (seen) {
+    usageError(
+      `${seen} and ${label} are the same file (${key}) — ` +
+        "each arm is one measurement, and repeating one is not a second"
+    );
+  }
+  armPaths.set(key, label);
+  const { summary, digest } = load(path);
+  return { side, index, label, path, summary, digest, time: Date.parse(summary.generatedAt ?? "") };
+}
 
-const champShas = [...new Set(champArms.map(shaOf))];
-const candShas = [...new Set(candArms.map(shaOf))];
-const provenanceMissing = [...champShas, ...candShas].includes(null);
-if (!provenanceMissing) {
-  check(champShas.length === 1, "champion arms are one tree", champShas.join(" vs "));
-  check(candShas.length === 1, "candidate arms are one tree", candShas.join(" vs "));
-  // The failure this catches is forgetting to commit the candidate: six arms of
-  // the same tree produce a tidy and entirely fictitious A/B.
+const champArms = args.champs.map((path, i) => abArm("champ", i, path));
+const candArms = args.cands.map((path, i) => abArm("cand", i, path));
+const allArms = [...champArms, ...candArms];
+
+comparabilityChecks(allArms);
+
+/**
+ * A copy under a second name is not a second run. Paths are already deduped, so
+ * what is left is the same measurement supplied twice: identical bytes, or the
+ * same instant stamped by the runner.
+ */
+function distinctAcross(label, get, describe) {
+  const groups = new Map();
+  for (const arm of allArms) {
+    const key = get(arm);
+    groups.set(key, [...(groups.get(key) ?? []), arm.label]);
+  }
+  const repeats = [...groups].filter(([, labels]) => labels.length > 1);
   check(
-    champShas[0] !== candShas[0],
-    "champion and candidate are different trees",
-    champShas[0] === candShas[0] ? `both ${champShas[0]}` : `${champShas[0]} vs ${candShas[0]}`
+    repeats.length === 0,
+    label,
+    repeats.length === 0
+      ? `${allArms.length} distinct`
+      : repeats.map(([key, labels]) => `${labels.join(" = ")} (${describe(key)})`).join("; ")
+  );
+}
+
+distinctAcross(
+  "every arm is its own measurement",
+  (arm) => arm.digest,
+  (digest) => `identical content, sha256 ${String(digest).slice(0, 12)}`
+);
+distinctAcross(
+  "every arm has its own generatedAt",
+  (arm) => arm.summary.generatedAt ?? null,
+  (stamp) => (stamp === null ? "generatedAt absent" : `both generated at ${stamp}`)
+);
+
+const untimed = allArms.filter((arm) => !Number.isFinite(arm.time));
+check(
+  untimed.length === 0,
+  "every arm stamps a readable generatedAt",
+  untimed.length === 0
+    ? "yes"
+    : `${untimed.map((arm) => arm.label).join(", ")} — chronology cannot be checked without it`
+);
+
+// Three champion runs then three candidate runs is the exact shape the interleave
+// exists to defeat: it cannot separate the change from the hour that passed.
+if (untimed.length === 0) {
+  const ordered = [...allArms].sort((a, b) => a.time - b.time);
+  const sequence = ordered.map((arm) => arm.label).join(" → ");
+  const pairs = [];
+  for (let i = 0; i < ordered.length; i += 2) pairs.push(ordered.slice(i, i + 2));
+
+  const interleaved = pairs.every(([first, second]) => first.side !== second.side);
+  check(
+    interleaved,
+    "champion and candidate arms alternate in time",
+    interleaved
+      ? sequence
+      : `${sequence} — one side ran twice in a row, so this measures thermal drift as well as the change`
+  );
+
+  if (interleaved) {
+    // Condition 1 below compares champ_k with cand_k. That pairing only means
+    // anything if those two arms were the two runs measured back to back.
+    const adjacent = pairs.every((pair, i) => pair.every((arm) => arm.index === i));
+    check(
+      adjacent,
+      "index-paired arms were measured back to back",
+      adjacent
+        ? sequence
+        : `${sequence} — champ<k>/cand<k> are compared as a pair, so pass --champ/--cand in measurement order`
+    );
+
+    const leaders = new Set(pairs.map((pair) => pair[0].side));
+    check(
+      leaders.size === 2,
+      "pair order reverses at least once",
+      leaders.size === 2
+        ? sequence
+        : `${sequence} — every pair led with ${pairs[0][0].side}; the first arm of a pair is the coldest, and a fixed order hands that handicap to the same side every time`
+    );
+  }
+}
+
+// Six arms of the whole matrix are not evidence about one scenario the way six
+// filtered runs are: they carry every other scenario's work in the same process.
+for (const arm of allArms) {
+  const selection = selectionOf(arm.summary);
+  check(
+    selection === args.scenario,
+    `${arm.label}: run filtered to ${args.scenario}`,
+    selection === args.scenario
+      ? `--scenario ${args.scenario}`
+      : `expected selection ${args.scenario}, found ${selection}`
+  );
+}
+
+let provenanceMissing = false;
+for (const arm of allArms) {
+  const sha = shaOf(arm);
+  if (sha === null) {
+    provenanceMissing = true;
+    continue;
+  }
+  if (checkNotDirty(arm.label, sha)) continue;
+  const expected = arm.side === "champ" ? args.expectChampSha : args.expectCandSha;
+  check(
+    sha === expected,
+    `${arm.label}: sourceSha is ${expected}`,
+    sha === expected ? sha : `found ${sha}`
   );
 }
 

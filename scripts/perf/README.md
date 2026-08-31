@@ -37,14 +37,14 @@ Counts are also the class that catches the bug latency benchmarks are blind to: 
 
 **Every count needs a paired correctness reading.** A dead watcher spawns nothing and scores perfectly — it is the best result the harness has ever recorded. So a scenario reporting a count-class metric declares `correctness: [...]` naming its miss counts, and the runner flags any scenario that does not. PERF-105's zero idle spawns is only meaningful beside `detectionMisses: 0`, which proves the edit was still detected.
 
-Two rules make the predicate worth having, and both are enforced rather than trusted:
+Two rules make the predicate worth having. Only the first can be checked mechanically:
 
-- **It is emitted on every iteration, including healthy ones.** `MetricStat.count` tallies the iterations that emitted a metric, not the run count, so a predicate present in one iteration of fifteen still aggregates to `max: 0` — a clean pass from a scenario that mostly did not run. The runner compares `count` against `runs` and says so when they differ.
-- **It is an independent oracle.** The test to apply is whether a no-op implementation of the subject could satisfy it. A count of its own spawns cannot; a read-back of the state the subject was supposed to produce can.
+- **It is emitted on every iteration, including healthy ones, and every sample is zero.** `MetricStat.count` tallies the iterations that emitted a metric, not the run count, so a predicate present in one iteration of fifteen still aggregates to `max: 0` — a clean pass from a scenario that mostly did not run. The runner compares `count` against `runs`, and reads `min` as well as `max`, because several predicates are signed subtractions where a negative means the subject produced more than it was asked to. **Enforced.**
+- **It is an independent oracle.** The test to apply is whether a no-op implementation of the subject could satisfy it. A count of its own spawns cannot; a read-back of the state the subject was supposed to produce can. **Not enforced, and not enforceable** — nothing outside the scenario can tell a real oracle from a decorative one that returns 0 unconditionally. This is a review obligation when a predicate is written, and the reason each one names what it actually read.
 
 Fifteen scenarios report no count-class metric and so carry no predicate — they measure only durations, a checksum, or retained heap. They are listed by id, with reasons, in `__tests__/scenarioMatrix.test.ts`, so a new scenario must either declare `correctness` or be exempted deliberately.
 
-The spawn counter validates itself before a scenario trusts it: it confirms its `child_process` hook is still installed and that a real child registers, and reports `spawnObserverMisses` when it does not. It remains blind to starts made from C++ inside native addons, to grandchildren, and to `spawnSync`. A zero means "nothing started through Node in this process", never "nothing started".
+The spawn counter validates itself before a scenario trusts it: it confirms its `child_process` hook is still the wrapper it installed, and that starting a real child increments the counter through that hook — reporting `spawnObserverMisses` when either fails. Read that claim narrowly. It proves the funnel is intact, not that the count is complete: the probe cannot see what never reaches the funnel. The counter stays blind to starts made from C++ inside native addons (`@parcel/watcher`'s watchman, better-sqlite3, node-pty), to grandchildren (Windows `exec` → `cmd.exe` → PowerShell), and to `spawnSync`. A zero means "nothing started through Node in this process", never "nothing started". Closing that gap needs an OS-level observer, which this harness does not have.
 
 ## Known gap: `scripts/perf` is not type-checked
 
@@ -53,7 +53,7 @@ The spawn counter validates itself before a scenario trusts it: it confirms its 
 This is not hypothetical. Two real instances found while this directory was being reworked:
 
 - `scripts/perf/scenarios/ipc.ts` called a function that had been renamed out from under it. `npm run typecheck` passed; only a real benchmark run caught it.
-- `lib/worktreeSidebarFixture.ts` calls `svc.loadProject(requestId, repoPath)` where the signature now takes 3–6 arguments.
+- `lib/worktreeSidebarFixture.ts` called `svc.loadProject(requestId, repoPath)` where the signature takes 3–6 arguments, so `projectId` arrived `undefined` and the fixture measured a load the product never performs. Found by a hand-run type probe, not by CI; fixed, but nothing would have caught it.
 
 To see the real state:
 

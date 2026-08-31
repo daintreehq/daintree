@@ -14,13 +14,15 @@ This is the other half of the measurement system. `scripts/perf/` answers _what 
 
 **"No improvement was available" is a successful outcome.** Most optimisation attempts fail. A run that tries six hypotheses, disproves all six, and writes down why is worth more than a run that ships a change with no evidence behind it. Never manufacture an improvement. Reverting everything and reporting an honest zero is a complete, correct run.
 
-**Nothing in the harness will stop you fooling yourself.** It gates nothing — `perf compare` prints `REFUSED` and exits 0; a measurement issue is a warning and exits 0; a scenario whose feature you broke still produces a number. The one exit code you can trust is `check-pair.mjs`, shipped beside this file: it reads the summary files itself and exits non-zero when they are not a result, and in `ab` mode it computes the A/B verdict rather than leaving the arithmetic to a tired reader. Run it before every comparison. Every other guard here is one you must apply deliberately.
+**Nothing in the harness will stop you fooling yourself.** It gates nothing — `perf compare` prints `REFUSED` and exits 0; a measurement issue is a warning and exits 0; a scenario whose feature you broke still produces a number. The one exit code worth acting on is `check-pair.mjs`'s, shipped beside this file: it reads the summary files itself and exits non-zero when they are not a result, and in `ab` mode it establishes that the six arms are six runs of the two trees you named — distinct files, distinct content, distinct `generatedAt`, sides alternating in time, every arm filtered to the scenario being claimed, every `sourceSha` clean and equal to the sha you passed — before computing the verdict, rather than leaving that arithmetic and that bookkeeping to a tired reader. Run it before every comparison.
+
+**What it cannot see, because it only reads the files:** that the machine was quiet, that nothing else was building while an arm ran, that a summary was not hand-edited. It takes `generatedAt` and `sourceSha` as the runner stamped them, and three arms of a `count` metric legitimately carry identical numbers, so it cannot distinguish "the count is deterministic" from "these are the same measurement retyped". A green exit means the files are a result; it does not mean the session around them was clean. That part is yours, and so is every other guard in this document.
 
 ## Inputs — all seven required before you start
 
 Ask for anything missing. Do not guess, and do not start with a partial set.
 
-1. **The target, as a scenario id plus an exact metric path.** `PERF-105 metricStats.idleGitSpawns.max`. Not `PERF-105`, which has eight metrics and lets you pick a winner after the fact. Not "make startup faster". One scalar that can go down.
+1. **The target, as a scenario id plus an exact metric path.** `PERF-105 metricStats.idleGitSpawns.max`. Not `PERF-105`, which reports nine metrics on a healthy run and lets you pick a winner after the fact. Not "make startup faster". One scalar that can go down.
 2. **The correctness predicate** — the metric and value proving the feature still works while the target improves. `detectionMisses.max === 0`. See **The correctness predicate is mandatory**.
 3. **The mode** the scenario runs in: `smoke`, `ci`, `nightly` or `soak`. Scenarios declare their modes and `run.ts` rejects an id that is not in the chosen one — PERF-002 is `ci`/`nightly` only, so `--mode smoke --scenario PERF-002` is a usage error, not a measurement.
 4. **The machines.** Not "Windows" — _which_ machine, and how you reach it. See **Cross-machine work**.
@@ -38,7 +40,7 @@ The REGISTRY commands are **not** valid targets: `launch-ab` takes `--runs` and 
 
 ## The correctness predicate is mandatory
 
-**A count goes to zero when the feature is broken.** A watcher that never arms spawns no processes. A cache that never writes is infinitely fast. A queue that drops messages has excellent throughput. `PERF-100` reports a duration and `gitSpawns` and _nothing else_ — a change making `refresh()` return immediately improves both numbers and destroys the feature. That scenario is not safe to optimise against blind.
+**A count goes to zero when the feature is broken.** A watcher that never arms spawns no processes. A cache that never writes is infinitely fast. A queue that drops messages has excellent throughput. Most scenarios now declare a `correctness` array naming the miss counts that prove the work happened — `PERF-100` declares `statusPassMisses` and `spawnObserverMisses`, so a `refresh()` rewritten to return immediately shows up as a miss instead of as the best duration and lowest spawn count the scenario has ever recorded. Some scenarios still declare nothing: `PERF-011` reports a `checksum` and a `switchWorkMs` and no miss count at all, and one in that state is not safe to optimise against blind. Read the target scenario's own `correctness` field rather than this paragraph — the roster moves.
 
 So, before any measurement:
 
@@ -122,7 +124,8 @@ Repeat until the budget is spent or credible hypotheses run out.
    ```
 
 4. **Hard-stop checks. `perf compare` and `run` exit 0 on every one of these, so the exit code you act on is `check-pair.mjs`'s:**
-   - **Exit 1** → the pair is not a result. It fails on a protocol, machine, mode or `--scenario` selection mismatch, on a `sourceSha` that is not the tree you think you measured, on a `gitVersion` or `electronVersion` move between the two files, on a broken apparatus, and on a predicate that is unhealthy or under-emitted. Do not read the comparison. Fix the cause and re-measure.
+   - **Exit 1** → the pair is not a result. It fails on a protocol, machine, mode or `--scenario` selection mismatch, on a `sourceSha` that is not the tree you think you measured, on a `gitVersion` or `electronVersion` move between the two files, on a broken apparatus, and on a predicate that is unhealthy or under-emitted. In `ab` it also fails on repeated or copied arms, a chronology that is not interleaved, an arm that measured more than the target scenario, and a dirty `sourceSha`. Do not read the comparison. Fix the cause and re-measure.
+   - **Exit 2** → the command line was wrong, so nothing was judged: a missing `--threshold` or `--expect-*-sha`, the same file passed as two arms, an even number of pairs, an expected sha that is not a sha. Fix the invocation and run it again — this says nothing about the measurement either way.
    - **Exit 3** → the runner did not stamp `sourceSha`, so neither file can be tied to a checkpoint. Proceed only if you measured both arms in this session, interleaved, and say so in the report. Never against a stored `best.json` in this state.
    - **Exit 4** (`ab` mode only) → the arms were sound and the hypothesis lost. Revert and record it as a disproof; it is not a broken run to retry.
    - `REFUSED` in the `perf compare` output → the comparison did not happen. `check-pair.mjs` catches every refusal cause it knows of, so a refusal it did not predict means the two runs differ in a way neither tool expected. Stop and find out what.
@@ -185,13 +188,17 @@ git switch "$BRANCH"
 
 Three pairs minimum, uninterrupted, with nothing else running on the machine. Never all-champion-then-all-candidate: that arrangement cannot separate your change from the hour that passed. The middle pair runs in reverse order because the first arm of a session is the coldest, and a fixed order hands that handicap to the same side three times. Keep `--scenario` on every arm — an unfiltered run writes a tracked file under `scripts/perf/history/`, which both dirties the tree the next `git switch` needs clean and puts a change under `scripts/perf/` into your diff.
 
+None of that shape is on your honour: `check-pair.mjs ab` reconstructs the running order from the arms' own `generatedAt` stamps and refuses three champion runs followed by three candidate ones, an order that never reverses, and arms passed in an order other than the one they were measured in. Pass `--champ`/`--cand` in measurement order, oldest first — the pairing it judges on is `champ<k>` against `cand<k>`, and that only means something if those two runs were the two that ran back to back.
+
 Then the verdict — computed, not eyeballed. The arithmetic here is the judgement call this whole procedure exists to remove, and an 8% improvement against a 6% drift looks like a win to anyone who has spent four hours earning it:
 
 ```bash
-node .agents/skills/optimize/check-pair.mjs ab --scenario <ID> --target <metric path> --predicate <predicate> --threshold <precommitted %> --champ .tmp/opt/ab/champ1.json --champ .tmp/opt/ab/champ2.json --champ .tmp/opt/ab/champ3.json --cand .tmp/opt/ab/cand1.json --cand .tmp/opt/ab/cand2.json --cand .tmp/opt/ab/cand3.json
+node .agents/skills/optimize/check-pair.mjs ab --scenario <ID> --target <metric path> --predicate <predicate> --threshold <precommitted %> --expect-champ-sha "$CHAMP" --expect-cand-sha "$CAND" --champ .tmp/opt/ab/champ1.json --champ .tmp/opt/ab/champ2.json --champ .tmp/opt/ab/champ3.json --cand .tmp/opt/ab/cand1.json --cand .tmp/opt/ab/cand2.json --cand .tmp/opt/ab/cand3.json
 ```
 
-It health-checks all six arms, refuses arms that are not comparable, refuses six arms of the same tree (the shape of forgetting to commit the candidate), and then rules on the three conditions:
+`--expect-champ-sha` and `--expect-cand-sha` are required. Without them the tool can only see that the arms came from two different trees, not that they came from _your_ two trees, and "some other tree beat the champion" is not the claim you are making.
+
+Before it computes anything it establishes that the six files are six runs of those two trees. It refuses arms that are not comparable; the same file, or a copy of it, supplied as two arms; two arms stamped with the same `generatedAt`; a running order that is not interleaved; an arm that measured anything other than the target scenario; and any `sourceSha` that is `-dirty`, `-dirty-unknown`, or not the sha you named — a dirty arm measured a tree that is not the commit it claims, which is the shape of forgetting to commit the candidate. Then it rules on the three conditions:
 
 1. The candidate won **every** index-paired arm — `champ1` against `cand1`, and so on. One loss and there is no claim, whatever the medians say.
 2. The median-to-median improvement is at least `--threshold`. That number is the one you precommitted, and passing it on this command line is what stops it being chosen after the result is visible.
@@ -267,7 +274,7 @@ Statistic: <median|count> · precommitted threshold: <value> · measured drift D
 
 ## Related
 
-- `check-pair.mjs`, beside this file — the pre-compare gate. The only exit code in this loop that means anything.
+- `check-pair.mjs`, beside this file — the pre-compare gate, and the only exit code in this loop worth acting on. It reads files; the caveat on what that cannot cover is at the top of this document.
 - `scripts/perf/README.md` — the harness, its modes, and every `npm run perf` command.
 - `.claude/rules/perf-benchmarks.md` — never add a `perf:*` script to package.json; baselines are harvested by hand.
 - `scripts/perf/lib/comparability.ts` — which metrics compare across machines, and why a runtime-derived percentage does not. Read it before claiming a cross-machine result.

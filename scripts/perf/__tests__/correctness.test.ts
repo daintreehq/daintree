@@ -64,6 +64,36 @@ describe("evaluateCorrectness — a declared predicate", () => {
     expect(issues[0]).toContain("suspect");
   });
 
+  it("flags a negative predicate, which a max-only test lets through", () => {
+    // Several predicates are signed subtractions — PERF-057's `written -
+    // persisted` — where a negative means the subject produced MORE than it was
+    // asked to. `max > 0` reads that as healthy.
+    const issues = evaluateCorrectness({
+      correctness: ["writeMisses"],
+      metricStats: statsFor([{ writeMisses: -1 }, { writeMisses: -2 }]),
+      runs: 2,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("reported misses");
+    expect(issues[0]).toContain("min -2");
+  });
+
+  it("flags a mixed run whose max is zero", () => {
+    // The trap in its purest form: max is 0, count equals runs, and the
+    // scenario still misbehaved on half its iterations.
+    const stats = statsFor([{ writeMisses: -1 }, { writeMisses: 0 }]);
+    expect(stats.writeMisses.max).toBe(0);
+    expect(stats.writeMisses.count).toBe(2);
+
+    const issues = evaluateCorrectness({
+      correctness: ["writeMisses"],
+      metricStats: stats,
+      runs: 2,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("reported misses");
+  });
+
   it("reports both faults when a predicate is partial AND non-zero", () => {
     const issues = evaluateCorrectness({
       correctness: ["refreshMisses"],
