@@ -234,10 +234,29 @@ export function loadActionModules(): Promise<ActionModules> {
   return modulesPromise;
 }
 
+/**
+ * Remove a scratch dir when the process ends.
+ *
+ * Without this the bundle dir survives every run, and since the action manifest
+ * is loaded by several families, a session leaves one behind per process — 58
+ * of them had accumulated before anyone noticed. Best effort by design: a
+ * failure here must never turn a completed measurement into an error.
+ */
+function reapOnExit(dir: string): void {
+  process.on("exit", () => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // The OS will get it eventually; a benchmark result is not worth a throw.
+    }
+  });
+}
+
 async function buildActionBundle(): Promise<ActionModules> {
   installPinnedNavigator();
   const esbuild = await import("esbuild");
   const outDir = mkdtempSync(join(tmpdir(), "daintree-perf-actions-"));
+  reapOnExit(outDir);
   const entryFile = join(outDir, "entry.ts");
   const outfile = join(outDir, "actionLayer.mjs");
 

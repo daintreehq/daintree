@@ -653,6 +653,15 @@ async function buildStoreBundle(): Promise<WorktreeStoreModule> {
   const here = dirname(fileURLToPath(import.meta.url));
   const repoRoot = pathResolve(here, "../../..");
   const outDir = mkdtempSync(join(tmpdir(), "daintree-perf-store-"));
+  // Best effort, and deliberately not fatal: without it this dir survives every
+  // run, and 430 of them had piled up in $TMPDIR before anyone looked.
+  process.on("exit", () => {
+    try {
+      rmSync(outDir, { recursive: true, force: true });
+    } catch {
+      // The OS will get it eventually.
+    }
+  });
   const outfile = join(outDir, "worktreeStore.mjs");
 
   const stubs: Array<{ filter: RegExp; contents: string }> = [
