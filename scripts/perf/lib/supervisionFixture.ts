@@ -56,7 +56,16 @@ import type { CrashType } from "../../../shared/types/pty-host";
  *     demand, so a scheduled backoff is read as data instead of slept through.
  *     The durations these scenarios report are the supervisor's OWN work
  *     (exit handling, the classification defer, the replay burst), and exclude
- *     both the scheduled backoff and the real fork.
+ *     the scheduled backoff.
+ *   - THE PROBE TIMES ITSELF, INSIDE THE CHILD. Every probe returns `probeMs`,
+ *     bracketed after its supervisor imports have resolved, and each scenario
+ *     reports that as its `durationMs` instead of wall-clocking
+ *     `runSupervisionProbe`. Wrapping the fork would make the headline mostly a
+ *     reading of `node --import tsx` booting and compiling the supervisor
+ *     graph: measured on the machine this was written, PERF-261's supervisor
+ *     work is single-digit milliseconds inside a ~150ms fork-to-result window.
+ *     A fresh child per measured iteration stays (see the closing paragraph);
+ *     what changed is that its startup is no longer inside the number.
  *   - `Math.random` is pinned for the driven window, because the product's
  *     backoff is full jitter. Pinning it to each extreme of its range recovers
  *     the exact [floor, ceiling) the product scheduled, without this fixture
@@ -73,11 +82,14 @@ import type { CrashType } from "../../../shared/types/pty-host";
  * anywhere in the path. PERF-263 is the only authoritative-everywhere scenario
  * in this family.
  *
- * Each probe runs in its own forked child. The `electron` remap is a
- * process-wide resolve hook and the timer/random/kill wrappers are process-wide
- * globals; installing either in the harness process would leak into every other
- * scenario. This module is its own child entry point, the same shape as
- * `lib/ipcFixture.ts`.
+ * Each probe runs in its own forked child, one per measured iteration. The
+ * `electron` remap is a process-wide resolve hook and the timer/random/kill
+ * wrappers are process-wide globals; installing either in the harness process
+ * would leak into every other scenario, and reusing one child across iterations
+ * would carry a drained timer table, a grown `forks` ledger and four
+ * supervisors' module-level crash windows into the next reading. So the fork
+ * stays per iteration and is kept out of the reported duration instead. This
+ * module is its own child entry point, the same shape as `lib/ipcFixture.ts`.
  */
 
 const PROBE_ENV = "DAINTREE_PERF_SUPERVISION_PROBE";
@@ -173,10 +185,14 @@ export interface SupervisorLadder {
   giveUpMisses: number;
   /** After give-up, the operator-driven restart did not produce a serving host. */
   manualRecoveryMisses: number;
+  /** Restart schedules that broke the policy in `BACKOFF_POLICY`. */
+  backoffMisses: number;
 }
 
 export interface LadderResult {
   supervisors: SupervisorLadder[];
+  /** Supervisor work inside the child: fork, tsx boot and imports excluded. */
+  probeMs: number;
 }
 
 export interface ReplayResult {
@@ -190,8 +206,13 @@ export interface ReplayResult {
   respawnToServingMs: number;
   /** Round trips the restarted workspace host answered through the broker. */
   servedRequests: number;
-  /** Nonce round trips that came back altered or not at all. */
+  /** Round trips the fresh host never received, or answered with a wrong nonce. */
   serveMisses: number;
+  /**
+   * The crash-to-graded-replay region inside the child. Fork, tsx boot, the
+   * supervisor imports and the state seeding are all outside it.
+   */
+  probeMs: number;
 }
 
 export interface ClassificationResult {
@@ -203,8 +224,8 @@ export interface ClassificationResult {
   crossAttributionMisses: number;
   /** Decisions that resolved only because the deferred reason arrived in time. */
   goneReasonDecisions: number;
-  /** Wall clock for the whole sweep — supervisor work, no OS involved. */
-  sweepMs: number;
+  /** The whole sweep inside the child: fork, tsx boot and imports excluded. */
+  probeMs: number;
 }
 
 export interface PtyReplayResult {
@@ -214,7 +235,7 @@ export interface PtyReplayResult {
   replaySpawnBytes: number;
   /** Terminals missing from the replay, or replayed with drifted options. */
   spawnReplayMisses: number;
-  /** Terminals replayed carrying their pre-crash launch generation. */
+  /** Terminals replayed without a fresh, strictly newer launch generation. */
   generationMisses: number;
   /** Config messages the shard replay re-sent alongside the spawns. */
   configReplayMessages: number;
@@ -222,6 +243,8 @@ export interface PtyReplayResult {
   configReplayMisses: number;
   /** Time inside `respawnPendingForShard`, from `ready` to the last send. */
   replayMs: number;
+  /** Supervisor work inside the child: fork, tsx boot and imports excluded. */
+  probeMs: number;
 }
 
 export interface ProbeResultMap {
@@ -1008,8 +1031,109 @@ interface LadderPass {
   firstCrashMisses: number;
   giveUpMisses: number;
   manualRecoveryMisses: number;
-  /** Sum of the delays scheduled under whichever jitter extreme was pinned. */
-  scheduledDelaySum: number;
+  /** Delays scheduled under whichever jitter extreme was pinned, in order. */
+  scheduledDelays: number[];
+}
+
+/**
+ * Whether a supervisor delays its restarts at all.
+ *
+ * One bit per supervisor, declared rather than read, because it is a POLICY and
+ * the family's whole argument is that a supervisor's policy is invisible in its
+ * latency. A `scheduled` supervisor waits before every respawn; an `immediate`
+ * one respawns inside its own crash handler and is bounded by the give-up
+ * budget alone. Both are defensible, and the two are indistinguishable in every
+ * other number this scenario reports — recovery, serving and give-up all land
+ * identically either way, which is exactly the hole this table closes. A
+ * supervisor that quietly loses its timer scores a miss here instead of a
+ * better duration.
+ */
+export type BackoffPolicy = "scheduled" | "immediate";
+
+export const BACKOFF_POLICY: Readonly<Record<string, BackoffPolicy>> = {
+  WorkspaceHostProcess: "scheduled",
+  PtyHostLifecycle: "scheduled",
+  // Respawns straight out of the deferred exit handler. Its bound is the
+  // crash-loop cap, not a delay.
+  PluginDevWorkerHost: "immediate",
+  MainProcessWatchdogClient: "scheduled",
+};
+
+/** One jitter pass of a supervisor's restart schedule, as the ladder saw it. */
+export interface BackoffPass {
+  restartsAttempted: number;
+  scheduledDelays: readonly number[];
+}
+
+/**
+ * Below this a "backoff" is a spin. The floor exists so an instant-fail crash
+ * loop cannot saturate a core between respawns; a delay of a millisecond or two
+ * satisfies "nonzero" and none of the intent.
+ */
+const MIN_BACKOFF_FLOOR_MS = 50;
+
+/**
+ * Above this the supervisor has stopped supervising. A restart the user waits a
+ * minute for is a hang with a timer attached, and no other counter here would
+ * notice — the ladder fires every armed timer on demand.
+ */
+const MAX_BACKOFF_CEILING_MS = 60_000;
+
+function total(values: readonly number[]): number {
+  return values.reduce((carried, value) => carried + value, 0);
+}
+
+/**
+ * Grade a supervisor's restart schedule against `BACKOFF_POLICY`.
+ *
+ * The reported floor/ceiling sums were the family's one ungraded reading: a
+ * supervisor that respawns instantly with no timer at all recovers, serves and
+ * gives up at exactly the same thresholds, so every other predicate stays zero
+ * while the schedule metrics quietly read 0ms. Four properties separate a real
+ * full-jitter backoff from that, and from the fixed-delay retry loop that also
+ * passes a nonzero check:
+ *
+ *   1. Exactly one armed delay per restart — zero is the no-backoff supervisor,
+ *      two is a double-arm that forks twice off one crash.
+ *   2. Every delay inside a plausible band.
+ *   3. Delays widen across successive crashes in the window, graded on the
+ *      high-jitter pass only: pinned low, an exponential cap and a constant are
+ *      the same sequence, and only the high end separates them.
+ *   4. The two pinned passes disagree. `Math.random` was pinned to each end of
+ *      its range, so equal totals mean the delay never consulted it — a
+ *      constant wearing a jitter formula's name, which resynchronises every
+ *      supervisor after a shared crash trigger.
+ */
+export function gradeBackoffSchedule(
+  policy: BackoffPolicy,
+  low: BackoffPass,
+  high: BackoffPass
+): number {
+  let misses = 0;
+
+  if (policy === "immediate") {
+    for (const pass of [low, high]) {
+      if (pass.scheduledDelays.length > 0) misses += 1;
+    }
+    return misses;
+  }
+
+  for (const pass of [low, high]) {
+    if (pass.scheduledDelays.length !== pass.restartsAttempted) misses += 1;
+    for (const delay of pass.scheduledDelays) {
+      if (delay < MIN_BACKOFF_FLOOR_MS || delay > MAX_BACKOFF_CEILING_MS) misses += 1;
+    }
+  }
+
+  for (let i = 1; i < high.scheduledDelays.length; i += 1) {
+    if (high.scheduledDelays[i]! <= high.scheduledDelays[i - 1]!) misses += 1;
+  }
+
+  if (high.restartsAttempted > 0 && total(high.scheduledDelays) <= total(low.scheduledDelays)) {
+    misses += 1;
+  }
+
+  return misses;
 }
 
 /**
@@ -1033,7 +1157,7 @@ async function runLadderPass(adapter: LadderAdapter, base: number): Promise<Ladd
   let recoveryMisses = 0;
   let firstCrashMisses = 0;
   let manualRecoveryMisses = 0;
-  let scheduledDelaySum = 0;
+  const scheduledDelays: number[] = [];
 
   for (let crashNo = 1; crashNo <= MAX_CRASH_PROBES; crashNo += 1) {
     const live = latestFork();
@@ -1048,7 +1172,7 @@ async function runLadderPass(adapter: LadderAdapter, base: number): Promise<Ladd
 
     for (const timer of timersArmedSince(timerMark)) {
       backoffTimersArmed += 1;
-      scheduledDelaySum += timer.delayMs;
+      scheduledDelays.push(timer.delayMs);
       fireTimer(timer);
     }
     await settle(3);
@@ -1100,7 +1224,7 @@ async function runLadderPass(adapter: LadderAdapter, base: number): Promise<Ladd
     firstCrashMisses,
     giveUpMisses,
     manualRecoveryMisses,
-    scheduledDelaySum,
+    scheduledDelays,
   };
 }
 
@@ -1312,9 +1436,28 @@ const LADDER_ADAPTERS: ReadonlyArray<() => Promise<LadderAdapter>> = [
 const JITTER_LOW = 0;
 const JITTER_HIGH = 1 - Number.EPSILON;
 
+/**
+ * Resolve the supervisor graph before the measured region opens.
+ *
+ * The adapters import their supervisor lazily, so without this the first pass
+ * would carry tsx compiling four main-process modules into the reading. The
+ * second import of each is a module-cache hit.
+ */
+async function preloadLadderModules(): Promise<void> {
+  await Promise.all([
+    import("../../../electron/services/WorkspaceHostProcess"),
+    import("../../../electron/services/pty/PtyHostLifecycle"),
+    import("../../../electron/services/plugin/PluginDevWorkerHost"),
+    import("../../../electron/services/MainProcessWatchdogClient"),
+  ]);
+}
+
 async function probeLadder(): Promise<LadderResult> {
   const supervisors: SupervisorLadder[] = [];
   const realRandom = Math.random;
+
+  await preloadLadderModules();
+  const started = performance.now();
 
   for (const make of LADDER_ADAPTERS) {
     const passes: LadderPass[] = [];
@@ -1334,8 +1477,11 @@ async function probeLadder(): Promise<LadderResult> {
       }
     }
 
-    const low = passes[0];
-    const high = passes[1];
+    const low = passes[0]!;
+    const high = passes[1]!;
+    // An unlisted supervisor is a new one nobody wrote a policy for, and the
+    // safe reading of "no declared policy" is a miss, not a free pass.
+    const policy = BACKOFF_POLICY[name];
     supervisors.push({
       name,
       forks: low.forks + high.forks,
@@ -1343,16 +1489,17 @@ async function probeLadder(): Promise<LadderResult> {
       crashesSurvived: low.crashesSurvived + high.crashesSurvived,
       gaveUpAtCrash: high.gaveUpAtCrash,
       backoffTimersArmed: low.backoffTimersArmed + high.backoffTimersArmed,
-      backoffFloorMsSum: low.scheduledDelaySum,
-      backoffCeilingMsSum: high.scheduledDelaySum,
+      backoffFloorMsSum: total(low.scheduledDelays),
+      backoffCeilingMsSum: total(high.scheduledDelays),
       recoveryMisses: low.recoveryMisses + high.recoveryMisses,
       firstCrashMisses: low.firstCrashMisses + high.firstCrashMisses,
       giveUpMisses: low.giveUpMisses + high.giveUpMisses,
       manualRecoveryMisses: low.manualRecoveryMisses + high.manualRecoveryMisses,
+      backoffMisses: policy === undefined ? 1 : gradeBackoffSchedule(policy, low, high),
     });
   }
 
-  return { supervisors };
+  return { supervisors, probeMs: performance.now() - started };
 }
 
 // --- Child: the state-replay probe ------------------------------------------
@@ -1436,6 +1583,7 @@ async function probeReplay(): Promise<ReplayResult> {
   });
 
   let respawnToServingMs = 0;
+  let probeMs = 0;
 
   try {
     const firstWorkspace = forks.find((entry) => entry.serviceName.includes("workspace-host"))!;
@@ -1507,15 +1655,33 @@ async function probeReplay(): Promise<ReplayResult> {
       }
 
       // Serving again, through the supervisor's own broker.
+      //
+      // The reply is injected ONLY once the request is observed in the fresh
+      // child's inbox. Injecting it unconditionally graded the harness's ability
+      // to answer rather than the supervisor's ability to route: a broker still
+      // holding the dead child's port, or one that dropped the send outright,
+      // would have had its answer written for it and kept `serveMisses` at zero.
       const requestId = host.generateRequestId();
       const token = nonce();
       const pending = host
         .sendWithResponse<{ nonce?: string }>({ type: "refresh", requestId }, 5_000)
         .catch(() => null);
-      freshWorkspace.child.post({ type: "refresh-result", requestId, success: true, nonce: token });
-      const answer = await pending;
-      servedRequests += 1;
-      if (answer?.nonce !== token) serveMisses += 1;
+      const delivered = (freshWorkspace.child.inbox as Array<Record<string, unknown>>).some(
+        (entry) => entry.requestId === requestId
+      );
+      if (!delivered) {
+        serveMisses += 1;
+      } else {
+        freshWorkspace.child.post({
+          type: "refresh-result",
+          requestId,
+          success: true,
+          nonce: token,
+        });
+        const answer = await pending;
+        if (answer?.nonce === token) servedRequests += 1;
+        else serveMisses += 1;
+      }
       respawnToServingMs = performance.now() - started;
     }
 
@@ -1552,6 +1718,8 @@ async function probeReplay(): Promise<ReplayResult> {
         replayMisses += 1;
       }
     }
+
+    probeMs = performance.now() - started;
   } finally {
     host.dispose();
     plugin.dispose();
@@ -1566,6 +1734,7 @@ async function probeReplay(): Promise<ReplayResult> {
     respawnToServingMs,
     servedRequests,
     serveMisses,
+    probeMs,
   };
 }
 
@@ -1688,7 +1857,7 @@ async function probeClassification(): Promise<ClassificationResult> {
     classificationMisses,
     crossAttributionMisses,
     goneReasonDecisions,
-    sweepMs: performance.now() - started,
+    probeMs: performance.now() - started,
   };
 }
 
@@ -1704,8 +1873,8 @@ const REPLAY_TERMINAL_COUNT = 24;
  * the registry at send time, so the replayed env legitimately differs from the
  * captured one. Comparing it would report a platform behaviour as a replay
  * defect. `launchGeneration` is excluded here and graded separately, because it
- * MUST differ — a replay carrying the pre-crash generation would let the
- * journal's exactly-once gate drop the new incarnation's records.
+ * MUST be freshly minted — a replay carrying the pre-crash generation would let
+ * the journal's exactly-once gate drop the new incarnation's records.
  */
 const SPAWN_IDENTITY_FIELDS = [
   "cwd",
@@ -1724,6 +1893,50 @@ function spawnIdentity(options: Record<string, unknown>): string {
   const projected: Record<string, unknown> = {};
   for (const field of SPAWN_IDENTITY_FIELDS) projected[field] = options[field];
   return JSON.stringify(projected);
+}
+
+/** The seeded process-tree cadence, which the shard replay must re-send. */
+const REPLAY_PROCESS_TREE_POLL_MS = 1500;
+
+/**
+ * Host-wide config a respawned shard must be handed back.
+ *
+ * The explicit poll interval is here because the oracle used to stop at the
+ * resource profile, and the two are not the same setting: the profile carries a
+ * default cadence, the focus throttle overrides it, and `PtyClient` replays the
+ * override AFTER the profile precisely because it was the later writer. A
+ * replay that re-sent the profile and dropped the override would leave every
+ * terminal in the fleet sampling its process tree at the profile's rate — the
+ * cadence bug that is invisible in a respawn latency and was invisible here too.
+ *
+ * Values, not just types: a replay that re-sends the message with the boot
+ * default is a replay that lost the state.
+ */
+const CONFIG_REPLAY_EXPECTATIONS: ReadonlyArray<(m: Record<string, unknown>) => boolean> = [
+  (m) => m.type === "set-resource-monitoring" && m.enabled === true,
+  (m) => m.type === "set-resource-profile" && m.profile === "performance",
+  (m) => m.type === "set-process-tree-poll-interval" && m.ms === REPLAY_PROCESS_TREE_POLL_MS,
+  (m) => m.type === "set-log-level-overrides",
+];
+
+const CONFIG_REPLAY_EXPECTATION_COUNT = CONFIG_REPLAY_EXPECTATIONS.length;
+
+/**
+ * Whether the replayed spawn carries a NEW incarnation stamp.
+ *
+ * `replayed !== previous` was the whole check, and `undefined !== 4` is true —
+ * so a replay that dropped `launchGeneration` altogether passed a predicate
+ * written to prove one had been minted. The ledger mints positive integers and
+ * increments on every relaunch, so the stamp is required to be present,
+ * well-formed and strictly newer than the one the terminal carried into the
+ * crash. `previous` must itself be a number: if the pre-crash spawn never
+ * stamped a generation there is nothing for the journal to supersede, and
+ * "newer than nothing" is not a pass.
+ */
+export function isFreshGeneration(replayed: unknown, previous: unknown): boolean {
+  if (typeof previous !== "number" || !Number.isInteger(previous)) return false;
+  if (typeof replayed !== "number" || !Number.isInteger(replayed)) return false;
+  return replayed > previous && replayed > 0;
 }
 
 async function probePtyReplay(): Promise<PtyReplayResult> {
@@ -1748,8 +1961,10 @@ async function probePtyReplay(): Promise<PtyReplayResult> {
   let configReplayMessages = 0;
   let configReplayMisses = 0;
   let replayMs = 0;
+  let probeMs = 0;
 
   try {
+    const started = performance.now();
     client.start();
     const first = latestFork();
     if (!first) throw new Error("pty shard never forked");
@@ -1758,7 +1973,7 @@ async function probePtyReplay(): Promise<PtyReplayResult> {
 
     client.setResourceMonitoring(true);
     client.setResourceProfile("performance");
-    client.setProcessTreePollInterval(1500);
+    client.setProcessTreePollInterval(REPLAY_PROCESS_TREE_POLL_MS);
 
     for (let i = 0; i < REPLAY_TERMINAL_COUNT; i += 1) {
       client.spawn(`perf-terminal-${i}`, {
@@ -1800,13 +2015,13 @@ async function probePtyReplay(): Promise<PtyReplayResult> {
     if (!fresh || fresh === first) {
       spawnReplayMisses += REPLAY_TERMINAL_COUNT;
       generationMisses += REPLAY_TERMINAL_COUNT;
-      configReplayMisses += 3;
+      configReplayMisses += CONFIG_REPLAY_EXPECTATION_COUNT;
     } else {
       // `handleShardReady` runs the whole replay burst synchronously inside this
       // message delivery, so the bracket is the supervisor's real replay cost.
-      const started = performance.now();
+      const replayStarted = performance.now();
       fresh.child.post({ type: "ready" });
-      replayMs = performance.now() - started;
+      replayMs = performance.now() - replayStarted;
       await settle(2);
 
       const replayed = new Map<string, Record<string, unknown>>();
@@ -1828,15 +2043,12 @@ async function probePtyReplay(): Promise<PtyReplayResult> {
           replayedSpawns += 1;
           replaySpawnBytes += serializedBytes(message);
         }
-        if (options.launchGeneration === expected.generation) generationMisses += 1;
+        if (!isFreshGeneration(options.launchGeneration, expected.generation)) {
+          generationMisses += 1;
+        }
       }
 
-      const configExpectations: ReadonlyArray<(m: Record<string, unknown>) => boolean> = [
-        (m) => m.type === "set-resource-monitoring" && m.enabled === true,
-        (m) => m.type === "set-resource-profile" && m.profile === "performance",
-        (m) => m.type === "set-log-level-overrides",
-      ];
-      for (const matches of configExpectations) {
+      for (const matches of CONFIG_REPLAY_EXPECTATIONS) {
         if ((fresh.child.inbox as Array<Record<string, unknown>>).some(matches)) {
           configReplayMessages += 1;
         } else {
@@ -1844,6 +2056,8 @@ async function probePtyReplay(): Promise<PtyReplayResult> {
         }
       }
     }
+
+    probeMs = performance.now() - started;
   } finally {
     client.dispose();
     Math.random = realRandom;
@@ -1857,6 +2071,7 @@ async function probePtyReplay(): Promise<PtyReplayResult> {
     configReplayMessages,
     configReplayMisses,
     replayMs,
+    probeMs,
   };
 }
 

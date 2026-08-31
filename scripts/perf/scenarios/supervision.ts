@@ -34,6 +34,14 @@ import {
  * the supervisors are real and unmodified, Electron and the OS fork are not,
  * `setTimeout` is a recorder rather than a sleep, and the only scenario with no
  * stub anywhere in its path is PERF-263.
+ *
+ * The four probe-backed scenarios report the probe's OWN `probeMs`, measured
+ * inside the child, rather than wall-clocking `runSupervisionProbe`. Each
+ * measured iteration still forks a fresh child — the probe installs
+ * process-wide `electron`, timer, `Math.random` and `process.kill` wrappers, so
+ * reuse across iterations is not sound — but that fork is a `node --import tsx`
+ * boot plus a main-process module graph, and wrapping it made these headlines
+ * mostly a reading of Node starting up.
  */
 
 /** Rounds of the watchdog decision ladder per iteration. */
@@ -63,12 +71,18 @@ export const supervisionScenarios: PerfScenario[] = [
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     warmups: 1,
-    correctness: ["recoveryMisses", "firstCrashMisses", "giveUpMisses", "manualRecoveryMisses"],
+    correctness: [
+      "recoveryMisses",
+      "firstCrashMisses",
+      "giveUpMisses",
+      "manualRecoveryMisses",
+      "backoffMisses",
+    ],
     run: async () => {
-      const started = performance.now();
       let ladders: readonly SupervisorLadder[];
+      let probeMs: number;
       try {
-        ({ supervisors: ladders } = await runSupervisionProbe("ladder"));
+        ({ supervisors: ladders, probeMs } = await runSupervisionProbe("ladder"));
       } catch (error) {
         return failClosed(`supervision ladder probe failed: ${String(error)}`, {
           supervisorCount: 0,
@@ -76,6 +90,7 @@ export const supervisionScenarios: PerfScenario[] = [
           firstCrashMisses: 99,
           giveUpMisses: 99,
           manualRecoveryMisses: 99,
+          backoffMisses: 99,
         });
       }
 
@@ -87,7 +102,7 @@ export const supervisionScenarios: PerfScenario[] = [
         Math.max(0, (byName(name)?.gaveUpAtCrash ?? 0) - 1);
 
       return {
-        durationMs: performance.now() - started,
+        durationMs: probeMs,
         metrics: {
           supervisorCount: ladders.length,
           // The ladder itself: what the supervisors did, not how long it took.
@@ -102,7 +117,9 @@ export const supervisionScenarios: PerfScenario[] = [
           pluginRestartsBeforeGiveUp: restartBudgetOf("PluginDevWorkerHost"),
           watchdogRestartsBeforeGiveUp: restartBudgetOf("MainProcessWatchdogClient"),
           // Zero armed timers means a supervisor respawns with no backoff at
-          // all — a real difference between these four, invisible in latency.
+          // all — a real difference between these four, invisible in latency
+          // and, until `backoffMisses` below, ungraded: an instant-restart
+          // supervisor recovers, serves and gives up identically.
           backoffTimersArmedCount: sum(ladders, "backoffTimersArmed"),
           // Deterministic despite the `~` marker the classifier gives a `*Ms`
           // name: these are the exact bounds of the product's own jitter range,
@@ -116,6 +133,7 @@ export const supervisionScenarios: PerfScenario[] = [
           firstCrashMisses: sum(ladders, "firstCrashMisses"),
           giveUpMisses: sum(ladders, "giveUpMisses"),
           manualRecoveryMisses: sum(ladders, "manualRecoveryMisses"),
+          backoffMisses: sum(ladders, "backoffMisses"),
           residualChildCount: liveSupervisionChildCount(),
         },
         notes: ladders
@@ -137,11 +155,10 @@ export const supervisionScenarios: PerfScenario[] = [
     warmups: 1,
     correctness: ["replayMisses", "serveMisses"],
     run: async () => {
-      const started = performance.now();
       try {
         const result = await runSupervisionProbe("replay");
         return {
-          durationMs: performance.now() - started,
+          durationMs: result.probeMs,
           metrics: {
             replayMessages: result.replayMessages,
             replayBytes: result.replayBytes,
@@ -175,15 +192,15 @@ export const supervisionScenarios: PerfScenario[] = [
     warmups: 1,
     correctness: ["classificationMisses", "crossAttributionMisses"],
     run: async () => {
-      const started = performance.now();
       try {
         const result = await runSupervisionProbe("classification");
         return {
-          durationMs: performance.now() - started,
+          // The whole case sweep, timed in the child. There is no separate
+          // `sweepMs` metric because it would be this number twice.
+          durationMs: result.probeMs,
           metrics: {
             classificationDecisionCount: result.classificationDecisions,
             goneReasonDecisionCount: result.goneReasonDecisions,
-            sweepMs: result.sweepMs,
             classificationMisses: result.classificationMisses,
             crossAttributionMisses: result.crossAttributionMisses,
             residualChildCount: liveSupervisionChildCount(),
@@ -243,11 +260,10 @@ export const supervisionScenarios: PerfScenario[] = [
     warmups: 1,
     correctness: ["spawnReplayMisses", "generationMisses", "configReplayMisses"],
     run: async () => {
-      const started = performance.now();
       try {
         const result = await runSupervisionProbe("ptyReplay");
         return {
-          durationMs: performance.now() - started,
+          durationMs: result.probeMs,
           metrics: {
             replayedSpawns: result.replayedSpawns,
             replaySpawnBytes: result.replaySpawnBytes,

@@ -1,9 +1,13 @@
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import {
+  BACKOFF_POLICY,
   CRASH_CASES,
   FOREIGN_SERVICE_NAME,
+  gradeBackoffSchedule,
+  isFreshGeneration,
   runWatchdogLadder,
+  type BackoffPass,
   type CrashCase,
 } from "../lib/supervisionFixture";
 import { supervisionScenarios } from "../scenarios/supervision";
@@ -106,6 +110,85 @@ describe("crash-classification expectation table", () => {
     for (const probe of CRASH_CASES) {
       expect(probe.expectPayload).toBe(probe.expectedCrashType !== "CLEAN_EXIT");
     }
+  });
+});
+
+describe("restart-schedule oracle", () => {
+  /** What the four real supervisors schedule, read off a PERF-260 smoke run. */
+  const workspaceLow: BackoffPass = { restartsAttempted: 2, scheduledDelays: [100, 100] };
+  const workspaceHigh: BackoffPass = { restartsAttempted: 2, scheduledDelays: [1999, 3999] };
+
+  it("passes the shipped full-jitter schedule", () => {
+    expect(gradeBackoffSchedule("scheduled", workspaceLow, workspaceHigh)).toBe(0);
+    expect(
+      gradeBackoffSchedule(
+        "immediate",
+        { restartsAttempted: 2, scheduledDelays: [] },
+        { restartsAttempted: 2, scheduledDelays: [] }
+      )
+    ).toBe(0);
+  });
+
+  it("fails a supervisor that restarts instantly with no timer", () => {
+    // The defect this predicate exists for: recovery, serving and give-up are
+    // all unchanged by dropping the timer, so nothing else would notice.
+    const none: BackoffPass = { restartsAttempted: 2, scheduledDelays: [] };
+    expect(gradeBackoffSchedule("scheduled", none, none)).toBeGreaterThan(0);
+  });
+
+  it("fails a fixed delay wearing a jitter formula's name", () => {
+    // Both pinned passes schedule the same total, so the delay never consulted
+    // `Math.random` — every supervisor resynchronises after a shared crash.
+    const fixed: BackoffPass = { restartsAttempted: 2, scheduledDelays: [500, 500] };
+    expect(gradeBackoffSchedule("scheduled", fixed, fixed)).toBeGreaterThan(0);
+  });
+
+  it("fails a backoff that does not widen across successive crashes", () => {
+    const flatHigh: BackoffPass = { restartsAttempted: 2, scheduledDelays: [1999, 1999] };
+    expect(gradeBackoffSchedule("scheduled", workspaceLow, flatHigh)).toBeGreaterThan(0);
+  });
+
+  it("fails a spin dressed as a backoff, and a delay nobody would wait out", () => {
+    const spin: BackoffPass = { restartsAttempted: 2, scheduledDelays: [1, 2] };
+    expect(gradeBackoffSchedule("scheduled", workspaceLow, spin)).toBeGreaterThan(0);
+    const forever: BackoffPass = { restartsAttempted: 2, scheduledDelays: [100, 600_000] };
+    expect(gradeBackoffSchedule("scheduled", workspaceLow, forever)).toBeGreaterThan(0);
+  });
+
+  it("fails an immediate supervisor that started scheduling", () => {
+    // Graded in both directions: the policy is the claim, not "some delay".
+    expect(gradeBackoffSchedule("immediate", workspaceLow, workspaceHigh)).toBeGreaterThan(0);
+  });
+
+  it("declares a policy for every supervisor the ladder drives", () => {
+    expect(Object.keys(BACKOFF_POLICY).sort()).toEqual([
+      "MainProcessWatchdogClient",
+      "PluginDevWorkerHost",
+      "PtyHostLifecycle",
+      "WorkspaceHostProcess",
+    ]);
+  });
+});
+
+describe("launch-generation oracle", () => {
+  it("accepts a freshly minted, strictly newer stamp", () => {
+    expect(isFreshGeneration(2, 1)).toBe(true);
+  });
+
+  it("rejects a replay that omitted the stamp", () => {
+    // `undefined !== 1` was the old check, so an omitted stamp satisfied a
+    // predicate written to prove a new one had been minted.
+    expect(isFreshGeneration(undefined, 1)).toBe(false);
+    expect(isFreshGeneration(null, 1)).toBe(false);
+  });
+
+  it("rejects a stale, malformed, or unmintable stamp", () => {
+    expect(isFreshGeneration(1, 1)).toBe(false);
+    expect(isFreshGeneration(1, 2)).toBe(false);
+    expect(isFreshGeneration("2", 1)).toBe(false);
+    expect(isFreshGeneration(1.5, 1)).toBe(false);
+    // Nothing was stamped before the crash, so there is nothing to supersede.
+    expect(isFreshGeneration(1, undefined)).toBe(false);
   });
 });
 
