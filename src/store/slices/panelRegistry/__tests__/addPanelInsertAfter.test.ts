@@ -317,18 +317,25 @@ describe("addPanel insertAfterId (#12095)", () => {
       expect(dockRenderOrder("wt-A")).toEqual([["bp"], ["outsider"], ["src"], ["copy"]]);
     });
 
-    it("skips a group member that is no longer in scope when picking the anchor", async () => {
-      seed("stale", "wt-A", "trash");
+    it("skips a group member that is only optimistically closed", async () => {
+      // `closing` still reads as a live grid panel — only `trashedTerminals`
+      // knows it is on its way out, which is the set both renderers filter on.
+      seed("closing", "wt-A");
       seed("g1", "wt-A");
       seed("outsider", "wt-A");
       seed("g2", "wt-A");
-      usePanelStore.getState().createTabGroup("grid", "wt-A", ["stale", "g1", "g2"]);
+      usePanelStore.getState().createTabGroup("grid", "wt-A", ["closing", "g1", "g2"]);
+      usePanelStore.setState({
+        trashedTerminals: new Map([
+          ["closing", { id: "closing", expiresAt: Date.now() + 60_000, originalLocation: "grid" }],
+        ]),
+      });
 
       await addBrowser("copy", { worktreeId: "wt-A", insertAfterId: "g2" });
 
-      // `stale` is trashed, so the group renders at `g1` and the copy follows it.
-      expect(panelIds()).toEqual(["stale", "g1", "copy", "outsider", "g2"]);
-      expect(bucket("wt-A")).toEqual(["stale", "g1", "copy", "outsider", "g2"]);
+      // The group renders at `g1`, so the copy follows it — not `closing`.
+      expect(panelIds()).toEqual(["closing", "g1", "copy", "outsider", "g2"]);
+      expect(bucket("wt-A")).toEqual(["closing", "g1", "copy", "outsider", "g2"]);
     });
 
     it("ignores a group pinned to another worktree and anchors on the source", async () => {
@@ -349,16 +356,21 @@ describe("addPanel insertAfterId (#12095)", () => {
     it("resolves the anchor in each structure independently", async () => {
       // A cross-worktree transfer appends to the destination bucket without
       // moving the flat id, so bucket order is not flat order projected by
-      // worktree. Each structure must anchor on what it sees.
-      seed("t1", "wt-A");
-      seed("t2", "wt-A");
-      seed("t3", "wt-A");
-      usePanelStore.setState({ panelIdsByWorktreeId: { "wt-A": ["t2", "t3", "t1"] } });
+      // worktree. With a two-member group the structures pick DIFFERENT
+      // members as the group's slot, which is the whole point of resolving an
+      // anchor set rather than sharing one id.
+      seed("g1", "wt-A");
+      seed("outsider", "wt-A");
+      seed("g2", "wt-A");
+      usePanelStore.setState({ panelIdsByWorktreeId: { "wt-A": ["g2", "outsider", "g1"] } });
+      usePanelStore.getState().createTabGroup("grid", "wt-A", ["g1", "g2"]);
 
-      await addBrowser("copy", { worktreeId: "wt-A", insertAfterId: "t1" });
+      await addBrowser("copy", { worktreeId: "wt-A", insertAfterId: "g2" });
 
-      expect(panelIds()).toEqual(["t1", "copy", "t2", "t3"]);
-      expect(bucket("wt-A")).toEqual(["t2", "t3", "t1", "copy"]);
+      // Flat order renders the group at `g1`; the bucket's own order puts `g2`
+      // first. Sharing one anchor would land the copy at the bucket's tail.
+      expect(panelIds()).toEqual(["g1", "copy", "outsider", "g2"]);
+      expect(bucket("wt-A")).toEqual(["g2", "copy", "outsider", "g1"]);
     });
 
     it("keeps a worktree-less dock source adjacent in the __none__ bucket", async () => {
