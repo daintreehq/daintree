@@ -1,12 +1,12 @@
 import { ChildProcess, execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type PQueueType from "p-queue";
 import type { WorktreeMonitor as WorktreeMonitorType } from "../../../electron/workspace-host/WorktreeMonitor";
 import type { WorktreeMonitorConfig } from "../../../electron/workspace-host/WorktreeMonitor";
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host";
 import type { Worktree } from "../../../shared/types/worktree";
+import { createPerfTempRoot } from "./tempRoots";
 
 /**
  * Fixture + instrumentation for the git-pipeline scenarios (PERF-100..104).
@@ -31,7 +31,7 @@ let envReady = false;
 
 function ensurePerfEnv(): void {
   if (envReady) return;
-  process.env.DAINTREE_USER_DATA ??= mkdtempSync(join(tmpdir(), "daintree-perf-userdata-"));
+  process.env.DAINTREE_USER_DATA ??= createPerfTempRoot("daintree-perf-userdata-");
   // Suppresses automatic PR polling if any scenario ever touches WorkspaceService.
   process.env.DAINTREE_INSTANCE_ROLE ??= "worker";
   envReady = true;
@@ -371,7 +371,7 @@ export function getGitPipelineFixture(): GitPipelineFixture {
   ensurePerfEnv();
   installGitSpawnCounter();
 
-  const root = mkdtempSync(join(tmpdir(), "daintree-perf-git-"));
+  const root = createPerfTempRoot("daintree-perf-git-");
   const mainPath = join(root, "repo");
   mkdirSync(mainPath, { recursive: true });
 
@@ -447,14 +447,6 @@ export function getGitPipelineFixture(): GitPipelineFixture {
     idlePath,
     faultPath,
   };
-
-  process.on("exit", () => {
-    try {
-      rmSync(root, { recursive: true, force: true });
-    } catch {
-      // Best-effort temp cleanup.
-    }
-  });
 
   return fixture;
 }

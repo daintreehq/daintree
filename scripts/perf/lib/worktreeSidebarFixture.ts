@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { WorktreeMonitor as WorktreeMonitorType } from "../../../electron/workspace-host/WorktreeMonitor";
@@ -20,6 +19,7 @@ import {
   loadPipelineModules,
   sleep,
 } from "./gitPipelineFixture";
+import { createPerfTempRoot, releasePerfTempRoot } from "./tempRoots";
 
 /**
  * Fixture + instrumentation for the worktree-sidebar latency scenarios
@@ -85,27 +85,6 @@ export async function quiesceGitSpawns(
     await sleep(25);
   }
   return false;
-}
-
-// Long-lived harnesses (steady/scale topology projects) intentionally live
-// until process exit, so their temp roots can't be reaped by dispose(). One
-// shared exit hook sweeps whatever is still registered.
-const tempRootsPendingCleanup = new Set<string>();
-let tempRootExitHookInstalled = false;
-
-function registerTempRootCleanup(root: string): void {
-  tempRootsPendingCleanup.add(root);
-  if (tempRootExitHookInstalled) return;
-  tempRootExitHookInstalled = true;
-  process.on("exit", () => {
-    for (const pending of tempRootsPendingCleanup) {
-      try {
-        rmSync(pending, { recursive: true, force: true });
-      } catch {
-        // Best-effort temp cleanup.
-      }
-    }
-  });
 }
 
 function runGit(cwd: string, args: string[]): void {
@@ -279,7 +258,7 @@ export function getSidebarEditFixture(): SidebarEditFixture {
   if (editFixture) return editFixture;
   installGitSpawnCounter();
 
-  const root = mkdtempSync(join(tmpdir(), "daintree-perf-sidebar-"));
+  const root = createPerfTempRoot("daintree-perf-sidebar-");
   const mainPath = join(root, "repo");
   mkdirSync(mainPath, { recursive: true });
   runGit(mainPath, ["init", "-b", "main"]);
@@ -315,14 +294,6 @@ export function getSidebarEditFixture(): SidebarEditFixture {
     burstPath: addWorktree("wt-burst"),
     fanInPaths,
   };
-
-  process.on("exit", () => {
-    try {
-      rmSync(root, { recursive: true, force: true });
-    } catch {
-      // Best-effort temp cleanup.
-    }
-  });
 
   return editFixture;
 }
@@ -392,8 +363,9 @@ export class TopologyHarness {
     installGitSpawnCounter();
     const { WorkspaceService } = await loadWorkspaceServiceModule();
 
-    const root = mkdtempSync(join(tmpdir(), "daintree-perf-topo-"));
-    registerTempRootCleanup(root);
+    // Long-lived harnesses (steady/scale topology projects) intentionally live
+    // until the process ends, so `dispose()` is not guaranteed to reap this.
+    const root = createPerfTempRoot("daintree-perf-topo-");
     const repoPath = join(root, "repo");
     mkdirSync(repoPath, { recursive: true });
     runGit(repoPath, ["init", "-b", "main"]);
@@ -540,12 +512,7 @@ export class TopologyHarness {
     if (this.disposed) return;
     this.disposed = true;
     this.svc.dispose();
-    tempRootsPendingCleanup.delete(this.root);
-    try {
-      rmSync(this.root, { recursive: true, force: true });
-    } catch {
-      // Best-effort temp cleanup.
-    }
+    releasePerfTempRoot(this.root);
   }
 }
 
@@ -652,16 +619,7 @@ async function buildStoreBundle(): Promise<WorktreeStoreModule> {
   const esbuild = await import("esbuild");
   const here = dirname(fileURLToPath(import.meta.url));
   const repoRoot = pathResolve(here, "../../..");
-  const outDir = mkdtempSync(join(tmpdir(), "daintree-perf-store-"));
-  // Best effort, and deliberately not fatal: without it this dir survives every
-  // run, and 430 of them had piled up in $TMPDIR before anyone looked.
-  process.on("exit", () => {
-    try {
-      rmSync(outDir, { recursive: true, force: true });
-    } catch {
-      // The OS will get it eventually.
-    }
-  });
+  const outDir = createPerfTempRoot("daintree-perf-store-");
   const outfile = join(outDir, "worktreeStore.mjs");
 
   const stubs: Array<{ filter: RegExp; contents: string }> = [
@@ -701,14 +659,6 @@ async function buildStoreBundle(): Promise<WorktreeStoreModule> {
         },
       },
     ],
-  });
-
-  process.on("exit", () => {
-    try {
-      rmSync(outDir, { recursive: true, force: true });
-    } catch {
-      // Best-effort temp cleanup.
-    }
   });
 
   const mod = (await import(pathToFileURL(outfile).href)) as WorktreeStoreModule;

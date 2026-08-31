@@ -1,8 +1,8 @@
 import { performance } from "node:perf_hooks";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { createPerfTempRoot } from "./tempRoots";
 
 /**
  * The real renderer hydration path (`src/utils/stateHydration/`), driven
@@ -179,14 +179,7 @@ async function buildStatePatcherBundle(): Promise<StatePatcherModule> {
   const esbuild = await import("esbuild");
   const here = dirname(fileURLToPath(import.meta.url));
   const repoRoot = pathResolve(here, "../../..");
-  const outDir = mkdtempSync(join(tmpdir(), "daintree-perf-hydration-"));
-  process.on("exit", () => {
-    try {
-      rmSync(outDir, { recursive: true, force: true });
-    } catch {
-      // The OS will get it eventually.
-    }
-  });
+  const outDir = createPerfTempRoot("daintree-perf-hydration-");
   const outfile = join(outDir, "statePatcher.mjs");
 
   await esbuild.build({

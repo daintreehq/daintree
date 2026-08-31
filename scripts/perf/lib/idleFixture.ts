@@ -1,6 +1,5 @@
 import { execFileSync, execSync, spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { performance, type EventLoopUtilization } from "node:perf_hooks";
 import type { ProcessTreeCache as ProcessTreeCacheType } from "../../../electron/services/ProcessTreeCache";
@@ -13,6 +12,7 @@ import {
   sleep,
   spawnObserverMisses,
 } from "./gitPipelineFixture";
+import { createPerfTempRoot, releasePerfTempRoot } from "./tempRoots";
 
 /**
  * Fixture for the idle-window scenarios (PERF-092..094).
@@ -44,7 +44,7 @@ let envReady = false;
 
 function ensureIdlePerfEnv(): void {
   if (envReady) return;
-  process.env.DAINTREE_USER_DATA ??= mkdtempSync(join(tmpdir(), "daintree-perf-userdata-"));
+  process.env.DAINTREE_USER_DATA ??= createPerfTempRoot("daintree-perf-userdata-");
   process.env.DAINTREE_INSTANCE_ROLE ??= "worker";
   envReady = true;
 }
@@ -250,7 +250,7 @@ export interface ProbeFaultHandle {
  * reproduces the case where a wrapper exists and refuses.
  */
 export function installProcessProbeFault(): ProbeFaultHandle {
-  const dir = mkdtempSync(join(tmpdir(), "daintree-perf-probe-fault-"));
+  const dir = createPerfTempRoot("daintree-perf-probe-fault-");
   if (process.platform === "win32") {
     // cmd.exe resolves `powershell` against PATH + PATHEXT, and ProcessTreeCache
     // reaches PowerShell through `exec` (a cmd.exe shell), so a .cmd wins.
@@ -271,11 +271,9 @@ export function removeProcessProbeFault(handle: ProbeFaultHandle): void {
   } else {
     process.env.PATH = handle.previousPath;
   }
-  try {
-    rmSync(handle.dir, { recursive: true, force: true });
-  } catch {
-    // Best-effort temp cleanup; the PATH restore above is what matters.
-  }
+  // Best-effort; the PATH restore above is what matters. If it fails, the root
+  // stays registered for the exit/signal sweep.
+  releasePerfTempRoot(handle.dir);
 }
 
 /**

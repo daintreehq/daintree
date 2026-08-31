@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createPerfTempRoot, releasePerfTempRoot } from "./tempRoots";
 import { createRng } from "./workloads";
 import type { FileTreeNode } from "../../../shared/types/ipc";
 import type { StagingFileEntry, StagingStatus } from "../../../shared/types/git";
@@ -85,11 +85,10 @@ let envReady = false;
 function ensurePerfEnv(): void {
   if (envReady) return;
   if (!process.env.DAINTREE_USER_DATA) {
-    const userData = mkdtempSync(join(tmpdir(), "daintree-perf-userdata-"));
-    process.env.DAINTREE_USER_DATA = userData;
-    // Exit-only: DAINTREE_USER_DATA is process-wide and other fixtures read it,
-    // so it must outlive `disposePanelFixtures()`.
-    removeOnExit(userData);
+    // Not in `tempRoots`: DAINTREE_USER_DATA is process-wide and other fixtures
+    // read it, so it must outlive `disposePanelFixtures()`. The shared owner
+    // still reaps it at exit.
+    process.env.DAINTREE_USER_DATA = createPerfTempRoot("daintree-perf-userdata-");
   }
   envReady = true;
 }
@@ -97,57 +96,35 @@ function ensurePerfEnv(): void {
 const tempRoots: string[] = [];
 
 /**
- * Registered before anything is written into the directory: a fixture that
- * throws half-way through building would otherwise leave tens of thousands of
- * files behind on the runner.
- */
-function removeOnExit(path: string): void {
-  process.on("exit", () => {
-    try {
-      rmSync(path, { recursive: true, force: true });
-    } catch {
-      // Best-effort: a leaked temp dir must never fail a benchmark run.
-    }
-  });
-}
-
-/** Exit cleanup plus explicit disposal, for the roots this fixture owns. */
-function registerCleanup(path: string): void {
-  tempRoots.push(path);
-  removeOnExit(path);
-}
-
-/**
  * Delete every directory this fixture built, now rather than at process exit.
  *
- * The `exit` handler above covers a benchmark run, which ends by exiting. It
- * does NOT cover a vitest worker, which is torn down by the pool without ever
- * emitting `exit` — so a test that drives these scenarios leaks the whole
- * ~70 MB of synthetic trees and repositories on every `npm test` unless it
- * calls this. Memoized fixtures are cleared too, so a later caller rebuilds
- * rather than reading paths that are gone.
+ * The shared owner's exit and signal hooks already cover both a benchmark run
+ * and a vitest worker, but these are the largest roots in the harness — ~70 MB
+ * of synthetic trees and repositories — so a test that drives these scenarios
+ * gives them back as soon as it is done. Memoized fixtures are cleared too, so
+ * a later caller rebuilds rather than reading paths that are gone.
  */
 export function disposePanelFixtures(): void {
-  for (const path of tempRoots.splice(0)) {
-    try {
-      rmSync(path, { recursive: true, force: true });
-    } catch {
-      // Best-effort.
-    }
-  }
+  for (const path of tempRoots.splice(0)) releasePerfTempRoot(path);
   browserFixture = null;
   reviewFixture = null;
   viewerFixture = null;
 }
 
+/**
+ * Registered before anything is written into the directory: a fixture that
+ * throws half-way through building would otherwise leave tens of thousands of
+ * files behind on the runner.
+ *
+ * `canonical` matters on macOS, where `mkdtemp` hands back `/var/...` while git
+ * and `fs.realpath` report `/private/var/...`. `FileTreeService` compares the
+ * canonical target against the canonical root, and `getPerFileDiffStats`
+ * re-keys numstat output by stripping the realpath'd toplevel prefix — both
+ * silently produce nothing when the two spellings disagree.
+ */
 function makeRoot(prefix: string): string {
-  // realpath matters on macOS, where `mkdtemp` hands back `/var/...` while git
-  // and `fs.realpath` report `/private/var/...`. `FileTreeService` compares the
-  // canonical target against the canonical root, and `getPerFileDiffStats`
-  // re-keys numstat output by stripping the realpath'd toplevel prefix — both
-  // silently produce nothing when the two spellings disagree.
-  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
-  registerCleanup(root);
+  const root = createPerfTempRoot(prefix, { canonical: true });
+  tempRoots.push(root);
   return root;
 }
 

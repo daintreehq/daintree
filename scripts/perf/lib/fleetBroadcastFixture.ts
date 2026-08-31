@@ -26,11 +26,11 @@
  * to assemble the armed set.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { dirname, join, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { PanelInstance, PanelLocation, PtyPanelData } from "../../../shared/types/panel";
+import { createPerfTempRoot } from "./tempRoots";
 import { createRng } from "./workloads";
 
 const REPO_ROOT = pathResolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -55,14 +55,7 @@ export function loadFleetEligibility(): Promise<FleetEligibilityModule> {
 
 async function buildBundle(): Promise<FleetEligibilityModule> {
   const esbuild = await import("esbuild");
-  const outDir = mkdtempSync(join(tmpdir(), "daintree-perf-fleet-"));
-  process.on("exit", () => {
-    try {
-      rmSync(outDir, { recursive: true, force: true });
-    } catch {
-      // Best-effort temp cleanup.
-    }
-  });
+  const outDir = createPerfTempRoot("daintree-perf-fleet-");
 
   const entryFile = join(outDir, "entry.ts");
   writeFileSync(

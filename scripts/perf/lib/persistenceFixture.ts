@@ -23,7 +23,6 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
@@ -33,6 +32,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as schema from "../../../electron/services/persistence/schema";
+import { createPerfTempRoot, releasePerfTempRoot } from "./tempRoots";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
@@ -94,10 +94,16 @@ function closeAllConnections(): void {
   openConnections.clear();
 }
 
-/** Lazily-created scratch root, removed on process exit. */
+/**
+ * Lazily-created scratch root.
+ *
+ * The shared owner removes it on exit and on a termination signal; the extra
+ * `exit` hook here is for the sqlite handles, which `cleanupTempRoot` closes
+ * before the directory underneath them goes away.
+ */
 export function getTempRoot(): string {
   if (!tempRoot) {
-    tempRoot = mkdtempSync(join(tmpdir(), "daintree-perf-persistence-"));
+    tempRoot = createPerfTempRoot("daintree-perf-persistence-");
     process.on("exit", () => {
       cleanupTempRoot();
     });
@@ -106,20 +112,16 @@ export function getTempRoot(): string {
 }
 
 /**
- * Explicit teardown for callers that never reach an `exit` handler. Vitest's
- * forked workers are torn down by signal, so a test that used this fixture
- * would otherwise leave a few megabytes of database behind on every run.
+ * Explicit teardown for callers that want the databases gone before the process
+ * ends — a vitest `afterAll`, or a scenario that is done with them.
  */
 export function cleanupTempRoot(): void {
   closeAllConnections();
   seededHandle = null;
+  // `ownedUserDataDir` normally sits inside `tempRoot`; releasing both covers
+  // the case where DAINTREE_USER_DATA put it somewhere else.
   for (const dir of [tempRoot, ownedUserDataDir]) {
-    if (!dir) continue;
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // Best-effort temp cleanup.
-    }
+    if (dir) releasePerfTempRoot(dir);
   }
   tempRoot = null;
   ownedUserDataDir = null;

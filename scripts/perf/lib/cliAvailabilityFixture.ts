@@ -1,10 +1,10 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import nodeModule from "node:module";
-import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 import type { AgentConfig } from "../../../shared/config/agentRegistry";
 import type { CliAvailability } from "../../../shared/types/ipc";
+import { createPerfTempRoot } from "./tempRoots";
 
 /**
  * The REAL CLI-availability probe storm for PERF-393..394, driven hermetically.
@@ -122,7 +122,7 @@ let fixtureRoot: string | null = null;
 
 function ensureCliEnv(): string {
   if (fixtureRoot !== null) return fixtureRoot;
-  const root = mkdtempSync(join(tmpdir(), "daintree-perf-cli-"));
+  const root = createPerfTempRoot("daintree-perf-cli-");
   fixtureRoot = root;
 
   const userData = join(root, "userdata");
@@ -136,14 +136,6 @@ function ensureCliEnv(): string {
   // stat'd by `probeNativePaths` or `checkAuth`.
   process.env.HOME = home;
   process.env.USERPROFILE = home;
-
-  process.on("exit", () => {
-    try {
-      rmSync(root, { recursive: true, force: true });
-    } catch {
-      // Best effort: a leaked benchmark temp dir is not worth a crash on exit.
-    }
-  });
 
   return root;
 }

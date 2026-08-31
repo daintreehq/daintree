@@ -1,13 +1,13 @@
 import nodeModule from "node:module";
-import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve as resolvePath } from "node:path";
+import { resolve as resolvePath } from "node:path";
 
 import type { NotificationSettings } from "../../../shared/types/ipc/api";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent";
 import type { StoreSchema } from "../../../electron/store";
 import type { WindowRegistry } from "../../../electron/window/WindowRegistry";
 import type { ProjectViewManagersProvider } from "../../../electron/window/activeProjectIds";
+import { createPerfTempRoot, releasePerfTempRoot } from "./tempRoots";
 
 /**
  * The REAL notification subsystem for PERF-320..325, in a plain Node process.
@@ -404,23 +404,19 @@ function ensureBenchUserData(): string {
     }
     return existing;
   }
-  const dir = mkdtempSync(join(tmpdir(), "daintree-perf-notify-"));
+  const dir = createPerfTempRoot("daintree-perf-notify-");
   ownedUserDataDir = dir;
   process.env.DAINTREE_USER_DATA = dir;
-  process.on("exit", () => {
-    cleanupNotificationTempDir();
-  });
   return dir;
 }
 
-/** Explicit teardown for callers that never reach an `exit` handler. */
+/**
+ * Explicit teardown for callers that want the directory gone before the process
+ * ends. The shared owner's exit and signal hooks cover everything else.
+ */
 export function cleanupNotificationTempDir(): void {
   if (!ownedUserDataDir) return;
-  try {
-    rmSync(ownedUserDataDir, { recursive: true, force: true });
-  } catch {
-    // Best-effort: a temp dir left behind is noise, not a failed measurement.
-  }
+  releasePerfTempRoot(ownedUserDataDir);
   ownedUserDataDir = null;
 }
 

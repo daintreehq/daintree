@@ -1,11 +1,12 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import nodeModule from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { serializedBytes } from "./ipcFixture";
+import { createPerfTempRoot, releasePerfTempRoot } from "./tempRoots";
 
 /**
  * A REAL plugin boundary for the plugin-host scenarios (PERF-220..225).
@@ -85,7 +86,9 @@ function perfRoot(): string {
     // worker bundle can be generated without forking anything, and a temp tree
     // nothing reaps is still litter.
     installExitHook();
-    sharedRoot = mkdtempSync(join(tmpdir(), "daintree-perf-plugin-"));
+    // Registered with the shared owner as a backstop; `installExitHook` ran
+    // first, so on a signal the children die before the sweep reaches this.
+    sharedRoot = createPerfTempRoot("daintree-perf-plugin-");
   }
   return sharedRoot;
 }
@@ -117,11 +120,7 @@ function installExitHook(): void {
     liveChildren.clear();
     // After the children: a service child holds a JSON store open in here.
     if (sharedRoot) {
-      try {
-        rmSync(sharedRoot, { recursive: true, force: true });
-      } catch {
-        // A tmpdir left behind is untidy, never incorrect.
-      }
+      releasePerfTempRoot(sharedRoot);
       sharedRoot = null;
     }
   };

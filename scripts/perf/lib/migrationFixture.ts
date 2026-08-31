@@ -55,17 +55,16 @@
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { StoreSchema } from "../../../electron/store";
+import { createPerfTempRoot } from "./tempRoots";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
@@ -573,32 +572,15 @@ function buildElectronBridge(userData: string): Record<string, unknown> {
   };
 }
 
-const tempRoots: string[] = [];
-let exitHookInstalled = false;
-
-function registerCleanup(dir: string): void {
-  tempRoots.push(dir);
-  if (exitHookInstalled) return;
-  exitHookInstalled = true;
-  process.on("exit", () => {
-    for (const root of tempRoots) {
-      try {
-        rmSync(root, { recursive: true, force: true });
-      } catch {
-        // The OS will get it eventually.
-      }
-    }
-  });
-}
-
 async function buildMigrationBundle(userData: string): Promise<MigrationModule> {
   const esbuild = await import("esbuild");
   // The bundle leaves `better-sqlite3` external (native addon), so it has to
   // sit somewhere the repo's own node_modules resolves from — hence `.tmp/`
   // inside the repo rather than the OS temp root.
   mkdirSync(join(repoRoot, ".tmp"), { recursive: true });
-  const outDir = mkdtempSync(join(repoRoot, ".tmp", "perf-migration-bundle-"));
-  registerCleanup(outDir);
+  const outDir = createPerfTempRoot("perf-migration-bundle-", {
+    parent: join(repoRoot, ".tmp"),
+  });
 
   const entryFile = join(outDir, "entry.ts");
   const src = (rel: string): string => JSON.stringify(join(repoRoot, rel));
@@ -743,8 +725,7 @@ export function loadMigrationHarness(): Promise<MigrationHarness> {
 }
 
 async function buildHarness(): Promise<MigrationHarness> {
-  const userData = mkdtempSync(join(tmpdir(), "daintree-perf-migrations-"));
-  registerCleanup(userData);
+  const userData = createPerfTempRoot("daintree-perf-migrations-");
 
   const mod = await buildMigrationBundle(userData);
   const fixture = createHeavyMigrationFixture();

@@ -1,10 +1,11 @@
 import { fork, type ChildProcess, type Serializable } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import v8 from "node:v8";
+
+import { createPerfTempRoot, releasePerfTempRoot } from "./tempRoots";
 
 /**
  * A REAL cross-process boundary for the IPC scenarios (PERF-043..046).
@@ -156,11 +157,7 @@ function installExitHook(): void {
     // here, and removing it out from under a live host would be a different
     // kind of leak.
     if (sharedUserDataDir) {
-      try {
-        rmSync(sharedUserDataDir, { recursive: true, force: true });
-      } catch {
-        // A tmpdir left behind is untidy, never incorrect.
-      }
+      releasePerfTempRoot(sharedUserDataDir);
       sharedUserDataDir = null;
     }
   };
@@ -181,7 +178,10 @@ let sharedUserDataDir: string | null = null;
 
 function userDataDir(): string {
   if (!sharedUserDataDir) {
-    sharedUserDataDir = mkdtempSync(join(tmpdir(), "daintree-perf-ipc-"));
+    // Registered with the shared owner as a backstop. `installExitHook` above
+    // always runs first, so on a signal the hosts are killed and this directory
+    // released before the owner's own sweep reaches it.
+    sharedUserDataDir = createPerfTempRoot("daintree-perf-ipc-");
   }
   return sharedUserDataDir;
 }

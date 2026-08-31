@@ -4,7 +4,6 @@ import {
   existsSync,
   ftruncateSync,
   mkdirSync,
-  mkdtempSync,
   openSync,
   readFileSync,
   readdirSync,
@@ -15,6 +14,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
+
+import { createPerfTempRoot, releasePerfTempRoot } from "./tempRoots";
 
 /**
  * The REAL main-process log emit path for PERF-380..384, in a plain Node
@@ -410,7 +411,10 @@ function ensureRoot(): string {
     inheritedUserData = process.env.DAINTREE_USER_DATA;
     inheritedUserDataRead = true;
   }
-  perfRoot = realpathSync(mkdtempSync(join(tmpdir(), "daintree-perf-logging-")));
+  // The shared owner reaps this on `exit` AND on a termination signal, which is
+  // what a vitest worker actually gets; the local `exit` hook is kept because it
+  // also has to put `DAINTREE_USER_DATA` back.
+  perfRoot = createPerfTempRoot("daintree-perf-logging-", { canonical: true });
   if (!exitHookRegistered) {
     exitHookRegistered = true;
     process.on("exit", cleanupLoggingTempDir);
@@ -430,13 +434,7 @@ export function cleanupLoggingTempDir(): void {
   const root = perfRoot;
   perfRoot = null;
   activeCorpusDir = null;
-  if (root !== null) {
-    try {
-      rmSync(root, { recursive: true, force: true });
-    } catch {
-      // Best-effort: a temp dir left behind is noise, not a failed measurement.
-    }
-  }
+  if (root !== null) releasePerfTempRoot(root);
   if (!inheritedUserDataRead) return;
   if (inheritedUserData === undefined) delete process.env.DAINTREE_USER_DATA;
   else process.env.DAINTREE_USER_DATA = inheritedUserData;

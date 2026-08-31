@@ -1,10 +1,10 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync } from "node:fs";
 import nodeModule from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProjectViewManager as ProjectViewManagerType } from "../../../electron/window/ProjectViewManager";
 import type { ViewEntry } from "../../../electron/window/ProjectViewManagerTypes";
+import { createPerfTempRoot } from "./tempRoots";
 
 /**
  * Harness for the REAL per-project view machinery (PERF-074..077).
@@ -56,7 +56,7 @@ let envReady = false;
 
 function ensurePerfEnv(): void {
   if (envReady) return;
-  process.env.DAINTREE_USER_DATA ??= mkdtempSync(join(tmpdir(), "daintree-perf-viewdata-"));
+  process.env.DAINTREE_USER_DATA ??= createPerfTempRoot("daintree-perf-viewdata-");
   envReady = true;
 }
 

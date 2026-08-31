@@ -1,9 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { PERF_MARKS } from "../../../shared/perf/marks";
+import { createPerfTempRoot, releasePerfTempRoot } from "./tempRoots";
 
 export interface PackagedLaunchResult {
   durationMs: number;
@@ -358,8 +358,9 @@ export async function launchPackagedAndMeasure(
   const timeoutMs = options.timeoutMs ?? 30_000;
   const isWarm = Boolean(options.userDataDir);
   const cacheKind: "cold" | "warm" = isWarm ? "warm" : "cold";
-  const userDataDir =
-    options.userDataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), `daintree-perf-${iteration}-`));
+  // A cold profile is this function's to reap; a warm one belongs to the caller
+  // and must survive the run loop to keep the compile cache warm.
+  const userDataDir = options.userDataDir ?? createPerfTempRoot(`daintree-perf-${iteration}-`);
   const ndjsonPath = path.join(userDataDir, "perf-metrics.ndjson");
 
   // Marks are append-only. When reusing a warm userDataDir across launches the
@@ -501,11 +502,7 @@ export async function launchPackagedAndMeasure(
     // needs it to persist across the run loop to keep the compile cache warm.
     if (!isWarm) {
       setTimeout(() => {
-        try {
-          fs.rmSync(userDataDir, { recursive: true, force: true });
-        } catch {
-          // Best effort
-        }
+        releasePerfTempRoot(userDataDir);
       }, 1000);
     }
   }

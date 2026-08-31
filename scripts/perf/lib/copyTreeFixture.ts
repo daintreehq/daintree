@@ -1,17 +1,10 @@
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 
 import type { CopyTreeResult } from "../../../shared/types/ipc/copyTree";
+import { createPerfTempRoot } from "./tempRoots";
 
 /**
  * The REAL CopyTree context-generation path for PERF-390..392, in a plain Node
@@ -97,7 +90,7 @@ let realTmpDir: string | null = null;
 function ensureCopyTreeEnv(): string {
   if (fixtureRoot !== null) return fixtureRoot;
   realTmpDir = tmpdir();
-  const root = mkdtempSync(join(realTmpDir, "daintree-perf-copytree-"));
+  const root = createPerfTempRoot("daintree-perf-copytree-", { parent: realTmpDir });
   fixtureRoot = root;
 
   const userData = join(root, "userdata");
@@ -109,14 +102,6 @@ function ensureCopyTreeEnv(): string {
   // `os.tmpdir()` on every call, so this captures the product's own bundle
   // directory without touching the module.
   process.env.TMPDIR = root;
-
-  process.on("exit", () => {
-    try {
-      rmSync(root, { recursive: true, force: true });
-    } catch {
-      // Best effort: a leaked benchmark temp dir is not worth a crash on exit.
-    }
-  });
 
   return root;
 }

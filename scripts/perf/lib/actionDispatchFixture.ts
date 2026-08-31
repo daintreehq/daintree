@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { dirname, join, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
+
+import { createPerfTempRoot } from "./tempRoots";
 
 /**
  * The REAL action dispatch layer for PERF-200..205, in a plain Node process.
@@ -234,29 +235,12 @@ export function loadActionModules(): Promise<ActionModules> {
   return modulesPromise;
 }
 
-/**
- * Remove a scratch dir when the process ends.
- *
- * Without this the bundle dir survives every run, and since the action manifest
- * is loaded by several families, a session leaves one behind per process — 58
- * of them had accumulated before anyone noticed. Best effort by design: a
- * failure here must never turn a completed measurement into an error.
- */
-function reapOnExit(dir: string): void {
-  process.on("exit", () => {
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // The OS will get it eventually; a benchmark result is not worth a throw.
-    }
-  });
-}
-
 async function buildActionBundle(): Promise<ActionModules> {
   installPinnedNavigator();
   const esbuild = await import("esbuild");
-  const outDir = mkdtempSync(join(tmpdir(), "daintree-perf-actions-"));
-  reapOnExit(outDir);
+  // The action manifest is loaded by several scenario families, so a session
+  // left one bundle dir behind per process — 106 of them had accumulated.
+  const outDir = createPerfTempRoot("daintree-perf-actions-");
   const entryFile = join(outDir, "entry.ts");
   const outfile = join(outDir, "actionLayer.mjs");
 
@@ -303,14 +287,6 @@ async function buildActionBundle(): Promise<ActionModules> {
         },
       },
     ],
-  });
-
-  process.on("exit", () => {
-    try {
-      rmSync(outDir, { recursive: true, force: true });
-    } catch {
-      // Best-effort temp cleanup.
-    }
   });
 
   const mod = (await import(pathToFileURL(outfile).href)) as ActionModules;

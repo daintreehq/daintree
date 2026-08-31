@@ -1,12 +1,11 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
 import nodeModule from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serializedBytes } from "./ipcFixture";
+import { createPerfTempRoot, releasePerfTempRoot } from "./tempRoots";
 import {
   createWatchdog,
   HEARTBEAT_INTERVAL_MS,
@@ -110,7 +109,9 @@ let sharedUserDataDir: string | null = null;
 function userDataDir(): string {
   if (!sharedUserDataDir) {
     installExitHook();
-    sharedUserDataDir = mkdtempSync(join(tmpdir(), "daintree-perf-supervision-"));
+    // Registered with the shared owner as a backstop; `installExitHook` ran
+    // first, so on a signal the children die before the sweep reaches this.
+    sharedUserDataDir = createPerfTempRoot("daintree-perf-supervision-");
   }
   return sharedUserDataDir;
 }
@@ -135,11 +136,7 @@ function installExitHook(): void {
     }
     liveChildren.clear();
     if (sharedUserDataDir) {
-      try {
-        rmSync(sharedUserDataDir, { recursive: true, force: true });
-      } catch {
-        // A tmpdir left behind is untidy, never incorrect.
-      }
+      releasePerfTempRoot(sharedUserDataDir);
       sharedUserDataDir = null;
     }
   };
