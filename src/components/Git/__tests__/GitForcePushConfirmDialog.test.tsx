@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { StrictMode } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GIT_REMOTE_COMMIT_PREVIEW_MAX, type GitRemoteCommitPreview } from "@shared/types/git";
@@ -323,5 +324,46 @@ describe("GitForcePushConfirmDialog preview", () => {
       await Promise.resolve();
     });
     expect(confirmButton().hasAttribute("aria-disabled")).toBe(false);
+  });
+
+  it("survives StrictMode's effect replay without declining a live request", async () => {
+    // StrictMode runs setup → cleanup → setup in one commit. A teardown decline
+    // that fired synchronously would cancel the confirm the moment it opened,
+    // in dev only — the sort of thing that never shows up in a production
+    // build's tests.
+    const confirmed = openConfirm();
+    render(
+      <StrictMode>
+        <GitForcePushConfirmDialog />
+      </StrictMode>
+    );
+    await flush();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+
+    expect(useGitForcePushStore.getState().pendingConfirm).not.toBeNull();
+    // Still answerable, and still the request the user is looking at.
+    await act(async () => {
+      confirmButton().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(await confirmed).toBe(true);
+  });
+
+  it("declines the pending request when the host really goes away", async () => {
+    // The action awaits this Promise. A dialog that unmounted without settling
+    // it — an ErrorBoundary catching a render crash is the real case — would
+    // leave the dispatch hanging for the rest of the session.
+    const confirmed = openConfirm();
+    const { unmount } = render(<GitForcePushConfirmDialog />);
+    await flush();
+
+    unmount();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+
+    expect(await confirmed).toBe(false);
   });
 });

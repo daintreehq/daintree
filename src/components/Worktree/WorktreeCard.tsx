@@ -837,6 +837,16 @@ export function WorktreeCard({
       });
       const recovery = gitReason ? getGitRecoveryAction(gitReason) : undefined;
       if (recovery) {
+        // The table's entries take different location spellings, and a wrong
+        // one fails silently rather than loudly: `worktree.openReviewHub`
+        // declares `z.object({ worktreeId })`, which STRIPS a stray `cwd` and
+        // then falls back to the focused/active worktree — opening the wrong
+        // card's Review Hub. The git actions want the path.
+        const recoveryArgs =
+          recovery.args ??
+          (recovery.actionId === "worktree.openReviewHub"
+            ? { worktreeId: worktree.id }
+            : { cwd: worktree.path });
         notify({
           type: "error",
           context: { eventKind: "git" },
@@ -844,12 +854,7 @@ export function WorktreeCard({
           message: humanized.body,
           action: {
             label: recovery.label,
-            onClick: () =>
-              void actionService.dispatch(
-                recovery.actionId,
-                recovery.args ?? { cwd: worktree.path },
-                { source }
-              ),
+            onClick: () => void actionService.dispatch(recovery.actionId, recoveryArgs, { source }),
           },
         });
         return;

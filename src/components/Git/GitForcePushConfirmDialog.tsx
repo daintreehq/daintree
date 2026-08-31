@@ -63,9 +63,7 @@ function GitForcePushConfirmDialogInner() {
    * down (an ErrorBoundary remount is exactly that shape).
    */
   const renderedRequestIdRef = useRef<number | null>(null);
-  useEffect(() => {
-    renderedRequestIdRef.current = requestId;
-  }, [requestId]);
+  const declineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadCommits = useCallback(() => {
     if (cwd === null || branchName === null || generation === null) return;
@@ -141,14 +139,31 @@ function GitForcePushConfirmDialogInner() {
 
   const isBlocked = isLoading || !!loadError || preview === null || isPreviewStale;
 
-  // Resolve false on unmount so the action's awaited Promise cannot leak — the
-  // same guarantee `GitPushConfirmDialog` gives, scoped to this request.
+  // Resolve false on teardown so the action's awaited Promise cannot leak — the
+  // guarantee `GitPushConfirmDialog` gives, scoped to this request and deferred
+  // by a tick.
+  //
+  // The deferral is what makes it survive an effect REPLAY. StrictMode runs
+  // setup → cleanup → setup in one commit, and the host also remounts when its
+  // ErrorBoundary resets after a crash — in both, a cleanup that declined
+  // immediately would cancel a request still on screen. Only a real teardown
+  // leaves the rescheduling setup un-run, so only a real teardown declines.
+  // No dependency array on purpose: every commit re-arms the cancellation.
   useEffect(() => {
+    renderedRequestIdRef.current = requestId;
+    if (declineTimerRef.current !== null) {
+      clearTimeout(declineTimerRef.current);
+      declineTimerRef.current = null;
+    }
     return () => {
       const owned = renderedRequestIdRef.current;
-      if (owned !== null) useGitForcePushStore.getState().resolveConfirmation(owned, false);
+      if (owned === null) return;
+      declineTimerRef.current = setTimeout(() => {
+        declineTimerRef.current = null;
+        useGitForcePushStore.getState().resolveConfirmation(owned, false);
+      }, 0);
     };
-  }, []);
+  });
 
   const handleConfirm = () => {
     // Block confirm when the discard preview failed to load — without it the
