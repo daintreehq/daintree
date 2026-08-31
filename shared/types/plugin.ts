@@ -541,6 +541,22 @@ export interface PluginAuthor {
   role?: string;
 }
 
+/**
+ * Which root a plugin was discovered under. Replaces the `isBuiltin` boolean at
+ * the manifest gate, which could only say "first-party or not" and had no way
+ * to express a third root:
+ *
+ * - `"builtin"` — shipped inside the app bundle (`plugins/builtin/`), plus the
+ *   E2E sideload root, which is loaded on the same trust footing.
+ * - `"user"` — installed by the user into the per-user plugins directory.
+ * - `"project"` — lives in a project's own `.daintree/plugins/`, is only ever
+ *   loaded while that project is open, and must declare `scope: "project"`.
+ *
+ * Host-internal: a plugin never learns its own origin, so this is deliberately
+ * not re-exported from the SDK barrel.
+ */
+export type PluginOrigin = "builtin" | "user" | "project";
+
 export interface PluginManifest {
   name: string;
   version: string;
@@ -565,6 +581,18 @@ export interface PluginManifest {
   engines?: {
     daintree?: string;
   };
+  /**
+   * Declares the plugin is only ever loaded project-locally. REQUIRED when the
+   * manifest is discovered under a project's own plugins directory, REJECTED
+   * under the user or builtin roots. The manifest gate enforces both directions,
+   * so a project plugin cannot be dropped into the user directory (or a user
+   * plugin into a project) and quietly keep working under assumptions its author
+   * never made.
+   *
+   * A guardrail against accidental promotion, not a security control: the trust
+   * decision is the project folder, not this field.
+   */
+  scope?: "project";
   capabilities?: PluginCapability[];
   /**
    * Per-capability scope bindings that attenuate the compound-capability

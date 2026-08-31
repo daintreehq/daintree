@@ -37,7 +37,7 @@ describe("scaffoldPlugin", () => {
 
       // plugin.json passes the host's manifest schema.
       const manifest = await readJson(path.join(result.dir, "plugin.json"));
-      const parsed = getPluginManifestSchema(false).safeParse(manifest);
+      const parsed = getPluginManifestSchema("user").safeParse(manifest);
       expect(parsed.success).toBe(true);
       expect(manifest.name).toBe("acme.issue-helper");
 
@@ -374,7 +374,7 @@ describe("scaffoldPlugin", () => {
       const manifest = await readJson(path.join(tmpDir, "issue-helper", "plugin.json"));
       expect(manifest.name).toBe("acme.issue-helper");
       expect(manifest.displayName).toBe("Issue Helper");
-      const parsed = getPluginManifestSchema(false).safeParse(manifest);
+      const parsed = getPluginManifestSchema("user").safeParse(manifest);
       expect(parsed.success).toBe(true);
     });
 

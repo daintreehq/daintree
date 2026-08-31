@@ -26,6 +26,7 @@ import {
 import { KEY_ACTION_VALUES } from "../../shared/types/keymap.js";
 import type {
   PluginManifest,
+  PluginOrigin,
   PanelContribution,
   ToolbarButtonContribution,
   MenuItemContribution,
@@ -1146,7 +1147,32 @@ function normalizeDeprecatedContributionAliases(raw: unknown): unknown {
   return next ?? obj;
 }
 
-export function getPluginManifestSchema(isBuiltin: boolean) {
+/** The schema {@link getPluginManifestSchema} hands back, for the overloads. */
+type PluginManifestSchema = ReturnType<typeof buildPluginManifestSchema>;
+
+/**
+ * Builds the manifest schema for a given discovery root.
+ *
+ * `origin` is what the three-way rules key off: the reserved `daintree.*`
+ * namespace (builtin only), and the `scope: "project"` gate in both directions
+ * (required under `"project"`, rejected under the other two).
+ */
+export function getPluginManifestSchema(origin: PluginOrigin): PluginManifestSchema;
+/**
+ * @deprecated Pass a {@link PluginOrigin}. Transitional bridge for call sites
+ * still on the old two-valued flag — `true` maps to `"builtin"`, `false` to
+ * `"user"`, which is exactly what the boolean meant. It cannot express
+ * `"project"`, so every caller that needs to must move to the string form; the
+ * overload goes away once the last boolean caller does.
+ */
+export function getPluginManifestSchema(isBuiltin: boolean): PluginManifestSchema;
+export function getPluginManifestSchema(origin: PluginOrigin | boolean): PluginManifestSchema {
+  return buildPluginManifestSchema(
+    typeof origin === "boolean" ? (origin ? "builtin" : "user") : origin
+  );
+}
+
+function buildPluginManifestSchema(origin: PluginOrigin) {
   return z
     .strictObject({
       name: z.string().min(1).max(64).regex(SCOPED_PLUGIN_NAME_PATTERN, {
@@ -1177,6 +1203,10 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
             .optional(),
         })
         .optional(),
+      // Declares the plugin is only ever loaded project-locally. Shape only
+      // here — whether it is required, optional-but-rejected, or absent is a
+      // function of the discovering `origin`, enforced in `superRefine`.
+      scope: z.literal("project").optional(),
       capabilities: z.array(PluginCapabilitySchema).default([]),
       scopes: PluginManifestScopesSchema.optional(),
       activationEvents: z.array(z.literal("onStartupFinished")).default([]),
@@ -1265,7 +1295,57 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
       ),
     })
     .superRefine((manifest, ctx) => {
-      if (!isBuiltin && manifest.name.startsWith("daintree.")) {
+      // `scope: "project"` and the discovering root must agree, in BOTH
+      // directions. A project plugin copied into the user directory would
+      // otherwise load app-globally with project-shaped assumptions (its fs
+      // containment root, its per-project settings tier), and a user plugin
+      // dropped into `.daintree/plugins/` would load with none of the
+      // project-local guarantees its author never opted into. Neither failure
+      // is visible at runtime, so both are rejected at the gate.
+      if (origin === "project" && manifest.scope !== "project") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["scope"],
+          message:
+            'A plugin discovered under a project\'s .daintree/plugins/ must declare "scope": "project" — the host will not load a project-local plugin that has not opted in.',
+          params: { errorCode: "project_scope_required" },
+        });
+      } else if (origin !== "project" && manifest.scope === "project") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["scope"],
+          message: `"scope": "project" declares a plugin that is only ever loaded from a project's .daintree/plugins/, but this manifest was discovered under the ${origin} plugins root.`,
+          params: { errorCode: "project_scope_not_allowed" },
+        });
+      }
+
+      // A project-local plugin runs in the sandboxed worker, and
+      // `host.registerForgeProvider` is unavailable there: forge providers
+      // require synchronous host methods (`parseRemote`, the URL builders) that
+      // cannot cross the worker's async message port — see the same refusal in
+      // `pluginDevWorkerHostProxy.registerForgeProvider`. The contribution
+      // would register a descriptor that can never be given an implementation,
+      // so the provider would sit in Preferences permanently unbacked. Reject
+      // the declaration rather than ship a forge provider that cannot work.
+      //
+      // Deliberately scoped to `scope: "project"` and not to every non-builtin
+      // origin, even though `PluginService.activatePlugin` routes user plugins
+      // through the same worker and so leaves their forge providers equally
+      // unbacked. That is a pre-existing gap with shipped manifests behind it;
+      // widening the rule would reject plugins that install today, which is its
+      // own decision with its own migration. Project scope is new surface, so
+      // it starts closed.
+      if (manifest.scope === "project" && manifest.contributes.forgeProviders.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["contributes", "forgeProviders"],
+          message:
+            'contributes.forgeProviders is not available to a "scope": "project" plugin — forge providers need synchronous host methods (parseRemote, URL builders) that cannot cross the plugin worker\'s async message port, so host.registerForgeProvider would refuse the implementation and the provider could never resolve.',
+          params: { errorCode: "forge_provider_project_scope_forbidden" },
+        });
+      }
+
+      if (origin !== "builtin" && manifest.name.startsWith("daintree.")) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["name"],

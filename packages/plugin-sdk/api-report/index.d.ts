@@ -2086,6 +2086,18 @@ interface PluginManifest {
     engines?: {
         daintree?: string;
     };
+    /**
+     * Declares the plugin is only ever loaded project-locally. REQUIRED when the
+     * manifest is discovered under a project's own plugins directory, REJECTED
+     * under the user or builtin roots. The manifest gate enforces both directions,
+     * so a project plugin cannot be dropped into the user directory (or a user
+     * plugin into a project) and quietly keep working under assumptions its author
+     * never made.
+     *
+     * A guardrail against accidental promotion, not a security control: the trust
+     * decision is the project folder, not this field.
+     */
+    scope?: "project";
     capabilities?: PluginCapability[];
     /**
      * Per-capability scope bindings that attenuate the compound-capability

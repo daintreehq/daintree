@@ -76,8 +76,8 @@ describe("validate-plugin-manifests CLI", () => {
   });
 
   it("accepts a daintree.* sample name (validated as built-in, mirroring sideload)", async () => {
-    // Sample plugins are sideloaded with isBuiltin: true, so the reserved
-    // daintree.* namespace must pass — this guards the flag choice.
+    // Sample plugins are sideloaded on the builtin footing, so the reserved
+    // daintree.* namespace must pass — this guards the origin choice.
     writeManifest(base, "sample", "daintree-hello", { name: "daintree.hello", version: "0.1.0" });
     const { code } = await run(base);
     expect(code).toBe(0);
@@ -109,7 +109,7 @@ describe("validatePluginManifests()", () => {
       path.join(dir, "evil", "plugin.json"),
       JSON.stringify({ name: "daintree.evil", version: "1.0.0" })
     );
-    const errors = validatePluginManifests([{ dir, isBuiltin: false }]);
+    const errors = validatePluginManifests([{ dir, origin: "user" }]);
     expect(errors).toHaveLength(1);
     expect(errors[0].message).toContain("daintree.*");
   });

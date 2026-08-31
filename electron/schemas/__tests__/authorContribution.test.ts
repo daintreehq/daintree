@@ -47,7 +47,7 @@ describe("PluginAuthorSchema (issue #10516)", () => {
   });
 
   it("reports the failing path for a nested invalid url", () => {
-    const result = getPluginManifestSchema(false).safeParse(
+    const result = getPluginManifestSchema("user").safeParse(
       manifestWith({ authors: [{ name: "Alice", url: "http://alice.dev" }] })
     );
     expect(result.success).toBe(false);
@@ -104,11 +104,11 @@ describe("PluginAuthorSchema (issue #10516)", () => {
 
 describe("manifest authors field (issue #10516)", () => {
   it("accepts a manifest with no authors field (backward-safe optional)", () => {
-    expect(getPluginManifestSchema(false).safeParse(manifestWith({})).success).toBe(true);
+    expect(getPluginManifestSchema("user").safeParse(manifestWith({})).success).toBe(true);
   });
 
   it("accepts a manifest with a valid authors array", () => {
-    const result = getPluginManifestSchema(false).safeParse(
+    const result = getPluginManifestSchema("user").safeParse(
       manifestWith({
         authors: [
           { name: "Alice", url: "https://alice.example.com", role: "Author" },
@@ -125,7 +125,7 @@ describe("manifest authors field (issue #10516)", () => {
 
   it("accepts exactly the author cap and rejects one over", () => {
     const make = (count: number) =>
-      getPluginManifestSchema(false).safeParse(
+      getPluginManifestSchema("user").safeParse(
         manifestWith({
           authors: Array.from({ length: count }, (_, i) => ({ name: `Author ${i}` })),
         })
@@ -135,7 +135,7 @@ describe("manifest authors field (issue #10516)", () => {
   });
 
   it("rejects a manifest whose author has an invalid url", () => {
-    const result = getPluginManifestSchema(false).safeParse(
+    const result = getPluginManifestSchema("user").safeParse(
       manifestWith({ authors: [{ name: "Alice", url: "http://alice.dev" }] })
     );
     expect(result.success).toBe(false);
@@ -144,7 +144,7 @@ describe("manifest authors field (issue #10516)", () => {
 
   it("rejects a non-array authors value", () => {
     expect(
-      getPluginManifestSchema(false).safeParse(manifestWith({ authors: "Alice" })).success
+      getPluginManifestSchema("user").safeParse(manifestWith({ authors: "Alice" })).success
     ).toBe(false);
   });
 });

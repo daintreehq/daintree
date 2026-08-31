@@ -746,7 +746,7 @@ describe("reserved contribution point warnings", () => {
   });
 
   it("rejects a views entry with an invalid location at schema level", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       name: "acme.bad-location",
       version: "1.0.0",
       contributes: {
@@ -757,7 +757,7 @@ describe("reserved contribution point warnings", () => {
   });
 
   it("rejects a views entry missing componentPath", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       name: "acme.no-path",
       version: "1.0.0",
       contributes: {
@@ -768,7 +768,7 @@ describe("reserved contribution point warnings", () => {
   });
 
   it("rejects an mcpServers entry missing command", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       name: "acme.no-cmd",
       version: "1.0.0",
       contributes: {
@@ -779,7 +779,7 @@ describe("reserved contribution point warnings", () => {
   });
 
   it("rejects an mcpServers entry with non-string env values", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       name: "acme.bad-env",
       version: "1.0.0",
       contributes: {
@@ -790,7 +790,7 @@ describe("reserved contribution point warnings", () => {
   });
 
   it("accepts an mcpServers entry without optional args/env fields", () => {
-    const result = getPluginManifestSchema(false).safeParse({
+    const result = getPluginManifestSchema("user").safeParse({
       name: "acme.minimal-mcp",
       version: "1.0.0",
       contributes: {
@@ -1207,12 +1207,12 @@ describe("hello-daintree sample fixture", () => {
     JSON.parse(await fs.readFile(fixturePath, "utf8"));
 
   it("validates against the manifest schema", async () => {
-    const result = getPluginManifestSchema(true).safeParse(await readManifest());
+    const result = getPluginManifestSchema("builtin").safeParse(await readManifest());
     expect(result.success).toBe(true);
   });
 
   it("declares the first-party name and the wired contribution points", async () => {
-    const manifest = getPluginManifestSchema(true).parse(await readManifest());
+    const manifest = getPluginManifestSchema("builtin").parse(await readManifest());
     expect(manifest.name).toBe("daintree.hello");
     expect(manifest.engines?.daintree).toBe(">=0.11.0");
     expect(manifest.contributes.toolbarButtons).toHaveLength(1);

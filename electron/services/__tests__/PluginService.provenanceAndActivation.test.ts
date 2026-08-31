@@ -521,7 +521,7 @@ describe("Plugin provenance persistence", () => {
 });
 
 describe("PluginManifestSchema activationEvents field", () => {
-  const schema = getPluginManifestSchema(false);
+  const schema = getPluginManifestSchema("user");
 
   it("defaults to an empty array when omitted", () => {
     const result = schema.safeParse({

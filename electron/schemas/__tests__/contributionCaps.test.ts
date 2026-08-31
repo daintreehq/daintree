@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { getPluginManifestSchema, MANIFEST_CONTRIBUTION_CAPS } from "../plugin.js";
+import type { PluginOrigin } from "../../../shared/types/plugin.js";
 
-function parseContributes(contributes: Record<string, unknown>, isBuiltin = false) {
-  return getPluginManifestSchema(isBuiltin).safeParse({
+function parseContributes(contributes: Record<string, unknown>, origin: PluginOrigin = "user") {
+  return getPluginManifestSchema(origin).safeParse({
     name: "acme.caps-test",
     version: "1.0.0",
     contributes,

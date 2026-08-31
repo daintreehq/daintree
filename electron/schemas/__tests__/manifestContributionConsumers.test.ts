@@ -952,7 +952,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
 const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 function parseEmptyContributes() {
-  return getPluginManifestSchema(false).safeParse({
+  return getPluginManifestSchema("user").safeParse({
     name: "acme.consumer-contract",
     version: "1.0.0",
     contributes: {},

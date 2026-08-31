@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getPluginManifestSchema, MANIFEST_CONTRIBUTION_CAPS } from "../plugin.js";
 
-const schema = getPluginManifestSchema(false);
+const schema = getPluginManifestSchema("user");
 
 function manifestWithSkills(skills: unknown, extra?: Record<string, unknown>) {
   return schema.safeParse({
