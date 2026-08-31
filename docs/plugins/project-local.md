@@ -53,7 +53,7 @@ Run `npx daintree-plugin validate` in the plugin directory to check the manifest
 
 ## The committed `dist/` contract
 
-**Daintree reads `plugin.json` and `dist/`. It never compiles a project plugin, never reads `src/`, and never runs its `package.json`.**
+**Daintree reads `plugin.json` and `dist/`. It never compiles a project plugin, never reads `src/`, and never runs its `package.json`.** That holds for command handlers too: an installed plugin may put one at `src/<commandId>.js` for the host to import, but a project plugin's commands are registered from its worker entry point with `host.registerAction`. Running a repository's uncompiled source in the main process would sit outside the worker every other plugin gets its crash isolation from.
 
 Opening a project must not run a build — that would be an execution channel with no gate in front of it — so the build output is part of the repository. The payoff is that a checkout is complete: the plugin activates on any machine, on any branch, with no `npm install` and no build step. That is what makes it work for an agent that just created a worktree.
 
@@ -200,6 +200,8 @@ In-repository files are named by the **manifest id**, never by the instance key:
 The project root a bound plugin writes to is the one from its binding, not the focused project. The `"worktree"` storage scope is the exception today — it still resolves the app-global active worktree, so it can follow the user's focus rather than your project.
 
 The `${worktree}` and `${project}` tokens in `scopes.fs.allowedPaths` expand against the bound project's own worktrees, so a project plugin's containment roots do not move when the user switches projects. An installed or builtin plugin keeps expanding them ambiently — it has no project of its own.
+
+A project plugin that declares no `scopes.fs.allowedPaths` at all defaults to its own project root. It lives inside that tree, so the tree is the only sensible default — and without it `host.fs` and `host.git` would reach nothing but the plugin's own data directory. Declaring `allowedPaths` replaces that default rather than adding to it. An installed plugin that declares nothing still gets nothing, because it has no project to widen to.
 
 The same containment applies to the settings UI: a project plugin's settings form can only address its own project.
 
