@@ -1,4 +1,9 @@
-import { broadcastToRenderer } from "../../ipc/utils.js";
+import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
+import {
+  getAllAppWebContents,
+  getProjectForWebContents,
+  getRegisteredProjectViews,
+} from "../../window/webContentsRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getPluginPanelKinds } from "../../../shared/config/panelKindRegistry.js";
 import { getAllPluginToolbarButtonConfigs } from "../../../shared/config/toolbarButtonRegistry.js";
@@ -6,7 +11,173 @@ import { getPluginKeybindings } from "../pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../pluginContextMenuRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import { getPluginRecipes } from "./PluginRecipeRegistry.js";
-import type { PluginActionDescriptor } from "../../../shared/types/plugin.js";
+import type { PluginActionDescriptor, PluginScopeKey } from "../../../shared/types/plugin.js";
+
+/**
+ * Scope of a plugin's contributions: `"global"` for installed and builtin
+ * plugins, or the owning project's app-minted id for a project-local plugin.
+ * Deliberately the same vocabulary as {@link PluginScopeKey} — a plugin's
+ * durable state scope and its contribution scope are the same fact.
+ */
+export type ContributionScope = PluginScopeKey;
+
+/**
+ * pluginId → owning project id, for project-scoped plugins only.
+ *
+ * Global plugins are ABSENT rather than mapped to `"global"`, so the map is
+ * empty in an app with no project-local plugins — which is every app today.
+ * {@link hasProjectScopedContributions} then short-circuits every filter to the
+ * identity, and each broadcast is the exact single `broadcastToRenderer` call
+ * it was before contribution scoping existed.
+ *
+ * Module-level rather than instance state because the registries it filters
+ * (`panelKindRegistry`, `toolbarButtonRegistry`, `pluginKeybindingRegistry`,
+ * `pluginContextMenuRegistry`) are module-level singletons too — a per-service
+ * scope index would disagree with a shared registry.
+ */
+const PROJECT_SCOPED_PLUGINS = new Map<string, string>();
+
+/**
+ * Record the scope every contribution registered by `pluginId` belongs to.
+ * The plugin LOADER calls this before registering the plugin's contributions;
+ * a plugin never seen here is global, which is why nothing changes for
+ * installed and builtin plugins.
+ *
+ * Throws on an empty project id: a scope that is present but blank is a bug in
+ * the loader, and silently treating it as global would publish a project's
+ * panels to every view — the exact leak this module exists to prevent.
+ */
+export function setPluginContributionScope(pluginId: string, scope: ContributionScope): void {
+  if (typeof pluginId !== "string" || pluginId.length === 0) {
+    throw new TypeError("setPluginContributionScope: pluginId must be a non-empty string");
+  }
+  if (scope === "global") {
+    PROJECT_SCOPED_PLUGINS.delete(pluginId);
+    return;
+  }
+  if (typeof scope !== "string" || scope.length === 0) {
+    throw new TypeError(
+      `setPluginContributionScope: scope for "${pluginId}" must be "global" or a non-empty project id`
+    );
+  }
+  PROJECT_SCOPED_PLUGINS.set(pluginId, scope);
+}
+
+/** The scope a plugin's contributions carry. Unknown plugins are global. */
+export function getPluginContributionScope(pluginId: string): ContributionScope {
+  return PROJECT_SCOPED_PLUGINS.get(pluginId) ?? "global";
+}
+
+/** Drop a plugin's scope on unload. Idempotent. */
+export function clearPluginContributionScope(pluginId: string): void {
+  PROJECT_SCOPED_PLUGINS.delete(pluginId);
+}
+
+/** Reset every recorded scope. Test isolation and full plugin-host disposal. */
+export function clearAllPluginContributionScopes(): void {
+  PROJECT_SCOPED_PLUGINS.clear();
+}
+
+/**
+ * Whether any loaded plugin is project-scoped. False in an app with only
+ * installed/builtin plugins, which is the fast path every filter takes.
+ */
+export function hasProjectScopedContributions(): boolean {
+  return PROJECT_SCOPED_PLUGINS.size > 0;
+}
+
+/**
+ * Does a contribution owned by `pluginId` belong in a view of `projectId`?
+ *
+ * `projectId` is `null` for a renderer with no project binding (an unbound
+ * window showing the project picker, or a view registered after this call).
+ * That is "unknown", not "unauthorized" — it sees global contributions and
+ * nothing else. An empty-string project id is treated the same way: a blank id
+ * matches no project rather than matching every one, so a caller that passes a
+ * degenerate id fails closed instead of leaking (`== null` gates only, never
+ * truthiness — a project id is compared, never tested).
+ */
+function isVisibleInProject(pluginId: string | undefined, projectId: string | null): boolean {
+  if (pluginId === undefined) return true;
+  const scope = PROJECT_SCOPED_PLUGINS.get(pluginId);
+  if (scope === undefined) return true;
+  if (projectId === null || projectId.length === 0) return false;
+  return scope === projectId;
+}
+
+/**
+ * Narrow a registry snapshot to what a view of `projectId` may see:
+ * global contributions plus that project's own.
+ *
+ * Returns the input array by reference when no plugin is project-scoped, so
+ * the all-global app broadcasts the identical payload it always has.
+ */
+function forProject<T>(
+  items: readonly T[],
+  pluginIdOf: (item: T) => string | undefined,
+  projectId: string | null
+): T[] {
+  if (PROJECT_SCOPED_PLUGINS.size === 0) return items as T[];
+  return items.filter((item) => isVisibleInProject(pluginIdOf(item), projectId));
+}
+
+/**
+ * Main-side registry query, scoped to one project.
+ *
+ * `projectId` is REQUIRED: a lookup with no project context is a programming
+ * error, and this throws rather than guessing the active project — guessing is
+ * how one project's contributions end up in another's window. `null` is a
+ * legitimate answer (a sender with no project binding) and yields the global
+ * contributions; `undefined` is a caller that forgot to resolve one.
+ */
+export function selectContributionsForProject<T>(
+  items: readonly T[],
+  pluginIdOf: (item: T) => string | undefined,
+  projectId: string | null | undefined
+): T[] {
+  if (projectId === undefined) {
+    throw new TypeError(
+      "Plugin contribution lookup requires an explicit project context (pass null for a sender with no project)"
+    );
+  }
+  return forProject(items, pluginIdOf, projectId);
+}
+
+/** Plugin-owned panel kinds visible in a view of `projectId`. */
+export function getPluginPanelKindsForProject(projectId: string | null | undefined) {
+  return selectContributionsForProject(
+    getPluginPanelKinds(),
+    (config) => config.extensionId,
+    projectId
+  );
+}
+
+/** Plugin toolbar buttons visible in a view of `projectId`. */
+export function getPluginToolbarButtonsForProject(projectId: string | null | undefined) {
+  return selectContributionsForProject(
+    getAllPluginToolbarButtonConfigs(),
+    (config) => config.pluginId,
+    projectId
+  );
+}
+
+/** Plugin keybindings visible in a view of `projectId`. */
+export function getPluginKeybindingsForProject(projectId: string | null | undefined) {
+  return selectContributionsForProject(
+    getPluginKeybindings(),
+    (entry) => entry.pluginId,
+    projectId
+  );
+}
+
+/** Plugin context-menu items visible in a view of `projectId`. */
+export function getPluginContextMenuItemsForProject(projectId: string | null | undefined) {
+  return selectContributionsForProject(
+    getPluginContextMenuItems(),
+    (entry) => entry.pluginId,
+    projectId
+  );
+}
 
 interface PluginContributionBroadcasterDeps {
   /** Getter so the collaborator never holds a stale snapshot of the disposed flag. */
@@ -20,8 +191,14 @@ interface PluginContributionBroadcasterDeps {
 /**
  * Owns the coalesced per-tick microtask broadcasts for actions, panel kinds,
  * toolbar buttons, keybindings, and context-menu items, plus the cold-start
- * {@link pushSnapshotTo} replay. Reads only the global registry getters and
- * emits via {@link broadcastToRenderer}.
+ * {@link PluginContributionBroadcaster.pushSnapshotTo} replay. Reads the global
+ * registry getters, narrows each snapshot to the receiving view's project (see
+ * {@link setPluginContributionScope}), and emits via {@link broadcastToRenderer}
+ * or {@link broadcastToProjectRenderers}.
+ *
+ * Agents and recipes are deliberately NOT scoped: both are deferred to a later
+ * phase, neither snapshot item carries an owning plugin id, and scoping them
+ * would mean per-contribution-point code for a point nothing can reach yet.
  */
 export class PluginContributionBroadcaster {
   private readonly deps: PluginContributionBroadcasterDeps;
@@ -79,6 +256,54 @@ export class PluginContributionBroadcaster {
     this.deps = deps;
   }
 
+  /**
+   * Emit one contribution snapshot per audience.
+   *
+   * With no project-scoped plugin loaded this is byte-for-byte the single
+   * `broadcastToRenderer` call it has always been — same channel, same payload,
+   * same one-shot ordering. Once a project-local plugin exists the snapshot
+   * stops being one value: each project's views get `global ∪ that project`,
+   * and every other app webContents gets the global slice alone. Renderer
+   * stores replace their state wholesale from this payload, so an audience must
+   * receive its merged snapshot in ONE message — never a global message
+   * followed by a project one.
+   */
+  private emitScoped(name: string, buildPayload: (projectId: string | null) => unknown): void {
+    if (!hasProjectScopedContributions()) {
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name, payload: buildPayload(null) });
+      return;
+    }
+    const views = getRegisteredProjectViews();
+    if (views.length === 0) {
+      // No project view is registered at all (startup, or a window that does
+      // not route through ProjectViewManager). Mirrors the same widening in
+      // `broadcastToProjectRenderers`.
+      broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name, payload: buildPayload(null) });
+      return;
+    }
+    const projectViewIds = new Set<number>();
+    const sentProjects = new Set<string>();
+    for (const { webContents, projectId } of views) {
+      projectViewIds.add(webContents.id);
+      if (sentProjects.has(projectId)) continue;
+      sentProjects.add(projectId);
+      broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+        name,
+        payload: buildPayload(projectId),
+      });
+    }
+    const globalPayload = buildPayload(null);
+    for (const wc of getAllAppWebContents()) {
+      if (projectViewIds.has(wc.id)) continue;
+      if (wc.isDestroyed()) continue;
+      try {
+        wc.send(CHANNELS.EVENTS_PUSH, { name, payload: globalPayload });
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+  }
+
   broadcastProvenanceChanged(): void {
     if (this.deps.isDisposed()) return;
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
@@ -88,10 +313,9 @@ export class PluginContributionBroadcaster {
   }
 
   broadcastPluginActions(): void {
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:actions-changed",
-      payload: { actions: this.deps.listPluginActions() },
-    });
+    this.emitScoped("plugin:actions-changed", (projectId) => ({
+      actions: forProject(this.deps.listPluginActions(), (a) => a.pluginId, projectId),
+    }));
   }
 
   /**
@@ -116,10 +340,9 @@ export class PluginContributionBroadcaster {
   }
 
   private broadcastPluginPanelKinds(): void {
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:panel-kinds-changed",
-      payload: { kinds: getPluginPanelKinds() },
-    });
+    this.emitScoped("plugin:panel-kinds-changed", (projectId) => ({
+      kinds: forProject(getPluginPanelKinds(), (c) => c.extensionId, projectId),
+    }));
   }
 
   /**
@@ -143,10 +366,10 @@ export class PluginContributionBroadcaster {
   }
 
   private broadcastPluginToolbarButtons(complete: boolean): void {
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:toolbar-buttons-changed",
-      payload: { buttons: getAllPluginToolbarButtonConfigs(), complete },
-    });
+    this.emitScoped("plugin:toolbar-buttons-changed", (projectId) => ({
+      buttons: forProject(getAllPluginToolbarButtonConfigs(), (c) => c.pluginId, projectId),
+      complete,
+    }));
   }
 
   scheduleKeybindingsBroadcast(complete: boolean): void {
@@ -159,10 +382,10 @@ export class PluginContributionBroadcaster {
       this.keybindingsBroadcastPending = false;
       this.keybindingsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
-      broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-        name: "plugin:keybindings-changed",
-        payload: { keybindings: getPluginKeybindings(), complete: isComplete },
-      });
+      this.emitScoped("plugin:keybindings-changed", (projectId) => ({
+        keybindings: forProject(getPluginKeybindings(), (e) => e.pluginId, projectId),
+        complete: isComplete,
+      }));
     });
   }
 
@@ -185,10 +408,10 @@ export class PluginContributionBroadcaster {
   }
 
   private broadcastPluginContextMenuItems(complete: boolean): void {
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
-      name: "plugin:context-menu-items-changed",
-      payload: { items: getPluginContextMenuItems(), complete },
-    });
+    this.emitScoped("plugin:context-menu-items-changed", (projectId) => ({
+      items: forProject(getPluginContextMenuItems(), (e) => e.pluginId, projectId),
+      complete,
+    }));
   }
 
   /**
@@ -252,15 +475,30 @@ export class PluginContributionBroadcaster {
    * needed. Awaits the init gate so the snapshot is post-activation, not the
    * empty pre-init view (#9285).
    *
+   * Project-aware: the replay carries `global ∪ the target view's project` and
+   * nothing else. This is the leak that is invisible until a view is recreated
+   * after LRU eviction and suddenly shows another project's panels, so
+   * `projectId` is resolved from the target's own registration rather than from
+   * the active project. An explicit `projectId` overrides that lookup; `null`
+   * means "this view has no project" and yields the global contributions alone,
+   * never everything.
+   *
    * Toolbar buttons use `complete: false` so the renderer does not stale-prune
    * against this snapshot — replay is authoritative for the target view but
    * conceptually identical to a coalesced "load tick" broadcast, not an
    * unload sweep.
    */
-  async pushSnapshotTo(webContents: Electron.WebContents): Promise<void> {
+  async pushSnapshotTo(
+    webContents: Electron.WebContents,
+    projectId?: string | null
+  ): Promise<void> {
     await this.deps.initPromise;
     if (this.deps.isDisposed()) return;
     if (webContents.isDestroyed()) return;
+    // `undefined` means "the caller did not resolve one" — look it up from the
+    // target's own project-view registration. Never the active project: a
+    // cold-restored background view is routinely not the focused one.
+    const target = projectId === undefined ? getProjectForWebContents(webContents.id) : projectId;
     // Mirror `broadcastToRenderer`'s defensive send pattern (electron/ipc/utils.ts:337-352):
     // the wc may be destroyed between the isDestroyed() check above and any
     // individual send (TOCTOU), and a throw on the first send would otherwise
@@ -268,19 +506,36 @@ export class PluginContributionBroadcaster {
     // cold-restored renderer to its pull-on-mount path for those two channels
     // only. Each send is independently guarded.
     const events: Array<{ name: string; payload: unknown }> = [
-      { name: "plugin:actions-changed", payload: { actions: this.deps.listPluginActions() } },
-      { name: "plugin:panel-kinds-changed", payload: { kinds: getPluginPanelKinds() } },
+      {
+        name: "plugin:actions-changed",
+        payload: {
+          actions: forProject(this.deps.listPluginActions(), (a) => a.pluginId, target),
+        },
+      },
+      {
+        name: "plugin:panel-kinds-changed",
+        payload: { kinds: forProject(getPluginPanelKinds(), (c) => c.extensionId, target) },
+      },
       {
         name: "plugin:toolbar-buttons-changed",
-        payload: { buttons: getAllPluginToolbarButtonConfigs(), complete: false },
+        payload: {
+          buttons: forProject(getAllPluginToolbarButtonConfigs(), (c) => c.pluginId, target),
+          complete: false,
+        },
       },
       {
         name: "plugin:keybindings-changed",
-        payload: { keybindings: getPluginKeybindings(), complete: true },
+        payload: {
+          keybindings: forProject(getPluginKeybindings(), (e) => e.pluginId, target),
+          complete: true,
+        },
       },
       {
         name: "plugin:context-menu-items-changed",
-        payload: { items: getPluginContextMenuItems(), complete: false },
+        payload: {
+          items: forProject(getPluginContextMenuItems(), (e) => e.pluginId, target),
+          complete: false,
+        },
       },
       {
         name: "plugin:agents-changed",

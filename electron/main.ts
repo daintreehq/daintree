@@ -501,6 +501,13 @@ if (!gotTheLock) {
         // a separate path; this is the push path that lets the existing
         // persistent listeners overtake a slow IPC pull. Dynamically imported
         // to avoid pulling PluginService into main.ts's static graph (#9285).
+        //
+        // The replay is project-scoped: it carries the global contributions
+        // plus this view's own project, resolved from `wc`'s project-view
+        // registration — the same mapping `pvm.getProjectIdForWebContents`
+        // reads above. A view restored after LRU eviction must never be handed
+        // another project's panels, and this is the one path where that leak
+        // is invisible until it happens.
         const wcId = wc.id;
         import("./services/PluginService.js")
           .then(({ pluginService }) => pluginService.pushSnapshotTo(wc))

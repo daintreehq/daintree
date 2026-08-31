@@ -52,6 +52,7 @@ import { sendToRendererContext } from "../utils.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
 import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
+import { selectContributionsForProject } from "../../services/plugin/PluginContributionBroadcaster.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import type { AgentConfig } from "../../../shared/config/agentRegistry.js";
 import type { PluginRecipeMetadataPatch, TerminalRecipe } from "../../../shared/types/project.js";
@@ -582,28 +583,36 @@ async function handleGetLatestBackgroundUpdateCheck(): Promise<PluginBackgroundU
   return getPluginUpdateCheckService().getLatest();
 }
 
-async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
+async function handleToolbarButtons(ctx: IpcContext): Promise<ToolbarButtonConfig[]> {
   // Block the renderer's mount-time pull until startup activation has settled,
   // otherwise a fast renderer can read an empty registry before any plugin's
   // activate() runs — leaving plugin toolbar buttons missing until the next
   // mutation pushes a fresh broadcast (#9285).
   await (await getPluginService()).waitForInit();
-  return getPluginToolbarButtonIds()
+  const buttons = getPluginToolbarButtonIds()
     .map((id) => getToolbarButtonConfig(id))
     .filter((c): c is ToolbarButtonConfig => c !== undefined);
+  // Scoped to the SENDER's project, not the active one: this pull is the
+  // renderer's own mount-time path and must agree with what the push path
+  // broadcast to that same view.
+  return selectContributionsForProject(buttons, (c) => c.pluginId, ctx.projectId);
 }
 
-async function handleKeybindings() {
+async function handleKeybindings(ctx: IpcContext) {
   await (await getPluginService()).waitForInit();
-  return getPluginKeybindings();
+  return selectContributionsForProject(getPluginKeybindings(), (e) => e.pluginId, ctx.projectId);
 }
 
-async function handleContextMenuItems() {
+async function handleContextMenuItems(ctx: IpcContext) {
   // Same init-race guard as `handleToolbarButtons` — block until startup
   // activation settles so the renderer's mount-time pull can't observe an empty
   // registry before plugins finish registering (#9285).
   await (await getPluginService()).waitForInit();
-  return getPluginContextMenuItems();
+  return selectContributionsForProject(
+    getPluginContextMenuItems(),
+    (e) => e.pluginId,
+    ctx.projectId
+  );
 }
 
 async function handleValidateActionIds(actionIds: string[]): Promise<void> {
@@ -646,10 +655,14 @@ async function handleValidateActionIds(actionIds: string[]): Promise<void> {
 // because it uses raw ipcMain.handle for its variadic signature, which
 // gives it direct access to event.senderFrame — the typed path here does
 // not and doesn't need it.
-async function handleActionsGet(): Promise<PluginActionDescriptor[]> {
+async function handleActionsGet(ctx: IpcContext): Promise<PluginActionDescriptor[]> {
   const pluginService = await getPluginService();
   await pluginService.waitForInit();
-  return pluginService.listPluginActions();
+  return selectContributionsForProject(
+    pluginService.listPluginActions(),
+    (a) => a.pluginId,
+    ctx.projectId
+  );
 }
 
 async function handleActionsRegister(
@@ -663,9 +676,9 @@ async function handleActionsUnregister(pluginId: string, actionId: string): Prom
   (await getPluginService()).unregisterPluginAction(pluginId, actionId);
 }
 
-async function handlePanelKindsGet(): Promise<PanelKindConfig[]> {
+async function handlePanelKindsGet(ctx: IpcContext): Promise<PanelKindConfig[]> {
   await (await getPluginService()).waitForInit();
-  return getPluginPanelKinds();
+  return selectContributionsForProject(getPluginPanelKinds(), (c) => c.extensionId, ctx.projectId);
 }
 
 /**
@@ -1215,14 +1228,20 @@ export const pluginNamespace = defineIpcNamespace({
     cancelInstall: op(PLUGIN_METHOD_CHANNELS.cancelInstall, handleCancelInstall),
     uninstall: op(PLUGIN_METHOD_CHANNELS.uninstall, handleUninstall),
     checkForUpdate: op(PLUGIN_METHOD_CHANNELS.checkForUpdate, handleCheckForUpdate),
-    toolbarButtons: op(PLUGIN_METHOD_CHANNELS.toolbarButtons, handleToolbarButtons),
-    keybindings: op(PLUGIN_METHOD_CHANNELS.keybindings, handleKeybindings),
-    contextMenuItems: op(PLUGIN_METHOD_CHANNELS.contextMenuItems, handleContextMenuItems),
+    toolbarButtons: op(PLUGIN_METHOD_CHANNELS.toolbarButtons, handleToolbarButtons, {
+      withContext: true,
+    }),
+    keybindings: op(PLUGIN_METHOD_CHANNELS.keybindings, handleKeybindings, { withContext: true }),
+    contextMenuItems: op(PLUGIN_METHOD_CHANNELS.contextMenuItems, handleContextMenuItems, {
+      withContext: true,
+    }),
     validateActionIds: op(PLUGIN_METHOD_CHANNELS.validateActionIds, handleValidateActionIds),
-    getActions: op(PLUGIN_METHOD_CHANNELS.getActions, handleActionsGet),
+    getActions: op(PLUGIN_METHOD_CHANNELS.getActions, handleActionsGet, { withContext: true }),
     registerAction: op(PLUGIN_METHOD_CHANNELS.registerAction, handleActionsRegister),
     unregisterAction: op(PLUGIN_METHOD_CHANNELS.unregisterAction, handleActionsUnregister),
-    getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet),
+    getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet, {
+      withContext: true,
+    }),
     activateForView: op(PLUGIN_METHOD_CHANNELS.activateForView, handleActivateForView),
     reportPanelLifecycle: op(
       PLUGIN_METHOD_CHANNELS.reportPanelLifecycle,

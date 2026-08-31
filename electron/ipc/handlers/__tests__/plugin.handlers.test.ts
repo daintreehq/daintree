@@ -129,6 +129,10 @@ import { registerPluginHandlers } from "../plugin.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../ipcGuard.js";
 import { PluginInvokeOwnershipError } from "../../../services/plugin/PluginInvokeErrors.js";
 import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
+import {
+  clearAllPluginContributionScopes,
+  setPluginContributionScope,
+} from "../../../services/plugin/PluginContributionBroadcaster.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -149,6 +153,7 @@ beforeEach(() => {
   mockGetWindowForWebContents.mockReturnValue(null);
   mockIsCachedViewWebContents.mockReturnValue(false);
   mockGetActiveWorktreeIdForWindow.mockResolvedValue(null);
+  clearAllPluginContributionScopes();
   _resetIpcGuardForTesting();
   markIpcSecurityReady();
 });
@@ -1749,7 +1754,7 @@ describe("PLUGIN_ACTIONS_GET / REGISTER / UNREGISTER handlers", () => {
     ];
     mockListPluginActions.mockReturnValue(actions);
     const handler = getHandler("plugin:actions-get");
-    const result = await handler({});
+    const result = await handler({ sender: { id: 1 } });
     expect(result).toEqual(actions);
   });
 
@@ -1803,7 +1808,7 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
       })
     );
     const handler = getHandler("plugin:actions-get");
-    const inFlight = handler({}) as Promise<unknown>;
+    const inFlight = handler({ sender: { id: 1 } }) as Promise<unknown>;
     await Promise.resolve();
     await Promise.resolve();
     expect(mockListPluginActions).not.toHaveBeenCalled();
@@ -1822,7 +1827,7 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
       })
     );
     const handler = getHandler("plugin:toolbar-buttons");
-    const inFlight = handler({}) as Promise<unknown>;
+    const inFlight = handler({ sender: { id: 1 } }) as Promise<unknown>;
     await Promise.resolve();
     await Promise.resolve();
     expect(mockGetPluginToolbarButtonIds).not.toHaveBeenCalled();
@@ -1841,7 +1846,7 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
       })
     );
     const handler = getHandler("plugin:panel-kinds-get");
-    const inFlight = handler({}) as Promise<unknown>;
+    const inFlight = handler({ sender: { id: 1 } }) as Promise<unknown>;
     await Promise.resolve();
     await Promise.resolve();
     // `handlePanelKindsGet` reads from the panelKindRegistry, which is mocked
@@ -1868,7 +1873,7 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
       })
     );
     const handler = getHandler("plugin:context-menu-items");
-    const inFlight = handler({}) as Promise<unknown>;
+    const inFlight = handler({ sender: { id: 1 } }) as Promise<unknown>;
     await Promise.resolve();
     await Promise.resolve();
     expect(mockGetPluginContextMenuItems).not.toHaveBeenCalled();
@@ -1886,8 +1891,85 @@ describe("pull handlers wait for PluginService init (#9285)", () => {
     ];
     mockGetPluginContextMenuItems.mockReturnValue(items);
     const handler = getHandler("plugin:context-menu-items");
-    const result = await (handler({}) as Promise<unknown>);
+    const result = await (handler({ sender: { id: 1 } }) as Promise<unknown>);
     expect(result).toEqual(items);
+  });
+});
+
+describe("pull handlers scope contributions to the sender's project", () => {
+  const GLOBAL_PLUGIN = "acme.global";
+  const LOCAL_A = "acme.local-a";
+  const LOCAL_B = "acme.local-b";
+
+  function getHandler(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  const globalAction = { pluginId: GLOBAL_PLUGIN, id: "acme.global.a", title: "G" };
+  const localAAction = { pluginId: LOCAL_A, id: "acme.local-a.a", title: "A" };
+  const localBAction = { pluginId: LOCAL_B, id: "acme.local-b.a", title: "B" };
+
+  beforeEach(() => {
+    mockListPluginActions.mockReturnValue([globalAction, localAAction, localBAction]);
+    mockGetPluginContextMenuItems.mockReturnValue([
+      { pluginId: GLOBAL_PLUGIN, item: { label: "G", actionId: "x", location: "worktree" } },
+      { pluginId: LOCAL_A, item: { label: "A", actionId: "x", location: "worktree" } },
+      { pluginId: LOCAL_B, item: { label: "B", actionId: "x", location: "worktree" } },
+    ]);
+    mockGetPluginToolbarButtonIds.mockReturnValue(["g.btn", "a.btn", "b.btn"]);
+    mockGetToolbarButtonConfig.mockImplementation((id: string) => {
+      if (id === "g.btn") return { id, pluginId: GLOBAL_PLUGIN, actionId: "x" };
+      if (id === "a.btn") return { id, pluginId: LOCAL_A, actionId: "x" };
+      return { id, pluginId: LOCAL_B, actionId: "x" };
+    });
+  });
+
+  it("returns everything unchanged while no plugin is project-scoped", async () => {
+    mockGetProjectForWebContents.mockReturnValue("project-a");
+    const result = await getHandler("plugin:actions-get")({ sender: { id: 1 } });
+    expect(result).toEqual([globalAction, localAAction, localBAction]);
+  });
+
+  it("narrows actions, toolbar buttons and context-menu items to global plus the sender's project", async () => {
+    setPluginContributionScope(LOCAL_A, "project-a");
+    setPluginContributionScope(LOCAL_B, "project-b");
+    mockGetProjectForWebContents.mockReturnValue("project-a");
+
+    expect(await getHandler("plugin:actions-get")({ sender: { id: 1 } })).toEqual([
+      globalAction,
+      localAAction,
+    ]);
+    expect(
+      (
+        (await getHandler("plugin:toolbar-buttons")({ sender: { id: 1 } })) as Array<{ id: string }>
+      ).map((b) => b.id)
+    ).toEqual(["g.btn", "a.btn"]);
+    expect(
+      (
+        (await getHandler("plugin:context-menu-items")({ sender: { id: 1 } })) as Array<{
+          pluginId: string;
+        }>
+      ).map((e) => e.pluginId)
+    ).toEqual([GLOBAL_PLUGIN, LOCAL_A]);
+  });
+
+  it("gives a sender with no project binding the global contributions only", async () => {
+    setPluginContributionScope(LOCAL_A, "project-a");
+    setPluginContributionScope(LOCAL_B, "project-b");
+    mockGetProjectForWebContents.mockReturnValue(null);
+
+    expect(await getHandler("plugin:actions-get")({ sender: { id: 1 } })).toEqual([globalAction]);
+  });
+
+  it("fails closed on an empty-string project id rather than serving every project", async () => {
+    setPluginContributionScope(LOCAL_A, "project-a");
+    setPluginContributionScope(LOCAL_B, "project-b");
+    mockGetProjectForWebContents.mockReturnValue("");
+
+    expect(await getHandler("plugin:actions-get")({ sender: { id: 1 } })).toEqual([globalAction]);
   });
 });
 
@@ -1912,14 +1994,14 @@ describe("PLUGIN_FORGE_PROVIDERS_GET handler", () => {
     ];
     mockGetRegisteredForgeProviders.mockReturnValue(providers);
     const handler = getHandler();
-    const result = await handler({});
+    const result = await handler({ sender: { id: 1 } });
     expect(result).toEqual(providers);
   });
 
   it("returns an empty array when no providers are registered", async () => {
     mockGetRegisteredForgeProviders.mockReturnValue([]);
     const handler = getHandler();
-    const result = await handler({});
+    const result = await handler({ sender: { id: 1 } });
     expect(result).toEqual([]);
   });
 
@@ -1934,7 +2016,7 @@ describe("PLUGIN_FORGE_PROVIDERS_GET handler", () => {
     );
     mockGetRegisteredForgeProviders.mockReturnValue([]);
     const handler = getHandler();
-    const inFlight = handler({}) as Promise<unknown>;
+    const inFlight = handler({ sender: { id: 1 } }) as Promise<unknown>;
     await Promise.resolve();
     await Promise.resolve();
     expect(mockGetRegisteredForgeProviders).not.toHaveBeenCalled();
@@ -2463,7 +2545,7 @@ describe("plugin install jobs (#11302)", () => {
     it("plugin:recipes-get returns the service snapshot", async () => {
       const handler = getHandler("plugin:recipes-get");
       mockGetPluginRecipes.mockReturnValueOnce([registered]);
-      await expect(handler({})).resolves.toEqual([registered]);
+      await expect(handler({ sender: { id: 1 } })).resolves.toEqual([registered]);
     });
 
     it("plugin:recipe-record-use forwards a valid id and timestamp", async () => {
