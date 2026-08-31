@@ -3,6 +3,7 @@ import {
   checkBaselineFreshness,
   describeForeignReference,
   findStaleBaselineEntries,
+  isUsableTimestamp,
   readBaselineEntries,
 } from "../lib/baselineCoverage";
 import { classifyMetric, isMachineIndependent } from "../lib/comparability";
@@ -29,6 +30,34 @@ function environment(machine: BaselineMachine): RunEnvironment {
 function entry(p95Ms: number, measuredAt: string, machine: BaselineMachine | null): BaselineEntry {
   return { p95Ms, measuredAt, machine };
 }
+
+describe("isUsableTimestamp", () => {
+  it.each([
+    ["what the writer emits", new Date("2026-08-04T12:30:15.204Z").toISOString()],
+    ["the committed baselines' own date", "2026-08-04T12:30:15.204Z"],
+  ])("accepts %s", (_label, value) => {
+    expect(isUsableTimestamp(value, Date.parse("2026-08-31T00:00:00.000Z"))).toBe(true);
+  });
+
+  it.each([
+    // Date.parse normalises this to 2 March without complaint, so a corrupted
+    // stamp becomes a plausible one.
+    ["an impossible date it would silently normalise", "2026-02-30T00:00:00.000Z"],
+    // Never older than the threshold, so it reads as freshly measured forever.
+    ["a far-future date", "9999-01-01T00:00:00.000Z"],
+    ["a parseable non-ISO form", "Aug 4 2026"],
+    ["an ISO form the writer does not emit", "2026-08-04T12:30:15Z"],
+    ["nonsense", "not-a-date"],
+  ])("rejects %s", (_label, value) => {
+    expect(isUsableTimestamp(value, Date.parse("2026-08-31T00:00:00.000Z"))).toBe(false);
+  });
+
+  it("allows a day of clock skew but not a week", () => {
+    const now = Date.parse("2026-08-31T00:00:00.000Z");
+    expect(isUsableTimestamp("2026-08-31T06:00:00.000Z", now)).toBe(true);
+    expect(isUsableTimestamp("2026-09-07T00:00:00.000Z", now)).toBe(false);
+  });
+});
 
 describe("readBaselineEntries — malformed provenance", () => {
   function withEntry(value: unknown): BaselineSummary {

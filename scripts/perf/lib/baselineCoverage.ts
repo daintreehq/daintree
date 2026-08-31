@@ -27,6 +27,35 @@ const MS_PER_DAY = 86_400_000;
 /** Stale ids named in a warning before it collapses into "+N more". */
 const MAX_NAMED_STALE = 6;
 
+/**
+ * How far ahead of now a stamp may sit before it is nonsense rather than skew.
+ * A laptop whose clock is a few hours out is ordinary; a day of slack absorbs
+ * that without admitting a stamp that can never go stale.
+ */
+const CLOCK_SKEW_TOLERANCE_MS = 86_400_000;
+
+/**
+ * Whether a stored timestamp can stand for when something was measured.
+ *
+ * `Date.parse` returning a finite number is not enough, and both ways it is
+ * insufficient let an unusable stamp behave like a fresh one:
+ *
+ * - It silently NORMALISES an impossible date. `2026-02-30` parses cleanly as
+ *   2 March, so a corrupted stamp becomes a plausible one. Requiring the value
+ *   to round-trip through `toISOString()` rejects anything the parser had to
+ *   reinterpret — and costs nothing, because the writer emits exactly that form.
+ * - It accepts a date arbitrarily far in the FUTURE. `9999-01-01` is never
+ *   older than the freshness threshold, so an entry stamped with it reads as
+ *   freshly measured forever and never earns a warning.
+ */
+export function isUsableTimestamp(value: unknown, now = Date.now()): value is string {
+  if (typeof value !== "string") return false;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return false;
+  if (new Date(parsed).toISOString() !== value) return false;
+  return parsed <= now + CLOCK_SKEW_TOLERANCE_MS;
+}
+
 export interface CoverageGap {
   scenarioId: string;
 }
@@ -61,9 +90,14 @@ export function readBaselineEntries(
 
   const entries: Record<string, BaselineEntry> = {};
 
-  for (const [scenarioId, p95Ms] of Object.entries(baseline.p95ByScenario ?? {})) {
-    if (typeof p95Ms !== "number" || !Number.isFinite(p95Ms)) continue;
-    entries[scenarioId] = { p95Ms, measuredAt: baseline.generatedAt, machine: null };
+  // The legacy promotion leans entirely on the file's own date, so a file that
+  // cannot state one dates none of its entries and they are all dropped.
+  const legacyMeasuredAt = isUsableTimestamp(baseline.generatedAt) ? baseline.generatedAt : null;
+  if (legacyMeasuredAt !== null) {
+    for (const [scenarioId, p95Ms] of Object.entries(baseline.p95ByScenario ?? {})) {
+      if (typeof p95Ms !== "number" || !Number.isFinite(p95Ms)) continue;
+      entries[scenarioId] = { p95Ms, measuredAt: legacyMeasuredAt, machine: null };
+    }
   }
 
   for (const [scenarioId, entry] of Object.entries(baseline.scenarios ?? {})) {
@@ -73,9 +107,7 @@ export function readBaselineEntries(
     // the freshness check skips an unparseable date silently, so keeping the
     // value would make an undateable reference behave exactly like a fresh one.
     // Absent is a state the harness already reports honestly.
-    if (typeof entry.measuredAt !== "string" || !Number.isFinite(Date.parse(entry.measuredAt))) {
-      continue;
-    }
+    if (!isUsableTimestamp(entry.measuredAt)) continue;
     entries[scenarioId] = {
       p95Ms: entry.p95Ms,
       measuredAt: entry.measuredAt,
@@ -98,6 +130,13 @@ export function readBaselineEntries(
  */
 function normalizeMachine(machine: BaselineEntry["machine"]): BaselineEntry["machine"] {
   if (!machine || typeof machine !== "object") return null;
+  // Own properties only. An identity inherited from a prototype is not one this
+  // file recorded; `JSON.parse` cannot produce that shape, so this is hardening
+  // rather than a live path, but the check costs one call and removes the
+  // question.
+  for (const field of ["machineLabel", "platform", "arch"] as const) {
+    if (!Object.prototype.hasOwnProperty.call(machine, field)) return null;
+  }
   const { machineLabel, platform, arch } = machine;
   if (typeof machineLabel !== "string" || machineLabel.trim() === "") return null;
   if (typeof platform !== "string" || platform.trim() === "") return null;

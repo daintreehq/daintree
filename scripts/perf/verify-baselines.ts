@@ -1,5 +1,9 @@
 import path from "node:path";
-import { findStaleBaselineEntries, readBaselineEntries } from "./lib/baselineCoverage";
+import {
+  findStaleBaselineEntries,
+  isUsableTimestamp,
+  readBaselineEntries,
+} from "./lib/baselineCoverage";
 import { readJson } from "./lib/io";
 import { getScenariosForMode } from "./scenarios";
 import type { BaselineSummary, PerfMode } from "./types";
@@ -62,11 +66,17 @@ function inspectEntries(baseline: BaselineSummary): string[] {
     if (typeof entry.p95Ms !== "number" || !Number.isFinite(entry.p95Ms)) {
       problems.push(`${scenarioId}: p95Ms is not a finite number (${String(entry.p95Ms)})`);
     }
-    if (typeof entry.measuredAt !== "string" || !Number.isFinite(Date.parse(entry.measuredAt))) {
+    // Same rule the reader applies, imported rather than restated: a stamp
+    // Date.parse silently normalised (2026-02-30) or one in the future is
+    // unusable, and the two checks disagreeing is how a file passes here and is
+    // then dropped at run time with no explanation.
+    if (!isUsableTimestamp(entry.measuredAt)) {
       // An entry that cannot say when it was measured is exactly the state this
       // whole format exists to remove, and the freshness check silently skips
       // it — so it has to be caught before the file is committed.
-      problems.push(`${scenarioId}: measuredAt is unparseable (${String(entry.measuredAt)})`);
+      problems.push(
+        `${scenarioId}: measuredAt is not a usable ISO timestamp (${String(entry.measuredAt)})`
+      );
     }
     // `machine: null` is legal and means "lifted from a pre-provenance file".
     // A machine that is present but incomplete is not: a half-filled identity
@@ -111,8 +121,8 @@ function verifyMode(mode: PerfMode): ModeReport {
     problems.push(`mode field is "${baseline.mode}", expected "${mode}" — wrong file written`);
   }
 
-  if (!Number.isFinite(Date.parse(baseline.generatedAt))) {
-    problems.push(`generatedAt is unparseable ("${baseline.generatedAt}")`);
+  if (!isUsableTimestamp(baseline.generatedAt)) {
+    problems.push(`generatedAt is not a usable ISO timestamp ("${baseline.generatedAt}")`);
   }
 
   problems.push(...inspectEntries(baseline));
