@@ -2625,11 +2625,32 @@ describe("createPluginProtocolHandler", () => {
   }
 
   function buildHandler(
-    overrides: { getPluginDir?: (id: string) => string | undefined } = {}
+    overrides: { getPluginRoot?: (authority: string) => string | undefined } = {}
   ): ProtocolHandler {
-    const getPluginDir =
-      overrides.getPluginDir ?? ((id: string) => (id === "my-plugin" ? PLUGIN_ROOT : undefined));
-    return createPluginProtocolHandler(getPluginDir);
+    const getPluginRoot =
+      overrides.getPluginRoot ??
+      ((authority: string) => (authority === "my-plugin" ? PLUGIN_ROOT : undefined));
+    return createPluginProtocolHandler(getPluginRoot);
+  }
+
+  /**
+   * A resolver backed the way PluginService backs it: one map, two keys per
+   * loaded plugin (the opaque authority and the manifest id as an alias),
+   * dropped together on unload.
+   */
+  function buildAuthorityRegistry() {
+    const roots = new Map<string, string>();
+    return {
+      handler: createPluginProtocolHandler((authority) => roots.get(authority)),
+      load(pluginId: string, authority: string, root: string): void {
+        roots.set(authority, root);
+        roots.set(pluginId, root);
+      },
+      unload(pluginId: string, authority: string): void {
+        roots.delete(authority);
+        roots.delete(pluginId);
+      },
+    };
   }
 
   function makeRequest(url: string, init?: RequestInit): GlobalRequest {
@@ -2774,7 +2795,7 @@ describe("createPluginProtocolHandler", () => {
     expect(handle.close).toHaveBeenCalled();
   });
 
-  it("returns 404 for an unknown plugin id", async () => {
+  it("returns 404 for an unknown authority", async () => {
     const fs = await import("fs/promises");
     const handler = buildHandler();
     const response = await handler(makeRequest("plugin://does-not-exist/anything.js"));
@@ -2784,14 +2805,56 @@ describe("createPluginProtocolHandler", () => {
     expect(fs.open).not.toHaveBeenCalled();
   });
 
-  it("returns 404 for a disabled plugin (getPluginDir returns undefined)", async () => {
+  it("returns 404 for a disabled plugin (the resolver returns undefined)", async () => {
     const fs = await import("fs/promises");
-    const handler = buildHandler({ getPluginDir: () => undefined });
+    const handler = buildHandler({ getPluginRoot: () => undefined });
     const response = await handler(makeRequest("plugin://my-plugin/dist/index.js"));
 
     expect(response.status).toBe(404);
     expect(fs.realpath).not.toHaveBeenCalled();
     expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it("serves an opaque authority and its manifest-id alias from the same root", async () => {
+    const registry = buildAuthorityRegistry();
+    registry.load("acme.tools", "pi-0123456789abcdef", PLUGIN_ROOT);
+
+    // Authors write `plugin://{pluginId}/…` by hand
+    // (docs/plugins/contribution-points.md), so the alias is not optional.
+    for (const host of ["pi-0123456789abcdef", "acme.tools"]) {
+      const response = await registry.handler(makeRequest(`plugin://${host}/dist/index.js`));
+      expect(response.status).toBe(200);
+    }
+  });
+
+  it("404s an authority invalidated by an unload without reaching any root", async () => {
+    const fs = await import("fs/promises");
+    const registry = buildAuthorityRegistry();
+    registry.load("acme.tools", "pi-0123456789abcdef", PLUGIN_ROOT);
+    expect(
+      (await registry.handler(makeRequest("plugin://pi-0123456789abcdef/dist/index.js"))).status
+    ).toBe(200);
+
+    registry.unload("acme.tools", "pi-0123456789abcdef");
+    // The same plugin id is re-loaded at a different root — the exact case the
+    // opaque authority exists for: a URL captured before the unload must not
+    // resolve into the new occupant's tree.
+    const OTHER_ROOT = path.resolve("/plugins/installed/other-plugin");
+    registry.load("acme.tools", "pi-fedcba9876543210", OTHER_ROOT);
+
+    vi.mocked(fs.realpath).mockClear();
+    vi.mocked(fs.open).mockClear();
+    const stale = await registry.handler(makeRequest("plugin://pi-0123456789abcdef/dist/index.js"));
+
+    expect(stale.status).toBe(404);
+    expect(fs.realpath).not.toHaveBeenCalled();
+    expect(fs.open).not.toHaveBeenCalled();
+
+    // The fresh authority is the only one that resolves, and it resolves to the
+    // new root.
+    const fresh = await registry.handler(makeRequest("plugin://pi-fedcba9876543210/dist/index.js"));
+    expect(fresh.status).toBe(200);
+    expect(vi.mocked(fs.open).mock.calls[0]![0]).toBe(path.join(OTHER_ROOT, "dist/index.js"));
   });
 
   it("returns 404 for an empty hostname", async () => {

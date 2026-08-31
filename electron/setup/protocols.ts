@@ -41,12 +41,25 @@ import { looksLikeOAuthUrl } from "../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { logWarn } from "../utils/logger.js";
 
-export type GetPluginDir = (pluginId: string) => string | undefined;
+/**
+ * Resolve a `plugin://` authority to the plugin root that serves it.
+ *
+ * The authority is an opaque token minted per plugin load and never reissued,
+ * so a host-minted URL captured before an unload resolves to nothing rather
+ * than into whatever now occupies that plugin id. A plugin's manifest id is
+ * seeded as an alias alongside it — plugin authors write `plugin://{pluginId}/…`
+ * by hand (docs/plugins/contribution-points.md), and that form keeps plain id
+ * semantics. Both keys live in the same map, so neither gets its own resolution
+ * path here.
+ *
+ * `undefined` means unknown, invalidated, or disabled.
+ */
+export type GetPluginRootByAuthority = (authority: string) => string | undefined;
 
 // Track which sessions have had protocols registered to avoid double-registration
 const registeredSessions = new WeakSet<Electron.Session>();
 let cachedDistPath: string | null = null;
-let cachedGetPluginDir: GetPluginDir | null = null;
+let cachedPluginRootResolver: GetPluginRootByAuthority | null = null;
 
 /**
  * Create the app:// protocol handler function for a given distPath.
@@ -1055,13 +1068,14 @@ function buildPluginErrorHeaders(): Record<string, string> {
 /**
  * Create the plugin:// protocol handler.
  *
- * URL shape: `plugin://{pluginId}/{relative/path}`. The host segment is the
- * plugin's manifest name; the pathname is resolved against the plugin's
- * installed-on-disk root via `getPluginDir`. Security mirrors `daintree-file://`:
+ * URL shape: `plugin://{authority}/{relative/path}`. The host segment is an
+ * opaque per-load authority (or the plugin's manifest id, which PluginService
+ * aliases to the same root); the pathname is resolved against the plugin's
+ * installed-on-disk root via `getPluginRoot`. Security mirrors `daintree-file://`:
  * segment-by-segment `..` rejection, `fs.realpath()` containment, and
  * `O_RDONLY | O_NOFOLLOW` on the final open to close the realpath/open TOCTOU.
  */
-export function createPluginProtocolHandler(getPluginDir: GetPluginDir) {
+export function createPluginProtocolHandler(getPluginRoot: GetPluginRootByAuthority) {
   return async (request: GlobalRequest) => {
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method Not Allowed", {
@@ -1080,18 +1094,19 @@ export function createPluginProtocolHandler(getPluginDir: GetPluginDir) {
       });
     }
 
-    const pluginId = url.hostname;
-    if (!pluginId) {
+    const authority = url.hostname;
+    if (!authority) {
       return new Response("Not Found", {
         status: 404,
         headers: buildPluginErrorHeaders(),
       });
     }
 
-    const pluginRoot = getPluginDir(pluginId);
+    const pluginRoot = getPluginRoot(authority);
     if (!pluginRoot) {
-      // Unknown plugin id, or the plugin is currently disabled. 404 — do not
-      // leak the existence of the disk path via a different status code.
+      // Unknown authority, an authority invalidated by an unload, or a plugin
+      // that is currently disabled. 404 — do not leak the existence of the disk
+      // path via a different status code.
       return new Response("Not Found", {
         status: 404,
         headers: buildPluginErrorHeaders(),
@@ -1267,8 +1282,8 @@ export function registerProtocolsForSession(ses: Electron.Session, distPath: str
   ses.protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
   ses.protocol.handle("daintree-html", createDaintreeHtmlProtocolHandler());
   ses.protocol.handle("daintree-pdf", createDaintreePdfProtocolHandler());
-  if (cachedGetPluginDir) {
-    ses.protocol.handle("plugin", createPluginProtocolHandler(resolvePluginDir));
+  if (cachedPluginRootResolver) {
+    ses.protocol.handle("plugin", createPluginProtocolHandler(resolvePluginRoot));
   }
 }
 
@@ -1320,16 +1335,16 @@ export function registerDaintreePdfProtocol(): void {
 // Stable indirection so the live `plugin://` resolver can be swapped after the
 // deferred PluginService import settles (#10322) without re-registering the
 // handler. Both the default-session handler and per-session handlers are wired
-// to this function once; it reads `cachedGetPluginDir` at request time, so a
-// later `setPluginDirResolver` is picked up live — no `protocol.unhandle`/
+// to this function once; it reads `cachedPluginRootResolver` at request time,
+// so a later `setPluginDirResolver` is picked up live — no `protocol.unhandle`/
 // re-`handle` (which would open a micro-tick `ERR_UNKNOWN_URL_SCHEME` gap).
-function resolvePluginDir(pluginId: string): string | undefined {
-  return cachedGetPluginDir ? cachedGetPluginDir(pluginId) : undefined;
+function resolvePluginRoot(authority: string): string | undefined {
+  return cachedPluginRootResolver ? cachedPluginRootResolver(authority) : undefined;
 }
 
-export function registerPluginProtocol(getPluginDir: GetPluginDir): void {
-  cachedGetPluginDir = getPluginDir;
-  protocol.handle("plugin", createPluginProtocolHandler(resolvePluginDir));
+export function registerPluginProtocol(getPluginRoot: GetPluginRootByAuthority): void {
+  cachedPluginRootResolver = getPluginRoot;
+  protocol.handle("plugin", createPluginProtocolHandler(resolvePluginRoot));
 }
 
 /**
@@ -1340,17 +1355,18 @@ export function registerPluginProtocol(getPluginDir: GetPluginDir): void {
  *
  * Ordering is load-bearing (#11728): the deferred `plugin-service` task must
  * call this immediately after importing the singleton and BEFORE `initialize()`
- * — not after it. `getPluginDir` is a plain map lookup, safe to install at any
+ * — not after it. The resolver is a plain map lookup, safe to install at any
  * time, whereas waiting for `initialize()` leaves the placeholder live across
  * the whole scan, during which the first plugin already publishes an addressable
  * `plugin://` componentPath. A 404 served in that window is permanent for that
  * specifier in the renderer's module map. The
- * handler delegates through `resolvePluginDir`, which reads `cachedGetPluginDir`
- * live, so the swap reaches every handler already registered (default session
- * plus any per-session handlers wired during `createWindow`).
+ * handler delegates through `resolvePluginRoot`, which reads
+ * `cachedPluginRootResolver` live, so the swap reaches every handler already
+ * registered (default session plus any per-session handlers wired during
+ * `createWindow`).
  */
-export function setPluginDirResolver(getPluginDir: GetPluginDir): void {
-  cachedGetPluginDir = getPluginDir;
+export function setPluginDirResolver(getPluginRoot: GetPluginRootByAuthority): void {
+  cachedPluginRootResolver = getPluginRoot;
 }
 
 /**

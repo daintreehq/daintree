@@ -694,7 +694,7 @@ if (!gotTheLock) {
       // first-paint critical path (#10322). The handler must exist before
       // `createWindow()` so `registerProtocolsForSession` wires per-session
       // handlers; the deferred `plugin-service` task later calls
-      // `setPluginDirResolver()` to point it at the real `getPluginDir` and
+      // `setPluginDirResolver()` to point it at the real authority resolver and
       // drains queued `.dntr` paths via `activateOpenFileInstaller`. The
       // placeholder is unobservable because a renderer can only learn a
       // `plugin://` module URL from a panel-kind contribution, and those are

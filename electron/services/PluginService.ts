@@ -1,5 +1,6 @@
 import fs from "fs/promises";
 import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
@@ -59,6 +60,7 @@ import type {
   PluginSettingsUiValues,
   PluginWorktreeStatus,
   PluginPanelBadge,
+  PluginProtocolAuthority,
   ViewContribution,
 } from "../../shared/types/plugin.js";
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
@@ -342,7 +344,7 @@ export function allocatePluginViewGeneration(): number {
 }
 
 /**
- * Build the `plugin://{pluginId}/{PLUGIN_VIEW_GENERATION_PREFIX}{n}/{path}` URL
+ * Build the `plugin://{authority}/{PLUGIN_VIEW_GENERATION_PREFIX}{n}/{path}` URL
  * that `PluginViewHost` passes to `import()`. Strips a single leading `./` so
  * the host segment doesn't end up with an awkward `./dist/view.js` path
  * component — the URL handler accepts either form, but the canonical shape
@@ -366,9 +368,13 @@ export function allocatePluginViewGeneration(): number {
  * but drops the query — so a query would refresh the entry chunk and leave
  * every secondary chunk stale.
  */
-function buildPluginViewUrl(pluginId: string, componentPath: string, generation: number): string {
+function buildPluginViewUrl(
+  authority: PluginProtocolAuthority,
+  componentPath: string,
+  generation: number
+): string {
   const normalized = componentPath.startsWith("./") ? componentPath.slice(2) : componentPath;
-  return `plugin://${pluginId}/${PLUGIN_VIEW_GENERATION_PREFIX}${generation}/${normalized}`;
+  return `plugin://${authority}/${PLUGIN_VIEW_GENERATION_PREFIX}${generation}/${normalized}`;
 }
 
 /**
@@ -423,6 +429,23 @@ function resolveGlobalConfigDir(): string | null {
 
 export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
+  /**
+   * The single map the `plugin://` protocol handler resolves a URL authority
+   * against. Each load seeds two keys pointing at the same root: the opaque
+   * authority minted for that load, and the plugin's manifest id as an alias —
+   * plugin authors write `plugin://{pluginId}/…` by hand and that contract is
+   * documented (docs/plugins/contribution-points.md). One map, so the handler
+   * keeps exactly one resolution path.
+   *
+   * Both keys are dropped on unload, but only the authority is per-load: it is
+   * never reissued, so a host-minted URL captured before an unload 404s forever
+   * rather than resolving into whatever next occupies that plugin id. The alias
+   * keeps plain id semantics by construction — a reload rebinds it — which is
+   * exactly what a hand-written `plugin://{pluginId}/…` URL asks for.
+   */
+  private pluginRootsByAuthority = new Map<string, string>();
+  /** pluginId → the authority minted for its current load; the invalidation and URL-building side. */
+  private pluginAuthorities = new Map<string, PluginProtocolAuthority>();
   /**
    * Live panel badges set via `host.setPanelBadge`, keyed `pluginId → panelId →
    * badge` (#10585). Plugin-first so {@link unloadPlugin} drops a plugin's whole
@@ -1533,13 +1556,16 @@ export class PluginService {
     // plugin as loaded. Without this, `hasPlugin(pluginId)` returns false
     // inside the plugin's own init, and registerHandler/registerPluginAction
     // throw "Unknown plugin" even for a correctly loaded plugin.
+    // Minted and committed synchronously with the registry insert below, so the
+    // authority is resolvable the instant the plugin is addressable.
+    const authority = this.mintPluginAuthority(manifest.name, plugin.dir);
     this.plugins.set(manifest.name, plugin);
 
     // Panel kinds are published only AFTER the map commit above, with no await
     // in between (#11728). `registerPanelKind` is what makes a panel
     // addressable — it carries the `plugin://` `componentPath` and schedules the
-    // `plugin:panel-kinds-changed` broadcast — while `getPluginDir` (the
-    // protocol handler's resolver) reads `this.plugins`. Publishing first, as
+    // `plugin:panel-kinds-changed` broadcast — while the protocol handler's
+    // resolver reads the authority map committed with it. Publishing first, as
     // this block used to, handed the renderer a URL that the protocol could not
     // yet resolve; any plugin with an await before the commit (a `skills`
     // contribution alone was enough) 404'd its own view module, and a rejected
@@ -1592,7 +1618,7 @@ export class PluginService {
         ...(view && !panel.hasPty
           ? {
               componentPath: buildPluginViewUrl(
-                manifest.name,
+                authority,
                 view.componentPath,
                 plugin.viewGeneration
               ),
@@ -2249,11 +2275,16 @@ export class PluginService {
             ? undefined
             : live.manifest.contributes.views.find((v) => v.id === panel.id);
           if (!view) return { ok: true };
+          // Same reason the map re-read above exists: without a live authority
+          // the URL would address nothing, so offer no recovery path at all
+          // rather than one that 404s.
+          const authority = this.pluginAuthorities.get(pluginId);
+          if (!authority) return { ok: true };
           live.recoveryViewGeneration ??= allocatePluginViewGeneration();
           return {
             ok: true,
             recoveryComponentPath: buildPluginViewUrl(
-              pluginId,
+              authority,
               view.componentPath,
               live.recoveryViewGeneration
             ),
@@ -2546,10 +2577,12 @@ export class PluginService {
   }
 
   _registerFakePluginForTests(plugin: LoadedPlugin): void {
+    this.mintPluginAuthority(plugin.manifest.name, plugin.dir);
     this.plugins.set(plugin.manifest.name, plugin);
   }
 
   _unregisterFakePluginForTests(pluginId: string): void {
+    this.invalidatePluginAuthority(pluginId);
     this.plugins.delete(pluginId);
   }
 
@@ -3380,6 +3413,12 @@ export class PluginService {
       this.promptDispatcher.cancelForPlugin(pluginId)
     );
 
+    // Both `plugin://` keys die with the load. The authority is never reissued,
+    // so a host-minted URL the renderer captured before this point 404s instead
+    // of resolving into the next occupant of this plugin id; the manifest-id
+    // alias is rebound by a reload, which is the id semantics a hand-written
+    // URL asked for.
+    this.invalidatePluginAuthority(pluginId);
     this.plugins.delete(pluginId);
     this.pluginWorkerActivity.delete(pluginId);
 
@@ -3771,13 +3810,42 @@ export class PluginService {
   }
 
   /**
-   * Resolve a plugin id to its installed-on-disk root directory. Returns
-   * `undefined` when the plugin is unknown or was skipped at load (disabled in
-   * Preferences). Used by the `plugin://` protocol handler to map URL hosts to
-   * filesystem roots without exposing the private `plugins` map.
+   * Resolve a `plugin://` URL authority to the plugin root that serves it.
+   * Accepts either the opaque per-load authority or a plugin's manifest id,
+   * which is seeded as an alias for the same root. Returns `undefined` when the
+   * authority is unknown, was invalidated by an unload, or names a plugin that
+   * was skipped at load (disabled in Preferences).
+   *
+   * Used by the `plugin://` protocol handler to map URL hosts to filesystem
+   * roots without exposing the private `plugins` map.
    */
-  getPluginDir(pluginId: string): string | undefined {
-    return this.plugins.get(pluginId)?.dir;
+  getPluginRootByAuthority(authority: string): string | undefined {
+    return this.pluginRootsByAuthority.get(authority);
+  }
+
+  /**
+   * Mint the `plugin://` authority for a load and seed both of its keys.
+   *
+   * The token comes from a CSPRNG and is never derived from the manifest id —
+   * derivation would reintroduce the id collision the authority exists to
+   * prevent. It is not a secret: it is a namespace, not a capability, so
+   * nothing may authorize on possession of one.
+   */
+  private mintPluginAuthority(pluginId: string, dir: string): PluginProtocolAuthority {
+    this.invalidatePluginAuthority(pluginId);
+    const authority = `pi-${randomBytes(16).toString("hex")}` as PluginProtocolAuthority;
+    this.pluginAuthorities.set(pluginId, authority);
+    this.pluginRootsByAuthority.set(authority, dir);
+    this.pluginRootsByAuthority.set(pluginId, dir);
+    return authority;
+  }
+
+  /** Drop both keys a load seeded, so every URL addressing it 404s from here on. */
+  private invalidatePluginAuthority(pluginId: string): void {
+    const previous = this.pluginAuthorities.get(pluginId);
+    if (previous) this.pluginRootsByAuthority.delete(previous);
+    this.pluginAuthorities.delete(pluginId);
+    this.pluginRootsByAuthority.delete(pluginId);
   }
 
   /**

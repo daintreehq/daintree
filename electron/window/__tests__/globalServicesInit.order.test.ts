@@ -38,13 +38,13 @@ const {
 const registerCommandsMock = vi.hoisted(() => vi.fn());
 const {
   pluginInitialize,
-  pluginGetPluginDir,
+  pluginGetPluginRoot,
   pluginActivateStartup,
   setPluginDirResolver,
   activateOpenFileInstaller,
 } = vi.hoisted(() => ({
   pluginInitialize: vi.fn(async () => {}),
-  pluginGetPluginDir: vi.fn((id: string) => `/plugins/${id}`),
+  pluginGetPluginRoot: vi.fn((authority: string) => `/plugins/${authority}`),
   pluginActivateStartup: vi.fn(),
   setPluginDirResolver: vi.fn(),
   activateOpenFileInstaller: vi.fn(async (_svc?: unknown) => {}),
@@ -130,7 +130,7 @@ vi.mock("../../services/plugin-mcp/instances.js", () => ({
 vi.mock("../../services/PluginService.js", () => ({
   pluginService: {
     initialize: pluginInitialize,
-    getPluginDir: pluginGetPluginDir,
+    getPluginRootByAuthority: pluginGetPluginRoot,
     activateStartupFinishedPlugins: pluginActivateStartup,
   },
 }));
@@ -728,7 +728,7 @@ describe("initGlobalServices task ordering", () => {
     getPluginMcpConsentService.mockClear();
     getPluginMcpConsentStore.mockClear();
     pluginInitialize.mockClear();
-    pluginGetPluginDir.mockClear();
+    pluginGetPluginRoot.mockClear();
     pluginActivateStartup.mockClear();
     setPluginDirResolver.mockClear();
     activateOpenFileInstaller.mockClear();
@@ -1028,10 +1028,13 @@ describe("initGlobalServices task ordering", () => {
     expect(pluginInitialize).toHaveBeenCalled();
     expect(setPluginDirResolver).toHaveBeenCalledTimes(1);
     // The resolver handed to protocols.ts must delegate to the live singleton —
-    // calling it routes through pluginService.getPluginDir, not a frozen value.
-    const resolver = setPluginDirResolver.mock.calls[0]![0] as (id: string) => string | undefined;
-    expect(resolver("acme.tool")).toBe("/plugins/acme.tool");
-    expect(pluginGetPluginDir).toHaveBeenCalledWith("acme.tool");
+    // calling it routes through pluginService.getPluginRootByAuthority, not a
+    // frozen value.
+    const resolver = setPluginDirResolver.mock.calls[0]![0] as (
+      authority: string
+    ) => string | undefined;
+    expect(resolver("pi-abc123")).toBe("/plugins/pi-abc123");
+    expect(pluginGetPluginRoot).toHaveBeenCalledWith("pi-abc123");
   });
 
   it("plugin-service task installs the plugin:// resolver BEFORE initialize() runs (#11728)", async () => {

@@ -778,9 +778,9 @@ describe("Deferred activation — activatePlugin", () => {
     // which the default vitest config excludes.
     //
     // `registerPanelKind` IS the publication point: it carries the `plugin://`
-    // componentPath and schedules the broadcast. Observing `getPluginDir` from
-    // inside the mock therefore samples the exact instant the renderer becomes
-    // able to request that module. Checking after `initialize()` would prove
+    // componentPath and schedules the broadcast. Resolving that URL's authority
+    // from inside the mock therefore samples the exact instant the renderer
+    // becomes able to request that module. Checking after `initialize()` would prove
     // nothing — by then everything is in the map regardless of ordering.
     //
     // The fixture contributes a skill because its `await` is what used to sit
@@ -806,10 +806,18 @@ describe("Deferred activation — activatePlugin", () => {
     );
 
     const service = new PluginService(tmpDir);
-    const observed: Array<{ id: string; resolvedDir: string | undefined }> = [];
+    const observed: Array<{
+      id: string;
+      resolvedDir: string | undefined;
+      aliasDir: string | undefined;
+    }> = [];
     vi.mocked(registerPanelKind).mockImplementation((config) => {
       if (!config.componentPath || !config.extensionId) return;
-      observed.push({ id: config.id, resolvedDir: service.getPluginDir(config.extensionId) });
+      observed.push({
+        id: config.id,
+        resolvedDir: service.getPluginRootByAuthority(new URL(config.componentPath).hostname),
+        aliasDir: service.getPluginRootByAuthority(config.extensionId),
+      });
     });
 
     try {
@@ -821,8 +829,50 @@ describe("Deferred activation — activatePlugin", () => {
     expect(observed).toHaveLength(1);
     expect(observed[0]!.id).toBe("acme.view-order.viewer");
     // Before the fix this was `undefined`: the panel was published while the
-    // plugin was still absent from the map `getPluginDir` reads.
+    // plugin was still absent from the map the resolver reads.
     expect(observed[0]!.resolvedDir).toBe(pluginDir);
+    expect(observed[0]!.aliasDir).toBe(pluginDir);
+  });
+
+  it("addresses views by an opaque authority that unload invalidates", async () => {
+    const pluginDir = path.join(tmpDir, "view-authority");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.view-authority",
+        version: "1.0.0",
+        contributes: {
+          panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#123" }],
+          views: [{ id: "viewer", componentPath: "view.mjs", location: "panel" }],
+        },
+      })
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const published = vi
+      .mocked(registerPanelKind)
+      .mock.calls.map(([config]) => config)
+      .find((config) => config.id === "acme.view-authority.viewer");
+    const authority = new URL(published!.componentPath!).hostname;
+
+    // Random per load, never the manifest id — a derived authority would carry
+    // the id collision it exists to prevent straight back in.
+    expect(authority).not.toBe("acme.view-authority");
+    expect(authority).toMatch(/^pi-[0-9a-f]{32}$/);
+    expect(service.getPluginRootByAuthority(authority)).toBe(pluginDir);
+    // The manifest id is an alias for the same root, because plugin authors
+    // write `plugin://{pluginId}/…` by hand.
+    expect(service.getPluginRootByAuthority("acme.view-authority")).toBe(pluginDir);
+
+    service.unloadPlugin("acme.view-authority");
+
+    // A URL the renderer captured before the unload now addresses nothing —
+    // not the old root, and not whatever next occupies that plugin id.
+    expect(service.getPluginRootByAuthority(authority)).toBeUndefined();
+    expect(service.getPluginRootByAuthority("acme.view-authority")).toBeUndefined();
   });
 
   it("activatePluginForView mints one shared recovery view generation per load (#11728)", async () => {
