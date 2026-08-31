@@ -2,6 +2,7 @@ import { ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getWindowRegistry, getProjectViewManager } from "../../window/windowRef.js";
+import { resolveTargetWebContents, type PluginTargetProjectId } from "./rendererTargeting.js";
 import type {
   ActionDispatchResult,
   PluginActionManifestEntry,
@@ -18,8 +19,9 @@ const PLUGIN_DISPATCH_TIMEOUT_MS = 30_000;
 /**
  * A `host.dispatch()` request awaiting its renderer response. Unlike the MCP
  * bridge's `PendingRequest`, the promise always resolves with an
- * {@link ActionDispatchResult} (never rejects) — `host.dispatch` returns the
- * `{ ok: false }` envelope on failure rather than throwing.
+ * {@link ActionDispatchResult} — `host.dispatch` returns the `{ ok: false }`
+ * envelope on failure rather than throwing. Only a bound dispatch rejects, and
+ * it does so before any entry is recorded here.
  */
 interface PendingPluginDispatch {
   resolve: (result: ActionDispatchResult) => void;
@@ -30,8 +32,8 @@ interface PendingPluginDispatch {
 
 /**
  * A `host.actions.list()` / `host.actions.get()` round-trip awaiting its
- * renderer response. Like {@link PendingPluginDispatch} the promise always
- * resolves (with the projected result or a fallback) and never rejects.
+ * renderer response. Like {@link PendingPluginDispatch} the promise resolves
+ * (with the projected result or a fallback) once an entry exists here.
  */
 interface PendingActionsRequest {
   resolve: (value: unknown) => void;
@@ -89,44 +91,9 @@ export class PluginRendererDispatcher {
   }
 
   /**
-   * Resolve the active project's renderer WebContents, mirroring the MCP
-   * renderer bridge's resolution order: walk every live window's active
-   * project view first, then fall back to the global `ProjectViewManager`.
-   * Returns `null` (rather than throwing) when no renderer is available so
-   * {@link sendDispatchToRenderer} can return an error result.
-   */
-  private resolveActiveWebContents(): Electron.WebContents | null {
-    const registry = getWindowRegistry();
-    if (registry) {
-      // Plugin dispatches carry no source window, so target the focused window
-      // (getPrimary) before falling back to scanning all windows in insertion
-      // order — otherwise every dispatch lands in the oldest window's view.
-      const primary = registry.getPrimary();
-      if (primary && !primary.browserWindow.isDestroyed()) {
-        const primaryWc = primary.services.projectViewManager?.getActiveView()?.webContents;
-        if (primaryWc && !primaryWc.isDestroyed()) {
-          return primaryWc;
-        }
-      }
-      for (const ctx of registry.all()) {
-        if (ctx.browserWindow.isDestroyed()) continue;
-        const webContents = ctx.services.projectViewManager?.getActiveView()?.webContents;
-        if (webContents && !webContents.isDestroyed()) {
-          return webContents;
-        }
-      }
-    }
-    const fallback = getProjectViewManager()?.getActiveView()?.webContents;
-    if (fallback && !fallback.isDestroyed()) {
-      return fallback;
-    }
-    return null;
-  }
-
-  /**
    * The visible project view of the focused window, or `null`.
    *
-   * Deliberately stricter than {@link resolveActiveWebContents}, which falls
+   * Deliberately stricter than `resolveAmbientWebContents`, which falls
    * back to scanning every window in insertion order. Dispatch has to land
    * somewhere — a UI action that reaches no renderer is a failed command — so
    * a best-effort target beats nothing. Scope resolution has the opposite
@@ -181,12 +148,20 @@ export class PluginRendererDispatcher {
   }
 
   /**
-   * Send a plugin-sourced action dispatch to the active renderer and await its
-   * response. Always resolves with an {@link ActionDispatchResult} — failures
-   * (no renderer, timeout, destroyed view, send error) come back as
-   * `EXECUTION_ERROR` rather than a rejected promise.
+   * Send a plugin-sourced action dispatch to a renderer and await its response.
+   * Resolves with an {@link ActionDispatchResult} — failures (no renderer,
+   * timeout, destroyed view, send error) come back as `EXECUTION_ERROR` rather
+   * than a rejected promise.
+   *
+   * `projectId` binds the dispatch to one project's renderer; it is the only
+   * path that can reject, with `PROJECT_VIEW_UNAVAILABLE` when that project has
+   * no live view.
    */
-  sendDispatchToRenderer(actionId: string, args: unknown): Promise<ActionDispatchResult> {
+  sendDispatchToRenderer(
+    actionId: string,
+    args: unknown,
+    projectId?: PluginTargetProjectId
+  ): Promise<ActionDispatchResult> {
     return new Promise((resolve) => {
       if (this.deps.isDisposed()) {
         resolve({
@@ -198,7 +173,9 @@ export class PluginRendererDispatcher {
         });
         return;
       }
-      const webContents = this.resolveActiveWebContents();
+      // Unbound: deliberately ambient — an installed plugin has no project, so
+      // the focused view is the only target its `host.dispatch` can mean.
+      const webContents = resolveTargetWebContents(projectId, `Plugin dispatch ${actionId}`);
       if (!webContents) {
         resolve({
           ok: false,
@@ -275,11 +252,14 @@ export class PluginRendererDispatcher {
   }
 
   /**
-   * Project `ActionService.list()` to the active renderer for the plugin
-   * action catalog (#10561). Resolves `[]` (never rejects) when no renderer is
-   * available, the round-trip times out, or the view is destroyed.
+   * Project `ActionService.list()` to a renderer for the plugin action catalog
+   * (#10561). Resolves `[]` when no renderer is available, the round-trip times
+   * out, or the view is destroyed; rejects only when `projectId` is bound and
+   * that project has no live view.
    */
-  sendActionsListToRenderer(): Promise<PluginActionManifestEntry[]> {
+  sendActionsListToRenderer(
+    projectId?: PluginTargetProjectId
+  ): Promise<PluginActionManifestEntry[]> {
     return this.requestFromRenderer<PluginActionManifestEntry[]>({
       requestChannel: CHANNELS.PLUGIN_ACTIONS_LIST_REQUEST,
       responseChannel: CHANNELS.PLUGIN_ACTIONS_LIST_RESPONSE,
@@ -289,15 +269,20 @@ export class PluginRendererDispatcher {
         return Array.isArray(entries) ? (entries as PluginActionManifestEntry[]) : [];
       },
       fallback: [],
+      projectId,
+      detail: "Plugin actions.list",
     });
   }
 
   /**
-   * Look up a single projected action entry on the active renderer (#10561).
-   * Resolves `null` (never rejects) when the action is absent or the round-trip
-   * fails.
+   * Look up a single projected action entry (#10561). Resolves `null` when the
+   * action is absent or the round-trip fails; rejects only when `projectId` is
+   * bound and that project has no live view.
    */
-  sendActionsGetToRenderer(actionId: string): Promise<PluginActionManifestEntry | null> {
+  sendActionsGetToRenderer(
+    actionId: string,
+    projectId?: PluginTargetProjectId
+  ): Promise<PluginActionManifestEntry | null> {
     return this.requestFromRenderer<PluginActionManifestEntry | null>({
       requestChannel: CHANNELS.PLUGIN_ACTIONS_GET_REQUEST,
       responseChannel: CHANNELS.PLUGIN_ACTIONS_GET_RESPONSE,
@@ -305,6 +290,8 @@ export class PluginRendererDispatcher {
       extract: (payload) =>
         ((payload as { entry?: unknown }).entry ?? null) as PluginActionManifestEntry | null,
       fallback: null,
+      projectId,
+      detail: `Plugin actions.get ${actionId}`,
     });
   }
 
@@ -345,10 +332,11 @@ export class PluginRendererDispatcher {
 
   /**
    * Generic main→renderer request/response round-trip for the read-only catalog
-   * surface. Always resolves with the extracted result or `fallback` — failures
-   * (no renderer, timeout, destroyed view, send error) come back as the fallback
-   * rather than a rejected promise. Shares the resolution/timeout/cleanup
-   * discipline of {@link sendDispatchToRenderer}.
+   * surface. Resolves with the extracted result or `fallback` — failures (no
+   * renderer, timeout, destroyed view, send error) come back as the fallback
+   * rather than a rejected promise, except a bound `projectId` with no live
+   * view. Shares the resolution/timeout/cleanup discipline of
+   * {@link sendDispatchToRenderer}.
    */
   private requestFromRenderer<T>(opts: {
     requestChannel: string;
@@ -356,13 +344,17 @@ export class PluginRendererDispatcher {
     buildRequest: (requestId: string) => Record<string, unknown>;
     extract: (payload: Record<string, unknown>) => T;
     fallback: T;
+    projectId?: PluginTargetProjectId;
+    detail: string;
   }): Promise<T> {
     return new Promise((resolve) => {
       if (this.deps.isDisposed()) {
         resolve(opts.fallback);
         return;
       }
-      const webContents = this.resolveActiveWebContents();
+      // Unbound: deliberately ambient — the catalog an installed plugin reads is
+      // whichever project's ActionService the user is currently looking at.
+      const webContents = resolveTargetWebContents(opts.projectId, opts.detail);
       if (!webContents) {
         resolve(opts.fallback);
         return;
