@@ -284,6 +284,20 @@ function isDisabled(row: HTMLElement): boolean {
   return row.hasAttribute("disabled");
 }
 
+/**
+ * A completed status pass. Without one the menu treats the upstream as
+ * unknown, which is a different state from having none.
+ */
+const measured = (tracking: string | null) => ({
+  worktreeChanges: {
+    worktreeId: "wt-1",
+    rootPath: "/repo/wt-1",
+    changes: [],
+    changedFileCount: 0,
+    tracking,
+  } as WorktreeState["worktreeChanges"],
+});
+
 const gitCallbacks = () => ({
   onGitPullRebase: vi.fn(),
   onGitPush: vi.fn(),
@@ -295,7 +309,7 @@ describe("WorktreeMenuItems Git submenu", () => {
     const { container } = renderWorktreeMenu({
       ...gitCallbacks(),
       onOpenReviewHub: vi.fn(),
-      worktree: makeWorktree({ aheadCount: 2, behindCount: 0 }),
+      worktree: makeWorktree({ aheadCount: 2, behindCount: 0, ...measured("origin/feature") }),
     });
 
     const labels = rootRowLabels(container);
@@ -307,7 +321,7 @@ describe("WorktreeMenuItems Git submenu", () => {
   it("offers pull and push when the branch tracks an upstream", () => {
     const { container } = renderWorktreeMenu({
       ...gitCallbacks(),
-      worktree: makeWorktree({ aheadCount: 3, behindCount: 1 }),
+      worktree: makeWorktree({ aheadCount: 3, behindCount: 1, ...measured("origin/feature") }),
     });
 
     expect(gitRowLabels(container)).toEqual([
@@ -328,7 +342,7 @@ describe("WorktreeMenuItems Git submenu", () => {
     // server-side — so the row states it instead of offering a failing action.
     const { container } = renderWorktreeMenu({
       ...gitCallbacks(),
-      worktree: makeWorktree({ aheadCount: undefined, behindCount: undefined }),
+      worktree: makeWorktree({ ...measured(null) }),
     });
 
     const pull = gitRowMatching(/Pull and rebase/);
@@ -342,13 +356,27 @@ describe("WorktreeMenuItems Git submenu", () => {
     expect(gitRowLabels(container)).toHaveLength(6);
   });
 
+  it("does not claim an upstream is missing before anything has looked", () => {
+    // A card rendered before the first status pass knows nothing about the
+    // upstream. Saying "No upstream" there states a fact nobody established;
+    // the action's own error is the honest answer if it turns out to be true.
+    renderWorktreeMenu({
+      ...gitCallbacks(),
+      worktree: makeWorktree({ worktreeChanges: null }),
+    });
+
+    const pull = gitRow(/Pull and rebase/);
+    expect(isDisabled(pull)).toBe(false);
+    expect(pull.textContent).not.toContain("No upstream");
+  });
+
   it("keeps push live with no upstream, because the push establishes one", () => {
     // `handlePush` retries with `--set-upstream` on "no upstream branch", so
     // the first push of a new worktree branch is exactly the case this row has
     // to serve.
     renderWorktreeMenu({
       ...gitCallbacks(),
-      worktree: makeWorktree({ aheadCount: undefined }),
+      worktree: makeWorktree({ ...measured(null) }),
     });
 
     expect(isDisabled(gitRowMatching(/^Push$/))).toBe(false);
@@ -357,7 +385,7 @@ describe("WorktreeMenuItems Git submenu", () => {
   it("disables push when nothing is ahead", () => {
     renderWorktreeMenu({
       ...gitCallbacks(),
-      worktree: makeWorktree({ aheadCount: 0, behindCount: 4 }),
+      worktree: makeWorktree({ aheadCount: 0, behindCount: 4, ...measured("origin/feature") }),
     });
 
     const push = gitRowMatching(/Push/);
@@ -372,7 +400,7 @@ describe("WorktreeMenuItems Git submenu", () => {
   it("hides the force-push row until a lease has been captured", () => {
     const { container } = renderWorktreeMenu({
       ...gitCallbacks(),
-      worktree: makeWorktree({ aheadCount: 2 }),
+      worktree: makeWorktree({ aheadCount: 2, ...measured("origin/feature") }),
     });
 
     // A lease cannot be derived from divergence — only a real push rejection
@@ -386,7 +414,7 @@ describe("WorktreeMenuItems Git submenu", () => {
     const { container } = renderWorktreeMenu({
       ...callbacks,
       canForcePush: true,
-      worktree: makeWorktree({ aheadCount: 2 }),
+      worktree: makeWorktree({ aheadCount: 2, ...measured("origin/feature") }),
     });
 
     expect(gitRowLabels(container)).toEqual([
@@ -418,7 +446,12 @@ describe("WorktreeMenuItems Git submenu", () => {
     // name a branch that is not checked out.
     const { container } = renderWorktreeMenu({
       ...gitCallbacks(),
-      worktree: makeWorktree({ branch: "feature", isDetached: true, aheadCount: 2 }),
+      worktree: makeWorktree({
+        branch: "feature",
+        isDetached: true,
+        aheadCount: 2,
+        ...measured("origin/feature"),
+      }),
     });
 
     // Fetch survives — it only moves remote-tracking refs, so it needs no
@@ -446,7 +479,12 @@ describe("WorktreeMenuItems Git submenu", () => {
     // It is a real checkout on a real branch; nothing about pushing it differs.
     const { container } = renderWorktreeMenu({
       ...gitCallbacks(),
-      worktree: makeWorktree({ isMainWorktree: true, aheadCount: 2, behindCount: 1 }),
+      worktree: makeWorktree({
+        isMainWorktree: true,
+        aheadCount: 2,
+        behindCount: 1,
+        ...measured("origin/main"),
+      }),
     });
 
     expect(gitRowLabels(container)).toEqual([

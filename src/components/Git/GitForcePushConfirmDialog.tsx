@@ -38,6 +38,7 @@ function GitForcePushConfirmDialogInner() {
   const resolveConfirmation = useGitForcePushStore((s) => s.resolveConfirmation);
 
   const record = pendingConfirm?.record ?? null;
+  const requestId = pendingConfirm?.requestId ?? null;
   const cwd = record?.cwd ?? null;
   const branchName = record?.branchName ?? null;
   const leaseSha = record?.leaseSha ?? null;
@@ -54,11 +55,21 @@ function GitForcePushConfirmDialogInner() {
    * enabled against them — for the frames between render and effect.
    */
   const [previewGeneration, setPreviewGeneration] = useState<number | null>(null);
-  const requestIdRef = useRef(0);
+  const fetchIdRef = useRef(0);
+  /**
+   * The request this instance last rendered. Unmount cleanup settles only that
+   * one: a tokenless decline would cancel whatever request happened to be
+   * pending, including a newer one installed while this instance was tearing
+   * down (an ErrorBoundary remount is exactly that shape).
+   */
+  const renderedRequestIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    renderedRequestIdRef.current = requestId;
+  }, [requestId]);
 
   const loadCommits = useCallback(() => {
     if (cwd === null || branchName === null || generation === null) return;
-    const requestId = ++requestIdRef.current;
+    const requestId = ++fetchIdRef.current;
     setIsLoading(true);
     setLoadError(null);
     setPreview(null);
@@ -68,16 +79,16 @@ function GitForcePushConfirmDialogInner() {
       window.electron.git
         .listRemoteCommits(cwd, branchName, COMMIT_LIMIT)
         .then((result) => {
-          if (requestIdRef.current !== requestId) return;
+          if (fetchIdRef.current !== requestId) return;
           setPreview(result);
           setPreviewGeneration(generation);
         })
         .catch((err: unknown) => {
-          if (requestIdRef.current !== requestId) return;
+          if (fetchIdRef.current !== requestId) return;
           setLoadError(formatErrorMessage(err, "Failed to load remote commits"));
         })
         .finally(() => {
-          if (requestIdRef.current !== requestId) return;
+          if (fetchIdRef.current !== requestId) return;
           setIsLoading(false);
         }),
       { context: "GitForcePushConfirmDialog: load remote commits" }
@@ -88,7 +99,7 @@ function GitForcePushConfirmDialogInner() {
     if (record === null) {
       // Invalidate anything still in flight so a late response can't repopulate
       // the preview after the request it belonged to went away.
-      requestIdRef.current++;
+      fetchIdRef.current++;
       setPreview(null);
       setPreviewGeneration(null);
       setLoadError(null);
@@ -130,6 +141,15 @@ function GitForcePushConfirmDialogInner() {
 
   const isBlocked = isLoading || !!loadError || preview === null || isPreviewStale;
 
+  // Resolve false on unmount so the action's awaited Promise cannot leak — the
+  // same guarantee `GitPushConfirmDialog` gives, scoped to this request.
+  useEffect(() => {
+    return () => {
+      const owned = renderedRequestIdRef.current;
+      if (owned !== null) useGitForcePushStore.getState().resolveConfirmation(owned, false);
+    };
+  }, []);
+
   const handleConfirm = () => {
     // Block confirm when the discard preview failed to load — without it the
     // user has no visibility into what `--force-with-lease` would discard,
@@ -138,16 +158,25 @@ function GitForcePushConfirmDialogInner() {
     // `isLoading` is still false, so the two guards together are what close
     // the window on a click landing before the fetch starts.
     if (isBlocked) return;
-    resolveConfirmation(true);
+    if (requestId === null) return;
+    // Re-read rather than trusting the render this handler closed over. A
+    // request installed between that render and this click owns the store now,
+    // and it has its own preview the user has not seen.
+    const live = useGitForcePushStore.getState().pendingConfirm;
+    if (!live || live.requestId !== requestId) return;
+    if (previewGeneration !== live.record.generation) return;
+    resolveConfirmation(requestId, true);
   };
 
-  if (record === null || branchName === null || leaseSha === null) return null;
+  if (record === null || requestId === null || branchName === null || leaseSha === null) {
+    return null;
+  }
 
   return (
     <ConfirmDialog
       isOpen={true}
       title={destinationLabel ? `Force push to ${destinationLabel}?` : `Force push ${branchName}?`}
-      onClose={() => resolveConfirmation(false)}
+      onClose={() => resolveConfirmation(requestId, false)}
       onConfirm={handleConfirm}
       confirmLabel="Force push"
       cancelLabel="Cancel"

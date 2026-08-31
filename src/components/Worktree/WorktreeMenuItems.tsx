@@ -449,15 +449,20 @@ export function WorktreeMenuItems({
   // a worktree detaches — a pull/push row would name a branch that is not
   // checked out. Fetch has no such problem: it only moves remote-tracking refs.
   const gitBranch = copyableBranchName(worktree);
-  // `aheadCount`/`behindCount` are populated only when an upstream exists
-  // (`GitStatusPass` sets them from `tracking`), so `undefined` IS the
-  // no-upstream signal — the same condition `requireRemoteTarget` throws on
-  // server-side for pull-rebase.
-  const hasUpstream = worktree.aheadCount !== undefined;
+  // `tracking` is the explicit upstream field, and it only exists once the
+  // status pass has run. Reading `aheadCount === undefined` instead would
+  // conflate "no upstream" with "not measured yet" and make a freshly created
+  // worktree claim it has no upstream before anything had looked — a state
+  // this menu has no business asserting. `undefined` here means exactly that:
+  // unknown.
+  const hasUpstream =
+    worktree.worktreeChanges == null ? undefined : Boolean(worktree.worktreeChanges.tracking);
   // Stays live even at `behindCount === 0`: the snapshot is a cached read, and
-  // pulling is how you find out it was stale. Push is the asymmetric one below
-  // because a push with nothing ahead genuinely does nothing.
-  const canPullRebase = Boolean(onGitPullRebase) && hasUpstream;
+  // pulling is how you find out it was stale. It also stays live while the
+  // upstream is unknown — the action's own error is a better answer than a row
+  // that guesses. Push is the asymmetric one below because a push with nothing
+  // ahead genuinely does nothing.
+  const canPullRebase = Boolean(onGitPullRebase) && hasUpstream !== false;
   // Measured against the UPSTREAM, while a triangular setup can push somewhere
   // else entirely (`branch.pushRemote`/`remote.pushDefault`), so zero-ahead can
   // in principle still have commits to publish. Accepted: the row stays live

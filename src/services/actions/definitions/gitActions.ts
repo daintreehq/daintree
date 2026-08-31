@@ -1078,6 +1078,21 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       try {
         await window.electron.git.forcePushWithLease(resolvedCwd, branchName, leaseSha);
       } catch (error) {
+        // Decode before rethrowing. The preload ships the discriminant fields
+        // inside an `[GitError|reason|lease|branch]` message prefix, and
+        // `isClientGitError` strips it as a side effect — without this, every
+        // consumer downstream (the ReviewHub banner, the card toast) classifies
+        // and displays the encoded envelope instead of the message.
+        const decoded = isClientGitError(error);
+        // A rejection means the remote refused the lease: it is no longer where
+        // it stood when the push that captured it was rejected, so the record
+        // describes a state that has been disproven. Transport and auth
+        // failures say nothing about the remote's position and keep it for a
+        // retry. Matched on the message because `GitOperationReason` has no
+        // member for a failed lease — git's own `stale info` is the signal.
+        if (decoded && /\bstale info\b|\[rejected\]/i.test(error.message)) {
+          useGitForcePushStore.getState().clearRecovery(resolvedCwd, generation);
+        }
         useAnnouncerStore.getState().announce(`Couldn't force push ${branchName}`, "assertive");
         throw error;
       }

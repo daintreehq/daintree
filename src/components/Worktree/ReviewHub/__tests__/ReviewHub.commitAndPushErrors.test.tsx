@@ -859,6 +859,26 @@ describe("ReviewHub", () => {
       expect(banner.getAttribute("data-reason")).not.toBe("push-rejected-outdated");
     });
 
+    it("drops a previously captured lease before pushing again", async () => {
+      // Otherwise a push that fails for some OTHER reason leaves the earlier
+      // rejection's lease standing, and the worktree card keeps offering a
+      // recovery for a remote state nobody has observed since.
+      useGitForcePushStore
+        .getState()
+        .recordRejection({ cwd: WORKTREE_PATH, branchName: "feature/x", leaseSha: "deadbeef" });
+      pushMock.mockRejectedValue(
+        Object.assign(new Error("Permission denied"), {
+          name: "GitOperationError",
+          gitReason: "auth-failed",
+        })
+      );
+
+      await triggerCommitAndPush();
+      await screen.findByTestId("review-hub-push-error");
+
+      expect(useGitForcePushStore.getState().getRecovery(WORKTREE_PATH)).toBeNull();
+    });
+
     it("Force-push CTA is suppressed when leaseSha is absent", async () => {
       pushMock.mockRejectedValue(
         Object.assign(new Error("! [rejected]"), {

@@ -52,6 +52,14 @@ export interface ForcePushRecovery {
 const LEASE_SHA_PATTERN = /^[0-9a-f]{4,64}$/i;
 
 interface PendingForcePushConfirmation {
+  /**
+   * Identifies THIS request. Resolution is scoped to it because a Promise
+   * resolved by "whatever is currently pending" can be settled by a handler
+   * that belongs to a request already superseded: request A renders, request B
+   * replaces it, and A's still-mounted button — its handler created before B's
+   * render committed — approves B against a preview of A.
+   */
+  requestId: number;
   resolve: (ok: boolean) => void;
   record: ForcePushRecovery;
 }
@@ -92,7 +100,11 @@ interface GitForcePushState {
   clearRecovery: (cwd: string, generation?: number) => void;
 
   requestConfirmation: (record: ForcePushRecovery) => Promise<boolean>;
-  resolveConfirmation: (ok: boolean) => void;
+  /**
+   * Settle one request. A no-op unless `requestId` names the request still
+   * pending, so a superseded dialog cannot answer for its replacement.
+   */
+  resolveConfirmation: (requestId: number, ok: boolean) => void;
 }
 
 export const useGitForcePushStore = create<GitForcePushState>()((set, get) => ({
@@ -135,18 +147,17 @@ export const useGitForcePushStore = create<GitForcePushState>()((set, get) => ({
     }
 
     return new Promise<boolean>((resolve) => {
-      set((state) => ({
-        pendingConfirm: { resolve, record },
-        requestSeq: state.requestSeq + 1,
-      }));
+      set((state) => {
+        const requestId = state.requestSeq + 1;
+        return { pendingConfirm: { requestId, resolve, record }, requestSeq: requestId };
+      });
     });
   },
 
-  resolveConfirmation: (ok: boolean) => {
+  resolveConfirmation: (requestId: number, ok: boolean) => {
     const pending = get().pendingConfirm;
-    if (pending) {
-      pending.resolve(ok);
-      set({ pendingConfirm: null });
-    }
+    if (!pending || pending.requestId !== requestId) return;
+    pending.resolve(ok);
+    set({ pendingConfirm: null });
   },
 }));

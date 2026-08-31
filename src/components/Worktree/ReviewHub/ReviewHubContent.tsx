@@ -1125,6 +1125,12 @@ export function ReviewHubContent({
       });
     });
 
+    // Drop any lease captured by an earlier rejection before pushing again —
+    // the same order `git.push`'s action uses. Without it a push that fails for
+    // some OTHER reason (or succeeds) leaves the previous rejection's lease
+    // standing, and the worktree card goes on offering a recovery for a remote
+    // state nobody has observed since.
+    useGitForcePushStore.getState().clearRecovery(worktreePath);
     try {
       await window.electron.git.push(worktreePath);
       setPushError(null);

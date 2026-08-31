@@ -29,6 +29,8 @@ import { actionService } from "@/services/ActionService";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
 import { notify } from "@/lib/notify";
 import { humanizeAppError } from "@shared/utils/errorMessage";
+import { getGitRecoveryAction } from "@shared/utils/gitOperationErrors";
+import { isClientGitError } from "@/utils/clientGitError";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { cn } from "../../lib/utils";
@@ -819,17 +821,41 @@ export function WorktreeCard({
         return;
       }
 
-      // Everything else is open-ended — auth, network, a hook, a rebase already
-      // in progress. `humanizeAppError` owns the copy for those; hand-writing a
-      // second set here would drift from the one every other git surface uses.
+      // ActionService preserves the original throw on `details`, and the git
+      // actions decode it before rethrowing — so the discriminated reason is
+      // right there. Dropping it would collapse auth, network, hook and policy
+      // failures into one "Git operation failed" toast that names no cause and
+      // offers no route.
+      const cause = result.error.details;
+      const gitReason = isClientGitError(cause) ? cause.gitReason : undefined;
       const humanized = humanizeAppError({
         type: "git",
         source: "WorktreeCard",
         message: result.error.message,
-        gitReason: undefined,
+        gitReason,
         recoveryHint: undefined,
       });
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok. No single recovery fits that set, and offering one that does not match what failed sends the user somewhere unrelated.
+      const recovery = gitReason ? getGitRecoveryAction(gitReason) : undefined;
+      if (recovery) {
+        notify({
+          type: "error",
+          context: { eventKind: "git" },
+          title: humanized.title,
+          message: humanized.body,
+          action: {
+            label: recovery.label,
+            onClick: () =>
+              void actionService.dispatch(
+                recovery.actionId,
+                recovery.args ?? { cwd: worktree.path },
+                { source }
+              ),
+          },
+        });
+        return;
+      }
+
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok. `RECOVERY_ACTIONS` in gitOperationErrors.ts is the repo's map of which git failures have a route; the ones that reach here are the ones it deliberately leaves unrouted, and inventing an action for them would send the user somewhere unrelated to what failed.
       notify({
         type: "error",
         context: { eventKind: "git" },

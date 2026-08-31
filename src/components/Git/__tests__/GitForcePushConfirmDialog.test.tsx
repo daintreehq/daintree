@@ -97,7 +97,8 @@ describe("GitForcePushConfirmDialog preview", () => {
     // Settle any deferred confirm before unmount so an awaited promise cannot
     // leak into the next test, then reset the store's recovery map.
     act(() => {
-      useGitForcePushStore.getState().resolveConfirmation(false);
+      const pending = useGitForcePushStore.getState().pendingConfirm;
+      if (pending) useGitForcePushStore.getState().resolveConfirmation(pending.requestId, false);
     });
     useGitForcePushStore.setState({ recovery: {}, pendingConfirm: null });
     cleanup();

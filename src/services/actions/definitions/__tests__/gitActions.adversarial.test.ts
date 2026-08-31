@@ -152,8 +152,9 @@ afterEach(() => {
   if (useGitPullRebaseConfirmStore.getState().pendingConfirm) {
     useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
   }
-  if (useGitForcePushStore.getState().pendingConfirm) {
-    useGitForcePushStore.getState().resolveConfirmation(false);
+  const forcePending = useGitForcePushStore.getState().pendingConfirm;
+  if (forcePending) {
+    useGitForcePushStore.getState().resolveConfirmation(forcePending.requestId, false);
   }
   useGitForcePushStore.setState({ recovery: {}, pendingConfirm: null });
 });
@@ -163,7 +164,8 @@ async function resolveForcePushConfirm(ok: boolean): Promise<void> {
   await vi.waitFor(() => {
     expect(useGitForcePushStore.getState().pendingConfirm).not.toBeNull();
   });
-  useGitForcePushStore.getState().resolveConfirmation(ok);
+  const pending = useGitForcePushStore.getState().pendingConfirm;
+  if (pending) useGitForcePushStore.getState().resolveConfirmation(pending.requestId, ok);
 }
 
 /** The error shape the preload reconstructs from a `GitOperationError`. */
@@ -301,20 +303,54 @@ describe("git.forcePushWithLease dispatch", () => {
     useGitForcePushStore
       .getState()
       .recordRejection({ cwd: "/repo/one", branchName: "feature/x", leaseSha: "abc123" });
-    useGitForcePushStore.getState().resolveConfirmation(true);
+    const pending = useGitForcePushStore.getState().pendingConfirm!;
+    useGitForcePushStore.getState().resolveConfirmation(pending.requestId, true);
 
     await expect(forced).rejects.toThrow(/changed while confirming/i);
     expect(git.forcePushWithLease).not.toHaveBeenCalled();
   });
 
-  it("keeps the lease when the force push itself fails", async () => {
+  it("drops a lease the remote has proven stale", async () => {
     const { run, git } = setupActions();
     seed();
-    git.forcePushWithLease.mockRejectedValueOnce(new Error("network down"));
+    git.forcePushWithLease.mockRejectedValueOnce(
+      new Error("[GitError|unknown||] ! [rejected] feature/x -> feature/x (stale info)")
+    );
 
     const forced = run("git.forcePushWithLease", { cwd: "/repo/one" });
     await resolveForcePushConfirm(true);
-    await expect(forced).rejects.toThrow(/network down/);
+    await expect(forced).rejects.toThrow(/stale info/);
+
+    // The remote refused the lease, so it is no longer where the rejection that
+    // captured it said. Keeping the row would offer an operation that cannot
+    // succeed until someone rewinds the remote to that exact commit.
+    expect(useGitForcePushStore.getState().getRecovery("/repo/one")).toBeNull();
+  });
+
+  it("strips the transport envelope off the error it rethrows", async () => {
+    // Consumers classify and display `error.message`. Left encoded, the
+    // ReviewHub banner and the card toast both show the wire format.
+    const { run, git } = setupActions();
+    seed();
+    git.forcePushWithLease.mockRejectedValueOnce(
+      new Error("[GitError|auth-failed||] Permission denied (publickey)")
+    );
+
+    const forced = run("git.forcePushWithLease", { cwd: "/repo/one" });
+    await resolveForcePushConfirm(true);
+    await expect(forced).rejects.toThrow(/^Permission denied \(publickey\)$/);
+  });
+
+  it("keeps the lease when the force push itself fails", async () => {
+    const { run, git } = setupActions();
+    seed();
+    git.forcePushWithLease.mockRejectedValueOnce(
+      new Error("[GitError|network-error||] Could not resolve host: github.com")
+    );
+
+    const forced = run("git.forcePushWithLease", { cwd: "/repo/one" });
+    await resolveForcePushConfirm(true);
+    await expect(forced).rejects.toThrow(/Could not resolve host/);
 
     // A transport failure says nothing about where the remote is, so the
     // capture is still the best evidence available for a retry.

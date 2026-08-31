@@ -15,7 +15,8 @@ function reset() {
 }
 
 afterEach(() => {
-  useGitForcePushStore.getState().resolveConfirmation(false);
+  const pending = useGitForcePushStore.getState().pendingConfirm;
+  if (pending) useGitForcePushStore.getState().resolveConfirmation(pending.requestId, false);
   reset();
 });
 
@@ -91,9 +92,10 @@ describe("gitForcePushStore confirm gate", () => {
     const record = store.recordRejection({ cwd: CWD, branchName: BRANCH, leaseSha: SHA })!;
 
     const pending = store.requestConfirmation(record);
+    const { requestId } = useGitForcePushStore.getState().pendingConfirm!;
     expect(useGitForcePushStore.getState().pendingConfirm?.record).toEqual(record);
 
-    useGitForcePushStore.getState().resolveConfirmation(true);
+    useGitForcePushStore.getState().resolveConfirmation(requestId, true);
     expect(await pending).toBe(true);
     expect(useGitForcePushStore.getState().pendingConfirm).toBeNull();
   });
@@ -104,12 +106,21 @@ describe("gitForcePushStore confirm gate", () => {
     const b = store.recordRejection({ cwd: "/repo/other", branchName: "b", leaseSha: "abcd" })!;
 
     const first = useGitForcePushStore.getState().requestConfirmation(a);
+    const firstId = useGitForcePushStore.getState().pendingConfirm!.requestId;
     const second = useGitForcePushStore.getState().requestConfirmation(b);
+    const secondId = useGitForcePushStore.getState().pendingConfirm!.requestId;
 
     // Same semantics as `gitPushConfirmStore`: a superseded confirm must settle
     // false rather than hang, or the action awaiting it never returns.
     expect(await first).toBe(false);
-    useGitForcePushStore.getState().resolveConfirmation(true);
+
+    // And the superseded dialog cannot answer for its replacement. Its click
+    // handler still carries the OLD id, so approving through it is a no-op
+    // rather than an approval of a preview nobody saw.
+    useGitForcePushStore.getState().resolveConfirmation(firstId, true);
+    expect(useGitForcePushStore.getState().pendingConfirm).not.toBeNull();
+
+    useGitForcePushStore.getState().resolveConfirmation(secondId, true);
     expect(await second).toBe(true);
   });
 
