@@ -13,6 +13,9 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 const refresh = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("@/clients", () => ({ worktreeClient: { refresh } }));
 
+const notify = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", () => ({ notify }));
+
 const WT_ID = "wt-1";
 const WT_PATH = "/repo/one";
 
@@ -47,6 +50,9 @@ function makeGitStub(): GitStub {
 
 function setupActions() {
   const actions: ActionRegistry = new Map();
+  // None of the git actions read a callback, so supplying the ~40-member real
+  // shape here would be noise. Same fixture the sibling adversarial suite builds.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture
   registerGitActions(actions, {} as unknown as ActionCallbacks);
   const git = makeGitStub();
 
@@ -59,6 +65,10 @@ function setupActions() {
       configurable: true,
       writable: true,
     });
+    // `run` over the definition union intersects its context parameter to
+    // `never`, so a caller cannot name the type it must pass. Same as the
+    // sibling adversarial suite.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- union parameter is `never`
     return def.run(args, (ctx ?? {}) as never) as Promise<unknown>;
   };
 
@@ -99,6 +109,7 @@ beforeEach(() => {
   dispatch.mockResolvedValue({ ok: true });
   refresh.mockReset();
   refresh.mockResolvedValue(undefined);
+  notify.mockReset();
   setWorktreePathIndexAccessor(() => new Map([[WT_ID, WT_PATH]]));
 });
 
@@ -354,6 +365,75 @@ describe("refreshWorktree never widens into a global sweep", () => {
     await pending;
     expect(git.rebaseOntoBase).toHaveBeenCalled();
     expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe("a failed operation is reported, not swallowed", () => {
+  it("raises one toast with humanized copy and a single recovery action", async () => {
+    // `ActionService.dispatch` CATCHES an action's error and resolves
+    // `{ok:false}`, so every dispatch surface — menu row, palette, keybinding —
+    // discards the failure unless the action reports it. Reporting here covers
+    // all of them at once.
+    const { run, git } = setupActions();
+    git.rebaseOntoBase.mockRejectedValue(
+      gitError("worktree-dirty", "This worktree has uncommitted changes.")
+    );
+    git.getStagingStatus.mockResolvedValue(CLEAN_STATUS);
+
+    const pending = run("git.rebaseOntoBase", { worktreeId: WT_ID, baseBranch: "develop" });
+    await settleConfirm(true);
+    await expect(pending).rejects.toThrow();
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    const payload = notify.mock.calls[0]![0] as {
+      type: string;
+      title: string;
+      message: string;
+      context: { eventKind: string };
+      action: { label: string };
+    };
+    expect(payload.type).toBe("error");
+    expect(payload.context.eventKind).toBe("git");
+    expect(payload.action.label).toBe("Open Review Hub");
+    // The copy comes from the classified reason, not the raw git string.
+    expect(payload.title).not.toContain("[GitError");
+    expect(payload.message.length).toBeGreaterThan(0);
+  });
+
+  it("stays silent when the operation succeeds", async () => {
+    const { run } = setupActions();
+    const pending = run("git.rebaseOntoBase", { worktreeId: WT_ID, baseBranch: "develop" });
+    await settleConfirm(true);
+    await pending;
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("stays silent on a halt — the conflict panel it just opened is the report", async () => {
+    const { run, git } = setupActions();
+    git.rebaseOntoBase.mockRejectedValue(
+      gitError("conflict-unresolved", "CONFLICT (content): in a.ts")
+    );
+    git.getStagingStatus.mockResolvedValue(HALTED_STATUS);
+
+    const pending = run("git.rebaseOntoBase", { worktreeId: WT_ID, baseBranch: "develop" });
+    await settleConfirm(true);
+    await pending;
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("does not toast an agent dispatch, which has no screen to read it", async () => {
+    const { run, git } = setupActions();
+    git.rebaseOntoBase.mockRejectedValue(gitError("worktree-dirty", "dirty"));
+    git.getStagingStatus.mockResolvedValue(CLEAN_STATUS);
+
+    await expect(
+      run(
+        "git.rebaseOntoBase",
+        { worktreeId: WT_ID, baseBranch: "develop" },
+        { dispatchSource: "agent" }
+      )
+    ).rejects.toThrow();
+    expect(notify).not.toHaveBeenCalled();
   });
 });
 

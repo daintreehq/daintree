@@ -21,9 +21,6 @@ const dispatch = vi.hoisted(() =>
 );
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 
-const notify = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/notify", () => ({ notify }));
-
 /**
  * A worktree with everything the Git submenu's start rows need: a base branch,
  * a known-clean tree, and something to integrate.
@@ -72,7 +69,6 @@ beforeEach(() => {
   // otherwise poison every test after it.
   dispatch.mockReset();
   dispatch.mockResolvedValue({ ok: true });
-  notify.mockReset();
 });
 
 describe("Git submenu — root placement", () => {
@@ -246,55 +242,6 @@ describe("Git submenu — recovery rows", () => {
     for (const label of ["Continue", "Abort"]) {
       expect(gitRow(container, label).disabled).toBe(false);
     }
-  });
-});
-
-describe("Git submenu — failures are visible", () => {
-  it("raises a toast when a row's action fails", async () => {
-    // `ActionService.dispatch` resolves `{ok:false}` instead of rejecting, so a
-    // bare `void dispatch(...)` discarded every failure these rows can produce —
-    // a dirty-tree race, an unresolvable base, a continue with nothing to
-    // continue. The user asked for a git operation and did not get one.
-    dispatch.mockResolvedValue({
-      ok: false,
-      error: { code: "ACTION_FAILED", message: "This worktree has uncommitted changes." },
-    });
-    const { container } = renderWorktreeMenu({ worktree: integrable() });
-    gitRow(container, "Rebase onto").click();
-
-    await vi.waitFor(() => {
-      expect(notify).toHaveBeenCalledTimes(1);
-    });
-    expect(notify.mock.calls[0]![0]).toMatchObject({
-      type: "error",
-      title: "Rebase failed",
-      message: "This worktree has uncommitted changes.",
-    });
-  });
-
-  it("stays quiet when the action succeeds", async () => {
-    const { container } = renderWorktreeMenu({ worktree: integrable() });
-    gitRow(container, "Merge develop in").click();
-    await vi.waitFor(() => {
-      expect(dispatch).toHaveBeenCalled();
-    });
-    expect(notify).not.toHaveBeenCalled();
-  });
-
-  it("names the operation in a failed recovery row's title", async () => {
-    dispatch.mockResolvedValue({
-      ok: false,
-      error: { code: "ACTION_FAILED", message: "No operation is in progress" },
-    });
-    const { container } = renderWorktreeMenu({
-      worktree: integrable({ repoState: "MERGING" } as Partial<WorktreeState>),
-    });
-    gitRow(container, "Continue").click();
-
-    await vi.waitFor(() => {
-      expect(notify).toHaveBeenCalledTimes(1);
-    });
-    expect(notify.mock.calls[0]![0]).toMatchObject({ title: "Continue merge failed" });
   });
 });
 
