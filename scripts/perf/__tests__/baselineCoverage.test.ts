@@ -46,18 +46,18 @@ describe("checkBaselineFreshness", () => {
     vi.restoreAllMocks();
   });
 
-  it("warns when the baseline is older than the threshold", () => {
+  it("warns when an entry is older than the threshold", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const now = new Date("2026-06-07T00:00:00.000Z");
-    const old = baseline({}, "2026-01-01T00:00:00.000Z"); // ~157 days
+    const old = baseline({ "PERF-001": 1 }, "2026-01-01T00:00:00.000Z"); // ~157 days
     checkBaselineFreshness(old, "ci", BASELINE_FRESHNESS_DAYS, now);
     expect(warn).toHaveBeenCalledOnce();
   });
 
-  it("does not warn when the baseline is within the threshold", () => {
+  it("does not warn when every entry is within the threshold", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const now = new Date("2026-06-07T00:00:00.000Z");
-    const fresh = baseline({}, "2026-06-01T00:00:00.000Z"); // 6 days
+    const fresh = baseline({ "PERF-001": 1 }, "2026-06-01T00:00:00.000Z"); // 6 days
     checkBaselineFreshness(fresh, "ci", BASELINE_FRESHNESS_DAYS, now);
     expect(warn).not.toHaveBeenCalled();
   });
@@ -65,7 +65,7 @@ describe("checkBaselineFreshness", () => {
   it("does not warn exactly at the threshold boundary", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const now = new Date("2026-02-01T00:00:00.000Z");
-    const atBoundary = baseline({}, "2026-01-02T00:00:00.000Z"); // exactly 30 days
+    const atBoundary = baseline({ "PERF-001": 1 }, "2026-01-02T00:00:00.000Z"); // exactly 30 days
     checkBaselineFreshness(atBoundary, "ci", 30, now);
     expect(warn).not.toHaveBeenCalled();
   });
@@ -78,7 +78,7 @@ describe("checkBaselineFreshness", () => {
 
   it("does not throw or warn on an unparseable timestamp", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const bad = baseline({}, "not-a-date");
+    const bad = baseline({ "PERF-001": 1 }, "not-a-date");
     expect(() => checkBaselineFreshness(bad, "ci")).not.toThrow();
     expect(warn).not.toHaveBeenCalled();
   });

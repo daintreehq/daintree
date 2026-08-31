@@ -229,8 +229,57 @@ export interface PerfBudgetConfig {
   scenarios: Record<string, ScenarioBudget>;
 }
 
+/**
+ * Machine identity of the run that measured a baseline entry.
+ *
+ * Deliberately a projection of {@link RunEnvironment} rather than a second
+ * vocabulary for the same thing: `durationsComparable` reads exactly these
+ * three fields, so an entry carries what the comparability rules need and
+ * nothing they do not.
+ */
+export type BaselineMachine = Pick<RunEnvironment, "machineLabel" | "platform" | "arch">;
+
+/**
+ * One scenario's reference p95, with the provenance needed to read it.
+ *
+ * A p95 is a `duration`, so it means nothing away from the machine that
+ * produced it, and entries now accumulate one scenario at a time across
+ * whichever machines the developer measured on. Without a per-entry date and
+ * machine, a reference measured on a Windows laptop six months ago is
+ * indistinguishable from one measured on this Mac today — and every
+ * `outsideReference` annotation computed against it is then a statement about
+ * two laptops presented as a statement about the code.
+ */
+export interface BaselineEntry {
+  p95Ms: number;
+  /** When the run that produced this p95 ran — NOT when the file was written. */
+  measuredAt: string;
+  /**
+   * Null only for an entry lifted from a pre-provenance file, where the machine
+   * was never recorded. Null means unknown, and every reader treats unknown as
+   * "not this machine" rather than assuming the convenient answer.
+   */
+  machine: BaselineMachine | null;
+}
+
 export interface BaselineSummary {
+  /**
+   * When this FILE was last written, and nothing more.
+   *
+   * `--update-baseline` merges one measured scenario into an existing file, so
+   * this carries today's date on a file whose other forty entries are months
+   * old. Freshness is per-entry (`BaselineEntry.measuredAt`). The one remaining
+   * reader of this field is the legacy promotion in `readBaselineEntries`,
+   * where it is the honest measurement date of every entry in a file that the
+   * whole-matrix writer produced in a single pass.
+   */
   generatedAt: string;
   mode: PerfMode;
-  p95ByScenario: Record<string, number>;
+  /**
+   * Pre-provenance shape: read, never written. The committed baselines are
+   * still in it, as is any file written before provenance existed.
+   */
+  p95ByScenario?: Record<string, number>;
+  /** Provenanced entries. What `--update-baseline` writes from now on. */
+  scenarios?: Record<string, BaselineEntry>;
 }

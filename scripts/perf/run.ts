@@ -4,13 +4,21 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadBudgetConfig, getScenarioBudget } from "./lib/budgets";
-import { checkBaselineCoverage, checkBaselineFreshness } from "./lib/baselineCoverage";
+import {
+  BASELINE_FRESHNESS_DAYS,
+  checkBaselineCoverage,
+  checkBaselineFreshness,
+  describeForeignReference,
+  readBaselineEntries,
+} from "./lib/baselineCoverage";
 import { evaluateCorrectness, evaluateScenarioBudget } from "./lib/gate";
 import { appendJsonLine, appendText, readJson, writeJson, writeText, ensureDir } from "./lib/io";
 import { aggregateMetrics, averageMetrics, mean, percentile, round, stdDev } from "./lib/stats";
 import { buildMarkdownReport } from "./report/generate";
 import { assertMatrixCoverage, getScenariosForMode } from "./scenarios";
 import type {
+  BaselineEntry,
+  BaselineMachine,
   BaselineSummary,
   PerfMode,
   PerfRunSummary,
@@ -656,6 +664,41 @@ function writeHistory(summary: PerfRunSummary): string {
   return historyPath;
 }
 
+export interface BaselineMergeInput {
+  /** Every reference already in the file, with the provenance it arrived with. */
+  existing: Record<string, BaselineEntry>;
+  /** Scenarios this run actually measured, and whose numbers are authoritative here. */
+  measured: ReadonlyArray<{ id: string; p95Ms: number }>;
+  /** This run's timestamp — applied to the measured entries and to nothing else. */
+  measuredAt: string;
+  /** This run's machine — likewise. */
+  machine: BaselineMachine;
+}
+
+/**
+ * Merge one run's measurements into an existing baseline.
+ *
+ * The merge itself is old; what is new is that an inherited entry keeps its own
+ * date and machine. Stamping the whole file with the current time was the
+ * defect: a run measuring one scenario re-dated forty references it never
+ * touched, and freshness — which read that one file-wide timestamp — then
+ * declared the lot current. An entry only gets today's date and this machine if
+ * this run actually measured it.
+ *
+ * Sorted, because inherited entries and measured ones would otherwise interleave
+ * by insertion order and put an unrelated reshuffle in every regeneration diff
+ * of a committed file.
+ */
+export function mergeBaselineEntries(input: BaselineMergeInput): Record<string, BaselineEntry> {
+  const merged: Record<string, BaselineEntry> = { ...input.existing };
+
+  for (const { id, p95Ms } of input.measured) {
+    merged[id] = { p95Ms, measuredAt: input.measuredAt, machine: input.machine };
+  }
+
+  return Object.fromEntries(Object.entries(merged).sort(([a], [b]) => a.localeCompare(b)));
+}
+
 async function run(): Promise<void> {
   const cli = parseArgs(process.argv.slice(2));
   assertMatrixCoverage();
@@ -664,8 +707,7 @@ async function run(): Promise<void> {
 
   const budgetConfig = loadBudgetConfig();
   const baseline = readJson<BaselineSummary>(cli.baselinePath);
-
-  checkBaselineFreshness(baseline, cli.mode);
+  const baselineEntries = readBaselineEntries(baseline);
 
   const selected = selectScenarios(cli);
   if (selected.length === 0) {
@@ -680,6 +722,16 @@ async function run(): Promise<void> {
     skipped: skippedScenarios,
     diagnostic: diagnosticIds,
   } = partitionByPlatform(selected, process.platform);
+
+  // Freshness is checked once the run's scenarios are known, so the reference
+  // this run actually reads is named rather than buried in a file-wide count.
+  checkBaselineFreshness(
+    baseline,
+    cli.mode,
+    BASELINE_FRESHNESS_DAYS,
+    new Date(),
+    scenarios.map((scenario) => scenario.id)
+  );
 
   // Regenerating the baseline is exactly how coverage gaps get fixed, so an
   // --update-baseline run has nothing to be told. Everywhere else this is a
@@ -795,6 +847,11 @@ async function run(): Promise<void> {
     }
   }
 
+  const provenanceNotes: string[] = [];
+  // Described before the aggregates are built, not after: deciding whether a
+  // stored reference was measured on THIS machine needs the machine identity.
+  const environment = describeEnvironment(cli.machineLabel, provenanceNotes);
+
   const scenariosOutsideReference: string[] = [];
   const aggregates: ScenarioAggregate[] = [];
 
@@ -810,7 +867,15 @@ async function run(): Promise<void> {
     const metricStats = aggregateMetrics(aggregate.metrics);
 
     const budget = getScenarioBudget(budgetConfig, scenarioId);
-    const baselineP95 = baseline?.p95ByScenario?.[scenarioId];
+    const baselineEntry = baselineEntries[scenarioId];
+    // A reference from another machine is withheld from the drift check rather
+    // than fed into it. The value is still real, but the VERDICT it would
+    // produce — "this drifted 40% from baseline" — would be a statement about
+    // two laptops. The reason is reported in its place, so the row says why it
+    // has no verdict instead of quietly having none.
+    const foreignReference =
+      baselineEntry === undefined ? null : describeForeignReference(baselineEntry, environment);
+    const baselineP95 = foreignReference === null ? baselineEntry?.p95Ms : undefined;
     const { outsideReference, measurementIssues, reasons } = evaluateScenarioBudget({
       scenarioId,
       p95Ms,
@@ -820,6 +885,17 @@ async function run(): Promise<void> {
 
       hasBaselineFile: baseline !== null,
     });
+
+    // Withholding the reference makes the gate report an ABSENT one, which is a
+    // different state with a different fix — the entry is present, it just did
+    // not come from here. That reason is replaced rather than added to.
+    const referenceReasons =
+      baselineEntry !== undefined && foreignReference !== null
+        ? [
+            ...reasons.filter((reason) => !reason.startsWith("no recorded baseline")),
+            `reference ${round(baselineEntry.p95Ms)}ms not compared: ${foreignReference}`,
+          ]
+        : reasons;
 
     const runs = aggregate.durations.length;
 
@@ -878,7 +954,7 @@ async function run(): Promise<void> {
         ])
       ),
       outsideReference: reportedOutsideReference,
-      referenceNotes: reasons.length > 0 ? reasons.join("; ") : undefined,
+      referenceNotes: referenceReasons.length > 0 ? referenceReasons.join("; ") : undefined,
       measurementIssues: [...measurementIssues, ...correctnessIssues],
       // The diagnostic marker leads, ahead of the scenario's own notes and
       // outside the slice that trims them, so a platform caveat can never be
@@ -892,15 +968,13 @@ async function run(): Promise<void> {
 
   aggregates.sort((a, b) => a.id.localeCompare(b.id));
 
-  const provenanceNotes: string[] = [];
-
   const summary: PerfRunSummary = {
     generatedAt: new Date().toISOString(),
     mode: cli.mode,
     nodeVersion: process.version,
     platform: process.platform,
     label: cli.label,
-    environment: describeEnvironment(cli.machineLabel, provenanceNotes),
+    environment,
     protocol: {
       iterations: cli.iterations ?? null,
       warmups: cli.warmups ?? null,
@@ -933,52 +1007,31 @@ async function run(): Promise<void> {
   }
 
   if (cli.updateBaseline) {
-    // A baseline is shared across machines and platforms, so a diagnostic p95
-    // written here would become the reference every supported platform is then
-    // measured against — the cross-platform comparison the marking exists to
-    // refuse. The previously recorded value is carried through instead of
-    // dropped: regenerating on the platform where a scenario is diagnostic must
-    // not delete the reference the platforms that CAN measure it depend on.
-    const p95ByScenario: Record<string, number> = {};
-    for (const aggregate of aggregates) {
-      if (!diagnosticIds.has(aggregate.id)) {
-        p95ByScenario[aggregate.id] = aggregate.p95Ms;
-        continue;
-      }
-      const inherited = baseline?.p95ByScenario?.[aggregate.id];
-      if (typeof inherited === "number" && Number.isFinite(inherited)) {
-        p95ByScenario[aggregate.id] = inherited;
-      }
-    }
-    // Same reasoning for a scenario that never ran here: an unsupported
-    // scenario has no measurement to contribute, and omitting it outright would
-    // erase the reference recorded on a platform that supports it.
-    for (const scenario of skippedScenarios) {
-      const inherited = baseline?.p95ByScenario?.[scenario.id];
-      if (typeof inherited === "number" && Number.isFinite(inherited)) {
-        p95ByScenario[scenario.id] = inherited;
-      }
-    }
-    // And for every scenario this run did not select. A run measures ONE
-    // scenario, so a baseline written from just what was measured would hold a
-    // single reference and be indistinguishable from a complete file. This is
-    // the merge that makes `--update-baseline` safe now that there is no
-    // whole-matrix run to regenerate from.
-    for (const [id, value] of Object.entries(baseline?.p95ByScenario ?? {})) {
-      if (p95ByScenario[id] === undefined && Number.isFinite(value)) {
-        p95ByScenario[id] = value;
-      }
-    }
+    const mergedScenarios = mergeBaselineEntries({
+      existing: baselineEntries,
+      // A diagnostic p95 is a signal, not a measurement, so it never becomes a
+      // reference; leaving it out of `measured` inherits the prior entry
+      // untouched, which is what keeps the value recorded on a platform that
+      // CAN measure the scenario. Unsupported scenarios and every scenario this
+      // run did not select are inherited by the same route.
+      measured: aggregates
+        .filter((aggregate) => !diagnosticIds.has(aggregate.id))
+        .map((aggregate) => ({ id: aggregate.id, p95Ms: aggregate.p95Ms })),
+      measuredAt: summary.generatedAt,
+      machine: {
+        machineLabel: environment.machineLabel,
+        platform: environment.platform,
+        arch: environment.arch,
+      },
+    });
 
     const baselineOut: BaselineSummary = {
-      generatedAt: new Date().toISOString(),
+      // The file's own write time, and nothing more. Every entry carries the
+      // date it was actually measured, so this timestamp no longer stands in
+      // for any of them.
+      generatedAt: summary.generatedAt,
       mode: cli.mode,
-      // Sorted, because inherited entries are collected after the measured ones
-      // and this file is committed — insertion order would put an unrelated
-      // reshuffle in every regeneration diff.
-      p95ByScenario: Object.fromEntries(
-        Object.entries(p95ByScenario).sort(([a], [b]) => a.localeCompare(b))
-      ),
+      scenarios: mergedScenarios,
     };
     writeJson(cli.baselinePath, baselineOut);
   }
