@@ -24,6 +24,7 @@ import { pluginHostScenarios } from "./pluginHost";
 import { panelScenarios } from "./panels";
 import { supervisionScenarios } from "./supervision";
 import { mcpSessionScenarios } from "./mcpSession";
+import { themeScenarios } from "./theme";
 
 export const allScenarios: PerfScenario[] = [
   ...startupScenarios,
@@ -51,6 +52,7 @@ export const allScenarios: PerfScenario[] = [
   ...panelScenarios,
   ...supervisionScenarios,
   ...mcpSessionScenarios,
+  ...themeScenarios,
 ];
 
 export function getScenariosForMode(mode: PerfMode): PerfScenario[] {
@@ -176,6 +178,12 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-283",
   "PERF-284",
   "PERF-285",
+  "PERF-300",
+  "PERF-301",
+  "PERF-302",
+  "PERF-303",
+  "PERF-304",
+  "PERF-305",
 ]);
 
 /**
