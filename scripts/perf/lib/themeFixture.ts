@@ -5,7 +5,6 @@ import {
   apcaContrast,
   apcaLc,
   applyAccentOverrideToScheme,
-  blendOverBackground,
   contrastRatio,
   deltaEOK,
   getAppThemeCssVariables,
@@ -54,12 +53,15 @@ import { BRAND_MARK_SURFACES, resolveBrandMarkInk } from "../../../src/lib/brand
  *   overridden) are real and the duration is a Map walk, not a style
  *   recalculation. Nothing here prices layout, paint or the compositor.
  * - **The oracles do their own colour maths.** `wcagRatio`, `srgbToLinear`,
- *   `neutralOklabL` and `compositeOver` below are written here rather than
- *   imported, because grading `contrastRatio` with `contrastRatio` grades
- *   nothing. Each is anchored against a value the subject does not contain:
- *   WCAG's 21:1 for white-on-black, APCA-W3's published 106.04 / -107.88 pair,
- *   and the identity that a neutral grey's OKLab L is the cube root of its
- *   linearised channel (the M1/M2 rows sum to 1 for an achromatic input).
+ *   `neutralOklabL`, `compositeOver`, `oklabOf`, `apcaWeight` and `mixChannels`
+ *   below are written here rather than imported, because grading `contrastRatio`
+ *   with `contrastRatio` grades nothing — and neither does compositing a
+ *   backdrop with the subject's own blend. Each is anchored against a value the
+ *   subject does not contain: WCAG's 21:1 for white-on-black, APCA-W3's
+ *   published 106.04 / -107.88 pair, and the identity that a neutral grey's
+ *   OKLab L is the cube root of its linearised channel (the M1/M2 rows sum to 1
+ *   for an achromatic input), which also fixes both OKLab distances exactly on
+ *   any pair of greys.
  */
 
 export const THEME_SOURCES: readonly BuiltInThemeSource[] = BUILT_IN_THEME_SOURCES;
@@ -97,14 +99,23 @@ export function srgbToLinear(channel: number): number {
   return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
 }
 
+// Memoized because the crossfade grid re-measures the same interpolated hexes
+// across 1,620 resolutions; the value is a pure function of the string.
+const luminanceCache = new Map<string, number>();
+
+function oracleLuminance(hex: string): number {
+  const cached = luminanceCache.get(hex);
+  if (cached !== undefined) return cached;
+  const [r, g, b] = channels(hex);
+  const value = 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b);
+  luminanceCache.set(hex, value);
+  return value;
+}
+
 /** WCAG 2.x contrast ratio, derived here so it can grade the product's own. */
 export function wcagRatio(foreground: string, background: string): number {
-  const luminance = (hex: string): number => {
-    const [r, g, b] = channels(hex);
-    return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b);
-  };
-  const a = luminance(foreground);
-  const b = luminance(background);
+  const a = oracleLuminance(foreground);
+  const b = oracleLuminance(background);
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
@@ -123,6 +134,97 @@ export function compositeOver(foreground: string, background: string, alpha: num
  */
 export function neutralOklabL(channel: number): number {
   return Math.cbrt(srgbToLinear(channel));
+}
+
+export interface OracleOklab {
+  L: number;
+  a: number;
+  b: number;
+}
+
+/**
+ * OKLab coordinates, written out so `deltaEOK` and the brand-mark predicates
+ * are graded by something neither `oklch.ts` nor `brandIcon.ts` contains.
+ *
+ * `neutralOklabL` is what anchors it: both matrices have rows summing to 1, so
+ * an achromatic input must come back with L at the cube root and a, b at zero.
+ */
+export function oklabOf(hex: string): OracleOklab {
+  const [r8, g8, b8] = channels(hex);
+  const r = srgbToLinear(r8);
+  const g = srgbToLinear(g8);
+  const b = srgbToLinear(b8);
+  const long = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const medium = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const short = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return {
+    L: 0.2104542553 * long + 0.793617785 * medium - 0.0040720468 * short,
+    a: 1.9779984951 * long - 2.428592205 * medium + 0.4505937099 * short,
+    b: 0.0259040371 * long + 0.7827717662 * medium - 0.808675766 * short,
+  };
+}
+
+/** Euclidean OKLab distance — what a perceptual ΔE in this space is defined as. */
+export function oklabDistance(from: string, to: string): number {
+  const a = oklabOf(from);
+  const b = oklabOf(to);
+  return Math.hypot(a.L - b.L, a.a - b.a, a.b - b.b);
+}
+
+export function oklabChroma(hex: string): number {
+  const { a, b } = oklabOf(hex);
+  return Math.hypot(a, b);
+}
+
+/** Hue angle in degrees. Noise below `COLOURLESS_CHROMA`, so it is only read above it. */
+export function oklabHue(hex: string): number {
+  const { a, b } = oklabOf(hex);
+  const degrees = (Math.atan2(b, a) * 180) / Math.PI;
+  return degrees < 0 ? degrees + 360 : degrees;
+}
+
+/** Shortest angular separation between two hues, in degrees. */
+export function hueSeparation(from: number, to: number): number {
+  return Math.abs(((((from - to) % 360) + 540) % 360) - 180);
+}
+
+/** APCA's soft black clamp: it models screen flare, where WCAG models nothing. */
+const APCA_BLACK_THRESHOLD = 0.022;
+
+function screenLuminance(hex: string): number {
+  const [r, g, b] = channels(hex);
+  const y =
+    (r / 255) ** 2.4 * 0.2126729 + (g / 255) ** 2.4 * 0.7151522 + (b / 255) ** 2.4 * 0.072175;
+  return y > APCA_BLACK_THRESHOLD ? y : y + (APCA_BLACK_THRESHOLD - y) ** 1.414;
+}
+
+/**
+ * APCA-W3 (`0.98G-4g`) perceived weight, unsigned, so the brand-mark predicate
+ * is not grading `apca.ts` with `apca.ts`. Anchored on the published
+ * 106.04 / 107.88 pair, which is a constant in neither implementation.
+ */
+export function apcaWeight(foreground: string, background: string): number {
+  const text = screenLuminance(foreground);
+  const backdrop = screenLuminance(background);
+  if (Math.abs(backdrop - text) < 0.0005) return 0;
+  const sapc =
+    backdrop > text
+      ? (backdrop ** 0.56 - text ** 0.57) * 1.14
+      : (backdrop ** 0.65 - text ** 0.62) * 1.14;
+  return Math.abs(sapc) < 0.1 ? 0 : (Math.abs(sapc) - 0.027) * 100;
+}
+
+/** Channel-wise sRGB interpolation — the space a CSS `color` transition crossfades in. */
+export function mixChannels(from: string, to: string, ratio: number): string {
+  const a = channels(from);
+  const b = channels(to);
+  return `#${a
+    .map((c, i) =>
+      Math.round(c + (b[i] - c) * ratio)
+        .toString(16)
+        .padStart(2, "0")
+    )
+    .join("")}`;
 }
 
 function isOpaqueHex(value: string | undefined): value is string {
@@ -383,6 +485,10 @@ export function runColourMathPass(corpus: ColourCorpus): ColourMathPass {
 /** Greys the corpus does not contain, so the identity is tested, not replayed. */
 const GREY_PROBES = [0x00, 0x1a, 0x40, 0x80, 0xbf, 0xe6, 0xff];
 
+function greyHex(channel: number): string {
+  return `#${channel.toString(16).padStart(2, "0").repeat(3)}`;
+}
+
 /**
  * Known values, every one derivable without reading `oklch.ts` or `apca.ts`.
  * A conversion returning a constant, its input, or null scores on all of them.
@@ -393,7 +499,7 @@ export function colourMathMisses(corpus: ColourCorpus, pass: ColourMathPass): nu
   if (!Number.isFinite(pass.checksum) || pass.checksum === 0) misses += 1;
 
   for (const channel of GREY_PROBES) {
-    const hex = `#${channel.toString(16).padStart(2, "0").repeat(3)}`;
+    const hex = greyHex(channel);
     const oklch = hexToOklch(hex);
     if (!oklch) {
       misses += 1;
@@ -401,6 +507,22 @@ export function colourMathMisses(corpus: ColourCorpus, pass: ColourMathPass): nu
     }
     if (Math.abs(oklch.l - neutralOklabL(channel)) > 1e-6) misses += 1;
     if (oklch.c > 1e-6) misses += 1;
+  }
+
+  // Both distances are exact on a pair of greys: a and b are zero there, so the
+  // whole distance collapses to the same cube-root identity the probes above
+  // check. This is the anchor `deltaEOK` had none of — the aggregate checksum
+  // stayed non-zero from the other four operations while it returned anything.
+  for (let i = 0; i < GREY_PROBES.length; i += 1) {
+    for (let j = i + 1; j < GREY_PROBES.length; j += 1) {
+      const from = greyHex(GREY_PROBES[i]);
+      const to = greyHex(GREY_PROBES[j]);
+      const expected = Math.abs(neutralOklabL(GREY_PROBES[j]) - neutralOklabL(GREY_PROBES[i]));
+      if (Math.abs(deltaEOK(from, to) - expected) > 1e-6) misses += 1;
+      const a = hexToOklch(from);
+      const b = hexToOklch(to);
+      if (!a || !b || Math.abs(deltaOklch(a, b) - expected) > 1e-6) misses += 1;
+    }
   }
 
   // Distance is a metric: zero on itself, symmetric, and non-zero between two
@@ -413,14 +535,22 @@ export function colourMathMisses(corpus: ColourCorpus, pass: ColourMathPass): nu
     if (Math.abs(deltaOklch(white, black) - deltaOklch(black, white)) > 1e-9) misses += 1;
     if (deltaOklch(white, black) < 0.9) misses += 1;
   }
+  if (deltaEOK("#ffffff", "#ffffff") !== 0) misses += 1;
+  if (Math.abs(deltaEOK("#ffffff", "#000000") - deltaEOK("#000000", "#ffffff")) > 1e-9) misses += 1;
+  if (deltaEOK("#ffffff", "#000000") < 0.9) misses += 1;
 
-  // The subject's own WCAG against the oracle's, over the real corpus edges.
+  // Every operation the timed loop pays for, against the oracle's own maths,
+  // over the real corpus edges rather than over anchors alone.
   for (const { hex, canvas } of corpus.pairs.slice(0, 64)) {
     if (Math.abs(contrastRatio(hex, canvas) - wcagRatio(hex, canvas)) > 1e-6) misses += 1;
+    if (Math.abs(deltaEOK(hex, canvas) - oklabDistance(hex, canvas)) > 1e-9) misses += 1;
+    if (Math.abs(apcaLc(hex, canvas) - apcaWeight(hex, canvas)) > 1e-9) misses += 1;
   }
 
   if (Math.abs(apcaLc("#000000", "#ffffff") - 106.04) > 0.01) misses += 1;
   if (Math.abs(apcaLc("#ffffff", "#000000") - 107.88) > 0.01) misses += 1;
+  if (Math.abs(apcaWeight("#000000", "#ffffff") - 106.04) > 0.01) misses += 1;
+  if (Math.abs(apcaWeight("#ffffff", "#000000") - 107.88) > 0.01) misses += 1;
 
   return misses;
 }
@@ -713,28 +843,77 @@ export function runInkSweep(schemes: readonly AppColorScheme[]): InkSweep {
   return { resolutions, attempted };
 }
 
-/** The two backdrops a mark meets, derived here rather than asked of the resolver. */
+/**
+ * The two backdrops a mark meets, composited by the oracle rather than asked of
+ * the subject.
+ *
+ * `compositeOver` exists so this file owns its own blend; the earlier revision
+ * wrote it and then called the product's `blendOverBackground` here anyway,
+ * which grades a blend with the blend. An opaque `overlay-elevated` replaces the
+ * surface rather than lifting it — reading it as a lift would measure a pixel
+ * the screen covers.
+ */
 function backdropsFor(
   scheme: AppColorScheme,
   surface: AppThemeTokenKey
 ): { rest: string; active: string } | null {
   const rest = scheme.tokens[surface];
   if (!isOpaqueHex(rest)) return null;
-  const overlay = parseRgba(scheme.tokens["overlay-elevated"] ?? "");
+  const declared = scheme.tokens["overlay-elevated"] ?? "";
+  if (isOpaqueHex(declared)) return { rest, active: declared };
+  const overlay = parseRgba(declared);
   return {
     rest,
-    active: overlay ? blendOverBackground(overlay.hex, rest, overlay.opacity) : rest,
+    active: overlay ? compositeOver(overlay.hex, rest, overlay.opacity) : rest,
   };
 }
 
+// The resolver's published contract, named here because a predicate that cannot
+// say the numbers cannot check them. Each is a threshold, not an implementation:
+// WCAG 1.4.11's non-text floor, `brandIcon`'s ACTIVE_MIN_LC, and the chroma
+// under which a brand has no hue for a theme to carry.
+const NON_TEXT_CONTRAST_FLOOR = 3;
+const ACTIVE_MIN_LC = 35;
+const COLOURLESS_CHROMA = 0.02;
+
 /**
- * WCAG 1.4.11's 3:1, checked with the oracle's own ratio against backdrops the
- * oracle composited itself.
+ * Hue drift a correction is allowed. `atLightness` holds the hue and gives up
+ * chroma to fit sRGB, so the only drift is 8-bit rounding; the cohort's worst is
+ * 1.63 degrees.
+ */
+const BRAND_HUE_TOLERANCE_DEG = 3;
+
+/**
+ * The crossfade grid, at twice the resolver's own resolution.
+ *
+ * `staysLegible` samples 9 points on each axis and enforces the floor with
+ * headroom because the minimum can sit between two samples. Sampling the 17-point
+ * superset at the bare floor tests that claim rather than replaying it: the 8
+ * interpolated points per axis are exactly what the headroom is for.
+ */
+const ORACLE_CROSSFADE_SAMPLES = Array.from({ length: 17 }, (_, index) => index / 16);
+
+/**
+ * Everything the resolver guarantees, re-derived: WCAG 1.4.11's 3:1 across the
+ * whole crossfade rather than at its endpoints, the APCA floor an active mark is
+ * placed at, and the hue a correction has to preserve.
+ *
+ * The endpoints alone were not enough to grade this. The APCA floor is where the
+ * cheap wrong answer hid: 153 of the 1,620 marks clear WCAG's 3:1 on the raw
+ * brand hex while sitting under Lc 35, so a resolver that stops at WCAG is
+ * faster and no endpoint check would say so.
+ *
+ * The crossfade is graded as a grid for the same reason the resolver searches
+ * one — both inks are in flight, so the minimum can sit between the endpoints.
+ * On the shipped matrix the interior never binds: shortening the resolver's own
+ * grid to its two endpoints halves its cost and returns byte-identical ink for
+ * all 1,620 resolutions. That is a finding about the resolver rather than a hole
+ * here — a pair that does dip between its endpoints is rejected.
  *
  * A resolver that hands back the brand hex unchanged scores on `rest === active`
- * — the whole point of the two states is that they differ — and on the floor
- * wherever the raw brand was illegible, which is the case the resolver exists
- * for.
+ * — the whole point of the two states is that they differ — on the contrast
+ * floor wherever the raw brand was illegible, and now on the APCA floor for the
+ * marks that were legible and still too light to read.
  */
 export function inkSweepMisses(schemes: readonly AppColorScheme[], sweep: InkSweep): number {
   let misses = 0;
@@ -746,6 +925,11 @@ export function inkSweepMisses(schemes: readonly AppColorScheme[], sweep: InkSwe
   if (Math.abs(wcagRatio("#ffffff", "#000000") - 21) > 1e-9) misses += 1;
   if (compositeOver("#ffffff", "#000000", 1) !== "#ffffff") misses += 1;
   if (compositeOver("#ffffff", "#000000", 0) !== "#000000") misses += 1;
+  if (mixChannels("#000000", "#ffffff", 0.5) !== "#808080") misses += 1;
+  if (Math.abs(apcaWeight("#000000", "#ffffff") - 106.04) > 0.01) misses += 1;
+  if (Math.abs(apcaWeight("#ffffff", "#000000") - 107.88) > 0.01) misses += 1;
+  if (Math.abs(oklabDistance("#000000", "#ffffff") - 1) > 1e-6) misses += 1;
+  if (oklabChroma(greyHex(0x80)) > 1e-6) misses += 1;
 
   for (const resolution of sweep.resolutions) {
     if (!resolution.rest || !resolution.active) {
@@ -763,11 +947,59 @@ export function inkSweepMisses(schemes: readonly AppColorScheme[], sweep: InkSwe
       misses += 1;
       continue;
     }
-    for (const ink of [resolution.rest, resolution.active]) {
-      for (const behind of [backdrops.rest, backdrops.active]) {
-        if (wcagRatio(ink, behind) < 3) misses += 1;
+
+    // One miss per resolution: the reading is "this mark's crossfade is not
+    // legible", not how many of its 289 frames are not.
+    if (!crossfadeStaysLegible(resolution.rest, resolution.active, backdrops)) misses += 1;
+
+    const activeWeight = Math.min(
+      apcaWeight(resolution.active, backdrops.rest),
+      apcaWeight(resolution.active, backdrops.active)
+    );
+    const ink = scheme.tokens["text-secondary"];
+    const colourless = oklabChroma(resolution.brand) < COLOURLESS_CHROMA;
+    const silhouette =
+      colourless && isOpaqueHex(ink) && resolution.rest.toLowerCase() === ink.toLowerCase();
+
+    if (silhouette) {
+      // A brand with no hue is drawn in the theme's own icon ink, so weight is
+      // the only reveal it has: active must sit further from the backdrop than
+      // rest does. The APCA floor is not this path's contract.
+      const restWeight = Math.min(
+        apcaWeight(resolution.rest, backdrops.rest),
+        apcaWeight(resolution.rest, backdrops.active)
+      );
+      if (activeWeight <= restWeight) misses += 1;
+    } else if (activeWeight < ACTIVE_MIN_LC) {
+      misses += 1;
+    }
+
+    if (!colourless) {
+      // Hue is the half of a brand mark a correction has to survive with, and a
+      // grey that clears every floor is the cheap wrong answer this catches.
+      if (oklabChroma(resolution.active) < COLOURLESS_CHROMA) misses += 1;
+      else if (
+        hueSeparation(oklabHue(resolution.active), oklabHue(resolution.brand)) >
+        BRAND_HUE_TOLERANCE_DEG
+      ) {
+        misses += 1;
       }
     }
   }
   return misses;
+}
+
+export function crossfadeStaysLegible(
+  rest: string,
+  active: string,
+  backdrops: { rest: string; active: string }
+): boolean {
+  for (const foreground of ORACLE_CROSSFADE_SAMPLES) {
+    const ink = mixChannels(rest, active, foreground);
+    for (const background of ORACLE_CROSSFADE_SAMPLES) {
+      const behind = mixChannels(backdrops.rest, backdrops.active, background);
+      if (wcagRatio(ink, behind) < NON_TEXT_CONTRAST_FLOOR) return false;
+    }
+  }
+  return true;
 }

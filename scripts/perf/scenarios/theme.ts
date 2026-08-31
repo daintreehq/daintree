@@ -141,9 +141,12 @@ export const themeScenarios: PerfScenario[] = [
       "contrastRatio, apcaLc and deltaEOK — over every opaque hex token in the shipped cohort. " +
       "hexTokens and conversionCount are deterministic cardinalities that travel; " +
       "usPerKConversions is the unit price PERF-301's composed number is made of. mathMisses " +
-      "grades against values no line of oklch.ts or apca.ts contains: a neutral grey's OKLab " +
-      "lightness is the cube root of its linearised channel, white-on-black is exactly 21:1, and " +
-      "the APCA-W3 reference pair is 106.04 / -107.88.",
+      "grades every one of the five against values no line of oklch.ts or apca.ts contains: a " +
+      "neutral grey's OKLab lightness is the cube root of its linearised channel, which fixes " +
+      "both OKLab distances exactly on any pair of greys; white-on-black is exactly 21:1; and " +
+      "the APCA-W3 reference pair is 106.04 / -107.88. contrastRatio, deltaEOK and apcaLc are " +
+      "each additionally compared against the oracle's own arithmetic over the real corpus, so " +
+      "an operation stubbed out cannot hide behind the aggregate checksum.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 16, nightly: 22 },
@@ -252,9 +255,11 @@ export const themeScenarios: PerfScenario[] = [
       "6 surfaces a mark can be painted on — the heaviest real consumer of the APCA and OKLCH " +
       "maths, run for every brand mark whenever the active theme changes. The full sweep is " +
       "1,620 resolutions against a 512-entry FIFO cache, so it thrashes and every pass is cold; " +
-      "warmSpeedup is measured on a bounded subset that fits. inkMisses re-derives each " +
-      "backdrop and each WCAG ratio itself and requires 3:1 on both states over both backdrops, " +
-      "so a resolver handing back the brand hex scores on rest === active and on the floor.",
+      "warmSpeedup is measured on a bounded subset that fits. inkMisses composites each backdrop " +
+      "itself and grades the two things the resolution actually costs: WCAG 1.4.11's 3:1 across " +
+      "a 17x17 crossfade grid rather than at its endpoints, and the APCA Lc 35 floor an active " +
+      "mark is placed at — 153 of the 1,620 clear 3:1 on the raw brand hex and are moved by " +
+      "nothing but that floor. Hue is checked too, so a grey that clears every floor scores.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 12 },
