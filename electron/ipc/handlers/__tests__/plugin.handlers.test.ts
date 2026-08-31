@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { markAuditedHandlerFailure } from "../../../utils/pluginAuditMarker.js";
 
 const mockDispatchHandler = vi.fn();
+const mockGetSettingValuesForUi = vi.fn();
+const mockRevealSecretSettingForUi = vi.fn();
 const mockListPlugins = vi.fn();
 const mockSetEnabled = vi.fn();
 const mockInstallPlugin = vi.fn();
@@ -53,6 +55,8 @@ vi.mock("../../../services/PluginService.js", () => ({
     uninstallPlugin: (...args: unknown[]) => mockUninstallPlugin(...args),
     checkForUpdate: (...args: unknown[]) => mockCheckForUpdate(...args),
     dispatchHandler: (...args: unknown[]) => mockDispatchHandler(...args),
+    getSettingValuesForUi: (...args: unknown[]) => mockGetSettingValuesForUi(...args),
+    revealSecretSettingForUi: (...args: unknown[]) => mockRevealSecretSettingForUi(...args),
     listPluginActions: (...args: unknown[]) => mockListPluginActions(...args),
     registerPluginAction: (...args: unknown[]) => mockRegisterPluginAction(...args),
     unregisterPluginAction: (...args: unknown[]) => mockUnregisterPluginAction(...args),
@@ -2743,5 +2747,89 @@ describe("plugin:invoke project binding", () => {
     mockDispatchHandler.mockResolvedValue({ ok: true });
     await invokeHandler()(trustedEvent, "acme.dashboard", "get-data");
     expect(mockDispatchHandler).toHaveBeenCalled();
+  });
+});
+
+describe("plugin settings project ownership", () => {
+  const PROJECT_A = "a".repeat(64);
+  const PROJECT_B = "b".repeat(64);
+  const INSTANCE_A = `project__${PROJECT_A}__acme.dashboard`;
+
+  function getHandler(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  beforeEach(() => {
+    mockGetSettingValuesForUi.mockResolvedValue({});
+    mockRevealSecretSettingForUi.mockResolvedValue("s3cret");
+  });
+
+  it("refuses to read another project's plugin settings", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:settings-get-values")(
+        { sender: { id: 1 } },
+        INSTANCE_A,
+        "project",
+        PROJECT_A
+      )
+    ).rejects.toThrow(/different project/);
+    expect(mockGetSettingValuesForUi).not.toHaveBeenCalled();
+  });
+
+  it("refuses to decrypt another project's plugin secret", async () => {
+    // The worst case of the same hole: an instance key is not a secret, so
+    // without the sender check any renderer that knows A's ids could read A's
+    // stored credentials in plaintext.
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:settings-reveal-secret")(
+        { sender: { id: 1 } },
+        INSTANCE_A,
+        "token",
+        "project",
+        PROJECT_A
+      )
+    ).rejects.toThrow(/different project/);
+    expect(mockRevealSecretSettingForUi).not.toHaveBeenCalled();
+  });
+
+  it("refuses a project id the sender does not own even for an app-global plugin", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:settings-get-values")(
+        { sender: { id: 1 } },
+        "acme.dashboard",
+        "project",
+        PROJECT_A
+      )
+    ).rejects.toThrow(/different project/);
+    expect(mockGetSettingValuesForUi).not.toHaveBeenCalled();
+  });
+
+  it("allows a project plugin read from its own project's renderer", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_A);
+    await getHandler("plugin:settings-get-values")(
+      { sender: { id: 1 } },
+      INSTANCE_A,
+      "project",
+      PROJECT_A
+    );
+    expect(mockGetSettingValuesForUi).toHaveBeenCalledWith(INSTANCE_A, "project", PROJECT_A);
+  });
+
+  it("leaves user-scope settings unconstrained by the sender's project", async () => {
+    // `projectId: null` is the "user" scope and names no project to own.
+    mockGetProjectForWebContents.mockReturnValue(null);
+    await getHandler("plugin:settings-get-values")(
+      { sender: { id: 1 } },
+      "acme.dashboard",
+      "user",
+      null
+    );
+    expect(mockGetSettingValuesForUi).toHaveBeenCalledWith("acme.dashboard", "user", null);
   });
 });

@@ -1139,39 +1139,74 @@ async function handleGetDiagnosticsSnapshot(): Promise<PluginDiagnosticsSnapshot
 
 // ── Plugin settings UI bridge (#9301) ─────────────────────────────────────
 
+/**
+ * Settings reads and writes answer only to a renderer that owns the project
+ * they name.
+ *
+ * `PluginSettingsManager` checks that the supplied `pluginId` and `projectId`
+ * agree with each other, but never that the *sender* owns that project. An
+ * instance key is not a secret, so without this a renderer for project B that
+ * knows A's ids could read — or with `revealSecret`, decrypt — project A's
+ * plugin settings. Both halves are checked: the id the caller names, and the
+ * project the plugin instance itself belongs to.
+ *
+ * `projectId: null` is the legitimate `"user"`-scope case and needs no owner.
+ */
+function assertSenderOwnsSettingsTarget(
+  ctx: IpcContext,
+  pluginId: string,
+  projectId: string | null
+): void {
+  if (projectId !== null && projectId !== ctx.projectId) {
+    throw new Error("plugin settings rejected: sender belongs to a different project");
+  }
+  const boundProjectId = projectIdFromPluginInstanceKey(pluginId);
+  if (boundProjectId !== null && boundProjectId !== ctx.projectId) {
+    throw new Error("plugin settings rejected: plugin belongs to a different project");
+  }
+}
+
 async function handleSettingsGetValues(
+  ctx: IpcContext,
   pluginId: string,
   scope: PluginSettingsScope,
   projectId: string | null
 ): Promise<PluginSettingsUiValues> {
+  assertSenderOwnsSettingsTarget(ctx, pluginId, projectId);
   return (await getPluginService()).getSettingValuesForUi(pluginId, scope, projectId);
 }
 
 async function handleSettingsSetValue(
+  ctx: IpcContext,
   pluginId: string,
   key: string,
   value: unknown,
   scope: PluginSettingsScope,
   projectId: string | null
 ): Promise<void> {
+  assertSenderOwnsSettingsTarget(ctx, pluginId, projectId);
   await (await getPluginService()).setSettingValueFromUi(pluginId, key, value, scope, projectId);
 }
 
 async function handleSettingsDeleteValue(
+  ctx: IpcContext,
   pluginId: string,
   key: string,
   scope: PluginSettingsScope,
   projectId: string | null
 ): Promise<void> {
+  assertSenderOwnsSettingsTarget(ctx, pluginId, projectId);
   await (await getPluginService()).deleteSettingValueFromUi(pluginId, key, scope, projectId);
 }
 
 async function handleSettingsRevealSecret(
+  ctx: IpcContext,
   pluginId: string,
   key: string,
   scope: PluginSettingsScope,
   projectId: string | null
 ): Promise<string | null> {
+  assertSenderOwnsSettingsTarget(ctx, pluginId, projectId);
   return (await getPluginService()).revealSecretSettingForUi(pluginId, key, scope, projectId);
 }
 
@@ -1371,10 +1406,20 @@ export const pluginNamespace = defineIpcNamespace({
       PLUGIN_METHOD_CHANNELS.getDiagnosticsSnapshot,
       handleGetDiagnosticsSnapshot
     ),
-    getSettingValues: op(PLUGIN_METHOD_CHANNELS.getSettingValues, handleSettingsGetValues),
-    setSettingValue: op(PLUGIN_METHOD_CHANNELS.setSettingValue, handleSettingsSetValue),
-    deleteSettingValue: op(PLUGIN_METHOD_CHANNELS.deleteSettingValue, handleSettingsDeleteValue),
-    revealSecretSetting: op(PLUGIN_METHOD_CHANNELS.revealSecretSetting, handleSettingsRevealSecret),
+    getSettingValues: op(PLUGIN_METHOD_CHANNELS.getSettingValues, handleSettingsGetValues, {
+      withContext: true,
+    }),
+    setSettingValue: op(PLUGIN_METHOD_CHANNELS.setSettingValue, handleSettingsSetValue, {
+      withContext: true,
+    }),
+    deleteSettingValue: op(PLUGIN_METHOD_CHANNELS.deleteSettingValue, handleSettingsDeleteValue, {
+      withContext: true,
+    }),
+    revealSecretSetting: op(
+      PLUGIN_METHOD_CHANNELS.revealSecretSetting,
+      handleSettingsRevealSecret,
+      { withContext: true }
+    ),
     pickPath: op(PLUGIN_METHOD_CHANNELS.pickPath, handlePickPath, { withContext: true }),
     pathExists: op(PLUGIN_METHOD_CHANNELS.pathExists, handlePathExists),
     getBackgroundUpdateCheckSettings: op(
