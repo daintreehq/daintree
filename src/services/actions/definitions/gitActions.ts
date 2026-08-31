@@ -17,6 +17,7 @@ import {
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { useGitWorktreeOperationConfirmStore } from "@/store/gitWorktreeOperationConfirmStore";
+import { isClientGitError } from "@/utils/clientGitError";
 import type { RepoOperationState } from "@/components/Git/repoOperationCopy";
 import { actionService } from "@/services/ActionService";
 import { worktreeClient } from "@/clients";
@@ -67,25 +68,36 @@ const RepoOperationStateSchema = z
  * Scoped to the worktree rather than the whole sidebar: a base integration
  * changes exactly one tree, and `worktree.refresh`'s no-arg form also refreshes
  * every pull request against the provider's rate limit.
+ *
+ * A worktree the renderer's index does not know is SKIPPED rather than
+ * refreshed with `undefined` — that argument does not mean "no worktree", it
+ * means "all of them", and quietly widening a one-worktree refresh into a
+ * global topology-plus-PR sweep is the opposite of what this function claims to
+ * do. Polling reconciles that tree on its own.
  */
 async function refreshWorktree(
   location: WorktreeLocationArgs | undefined,
   ctx: ActionContext
 ): Promise<void> {
-  let worktreeId: string | undefined;
-  try {
-    worktreeId = requireWorktreeId(location, ctx);
-  } catch {
-    // A path the worktree index does not know is still a valid target for the
-    // operation itself — it just cannot be refreshed by id. The next poll picks
-    // the change up either way, so this must never turn a successful rebase
-    // into a reported failure.
-    worktreeId = undefined;
-  }
+  const worktreeId = resolveWorktreeIdOrNull(location, ctx);
+  if (!worktreeId) return;
   try {
     await worktreeClient.refresh(worktreeId);
   } catch {
-    // Same reasoning: polling reconciles regardless.
+    // Never turn a successful git mutation into a reported failure over a UI
+    // read. Polling reconciles regardless.
+  }
+}
+
+/** The worktree id for `location`, or `null` when the index cannot name one. */
+function resolveWorktreeIdOrNull(
+  location: WorktreeLocationArgs | undefined,
+  ctx: ActionContext
+): string | null {
+  try {
+    return requireWorktreeId(location, ctx);
+  } catch {
+    return null;
   }
 }
 
@@ -102,6 +114,12 @@ async function refreshWorktree(
  *
  * Reads the status fresh rather than trusting the snapshot: the halt happened
  * milliseconds ago and the polled snapshot has not seen it yet.
+ *
+ * Returns whether the conflict surface is actually now open. The caller uses
+ * that to decide whether to swallow its error, so a dispatch that resolved
+ * `{ok:false}` — Review Hub's own action fails softly when the worktree lookup
+ * misses — must report `false` here. Reporting `true` on a panel that never
+ * opened would turn a failed rebase into a silent success.
  */
 async function routeHaltToReviewHub(
   cwd: string,
@@ -119,20 +137,16 @@ async function routeHaltToReviewHub(
   }
   if (!halted) return false;
 
-  let worktreeId: string | undefined;
-  try {
-    worktreeId = requireWorktreeId(location, ctx);
-  } catch {
-    return false;
-  }
+  const worktreeId = resolveWorktreeIdOrNull(location, ctx);
+  if (!worktreeId) return false;
   // Inherits the source that got here, so a menu-initiated halt opens Review
   // Hub as a menu dispatch rather than laundering itself into a user one.
-  await actionService.dispatch(
+  const result = await actionService.dispatch(
     "worktree.openReviewHub",
     { worktreeId },
     ctx.dispatchSource ? { source: ctx.dispatchSource } : undefined
   );
-  return true;
+  return result.ok;
 }
 
 /**
@@ -140,10 +154,18 @@ async function routeHaltToReviewHub(
  *
  * Refreshes on BOTH paths, not just success: a rebase that stops on a conflict
  * throws while having genuinely moved the worktree, so refreshing only on
- * success leaves the card claiming the pre-rebase state (#12092). On a halt the
- * user is taken to the conflict UI and the error is swallowed — the panel they
- * are now looking at IS the report, and a toast on top of it would be the same
- * failure stated twice.
+ * success leaves the card claiming the pre-rebase state (#12092).
+ *
+ * The error is swallowed in exactly one case, and the narrowness is the point.
+ * It must be a CONFLICT — read off the classified `gitReason` the handler
+ * encoded, not inferred from the repository merely being in some operation
+ * state — and Review Hub must actually have opened. Inferring it from state
+ * alone was wrong in both directions: an agent starting a cherry-pick in its
+ * own PTY between the click and the failure would make an unrelated
+ * `worktree-dirty` refusal look like a halt, and the handler's own "already
+ * mid-operation" refusal would swallow itself. Either way the user would be
+ * shown a conflict panel for an operation that never started, and the caller
+ * would be told it succeeded.
  */
 async function runBaseIntegration(
   invoke: () => Promise<void>,
@@ -155,7 +177,13 @@ async function runBaseIntegration(
     await invoke();
   } catch (error) {
     await refreshWorktree(location, ctx);
-    if (await routeHaltToReviewHub(cwd, location, ctx)) return;
+    // `isClientGitError` decodes the `[GitError|<reason>|…]` prefix the preload
+    // sets when crossing the contextBridge, and attaches `gitReason` in place.
+    // Its sibling `readGitErrorFields` would do too, but lives in the ReviewHub
+    // module graph — importing that here pulls a panel's dependencies into
+    // every action-definition test.
+    const isConflict = isClientGitError(error) && error.gitReason === "conflict-unresolved";
+    if (isConflict && (await routeHaltToReviewHub(cwd, location, ctx))) return;
     throw error;
   }
   await refreshWorktree(location, ctx);
@@ -758,14 +786,19 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         baseBranch: string;
       };
       const resolvedCwd = requireWorktreePath(location, ctx);
+      // The commits the dialog previewed. Handed to the write so it refuses if
+      // either has moved since — an agent committing into the worktree while
+      // the dialog is open is ordinary in this product, not a corner case.
+      let pinned: { headOid?: string; baseOid?: string } | null = null;
       if (ctx.dispatchSource !== "agent") {
-        const confirmed = await useGitWorktreeOperationConfirmStore
+        const result = await useGitWorktreeOperationConfirmStore
           .getState()
           .requestConfirmation({ kind: "rebase-onto-base", cwd: resolvedCwd, baseBranch });
-        if (!confirmed) return;
+        if (!result.confirmed) return;
+        pinned = result.pinned;
       }
       await runBaseIntegration(
-        () => window.electron.git.rebaseOntoBase(resolvedCwd, baseBranch),
+        () => window.electron.git.rebaseOntoBase(resolvedCwd, baseBranch, pinned ?? undefined),
         resolvedCwd,
         location,
         ctx
@@ -789,14 +822,16 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
         baseBranch: string;
       };
       const resolvedCwd = requireWorktreePath(location, ctx);
+      let pinned: { headOid?: string; baseOid?: string } | null = null;
       if (ctx.dispatchSource !== "agent") {
-        const confirmed = await useGitWorktreeOperationConfirmStore
+        const result = await useGitWorktreeOperationConfirmStore
           .getState()
           .requestConfirmation({ kind: "merge-base", cwd: resolvedCwd, baseBranch });
-        if (!confirmed) return;
+        if (!result.confirmed) return;
+        pinned = result.pinned;
       }
       await runBaseIntegration(
-        () => window.electron.git.mergeBaseIntoBranch(resolvedCwd, baseBranch),
+        () => window.electron.git.mergeBaseIntoBranch(resolvedCwd, baseBranch, pinned ?? undefined),
         resolvedCwd,
         location,
         ctx
@@ -833,14 +868,14 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       };
       const resolvedCwd = requireWorktreePath(location, ctx);
       if (ctx.dispatchSource !== "agent") {
-        const confirmed = await useGitWorktreeOperationConfirmStore.getState().requestConfirmation({
+        const result = await useGitWorktreeOperationConfirmStore.getState().requestConfirmation({
           kind: "abort-operation",
           cwd: resolvedCwd,
           // The dialog re-reads the real state and prefers its answer; this is
           // only the label to show while that read is in flight.
           operation: operation ?? "REBASING",
         });
-        if (!confirmed) return;
+        if (!result.confirmed) return;
       }
       await window.electron.git.abortRepositoryOperation(resolvedCwd);
       await refreshWorktree(location, ctx);
@@ -861,13 +896,22 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       const resolvedCwd = requireWorktreePath(location, ctx);
       try {
         await window.electron.git.continueRepositoryOperation(resolvedCwd);
-      } finally {
-        // In `finally`, not on the success path: `--continue` can advance the
-        // operation and THEN stop on the next conflict, which throws while
-        // having genuinely moved the worktree. Refreshing only on success would
-        // leave the card showing the step before last.
+      } catch (error) {
+        // `--continue` can advance the operation and THEN stop on the next
+        // conflict, which throws while having genuinely moved the worktree. So
+        // both refresh AND halt-routing have to happen here as well as on the
+        // success path — a `finally` refresh alone would leave the user on a
+        // card showing the step before last, with the conflict panel unopened
+        // because the throw skipped past the routing call.
         await refreshWorktree(location, ctx);
+        const isConflict = isClientGitError(error) && error.gitReason === "conflict-unresolved";
+        if (isConflict && (await routeHaltToReviewHub(resolvedCwd, location, ctx))) return;
+        throw error;
       }
+      await refreshWorktree(location, ctx);
+      // Not gated on an error: a continue that SUCCEEDS still leaves the
+      // worktree mid-rebase whenever there are more commits to replay, and that
+      // is the ordinary case rather than a failure.
       await routeHaltToReviewHub(resolvedCwd, location, ctx);
     },
   }));

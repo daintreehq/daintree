@@ -21,7 +21,7 @@ describe("gitWorktreeOperationConfirmStore", () => {
     });
 
     useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(true);
-    await expect(pending).resolves.toBe(true);
+    await expect(pending).resolves.toEqual({ confirmed: true, pinned: null });
     expect(useGitWorktreeOperationConfirmStore.getState().pendingConfirm).toBeNull();
   });
 
@@ -37,7 +37,7 @@ describe("gitWorktreeOperationConfirmStore", () => {
       operation: "MERGING",
     });
     useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(false);
-    await expect(pending).resolves.toBe(false);
+    await expect(pending).resolves.toEqual({ confirmed: false, pinned: null });
   });
 
   it("cancels a superseded request rather than leaking its Promise", async () => {
@@ -55,13 +55,13 @@ describe("gitWorktreeOperationConfirmStore", () => {
       baseBranch: "main",
     });
 
-    await expect(first).resolves.toBe(false);
+    await expect(first).resolves.toEqual({ confirmed: false, pinned: null });
     expect(useGitWorktreeOperationConfirmStore.getState().pendingConfirm?.request).toMatchObject({
       cwd: "/repo/two",
     });
 
     useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(true);
-    await expect(second).resolves.toBe(true);
+    await expect(second).resolves.toEqual({ confirmed: true, pinned: null });
   });
 
   it("bumps requestSeq on every request, including a back-to-back supersede", () => {
@@ -71,6 +71,37 @@ describe("gitWorktreeOperationConfirmStore", () => {
     void store.requestConfirmation({ kind: "rebase-onto-base", cwd: "/a", baseBranch: "develop" });
     void store.requestConfirmation({ kind: "rebase-onto-base", cwd: "/b", baseBranch: "develop" });
     expect(useGitWorktreeOperationConfirmStore.getState().requestSeq).toBe(2);
+  });
+
+  it("carries the previewed commits back to the caller", async () => {
+    // The whole reason the result is not a bare boolean: the action hands these
+    // to the write, which refuses if either has moved since.
+    const pending = useGitWorktreeOperationConfirmStore.getState().requestConfirmation({
+      kind: "rebase-onto-base",
+      cwd: "/repo/wt",
+      baseBranch: "develop",
+    });
+    useGitWorktreeOperationConfirmStore
+      .getState()
+      .resolveConfirmation(true, { headOid: "aaa", baseOid: "bbb" });
+    await expect(pending).resolves.toEqual({
+      confirmed: true,
+      pinned: { headOid: "aaa", baseOid: "bbb" },
+    });
+  });
+
+  it("drops any pins on a decline", async () => {
+    // A declined confirm has nothing to pin, and carrying OIDs through it would
+    // let a caller act on refs it was never given permission for.
+    const pending = useGitWorktreeOperationConfirmStore.getState().requestConfirmation({
+      kind: "merge-base",
+      cwd: "/repo/wt",
+      baseBranch: "develop",
+    });
+    useGitWorktreeOperationConfirmStore
+      .getState()
+      .resolveConfirmation(false, { headOid: "aaa", baseOid: "bbb" });
+    await expect(pending).resolves.toEqual({ confirmed: false, pinned: null });
   });
 
   it("ignores a resolve with nothing pending", () => {

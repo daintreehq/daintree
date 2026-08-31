@@ -131,18 +131,39 @@ describe("resolveExistingBaseCompareTarget", () => {
     });
   });
 
-  it("falls back to origin/<base> when the selected ref does not exist", async () => {
-    const remotes = ["origin", "upstream"];
+  it("defaults an unresolved ref to origin/<base>, exactly as the behind count does", async () => {
+    // `BaseDivergence.compute()` uses `resolution?.compareRef ?? origin/<base>`.
+    // Anything else here would target a different commit from the one the card
+    // measured, with nothing on screen to give it away.
     const { git } = fakeGit({
-      remote: "origin\nupstream\n",
-      [FOR_EACH_REF(remotes, "develop")]: "refs/remotes/upstream/develop\n",
-      // The selected ref is gone (pruned between the for-each-ref and now).
+      remote: "origin\n",
+      // No tracking ref and no for-each-ref hit, so the resolver declines.
       "rev-parse --verify --quiet refs/remotes/origin/develop^{commit}": "def456\n",
     });
     expect(await resolveExistingBaseCompareTarget(git, "develop")).toEqual({
       compareRef: "origin/develop",
       fullRef: "refs/remotes/origin/develop",
       remote: "origin",
+    });
+  });
+
+  it("skips origin and falls straight to LOCAL when a resolved ref is pruned", async () => {
+    // The case a third `origin/<base>` rung would have quietly changed. The
+    // base tracks `upstream/develop`, that ref is gone, and `origin/develop`
+    // exists — `compute()` falls through to the local branch here, so this must
+    // too, or the badge counts against `develop` while the menu rebases onto
+    // `origin/develop`.
+    const remotes = ["origin", "upstream"];
+    const { git } = fakeGit({
+      remote: "origin\nupstream\n",
+      [FOR_EACH_REF(remotes, "develop")]: "refs/remotes/upstream/develop\n",
+      "rev-parse --verify --quiet refs/remotes/origin/develop^{commit}": "def456\n",
+      "rev-parse --verify --quiet refs/heads/develop^{commit}": "aaa111\n",
+    });
+    expect(await resolveExistingBaseCompareTarget(git, "develop")).toEqual({
+      compareRef: "develop",
+      fullRef: "refs/heads/develop",
+      remote: null,
     });
   });
 
@@ -180,16 +201,22 @@ describe("resolveExistingBaseCompareTarget", () => {
     expect(target?.fullRef.startsWith("-")).toBe(false);
   });
 
-  it("peels an annotated tag rather than accepting the tag object", async () => {
-    // `^{commit}` is what makes a tag-shaped ref usable as a rebase target.
+  it("peels to a commit, so a tag-shaped ref is not offered as a rebase target", async () => {
+    // Behavioural, not a suffix check: the double answers ONLY the peeled
+    // spelling, so a resolver that dropped `^{commit}` would find nothing and
+    // return null instead of this target.
     const { git, raw } = fakeGit({
       remote: "",
       "rev-parse --verify --quiet refs/heads/develop^{commit}": "ccc333\n",
     });
-    await resolveExistingBaseCompareTarget(git, "develop");
+    expect(await resolveExistingBaseCompareTarget(git, "develop")).toEqual({
+      compareRef: "develop",
+      fullRef: "refs/heads/develop",
+      remote: null,
+    });
     const verifyCalls = raw.mock.calls
-      .map((c) => c[0])
-      .filter((args: string[]) => args[0] === "rev-parse" && args[1] === "--verify");
-    expect(verifyCalls.every((args: string[]) => args[3]!.endsWith("^{commit}"))).toBe(true);
+      .map((c) => c[0] as string[])
+      .filter((args) => args[0] === "rev-parse" && args[1] === "--verify");
+    expect(verifyCalls.length).toBeGreaterThan(0);
   });
 });

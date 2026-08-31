@@ -29,8 +29,25 @@ export type GitWorktreeOperationConfirmRequest =
   | { kind: GitBaseIntegrationKind; cwd: string; baseBranch: string }
   | { kind: "abort-operation"; cwd: string; operation: RepoOperationState };
 
+/**
+ * What the dialog approved, not merely THAT it approved.
+ *
+ * A bare boolean was not enough: between the preview and the click an agent can
+ * commit into the worktree or background fetch can move the base ref, and the
+ * write would then do something other than what was on screen. `pinned` carries
+ * the two commits the dialog actually described so the handler can refuse if
+ * either moved. `null` when the surface had nothing to pin (the abort kind, or
+ * a ref that did not resolve).
+ */
+export interface GitWorktreeOperationConfirmResult {
+  confirmed: boolean;
+  pinned: { headOid?: string; baseOid?: string } | null;
+}
+
+const DECLINED: GitWorktreeOperationConfirmResult = { confirmed: false, pinned: null };
+
 interface PendingConfirmation {
-  resolve: (ok: boolean) => void;
+  resolve: (result: GitWorktreeOperationConfirmResult) => void;
   request: GitWorktreeOperationConfirmRequest;
 }
 
@@ -43,8 +60,13 @@ interface GitWorktreeOperationConfirmState {
    * where `pendingConfirm` never returns to null between requests (#9918).
    */
   requestSeq: number;
-  requestConfirmation: (request: GitWorktreeOperationConfirmRequest) => Promise<boolean>;
-  resolveConfirmation: (ok: boolean) => void;
+  requestConfirmation: (
+    request: GitWorktreeOperationConfirmRequest
+  ) => Promise<GitWorktreeOperationConfirmResult>;
+  resolveConfirmation: (
+    ok: boolean,
+    pinned?: { headOid?: string; baseOid?: string } | null
+  ) => void;
 }
 
 export const useGitWorktreeOperationConfirmStore = create<GitWorktreeOperationConfirmState>()(
@@ -52,13 +74,15 @@ export const useGitWorktreeOperationConfirmStore = create<GitWorktreeOperationCo
     pendingConfirm: null,
     requestSeq: 0,
 
-    requestConfirmation: (request: GitWorktreeOperationConfirmRequest): Promise<boolean> => {
+    requestConfirmation: (
+      request: GitWorktreeOperationConfirmRequest
+    ): Promise<GitWorktreeOperationConfirmResult> => {
       const existing = get().pendingConfirm;
       if (existing) {
-        existing.resolve(false);
+        existing.resolve(DECLINED);
       }
 
-      return new Promise<boolean>((resolve) => {
+      return new Promise<GitWorktreeOperationConfirmResult>((resolve) => {
         set((state) => ({
           pendingConfirm: { resolve, request },
           requestSeq: state.requestSeq + 1,
@@ -66,10 +90,13 @@ export const useGitWorktreeOperationConfirmStore = create<GitWorktreeOperationCo
       });
     },
 
-    resolveConfirmation: (ok: boolean) => {
+    resolveConfirmation: (
+      ok: boolean,
+      pinned: { headOid?: string; baseOid?: string } | null = null
+    ) => {
       const pending = get().pendingConfirm;
       if (pending) {
-        pending.resolve(ok);
+        pending.resolve(ok ? { confirmed: true, pinned } : DECLINED);
         set({ pendingConfirm: null });
       }
     },

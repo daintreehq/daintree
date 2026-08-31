@@ -16,7 +16,19 @@ vi.mock("@/clients", () => ({ worktreeClient: { refresh } }));
 const WT_ID = "wt-1";
 const WT_PATH = "/repo/one";
 
-type GitStub = Record<string, ReturnType<typeof vi.fn>>;
+/**
+ * Named members, not an index signature: `Record<string, Mock>` resolves every
+ * read to `Mock | undefined` under `noUncheckedIndexedAccess`, so a typo in a
+ * method name would typecheck as "possibly undefined" rather than as a missing
+ * stub.
+ */
+interface GitStub {
+  rebaseOntoBase: ReturnType<typeof vi.fn>;
+  mergeBaseIntoBranch: ReturnType<typeof vi.fn>;
+  abortRepositoryOperation: ReturnType<typeof vi.fn>;
+  continueRepositoryOperation: ReturnType<typeof vi.fn>;
+  getStagingStatus: ReturnType<typeof vi.fn>;
+}
 
 /** A staging status that reports no operation in progress. */
 const CLEAN_STATUS = { repoState: "CLEAN", staged: [], unstaged: [] };
@@ -57,16 +69,36 @@ function setupActions() {
 }
 
 /** Resolve the deferred confirm the way a mounted dialog would. */
-async function settleConfirm(ok: boolean): Promise<void> {
+async function settleConfirm(
+  ok: boolean,
+  pinned?: { headOid?: string; baseOid?: string }
+): Promise<void> {
   await vi.waitFor(() => {
     expect(useGitWorktreeOperationConfirmStore.getState().pendingConfirm).not.toBeNull();
   });
-  useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(ok);
+  useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(ok, pinned ?? null);
+}
+
+/**
+ * A rejection shaped like one that crossed the contextBridge.
+ *
+ * The preload encodes `GitOperationError`'s discriminant INTO the message, and
+ * the action reads it back with `isClientGitError` to tell a genuine halt from
+ * an unrelated refusal. A bare `new Error("CONFLICT …")` would classify as
+ * `unknown` here and silently skip the routing these tests are about.
+ */
+function gitError(reason: string, message: string): Error {
+  return new Error(`[GitError|${reason}||] ${message}`);
 }
 
 beforeEach(() => {
-  dispatch.mockClear();
-  refresh.mockClear();
+  // `mockClear` alone resets call history but KEEPS the implementation, so a
+  // test that swaps in `{ok:false}` to exercise a failed dispatch silently
+  // poisons every test after it. Reset and re-arm the default instead.
+  dispatch.mockReset();
+  dispatch.mockResolvedValue({ ok: true });
+  refresh.mockReset();
+  refresh.mockResolvedValue(undefined);
   setWorktreePathIndexAccessor(() => new Map([[WT_ID, WT_PATH]]));
 });
 
@@ -92,7 +124,7 @@ describe("git.rebaseOntoBase", () => {
 
     await settleConfirm(true);
     await pending;
-    expect(git.rebaseOntoBase).toHaveBeenCalledWith(WT_PATH, "develop");
+    expect(git.rebaseOntoBase).toHaveBeenCalledWith(WT_PATH, "develop", undefined);
   });
 
   it("does nothing at all when the confirm is declined", async () => {
@@ -132,7 +164,7 @@ describe("git.rebaseOntoBase", () => {
       { worktreeId: WT_ID, baseBranch: "develop" },
       { dispatchSource: "agent" }
     );
-    expect(git.rebaseOntoBase).toHaveBeenCalledWith(WT_PATH, "develop");
+    expect(git.rebaseOntoBase).toHaveBeenCalledWith(WT_PATH, "develop", undefined);
     expect(useGitWorktreeOperationConfirmStore.getState().pendingConfirm).toBeNull();
   });
 
@@ -150,7 +182,9 @@ describe("git.rebaseOntoBase", () => {
     // badge is deliberately passive (#10921) — so nothing would take the user
     // to the conflict UI.
     const { run, git } = setupActions();
-    git.rebaseOntoBase.mockRejectedValue(new Error("CONFLICT (content): Merge conflict in a.ts"));
+    git.rebaseOntoBase.mockRejectedValue(
+      gitError("conflict-unresolved", "CONFLICT (content): Merge conflict in a.ts")
+    );
     git.getStagingStatus.mockResolvedValue(HALTED_STATUS);
 
     const pending = run("git.rebaseOntoBase", { worktreeId: WT_ID, baseBranch: "develop" });
@@ -169,28 +203,15 @@ describe("git.rebaseOntoBase", () => {
     // A refusal (dirty tree, unresolvable base) leaves no operation in
     // progress. Swallowing it would report a rebase that never ran as done.
     const { run, git } = setupActions();
-    git.rebaseOntoBase.mockRejectedValue(new Error("error: cannot rebase: You have unstaged"));
+    git.rebaseOntoBase.mockRejectedValue(
+      gitError("worktree-dirty", "error: cannot rebase: You have unstaged changes.")
+    );
     git.getStagingStatus.mockResolvedValue(CLEAN_STATUS);
 
     const pending = run("git.rebaseOntoBase", { worktreeId: WT_ID, baseBranch: "develop" });
     await settleConfirm(true);
     await expect(pending).rejects.toThrow(/cannot rebase/);
     expect(dispatch).not.toHaveBeenCalled();
-  });
-
-  it("still completes when the worktree is unknown to the index", async () => {
-    // A path-only dispatch for a worktree the renderer has not indexed is a
-    // valid target for the operation; it just cannot be refreshed by id. That
-    // must never turn a successful rebase into a reported failure.
-    setWorktreePathIndexAccessor(() => new Map());
-    const { run, git } = setupActions();
-    const pending = run("git.rebaseOntoBase", {
-      worktreePath: "/elsewhere",
-      baseBranch: "develop",
-    });
-    await settleConfirm(true);
-    await pending;
-    expect(git.rebaseOntoBase).toHaveBeenCalledWith("/elsewhere", "develop");
   });
 
   it("requires a base branch in its schema", () => {
@@ -211,12 +232,14 @@ describe("git.mergeBaseIntoBranch", () => {
     });
     await settleConfirm(true);
     await pending;
-    expect(git.mergeBaseIntoBranch).toHaveBeenCalledWith(WT_PATH, "develop");
+    expect(git.mergeBaseIntoBranch).toHaveBeenCalledWith(WT_PATH, "develop", undefined);
   });
 
   it("routes a halted merge to Review Hub too", async () => {
     const { run, git } = setupActions();
-    git.mergeBaseIntoBranch.mockRejectedValue(new Error("CONFLICT (content): in a.ts"));
+    git.mergeBaseIntoBranch.mockRejectedValue(
+      gitError("conflict-unresolved", "CONFLICT (content): in a.ts")
+    );
     git.getStagingStatus.mockResolvedValue({ ...HALTED_STATUS, repoState: "MERGING" });
 
     const pending = run("git.mergeBaseIntoBranch", { worktreeId: WT_ID, baseBranch: "develop" });
@@ -227,6 +250,109 @@ describe("git.mergeBaseIntoBranch", () => {
       { worktreeId: WT_ID },
       undefined
     );
+  });
+});
+
+describe("halt routing is correlated, not inferred from state", () => {
+  it("rethrows a refusal even when the worktree happens to be mid-operation", async () => {
+    // The race that made state-alone wrong: an agent starts a cherry-pick in
+    // its own PTY between the click and the failure. The rebase was REFUSED —
+    // it never ran — but the fresh status reports CHERRY_PICKING. Treating that
+    // as a halt would open a conflict panel for an operation this action never
+    // started, and report success for a rebase that did not happen.
+    const { run, git } = setupActions();
+    git.rebaseOntoBase.mockRejectedValue(
+      gitError("worktree-dirty", "This worktree has uncommitted changes.")
+    );
+    git.getStagingStatus.mockResolvedValue({ ...HALTED_STATUS, repoState: "CHERRY_PICKING" });
+
+    const pending = run("git.rebaseOntoBase", { worktreeId: WT_ID, baseBranch: "develop" });
+    await settleConfirm(true);
+    await expect(pending).rejects.toThrow(/uncommitted changes/);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rethrows the handler's own already-mid-operation refusal", async () => {
+    // Encoded as `conflict-unresolved` because that is the closest reason, so
+    // the state check alone cannot separate it from a real halt either. It is
+    // separated by the panel actually opening — which it does — but the error
+    // must still not be reported as a success by the ROW.
+    const { run, git } = setupActions();
+    git.rebaseOntoBase.mockRejectedValue(
+      gitError("conflict-unresolved", "This worktree is already mid-operation (rebasing).")
+    );
+    git.getStagingStatus.mockResolvedValue(HALTED_STATUS);
+    dispatch.mockResolvedValue({ ok: true });
+
+    const pending = run("git.rebaseOntoBase", { worktreeId: WT_ID, baseBranch: "develop" });
+    await settleConfirm(true);
+    await pending;
+    // Routed, because the worktree genuinely IS halted and the panel is where
+    // the recovery lives. The distinction this test pins is that the reason is
+    // read rather than guessed.
+    expect(dispatch).toHaveBeenCalledWith(
+      "worktree.openReviewHub",
+      { worktreeId: WT_ID },
+      undefined
+    );
+  });
+
+  it("rethrows when Review Hub could not actually be opened", async () => {
+    // `ActionService.dispatch` resolves `{ok:false}` rather than rejecting, and
+    // `worktree.openReviewHub` fails softly when its worktree lookup misses.
+    // Swallowing the git error on the strength of a dispatch that did nothing
+    // would leave the repository halted with no panel and no report.
+    const { run, git } = setupActions();
+    git.rebaseOntoBase.mockRejectedValue(
+      gitError("conflict-unresolved", "CONFLICT (content): in a.ts")
+    );
+    git.getStagingStatus.mockResolvedValue(HALTED_STATUS);
+    dispatch.mockResolvedValue({ ok: false, error: { code: "NOT_FOUND", message: "gone" } });
+
+    const pending = run("git.rebaseOntoBase", { worktreeId: WT_ID, baseBranch: "develop" });
+    await settleConfirm(true);
+    await expect(pending).rejects.toThrow(/CONFLICT/);
+  });
+});
+
+describe("the write is bound to what the dialog previewed", () => {
+  it("forwards the pinned commits to the IPC", async () => {
+    const { run, git } = setupActions();
+    const pending = run("git.rebaseOntoBase", { worktreeId: WT_ID, baseBranch: "develop" });
+    await settleConfirm(true, { headOid: "aaa", baseOid: "bbb" });
+    await pending;
+    expect(git.rebaseOntoBase).toHaveBeenCalledWith(WT_PATH, "develop", {
+      headOid: "aaa",
+      baseOid: "bbb",
+    });
+  });
+
+  it("sends no pins for an agent dispatch, which had no preview to bind to", async () => {
+    const { run, git } = setupActions();
+    await run(
+      "git.rebaseOntoBase",
+      { worktreeId: WT_ID, baseBranch: "develop" },
+      { dispatchSource: "agent" }
+    );
+    expect(git.rebaseOntoBase).toHaveBeenCalledWith(WT_PATH, "develop", undefined);
+  });
+});
+
+describe("refreshWorktree never widens into a global sweep", () => {
+  it("skips the refresh entirely for a worktree the index cannot name", async () => {
+    // `worktreeClient.refresh(undefined)` does not mean "no worktree" — it
+    // means ALL of them, plus a pull-request sweep against the provider's rate
+    // limit. A one-worktree operation must never trigger that.
+    setWorktreePathIndexAccessor(() => new Map());
+    const { run, git } = setupActions();
+    const pending = run("git.rebaseOntoBase", {
+      worktreePath: "/elsewhere",
+      baseBranch: "develop",
+    });
+    await settleConfirm(true);
+    await pending;
+    expect(git.rebaseOntoBase).toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
   });
 });
 
@@ -289,14 +415,35 @@ describe("git.continueRepositoryOperation", () => {
     );
   });
 
-  it("refreshes even when --continue throws", async () => {
+  it("refreshes AND routes when --continue throws on the next conflict", async () => {
     // `--continue` can advance the operation and THEN stop, which throws while
-    // having genuinely moved the worktree. Refreshing only on success would
-    // leave the card showing the step before last.
+    // having genuinely moved the worktree. A `finally` refresh alone left the
+    // card a step behind AND skipped past the routing call, so the user got a
+    // thrown error and no conflict panel.
     const { run, git } = setupActions();
-    git.continueRepositoryOperation.mockRejectedValue(new Error("CONFLICT (content): in b.ts"));
-    await expect(run("git.continueRepositoryOperation", { worktreeId: WT_ID })).rejects.toThrow();
+    git.continueRepositoryOperation.mockRejectedValue(
+      gitError("conflict-unresolved", "CONFLICT (content): in b.ts")
+    );
+    git.getStagingStatus.mockResolvedValue(HALTED_STATUS);
+    await run("git.continueRepositoryOperation", { worktreeId: WT_ID });
     expect(refresh).toHaveBeenCalledWith(WT_ID);
+    expect(dispatch).toHaveBeenCalledWith(
+      "worktree.openReviewHub",
+      { worktreeId: WT_ID },
+      undefined
+    );
+  });
+
+  it("rethrows a continue failure that is not a conflict", async () => {
+    const { run, git } = setupActions();
+    git.continueRepositoryOperation.mockRejectedValue(
+      new Error("No merge, rebase, cherry-pick, or revert operation is in progress")
+    );
+    await expect(run("git.continueRepositoryOperation", { worktreeId: WT_ID })).rejects.toThrow(
+      /no merge, rebase/i
+    );
+    expect(refresh).toHaveBeenCalledWith(WT_ID);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("does not open Review Hub when the operation finished cleanly", async () => {

@@ -14,7 +14,11 @@ import { isClientGitError } from "@/utils/clientGitError";
 import { useGitWorktreeOperationConfirmStore } from "@/store/gitWorktreeOperationConfirmStore";
 import type { GitBaseIntegrationCommitPreview } from "@shared/types/git";
 import type { StagingStatus } from "@shared/types";
-import { OPERATION_LABEL, buildAbortDescription } from "@/components/Git/repoOperationCopy";
+import {
+  OPERATION_LABEL,
+  buildAbortDescription,
+  toRepoOperationState,
+} from "@/components/Git/repoOperationCopy";
 
 const SHORT_HASH_LEN = 7;
 
@@ -76,7 +80,14 @@ type LoadedPayload =
   | { kind: "base-integration"; preview: GitBaseIntegrationCommitPreview }
   | { kind: "abort-operation"; status: StagingStatus };
 
-/** Separator for the request identity key; illegal in a path and in a git ref. */
+/**
+ * Separator for the request identity key.
+ *
+ * Deliberately NOT relied on for uniqueness — it is legal in both POSIX paths
+ * and git refs, so crafted inputs can collide across the joined fields. The
+ * monotonic request sequence in the same key is what actually makes it unique;
+ * this only keeps the common case readable.
+ */
 const KEY_SEP = "␟";
 
 /**
@@ -100,6 +111,9 @@ function GitWorktreeOperationConfirmDialogInner() {
   const pendingConfirm = useGitWorktreeOperationConfirmStore((s) => s.pendingConfirm);
   const resolveConfirmation = useGitWorktreeOperationConfirmStore((s) => s.resolveConfirmation);
 
+  // The store's monotonic counter, read as part of the read identity below.
+  const requestSeq = useGitWorktreeOperationConfirmStore((s) => s.requestSeq);
+
   const request = pendingConfirm?.request ?? null;
   const cwd = request?.cwd ?? null;
   const kind = request?.kind ?? null;
@@ -122,10 +136,15 @@ function GitWorktreeOperationConfirmDialogInner() {
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const requestIdRef = useRef(0);
 
-  // Identity of the thing being read. The worktree alone is not enough: the
-  // same worktree can be asked about a rebase and then a merge, and those are
-  // different commit sets under one cwd.
-  const previewKey = cwd && kind ? [kind, baseBranch ?? "", cwd].join(KEY_SEP) : null;
+  // Identity of the READ, and therefore of what may be approved.
+  //
+  // `requestSeq` is the load-bearing part. Keying on `{kind, baseBranch, cwd}`
+  // alone looked sufficient and was not: two consecutive requests with those
+  // three identical — the same row clicked twice, or an agent re-dispatching —
+  // produce an unchanged key, so no effect reruns and the SECOND request can be
+  // approved against the FIRST one's commits. The counter changes on every
+  // request by construction, which is exactly the property needed here.
+  const previewKey = cwd && kind ? [requestSeq, kind, baseBranch ?? "", cwd].join(KEY_SEP) : null;
 
   const loadPreview = useCallback(() => {
     if (!cwd || !kind || !previewKey) return;
@@ -211,25 +230,45 @@ function GitWorktreeOperationConfirmDialogInner() {
     const status = isSettled && loaded?.kind === "abort-operation" ? loaded.status : null;
     // Re-derived from a fresh read rather than trusted from the request: the
     // request was built from the card's polled snapshot, and an operation can
-    // finish between the menu opening and the confirm resolving.
-    const freshOperation = status ? toOperationLabel(status) : null;
-    const label = (freshOperation ?? OPERATION_LABEL[request.operation]).toLowerCase();
+    // finish — or be replaced by a different one — between the menu opening and
+    // the confirm resolving.
+    //
+    // The fresh state feeds BOTH the label and the consequence sentence. Taking
+    // the label from the read and the sentence from the request would let the
+    // dialog say "Abort merge?" over a rebase's consequences.
+    const freshOperation = status ? toRepoOperationState(status.repoState) : null;
+    const operation = freshOperation ?? request.operation;
+    const label = OPERATION_LABEL[operation].toLowerCase();
+    // Nothing to abort. The handler refuses this anyway ("No merge, rebase,
+    // cherry-pick, or revert operation is in progress"), and a live primary
+    // over a settled read that found no operation is an approval the surface
+    // cannot honour.
+    const nothingInProgress = status !== null && freshOperation === null;
     return (
       <ConfirmDialog
         isOpen={true}
         onClose={() => resolveConfirmation(false)}
-        title={`Abort ${label}?`}
+        title={nothingInProgress ? "Nothing to abort" : `Abort ${label}?`}
         description={
-          status && freshOperation
-            ? buildAbortDescription(request.operation, status)
-            : loadError
-              ? `Couldn't read what this would discard. Aborting still ends the in-progress ${label}.`
-              : `Discards the in-progress ${label}.`
+          nothingInProgress
+            ? "This worktree is no longer mid-operation — it finished or was already resolved."
+            : status && freshOperation
+              ? buildAbortDescription(freshOperation, status)
+              : loadError
+                ? `Couldn't read what this would discard. Aborting still ends the in-progress ${label}.`
+                : `Discards the in-progress ${label}.`
         }
-        confirmLabel={`Abort ${label}`}
+        confirmLabel={nothingInProgress ? "Close" : `Abort ${label}`}
         cancelLabel="Keep working"
         variant="destructive"
-        onConfirm={() => resolveConfirmation(true)}
+        // Held until this request's own read settles: the counts in the
+        // description are the whole reason to confirm, and approving before
+        // they land is approving a blank.
+        confirmDisabled={nothingInProgress || (!isSettled && !loadError)}
+        hint={
+          !isSettled && !loadError && showPendingHint ? "Checking what this would discard…" : null
+        }
+        onConfirm={() => resolveConfirmation(!nothingInProgress)}
       />
     );
   }
@@ -290,7 +329,15 @@ function GitWorktreeOperationConfirmDialogInner() {
       // Cancel. A preview fetch is not a reason to take away the way out.
       confirmDisabled={confirmDisabled}
       hint={blockedReason}
-      onConfirm={() => resolveConfirmation(true)}
+      // Hands back the two commits this panel actually described. The handler
+      // refuses if either has moved, so what gets rebased is what was read here
+      // — not whatever the refs point at by the time the click lands.
+      onConfirm={() =>
+        resolveConfirmation(true, {
+          ...(preview?.headOid ? { headOid: preview.headOid } : {}),
+          ...(preview?.baseOid ? { baseOid: preview.baseOid } : {}),
+        })
+      }
     >
       <div className="rounded border border-tint/[0.08] bg-tint/[0.04] text-xs">
         {/* Subject first, then target: the pair reads in the order the
@@ -435,15 +482,6 @@ function GitWorktreeOperationConfirmDialogInner() {
       )}
     </ConfirmDialog>
   );
-}
-
-/**
- * The operation a fresh staging status says is in progress, or `null`.
- */
-function toOperationLabel(status: StagingStatus): string | null {
-  const state = status.repoState;
-  if (state === "CLEAN" || state === "DIRTY") return null;
-  return OPERATION_LABEL[state];
 }
 
 function SummaryRow({ label, children }: { label: string; children: React.ReactNode }) {

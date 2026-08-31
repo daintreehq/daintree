@@ -159,15 +159,37 @@ async function refExists(git: BaseCompareRefGit, fullRef: string): Promise<boole
 /**
  * The base ref a rebase or merge should act on, or `null` when none exists.
  *
- * The ladder mirrors `BaseDivergence.compute()` exactly — selected ref, then
- * `origin/<base>`, then the local branch — so an operation always targets the
- * same commit the `↓N behind` badge measured against. Diverging here would let
- * the card promise one integration and the menu perform another.
+ * **The ladder is `BaseDivergence.compute()`'s, rung for rung**, and that is the
+ * whole contract of this function rather than an implementation note. The card
+ * says `↓N behind`; the menu row acts. If the two resolve differently the card
+ * promises one integration and the menu performs another, with nothing on
+ * screen to give it away.
  *
- * Each rung is verified to exist before it is offered. `BaseDivergence` can get
- * away with trying a `rev-list` and catching the failure because a miss costs a
- * displayed number; a write cannot, because a miss costs a git invocation
- * against a ref that turns out to be a pathspec.
+ * So there are exactly TWO rungs, matching `compute()`:
+ *
+ *   1. `resolution.compareRef`, defaulting to `origin/<base>` when the resolver
+ *      declined to name one — the same `?? origin/<base>` that function uses.
+ *   2. the local `<base>` branch.
+ *
+ * An `origin/<base>` rung between them is deliberately NOT here, tempting as it
+ * is. It would fire in exactly one case — the base tracks, say,
+ * `upstream/develop`, that ref has been pruned, and `origin/develop` still
+ * exists — and in that case `compute()` falls through to the LOCAL branch. A
+ * third rung would make the menu rebase onto `origin/develop` while the badge
+ * counted against local `develop`.
+ *
+ * Two deliberate differences from `compute()`, neither of which moves the
+ * target commit:
+ *
+ * - Refs are fully qualified. `compute()` passes the short `origin/<base>`,
+ *   which git resolves through `refs/heads/` BEFORE `refs/remotes/` — so a
+ *   local branch literally named `origin/develop` shadows the remote-tracking
+ *   ref there. Writing `refs/remotes/…` is both unambiguous and the reason a
+ *   branch named like a flag cannot reach argv as one.
+ * - Existence is checked with `rev-parse --verify`, where `compute()` just
+ *   tries its `rev-list` and catches the failure. It can afford that because a
+ *   miss costs a displayed number; a write cannot, because a miss costs a git
+ *   invocation against a ref that turns out to be a pathspec.
  *
  * Fails CLOSED at the end. Returning `origin/<base>` unverified would be the
  * reassuring answer and the wrong one — the same fail-closed rule every
@@ -178,30 +200,22 @@ export async function resolveExistingBaseCompareTarget(
   baseBranch: string
 ): Promise<ExistingBaseCompareTarget | null> {
   const inputs = await gatherBaseCompareRefInputs(git, baseBranch);
-  const { compareRef, remote } = resolveBaseCompareRef(inputs);
+  const resolved = resolveBaseCompareRef(inputs);
 
-  const candidates: ExistingBaseCompareTarget[] = [];
-  if (compareRef && remote) {
-    candidates.push({ compareRef, remote, fullRef: `${REMOTE_REF_PREFIX}${compareRef}` });
-  }
-  // `origin/<base>` is tried even when the resolver declined to name it: the
-  // resolver only ranks remotes it could prove carry the branch, and a repo
-  // whose `for-each-ref` read failed transiently still has an origin.
-  if (compareRef !== `${DEFAULT_REMOTE}/${baseBranch}`) {
-    candidates.push({
-      compareRef: `${DEFAULT_REMOTE}/${baseBranch}`,
-      remote: DEFAULT_REMOTE,
-      fullRef: `${REMOTE_REF_PREFIX}${DEFAULT_REMOTE}/${baseBranch}`,
-    });
-  }
-  // A repo with no remote at all falls back to the local base branch. Rebasing
-  // ONTO a local `develop` from a linked worktree is fine — git only refuses to
-  // *write* a branch checked out somewhere else.
-  candidates.push({
-    compareRef: baseBranch,
-    remote: null,
-    fullRef: `${LOCAL_REF_PREFIX}${baseBranch}`,
-  });
+  // `?? origin/<base>` — `compute()`'s own default for an unresolved ref, which
+  // is also what this repo did before the resolver existed (#11747).
+  const remote = resolved.compareRef ? resolved.remote : DEFAULT_REMOTE;
+  const compareRef = resolved.compareRef ?? `${DEFAULT_REMOTE}/${baseBranch}`;
+
+  const candidates: ExistingBaseCompareTarget[] = [
+    // `remote` is non-null whenever `compareRef` is — `resolveBaseCompareRef`
+    // sets them together — so this is a total guard, not a fallback.
+    ...(remote ? [{ compareRef, remote, fullRef: `${REMOTE_REF_PREFIX}${compareRef}` }] : []),
+    // A repo with no remote at all falls back to the local base branch. Rebasing
+    // ONTO a local `develop` from a linked worktree is fine — git only refuses
+    // to *write* a branch checked out somewhere else.
+    { compareRef: baseBranch, remote: null, fullRef: `${LOCAL_REF_PREFIX}${baseBranch}` },
+  ];
 
   for (const candidate of candidates) {
     if (await refExists(git, candidate.fullRef)) return candidate;

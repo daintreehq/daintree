@@ -464,6 +464,13 @@ function requireBaseBranch(value: unknown): string {
   if (!trimmed || trimmed.startsWith("-") || /[\s~^:?*[\\]|\.\.|@\{/.test(trimmed)) {
     throw new Error("Invalid base branch");
   }
+  // `@` and `HEAD` are legal branch names AND git revision shorthands, and the
+  // shorthand wins wherever a revision is expected. `@` is the sharp one: it is
+  // shorthand for HEAD, so a base named `@` turns any `<base>@{upstream}` read
+  // into "the CURRENT branch's upstream" — "rebase onto @" would then target
+  // the feature branch's own upstream. Refusing both is cheaper than auditing
+  // every downstream read for revision-vs-ref context.
+  if (trimmed === "@" || trimmed === "HEAD") throw new Error("Invalid base branch");
   return trimmed;
 }
 
@@ -586,6 +593,75 @@ function asBaseIntegrationError(error: unknown, cwd: string, op: string): unknow
 }
 
 /**
+ * Resolve a ref to its commit OID, or `null` when it does not resolve.
+ *
+ * Shared by the preview (which records the OIDs it measured against) and the
+ * write (which checks they still hold), so the two cannot read the ref two
+ * different ways.
+ */
+async function readOid(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  fullRef: string
+): Promise<string | null> {
+  try {
+    const out = await git.raw(["rev-parse", "--verify", "--quiet", `${fullRef}^{commit}`]);
+    const oid = out.trim();
+    return /^[0-9a-f]{40,64}$/i.test(oid) ? oid : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Refuse the write if anything moved between the preview and the approval.
+ *
+ * The confirm dialog is a promise about specific commits: *these* get replayed,
+ * *onto that*. In this product that promise has a genuinely short shelf life —
+ * Daintree exists to run many agents in parallel across worktrees, so an agent
+ * committing into the worktree while the dialog sits open is the ordinary case
+ * rather than a race to shrug at. Background fetch moving the remote-tracking
+ * ref is the same story from the other end.
+ *
+ * So the preview reports the two OIDs it measured against and the write checks
+ * them. A mismatch is refused rather than reconciled: re-previewing silently
+ * would be the "if X changed, use Y" substitution the destructive-action rules
+ * call a review blocker, and the operation the user actually sanctioned no
+ * longer exists.
+ *
+ * Both are OPTIONAL. A caller that supplies neither — an agent dispatch, a
+ * keybinding, a plugin — gets today's unpinned behaviour rather than a hard
+ * failure, because there was no preview to bind to in the first place. What
+ * must never happen is a supplied expectation being ignored.
+ */
+async function requireUnmovedSince(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  payload: { expectedHeadOid?: string; expectedBaseOid?: string; cwd: string },
+  target: ExistingBaseCompareTarget,
+  op: string
+): Promise<void> {
+  const checks: Array<{ expected: string | undefined; ref: string; what: string }> = [
+    { expected: payload.expectedHeadOid, ref: "HEAD", what: "This branch has new commits" },
+    {
+      expected: payload.expectedBaseOid,
+      ref: target.fullRef,
+      what: `${target.compareRef} has moved`,
+    },
+  ];
+
+  for (const { expected, ref, what } of checks) {
+    if (!expected) continue;
+    const actual = await readOid(git, ref);
+    if (actual === expected) continue;
+    const message = `${what} since this operation was previewed, so it would no longer do what was approved. Try again to see the current state.`;
+    throw new GitOperationError(
+      "conflict-unresolved",
+      encodeGitOperationErrorMessage("conflict-unresolved", message),
+      { cwd: payload.cwd, op, rawMessage: message }
+    );
+  }
+}
+
+/**
  * Worktrees with a base integration in flight.
  *
  * A second start against the same worktree while the first is still running
@@ -606,7 +682,7 @@ const baseIntegratingCwds = new Set<string>();
  * classified and rethrown with the operation left exactly where git left it.
  */
 async function runBaseIntegration(
-  payload: { cwd: string; baseBranch: string },
+  payload: { cwd: string; baseBranch: string; expectedHeadOid?: string; expectedBaseOid?: string },
   kind: GitBaseIntegrationKind
 ): Promise<void> {
   validateCwd(payload?.cwd);
@@ -621,22 +697,71 @@ async function runBaseIntegration(
       { cwd: payload.cwd, op, rawMessage: message }
     );
   }
+  // Claimed INSIDE the try, so the `finally` that releases it dominates every
+  // path that could have claimed it. Adding before `createHardenedGit` left the
+  // cwd marked forever if that factory rejected — a deleted worktree would then
+  // report "already running" until the main process restarted.
   baseIntegratingCwds.add(payload.cwd);
-
-  const git = await createHardenedGit(payload.cwd);
   try {
-    await requireCheckedOutBranch(git);
+    const git = await createHardenedGit(payload.cwd);
+    const branch = await requireCheckedOutBranch(git);
+    // THE invariant, enforced rather than assumed. Everything else in this file
+    // arranges for the operation to read the base ref and write only this
+    // worktree's HEAD — but if HEAD *is* the base branch, "write only HEAD"
+    // and "write refs/heads/<base>" are the same sentence. Possible whenever a
+    // worktree has the base checked out: a fork layout where the feature branch
+    // is also called `develop`, or a hand-arranged tree.
+    if (branch === baseBranch) {
+      const message = `This worktree has '${baseBranch}' itself checked out, so integrating the base branch would rewrite it. Check out the branch you want to update first.`;
+      throw new GitOperationError(
+        "config-missing",
+        encodeGitOperationErrorMessage("config-missing", message, { branchName: branch }),
+        { cwd: payload.cwd, op, rawMessage: message, branchName: branch }
+      );
+    }
     await requireNoOperationInProgress(git, payload.cwd, op);
     await requireCleanTree(git, payload.cwd, op);
     const target = await requireBaseTarget(git, baseBranch, payload.cwd);
+    await requireUnmovedSince(git, payload, target, op);
+
+    // `-c` overrides rather than command-line flags, deliberately. Git ignores a
+    // config key it does not know, so these degrade to a no-op on an older git;
+    // the equivalent `--no-update-refs` / `--no-rebase-merges` flags are hard
+    // errors there instead. Each pin closes a gap between what the confirm
+    // dialog described and what git would actually do under a user's config:
+    //
+    //  - `rebase.updateRefs=true` force-updates OTHER local branches that point
+    //    into the replayed range. `refs/heads/<base>` can be one of them, which
+    //    is the exact write this whole path exists to avoid.
+    //  - `rebase.rebaseMerges=true` recreates merge commits the preview omitted
+    //    (it measures with `--no-merges`, matching a default rebase).
+    //  - `*.autoStash=true` would stash and re-apply the user's changes, which
+    //    contradicts the refusal this handler just performed and can strand
+    //    them in a stash-pop conflict on top of the rebase.
+    const pins =
+      kind === "rebase-onto-base"
+        ? [
+            "-c",
+            "rebase.updateRefs=false",
+            "-c",
+            "rebase.rebaseMerges=false",
+            "-c",
+            "rebase.autoStash=false",
+          ]
+        : ["-c", "merge.autoStash=false"];
 
     if (kind === "rebase-onto-base") {
-      await git.rebase([target.fullRef]);
+      await git.raw([...pins, "rebase", target.fullRef]);
     } else {
       // `--no-edit` is load-bearing, not tidiness: a real (non-fast-forward)
       // merge opens an editor for the commit message, and there is no TTY in a
       // utility process for it to open on. Without this the spawn hangs.
-      await git.merge([target.fullRef, "--no-edit"]);
+      //
+      // `--no-squash` overrides a `branch.<name>.mergeOptions = --squash`, which
+      // git applies BEFORE command-line args. Under that config the merge would
+      // report success having created no commit and left everything staged —
+      // the opposite of what the dialog promised.
+      await git.raw([...pins, "merge", "--no-edit", "--no-squash", target.fullRef]);
     }
 
     if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
@@ -728,6 +853,13 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
           // by the operation; for a merge this IS the incoming count, and
           // restating it costs one cheap local rev-list.
           const behind = await countCommitsInRange(git, [`${localRef}..${target.fullRef}`]);
+          // Read LAST, so they describe the repository at the end of the
+          // measurement rather than the start. The rows above are still a
+          // best-effort snapshot across several invocations, but these two are
+          // what the write is held to — so anything that moved mid-read shows
+          // up as a refusal on submit instead of an unnoticed substitution.
+          const headOid = await readOid(git, localRef);
+          const baseOid = await readOid(git, target.fullRef);
 
           return {
             kind,
@@ -735,6 +867,8 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
             baseBranch,
             compareRef: target.compareRef,
             remote: target.remote,
+            headOid,
+            baseOid,
             total,
             behind,
             commits: log.all.map((commit) => ({
@@ -752,7 +886,12 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
 
     rebaseOntoBase: op(
       CHANNELS.GIT_REBASE_ONTO_BASE,
-      async (payload: { cwd: string; baseBranch: string }): Promise<void> => {
+      async (payload: {
+        cwd: string;
+        baseBranch: string;
+        expectedHeadOid?: string;
+        expectedBaseOid?: string;
+      }): Promise<void> => {
         checkRateLimit(CHANNELS.GIT_REBASE_ONTO_BASE, 3, 10_000);
         await runBaseIntegration(payload, "rebase-onto-base");
       }
@@ -760,7 +899,12 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
 
     mergeBaseIntoBranch: op(
       CHANNELS.GIT_MERGE_BASE_INTO_BRANCH,
-      async (payload: { cwd: string; baseBranch: string }): Promise<void> => {
+      async (payload: {
+        cwd: string;
+        baseBranch: string;
+        expectedHeadOid?: string;
+        expectedBaseOid?: string;
+      }): Promise<void> => {
         checkRateLimit(CHANNELS.GIT_MERGE_BASE_INTO_BRANCH, 3, 10_000);
         await runBaseIntegration(payload, "merge-base");
       }

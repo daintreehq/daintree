@@ -68,6 +68,7 @@ import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
 import { fileManagerRevealLabel } from "@/lib/platform";
 import { useMenuActionSource, type MenuActionSourceValue } from "@/components/ui/menu-source";
 import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
 import type { ActionId } from "@shared/types/actions";
 import { OPERATION_LABEL, toRepoOperationState } from "@/components/Git/repoOperationCopy";
 import { resourceLifecycleVisibility } from "./utils/resourceLifecycle";
@@ -459,8 +460,34 @@ export function WorktreeMenuItems({
             ? "Up to date"
             : null;
 
-  const dispatchGit = (actionId: ActionId, args: Record<string, unknown>) =>
-    void actionService.dispatch(actionId, { worktreeId: worktree.id, ...args }, { source });
+  // `ActionService.dispatch` CATCHES an action's error and resolves
+  // `{ok: false}` — it does not reject. A plain `void dispatch(...)` therefore
+  // discards every failure these rows can produce: a dirty-tree race, an
+  // unresolvable base ref, a continue that has nothing to continue. Each of
+  // those is a git operation the user asked for and did not get, so it earns a
+  // toast; a genuine halt never reaches here, because the action swallows that
+  // case itself after opening the conflict panel.
+  const dispatchGit = (actionId: ActionId, label: string, args: Record<string, unknown>) => {
+    void actionService
+      .dispatch(actionId, { worktreeId: worktree.id, ...args }, { source })
+      .then((result) => {
+        if (result.ok) return;
+        notify({
+          type: "error",
+          title: `${label} failed`,
+          message: result.error.message,
+          action: {
+            label: "Open Review Hub",
+            onClick: () =>
+              void actionService.dispatch(
+                "worktree.openReviewHub",
+                { worktreeId: worktree.id },
+                { source }
+              ),
+          },
+        });
+      });
+  };
 
   const gitRows = [
     <C.Item
@@ -489,14 +516,26 @@ export function WorktreeMenuItems({
     ? [
         <C.Item
           key="git-continue"
-          onSelect={() => dispatchGit("git.continueRepositoryOperation", {})}
+          onSelect={() =>
+            dispatchGit(
+              "git.continueRepositoryOperation",
+              `Continue ${OPERATION_LABEL[baseOperation].toLowerCase()}`,
+              {}
+            )
+          }
         >
           <Play className={ICON} />
           Continue {OPERATION_LABEL[baseOperation].toLowerCase()}
         </C.Item>,
         <C.Item
           key="git-abort"
-          onSelect={() => dispatchGit("git.abortRepositoryOperation", { operation: baseOperation })}
+          onSelect={() =>
+            dispatchGit(
+              "git.abortRepositoryOperation",
+              `Abort ${OPERATION_LABEL[baseOperation].toLowerCase()}`,
+              { operation: baseOperation }
+            )
+          }
           destructive
         >
           <OctagonX className={ICON} />
@@ -506,7 +545,9 @@ export function WorktreeMenuItems({
     : [
         <C.Item
           key="git-rebase-onto-base"
-          onSelect={() => dispatchGit("git.rebaseOntoBase", { baseBranch: baseBranchName ?? "" })}
+          onSelect={() =>
+            dispatchGit("git.rebaseOntoBase", "Rebase", { baseBranch: baseBranchName ?? "" })
+          }
           disabled={baseBlockedReason !== null}
         >
           <GitBranch className={ICON} />
@@ -520,7 +561,7 @@ export function WorktreeMenuItems({
         <C.Item
           key="git-merge-base"
           onSelect={() =>
-            dispatchGit("git.mergeBaseIntoBranch", { baseBranch: baseBranchName ?? "" })
+            dispatchGit("git.mergeBaseIntoBranch", "Merge", { baseBranch: baseBranchName ?? "" })
           }
           disabled={baseBlockedReason !== null}
         >

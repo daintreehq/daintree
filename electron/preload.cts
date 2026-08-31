@@ -2141,10 +2141,28 @@ function buildElectronApi(): ElectronAPI {
           kind,
           limit,
         }),
-      rebaseOntoBase: (cwd: string, baseBranch: string) =>
-        _unwrappingInvoke(CHANNELS.GIT_REBASE_ONTO_BASE, { cwd, baseBranch }),
-      mergeBaseIntoBranch: (cwd: string, baseBranch: string) =>
-        _unwrappingInvoke(CHANNELS.GIT_MERGE_BASE_INTO_BRANCH, { cwd, baseBranch }),
+      rebaseOntoBase: (
+        cwd: string,
+        baseBranch: string,
+        expected?: { headOid?: string; baseOid?: string }
+      ) =>
+        _unwrappingInvoke(CHANNELS.GIT_REBASE_ONTO_BASE, {
+          cwd,
+          baseBranch,
+          expectedHeadOid: expected?.headOid,
+          expectedBaseOid: expected?.baseOid,
+        }),
+      mergeBaseIntoBranch: (
+        cwd: string,
+        baseBranch: string,
+        expected?: { headOid?: string; baseOid?: string }
+      ) =>
+        _unwrappingInvoke(CHANNELS.GIT_MERGE_BASE_INTO_BRANCH, {
+          cwd,
+          baseBranch,
+          expectedHeadOid: expected?.headOid,
+          expectedBaseOid: expected?.baseOid,
+        }),
 
       onPushProgress: (callback: (event: PushProgressEvent) => void) =>
         _typedOn(CHANNELS.GIT_PUSH_PROGRESS, callback),

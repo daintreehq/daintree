@@ -274,6 +274,18 @@ export interface GitBaseIntegrationCommitPreview {
   /** Remote `compareRef` lives on, or `null` on the local-branch fallback. */
   remote: string | null;
   /**
+   * The two commits this preview describes: the branch tip and the base tip.
+   *
+   * Carried so the confirm can hand them back to the write, which refuses if
+   * either has moved. Daintree runs many agents in parallel across worktrees,
+   * so a commit landing while the dialog is open is ordinary rather than a
+   * race to shrug at — without these the user could approve one replay set and
+   * get another. `null` when the ref did not resolve, which the caller treats
+   * as "nothing to pin" rather than as a match.
+   */
+  headOid: string | null;
+  baseOid: string | null;
+  /**
    * For `rebase-onto-base`, the commits that would be REPLAYED (the branch's
    * own, measured `--cherry-pick --right-only` so commits the base already
    * holds as equivalent patches are excluded). For `merge-base`, the commits

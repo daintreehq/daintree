@@ -672,11 +672,25 @@ export interface GeneratedIpcInvokeMap {
     result: import("../git.js").GitRebaseCommitPreview;
   };
   "git:merge-base-into-branch": {
-    args: [payload: { cwd: string; baseBranch: string }];
+    args: [
+      payload: {
+        cwd: string;
+        baseBranch: string;
+        expectedHeadOid?: string | undefined;
+        expectedBaseOid?: string | undefined;
+      },
+    ];
     result: void;
   };
   "git:rebase-onto-base": {
-    args: [payload: { cwd: string; baseBranch: string }];
+    args: [
+      payload: {
+        cwd: string;
+        baseBranch: string;
+        expectedHeadOid?: string | undefined;
+        expectedBaseOid?: string | undefined;
+      },
+    ];
     result: void;
   };
   "global-env:get": {
