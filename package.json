@@ -72,7 +72,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "cross-env NODE_OPTIONS=--max-old-space-size=4096 npm run typecheck:projects",
-    "typecheck:projects": "tsc --noEmit && tsc -b electron/tsconfig.json && tsc --noEmit -p electron/tsconfig.preload.json && tsc --noEmit -p packages/daintree-plugin/tsconfig.json && tsc --noEmit -p packages/create-daintree-plugin/tsconfig.json && tsc --noEmit -p packages/plugin-sdk/tsconfig.json && tsc --noEmit -p packages/plugin-testing/tsconfig.json && tsc --noEmit -p packages/plugin-vite/tsconfig.json && tsc --noEmit -p tsconfig.plugins.json",
+    "typecheck:projects": "tsc --noEmit && tsc -b electron/tsconfig.json && tsc --noEmit -p electron/tsconfig.preload.json && tsc --noEmit -p packages/daintree-plugin/tsconfig.json && tsc --noEmit -p packages/create-daintree-plugin/tsconfig.json && tsc --noEmit -p packages/plugin-sdk/tsconfig.json && tsc --noEmit -p packages/plugin-testing/tsconfig.json && tsc --noEmit -p packages/plugin-vite/tsconfig.json && tsc --noEmit -p tsconfig.plugins.json && tsc --noEmit -p tsconfig.perf.json",
     "packages:build": "npm run build --workspace=packages/plugin-sdk --workspace=packages/plugin-testing --workspace=packages/plugin-vite --workspace=packages/daintree-plugin --workspace=packages/create-daintree-plugin",
     "build:sample-rich-view": "npm run build --workspace=packages/plugin-vite && vite build plugins/sample/rich-daintree --config plugins/sample/rich-daintree/vite.config.ts",
     "check:channels": "node scripts/ci/check-channel-drift.mjs",

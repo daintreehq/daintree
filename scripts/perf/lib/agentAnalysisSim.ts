@@ -357,6 +357,27 @@ export interface AgentAnalysisSimResult {
   waitFlipLatencyMs: number;
   /** Median across agents; virtual ms from resumed output to the FSM working flip. */
   resumeFlipLatencyMs: number;
+  /**
+   * FSM state-change records the analysis pipeline actually emitted, and the
+   * agents that produced each canonical flip.
+   *
+   * The scenario reports CPU rates and virtual-time latencies, all of which a
+   * sim that analysed nothing would win outright. These are the readings it
+   * could not produce: they come off the `agent:state-changed` stream, not off
+   * the bytes that were fed in.
+   */
+  stateChangeRecords: number;
+  agentsWithWaitFlip: number;
+  agentsWithResumeFlip: number;
+  /**
+   * Bytes the workload scripts contain, totalled as they were built.
+   *
+   * `fedBytes` is the feed loop's own tally and it is the denominator of every
+   * rate this sim reports, so the two agreeing is what proves the fleet was
+   * charged for the whole workload. A feed loop that quietly stopped short
+   * would report a lower tax over a smaller job.
+   */
+  scriptedBytes: number;
 }
 
 interface FsmRecord {
@@ -404,6 +425,7 @@ export async function runAgentAnalysisSim(
 
     const slots: AgentSlot[] = [];
     const byTerminalId = new Map<string, AgentSlot>();
+    let scriptedBytes = 0;
 
     const onStateChanged = (payload: { terminalId?: string; state: AgentState }): void => {
       const slot = payload.terminalId ? byTerminalId.get(payload.terminalId) : undefined;
@@ -455,6 +477,7 @@ export async function runAgentAnalysisSim(
         };
         slots.push(slot);
         byTerminalId.set(terminalId, slot);
+        scriptedBytes += slot.script.totalBytes;
 
         runtime.handleMessage({
           type: "create",
@@ -522,9 +545,14 @@ export async function runAgentAnalysisSim(
       // the workload is deterministic, so any deviation is a semantic change.
       const waitLatencies: number[] = [];
       const resumeLatencies: number[] = [];
+      let stateChangeRecords = 0;
       for (const slot of slots) {
+        stateChangeRecords += slot.fsm.length;
         const seq = slot.fsm;
-        const fail = (reason: string): never => {
+        // Annotated on the variable, not just the arrow: control-flow analysis
+        // only treats a call as unreachable when the *binding* is typed, so
+        // without this the `if (!flip) fail()` guards below narrow nothing.
+        const fail: (reason: string) => never = (reason) => {
           throw new Error(
             `[agentAnalysisSim] FSM timeline broken for ${slot.terminalId}: ${reason} — ` +
               JSON.stringify(seq) +
@@ -570,6 +598,10 @@ export async function runAgentAnalysisSim(
         cpuMsPerAgentSecond: cpuMs / agentSeconds,
         waitFlipLatencyMs: median(waitLatencies),
         resumeFlipLatencyMs: median(resumeLatencies),
+        stateChangeRecords,
+        agentsWithWaitFlip: waitLatencies.length,
+        agentsWithResumeFlip: resumeLatencies.length,
+        scriptedBytes,
       };
     } finally {
       for (const slot of slots) {

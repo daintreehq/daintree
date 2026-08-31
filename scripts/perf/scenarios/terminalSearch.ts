@@ -107,6 +107,13 @@ interface SweepResult {
   worstMs: number;
   byLabel: Record<string, number>;
   decorations: number;
+  /**
+   * Cases whose hit/miss outcome was not the expected one, plus one for a
+   * sweep that highlighted nothing at all. A search that stopped matching
+   * walks less buffer and produces the fastest sweep this file can record, so
+   * every timing here is only readable next to this number.
+   */
+  searchMisses: number;
 }
 
 /**
@@ -124,6 +131,7 @@ async function runSearchSweep(fixture: SearchableTerminal, cold: boolean): Promi
   fixture.resetDecorationCount();
   const terminal = fixture.terminal as unknown as { clearSelection: () => void };
 
+  let searchMisses = 0;
   for (const testCase of SEARCH_CASES) {
     if (cold) await fixture.invalidateLineCache();
     terminal.clearSelection();
@@ -132,21 +140,23 @@ async function runSearchSweep(fixture: SearchableTerminal, cold: boolean): Promi
     const found = fixture.addon.findNext(testCase.term, options);
     const elapsed = performance.now() - caseStart;
 
-    if (found !== testCase.expectHit) {
-      throw new Error(
-        `terminal search case '${testCase.label}' returned found=${found}, expected ${testCase.expectHit} — corpus or search path is broken`
-      );
-    }
+    if (found !== testCase.expectHit) searchMisses += 1;
     durations.push(elapsed);
     byLabel[testCase.label] = elapsed;
   }
+
+  const decorations = fixture.decorationCount();
+  // A sweep that highlighted nothing across every case is the highlight pass
+  // having collapsed, not seven cheap searches.
+  if (decorations === 0) searchMisses += 1;
 
   return {
     totalMs: durations.reduce((sum, ms) => sum + ms, 0),
     p99SearchMs: percentile(durations, 99),
     worstMs: Math.max(...durations),
     byLabel,
-    decorations: fixture.decorationCount(),
+    decorations,
+    searchMisses,
   };
 }
 
@@ -192,11 +202,13 @@ export const terminalSearchScenarios: PerfScenario[] = [
       "case-sensitive, whole-word). Each search runs with the addon's translated-line cache dropped " +
       "— the state a terminal still streaming agent output is always in — so durationMs and " +
       "p99SearchMs are what a real post-debounce search costs. warmP99SearchMs reports the quiet " +
-      "terminal for contrast. Every case asserts its expected hit/miss.",
+      "terminal for contrast. searchMisses counts cases that did not produce their expected " +
+      "hit/miss.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 14, nightly: 20 },
     warmups: 2,
+    correctness: ["searchMisses"],
     async run() {
       const fixture = await getTerminal(SCROLLBACK_MAX, 193);
 
@@ -205,13 +217,9 @@ export const terminalSearchScenarios: PerfScenario[] = [
       const durationMs = performance.now() - coldStart;
       const warm = await runSearchSweep(fixture, false);
 
-      // Every case hit its expected outcome above; this catches the highlight
-      // pass silently collapsing to zero decorations across the whole sweep.
-      if (cold.decorations === 0) {
-        throw new Error("terminal search produced no decorations — highlight path is broken");
-      }
       assertMarkersReleased(fixture, "PERF-193");
 
+      const searchMisses = cold.searchMisses + warm.searchMisses;
       return {
         durationMs,
         metrics: {
@@ -223,7 +231,12 @@ export const terminalSearchScenarios: PerfScenario[] = [
           regexSearchMs: cold.byLabel.regex ?? 0,
           decorations: cold.decorations,
           bufferLines: fixture.bufferLines,
+          searchMisses,
         },
+        notes:
+          searchMisses > 0
+            ? "a search case did not produce its expected hit/miss — these timings are not search timings"
+            : undefined,
       };
     },
   },
@@ -241,6 +254,7 @@ export const terminalSearchScenarios: PerfScenario[] = [
     modes: ["ci", "nightly"],
     iterations: { ci: 10, nightly: 16 },
     warmups: 1,
+    correctness: ["searchMisses", "stepMisses"],
     async run() {
       const small = await getTerminal(SCROLLBACK_DEFAULT, 194);
       const large = await getTerminal(SCROLLBACK_MAX, 193);
@@ -274,18 +288,13 @@ export const terminalSearchScenarios: PerfScenario[] = [
       const backMs = performance.now() - backStart;
       const durationMs = performance.now() - start;
 
-      // Every step must land. Accepting "at least one" would pass a navigation
-      // path stuck re-selecting the same match 25 times.
-      if (forwardHits !== STEPS || backHits !== STEPS) {
-        throw new Error(
-          `match stepping incomplete: ${forwardHits}/${STEPS} forward, ${backHits}/${STEPS} backward`
-        );
-      }
-      if (smallSweep.decorations === 0 || largeSweep.decorations === 0) {
-        throw new Error("a scrollback arm produced no decorations — highlight path is broken");
-      }
       assertMarkersReleased(large, "PERF-194");
 
+      // Every step must land. Accepting "at least one" would pass a navigation
+      // path stuck re-selecting the same match 25 times, and a stepper that
+      // stops finding matches is the cheapest per-step cost measurable here.
+      const stepMisses = STEPS - forwardHits + (STEPS - backHits);
+      const searchMisses = smallSweep.searchMisses + largeSweep.searchMisses;
       return {
         durationMs,
         metrics: {
@@ -294,7 +303,13 @@ export const terminalSearchScenarios: PerfScenario[] = [
           msPerKLine: largeSweep.worstMs / (SCROLLBACK_MAX / 1000),
           stepForwardMs: forwardMs / STEPS,
           stepBackwardMs: backMs / STEPS,
+          searchMisses,
+          stepMisses,
         },
+        notes:
+          stepMisses > 0
+            ? `match stepping incomplete: ${forwardHits}/${STEPS} forward, ${backHits}/${STEPS} backward`
+            : undefined,
       };
     },
   },

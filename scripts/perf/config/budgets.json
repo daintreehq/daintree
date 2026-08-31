@@ -1,38 +1,68 @@
 {
-  "criticalScenarios": ["PERF-001", "PERF-011", "PERF-020"],
   "defaultBudget": {
     "p95Ms": 5000,
     "maxRegressionPct": 15
   },
   "scenarios": {
-    "PERF-001": { "p95Ms": 3500, "maxRegressionPct": 15 },
-    "PERF-002": { "p95Ms": 4500, "maxRegressionPct": 15 },
-    "PERF-003": { "p95Ms": 1800, "maxRegressionPct": 15 },
+    "PERF-001": {
+      "maxRegressionPct": 15
+    },
+    "PERF-002": {
+      "maxRegressionPct": 15
+    },
+    "PERF-003": {
+      "maxRegressionPct": 15
+    },
     "PERF-004": {
       "p95Ms": 8000,
-      "maxRegressionPct": 20,
-      "comparison": { "maxPValue": 0.05, "minEffectSize": 0.5 }
+      "maxRegressionPct": 20
     },
-
-    "PERF-010": { "p95Ms": 1800, "maxRegressionPct": 15 },
-    "PERF-011": { "p95Ms": 1500, "maxRegressionPct": 15 },
-    "PERF-012": { "p95Ms": 2600, "maxRegressionPct": 20 },
-    "PERF-013": { "p95Ms": 1200, "maxRegressionPct": 15 },
-
-    "PERF-020": { "p95Ms": 2500, "maxRegressionPct": 15 },
-    "PERF-021": { "p95Ms": 3000, "maxRegressionPct": 15 },
-    "PERF-022": { "p95Ms": 3200, "maxRegressionPct": 20 },
-    "PERF-023": { "p95Ms": 3000, "maxRegressionPct": 15 },
-    "PERF-024": { "p95Ms": 2200, "maxRegressionPct": 15 },
-
-    "PERF-030": { "p95Ms": 2200, "maxRegressionPct": 15 },
-    "PERF-031": { "p95Ms": 2400, "maxRegressionPct": 50 },
-    "PERF-032": { "p95Ms": 2600, "maxRegressionPct": 15 },
-    "PERF-033": { "p95Ms": 100, "maxRegressionPct": 25 },
+    "PERF-010": {
+      "maxRegressionPct": 15
+    },
+    "PERF-011": {
+      "maxRegressionPct": 15
+    },
+    "PERF-012": {
+      "maxRegressionPct": 20
+    },
+    "PERF-013": {
+      "maxRegressionPct": 15
+    },
+    "PERF-020": {
+      "maxRegressionPct": 15
+    },
+    "PERF-021": {
+      "maxRegressionPct": 15
+    },
+    "PERF-022": {
+      "maxRegressionPct": 20
+    },
+    "PERF-023": {
+      "maxRegressionPct": 15
+    },
+    "PERF-024": {
+      "maxRegressionPct": 15
+    },
+    "PERF-030": {
+      "maxRegressionPct": 15
+    },
+    "PERF-031": {
+      "maxRegressionPct": 50
+    },
+    "PERF-032": {
+      "maxRegressionPct": 15
+    },
+    "PERF-033": {
+      "p95Ms": 100,
+      "maxRegressionPct": 25
+    },
     "PERF-034": {
       "p95Ms": 900,
       "maxRegressionPct": 40,
-      "maxMetricValues": { "echoDegradationX": 30 }
+      "maxMetricValues": {
+        "echoDegradationX": 30
+      }
     },
     "PERF-035": {
       "p95Ms": 15000,
@@ -44,107 +74,275 @@
         "resumeFlipLatencyMs": 2000
       }
     },
-
-    "PERF-040": { "p95Ms": 1400, "maxRegressionPct": 15 },
-    "PERF-041": { "p95Ms": 2200, "maxRegressionPct": 15 },
     "PERF-042": {
       "p95Ms": 1500,
       "maxRegressionPct": 20,
-      "maxMetricValues": { "eventLoopLagMs": 100 }
+      "maxMetricValues": {
+        "eventLoopLagMs": 100
+      }
     },
-
-    "PERF-050": { "p95Ms": 1800, "maxRegressionPct": 15 },
-    "PERF-051": { "p95Ms": 1800, "maxRegressionPct": 15 },
-    "PERF-052": { "p95Ms": 2400, "maxRegressionPct": 50 },
-
+    "PERF-043": {
+      "p95Ms": 12000,
+      "maxMetricValues": {
+        "bootReadyMisses": 0,
+        "healthCheckMisses": 0,
+        "disposeExitMisses": 0,
+        "residualHostCount": 0
+      }
+    },
+    "PERF-044": {
+      "p95Ms": 12000,
+      "maxMetricValues": {
+        "responseMisses": 0,
+        "responseTypeMisses": 0,
+        "unexpectedResponseMessages": 0,
+        "duplicateResponseMessages": 0,
+        "residualHostCount": 0
+      }
+    },
+    "PERF-045": {
+      "p95Ms": 30000,
+      "maxMetricValues": {
+        "lineMisses": 0,
+        "spawnMisses": 0,
+        "exitMisses": 0,
+        "exitCodeMisses": 0,
+        "residualHostCount": 0
+      }
+    },
+    "PERF-046": {
+      "p95Ms": 40000,
+      "maxMetricValues": {
+        "respawnReadyMisses": 0,
+        "respawnHealthMisses": 0,
+        "reapMisses": 0,
+        "residualHostCount": 0
+      }
+    },
+    "PERF-053": {
+      "maxMetricValues": {
+        "rowMisses": 0
+      }
+    },
+    "PERF-054": {
+      "maxMetricValues": {
+        "lookupMisses": 0,
+        "indexPlanMisses": 0,
+        "orderedRowMisses": 0
+      }
+    },
+    "PERF-055": {
+      "maxMetricValues": {
+        "readerBusyRetries": 0,
+        "readerRowMisses": 0,
+        "contentionProbeMisses": 0,
+        "checkpointReclaimMisses": 0,
+        "rowMisses": 0,
+        "cleanupMisses": 0
+      }
+    },
+    "PERF-056": {
+      "maxMetricValues": {
+        "schemaColumnMisses": 0,
+        "rowMisses": 0,
+        "dataMigrationMisses": 0,
+        "migrationCountMisses": 0
+      }
+    },
+    "PERF-057": {
+      "maxMetricValues": {
+        "readBackMisses": 0,
+        "writeMisses": 0
+      }
+    },
+    "PERF-058": {
+      "maxMetricValues": {
+        "keyReadMisses": 0,
+        "hydrationMisses": 0
+      }
+    },
     "PERF-070": {
-      "p95Ms": 1200,
-      "maxRegressionPct": 15,
-      "maxMetricValues": { "serializeMs": 5, "totalMs": 10 }
+      "maxRegressionPct": 15
     },
     "PERF-071": {
-      "p95Ms": 1500,
-      "maxRegressionPct": 15,
-      "maxMetricValues": { "serializeMs": 8, "totalMs": 15 }
+      "maxRegressionPct": 15
     },
     "PERF-072": {
-      "p95Ms": 1800,
-      "maxRegressionPct": 15,
-      "maxMetricValues": { "serializeMs": 12, "totalMs": 25 }
+      "maxRegressionPct": 15
     },
     "PERF-073": {
-      "p95Ms": 2600,
-      "maxRegressionPct": 20,
-      "maxMetricValues": { "serializeTotalMs": 25 }
+      "maxRegressionPct": 20
     },
-
-    "PERF-060": {
-      "p95Ms": 5000,
+    "PERF-074": {
+      "p95Ms": 2000,
       "maxRegressionPct": 50,
-      "maxMetricValues": { "memoryGrowthPct": 10 }
+      "maxMetricValues": {
+        "coldStartCount": 0,
+        "viewCreateCount": 0,
+        "warmSwitchMisses": 0,
+        "switchFailureCount": 0,
+        "evictionCount": 0,
+        "attachMisses": 0,
+        "closeMisses": 0,
+        "listenerLeakCount": 0
+      }
+    },
+    "PERF-075": {
+      "p95Ms": 2000,
+      "maxRegressionPct": 50,
+      "maxMetricValues": {
+        "capOverflowCount": 0,
+        "lruOrderMisses": 0,
+        "lruRequestOrderMisses": 0,
+        "bootstrapProbeMisses": 0,
+        "switchFailureCount": 0,
+        "closeMisses": 0,
+        "listenerLeakCount": 0,
+        "attachMisses": 0
+      }
+    },
+    "PERF-076": {
+      "p95Ms": 2000,
+      "maxRegressionPct": 50,
+      "maxMetricValues": {
+        "pressureLadderMisses": 0,
+        "pressureBudgetMisses": 0,
+        "healthyBandMisses": 0,
+        "forcedReportMisses": 0,
+        "forcedConvergenceMisses": 0,
+        "protectedEvictionMisses": 0,
+        "agentTierOrderMisses": 0,
+        "assistantFloorMisses": 0,
+        "closeMisses": 0,
+        "listenerLeakCount": 0,
+        "attachMisses": 0
+      }
+    },
+    "PERF-077": {
+      "p95Ms": 2000,
+      "maxRegressionPct": 50,
+      "maxMetricValues": {
+        "switchFailureCount": 0,
+        "finalActiveMisses": 0,
+        "capOverflowCount": 0,
+        "attachMisses": 0,
+        "strandedViewCount": 0,
+        "closeMisses": 0,
+        "listenerLeakCount": 0
+      }
+    },
+    "PERF-060": {
+      "maxRegressionPct": 50,
+      "maxMetricValues": {
+        "memoryGrowthPct": 10
+      }
     },
     "PERF-061": {
-      "p95Ms": 7000,
       "maxRegressionPct": 50,
-      "maxMetricValues": { "memoryGrowthMb": 64 }
+      "maxMetricValues": {
+        "memoryGrowthMb": 64
+      }
     },
     "PERF-062": {
       "p95Ms": 6500,
       "maxRegressionPct": 20,
-      "maxMetricValues": { "memoryGrowthPct": 10 }
+      "maxMetricValues": {
+        "memoryGrowthPct": 10
+      }
     },
-
     "PERF-080": {
-      "p95Ms": 500,
-      "maxRegressionPct": 15,
-      "maxMetricValues": { "bytes": 10000000 }
+      "maxRegressionPct": 15
     },
-
     "PERF-100": {
       "p95Ms": 100,
       "maxRegressionPct": 50,
-      "maxMetricValues": { "gitSpawns": 1.5 }
+      "maxMetricValues": {
+        "gitSpawns": 1.5
+      }
     },
     "PERF-101": {
       "p95Ms": 1500,
       "maxRegressionPct": 50,
-      "maxMetricValues": { "spawnsPerWorktreeN50": 1.5 }
+      "maxMetricValues": {
+        "spawnsPerWorktreeN50": 1.5
+      }
     },
     "PERF-102": {
       "p95Ms": 60,
       "maxRegressionPct": 50,
-      "maxMetricValues": { "gitSpawns": 1 }
+      "maxMetricValues": {
+        "gitSpawns": 1
+      }
     },
     "PERF-103": {
       "p95Ms": 100,
       "maxRegressionPct": 50,
-      "maxMetricValues": { "gitSpawns": 1.5 }
+      "maxMetricValues": {
+        "gitSpawns": 1.5
+      }
     },
     "PERF-104": {
       "p95Ms": 4000,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "statusPasses": 3, "gitSpawns": 10 }
+      "maxMetricValues": {
+        "statusPasses": 3,
+        "gitSpawns": 10
+      }
     },
-
+    "PERF-105": {
+      "p95Ms": 20000,
+      "maxRegressionPct": 100,
+      "maxMetricValues": {
+        "idleStatusPasses": 0,
+        "idleGitSpawns": 4,
+        "idleNonGitSpawns": 0,
+        "detectionMisses": 0,
+        "watcherArmMisses": 0,
+        "residualGitSpawns": 0
+      }
+    },
+    "PERF-106": {
+      "p95Ms": 20000,
+      "maxRegressionPct": 100,
+      "maxMetricValues": {
+        "idleStatusPasses": 0,
+        "idleGitSpawns": 6,
+        "idleNonGitSpawns": 0,
+        "detectionMisses": 0,
+        "watcherArmMisses": 0,
+        "faultInjectionMisses": 0,
+        "faultStateMisses": 0,
+        "residualGitSpawns": 0
+      }
+    },
     "PERF-130": {
       "p95Ms": 400,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "gitSpawns": 8 }
+      "maxMetricValues": {
+        "gitSpawns": 8
+      }
     },
     "PERF-131": {
       "p95Ms": 600,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "gitSpawns": 10 }
+      "maxMetricValues": {
+        "gitSpawns": 10
+      }
     },
     "PERF-132": {
       "p95Ms": 4000,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "detectionToIntervalRatio": 2.5 }
+      "maxMetricValues": {
+        "detectionToIntervalRatio": 2.5
+      }
     },
     "PERF-133": {
       "p95Ms": 1200,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "emitCount": 5, "gitSpawns": 18 }
+      "maxMetricValues": {
+        "emitCount": 5,
+        "gitSpawns": 18
+      }
     },
     "PERF-134": {
       "p95Ms": 800,
@@ -153,36 +351,57 @@
     "PERF-135": {
       "p95Ms": 800,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "worktreeListSpawns": 5 }
+      "maxMetricValues": {
+        "worktreeListSpawns": 5
+      }
     },
-    "PERF-136": { "p95Ms": 1500, "maxRegressionPct": 75 },
+    "PERF-136": {
+      "p95Ms": 1500,
+      "maxRegressionPct": 75
+    },
     "PERF-137": {
       "p95Ms": 3000,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "worktreeListSpawns": 8 }
+      "maxMetricValues": {
+        "worktreeListSpawns": 8
+      }
     },
-    "PERF-138": { "p95Ms": 1000, "maxRegressionPct": 75 },
+    "PERF-138": {
+      "p95Ms": 1000,
+      "maxRegressionPct": 75
+    },
     "PERF-139": {
       "p95Ms": 800,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "cooldownRemovalMs": 1200 }
+      "maxMetricValues": {
+        "cooldownRemovalMs": 1200
+      }
     },
     "PERF-140": {
       "p95Ms": 60,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "mapChangesPerApply": 1.05 }
+      "maxMetricValues": {
+        "mapChangesPerApply": 1.05
+      }
     },
     "PERF-141": {
       "p95Ms": 40,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "mapIdentityChanges": 0 }
+      "maxMetricValues": {
+        "mapIdentityChanges": 0
+      }
     },
-
-    "PERF-110": { "p95Ms": 80, "maxRegressionPct": 50 },
+    "PERF-110": {
+      "p95Ms": 80,
+      "maxRegressionPct": 50
+    },
     "PERF-111": {
       "p95Ms": 3500,
       "maxRegressionPct": 50,
-      "maxMetricValues": { "maxStepMs": 150, "settleResizeMs": 5 }
+      "maxMetricValues": {
+        "maxStepMs": 150,
+        "settleResizeMs": 5
+      }
     },
     "PERF-112": {
       "p95Ms": 25,
@@ -193,92 +412,132 @@
         "drainMsLargeBacklog": 500
       }
     },
-
-    "PERF-090": {
-      "p95Ms": 15000,
-      "maxRegressionPct": 50,
+    "PERF-092": {
+      "p95Ms": 60000,
+      "maxRegressionPct": 100,
       "maxMetricValues": {
-        "wakeUpCount": 120,
-        "eventLoopLagP95Ms": 100,
-        "eluUtilization": 0.9,
-        "heapDeltaMb": 128,
-        "memoryGrowthPct": 25
+        "idleProbeSpawns": 12,
+        "idleSubprocessSpawns": 12,
+        "discoveryMisses": 0,
+        "refreshMisses": 0,
+        "residualSubprocessSpawns": 0
       }
     },
-    "PERF-091": {
-      "p95Ms": 15000,
-      "maxRegressionPct": 50,
+    "PERF-093": {
+      "p95Ms": 60000,
+      "maxRegressionPct": 100,
       "maxMetricValues": {
-        "wakeUpCount": 5,
-        "eventLoopLagP95Ms": 100,
-        "eluUtilization": 0.9,
-        "heapDeltaMb": 128,
-        "memoryGrowthPct": 25
+        "faultProbeSpawns": 8,
+        "faultSubprocessSpawns": 8,
+        "healedProbeSpawns": 8,
+        "healedSubprocessSpawns": 8,
+        "recoveryMisses": 0,
+        "postHealDiscoveryMisses": 0,
+        "faultInjectionMisses": 0,
+        "faultStateMisses": 0,
+        "preFaultRefreshMisses": 0,
+        "residualSubprocessSpawns": 0
       }
     },
-
-    "PERF-150": { "p95Ms": 15, "maxRegressionPct": 75 },
+    "PERF-094": {
+      "p95Ms": 90000,
+      "maxRegressionPct": 100,
+      "maxMetricValues": {
+        "idleGitSpawns": 4,
+        "gitSpawnsPerMonitor": 0.2,
+        "pollTickMisses": 0,
+        "detectionMisses": 0,
+        "discoveryMisses": 0,
+        "warmMisses": 0,
+        "populationMisses": 0,
+        "settleMisses": 0,
+        "residualGitSpawns": 0
+      }
+    },
+    "PERF-150": {
+      "maxRegressionPct": 75
+    },
     "PERF-151": {
-      "p95Ms": 15,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "msPerTargetAt48": 1 }
+      "maxMetricValues": {
+        "msPerTargetAt48": 1
+      }
     },
-
-    "PERF-160": { "p95Ms": 170, "maxRegressionPct": 75 },
+    "PERF-160": {
+      "p95Ms": 170,
+      "maxRegressionPct": 75
+    },
     "PERF-161": {
       "p95Ms": 320,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "markedIntraLine": 0 }
+      "maxMetricValues": {
+        "markedIntraLine": 0
+      }
     },
-    "PERF-162": { "p95Ms": 260, "maxRegressionPct": 75 },
-
+    "PERF-162": {
+      "p95Ms": 260,
+      "maxRegressionPct": 75
+    },
     "PERF-170": {
       "p95Ms": 40,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "p99KeystrokeMs": 8 }
+      "maxMetricValues": {
+        "p99KeystrokeMs": 8
+      }
     },
     "PERF-171": {
       "p95Ms": 55,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "msPerKAction": 6 }
+      "maxMetricValues": {
+        "msPerKAction": 6
+      }
     },
-
     "PERF-190": {
-      "calibrating": true,
       "p95Ms": 60,
-      "maxMetricValues": { "p99KeystrokeMs": 4 }
+      "maxMetricValues": {
+        "p99KeystrokeMs": 4
+      }
     },
     "PERF-191": {
-      "calibrating": true,
       "p95Ms": 220,
-      "maxMetricValues": { "msPerKFile": 0.5, "largeP99KeystrokeMs": 8 }
+      "maxMetricValues": {
+        "msPerKFile": 0.5,
+        "largeP99KeystrokeMs": 8
+      }
     },
     "PERF-192": {
-      "calibrating": true,
       "p95Ms": 450,
-      "maxMetricValues": { "coldMsPerKFile": 22, "largeColdMs": 260 }
+      "maxMetricValues": {
+        "coldMsPerKFile": 22,
+        "largeColdMs": 260
+      }
     },
-
     "PERF-193": {
-      "calibrating": true,
       "p95Ms": 150,
-      "maxMetricValues": { "p99SearchMs": 22 }
+      "maxMetricValues": {
+        "p99SearchMs": 22
+      }
     },
     "PERF-194": {
-      "calibrating": true,
       "p95Ms": 220,
-      "maxMetricValues": { "msPerKLine": 2.5, "stepForwardMs": 2, "stepBackwardMs": 2 }
+      "maxMetricValues": {
+        "msPerKLine": 2.5,
+        "stepForwardMs": 2,
+        "stepBackwardMs": 2
+      }
     },
-
     "PERF-195": {
-      "calibrating": true,
       "p95Ms": 1600,
-      "maxMetricValues": { "p95TerminalMs": 160, "snapshotKB": 800 }
+      "maxMetricValues": {
+        "p95TerminalMs": 160,
+        "snapshotKB": 800
+      }
     },
     "PERF-196": {
-      "calibrating": true,
       "p95Ms": 800,
-      "maxMetricValues": { "msPerKLine": 6 }
+      "maxMetricValues": {
+        "msPerKLine": 6
+      }
     }
   }
 }

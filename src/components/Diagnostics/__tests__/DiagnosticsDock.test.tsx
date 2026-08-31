@@ -43,7 +43,7 @@ vi.mock("../DiagnosticsActions", () => ({
 }));
 
 vi.mock("@/store/perfMetricsStore", () => {
-  const state = { failedBudgetCount: 0 };
+  const state = { outsideReferenceCount: 0 };
   return {
     usePerfMetricsStore: (selector: (s: typeof state) => unknown) => selector(state),
   };

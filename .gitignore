@@ -127,3 +127,7 @@ planning/
 
 # Unredacted raw captures left behind by pattern-discovery:redact-cast in-place mode
 *.cast.bak
+
+# Perf results history: ~5k lines rewritten per canonical run, and the filename
+# carries a machine label. Local to whoever ran it.
+scripts/perf/history/*.json

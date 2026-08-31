@@ -1,0 +1,46 @@
+{
+  /*
+   * Type-checks scripts/perf, which no other project includes.
+   *
+   * The harness imports from both halves of the app, so this config has to pick
+   * one regime for files that already have their own: bundler resolution plus
+   * the renderer path aliases (the harness uses extensionless and `.ts`
+   * specifiers that NodeNext would reject), and `noUncheckedIndexedAccess` off
+   * to match electron/ and shared/, which supply most of the transitive graph.
+   * Turning it on would fail ~250 product files that their own configs pass.
+   *
+   * `src/types` and `src/vite-env.d.ts` are included for the ambient globals
+   * (`window.electron`) that the root config picks up from its `src` include.
+   */
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "types": ["node"],
+    "skipLibCheck": true,
+
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false,
+    "forceConsistentCasingInFileNames": true,
+
+    "paths": {
+      "@/*": ["./src/*"],
+      "@shared/*": ["./shared/*"]
+    }
+  },
+  "include": ["scripts/perf", "src/types", "src/vite-env.d.ts", "electron/types"]
+}

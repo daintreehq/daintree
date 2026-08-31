@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createPerfTempRoot } from "./tempRoots";
 import { createRng } from "./workloads";
 
 /**
@@ -200,16 +200,9 @@ export function getFileSearchFixture(): FileSearchFixture {
   // yields a bogus `../../..` pathspec, `git ls-files` returns nothing, and the
   // service silently falls back to its filesystem walk — the benchmark would
   // then time the walker while claiming to measure git.
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "daintree-perf-filesearch-")));
   // Registered before the repos are built: a fixture that throws half-way
   // through would otherwise leave ~15k files behind on the runner.
-  process.on("exit", () => {
-    try {
-      rmSync(root, { recursive: true, force: true });
-    } catch {
-      // Best-effort: a leaked temp dir must never fail a benchmark run.
-    }
-  });
+  const root = createPerfTempRoot("daintree-perf-filesearch-", { canonical: true });
 
   fixture = {
     root,
@@ -233,15 +226,7 @@ let modulePromise: Promise<FileSearchModule> | null = null;
 export function loadFileSearchModule(): Promise<FileSearchModule> {
   if (!modulePromise) {
     if (!process.env.DAINTREE_USER_DATA) {
-      const userData = mkdtempSync(join(tmpdir(), "daintree-perf-userdata-"));
-      process.env.DAINTREE_USER_DATA = userData;
-      process.on("exit", () => {
-        try {
-          rmSync(userData, { recursive: true, force: true });
-        } catch {
-          // Best-effort.
-        }
-      });
+      process.env.DAINTREE_USER_DATA = createPerfTempRoot("daintree-perf-userdata-");
     }
     modulePromise = import("../../../electron/services/FileSearchService").then((mod) => ({
       fileSearchService: mod.fileSearchService,

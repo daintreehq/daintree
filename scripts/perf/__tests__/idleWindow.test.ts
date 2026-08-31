@@ -1,97 +1,207 @@
 import { describe, expect, it } from "vitest";
 import { idleWindowScenarios } from "../scenarios/idleWindow";
+import {
+  createProcessTreeHarness,
+  closeIdleWindow,
+  installProcessProbeFault,
+  openIdleWindow,
+  processProbeSpawnCount,
+  processProbeWorks,
+  removeProcessProbeFault,
+  spawnProbeChild,
+  waitForProcessDiscovery,
+} from "../lib/idleFixture";
+import { sleep } from "../lib/gitPipelineFixture";
+import { classifyMetric, isMachineIndependent } from "../lib/comparability";
 
-const context = { mode: "ci" as const, now: () => performance.now() };
+/** Wait for one more completed poll, i.e. drain whatever is in flight. */
+async function waitForRefresh(harness: { refreshCount: () => number }): Promise<void> {
+  const before = harness.refreshCount();
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline && harness.refreshCount() === before) {
+    await sleep(25);
+  }
+}
 
-describe("idleWindow scenarios", () => {
-  it("PERF-090 (basic) returns valid metrics", async () => {
-    const scenario = idleWindowScenarios.find((s) => s.id === "PERF-090");
-    expect(scenario).toBeDefined();
+/**
+ * These scenarios idle real services for 15-25s each, so running them here
+ * would make the unit suite a perf run. What the suite guards instead is the
+ * apparatus: that the fixture drives real product code, that the fault
+ * injection genuinely breaks the probe, and that every count metric is named
+ * so `comparability` reads it as a count rather than a duration — a naming
+ * slip is silent at runtime and costs the metric its cross-machine
+ * comparison.
+ */
 
-    const sample = await scenario!.run(context);
-    expect(sample.metrics).toBeDefined();
-    const m = sample.metrics!;
+const COUNT_METRICS = [
+  "idleProbeSpawns",
+  "idleSubprocessSpawns",
+  "idleRefreshCallbacks",
+  "idleGitSpawns",
+  "idleSnapshotEvents",
+  "monitorCount",
+  "faultProbeSpawns",
+  "faultSubprocessSpawns",
+  "healedProbeSpawns",
+  "healedSubprocessSpawns",
+  "residualProbeSpawns",
+  "residualSubprocessSpawns",
+  "residualGitSpawns",
+  "discoveryMisses",
+  "detectionMisses",
+  "refreshMisses",
+  "recoveryMisses",
+  "postHealDiscoveryMisses",
+  "preFaultRefreshMisses",
+  "faultInjectionMisses",
+  "faultStateMisses",
+  "pollTickMisses",
+  "warmMisses",
+  "populationMisses",
+  "settleMisses",
+];
 
-    expect(m.wakeUpCount).toBeGreaterThan(0);
-    expect(m.unthrottledCallbackCount).toBeGreaterThan(m.wakeUpCount);
-    expect(m.maxDriftMs).toBeGreaterThanOrEqual(0);
-    expect(m.meanDriftMs).toBeGreaterThan(0);
-    expect(m.eventLoopLagP95Ms).toBeGreaterThanOrEqual(0);
-    expect(m.eluUtilization).toBeGreaterThanOrEqual(0);
-    expect(m.eluUtilization).toBeLessThanOrEqual(1);
-    expect(m.heapDeltaMb).toBeGreaterThanOrEqual(0);
-    expect(m.memoryGrowthPct).toBeGreaterThanOrEqual(0);
+const RATIO_METRICS = ["gitSpawnsPerMonitor"];
+
+// Event-loop utilization over a wall-clock window, however it is spelled. A
+// slower CPU raises it for identical work, so it is a reading about this
+// machine and comparing it to another machine's is not a finding.
+const DERIVED_RATIO_METRICS = ["idleEluPct", "healedEluPct"];
+
+const DURATION_METRICS = [
+  "idleCpuMs",
+  "faultCpuMs",
+  "healedCpuMs",
+  "cpuMsPerIdleSec",
+  "backoffIntervalMs",
+  "faultBackoffIntervalMs",
+  "healedBackoffIntervalMs",
+  "discoveryMs",
+  "detectionMs",
+  "recoveryMs",
+  "postHealDiscoveryMs",
+];
+
+describe("idleWindow scenario declarations", () => {
+  it("declares PERF-092/093/094 and nothing else", () => {
+    expect(idleWindowScenarios.map((s) => s.id)).toEqual(["PERF-092", "PERF-093", "PERF-094"]);
   });
 
-  it("PERF-091 (intensive) returns valid metrics", async () => {
-    const scenario = idleWindowScenarios.find((s) => s.id === "PERF-091");
-    expect(scenario).toBeDefined();
+  it("reports counts as the headline, so durationMs is the self-timed sentinel", () => {
+    for (const scenario of idleWindowScenarios) {
+      expect(scenario.tier).toBe("heavy");
+      expect(scenario.warmups).toBe(1);
+    }
+  });
+});
 
-    const sample = await scenario!.run(context);
-    expect(sample.metrics).toBeDefined();
-    const m = sample.metrics!;
-
-    expect(m.wakeUpCount).toBeGreaterThan(0);
-    expect(m.unthrottledCallbackCount).toBeGreaterThan(m.wakeUpCount);
-    expect(m.maxDriftMs).toBeGreaterThanOrEqual(0);
-    expect(m.meanDriftMs).toBeGreaterThan(0);
-    expect(m.eventLoopLagP95Ms).toBeGreaterThanOrEqual(0);
-    expect(m.eluUtilization).toBeGreaterThanOrEqual(0);
-    expect(m.eluUtilization).toBeLessThanOrEqual(1);
-    expect(m.heapDeltaMb).toBeGreaterThanOrEqual(0);
-    expect(m.memoryGrowthPct).toBeGreaterThanOrEqual(0);
+describe("idleWindow metric naming", () => {
+  it("classifies every count metric as machine-independent", () => {
+    for (const name of COUNT_METRICS) {
+      expect(`${name}:${classifyMetric(name)}`).toBe(`${name}:count`);
+      expect(isMachineIndependent(classifyMetric(name))).toBe(true);
+    }
   });
 
-  it("PERF-091 intensive has far fewer wake-ups than PERF-090 basic", async () => {
-    const basic = idleWindowScenarios.find((s) => s.id === "PERF-090")!;
-    const intensive = idleWindowScenarios.find((s) => s.id === "PERF-091")!;
-
-    const basicSample = await basic.run(context);
-    const intensiveSample = await intensive.run(context);
-
-    const basicWakes = basicSample.metrics!.wakeUpCount;
-    const intensiveWakes = intensiveSample.metrics!.wakeUpCount;
-
-    expect(intensiveWakes).toBeLessThan(basicWakes);
-    // Intensive (60s floor) over 60s → at most 2 wake-ups
-    // Basic (1s floor) over 60s → at most 61 wake-ups
-    expect(intensiveWakes).toBeLessThanOrEqual(2);
-    expect(basicWakes).toBeLessThanOrEqual(61);
+  it("classifies the normalised metrics as ratios", () => {
+    for (const name of RATIO_METRICS) {
+      expect(`${name}:${classifyMetric(name)}`).toBe(`${name}:ratio`);
+      expect(isMachineIndependent(classifyMetric(name))).toBe(true);
+    }
   });
 
-  it("PERF-090 basic throttling wake-up count ≈ simulated seconds", async () => {
-    const basic = idleWindowScenarios.find((s) => s.id === "PERF-090")!;
-    const sample = await basic.run(context);
-
-    // Under basic throttling with 1s alignment, each second bucket gets
-    // one wake-up. Total wake-ups should equal the number of unique
-    // alignment points, which is at most ceil(60_000 / 1_000) = 60.
-    // Allow +/- 5 for edge cases (some alignment points may be empty).
-    const wakes = sample.metrics!.wakeUpCount;
-    expect(wakes).toBeGreaterThanOrEqual(55);
-    expect(wakes).toBeLessThanOrEqual(61);
+  it("keeps event-loop utilization machine-dependent under either spelling", () => {
+    for (const name of DERIVED_RATIO_METRICS) {
+      expect(`${name}:${classifyMetric(name)}`).toBe(`${name}:derived-ratio`);
+      expect(isMachineIndependent(classifyMetric(name))).toBe(false);
+    }
   });
 
-  it("both scenarios produce consistent results across repeated runs", async () => {
-    const basic = idleWindowScenarios.find((s) => s.id === "PERF-090")!;
-    const intensive = idleWindowScenarios.find((s) => s.id === "PERF-091")!;
-
-    const basic1 = await basic.run(context);
-    const basic2 = await basic.run(context);
-
-    expect(basic1.metrics!.wakeUpCount).toBe(basic2.metrics!.wakeUpCount);
-    expect(basic1.metrics!.unthrottledCallbackCount).toBe(basic2.metrics!.unthrottledCallbackCount);
-    expect(basic1.metrics!.maxDriftMs).toBe(basic2.metrics!.maxDriftMs);
-    expect(basic1.metrics!.meanDriftMs).toBe(basic2.metrics!.meanDriftMs);
-
-    const intensive1 = await intensive.run(context);
-    const intensive2 = await intensive.run(context);
-
-    expect(intensive1.metrics!.wakeUpCount).toBe(intensive2.metrics!.wakeUpCount);
-    expect(intensive1.metrics!.unthrottledCallbackCount).toBe(
-      intensive2.metrics!.unthrottledCallbackCount
-    );
-    expect(intensive1.metrics!.maxDriftMs).toBe(intensive2.metrics!.maxDriftMs);
-    expect(intensive1.metrics!.meanDriftMs).toBe(intensive2.metrics!.meanDriftMs);
+  it("classifies every time reading as a duration, never a count", () => {
+    for (const name of DURATION_METRICS) {
+      expect(`${name}:${classifyMetric(name)}`).toBe(`${name}:duration`);
+      expect(isMachineIndependent(classifyMetric(name))).toBe(false);
+    }
   });
+});
+
+describe("idleFixture drives the real ProcessTreeCache", () => {
+  it("spawns real probes over an idle window, discovers a live child, and stops cleanly", async () => {
+    const harness = await createProcessTreeHarness(300);
+    let child: ReturnType<typeof spawnProbeChild> | null = null;
+    try {
+      await waitForRefresh(harness);
+
+      const window = openIdleWindow();
+      await sleep(1500);
+      const reading = closeIdleWindow(window);
+
+      // Real work happened — the counters see the product's own `ps` /
+      // `powershell` starts, and CPU was burned parsing them. A zero here is
+      // the degenerate result the scenarios are built to make impossible.
+      expect(processProbeSpawnCount(reading.byExecutable)).toBeGreaterThan(0);
+      expect(reading.cpuMs).toBeGreaterThan(0);
+      expect(Number.isFinite(reading.cpuMsPerIdleSec)).toBe(true);
+      expect(harness.refreshCount()).toBeGreaterThan(1);
+
+      // The paired reading the scenarios depend on: a real subprocess started
+      // AFTER the window is still found, so the poller is alive rather than
+      // sitting on a stale snapshot.
+      child = spawnProbeChild(20_000);
+      expect(child.pid).not.toBeNull();
+      expect(await waitForProcessDiscovery(harness.cache, child.pid!, 20_000)).not.toBeNull();
+
+      harness.stop();
+      const after = openIdleWindow();
+      await sleep(1500);
+      expect(processProbeSpawnCount(closeIdleWindow(after).byExecutable)).toBe(0);
+    } finally {
+      harness.stop();
+      child?.kill();
+    }
+  }, 60_000);
+});
+
+describe("idleFixture probe fault", () => {
+  it("breaks the probe the product resolves, then heals it", () => {
+    expect(processProbeWorks()).toBe(true);
+    const fault = installProcessProbeFault();
+    try {
+      expect(processProbeWorks()).toBe(false);
+    } finally {
+      removeProcessProbeFault(fault);
+    }
+    expect(processProbeWorks()).toBe(true);
+  }, 60_000);
+
+  it("blinds the real cache while it is live, and the cache recovers when it heals", async () => {
+    const harness = await createProcessTreeHarness(300);
+    const fault = installProcessProbeFault();
+    let child: ReturnType<typeof spawnProbeChild> | null = null;
+    try {
+      // A poll that started before the shim went in resolves against a healthy
+      // `ps`, and `ps` enumerates when it actually execs — late enough to list
+      // a child spawned microseconds after the shim. Draining that poll first
+      // is what makes the blindness assertion below mean anything, and is why
+      // PERF-093 does the same before it spawns its probe.
+      await waitForRefresh(harness);
+      child = spawnProbeChild(20_000);
+
+      // Long enough for several poll attempts against the failing shim.
+      await sleep(2000);
+      expect(harness.cache.getProcess(child.pid!)).toBeUndefined();
+      // Blindness alone is also what a poller that simply stopped looks like.
+      // The service's own error record is what separates the two, and is the
+      // reading PERF-093 folds into `faultStateMisses`.
+      expect(harness.hasObservedFailure()).toBe(true);
+      expect(harness.isHealthy()).toBe(false);
+
+      removeProcessProbeFault(fault);
+      expect(await waitForProcessDiscovery(harness.cache, child.pid!, 20_000)).not.toBeNull();
+    } finally {
+      removeProcessProbeFault(fault);
+      harness.stop();
+      child?.kill();
+    }
+  }, 60_000);
 });

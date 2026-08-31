@@ -45,12 +45,14 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
       "Real SerializeAddon.serialize() across a 12-terminal fleet filled to the 10,000-line " +
       "scrollback maximum with SGR-dense agent output — the teardown cost paid on every quit. " +
       "durationMs is the whole fleet; p95TerminalMs is what one preserved terminal costs and " +
-      "snapshotKB is what it writes to disk. Every terminal's payload is checked individually so " +
-      "one healthy snapshot cannot mask eleven empty ones.",
+      "snapshotKB is what it writes to disk. snapshotMisses counts terminals whose payload came " +
+      "back under the size floor, checked individually so one healthy snapshot cannot mask " +
+      "eleven empty ones.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 5, ci: 9, nightly: 14 },
     warmups: 1,
+    correctness: ["snapshotMisses"],
     async run() {
       const fleet = await getSnapshotFleet(SCROLLBACK_MAX, REPRESENTATIVE_FLEET);
 
@@ -68,13 +70,12 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
       }
       const durationMs = performance.now() - start;
 
-      perTerminalBytes.forEach((bytes, index) => {
-        if (bytes < MIN_LARGE_SNAPSHOT_BYTES) {
-          throw new Error(
-            `terminal ${index} serialized only ${bytes} bytes (expected >= ${MIN_LARGE_SNAPSHOT_BYTES}) — its buffer is empty or serialize is broken`
-          );
-        }
-      });
+      // Per terminal, not in aggregate: `serialize()` returning an empty
+      // string is instantaneous, and one healthy snapshot in a summed byte
+      // total would happily cover for eleven empty ones.
+      const snapshotMisses = perTerminalBytes.filter(
+        (bytes) => bytes < MIN_LARGE_SNAPSHOT_BYTES
+      ).length;
 
       const totalBytes = perTerminalBytes.reduce((sum, bytes) => sum + bytes, 0);
 
@@ -86,7 +87,12 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
           snapshotKB: totalBytes / 1024 / fleet.sources.length,
           fleetSnapshotKB: totalBytes / 1024,
           fleetSize: fleet.sources.length,
+          snapshotMisses,
         },
+        notes:
+          snapshotMisses > 0
+            ? `${snapshotMisses}/${fleet.sources.length} terminals serialized under the size floor`
+            : undefined,
       };
     },
   },
@@ -98,12 +104,13 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
       "waits for each write to drain, at both the 1,000-line default and the 10,000-line maximum. " +
       "This is the PARSER FLOOR, not wall-clock restore: production chunks payloads this size at " +
       "32 KiB with UI yields via TerminalRestoreController, which cannot run in-process. Target " +
-      "terminals are built and disposed outside the bracket. Every target is verified to have been " +
-      "rebuilt to its full line count.",
+      "terminals are built and disposed outside the bracket. replayMisses counts targets that were " +
+      "not rebuilt to their full line count.",
     tier: "heavy",
     modes: ["ci", "nightly"],
     iterations: { ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: ["replayMisses"],
     async run() {
       const largeFleet = await getSnapshotFleet(SCROLLBACK_MAX, REPRESENTATIVE_FLEET);
       const smallFleet = await getSnapshotFleet(SCROLLBACK_DEFAULT, REPRESENTATIVE_FLEET);
@@ -135,23 +142,24 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
 
         // Check EVERY target in both arms: a no-op write is the fastest possible
         // result, so one verified terminal would happily hide 23 broken ones.
-        const verify = (targets: typeof largeTargets, expected: number, arm: string): number => {
+        const verify = (
+          targets: typeof largeTargets,
+          expected: number
+        ): { minLines: number; misses: number } => {
           let minLines = Infinity;
-          targets.forEach((terminal, index) => {
+          let misses = 0;
+          targets.forEach((terminal) => {
             const lines = terminal.buffer.active.length;
             minLines = Math.min(minLines, lines);
-            if (lines < expected) {
-              throw new Error(
-                `${arm} target ${index} holds ${lines} lines (expected >= ${expected}) — snapshot replay did not rebuild the buffer`
-              );
-            }
+            if (lines < expected) misses += 1;
           });
-          return minLines;
+          return { minLines, misses };
         };
         // Serialize emits the trimmed buffer, so a faithful replay lands on the
         // full scrollback; allow a small margin for the trailing partial row.
-        const largeMinLines = verify(largeTargets, SCROLLBACK_MAX - 8, "large");
-        verify(smallTargets, SCROLLBACK_DEFAULT - 8, "small");
+        const largeVerdict = verify(largeTargets, SCROLLBACK_MAX - 8);
+        const smallVerdict = verify(smallTargets, SCROLLBACK_DEFAULT - 8);
+        const replayMisses = largeVerdict.misses + smallVerdict.misses;
 
         return {
           durationMs,
@@ -160,8 +168,13 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
             smallPerTerminalMs: smallMs / smallPayloads.length,
             msPerKLine: largeMs / largePayloads.length / (SCROLLBACK_MAX / 1000),
             fleetReparseMs: largeMs,
-            restoredLines: largeMinLines,
+            restoredLines: largeVerdict.minLines,
+            replayMisses,
           },
+          notes:
+            replayMisses > 0
+              ? `${replayMisses} restore targets did not rebuild to their full line count`
+              : undefined,
         };
       } finally {
         // Without this, warmups plus iterations leave hundreds of filled

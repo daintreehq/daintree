@@ -1,11 +1,14 @@
 import type { PerfScenario } from "../types";
+import { makeTerminalChunks, createHeadlessTerminal } from "../lib/workloads";
 import {
-  makeTerminalChunks,
-  simulateTerminalOutputPass,
-  spinEventLoop,
-  createRng,
-  createHeadlessTerminal,
-} from "../lib/workloads";
+  addPipelineMisses,
+  buildPipelinePlan,
+  emptyPipelineMisses,
+  pipelinePassMisses,
+  runInterleavedPipelinePlans,
+  runPipelinePlan,
+  type PipelinePlan,
+} from "../lib/ptyOutputPipelineFixture";
 import { percentile } from "../lib/stats";
 import { INCREMENTAL_RESTORE_CONFIG } from "../../../src/services/terminal/types";
 import { WorkerParseSession } from "../../../src/services/terminal/workerParse/WorkerParseSession";
@@ -18,103 +21,241 @@ function isWorkerIngestPerfMode(): boolean {
   return process.env.DAINTREE_PAINT_FABRIC_WORKER_INGEST === "1";
 }
 
-const BURST_CHUNKS = makeTerminalChunks(6000, 96);
-const SUSTAINED_CHUNKS = makeTerminalChunks(3500, 180);
-const LARGE_SCROLL_CHUNKS = makeTerminalChunks(9000, 200);
+/**
+ * PERF-030/031/032 drive the real `PtyDataPipeline` — the per-chunk fan-out in
+ * the PTY host — through `handlePtyData`, with the real OSC colour responder,
+ * the real forensics ring, the real semantic ring, the real agent output ring
+ * and the real identity-watcher prompt scan attached. `lib/ptyOutputPipeline
+ * Fixture.ts` states what is stubbed (the analysis backend and the session
+ * snapshotter, both counted) and why.
+ *
+ * They previously ran `simulateTerminalOutputPass`, a `push()`/`shift()` loop
+ * over a `string[]` the harness owned, and imported no product code at all.
+ *
+ * PERF-033/034 below are unchanged and remain the xterm parse measurements;
+ * these three are the retention and fan-out half, which nothing else covered.
+ */
+
+const MULTI_TERMINAL_COUNT = 6;
+
+/**
+ * Corpora are built once, lazily. Built inside `run()` they were wall-clocked
+ * as if they were pipeline throughput — for PERF-031 that was more than twice
+ * the cost of the passes being measured.
+ */
+let corpora: {
+  burst: PipelinePlan;
+  sustained: PipelinePlan;
+  multi: PipelinePlan[];
+  large: PipelinePlan;
+} | null = null;
+
+function plans(): NonNullable<typeof corpora> {
+  if (corpora) return corpora;
+  corpora = {
+    // Burst: many small chunks, the shape of a `tsc --watch` or test-runner
+    // flood, where per-chunk fixed cost dominates.
+    burst: buildPipelinePlan({
+      chunks: 600,
+      linesPerChunk: 2,
+      oscEvery: 41,
+      promptEvery: 29,
+      seed: 30,
+    }),
+    // Sustained: fewer, fatter chunks — an agent streaming a long answer.
+    sustained: buildPipelinePlan({
+      chunks: 260,
+      linesPerChunk: 12,
+      oscEvery: 53,
+      promptEvery: 37,
+      seed: 31,
+    }),
+    multi: Array.from({ length: MULTI_TERMINAL_COUNT }, (_, index) =>
+      buildPipelinePlan({
+        chunks: 150 + index * 20,
+        linesPerChunk: 3 + (index % 3),
+        oscEvery: 23 + index,
+        promptEvery: 31 + index,
+        seed: 300 + index,
+      })
+    ),
+    // Large retained history: long enough that every ring is trimming on
+    // essentially every chunk, which is the cost this scenario is named for.
+    large: buildPipelinePlan({
+      chunks: 1800,
+      linesPerChunk: 4,
+      oscEvery: 97,
+      promptEvery: 71,
+      seed: 32,
+    }),
+  };
+  return corpora;
+}
 
 // One byte past the Daintree-side incremental-restore slice boundary —
 // the scenario must cover both sides of `chunkBytes` to catch regressions
 // in the slicing path.
 const CROSSING_CHUNK_BYTES = INCREMENTAL_RESTORE_CONFIG.chunkBytes + 1024;
 const STEADY_CHUNK_BYTES = 4 * 1024;
+/** PERF-033 writes exactly three chunks and ends on the last log line. */
+const WRITE_COUNT = 3;
+const EXPECTED_LAST_LINE = "log entry 99 from agent terminal";
 
 export const terminalScenarios: PerfScenario[] = [
   {
     id: "PERF-030",
-    name: "Terminal Throughput - Burst + Sustained",
-    description: "Stress terminal output pipeline with burst and sustained synthetic traffic.",
+    name: "Terminal Output Pipeline - Burst + Sustained",
+    description:
+      "The real PtyDataPipeline over two chunk shapes on one terminal: a " +
+      "600-chunk burst of two-line writes (test-runner / tsc --watch flood, " +
+      "where per-chunk fixed cost dominates) and a 260-chunk sustained stream " +
+      "of twelve-line writes (an agent streaming a long answer). Every stage " +
+      "is graded separately — the OSC colour responder in both directions, " +
+      "the prompt-return demotion in both directions, and each retention ring " +
+      "against the stream tail the fixture itself composed.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 18, nightly: 24 },
     warmups: 2,
-    async run() {
-      const burst = simulateTerminalOutputPass(BURST_CHUNKS, 4000);
-      const sustained = simulateTerminalOutputPass(SUSTAINED_CHUNKS, 5000);
-      await spinEventLoop(0.75);
+    correctness: [
+      "forwardMisses",
+      "analysisFeedMisses",
+      "snapshotScheduleMisses",
+      "agentQueueMisses",
+      "agentQueuePayloadMisses",
+      "outputStampMisses",
+      "oscResponseMisses",
+      "oscStripMisses",
+      "promptReturnMisses",
+      "forensicRingMisses",
+      "outputRingMisses",
+      "semanticRingMisses",
+    ],
+    run() {
+      const { burst, sustained } = plans();
+      const burstObserved = runPipelinePlan(burst, "perf-030-burst");
+      const sustainedObserved = runPipelinePlan(sustained, "perf-030-sustained");
+      const misses = addPipelineMisses(
+        pipelinePassMisses(burst, burstObserved),
+        pipelinePassMisses(sustained, sustainedObserved)
+      );
 
       return {
-        durationMs: 0,
+        durationMs: -1,
         metrics: {
-          renderedBytes: burst.renderedBytes + sustained.renderedBytes,
-          retainedBytes: sustained.retainedBytes,
-          checksum: burst.checksum + sustained.checksum,
+          chunkCount: burstObserved.chunksFed + sustainedObserved.chunksFed,
+          forwardedBytes: burstObserved.emittedChars + sustainedObserved.emittedChars,
+          retainedBytes:
+            burstObserved.forensicTail.length +
+            burstObserved.outputTail.length +
+            sustainedObserved.forensicTail.length +
+            sustainedObserved.outputTail.length,
+          oscResponseCount: burstObserved.oscResponses + sustainedObserved.oscResponses,
+          promptReturnCount: burstObserved.promptReturns + sustainedObserved.promptReturns,
+          ...misses,
         },
       };
     },
   },
   {
     id: "PERF-031",
-    name: "Terminal Throughput - Multi Terminal",
-    description: "Run simultaneous output streams while focus changes between terminals.",
+    name: "Terminal Output Pipeline - Multi Terminal",
+    description:
+      "Six terminals' streams round-robin a chunk at a time through six real " +
+      "PtyDataPipelines, which is how they arrive: one PTY host thread serves " +
+      "every pane in the window, so chatty panes interleave at chunk " +
+      "granularity rather than running to completion one after another. Each " +
+      "terminal is graded against its own corpus, so a pipeline that mixed " +
+      "two terminals' output would fail its ring oracles.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 16, nightly: 22 },
     warmups: 1,
-    async run() {
-      const rng = createRng(31031);
-      const streamCount = 6;
-      let checksum = 0;
-      let renderedBytes = 0;
+    correctness: [
+      "forwardMisses",
+      "analysisFeedMisses",
+      "snapshotScheduleMisses",
+      "agentQueueMisses",
+      "agentQueuePayloadMisses",
+      "outputStampMisses",
+      "oscResponseMisses",
+      "oscStripMisses",
+      "promptReturnMisses",
+      "forensicRingMisses",
+      "outputRingMisses",
+      "semanticRingMisses",
+    ],
+    run() {
+      const multi = plans().multi;
+      const observations = runInterleavedPipelinePlans(multi);
+      const misses = emptyPipelineMisses();
+      let chunkCount = 0;
+      let forwardedBytes = 0;
+      let retainedBytes = 0;
 
-      for (let streamIndex = 0; streamIndex < streamCount; streamIndex += 1) {
-        const chunks = makeTerminalChunks(1200 + streamIndex * 120, 80 + streamIndex * 5);
-        const result = simulateTerminalOutputPass(chunks, 3000 + streamIndex * 500);
-        renderedBytes += result.renderedBytes;
-        checksum += result.checksum;
-
-        // Focus changes trigger extra view work.
-        if (rng() > 0.4) {
-          await spinEventLoop(0.3);
-        }
+      for (let i = 0; i < multi.length; i += 1) {
+        const observed = observations[i]!;
+        addPipelineMisses(misses, pipelinePassMisses(multi[i]!, observed));
+        chunkCount += observed.chunksFed;
+        forwardedBytes += observed.emittedChars;
+        retainedBytes += observed.forensicTail.length + observed.outputTail.length;
       }
 
       return {
-        durationMs: 0,
+        durationMs: -1,
         metrics: {
-          renderedBytes,
-          checksum,
+          terminalCount: multi.length,
+          chunkCount,
+          forwardedBytes,
+          retainedBytes,
+          ...misses,
         },
       };
     },
   },
   {
     id: "PERF-032",
-    name: "Terminal Scroll Performance - Large Retained Output",
-    description: "Evaluate retained-output and scroll-like workloads under large histories.",
+    name: "Terminal Output Pipeline - Large Retained History",
+    description:
+      "1,800 chunks through one real PtyDataPipeline: long enough that all " +
+      "three retention rings — the 4,000-char forensics ring, the 2,000-char " +
+      "agent output ring and the 50-line semantic ring — are trimming on " +
+      "essentially every chunk. That trimming is the cost this scenario is " +
+      "named for, and it is the one term that grows with history length, so " +
+      "each ring is graded against the stream tail independently rather than " +
+      "through a single aggregate.",
     tier: "heavy",
     modes: ["ci", "nightly"],
     iterations: { ci: 6, nightly: 10 },
     warmups: 1,
-    async run() {
-      const result = simulateTerminalOutputPass(LARGE_SCROLL_CHUNKS, 12000);
-
-      // Simulate repeated scrollback slicing and viewport updates.
-      let scrollChecksum = 0;
-      const viewport = 120;
-      const lineCount = Math.max(1, Math.floor(result.retainedBytes / 80));
-      for (let i = 0; i < 300; i += 1) {
-        const start = Math.max(0, Math.floor((i / 299) * Math.max(0, lineCount - viewport)));
-        scrollChecksum += start + viewport;
-      }
-
-      await spinEventLoop(1.2);
+    correctness: [
+      "forwardMisses",
+      "analysisFeedMisses",
+      "snapshotScheduleMisses",
+      "agentQueueMisses",
+      "agentQueuePayloadMisses",
+      "outputStampMisses",
+      "oscResponseMisses",
+      "oscStripMisses",
+      "promptReturnMisses",
+      "forensicRingMisses",
+      "outputRingMisses",
+      "semanticRingMisses",
+    ],
+    run() {
+      const large = plans().large;
+      const observed = runPipelinePlan(large, "perf-032-large");
+      const misses = pipelinePassMisses(large, observed);
 
       return {
-        durationMs: 0,
+        durationMs: -1,
         metrics: {
-          renderedBytes: result.renderedBytes,
-          retainedBytes: result.retainedBytes,
-          checksum: result.checksum + scrollChecksum,
+          chunkCount: observed.chunksFed,
+          streamBytes: large.totalChars,
+          forwardedBytes: observed.emittedChars,
+          retainedBytes: observed.forensicTail.length + observed.outputTail.length,
+          semanticLineCount: observed.semanticLines.length,
+          ...misses,
         },
       };
     },
@@ -133,6 +274,7 @@ export const terminalScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 14, nightly: 20 },
     warmups: 1,
+    correctness: ["parseMisses"],
     async run() {
       const terminal = await createHeadlessTerminal({
         cols: 120,
@@ -175,6 +317,18 @@ export const terminalScenarios: PerfScenario[] = [
           terminal.buffer.active
             .getLine(terminal.buffer.active.baseY - 1)
             ?.translateToString(true) ?? "";
+        // The final row the parser wrote, which is NOT `baseY - 1` — that row
+        // sits a viewport above the cursor. The last log entry is a known
+        // string, so this is the one reading here a parser has to have run to
+        // satisfy.
+        let lastWrittenLine = "";
+        for (let row = terminal.buffer.active.length - 1; row >= 0; row -= 1) {
+          const text = terminal.buffer.active.getLine(row)?.translateToString(true) ?? "";
+          if (text.length > 0) {
+            lastWrittenLine = text;
+            break;
+          }
+        }
 
         return {
           // Negative durationMs triggers the wall-clock fallback in run.ts
@@ -185,6 +339,13 @@ export const terminalScenarios: PerfScenario[] = [
             bytesWritten,
             parseInvocations,
             lastLineLength: lastLine.length,
+            // `bytesWritten` is arithmetic over the inputs and `parseInvocations`
+            // counts callbacks, neither of which needs a parser to have run.
+            // The buffer is where the parse actually lands, so the final row is
+            // checked against the exact string that was written last.
+            parseMisses:
+              Math.max(0, WRITE_COUNT - parseInvocations) +
+              (lastWrittenLine === EXPECTED_LAST_LINE ? 0 : 1),
           },
         };
       } finally {
@@ -210,10 +371,20 @@ export const terminalScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 5, ci: 8, nightly: 12 },
     warmups: 1,
+    correctness: ["floodParseMisses"],
     async run() {
       const BACKGROUND_TERMINALS = 12;
       const ROUNDS = 30;
+      const TERMINAL_ROWS = 30;
       const ECHO_PAYLOAD = "k"; // one keystroke echoed back
+      // `floodBytes` is summed off the input chunks, so it reads identically
+      // whether the background terminals parsed them or dropped them — and a
+      // flood that never lands is the cheapest possible `echoDegradationX`.
+      // A terminal that parsed a 30-round stream has scrolled well past its
+      // initial `rows` of buffer; one that parsed nothing has not moved.
+      const unparsedCount = (
+        terminals: Array<{ buffer: { active: { length: number } } }>
+      ): number => terminals.filter((t) => t.buffer.active.length <= TERMINAL_ROWS).length;
 
       // Worker-ingest mode (DAINTREE_PAINT_FABRIC_WORKER_INGEST=1): the same
       // deterministic workload, but each background terminal's parse runs in a
@@ -287,6 +458,7 @@ export const terminalScenarios: PerfScenario[] = [
               floodEchoP99Ms: floodP99,
               echoDegradationX: soloP99 > 0 ? floodP99 / soloP99 : 0,
               floodBytes,
+              floodParseMisses: unparsedCount(mirrors),
             },
           };
         } finally {
@@ -348,6 +520,7 @@ export const terminalScenarios: PerfScenario[] = [
             floodEchoP99Ms: floodP99,
             echoDegradationX: soloP99 > 0 ? floodP99 / soloP99 : 0,
             floodBytes,
+            floodParseMisses: unparsedCount(background),
           },
         };
       } finally {

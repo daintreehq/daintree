@@ -1,6 +1,12 @@
 import { basename } from "node:path";
 import type { PerfScenario, ScenarioSample } from "../types";
-import { gitSpawnMark, gitSpawnsSince, percentileOf, sleep } from "../lib/gitPipelineFixture";
+import {
+  gitSpawnMark,
+  gitSpawnsSince,
+  percentileOf,
+  sleep,
+  spawnObserverMisses,
+} from "../lib/gitPipelineFixture";
 import {
   FAN_IN_WORKTREE_COUNT,
   TOPOLOGY_SCALING_COUNTS,
@@ -51,12 +57,41 @@ const BULK_ADD_COUNT = 10;
 const STORE_SEED_COUNTS = [50, 200] as const;
 const STORE_APPLY_BATCH = 400;
 
+/**
+ * A scenario that never reached its outcome, reported as its timeout.
+ *
+ * The duration is the deadline, not a measurement — the operation did not
+ * complete. Under a gating harness that was enough, because the inflated number
+ * tripped the gate. Nothing gates now, so the timeout would otherwise read as a
+ * genuine slow result: an 8000ms row that looks measured and exits 0.
+ *
+ * `timeoutMisses` makes it machine-readable. The name matters — the
+ * comparability classifier reads a `*Misses` suffix as a count, so it compares
+ * across machines and shows up in `perf compare` rather than being written off
+ * as timing noise. A non-zero value means the row's duration is not a
+ * measurement at all and every other metric on it is suspect.
+ *
+ * It is emitted on EVERY path — see {@link measured} for the healthy 0. An
+ * only-on-failure version was worthless twice over: `MetricStat.count` tallies
+ * the iterations that reported a metric, so fifteen timeouts and one healthy
+ * sample aggregate to `max: 1` over a `count` of 15, while a scenario that
+ * stopped running entirely reports no misses at all and reads as clean.
+ */
 function failClosed(
   durationMs: number,
   notes: string,
   metrics?: Record<string, number>
 ): ScenarioSample {
-  return { durationMs, metrics, notes };
+  return { durationMs, metrics: { ...metrics, timeoutMisses: 1 }, notes };
+}
+
+/** A measurement that completed, carrying the healthy half of the pair. */
+function measured(
+  durationMs: number,
+  metrics?: Record<string, number>,
+  notes?: string
+): ScenarioSample {
+  return { durationMs, metrics: { ...metrics, timeoutMisses: 0 }, notes };
 }
 
 export const worktreeSidebarScenarios: PerfScenario[] = [
@@ -69,6 +104,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 6, ci: 10, nightly: 14 },
     warmups: 1,
+    correctness: ["timeoutMisses", "spawnObserverMisses"],
     async run() {
       const fixture = getSidebarEditFixture();
       const rm = await createRecordingMonitor(fixture.focusPath, "wt-focus-branch", {
@@ -79,6 +115,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
       try {
         await startArmedMonitor(rm, { requireWatcher: true });
         await quiesceGitSpawns();
+        const observerMisses = spawnObserverMisses();
         const from = rm.recorder.cursor();
         const mark = gitSpawnMark();
         const t0 = performance.now();
@@ -90,9 +127,12 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
         );
         const gitSpawns = gitSpawnsSince(mark).count;
         if (!emit) {
-          return failClosed(EMIT_TIMEOUT_MS, "no matching emit before deadline", { gitSpawns });
+          return failClosed(EMIT_TIMEOUT_MS, "no matching emit before deadline", {
+            gitSpawns,
+            spawnObserverMisses: observerMisses,
+          });
         }
-        return { durationMs: emit.atMs - t0, metrics: { gitSpawns } };
+        return measured(emit.atMs - t0, { gitSpawns, spawnObserverMisses: observerMisses });
       } finally {
         rm.monitor.stop();
         if (editFile) removeFileQuietly(editFile);
@@ -108,6 +148,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 6, ci: 10, nightly: 14 },
     warmups: 1,
+    correctness: ["timeoutMisses", "spawnObserverMisses"],
     async run() {
       const fixture = getSidebarEditFixture();
       const seq = uid();
@@ -122,6 +163,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
       try {
         await startArmedMonitor(rm, { requireWatcher: true });
         await quiesceGitSpawns();
+        const observerMisses = spawnObserverMisses();
         const from = rm.recorder.cursor();
         const mark = gitSpawnMark();
         commitAllIn(fixture.metaPath, `bench commit ${seq}`);
@@ -133,9 +175,12 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
         );
         const gitSpawns = gitSpawnsSince(mark).count;
         if (!emit) {
-          return failClosed(EMIT_TIMEOUT_MS, "no clean-state emit before deadline", { gitSpawns });
+          return failClosed(EMIT_TIMEOUT_MS, "no clean-state emit before deadline", {
+            gitSpawns,
+            spawnObserverMisses: observerMisses,
+          });
         }
-        return { durationMs: emit.atMs - t0, metrics: { gitSpawns } };
+        return measured(emit.atMs - t0, { gitSpawns, spawnObserverMisses: observerMisses });
       } finally {
         rm.monitor.stop();
       }
@@ -150,6 +195,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 6, nightly: 8 },
     warmups: 1,
+    correctness: ["timeoutMisses"],
     async run() {
       const fixture = getSidebarEditFixture();
       const rm = await createRecordingMonitor(fixture.pollPath, "wt-poll-branch", {
@@ -196,10 +242,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
           });
         }
         const latency = emit.atMs - t0;
-        return {
-          durationMs: latency,
-          metrics: { detectionToIntervalRatio: latency / POLL_BOUND_INTERVAL_MS },
-        };
+        return measured(latency, { detectionToIntervalRatio: latency / POLL_BOUND_INTERVAL_MS });
       } finally {
         rm.monitor.stop();
         if (editFile) removeFileQuietly(editFile);
@@ -215,6 +258,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 10 },
     warmups: 1,
+    correctness: ["timeoutMisses", "spawnObserverMisses"],
     async run() {
       const fixture = getSidebarEditFixture();
       const rm = await createRecordingMonitor(fixture.burstPath, "wt-burst-branch", {
@@ -225,6 +269,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
       try {
         await startArmedMonitor(rm, { requireWatcher: true });
         await quiesceGitSpawns();
+        const observerMisses = spawnObserverMisses();
         const from = rm.recorder.cursor();
         const mark = gitSpawnMark();
         const t0 = performance.now();
@@ -253,17 +298,16 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
           return failClosed(EMIT_TIMEOUT_MS, "burst never fully reflected before deadline", {
             emitCount,
             gitSpawns: window.count,
+            spawnObserverMisses: observerMisses,
           });
         }
-        return {
-          durationMs: settled.atMs - t0,
-          metrics: {
-            firstEmitMs: first.atMs - t0,
-            settleMs: settled.atMs - t0,
-            emitCount,
-            gitSpawns: window.count,
-          },
-        };
+        return measured(settled.atMs - t0, {
+          firstEmitMs: first.atMs - t0,
+          settleMs: settled.atMs - t0,
+          emitCount,
+          gitSpawns: window.count,
+          spawnObserverMisses: observerMisses,
+        });
       } finally {
         rm.monitor.stop();
         for (const file of files) removeFileQuietly(file);
@@ -279,6 +323,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 5, nightly: 8 },
     warmups: 1,
+    correctness: ["emitMisses", "timeoutMisses", "spawnObserverMisses"],
     async run() {
       const fixture = getSidebarEditFixture();
       const monitors: RecordingMonitor[] = [];
@@ -296,6 +341,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
           await startArmedMonitor(rm, { requireWatcher: true });
         }
         await quiesceGitSpawns();
+        const observerMisses = spawnObserverMisses();
         const cursors = monitors.map((rm) => rm.recorder.cursor());
         const mark = gitSpawnMark();
         const seq = uid();
@@ -314,21 +360,26 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
         );
         const gitSpawns = gitSpawnsSince(mark).count;
         const latencies = emits.map((emit) => (emit ? emit.atMs - t0 : EMIT_TIMEOUT_MS));
-        const missing = emits.filter((emit) => emit === null).length;
+        // Worktrees whose edit never reached a snapshot. This used to be prose
+        // in `notes` plus a timeout folded into the latency distribution, so a
+        // fan-in where half the watchers had gone dark still reported a
+        // plausible p95 and a low spawn count with nothing numeric to say so.
+        const emitMisses = emits.filter((emit) => emit === null).length;
         const allSettledMs = Math.max(...latencies);
-        return {
-          durationMs: allSettledMs,
-          metrics: {
+        return measured(
+          allSettledMs,
+          {
             p95LatencyMs: percentileOf(latencies, 95),
             maxLatencyMs: allSettledMs,
             meanLatencyMs: latencies.reduce((a, b) => a + b, 0) / latencies.length,
             gitSpawns,
+            emitMisses,
+            spawnObserverMisses: observerMisses,
           },
-          notes:
-            missing > 0
-              ? `${missing}/${FAN_IN_WORKTREE_COUNT} emits missed the deadline`
-              : undefined,
-        };
+          emitMisses > 0
+            ? `${emitMisses}/${FAN_IN_WORKTREE_COUNT} emits missed the deadline`
+            : undefined
+        );
       } finally {
         for (const rm of monitors) rm.monitor.stop();
         for (const file of files) removeFileQuietly(file);
@@ -344,10 +395,12 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 6, nightly: 8 },
     warmups: 1,
+    correctness: ["timeoutMisses", "spawnObserverMisses"],
     async run() {
       const harness = await getSteadyTopologyHarness();
       await harness.settle();
       const name = `ext-${uid()}`;
+      const observerMisses = spawnObserverMisses();
       const from = harness.cursor();
       const mark = gitSpawnMark();
       const wtPath = harness.addWorktreeExternal(name);
@@ -361,9 +414,13 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
       if (!surfaced) {
         return failClosed(TOPOLOGY_TIMEOUT_MS, "external add never surfaced", {
           worktreeListSpawns,
+          spawnObserverMisses: observerMisses,
         });
       }
-      return { durationMs: surfaced.atMs - addDoneAt, metrics: { worktreeListSpawns } };
+      return measured(surfaced.atMs - addDoneAt, {
+        worktreeListSpawns,
+        spawnObserverMisses: observerMisses,
+      });
     },
   },
   {
@@ -375,6 +432,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 5, nightly: 6 },
     warmups: 1,
+    correctness: ["timeoutMisses"],
     async run() {
       const harness = await TopologyHarness.create(0);
       try {
@@ -386,7 +444,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
         if (!surfaced) {
           return failClosed(TOPOLOGY_TIMEOUT_MS, "cold add never surfaced (sentinel missed)");
         }
-        return { durationMs: surfaced.atMs - addDoneAt };
+        return measured(surfaced.atMs - addDoneAt);
       } finally {
         harness.dispose();
       }
@@ -401,9 +459,11 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 2, ci: 3, nightly: 5 },
     warmups: 1,
+    correctness: ["timeoutMisses", "removalMisses", "spawnObserverMisses"],
     async run() {
       const harness = await getSteadyTopologyHarness();
       await harness.settle();
+      const observerMisses = spawnObserverMisses();
       const seq = uid();
       const names = Array.from({ length: BULK_ADD_COUNT }, (_, k) => `bulk-${seq}-${k}`);
       const from = harness.cursor();
@@ -452,6 +512,13 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
       const metrics = {
         worktreeListSpawns: window.bySubcommand["worktree"] ?? 0,
         gitSpawns: window.count,
+        // Adds whose removal was never confirmed. The removal leg is cleanup,
+        // not the measured latency, but an unconfirmed removal leaves the
+        // shared steady-state project holding worktrees the NEXT iteration
+        // will reconcile — so the count it reports is over a topology this one
+        // silently grew.
+        removalMisses: remainingRemoves.size,
+        spawnObserverMisses: observerMisses,
       };
       if (!allSurfaced) {
         return failClosed(
@@ -460,14 +527,13 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
           metrics
         );
       }
-      return {
-        durationMs: lastSurfacedAt - t0,
-        metrics: { ...metrics, allSurfacedMs: lastSurfacedAt - t0 },
-        notes:
-          remainingRemoves.size > 0
-            ? `${remainingRemoves.size} cleanup removals unconfirmed`
-            : undefined,
-      };
+      return measured(
+        lastSurfacedAt - t0,
+        { ...metrics, allSurfacedMs: lastSurfacedAt - t0 },
+        remainingRemoves.size > 0
+          ? `${remainingRemoves.size} cleanup removals unconfirmed`
+          : undefined
+      );
     },
   },
   {
@@ -479,9 +545,14 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 2, ci: 3, nightly: 4 },
     warmups: 1,
+    correctness: ["surfaceMisses"],
     async run() {
       const latencies = new Map<number, number>();
       const notes: string[] = [];
+      // Legs where the add never surfaced. Their latency is the deadline, not
+      // a measurement, and folding that into the per-N metrics without saying
+      // so reports a broken pickup as a slow one.
+      let surfaceMisses = 0;
       for (const count of TOPOLOGY_SCALING_COUNTS) {
         const harness = await getScaleTopologyHarness(count);
         await harness.settle();
@@ -491,11 +562,14 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
         const addDoneAt = performance.now();
         const surfaced = await harness.waitForSurfaced(name, TOPOLOGY_TIMEOUT_MS, from);
         latencies.set(count, surfaced ? surfaced.atMs - addDoneAt : TOPOLOGY_TIMEOUT_MS);
-        if (!surfaced) notes.push(`N=${count} add never surfaced`);
+        if (!surfaced) {
+          surfaceMisses += 1;
+          notes.push(`N=${count} add never surfaced`);
+        }
         await harness.cleanupWorktree(wtPath, name, from);
       }
       return {
-        // Worst leg, so a pickup failure at ANY scale fails the p95 gate —
+        // Worst leg, so a pickup failure at ANY scale shows in the headline —
         // the per-N metrics carry the scaling story.
         durationMs: Math.max(
           ...TOPOLOGY_SCALING_COUNTS.map((count) => latencies.get(count) ?? TOPOLOGY_TIMEOUT_MS)
@@ -505,6 +579,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
           latencyMsN5: latencies.get(5) ?? TOPOLOGY_TIMEOUT_MS,
           latencyMsN20: latencies.get(20) ?? TOPOLOGY_TIMEOUT_MS,
           latencyMsN50: latencies.get(50) ?? TOPOLOGY_TIMEOUT_MS,
+          surfaceMisses,
         },
         notes: notes.length > 0 ? notes.join("; ") : undefined,
       };
@@ -519,6 +594,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 5, nightly: 6 },
     warmups: 1,
+    correctness: ["timeoutMisses", "removalMisses"],
     async run() {
       const harness = await getSteadyTopologyHarness();
       await harness.settle();
@@ -528,7 +604,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
       const surfaced = await harness.waitForSurfaced(name, TOPOLOGY_TIMEOUT_MS, from);
       if (!surfaced) {
         await harness.cleanupWorktree(wtPath, name, from);
-        return failClosed(TOPOLOGY_TIMEOUT_MS, "setup add never surfaced");
+        return failClosed(TOPOLOGY_TIMEOUT_MS, "setup add never surfaced", { removalMisses: 1 });
       }
       await harness.settle();
       from = harness.cursor();
@@ -536,7 +612,9 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
       const removeDoneAt = performance.now();
       const removed = await harness.waitForRemoved(name, TOPOLOGY_TIMEOUT_MS, from);
       if (!removed) {
-        return failClosed(TOPOLOGY_TIMEOUT_MS, "external removal never dropped");
+        return failClosed(TOPOLOGY_TIMEOUT_MS, "external removal never dropped", {
+          removalMisses: 1,
+        });
       }
       const settledRemovalMs = removed.atMs - removeDoneAt;
 
@@ -550,6 +628,9 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
       const wtPath2 = harness.addWorktreeExternal(name2);
       const surfaced2 = await harness.waitForSurfaced(name2, TOPOLOGY_TIMEOUT_MS, from2);
       let cooldownRemovalMs = EMIT_TIMEOUT_MS;
+      // The in-cooldown leg reports its deadline as a latency when it strands,
+      // so without this a permanently stranded removal reads as a slow one.
+      let removalMisses = 0;
       let notes: string | undefined;
       if (surfaced2) {
         harness.removeWorktreeExternal(wtPath2);
@@ -558,19 +639,21 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
         if (removed2) {
           cooldownRemovalMs = removed2.atMs - removeDoneAt2;
         } else {
+          removalMisses += 1;
           notes = "in-cooldown removal stranded past deadline";
           harness.svc.scheduleTopologyReconcile(true);
           await harness.waitForRemoved(name2, TOPOLOGY_TIMEOUT_MS, from2);
         }
       } else {
+        removalMisses += 1;
         notes = "in-cooldown setup add never surfaced";
         await harness.cleanupWorktree(wtPath2, name2, from2);
       }
-      return {
-        durationMs: settledRemovalMs,
-        metrics: { settledRemovalMs, cooldownRemovalMs },
-        notes,
-      };
+      return measured(
+        settledRemovalMs,
+        { settledRemovalMs, cooldownRemovalMs, removalMisses },
+        notes
+      );
     },
   },
   {
@@ -582,12 +665,18 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 16, nightly: 24 },
     warmups: 1,
+    correctness: ["applyMisses"],
     async run() {
       const { createWorktreeStore } = await loadWorktreeStoreModule();
       const applyMsBySeed = new Map<number, number>();
       let notifies = 0;
       let mapChanges = 0;
       let applies = 0;
+      // An `applyUpdate` that dropped its payload on the floor is the fastest
+      // possible apply, and would improve every timing and lower every
+      // per-apply ratio here. Checked against the values this loop fed in, so
+      // no change inside the store can satisfy it without actually storing.
+      let applyMisses = 0;
       for (const seedCount of STORE_SEED_COUNTS) {
         const store = createWorktreeStore();
         let seq = 0;
@@ -617,6 +706,12 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
         applyMsBySeed.set(seedCount, performance.now() - t0);
         applies += STORE_APPLY_BATCH;
         unsubscribe();
+
+        const map = store.getState().worktrees;
+        const lastIndex = (STORE_APPLY_BATCH - 1) % seedCount;
+        const last = map.get(`/bench/worktrees/wt-${lastIndex}`);
+        if (map.size !== seedCount) applyMisses += 1;
+        if (last?.worktreeChanges?.changedFileCount !== STORE_APPLY_BATCH) applyMisses += 1;
       }
       const applyMsN200 = applyMsBySeed.get(200) ?? 0;
       return {
@@ -627,6 +722,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
           perApplyUsN200: (applyMsN200 * 1000) / STORE_APPLY_BATCH,
           notifiesPerApply: notifies / applies,
           mapChangesPerApply: mapChanges / applies,
+          applyMisses,
         },
       };
     },
@@ -640,6 +736,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 16, nightly: 24 },
     warmups: 1,
+    correctness: ["freshnessMisses"],
     async run() {
       const { createWorktreeStore } = await loadWorktreeStoreModule();
       const store = createWorktreeStore();
@@ -671,12 +768,27 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
       }
       const elapsed = performance.now() - t0;
       unsubscribe();
+
+      // `mapIdentityChanges: 0` is the result this scenario wants, which makes
+      // it exactly the number a store that ignored every update would post.
+      // The side map is where a freshness-only update is supposed to land, so
+      // that is where the proof has to come from: the last stamp fed in must
+      // be readable back out.
+      const state = store.getState() as unknown as { statusCheckedAt: Map<string, number> };
+      const lastIndex = (STORE_APPLY_BATCH - 1) % seedCount;
+      const expectedCheckedAt = 1_000_000 + STORE_APPLY_BATCH;
+      const freshnessMisses =
+        (state.statusCheckedAt?.get(`/bench/worktrees/wt-${lastIndex}`) === expectedCheckedAt
+          ? 0
+          : 1) + (store.getState().worktrees.size === seedCount ? 0 : 1);
+
       return {
         durationMs: elapsed,
         metrics: {
           mapIdentityChanges,
           notifiesPerApply: notifies / STORE_APPLY_BATCH,
           perApplyUs: (elapsed * 1000) / STORE_APPLY_BATCH,
+          freshnessMisses,
         },
       };
     },

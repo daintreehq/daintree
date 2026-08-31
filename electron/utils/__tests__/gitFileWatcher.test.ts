@@ -1697,6 +1697,56 @@ describe("GitFileWatcher", () => {
       expect(ignore).toHaveLength(expectedDirs.length + 2);
     });
 
+    // The parcel backend is pinned so no arm probes watchman (a cmd.exe
+    // popen on Windows), and every re-arm after a teardown would repeat it.
+    it.each([
+      ["win32", "windows"],
+      ["darwin", "fs-events"],
+      ["linux", "inotify"],
+    ])("pins the %s watcher backend to %s", async (platform, backend) => {
+      const origPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      const mock = setupSubscribeMock();
+
+      try {
+        const gitWatcher = new GitFileWatcher({
+          worktreePath: "/repo",
+          branch: "main",
+          debounceMs: 300,
+          onChange: vi.fn(),
+          watchWorktree: true,
+        });
+        await gitWatcher.start();
+
+        expect(mock.getOptions()?.backend).toBe(backend);
+      } finally {
+        Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+      }
+    });
+
+    it("leaves the backend unpinned on platforms parcel has no typed backend for", async () => {
+      const origPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "freebsd", configurable: true });
+      const mock = setupSubscribeMock();
+
+      try {
+        const gitWatcher = new GitFileWatcher({
+          worktreePath: "/repo",
+          branch: "main",
+          debounceMs: 300,
+          onChange: vi.fn(),
+          watchWorktree: true,
+        });
+        await gitWatcher.start();
+
+        const options = mock.getOptions();
+        expect(options?.ignore).toBeDefined();
+        expect(options && "backend" in options).toBe(false);
+      } finally {
+        Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+      }
+    });
+
     it("events from non-ignored paths still fire onChange", async () => {
       const onChange = vi.fn();
       const mock = setupSubscribeMock();
