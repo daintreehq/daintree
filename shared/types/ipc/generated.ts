@@ -1225,6 +1225,10 @@ export interface GeneratedIpcInvokeMap {
     args: [decision: import("../plugin.js").ProjectPluginTrustDecision];
     result: void;
   };
+  "plugin:project-surfaces-get": {
+    args: [];
+    result: Partial<Record<"emptyCanvas", import("../plugin.js").ProjectSurfaceClaim>>;
+  };
   "plugin:recipe-metadata-update": {
     args: [recipeId: string, updates: import("../project.js").PluginRecipeMetadataPatch];
     result: import("../project.js").TerminalRecipe;

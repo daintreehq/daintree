@@ -1072,6 +1072,48 @@ export const SettingDefinitionSchema = SettingDefinitionObjectSchema.superRefine
 });
 
 /**
+ * A surface slot that renders a plugin view: `viewId` names an entry in this
+ * manifest's own `contributes.views`, cross-checked in `superRefine` exactly
+ * like `forgeProviders.viewRefs` (#10620) — a dangling id would mount nothing
+ * and leave the slot blank with no diagnostic.
+ */
+export const SurfaceViewSlotSchema = z
+  .object({
+    viewId: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+  })
+  .strict();
+
+/**
+ * `contributes.surfaces` (§7.8) — the project surfaces a project-local plugin
+ * may own, so a project can present as a purpose-built application rather than
+ * as a host with one extra panel.
+ *
+ * Additive and slot-replacing only. Nothing here removes host chrome: the
+ * project switcher, the worktree dashboard and the stock launcher stay
+ * reachable in every case, which is the boundary that keeps a broken plugin
+ * from stranding the user with no way back. Available to `scope: "project"`
+ * plugins alone — an installed plugin claiming a project's surfaces is exactly
+ * what locality is supposed to rule out — and at most one plugin may claim each
+ * slot per project, enforced at load, where both claimants are known.
+ *
+ * `emptyCanvas` is the only slot accepted today. The spec also describes
+ * `projectHome` (a persistent home surface in the project's primary
+ * navigation) and `defaultLayout` (the arrangement opened on a cold first open
+ * with no restorable session). Neither is declared here, because neither has a
+ * consumer: this renderer has no per-project routing a persistent home surface
+ * could live at — the sidebar lists worktrees, not views — and a recipe is
+ * launched against a worktree, not against a project cold open. Accepting
+ * either now would put a field in a frozen public contract that nothing reads,
+ * which is the drift `manifestContributionConsumers.test.ts` exists to stop.
+ * They land with the routing they need, not before it.
+ */
+export const SurfaceContributionsSchema = z
+  .object({
+    emptyCanvas: SurfaceViewSlotSchema.optional(),
+  })
+  .strict();
+
+/**
  * Per-array upper bounds for `contributes.*`. A crafted manifest with tens of
  * thousands of entries would otherwise exhaust the registration loops in
  * `PluginService.loadPlugin`. These caps are generous relative to any plausible
@@ -1146,6 +1188,53 @@ function normalizeDeprecatedContributionAliases(raw: unknown): unknown {
   }
   return next ?? obj;
 }
+
+/**
+ * `contributes.*` groups a `scope: "project"` plugin may not declare, each with
+ * the structural reason it cannot yet be narrowed to one project.
+ *
+ * The dividing line is {@link
+ * ../services/plugin/PluginContributionBroadcaster.js}: the groups it filters by
+ * owning plugin id (panels, commands/actions, toolbarButtons, keybindings,
+ * contextMenus) reach only the owning project's views, and `settings` resolves
+ * through the bound instance handle. Everything here registers into a registry
+ * with no project axis — a single app menu, one agent roster mirrored into the
+ * shared pty-host, one skill index behind the MCP server — so the contribution
+ * is published app-wide no matter which project loaded it.
+ *
+ * Exported so tests enumerate the set instead of restating it, and so a group
+ * that later grows a project axis is removed in exactly one place.
+ */
+export const PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS = [
+  [
+    "menuItems",
+    "the application menu is one OS-level menu shared by every window, with no per-project projection — the item would stay on the menu bar while a different project is focused and dispatch into it.",
+  ],
+  [
+    "agents",
+    "the plugin agent roster is a single app-wide registry mirrored into the shared pty-host, and an agent's launch identity is persisted into terminals and sessions that outlive the project binding — the agent would be launchable from every project.",
+  ],
+  [
+    "skills",
+    "contributed skills land in one app-wide index behind the built-in MCP server's skills.search/skills.load, which external agent sessions query with no project context to filter on.",
+  ],
+  [
+    "recipes",
+    "the plugin recipe registry is broadcast to every renderer unfiltered, so the recipe would appear in every project's launcher and empty state.",
+  ],
+  [
+    "fileDecorationProviders",
+    "decoration requests carry a resource path with no owning-project routing, so the provider would be consulted for files in every project the app has open.",
+  ],
+  [
+    "processTools",
+    "process-tool detections are mirrored into the shared pty-host as one detection table for every terminal in the app, so the icon mapping would apply to every project's processes.",
+  ],
+  [
+    "mcpServers",
+    "contributed MCP servers are reachable through the app-global plugin-MCP surface, where an external agent session carries no project binding to check the contribution against.",
+  ],
+] as const satisfies ReadonlyArray<readonly [string, string]>;
 
 /** The schema {@link getPluginManifestSchema} hands back, for the overloads. */
 type PluginManifestSchema = ReturnType<typeof buildPluginManifestSchema>;
@@ -1274,6 +1363,9 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(RecipeContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.recipes)
               .default([]),
+            // Not an array, so it carries no MANIFEST_CONTRIBUTION_CAPS entry —
+            // three optional fixed slots are structurally bounded already.
+            surfaces: SurfaceContributionsSchema.default({}),
           })
           .default({
             panels: [],
@@ -1291,6 +1383,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             processTools: [],
             settings: [],
             recipes: [],
+            surfaces: {},
           })
       ),
     })
@@ -1343,6 +1436,54 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             'contributes.forgeProviders is not available to a "scope": "project" plugin — forge providers need synchronous host methods (parseRemote, URL builders) that cannot cross the plugin worker\'s async message port, so host.registerForgeProvider would refuse the implementation and the provider could never resolve.',
           params: { errorCode: "forge_provider_project_scope_forbidden" },
         });
+      }
+
+      // The contribution groups that are still STRUCTURALLY GLOBAL. Contribution
+      // scoping (`PluginContributionBroadcaster`) narrows panels, actions,
+      // toolbar buttons, keybindings and context menus to the owning project's
+      // views; every group below is registered into an app-wide registry that
+      // has no project axis at all, so a project plugin declaring one publishes
+      // it to every project in the app — the exact locality violation project
+      // scope exists to prevent. That was harmless while nothing could be
+      // project-scoped; it is a live leak now, so the declaration is rejected at
+      // the gate rather than accepted and silently over-published.
+      //
+      // Each of these is deferred, not forbidden forever: the reason names the
+      // structural obstacle so a later phase knows what it has to build first.
+      // Installed and builtin plugins are unaffected — they ARE app-wide, which
+      // is what the absent `scope` means.
+      if (manifest.scope === "project") {
+        for (const [group, reason] of PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS) {
+          if (manifest.contributes[group].length === 0) continue;
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", group],
+            message: `contributes.${group} is not available to a "scope": "project" plugin — ${reason}`,
+            params: { errorCode: `${group}_project_scope_forbidden` },
+          });
+        }
+      }
+
+      // The inverse asymmetry: `contributes.surfaces` is available to project
+      // plugins ALONE. An installed plugin taking over a project's empty canvas,
+      // its home nav entry or its cold-open layout would be reshaping a project
+      // it was never bound to, from a decision the user made globally — and
+      // there would be no project whose slot registry could arbitrate the
+      // claim. Locality is the whole point of the slot, so a manifest without
+      // `scope: "project"` may not declare one.
+      if (manifest.scope !== "project" && manifest.contributes.surfaces !== undefined) {
+        const claimed = Object.entries(manifest.contributes.surfaces).filter(
+          ([, value]) => value !== undefined
+        );
+        if (claimed.length > 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "surfaces"],
+            message:
+              'contributes.surfaces is available only to a "scope": "project" plugin — a surface claim replaces one project\'s own chrome, and an installed plugin is bound to no project, so there is nothing to scope the claim to or to arbitrate a second claimant against.',
+            params: { errorCode: "surfaces_project_scope_only" },
+          });
+        }
       }
 
       if (origin !== "builtin" && manifest.name.startsWith("daintree.")) {
@@ -1555,6 +1696,39 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           }
         });
       });
+
+      // `surfaces.*.viewId` → a declared view, the same dangling-reference
+      // treatment `forgeProviders.viewRefs` gets above: an id matching no
+      // contributed view mounts nothing, so the slot the plugin claimed renders
+      // blank with no diagnostic.
+      const ptyPanelIds = new Set(
+        manifest.contributes.panels.filter((p) => p.hasPty === true).map((p) => p.id)
+      );
+      for (const slot of ["emptyCanvas"] as const) {
+        const claim = manifest.contributes.surfaces[slot];
+        if (claim === undefined) continue;
+        if (!viewIds.has(claim.viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "surfaces", slot, "viewId"],
+            message: `surfaces.${slot}.viewId "${claim.viewId}" matches no contributes.views[].id.`,
+            params: { errorCode: "surface_view_ref_unknown" },
+          });
+          continue;
+        }
+        // A PTY panel is rendered by TerminalPane, so its matching view is
+        // ignored at load and no component path is ever attached. The claim
+        // would then hold the project's slot against every other plugin while
+        // rendering nothing — worse than not claiming it at all.
+        if (ptyPanelIds.has(claim.viewId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", "surfaces", slot, "viewId"],
+            message: `surfaces.${slot}.viewId "${claim.viewId}" names a panel with hasPty: true — PTY panels are rendered by the terminal host and never load the view module, so the surface would hold the slot and draw nothing.`,
+            params: { errorCode: "surface_view_ref_pty" },
+          });
+        }
+      }
 
       // A view renders into a `contributes.panels` entry with a matching id; a
       // view whose id matches no panel can never be shown (#10620). This is a

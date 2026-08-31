@@ -169,8 +169,12 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(47);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(48);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:project-surfaces-get",
+      expect.any(Function)
+    );
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:recipes-get", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:recipe-record-use",

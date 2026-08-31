@@ -1712,6 +1712,14 @@ interface ViewContribution {
     location: ViewLocation;
     iconId?: string;
 }
+/** A surface slot claim naming one of the plugin's own `contributes.views`. */
+interface SurfaceViewSlot {
+    viewId: string;
+}
+/** The `contributes.surfaces` block of a project plugin's manifest. */
+interface SurfaceContributions {
+    emptyCanvas?: SurfaceViewSlot;
+}
 /**
  * Props every plugin-contributed panel view receives from the renderer host.
  * Intentionally narrower than the host-internal `PanelComponentProps` so the
@@ -2162,6 +2170,17 @@ interface PluginManifest {
          * qualified id. Empty unless the plugin ships recipes.
          */
         recipes: RecipeContribution[];
+        /**
+         * Project surfaces this plugin claims (§7.8). Optional in the type but
+         * always materialized by the manifest schema's `.default({})`, so a
+         * consumer reading it off a parsed manifest never sees `undefined` — the
+         * optionality is for the hand-built manifest literals in tests and tooling
+         * that predate the field.
+         *
+         * Only meaningful for a `scope: "project"` plugin; the manifest schema
+         * rejects the key outright for any other origin.
+         */
+        surfaces?: SurfaceContributions;
     };
 }
 /**

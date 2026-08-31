@@ -60,17 +60,48 @@ describe("contributes.* array-size caps (#10477)", () => {
     }
   );
 
+  /**
+   * Contribution kinds that are NOT arrays, and so carry no cap. Enumerated
+   * explicitly rather than inferred, so a new UNBOUNDED array kind cannot hide
+   * behind the shape check below: an array key must have a cap, and a non-array
+   * key must be listed here, or the guard fails either way.
+   */
+  const NON_ARRAY_CONTRIBUTION_KINDS = new Set([
+    // Three optional fixed slots on a strict object — bounded by its shape.
+    "surfaces",
+  ]);
+
   it("exposes a cap for every contributes.* array key", () => {
     // Guard against a new contribution point being added to the schema without a
     // matching cap — every declared array must be bounded.
     const parsed = parseContributes({});
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
-    for (const key of Object.keys(parsed.data.contributes)) {
+    const contributes = parsed.data.contributes as Record<string, unknown>;
+    for (const key of Object.keys(contributes)) {
+      if (!Array.isArray(contributes[key])) {
+        expect(NON_ARRAY_CONTRIBUTION_KINDS).toContain(key);
+        continue;
+      }
       expect(MANIFEST_CONTRIBUTION_CAPS).toHaveProperty(key);
       expect(
         MANIFEST_CONTRIBUTION_CAPS[key as keyof typeof MANIFEST_CONTRIBUTION_CAPS]
       ).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps every non-array contribution kind structurally bounded", () => {
+    // The escape hatch above is only sound while each listed kind is a strict
+    // object with a fixed field set — an unbounded record or array slipping in
+    // under one of these names would be caught here.
+    const parsed = parseContributes({});
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const contributes = parsed.data.contributes as Record<string, unknown>;
+    for (const key of NON_ARRAY_CONTRIBUTION_KINDS) {
+      expect(Object.keys(contributes)).toContain(key);
+      // Unknown keys are rejected, so the kind cannot grow at parse time.
+      expect(parseContributes({ [key]: { __unexpected__: {} } }).success).toBe(false);
     }
   });
 });

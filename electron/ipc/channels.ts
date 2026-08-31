@@ -992,6 +992,12 @@ export const CHANNELS = {
   PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
   PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",
+  /**
+   * Project surfaces (§7.8) claimed in the SENDER's project. Never takes a
+   * project id from the caller — a renderer asking for another project's
+   * surfaces is the leak project scope exists to prevent.
+   */
+  PLUGIN_PROJECT_SURFACES_GET: "plugin:project-surfaces-get",
   /** Project-local plugins: the sender project's rows, valid and invalid alike. */
   PLUGIN_PROJECT_LIST: "plugin:project-list",
   /** Project-local plugins: record the trust decision for the SENDER's project. */

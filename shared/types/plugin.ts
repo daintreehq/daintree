@@ -175,6 +175,41 @@ export interface ViewContribution {
 }
 
 /**
+ * The project surfaces a project-local plugin can own. See §7.8 and
+ * `SurfaceContributionsSchema` in `electron/schemas/plugin.ts` for why
+ * `projectHome` and `defaultLayout` are not here yet.
+ */
+export type ProjectSurfaceSlot = "emptyCanvas";
+
+/** A surface slot claim naming one of the plugin's own `contributes.views`. */
+export interface SurfaceViewSlot {
+  viewId: string;
+}
+
+/** The `contributes.surfaces` block of a project plugin's manifest. */
+export interface SurfaceContributions {
+  emptyCanvas?: SurfaceViewSlot;
+}
+
+/**
+ * A resolved surface claim, as the renderer receives it.
+ *
+ * `panelKindId` is the RUNTIME, project-qualified panel-kind id the view
+ * registered under, not the manifest's bare `viewId` — the renderer already
+ * knows how to turn one of those into a mounted plugin view (icon, name, the
+ * `plugin://` component path, the error boundary), so a surface reuses that
+ * path wholesale instead of growing a second way to mount the same module.
+ */
+export interface ProjectSurfaceClaim {
+  /** The owning plugin INSTANCE key, matching `PanelKindConfig.extensionId`. */
+  pluginId: string;
+  panelKindId: string;
+}
+
+/** Every surface claimed in one project, keyed by slot. */
+export type ProjectSurfaceSnapshot = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceClaim>>;
+
+/**
  * Props every plugin-contributed panel view receives from the renderer host.
  * Intentionally narrower than the host-internal `PanelComponentProps` so the
  * SDK surface stays stable across a future `plugin://` → trusted-iframe
@@ -657,6 +692,17 @@ export interface PluginManifest {
      * qualified id. Empty unless the plugin ships recipes.
      */
     recipes: RecipeContribution[];
+    /**
+     * Project surfaces this plugin claims (§7.8). Optional in the type but
+     * always materialized by the manifest schema's `.default({})`, so a
+     * consumer reading it off a parsed manifest never sees `undefined` — the
+     * optionality is for the hand-built manifest literals in tests and tooling
+     * that predate the field.
+     *
+     * Only meaningful for a `scope: "project"` plugin; the manifest schema
+     * rejects the key outright for any other origin.
+     */
+    surfaces?: SurfaceContributions;
   };
 }
 

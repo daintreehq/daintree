@@ -41,6 +41,7 @@ import { z } from "zod";
 import {
   isBuiltInPluginCapability,
   UNBOUND_PLUGIN_HOST_BINDING,
+  type ProjectSurfaceSlot,
 } from "../../shared/types/plugin.js";
 import type {
   PluginManifest,
@@ -78,6 +79,7 @@ import {
   setPluginContributionScope,
   clearPluginContributionScope,
 } from "./plugin/PluginContributionBroadcaster.js";
+import { claimProjectSurface, releasePluginSurfaces } from "./plugin/PluginSurfaceRegistry.js";
 import {
   ProjectPluginController,
   type ProjectPluginControllerDeps,
@@ -1871,6 +1873,54 @@ export class PluginService {
       console.warn(
         `[PluginService] Plugin "${manifest.name}": views entry "${orphanId}" has no matching contributes.panels entry and will be ignored`
       );
+    }
+
+    // Project surface claims (§7.8). After the panels loop, because a claim
+    // resolves to the RUNTIME panel-kind id that loop just registered — the
+    // renderer mounts a surface through the ordinary plugin-view path, so a
+    // claim naming a kind that never registered would point at nothing.
+    //
+    // Additive only: a claim replaces one slot's content and touches no host
+    // chrome, so the project switcher, the worktree dashboard and the stock
+    // launcher stay reachable even when the claimed view is broken.
+    if (isProject && binding.projectId != null && binding.projectId.length > 0) {
+      const surfaceProjectId = binding.projectId;
+      const surfaces = manifest.contributes.surfaces ?? {};
+      for (const [slot, claim] of Object.entries(surfaces) as [
+        ProjectSurfaceSlot,
+        { viewId: string } | undefined,
+      ][]) {
+        if (claim === undefined) continue;
+        const panelKindId = toRuntimePanelKindId(
+          { origin: "project", pluginId: manifest.name, kindId: claim.viewId },
+          surfaceProjectId
+        );
+        // The schema already cross-checks `viewId` against `contributes.views`,
+        // and a view without a matching panel is a manifest error — so a miss
+        // here means the panels loop skipped the kind (an unqualifiable id, or
+        // a `hasPty` panel whose view is ignored). Skip the slot rather than
+        // publish a claim the renderer cannot resolve.
+        // `componentPath`, not merely a registered kind: the panels loop leaves
+        // it off for a PTY panel (and for a view it skipped), and a claim with
+        // no module to load would hold the project's slot against every other
+        // plugin while rendering nothing.
+        if (panelKindId === null || getPanelKindConfig(panelKindId)?.componentPath === undefined) {
+          console.warn(
+            `[PluginService] Plugin "${manifest.name}": surfaces.${slot} names view "${claim.viewId}", which registered no loadable panel kind — the slot keeps its stock content`
+          );
+          continue;
+        }
+        const result = claimProjectSurface(surfaceProjectId, slot, { pluginId, panelKindId });
+        if (!result.ok) {
+          // Never a silent last-wins: which surface the user sees would then be
+          // a function of directory-scan order. First claim stands and BOTH
+          // plugins are named, because the fix is to change one of the two
+          // manifests and the author cannot do that without knowing the other.
+          console.error(
+            `[PluginService] Project surface conflict: "${manifest.name}" claims surfaces.${slot}, which is already owned by "${result.heldBy}" in this project. The incumbent keeps the slot; only one plugin may claim it.`
+          );
+        }
+      }
     }
 
     // Plugins without a `main` entry contribute no executable code — the
@@ -4005,6 +4055,13 @@ export class PluginService {
     runUnloadStep(pluginId, "clearPluginContributionScope", () =>
       clearPluginContributionScope(pluginId)
     );
+
+    // A surface must not outlive the plugin that draws it: the claimed view's
+    // module is unimportable the moment its authority is dropped, so a
+    // surviving claim would leave the project rendering a permanently-failing
+    // view where its stock content used to be. Trust revoke unloads through
+    // this same cascade, so revoking trust releases the slot too.
+    runUnloadStep(pluginId, "releasePluginSurfaces", () => releasePluginSurfaces(pluginId));
 
     // Drop any live panel badges this plugin set and tell the renderer to clear
     // them (#10585). Only broadcast when the plugin actually had badges so an

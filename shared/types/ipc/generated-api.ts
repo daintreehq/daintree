@@ -526,6 +526,9 @@ export interface GeneratedElectronAPI {
     getProjectPlugins(
       ...args: IpcInvokeMap["plugin:project-list"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-list"]["result"]>;
+    getProjectSurfaces(
+      ...args: IpcInvokeMap["plugin:project-surfaces-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-surfaces-get"]["result"]>;
     getRecipes(
       ...args: IpcInvokeMap["plugin:recipes-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:recipes-get"]["result"]>;

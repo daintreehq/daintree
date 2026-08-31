@@ -53,6 +53,7 @@ import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
 import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
 import { selectContributionsForProject } from "../../services/plugin/PluginContributionBroadcaster.js";
+import { getProjectSurfaces } from "../../services/plugin/PluginSurfaceRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import type { AgentConfig } from "../../../shared/config/agentRegistry.js";
 import type { PluginRecipeMetadataPatch, TerminalRecipe } from "../../../shared/types/project.js";
@@ -80,6 +81,7 @@ import type {
   PluginWorktreeStatus,
   PluginActivationResult,
   PluginPanelLifecycleEvent,
+  ProjectSurfaceSnapshot,
 } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
 import {
@@ -687,6 +689,23 @@ async function handleActionsUnregister(pluginId: string, actionId: string): Prom
 async function handlePanelKindsGet(ctx: IpcContext): Promise<PanelKindConfig[]> {
   await (await getPluginService()).waitForInit();
   return selectContributionsForProject(getPluginPanelKinds(), (c) => c.extensionId, ctx.projectId);
+}
+
+/**
+ * The project surfaces claimed in the SENDER's project (§7.8).
+ *
+ * The project comes from the sender's own view registration, never from an
+ * argument — the same rule the contribution broadcaster follows, and for the
+ * same reason: a renderer that could name the project could read another one's
+ * surfaces. A sender with no project binding gets an empty snapshot, which is
+ * the stock chrome.
+ */
+async function handleProjectSurfacesGet(ctx: IpcContext): Promise<ProjectSurfaceSnapshot> {
+  // Same init-race guard as handlePanelKindsGet: a mount-time pull before the
+  // deferred initialize() would cache "no surfaces" and leave the project on
+  // its stock canvas until the next panel-kinds push.
+  await (await getPluginService()).waitForInit();
+  return getProjectSurfaces(ctx.projectId);
 }
 
 /**
@@ -1301,6 +1320,9 @@ export const pluginNamespace = defineIpcNamespace({
     registerAction: op(PLUGIN_METHOD_CHANNELS.registerAction, handleActionsRegister),
     unregisterAction: op(PLUGIN_METHOD_CHANNELS.unregisterAction, handleActionsUnregister),
     getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet, {
+      withContext: true,
+    }),
+    getProjectSurfaces: op(PLUGIN_METHOD_CHANNELS.getProjectSurfaces, handleProjectSurfacesGet, {
       withContext: true,
     }),
     getProjectPlugins: op(PLUGIN_METHOD_CHANNELS.getProjectPlugins, handleProjectPluginsList, {
