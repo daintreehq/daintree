@@ -52,7 +52,7 @@ So, before any measurement:
 
 The predicate is checked as an **absolute health condition every round**, not as "did not regress". A scenario that starts at `detectionMisses: 1` and stays at `1` is broken before you began and stays broken; treating that as passing is exactly the trap. It must hold on **every iteration**, not on average.
 
-**The condition is `count === runs` AND `max === 0` — both halves, every round.** `MetricStat.count` is the number of iterations that _emitted_ the metric, not the number that ran, so a predicate that vanished for fourteen of fifteen iterations still aggregates to `max: 0` and reads as perfect health. `max` alone cannot tell a working feature from an absent measurement. `check-pair.mjs` applies both; do not simplify it back to one, and do not assume your runner warns about this — check it yourself.
+**The condition is `count === runs` AND `min === 0` AND `max === 0` — all three, every round.** `MetricStat.count` is the number of iterations that _emitted_ the metric, not the number that ran, so a predicate that vanished for fourteen of fifteen iterations still aggregates to `max: 0` and reads as perfect health: `max` alone cannot tell a working feature from an absent measurement. And `max === 0` is not "every sample was zero" — some predicates are signed subtractions where a negative means the subject produced _more_ than it was asked to, so a run of `[-1, 0]` has a max of zero and a full count while being plainly unhealthy. `check-pair.mjs` applies all three; do not simplify it back, and do not assume your runner warns about this — check it yourself.
 
 **An improvement in the target with the predicate unhealthy is a bug, not a win.** Revert it, record it, move on. Do not try to repair it in the same round.
 

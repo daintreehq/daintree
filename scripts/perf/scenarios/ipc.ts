@@ -458,7 +458,12 @@ export const ipcScenarios: PerfScenario[] = [
             // channel traffic a terminal's output costs, and how much of that
             // traffic is framing rather than output.
             messagesPerKLine: (ptyDataMessages * 1000) / PTY_LINES,
-            cloneOverheadRatio: payloadBytes > 0 ? ptyDataBytes / payloadBytes : 0,
+            // Named for its operands, not for what it means. "Overhead ratio"
+            // is ambiguous about whether it divides times or bytes, and
+            // `comparability.ts` has to decide that from the name alone — it
+            // read the old `cloneOverheadRatio` as duration-derived and took
+            // away a comparison this number is entitled to.
+            cloneBytesPerPayloadByte: payloadBytes > 0 ? ptyDataBytes / payloadBytes : 0,
             // The pairings. Harder coalescing and outright dropping both look
             // like "fewer messages" without `lineMisses`, and `payloadBytes`
             // above is the exact-arithmetic companion: 2000 lines is a fixed

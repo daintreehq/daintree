@@ -1183,6 +1183,12 @@ export default tseslint.config(
       "build/**",
       "public/**",
       ".claude/**",
+      // Agent workflow skills, in the same category as scripts/ and .claude/:
+      // Node tooling outside the TypeScript build graph, run by hand or by an
+      // agent, never bundled. `.agents/**` held only Markdown until the
+      // optimize skill's check-pair.mjs, which linted as browser code and
+      // failed no-undef on `console` and `process`.
+      ".agents/**",
       // Native N-API addons live under electron/native/. The CJS wrapper
       // and binding.gyp aren't part of the TypeScript build graph; they're
       // packaged build infrastructure (analogous to scripts/).

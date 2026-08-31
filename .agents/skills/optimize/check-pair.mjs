@@ -220,13 +220,16 @@ function healthChecks(arm, args) {
       check(false, `${arm.label}: predicate ${predicate}`, "not emitted at all");
       continue;
     }
-    // BOTH halves. `count` tallies the iterations that emitted the metric, not
+    // All three. `count` tallies the iterations that emitted the metric, not
     // the iterations that ran, so one healthy sample among fifteen absent ones
-    // aggregates to `max: 0` and reads as perfect health.
+    // aggregates to `max: 0` and reads as perfect health. And `max` alone is
+    // not "every sample was zero": some predicates are signed subtractions
+    // where a negative means the subject overproduced, so a mixed [-1, 0] run
+    // has a max of 0 and a full count while being plainly unhealthy.
     check(
-      stat.count === aggregate.runs && stat.max === 0,
+      stat.count === aggregate.runs && stat.min === 0 && stat.max === 0,
       `${arm.label}: predicate ${predicate}`,
-      `count ${stat.count}/${aggregate.runs}, max ${stat.max}`
+      `count ${stat.count}/${aggregate.runs}, min ${stat.min}, max ${stat.max}`
     );
   }
 
