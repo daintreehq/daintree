@@ -63,6 +63,9 @@ const ROUND_TRIP_BATCHES = 20;
 
 const PTY_LINES = 2_000;
 
+/** Lag samples PERF-042 takes; its predicate holds the sampler to all of them. */
+const LAG_SAMPLE_COUNT = 30;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -161,15 +164,15 @@ export const ipcScenarios: PerfScenario[] = [
     // asks for, and the id carries a live baseline, so it keeps its id and its
     // number. Read it as "Node event-loop lag under orchestration-like load",
     // never as evidence about the real main process.
+    correctness: ["lagSampleMisses"],
     async run() {
-      const eventLoopLagMs = await measureEventLoopLag(30, async () => {
-        await spinEventLoop(0.6);
-      });
+      const lag = await measureEventLoopLag(LAG_SAMPLE_COUNT, () => spinEventLoop(0.6));
 
       return {
         durationMs: 0,
         metrics: {
-          eventLoopLagMs,
+          eventLoopLagMs: lag.maxLagMs,
+          lagSampleMisses: Math.abs(LAG_SAMPLE_COUNT - lag.samples) + (lag.loadTurns > 0 ? 0 : 1),
         },
       };
     },
@@ -577,23 +580,31 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Also reports what it actually did, because the headline is a lag: a load that
+ * stopped loading and a sampler that stopped sampling both drive the number
+ * toward zero, which is the best result this scenario can record.
+ */
 async function measureEventLoopLag(
   sampleCount: number,
-  loadFn: () => Promise<void>
-): Promise<number> {
+  loadFn: () => Promise<number>
+): Promise<{ maxLagMs: number; samples: number; loadTurns: number }> {
   const intervalMs = 4;
   let maxLag = 0;
+  let samples = 0;
+  let loadTurns = 0;
 
   for (let i = 0; i < sampleCount; i += 1) {
     const start = performance.now();
     const timer = delay(intervalMs);
-    await loadFn();
+    loadTurns += await loadFn();
     await timer;
 
     const elapsed = performance.now() - start;
     const lag = Math.max(0, elapsed - intervalMs);
     maxLag = Math.max(maxLag, lag);
+    samples += 1;
   }
 
-  return maxLag;
+  return { maxLagMs: maxLag, samples, loadTurns };
 }

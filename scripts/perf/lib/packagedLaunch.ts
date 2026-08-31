@@ -215,13 +215,31 @@ async function stopProcess(child: ChildProcess, traceEnabled: boolean): Promise<
   await waitForExit(child, 2_000);
 }
 
+/**
+ * The marks a healthy packaged boot must leave in the NDJSON.
+ *
+ * Every number this module reports is a mark-to-mark duration, so a boot that
+ * emitted fewer marks reports fewer metrics rather than a worse one — the phase
+ * readings simply stop appearing, which reads as a clean run. The pair marks are
+ * required together because a half-present pair yields no duration at all.
+ */
+export const REQUIRED_BOOT_MARKS: readonly string[] = [
+  PERF_MARKS.APP_BOOT_START,
+  PERF_MARKS.RENDERER_READY,
+  PERF_MARKS.RENDERER_FIRST_INTERACTIVE,
+  PERF_MARKS.SERVICE_INIT_START,
+  PERF_MARKS.SERVICE_INIT_COMPLETE,
+  PERF_MARKS.HYDRATE_START,
+  PERF_MARKS.HYDRATE_COMPLETE,
+];
+
 export function parseBootDuration(ndjsonPath: string): {
   durationMs: number;
   metrics: Record<string, number>;
   degraded?: string;
 } {
   if (!fs.existsSync(ndjsonPath)) {
-    return { durationMs: -1, metrics: {} };
+    return { durationMs: -1, metrics: { bootMarkMisses: REQUIRED_BOOT_MARKS.length } };
   }
 
   const lines = fs.readFileSync(ndjsonPath, "utf-8").trim().split("\n");
@@ -243,9 +261,11 @@ export function parseBootDuration(ndjsonPath: string): {
     }
   }
 
+  const bootMarkMisses = REQUIRED_BOOT_MARKS.filter((mark) => !marks.has(mark)).length;
+
   const bootStart = marks.get(PERF_MARKS.APP_BOOT_START);
   if (!bootStart) {
-    return { durationMs: -1, metrics: {} };
+    return { durationMs: -1, metrics: { bootMarkMisses } };
   }
 
   // RENDERER_FIRST_INTERACTIVE fires post-hydration after 2x rAF + the
@@ -255,7 +275,7 @@ export function parseBootDuration(ndjsonPath: string): {
   const firstInteractive = marks.get(PERF_MARKS.RENDERER_FIRST_INTERACTIVE);
   const rendererReady = marks.get(PERF_MARKS.RENDERER_READY);
 
-  const metrics: Record<string, number> = {};
+  const metrics: Record<string, number> = { bootMarkMisses };
 
   // Extract key phase durations regardless of which terminal mark we use.
   const serviceInitStart = marks.get(PERF_MARKS.SERVICE_INIT_START);

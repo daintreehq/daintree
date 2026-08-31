@@ -69,7 +69,7 @@ describe("averageMetrics", () => {
   it("divides each metric by its own occurrence count, not the sample count", () => {
     // serializeMs appears once across four samples; it must average to its lone
     // value, not be diluted toward zero by the three samples that omit it.
-    const samples = [{ serializeMs: 1000 }, {}, {}, {}];
+    const samples: Array<Record<string, number>> = [{ serializeMs: 1000 }, {}, {}, {}];
     expect(averageMetrics(samples).serializeMs).toBe(1000);
   });
 
@@ -79,7 +79,7 @@ describe("averageMetrics", () => {
   });
 
   it("handles disjoint metric keys across samples independently", () => {
-    const samples = [{ a: 4 }, { b: 8 }, { a: 6 }];
+    const samples: Array<Record<string, number>> = [{ a: 4 }, { b: 8 }, { a: 6 }];
     const result = averageMetrics(samples);
     expect(result.a).toBe(5);
     expect(result.b).toBe(8);

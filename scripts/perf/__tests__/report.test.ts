@@ -51,6 +51,7 @@ function summary(overrides: Partial<PerfRunSummary> = {}): PerfRunSummary {
     protocol: { iterations: null, warmups: null, scenarioSelection: null },
     scenarioCount: 1,
     scenariosOutsideReference: [],
+    scenariosSkipped: [],
     aggregates: [aggregate()],
     ...overrides,
   };

@@ -1,4 +1,4 @@
-import type { PerfScenario, ScenarioContext } from "../types";
+import type { PerfScenario } from "../types";
 import {
   createPersistedLayout,
   simulateLayoutHydration,
@@ -126,7 +126,12 @@ export const startupScenarios: PerfScenario[] = [
     modes: ["nightly"],
     iterations: { nightly: 30 },
     warmups: 2,
-    async run(context: ScenarioContext) {
+    // Every reading here is a mark-to-mark duration, and a boot that stops
+    // emitting a mark drops the metric rather than worsening it — the row
+    // simply disappears from the report. `bootMarkMisses` is the count of
+    // canonical marks the launch failed to leave behind.
+    correctness: ["bootMarkMisses"],
+    async run() {
       const projectRoot = process.cwd();
       const executablePath = findPackagedExecutable(projectRoot);
 

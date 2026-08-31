@@ -135,13 +135,38 @@ export function simulateLayoutHydration(layout: PersistedLayout): {
   };
 }
 
+/**
+ * What a switch cycle actually built, read back off the structures it produced.
+ *
+ * Counts, not timings, and cumulative across `iterations`. A cycle reduced to
+ * `return { checksum: 0 }` is the fastest one there is and reports none of
+ * them, which is what lets the scenarios pair their durations with a miss
+ * count instead of trusting a checksum nothing compares.
+ */
+export interface ProjectSwitchCycleResult {
+  checksum: number;
+  elapsedMs: number;
+  /** Panels that came back out of the hydration index. */
+  restoredPanels: number;
+  /** Tab groups rebuilt with at least one surviving tab. */
+  restoredGroups: number;
+  /** Outgoing terminal entries that were built and serialized. */
+  serializedTerminals: number;
+  /** Bytes of outgoing state actually serialized. */
+  serializedBytes: number;
+}
+
 export function simulateProjectSwitchCycle(params: {
   outgoingStateSize: number;
   incomingLayout: PersistedLayout;
   iterations?: number;
-}): { checksum: number; elapsedMs: number } {
+}): ProjectSwitchCycleResult {
   const start = performance.now();
   let checksum = 0;
+  let restoredPanels = 0;
+  let restoredGroups = 0;
+  let serializedTerminals = 0;
+  let serializedBytes = 0;
   const iterations = Math.max(1, params.iterations ?? 1);
 
   for (let i = 0; i < iterations; i += 1) {
@@ -157,19 +182,73 @@ export function simulateProjectSwitchCycle(params: {
 
     const payload = JSON.stringify(outgoingState);
     checksum += payload.length;
+    serializedTerminals += outgoingState.terminals.length;
+    serializedBytes += payload.length;
 
     const hydrated = simulateLayoutHydration(params.incomingLayout);
     checksum += hydrated.checksum;
+    restoredPanels += hydrated.restoredPanels;
+    restoredGroups += hydrated.restoredGroups;
   }
 
   return {
     checksum,
     elapsedMs: performance.now() - start,
+    restoredPanels,
+    restoredGroups,
+    serializedTerminals,
+    serializedBytes,
   };
+}
+
+/**
+ * Post-conditions of a switch cycle, checked against what it produced.
+ *
+ * The expectations come from the layout that went in and the outgoing size it
+ * was asked for, so nothing inside `simulateProjectSwitchCycle` can satisfy
+ * them without rebuilding the hydration index and serializing the outgoing
+ * state — the two pieces of work the scenario is timing.
+ */
+export function projectSwitchCycleMisses(
+  expected: { incomingLayout: PersistedLayout; outgoingStateSize: number; iterations?: number },
+  result: ProjectSwitchCycleResult
+): number {
+  const iterations = Math.max(1, expected.iterations ?? 1);
+  return (
+    Math.abs(expected.incomingLayout.panels.length * iterations - result.restoredPanels) +
+    Math.abs(expected.incomingLayout.tabGroups.length * iterations - result.restoredGroups) +
+    Math.abs(expected.outgoingStateSize * iterations - result.serializedTerminals) +
+    (result.serializedBytes > 0 ? 0 : 1)
+  );
 }
 
 export interface ProjectSwitchPhaseResult {
   checksum: number;
+  /**
+   * What each phase left behind, read back off the structures themselves.
+   *
+   * Every phase below is timed and reports only a duration, so a phase reduced
+   * to a no-op posts the best number the harness has recorded. These counts are
+   * what a skipped phase cannot post.
+   */
+  produced: {
+    /** Outgoing terminal entries built and serialized (phase 1). */
+    serializedTerminals: number;
+    /** Entries in the hibernation map (phase 2). */
+    hibernatedTerminals: number;
+    /** Stores that were filled and cleared (phase 3). */
+    resetStores: number;
+    /** Panels in the rebuilt panel index (phase 4). */
+    indexedPanels: number;
+    /** Panels the hydration restored (phase 5). */
+    restoredPanels: number;
+    /** Tab groups the hydration rebuilt (phase 5). */
+    restoredGroups: number;
+    /** PTY descriptors allocated (phase 6). */
+    ptyDescriptors: number;
+    /** File status entries aggregated (phase 7). */
+    fileStatuses: number;
+  };
   phases: {
     serializeMs: number;
     ptyHibernateMs: number;
@@ -283,6 +362,16 @@ export function simulateProjectSwitchPhased(params: {
 
   return {
     checksum,
+    produced: {
+      serializedTerminals: outgoingState.terminals.length,
+      hibernatedTerminals: hibernated.size,
+      resetStores: stores.length,
+      indexedPanels: panelIndex.size,
+      restoredPanels: hydrated.restoredPanels,
+      restoredGroups: hydrated.restoredGroups,
+      ptyDescriptors: descriptors.length,
+      fileStatuses: fileStatuses.size,
+    },
     phases: {
       serializeMs,
       ptyHibernateMs,
@@ -296,6 +385,31 @@ export function simulateProjectSwitchPhased(params: {
       hydrateMs: totalMs,
     },
   };
+}
+
+/**
+ * Post-conditions of a phased switch, one per phase that produces something.
+ *
+ * Derived from the layout and outgoing size that went in, so a phase that
+ * stopped doing its work scores here rather than reporting its best-ever
+ * duration. Phases 1-7 map onto the seven terms below in order.
+ */
+export function projectSwitchPhaseMisses(
+  expected: { incomingLayout: PersistedLayout; outgoingStateSize: number },
+  result: ProjectSwitchPhaseResult
+): number {
+  const layout = expected.incomingLayout;
+  const produced = result.produced;
+  return (
+    Math.abs(expected.outgoingStateSize - produced.serializedTerminals) +
+    Math.abs(expected.outgoingStateSize - produced.hibernatedTerminals) +
+    (produced.resetStores > 0 ? 0 : 1) +
+    Math.abs(layout.panels.length - produced.indexedPanels) +
+    Math.abs(layout.panels.length - produced.restoredPanels) +
+    Math.abs(layout.tabGroups.length - produced.restoredGroups) +
+    Math.abs(layout.panels.length - produced.ptyDescriptors) +
+    Math.abs(layout.worktrees.length * 10 - produced.fileStatuses)
+  );
 }
 
 export function createDevPreviewLogFrames(frameCount: number, noisy = false): DevPreviewLogFrame[] {
@@ -338,21 +452,29 @@ export function detectLatestLocalhostUrl(frames: readonly DevPreviewLogFrame[]):
   return lastUrl;
 }
 
-export function simulateTerminalOutputPass(
-  chunks: readonly string[],
-  retainedLines: number
-): {
+export interface TerminalOutputPassResult {
   renderedBytes: number;
   retainedBytes: number;
   checksum: number;
-} {
+  /** Chunks the pass actually walked. */
+  consumedChunks: number;
+  /** Lines left in the scrollback ring once the pass finished. */
+  retainedLineCount: number;
+}
+
+export function simulateTerminalOutputPass(
+  chunks: readonly string[],
+  retainedLines: number
+): TerminalOutputPassResult {
   const ring: string[] = [];
   let renderedBytes = 0;
   let checksum = 0;
+  let consumedChunks = 0;
 
   for (const chunk of chunks) {
     renderedBytes += chunk.length;
     checksum += chunk.charCodeAt(0) ?? 0;
+    consumedChunks += 1;
 
     const lines = chunk.split("\n");
     for (const line of lines) {
@@ -367,7 +489,41 @@ export function simulateTerminalOutputPass(
   const retainedBytes = ring.reduce((sum, line) => sum + line.length, 0);
   checksum += retainedBytes;
 
-  return { renderedBytes, retainedBytes, checksum };
+  return {
+    renderedBytes,
+    retainedBytes,
+    checksum,
+    consumedChunks,
+    retainedLineCount: ring.length,
+  };
+}
+
+/**
+ * Post-conditions of an output pass, checked against the chunks it was handed.
+ *
+ * A pass reduced to `return { renderedBytes: 0 }` is instant and reports the
+ * best `renderedBytes`/`checksum` the harness would ever record; it scores every
+ * term here. The byte total is summed from the input rather than read off the
+ * result, and the ring depth is the scrollback rule applied independently of the
+ * ring — `makeTerminalChunks` puts exactly one line in each chunk, which is what
+ * makes the expected depth `min(chunks, cap)`.
+ *
+ * Deliberately arithmetic over lengths and never a second `split()` pass: the
+ * scenarios wall-clock the whole `run()`, so an oracle that re-walked the text
+ * would land inside the bracket it is there to validate.
+ */
+export function terminalOutputPassMisses(
+  chunks: readonly string[],
+  retainedLines: number,
+  result: TerminalOutputPassResult
+): number {
+  let expectedBytes = 0;
+  for (const chunk of chunks) expectedBytes += chunk.length;
+  return (
+    Math.abs(chunks.length - result.consumedChunks) +
+    (expectedBytes === result.renderedBytes ? 0 : 1) +
+    Math.abs(Math.min(chunks.length, retainedLines) - result.retainedLineCount)
+  );
 }
 
 export function makeTerminalChunks(count: number, avgLength = 120): string[] {
@@ -383,7 +539,20 @@ export function makeTerminalChunks(count: number, avgLength = 120): string[] {
   return chunks;
 }
 
-export function createLargeStateSnapshot(scale: number): Record<string, unknown> {
+export interface LargeStateSnapshot {
+  appState: {
+    activeWorktreeId: string | null;
+    sidebarWidth: number;
+    focusMode: boolean;
+    panelGridConfig: { columns: number; rows: number };
+    terminals: PanelState[];
+  };
+  worktreeState: Array<{ id: string; branch: string; path: string; status: string }>;
+  tabGroups: PersistedLayout["tabGroups"];
+  diagnostics: { logs: Array<{ level: string; message: string; timestamp: number }> };
+}
+
+export function createLargeStateSnapshot(scale: number): LargeStateSnapshot {
   const panelCount = Math.max(20, scale);
   const layout = createPersistedLayout(
     panelCount,
@@ -419,11 +588,15 @@ export function createLargeStateSnapshot(scale: number): Record<string, unknown>
   };
 }
 
-export async function spinEventLoop(ms: number): Promise<void> {
+/** Returns the microtask turns actually spun, so callers can prove the load ran. */
+export async function spinEventLoop(ms: number): Promise<number> {
   const end = performance.now() + ms;
+  let turns = 0;
   while (performance.now() < end) {
     await Promise.resolve();
+    turns += 1;
   }
+  return turns;
 }
 
 export interface HeadlessTerminalConfig {

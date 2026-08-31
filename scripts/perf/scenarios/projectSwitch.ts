@@ -1,6 +1,7 @@
 import type { PerfScenario } from "../types";
 import {
   createPersistedLayout,
+  projectSwitchPhaseMisses,
   simulateProjectSwitchPhased,
   spinEventLoop,
 } from "../lib/workloads";
@@ -482,16 +483,19 @@ export const projectSwitchScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 20, nightly: 28 },
     warmups: 2,
+    correctness: ["phaseMisses"],
     async run() {
-      const result = simulateProjectSwitchPhased({
-        outgoingStateSize: 40,
-        incomingLayout: SMALL_LAYOUT,
-      });
+      const spec = { outgoingStateSize: 40, incomingLayout: SMALL_LAYOUT };
+      const result = simulateProjectSwitchPhased(spec);
       await spinEventLoop(0.5);
 
       return {
         durationMs: 0,
-        metrics: { ...result.phases, checksum: result.checksum },
+        metrics: {
+          ...result.phases,
+          checksum: result.checksum,
+          phaseMisses: projectSwitchPhaseMisses(spec, result),
+        },
       };
     },
   },
@@ -503,16 +507,19 @@ export const projectSwitchScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 20, nightly: 28 },
     warmups: 2,
+    correctness: ["phaseMisses"],
     async run() {
-      const result = simulateProjectSwitchPhased({
-        outgoingStateSize: 80,
-        incomingLayout: MEDIUM_LAYOUT,
-      });
+      const spec = { outgoingStateSize: 80, incomingLayout: MEDIUM_LAYOUT };
+      const result = simulateProjectSwitchPhased(spec);
       await spinEventLoop(0.5);
 
       return {
         durationMs: 0,
-        metrics: { ...result.phases, checksum: result.checksum },
+        metrics: {
+          ...result.phases,
+          checksum: result.checksum,
+          phaseMisses: projectSwitchPhaseMisses(spec, result),
+        },
       };
     },
   },
@@ -525,16 +532,19 @@ export const projectSwitchScenarios: PerfScenario[] = [
     modes: ["ci", "nightly"],
     iterations: { ci: 16, nightly: 24 },
     warmups: 2,
+    correctness: ["phaseMisses"],
     async run() {
-      const result = simulateProjectSwitchPhased({
-        outgoingStateSize: 150,
-        incomingLayout: LARGE_LAYOUT,
-      });
+      const spec = { outgoingStateSize: 150, incomingLayout: LARGE_LAYOUT };
+      const result = simulateProjectSwitchPhased(spec);
       await spinEventLoop(0.5);
 
       return {
         durationMs: 0,
-        metrics: { ...result.phases, checksum: result.checksum },
+        metrics: {
+          ...result.phases,
+          checksum: result.checksum,
+          phaseMisses: projectSwitchPhaseMisses(spec, result),
+        },
       };
     },
   },
@@ -547,6 +557,7 @@ export const projectSwitchScenarios: PerfScenario[] = [
     modes: ["ci", "nightly"],
     iterations: { ci: 6, nightly: 10 },
     warmups: 1,
+    correctness: ["phaseMisses"],
     async run() {
       const sizes = [50, 100, 200];
       let checksum = 0;
@@ -554,17 +565,17 @@ export const projectSwitchScenarios: PerfScenario[] = [
       let totalSwitchWorkMs = 0;
       let visibleTotalMs = 0;
       let hydrateTotalMs = 0;
+      let phaseMisses = 0;
 
       for (const size of sizes) {
-        const result = simulateProjectSwitchPhased({
-          outgoingStateSize: size,
-          incomingLayout: MEDIUM_LAYOUT,
-        });
+        const spec = { outgoingStateSize: size, incomingLayout: MEDIUM_LAYOUT };
+        const result = simulateProjectSwitchPhased(spec);
         checksum += result.checksum;
         serializeTotalMs += result.phases.serializeMs;
         totalSwitchWorkMs += result.phases.totalMs;
         visibleTotalMs += result.phases.visibleMs;
         hydrateTotalMs += result.phases.hydrateMs;
+        phaseMisses += projectSwitchPhaseMisses(spec, result);
       }
 
       await spinEventLoop(1);
@@ -577,6 +588,7 @@ export const projectSwitchScenarios: PerfScenario[] = [
           totalSwitchWorkMs,
           visibleTotalMs,
           hydrateTotalMs,
+          phaseMisses,
         },
       };
     },

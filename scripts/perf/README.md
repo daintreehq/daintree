@@ -42,28 +42,17 @@ Two rules make the predicate worth having. Only the first can be checked mechani
 - **It is emitted on every iteration, including healthy ones, and every sample is zero.** `MetricStat.count` tallies the iterations that emitted a metric, not the run count, so a predicate present in one iteration of fifteen still aggregates to `max: 0` — a clean pass from a scenario that mostly did not run. The runner compares `count` against `runs`, and reads `min` as well as `max`, because several predicates are signed subtractions where a negative means the subject produced more than it was asked to. **Enforced.**
 - **It is an independent oracle.** The test to apply is whether a no-op implementation of the subject could satisfy it. A count of its own spawns cannot; a read-back of the state the subject was supposed to produce can. **Not enforced, and not enforceable** — nothing outside the scenario can tell a real oracle from a decorative one that returns 0 unconditionally. This is a review obligation when a predicate is written, and the reason each one names what it actually read.
 
-Fifteen scenarios report no count-class metric and so carry no predicate — they measure only durations, a checksum, or retained heap. They are listed by id, with reasons, in `__tests__/scenarioMatrix.test.ts`, so a new scenario must either declare `correctness` or be exempted deliberately.
+Every scenario declares a predicate. The exemption list in `__tests__/scenarioMatrix.test.ts` is empty and stays enforced, so a new scenario must either declare `correctness` or be exempted deliberately. The fifteen that once sat on it reported only durations, a `checksum` or retained heap; a checksum nothing compares against an expected value is not an oracle, and the fixtures now report what each subject produced — panels restored, chunks consumed, FSM flips observed, boot marks emitted — for the predicates to read.
 
 The spawn counter validates itself before a scenario trusts it: it confirms its `child_process` hook is still the wrapper it installed, and that starting a real child increments the counter through that hook — reporting `spawnObserverMisses` when either fails. Read that claim narrowly. It proves the funnel is intact, not that the count is complete: the probe cannot see what never reaches the funnel. The counter stays blind to starts made from C++ inside native addons (`@parcel/watcher`'s watchman, better-sqlite3, node-pty), to grandchildren (Windows `exec` → `cmd.exe` → PowerShell), and to `spawnSync`. A zero means "nothing started through Node in this process", never "nothing started". Closing that gap needs an OS-level observer, which this harness does not have.
 
-## Known gap: `scripts/perf` is not type-checked
+## Type checking
 
-`npm run typecheck` covers **zero files** under `scripts/perf` — `scripts/` appears in no tsconfig's `include`. The harness is gated by execution (`npm test` and real benchmark runs) and by nothing else, so a rename can silently break a fixture and every test still passes: vitest transpiles without checking types.
+`scripts/perf` is covered by `tsconfig.perf.json`, wired into `typecheck:projects`, so `npm run typecheck` checks the harness and everything it reaches in `src/` and `electron/`.
 
-This is not hypothetical. Two real instances found while this directory was being reworked:
+It needs its own project because the harness spans both halves of the app. It uses bundler resolution and the renderer path aliases (its relative imports are extensionless or carry `.ts`, which the NodeNext configs would reject), and it leaves `noUncheckedIndexedAccess` off to match `electron/` and `shared/`, which supply most of the transitive graph — turning it on fails ~250 product files their own configs pass.
 
-- `scripts/perf/scenarios/ipc.ts` called a function that had been renamed out from under it. `npm run typecheck` passed; only a real benchmark run caught it.
-- `lib/worktreeSidebarFixture.ts` called `svc.loadProject(requestId, repoPath)` where the signature takes 3–6 arguments, so `projectId` arrived `undefined` and the fixture measured a load the product never performs. Found by a hand-run type probe, not by CI; fixed, but nothing would have caught it.
-
-To see the real state:
-
-```bash
-npx tsc --noEmit --strict --skipLibCheck --target ES2022 --module ESNext \
-  --moduleResolution bundler --types node --allowImportingTsExtensions \
-  --resolveJsonModule scripts/perf/run.ts
-```
-
-Wiring this into `typecheck:projects` was attempted and reverted. It surfaces roughly 30 further pre-existing errors — `migrationFixture.ts` has drifted from `StoreSchema`, `agentAnalysisSim.ts` has unguarded optionals, `archiver` has no types — and the module graph transitively pulls in `src/` and `electron/`, so the config also needs their path aliases. Closing this properly is its own piece of work.
+This closed a real hole rather than a theoretical one. Before it existed, vitest transpiled without checking types, so a rename could silently break a fixture with every test still green: `scenarios/ipc.ts` called a function that had been renamed out from under it, and `lib/worktreeSidebarFixture.ts` called `svc.loadProject(requestId, repoPath)` against a 3-6 argument signature, so `projectId` arrived `undefined` and the fixture measured a load the product never performs. Neither was caught by CI.
 
 ## Entry point
 

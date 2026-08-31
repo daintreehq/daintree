@@ -1,4 +1,4 @@
-import { fork, type ChildProcess } from "node:child_process";
+import { fork, type ChildProcess, type Serializable } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -298,7 +298,7 @@ export class UtilityHost {
     return this.stderrTail;
   }
 
-  send(message: unknown): void {
+  send(message: Serializable): void {
     this.requestMessages += 1;
     this.requestBytes += serializedBytes(message);
     try {

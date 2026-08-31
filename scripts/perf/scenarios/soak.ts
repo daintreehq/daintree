@@ -2,10 +2,12 @@ import { PerformanceObserver, constants } from "node:perf_hooks";
 import type { PerfScenario } from "../types";
 import {
   createPersistedLayout,
+  projectSwitchCycleMisses,
   simulateLayoutHydration,
   simulateProjectSwitchCycle,
   makeTerminalChunks,
   simulateTerminalOutputPass,
+  terminalOutputPassMisses,
   createLargeStateSnapshot,
   spinEventLoop,
 } from "../lib/workloads";
@@ -100,6 +102,12 @@ async function measureMinorGc(body: () => void): Promise<GcStats> {
 const SOAK_LAYOUT_A = createPersistedLayout(110, 8, 601);
 const SOAK_LAYOUT_B = createPersistedLayout(140, 10, 602);
 const SOAK_CHUNKS = makeTerminalChunks(2500, 130);
+const SOAK_SCROLLBACK = 6000;
+/** Cycles per iteration. Named so the oracles can hold the loops to them. */
+const MIXED_SOAK_CYCLES = 120;
+const CHURN_SOAK_CYCLES = 180;
+const LEAK_SAMPLE_CYCLES = 40;
+const LEAK_TRANSIENTS_PER_CYCLE = 600;
 
 export const soakScenarios: PerfScenario[] = [
   {
@@ -110,23 +118,33 @@ export const soakScenarios: PerfScenario[] = [
     modes: ["nightly", "soak"],
     iterations: { nightly: 4, soak: 8 },
     warmups: 1,
+    correctness: ["soakMisses"],
     async run() {
       maybeRunGc();
       const baselineMb = memoryUsedMb();
       const startedAt = performance.now();
       let checksum = 0;
+      let soakMisses = 0;
+      let cycles = 0;
 
-      for (let i = 0; i < 120; i += 1) {
+      for (let i = 0; i < MIXED_SOAK_CYCLES; i += 1) {
         const layout = i % 2 === 0 ? SOAK_LAYOUT_A : SOAK_LAYOUT_B;
         const hydrated = simulateLayoutHydration(layout);
-        const switched = simulateProjectSwitchCycle({
+        const spec = {
           outgoingStateSize: 90 + (i % 8) * 12,
           incomingLayout: layout,
           iterations: 1,
-        });
-        const terminal = simulateTerminalOutputPass(SOAK_CHUNKS, 6000);
+        };
+        const switched = simulateProjectSwitchCycle(spec);
+        const terminal = simulateTerminalOutputPass(SOAK_CHUNKS, SOAK_SCROLLBACK);
 
         checksum += hydrated.checksum + switched.checksum + terminal.checksum;
+        cycles += 1;
+        soakMisses +=
+          Math.abs(layout.panels.length - hydrated.restoredPanels) +
+          Math.abs(layout.tabGroups.length - hydrated.restoredGroups) +
+          projectSwitchCycleMisses(spec, switched) +
+          terminalOutputPassMisses(SOAK_CHUNKS, SOAK_SCROLLBACK, terminal);
 
         if (i % 15 === 0) {
           await spinEventLoop(0.8);
@@ -146,6 +164,9 @@ export const soakScenarios: PerfScenario[] = [
           memoryGrowthPct,
           memoryGrowthMb,
           checksum,
+          // A soak that stopped churning holds its heap flat, which reads as the
+          // cleanest run this scenario has ever recorded.
+          soakMisses: soakMisses + Math.abs(MIXED_SOAK_CYCLES - cycles),
         },
       };
     },
@@ -158,22 +179,31 @@ export const soakScenarios: PerfScenario[] = [
     modes: ["nightly", "soak"],
     iterations: { nightly: 3, soak: 6 },
     warmups: 1,
+    correctness: ["churnMisses"],
     async run() {
       maybeRunGc();
       const baselineMb = memoryUsedMb();
       const startedAt = performance.now();
       let checksum = 0;
+      let churnMisses = 0;
+      let cycles = 0;
 
-      for (let i = 0; i < 180; i += 1) {
+      for (let i = 0; i < CHURN_SOAK_CYCLES; i += 1) {
         const layout = i % 3 === 0 ? SOAK_LAYOUT_A : SOAK_LAYOUT_B;
-        const switched = simulateProjectSwitchCycle({
-          outgoingStateSize: 120,
-          incomingLayout: layout,
-          iterations: 1,
-        });
-        const snapshot = createLargeStateSnapshot(800 + (i % 6) * 120);
+        const spec = { outgoingStateSize: 120, incomingLayout: layout, iterations: 1 };
+        const switched = simulateProjectSwitchCycle(spec);
+        const scale = 800 + (i % 6) * 120;
+        const snapshot = createLargeStateSnapshot(scale);
         const payload = JSON.stringify(snapshot);
         checksum += switched.checksum + payload.length;
+        cycles += 1;
+        churnMisses +=
+          projectSwitchCycleMisses(spec, switched) +
+          // The snapshot builder is the restart-like half of the churn: its
+          // panel count follows `scale` by construction, so a builder that
+          // stopped building scores here instead of allocating nothing.
+          Math.abs(scale - snapshot.appState.terminals.length) +
+          (payload.length > 0 ? 0 : 1);
 
         if (i % 18 === 0) {
           await spinEventLoop(1.1);
@@ -193,6 +223,7 @@ export const soakScenarios: PerfScenario[] = [
           memoryGrowthPct,
           memoryGrowthMb,
           checksum,
+          churnMisses: churnMisses + Math.abs(CHURN_SOAK_CYCLES - cycles),
         },
       };
     },
@@ -205,24 +236,29 @@ export const soakScenarios: PerfScenario[] = [
     modes: ["nightly", "soak"],
     iterations: { nightly: 3, soak: 6 },
     warmups: 1,
+    correctness: ["leakMisses"],
     async run() {
       maybeRunGc();
       const baselineMb = memoryUsedMb();
       const startedAt = performance.now();
       let peakMb = baselineMb;
       let checksum = 0;
+      let allocatedRecords = 0;
+      let heapSamples = 0;
       const stablePayloads = Array.from({ length: 256 }, (_, index) => `payload-${index}`);
 
-      for (let i = 0; i < 40; i += 1) {
-        const transient = Array.from({ length: 600 }, (_, index) => ({
+      for (let i = 0; i < LEAK_SAMPLE_CYCLES; i += 1) {
+        const transient = Array.from({ length: LEAK_TRANSIENTS_PER_CYCLE }, (_, index) => ({
           id: `${i}-${index}`,
           data: stablePayloads[index % stablePayloads.length],
         }));
 
         checksum += transient.length;
+        allocatedRecords += transient.length;
 
         if (i % 4 === 0) {
           peakMb = Math.max(peakMb, memoryUsedMb());
+          heapSamples += 1;
         }
 
         await spinEventLoop(0.2);
@@ -245,6 +281,12 @@ export const soakScenarios: PerfScenario[] = [
           peakMemoryGrowthPct: (peakMemoryGrowthMb / normalizedBaselineMb) * 100,
           peakMemoryGrowthMb,
           checksum,
+          // Both halves of the scenario are gameable by doing nothing: skipping
+          // the transient allocations holds growth at zero, and skipping the
+          // interval samples leaves the peak envelope reading its baseline.
+          leakMisses:
+            Math.abs(LEAK_SAMPLE_CYCLES * LEAK_TRANSIENTS_PER_CYCLE - allocatedRecords) +
+            Math.abs(Math.ceil(LEAK_SAMPLE_CYCLES / 4) - heapSamples),
         },
       };
     },

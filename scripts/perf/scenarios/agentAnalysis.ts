@@ -31,10 +31,25 @@ export const agentAnalysisScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 5, nightly: 8 },
     warmups: 1,
+    correctness: ["analysisMisses"],
     async run() {
       const single = await runAgentAnalysisSim({ agents: 1, phases: DEFAULT_PHASES });
       const ten = await runAgentAnalysisSim({ agents: 10, phases: DEFAULT_PHASES });
       const thirty = await runAgentAnalysisSim({ agents: 30, phases: DEFAULT_PHASES });
+
+      // Read back off the `agent:state-changed` stream each sweep produced, not
+      // off the bytes fed into it. The sim throws on a broken FSM timeline, but
+      // the throw lives inside the subject — a sweep replaced wholesale by a
+      // constant would take every rate metric here to its best-ever value and
+      // raise nothing. Every agent must have produced both canonical flips.
+      const analysisMisses = [single, ten, thirty].reduce(
+        (misses, sweep) =>
+          misses +
+          (sweep.agents - sweep.agentsWithWaitFlip) +
+          (sweep.agents - sweep.agentsWithResumeFlip) +
+          (sweep.stateChangeRecords >= sweep.agents ? 0 : 1),
+        0
+      );
 
       return {
         // Wall-clock fallback: the whole simulated fleet sweep is awaited, so
@@ -48,6 +63,7 @@ export const agentAnalysisScenarios: PerfScenario[] = [
           fleetCpuMs30: thirty.cpuMs,
           waitFlipLatencyMs: thirty.waitFlipLatencyMs,
           resumeFlipLatencyMs: thirty.resumeFlipLatencyMs,
+          analysisMisses,
         },
       };
     },

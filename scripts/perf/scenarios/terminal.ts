@@ -2,6 +2,7 @@ import type { PerfScenario } from "../types";
 import {
   makeTerminalChunks,
   simulateTerminalOutputPass,
+  terminalOutputPassMisses,
   spinEventLoop,
   createRng,
   createHeadlessTerminal,
@@ -22,6 +23,13 @@ const BURST_CHUNKS = makeTerminalChunks(6000, 96);
 const SUSTAINED_CHUNKS = makeTerminalChunks(3500, 180);
 const LARGE_SCROLL_CHUNKS = makeTerminalChunks(9000, 200);
 
+// Scrollback caps, named so the oracle and the pass are given the same one.
+const BURST_SCROLLBACK = 4000;
+const SUSTAINED_SCROLLBACK = 5000;
+const LARGE_SCROLL_SCROLLBACK = 12000;
+const MULTI_STREAM_COUNT = 6;
+const SCROLL_SLICE_COUNT = 300;
+
 // One byte past the Daintree-side incremental-restore slice boundary —
 // the scenario must cover both sides of `chunkBytes` to catch regressions
 // in the slicing path.
@@ -40,9 +48,10 @@ export const terminalScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 18, nightly: 24 },
     warmups: 2,
+    correctness: ["outputMisses"],
     async run() {
-      const burst = simulateTerminalOutputPass(BURST_CHUNKS, 4000);
-      const sustained = simulateTerminalOutputPass(SUSTAINED_CHUNKS, 5000);
+      const burst = simulateTerminalOutputPass(BURST_CHUNKS, BURST_SCROLLBACK);
+      const sustained = simulateTerminalOutputPass(SUSTAINED_CHUNKS, SUSTAINED_SCROLLBACK);
       await spinEventLoop(0.75);
 
       return {
@@ -51,6 +60,9 @@ export const terminalScenarios: PerfScenario[] = [
           renderedBytes: burst.renderedBytes + sustained.renderedBytes,
           retainedBytes: sustained.retainedBytes,
           checksum: burst.checksum + sustained.checksum,
+          outputMisses:
+            terminalOutputPassMisses(BURST_CHUNKS, BURST_SCROLLBACK, burst) +
+            terminalOutputPassMisses(SUSTAINED_CHUNKS, SUSTAINED_SCROLLBACK, sustained),
         },
       };
     },
@@ -63,17 +75,20 @@ export const terminalScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 16, nightly: 22 },
     warmups: 1,
+    correctness: ["outputMisses"],
     async run() {
       const rng = createRng(31031);
-      const streamCount = 6;
       let checksum = 0;
       let renderedBytes = 0;
+      let outputMisses = 0;
 
-      for (let streamIndex = 0; streamIndex < streamCount; streamIndex += 1) {
+      for (let streamIndex = 0; streamIndex < MULTI_STREAM_COUNT; streamIndex += 1) {
         const chunks = makeTerminalChunks(1200 + streamIndex * 120, 80 + streamIndex * 5);
-        const result = simulateTerminalOutputPass(chunks, 3000 + streamIndex * 500);
+        const scrollback = 3000 + streamIndex * 500;
+        const result = simulateTerminalOutputPass(chunks, scrollback);
         renderedBytes += result.renderedBytes;
         checksum += result.checksum;
+        outputMisses += terminalOutputPassMisses(chunks, scrollback, result);
 
         // Focus changes trigger extra view work.
         if (rng() > 0.4) {
@@ -86,6 +101,7 @@ export const terminalScenarios: PerfScenario[] = [
         metrics: {
           renderedBytes,
           checksum,
+          outputMisses,
         },
       };
     },
@@ -98,16 +114,19 @@ export const terminalScenarios: PerfScenario[] = [
     modes: ["ci", "nightly"],
     iterations: { ci: 6, nightly: 10 },
     warmups: 1,
+    correctness: ["outputMisses"],
     async run() {
-      const result = simulateTerminalOutputPass(LARGE_SCROLL_CHUNKS, 12000);
+      const result = simulateTerminalOutputPass(LARGE_SCROLL_CHUNKS, LARGE_SCROLL_SCROLLBACK);
 
       // Simulate repeated scrollback slicing and viewport updates.
       let scrollChecksum = 0;
+      let scrollSlices = 0;
       const viewport = 120;
       const lineCount = Math.max(1, Math.floor(result.retainedBytes / 80));
-      for (let i = 0; i < 300; i += 1) {
+      for (let i = 0; i < SCROLL_SLICE_COUNT; i += 1) {
         const start = Math.max(0, Math.floor((i / 299) * Math.max(0, lineCount - viewport)));
         scrollChecksum += start + viewport;
+        scrollSlices += 1;
       }
 
       await spinEventLoop(1.2);
@@ -118,6 +137,11 @@ export const terminalScenarios: PerfScenario[] = [
           renderedBytes: result.renderedBytes,
           retainedBytes: result.retainedBytes,
           checksum: result.checksum + scrollChecksum,
+          // The scroll loop is the second half of this scenario's work and
+          // produces nothing but a checksum, so its slice tally rides along.
+          outputMisses:
+            terminalOutputPassMisses(LARGE_SCROLL_CHUNKS, LARGE_SCROLL_SCROLLBACK, result) +
+            Math.abs(SCROLL_SLICE_COUNT - scrollSlices),
         },
       };
     },

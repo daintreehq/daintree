@@ -1,6 +1,7 @@
 import type { PerfScenario } from "../types";
 import {
   createPersistedLayout,
+  projectSwitchCycleMisses,
   simulateLayoutHydration,
   simulateProjectSwitchCycle,
   spinEventLoop,
@@ -60,17 +61,12 @@ export const hydrationSwitchScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 20, nightly: 28 },
     warmups: 2,
+    correctness: ["switchMisses"],
     async run() {
-      const switchA = simulateProjectSwitchCycle({
-        outgoingStateSize: 80,
-        incomingLayout: SWITCH_LAYOUT_A,
-        iterations: 1,
-      });
-      const switchB = simulateProjectSwitchCycle({
-        outgoingStateSize: 90,
-        incomingLayout: SWITCH_LAYOUT_B,
-        iterations: 1,
-      });
+      const specA = { outgoingStateSize: 80, incomingLayout: SWITCH_LAYOUT_A, iterations: 1 };
+      const specB = { outgoingStateSize: 90, incomingLayout: SWITCH_LAYOUT_B, iterations: 1 };
+      const switchA = simulateProjectSwitchCycle(specA);
+      const switchB = simulateProjectSwitchCycle(specB);
       await spinEventLoop(0.5);
 
       return {
@@ -78,6 +74,8 @@ export const hydrationSwitchScenarios: PerfScenario[] = [
         metrics: {
           checksum: switchA.checksum + switchB.checksum,
           switchWorkMs: switchA.elapsedMs + switchB.elapsedMs,
+          switchMisses:
+            projectSwitchCycleMisses(specA, switchA) + projectSwitchCycleMisses(specB, switchB),
         },
       };
     },
@@ -90,20 +88,23 @@ export const hydrationSwitchScenarios: PerfScenario[] = [
     modes: ["ci", "nightly"],
     iterations: { ci: 6, nightly: 10 },
     warmups: 1,
+    correctness: ["switchMisses"],
     async run() {
       const layouts = [SWITCH_LAYOUT_A, SWITCH_LAYOUT_B, SWITCH_LAYOUT_C];
       let checksum = 0;
       let elapsed = 0;
+      let switchMisses = 0;
 
       for (let i = 0; i < 12; i += 1) {
-        const layout = layouts[i % layouts.length];
-        const result = simulateProjectSwitchCycle({
+        const spec = {
           outgoingStateSize: 100 + (i % 3) * 25,
-          incomingLayout: layout,
+          incomingLayout: layouts[i % layouts.length],
           iterations: 1,
-        });
+        };
+        const result = simulateProjectSwitchCycle(spec);
         checksum += result.checksum;
         elapsed += result.elapsedMs;
+        switchMisses += projectSwitchCycleMisses(spec, result);
       }
 
       await spinEventLoop(2);
@@ -113,6 +114,7 @@ export const hydrationSwitchScenarios: PerfScenario[] = [
         metrics: {
           checksum,
           switchWorkMs: elapsed,
+          switchMisses,
         },
       };
     },

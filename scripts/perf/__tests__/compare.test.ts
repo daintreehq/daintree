@@ -88,6 +88,7 @@ function summary(
     protocol: { iterations: null, warmups: null, scenarioSelection: null },
     scenarioCount: aggregates.length,
     scenariosOutsideReference: [],
+    scenariosSkipped: [],
     aggregates,
     ...overrides,
   };
