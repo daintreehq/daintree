@@ -1,6 +1,14 @@
 import type { TerminalRuntimeStatus } from "@/types";
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
-import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
+import {
+  isGridPanelLocation,
+  isPtyPanel,
+  type PanelInstance,
+  type PanelLocation,
+  type PtyPanelData,
+  type TabGroup,
+  type TabGroupLocation,
+} from "@shared/types/panel";
 import { getNarrowPanel } from "./selectors";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
@@ -35,7 +43,11 @@ import { logDebug, logWarn, logError } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { collectPanelIdForBatch, isHydrationBatchActive } from "./hydrationBatch";
-import { addToWorktreeIndex, transferBetweenWorktreeIndex } from "./worktreeIndex";
+import {
+  addToWorktreeIndex,
+  panelMatchesWorktreeScope,
+  transferBetweenWorktreeIndex,
+} from "./worktreeIndex";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -51,6 +63,69 @@ async function resolveProjectStore() {
     _cachedProjectStore = mod.useProjectStore;
   }
   return _cachedProjectStore;
+}
+
+/**
+ * Resolve `AddPanelOptions.insertAfterId` to a flat `panelIds` index for a live
+ * add, or `null` to fall back to the ordinary append.
+ *
+ * Runs inside the commit `set()` on purpose. `addPanel` has async gaps before
+ * it lands (agent-settings IPC while the duplicate recipe is built, then
+ * `resolveProjectStore()` on the PTY path), so a numeric index computed at
+ * dispatch would be stale by the time it is used. Only the id is durable
+ * intent; the position is whatever that id means at commit.
+ */
+function resolveInsertAfterAnchor(
+  state: {
+    panelIds: string[];
+    panelsById: Record<string, CarrierPanel>;
+    tabGroups: Map<string, TabGroup>;
+  },
+  panel: { id: string; location?: PanelLocation; worktreeId?: string | null },
+  insertAfterId: string | undefined
+): { index: number; anchorId: string } | null {
+  if (!insertAfterId || insertAfterId === panel.id) return null;
+
+  // Grid and dock are the only surfaces with a user-visible order to be
+  // adjacent within — an overlay/dialog/trash landing has no slot to take.
+  const location: TabGroupLocation | null = isGridPanelLocation(panel.location)
+    ? "grid"
+    : panel.location === "dock"
+      ? "dock"
+      : null;
+  if (location === null) return null;
+
+  const inScope = (candidate: CarrierPanel | undefined): boolean => {
+    if (!candidate) return false;
+    const onSurface =
+      location === "grid" ? isGridPanelLocation(candidate.location) : candidate.location === "dock";
+    return onSurface && panelMatchesWorktreeScope(candidate.worktreeId, panel.worktreeId, location);
+  };
+
+  // A source that has been trashed, moved to the other surface, or re-homed to
+  // another worktree since dispatch no longer has a slot the copy can sit next
+  // to; the same goes for one that never made it into `panelIds`.
+  if (!inScope(state.panelsById[insertAfterId])) return null;
+  const sourceIndex = state.panelIds.indexOf(insertAfterId);
+  if (sourceIndex === -1) return null;
+
+  // Both `getTabGroups` and the dock's render items emit an explicit group at
+  // its EARLIEST member's position, so a copy spliced after a later member
+  // would land past every panel rendered between the two. Anchor to the slot
+  // the user actually sees. The copy itself stays ungrouped — folding it into
+  // the source's group is `addTabForPanel`'s job.
+  let anchorIndex = sourceIndex;
+  for (const group of state.tabGroups.values()) {
+    if (group.location !== location || !group.panelIds.includes(insertAfterId)) continue;
+    for (const memberId of group.panelIds) {
+      if (!inScope(state.panelsById[memberId])) continue;
+      const memberIndex = state.panelIds.indexOf(memberId);
+      if (memberIndex !== -1 && memberIndex < anchorIndex) anchorIndex = memberIndex;
+    }
+    break;
+  }
+
+  return { index: anchorIndex + 1, anchorId: state.panelIds[anchorIndex]! };
 }
 
 type Set = PanelRegistryStoreApi["setState"];
@@ -323,8 +398,15 @@ export const createAddPanelActions = (
             return { panelsById: newById, panelIdsByWorktreeId: newIndex };
           }
           const newById = { ...state.panelsById, [id]: terminal };
-          const newIds = [...state.panelIds, id];
-          const newIndex = addToWorktreeIndex(state.panelIdsByWorktreeId, terminal.worktreeId, id);
+          const anchor = resolveInsertAfterAnchor(state, terminal, options.insertAfterId);
+          const newIds = [...state.panelIds];
+          newIds.splice(anchor ? anchor.index : newIds.length, 0, id);
+          const newIndex = addToWorktreeIndex(
+            state.panelIdsByWorktreeId,
+            terminal.worktreeId,
+            id,
+            anchor?.anchorId
+          );
           saveNormalized(newById, newIds);
           // Fold dock activation into this commit so the watchdog effect in
           // `DockPanelOffscreenContainer` cannot observe `activeDockTerminalId`
@@ -672,8 +754,15 @@ export const createAddPanelActions = (
           return { panelsById: newById, panelIdsByWorktreeId: newIndex };
         }
         const newById = { ...state.panelsById, [id]: terminal };
-        const newIds = [...state.panelIds, id];
-        const newIndex = addToWorktreeIndex(state.panelIdsByWorktreeId, terminal.worktreeId, id);
+        const anchor = resolveInsertAfterAnchor(state, terminal, options.insertAfterId);
+        const newIds = [...state.panelIds];
+        newIds.splice(anchor ? anchor.index : newIds.length, 0, id);
+        const newIndex = addToWorktreeIndex(
+          state.panelIdsByWorktreeId,
+          terminal.worktreeId,
+          id,
+          anchor?.anchorId
+        );
         saveNormalized(newById, newIds);
         // Fold dock activation into this commit so the watchdog effect in
         // `DockPanelOffscreenContainer` cannot observe `activeDockTerminalId`

@@ -142,6 +142,11 @@ export function registerTerminalSpawnActions(
         if (focusPolicy) {
           options.focusPolicy = focusPolicy;
         }
+        // Land the copy directly after the panel it was copied from instead of
+        // at the end of the list (#12095). Passed as an id, not a position:
+        // `buildPanelDuplicateOptions` above can await agent-settings IPC, so
+        // any index computed here would be stale by the time the store commits.
+        options.insertAfterId = targetId;
         await state.addPanel(options);
       } else if (nonTrashed.length === 0) {
         const lastClosed = state.lastClosedConfig;

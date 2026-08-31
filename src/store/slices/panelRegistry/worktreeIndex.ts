@@ -92,15 +92,32 @@ function bucketKey(worktreeId: string | undefined | null): string {
   return worktreeId ?? NO_WORKTREE;
 }
 
+/**
+ * Add a panel to its worktree bucket. Appends by default; with `afterPanelId`
+ * it splices directly after that anchor so a positional add (`insertAfterId`
+ * in `AddPanelOptions`) leaves the bucket in the same relative order as the
+ * flat `panelIds` splice it accompanies — `gridTerminals` iterates the bucket,
+ * so an append here would order the grid differently from the dock.
+ *
+ * Positional adds stay in this targeted helper rather than going through
+ * `buildWorktreeIndex`: a full rebuild replaces every worktree's bucket array,
+ * breaking the reference-stability invariant above for worktrees that never
+ * changed. An anchor missing from the bucket falls back to appending, which is
+ * the same fallback the flat-array side takes.
+ */
 export function addToWorktreeIndex(
   index: PanelIdsByWorktreeId,
   worktreeId: string | undefined | null,
-  panelId: string
+  panelId: string,
+  afterPanelId?: string
 ): PanelIdsByWorktreeId {
   const key = bucketKey(worktreeId);
   const existing = index[key];
   if (existing && existing.includes(panelId)) return index;
-  const next = existing ? [...existing, panelId] : [panelId];
+  if (!existing) return { ...index, [key]: [panelId] };
+  const anchor = afterPanelId === undefined ? -1 : existing.indexOf(afterPanelId);
+  const next = [...existing];
+  next.splice(anchor === -1 ? next.length : anchor + 1, 0, panelId);
   return { ...index, [key]: next };
 }
 

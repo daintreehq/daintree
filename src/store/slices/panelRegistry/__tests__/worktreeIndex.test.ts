@@ -45,6 +45,38 @@ describe("worktreeIndex", () => {
       expect(after["wt-B"]).toBe(wtBBucket);
       expect(after["wt-A"]).not.toBe(before["wt-A"]);
     });
+
+    it("splices directly after the anchor when one is given (#12095)", () => {
+      const next = addToWorktreeIndex(
+        { "wt-A": ["panel-1", "panel-2", "panel-3"] },
+        "wt-A",
+        "copy",
+        "panel-1"
+      );
+      expect(next).toEqual({ "wt-A": ["panel-1", "copy", "panel-2", "panel-3"] });
+    });
+
+    it("appends when the anchor is the last entry", () => {
+      const next = addToWorktreeIndex({ "wt-A": ["panel-1"] }, "wt-A", "copy", "panel-1");
+      expect(next).toEqual({ "wt-A": ["panel-1", "copy"] });
+    });
+
+    it("falls back to appending when the anchor is not in the bucket", () => {
+      const next = addToWorktreeIndex({ "wt-A": ["panel-1"] }, "wt-A", "copy", "elsewhere");
+      expect(next).toEqual({ "wt-A": ["panel-1", "copy"] });
+    });
+
+    it("keeps other buckets reference-stable across an anchored insert", () => {
+      const wtBBucket = ["panel-2"];
+      const before: PanelIdsByWorktreeId = { "wt-A": ["panel-1"], "wt-B": wtBBucket };
+      const after = addToWorktreeIndex(before, "wt-A", "copy", "panel-1");
+      expect(after["wt-B"]).toBe(wtBBucket);
+    });
+
+    it("creates the bucket when anchored into an empty index", () => {
+      const next = addToWorktreeIndex({}, "wt-A", "copy", "panel-1");
+      expect(next).toEqual({ "wt-A": ["copy"] });
+    });
   });
 
   describe("removeFromWorktreeIndex", () => {

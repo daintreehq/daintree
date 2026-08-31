@@ -35,6 +35,26 @@ export interface AddPanelOptionsBase {
   worktreeIdSource?: "explicit" | "inferred";
   cwd?: string;
   location?: PanelLocation;
+  /**
+   * Opt-in placement hint: land the new panel immediately after this one
+   * instead of at the end. Resolved against live store state at commit time,
+   * never precomputed as a numeric index — `addPanel` has async gaps (agent
+   * settings IPC, project-store resolution) during which the source can be
+   * reordered, re-homed, or trashed.
+   *
+   * Honored only when the source shares the new panel's rendered scope
+   * (`panelMatchesWorktreeScope` at the resolved grid/dock location). A source
+   * in an explicit tab group anchors to that group's rendered slot — its
+   * earliest member — because both grid and dock emit a group at that position;
+   * anchoring to a later member would drop the copy past the panels rendered in
+   * between. The copy stays ungrouped either way: joining the source's group is
+   * `addTabForPanel`'s job, not this hint's.
+   *
+   * Falls back to the ordinary append whenever the hint can't be honored
+   * (absent, out of scope, source gone) and is ignored inside hydration/spawn
+   * batches, whose `panelIds` append is deferred to flush.
+   */
+  insertAfterId?: string;
   /** If provided, request a stable ID when spawning a new backend process */
   requestedId?: string;
   /** If provided, reconnect to existing backend process instead of spawning */
