@@ -365,7 +365,7 @@ describe("WorktreeMenuItems Git submenu", () => {
       worktree: makeWorktree({ worktreeChanges: null }),
     });
 
-    const pull = gitRow(/Pull and rebase/);
+    const pull = gitRowMatching(/Pull and rebase/);
     expect(isDisabled(pull)).toBe(false);
     expect(pull.textContent).not.toContain("No upstream");
   });
