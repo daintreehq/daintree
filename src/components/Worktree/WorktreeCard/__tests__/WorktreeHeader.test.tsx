@@ -1049,7 +1049,13 @@ describe("WorktreeHeader collapsed alarm pill", () => {
     const pill = screen.getByTestId("collapsed-alarm-pill");
     expect(pill.getAttribute("data-alarm-kind")).toBe("ci-failed");
     expect(pill.className).toContain("text-status-error");
-    expect(pill.textContent).toBe("CI failed");
+    // The label moved into the tooltip and the accessible name; the mark on the
+    // row is a glyph, so it carries no text of its own.
+    expect(pill.textContent).toBe("");
+    // The whole name, not a substring: the fixture reports 1 of 1 check
+    // failing, so a `contains` would still pass if the counts stopped being
+    // forwarded and the detail fell back to its countless wording.
+    expect(pill.getAttribute("aria-label")).toBe("CI failed — 1 of 1 check failing");
   });
 
   it("renders the pill with warning treatment for GitHub auth-failed remote", () => {
@@ -1086,6 +1092,26 @@ describe("WorktreeHeader collapsed alarm pill", () => {
     const pill = screen.getByTestId("collapsed-alarm-pill");
     expect(pill.getAttribute("data-alarm-kind")).toBe("behind");
     expect(pill.className).toContain("text-status-warning");
+    expect(pill.getAttribute("aria-label")).toBe("Behind — Upstream: 3 commits behind");
+  });
+
+  it("threads the base compare ref into the detail for base-only drift", () => {
+    // The counts only reach the tooltip if every field is actually passed
+    // through — a formatter that works in isolation over a header that hands
+    // it half the worktree is the failure this catches.
+    renderHeader({
+      isCollapsed: true,
+      worktree: {
+        ...baseWorktree,
+        behindCount: 0,
+        baseBehindCount: 4,
+        baseBranchName: "develop",
+        baseCompareRef: "upstream/develop",
+      },
+    });
+    expect(screen.getByTestId("collapsed-alarm-pill").getAttribute("aria-label")).toBe(
+      "Behind — Base (upstream/develop): 4 commits behind"
+    );
   });
 
   it("does not duplicate gitStateIndicator for detached HEAD", () => {

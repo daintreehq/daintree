@@ -10,6 +10,7 @@ export * from "./brands";
 // Each was chosen to fit the metaphor.
 export {
   Activity, // project pulse / live activity heartbeat
+  ArrowDown, // a branch behind what it tracks — the same ↓ the upstream badge writes beside the count, so the collapsed alarm and the expanded one name the drift alike
   ArrowDownAZ, // alphabetical sort order (A to Z)
   ArrowLeftRight, // a settings search hit that lives in the other scope — following it switches scope
   ArrowUpDown, // card organization — pinning, collapsing and reordering a worktree row
@@ -22,6 +23,7 @@ export {
   CircleHelp, // workspace whose metadata is missing (removed while its agents ran)
   CirclePause, // run the user parked — shelved on purpose (Pilot's parked band)
   CircleSlash, // agent stopped on an error, distinct in shape from a waiting one (Pilot's blocked band)
+  CircleX, // CI that failed — the cross the PR badge already uses, enclosed so a glyph standing alone reads as a verdict rather than a dismiss control
   Clock, // recency sort order (most recently opened first)
   FileText, // view selected file path in the read-only file viewer
   FolderGit2, // git worktree (single)
@@ -32,6 +34,7 @@ export {
   GitBranchPlus, // per-project worktree setup — creating branches, not browsing them
   GitPullRequest, // forge provider / code-host plugin category
   History, // resume closed session / session history
+  KeyRound, // forge credentials that stopped working — a key names what has to be fixed, and it shares a silhouette with nothing else here, so it survives forced colors
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)
   Link2Off, // detach the issue linked to a worktree
