@@ -16,6 +16,7 @@ import {
   gradeFlushCadence,
   HEAP_BUDGET_MB,
   heldByToken,
+  ipcFallbackMirrorMisses,
   ipcFallbackSequenceMisses,
   loadFlowControlModules,
   measureTimerOverheadNs,
@@ -402,7 +403,7 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
     id: "PERF-371",
     name: "Window Aggregate Watermark and the Focused-Terminal Exemption",
     description:
-      "The window-level gate: 18 MiB of agent output across 12 terminals, none of them over its own 3 MiB queue, against the real 16 MiB IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES. Three arms on one pass. The port path WITH a focused terminal must pause every sibling and exempt the focused pane; the same flood with no terminal focused must pause all twelve, which is what proves the exemption is the focus and not something else about that terminal; and the IPC fallback path — whose IpcQueueDeps has no focused-terminal member at all — must pause all twelve including the focused one. Every arm's victim set is compared by symmetric difference against the set derived from this fixture's own ledger, so pausing nothing and pausing everything are separately caught, and the third arm records a real product asymmetry rather than asserting the two paths agree. The fallback arm cannot import its orchestration — pty-host.ts exports nothing and refuses to evaluate outside a UtilityProcess — so the call sequence is mirrored here and the mirror is graded: ipcFallbackSequenceMisses reads the ordered ipcQueueManager calls back out of the host's own source and compares them positionally.",
+      "The window-level gate: 18 MiB of agent output across 12 terminals, none of them over its own 3 MiB queue, against the real 16 MiB IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES. Three arms on one pass. The port path WITH a focused terminal must pause every sibling and exempt the focused pane; the same flood with no terminal focused must pause all twelve, which is what proves the exemption is the focus and not something else about that terminal; and the IPC fallback path — whose IpcQueueDeps has no focused-terminal member at all — must pause all twelve including the focused one. Every arm's victim set is compared by symmetric difference against the set derived from this fixture's own ledger, so pausing nothing and pausing everything are separately caught, and the third arm records a real product asymmetry rather than asserting the two paths agree. The fallback arm cannot import its orchestration — pty-host.ts exports nothing and refuses to evaluate outside a UtilityProcess — so the call sequence is mirrored here and the mirror is graded in both directions. ipcFallbackMirrorMisses is the term that matters: the sequence the fixture ACTUALLY executes is recorded as the mirror enters each ipcQueueManager member, then compared per branch against the accept and drop paths parsed out of the host's own source, so a reordered or dropped step in the fixture scores rather than passing. ipcFallbackSequenceMisses sits beside it and pins that same source against the declared constant.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     warmups: WARMUPS,
@@ -413,6 +414,7 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
       "focusControlMisses",
       "ipcPathMisses",
       "ipcFallbackSequenceMisses",
+      "ipcFallbackMirrorMisses",
       "coordinatorHoldMisses",
       "pauseSignalMisses",
       "immediateFlushMisses",
@@ -427,6 +429,8 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
       const timerOverheadNs = measureTimerOverheadNs();
       // Read off `pty-host.ts` itself, outside every bracket below.
       const fallbackSequenceMisses = ipcFallbackSequenceMisses();
+      // What runIpcFlood ACTUALLY calls, against the branch it mirrors.
+      const fallbackMirrorMisses = ipcFallbackMirrorMisses();
       const perTerminalBytes = Math.floor(AGGREGATE_TOTAL_BYTES / AGGREGATE_FLEET_SIZE);
       const chunksPerTerminal = chunkPlanFor(CHUNK_BYTES, perTerminalBytes);
 
@@ -601,6 +605,7 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
           focusControlMisses,
           ipcPathMisses,
           ipcFallbackSequenceMisses: fallbackSequenceMisses,
+          ipcFallbackMirrorMisses: fallbackMirrorMisses,
           immediateFlushMisses: cadence.immediateFlushMisses,
           throughputFlushMisses: cadence.throughputFlushMisses,
           cadenceShortfallCount: cadence.cadenceShortfallCount,

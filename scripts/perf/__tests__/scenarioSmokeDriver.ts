@@ -12,6 +12,15 @@
  * process is also how `run.ts` drives them, so what this proves is what the
  * runner would do.
  *
+ * WHAT IT DECIDES AND WHAT IT REPORTS. Apparatus facts are thrown here — a
+ * sample that is not an object, a non-finite `durationMs`, a non-finite metric,
+ * because none of those can be true of anything and none needs a per-scenario
+ * exemption. Everything a VERDICT needs — the self-measured duration, the
+ * bracket the driver spent around `run()`, the value of every declared
+ * correctness metric — is reported instead, and judged in
+ * `scenarioLiveness.test.ts`, which is where the exclusion tables and their
+ * reasons live.
+ *
  * Usage: tsx scenarioSmokeDriver.ts <scenario-id>
  */
 import { allScenarios } from "../scenarios";
@@ -52,19 +61,35 @@ async function main(): Promise<void> {
   // Correctness metrics are the harness's own invariant: declared, emitted on
   // every iteration, and zero on a healthy one. A liveness guard that ignored
   // them would pass a scenario whose subject had stopped doing its work.
-  const missingCorrectness = (scenario.correctness ?? []).filter(
+  //
+  // The VALUES are reported rather than judged here. Presence is an apparatus
+  // fact and belongs with the other apparatus throws above; "this reading is
+  // wrong" is a verdict, and the verdict needs the exclusion table — with its
+  // per-scenario reasons — that lives in `scenarioLiveness.test.ts`.
+  const declared = scenario.correctness ?? [];
+  const missingCorrectness = declared.filter(
     (key) => !Object.prototype.hasOwnProperty.call(metrics, key)
   );
+  const correctness: Record<string, number> = {};
+  for (const key of declared) {
+    const value = metrics[key];
+    if (typeof value === "number") correctness[key] = value;
+  }
 
   process.stdout.write(
     `${JSON.stringify({
       ok: true,
       id: scenarioId,
       mode,
-      elapsedMs: Math.round(elapsedMs),
+      // Unrounded, and load-bearing: the test compares the scenario's own
+      // duration against this bracket, and rounding a 0.19ms scenario's
+      // bracket to 0 would make a real measurement look like it had reported
+      // more time than it was given.
+      elapsedMs,
       durationMs: sample.durationMs,
       metricCount: Object.keys(metrics).length,
       missingCorrectness,
+      correctness,
     })}\n`
   );
 }

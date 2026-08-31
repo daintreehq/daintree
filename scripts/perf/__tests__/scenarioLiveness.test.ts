@@ -22,18 +22,54 @@ import { allScenarios } from "../scenarios";
  * in every perf run, whichever id `--scenario` names.
  *
  * WHAT THIS GUARD PROVES
- *   Each scenario's `run()` completes once, returns a sample with a finite
- *   `durationMs`, emits no non-finite metric, and emits every metric key it
- *   declared in `correctness`.
+ *   Each scenario's `run()` completes once and returns a sample in which
+ *   (a) every metric is finite, (b) every metric key declared in `correctness`
+ *   is emitted AND reads exactly 0, and (c) the duration the runner would
+ *   record is a positive measurement contained inside the bracket the driver
+ *   spent calling `run()`.
+ *
+ *   (b) and (c) are what make "it ran" mean something. Key presence alone does
+ *   not: strip a subject's `onProgress` and the declared keys still come back,
+ *   carrying 16 and 4 misses. Every correctness metric is a MISS COUNT, so a
+ *   healthy run is 0 BY CONSTRUCTION — it is a structural fact about the
+ *   predicate, not a threshold about the machine, so asserting it cannot make
+ *   this guard timing-sensitive. All 149 scenarios driven here report 0 on
+ *   every declared term; none needed an exemption.
  *
  * WHAT IT DOES NOT PROVE
- *   Nothing about the NUMBERS. A scenario whose subject got 10x slower, or
- *   whose predicate started reporting misses, passes here. This is a liveness
- *   check, not a measurement: it answers "is this benchmark still a benchmark",
- *   which is the one question the harness could not previously answer about
- *   itself. Correctness metrics are checked for PRESENCE, not for zero — one
- *   iteration under vitest contention is not a reading, and asserting zero
- *   would turn a busy machine into a red suite.
+ *   Nothing about the NUMBERS. A scenario whose subject got 10x slower passes
+ *   here. This is a liveness check, not a measurement: it answers "is this
+ *   benchmark still a benchmark", which is the one question the harness could
+ *   not previously answer about itself.
+ *
+ *   Nor can it prove the predicate is an ORACLE. A scenario rewritten to
+ *   hardcode `{ someMisses: 0 }` and a plausible small duration satisfies every
+ *   rule below, and no check outside the scenario can tell that apart from a
+ *   real reading — the same limit `README.md` states about decorative
+ *   predicates. What the duration rules do close is the shape that has actually
+ *   bitten: a stub that keeps the keys and stops doing the work is
+ *   near-instant, so a hardcoded duration is either the `0` sentinel (rejected
+ *   for any scenario not named in WALL_CLOCK_TIMED) or a constant larger than
+ *   the bracket it was measured in (rejected by containment).
+ *
+ * CONSIDERED AND REJECTED: RUNNING EACH SCENARIO TWICE
+ *   A hardcoded duration is identical across two runs and a real measurement
+ *   essentially never is, so a second `run()` in the same child would catch the
+ *   one case containment cannot: a constant SMALLER than the bracket. It was
+ *   built and measured rather than argued about. It works — across all 149
+ *   scenarios no pair of runs produced the same `durationMs`, and every one
+ *   tolerated the repeat — and it costs 67s against 55s, +22%, on every
+ *   `npm test`.
+ *
+ *   Rejected on what the second run does, not on what it checks. It doubles
+ *   this guard's side-effect surface inside the unit suite: every real
+ *   subprocess spawn, temp git tree, SIGKILL and port bind happens twice, in a
+ *   file that already runs four children at once beside Vitest's own workers.
+ *   That trades a small, never-observed defect (a scenario hardcoding a
+ *   plausible duration — the historical one hardcoded `0`, which is caught
+ *   above) for a larger, ordinary class of flake. Two scenarios say so
+ *   outright: PERF-046 and PERF-224 declare `warmups: 0`, so repeating them is
+ *   something the harness's own authors declined to do.
  *
  * WHY CHILD PROCESSES
  *   Every fixture that loads main-process code installs its module-resolution
@@ -54,17 +90,21 @@ const DRIVER = path.join(HERE, "scenarioSmokeDriver.ts");
 /**
  * Scenarios this guard deliberately does NOT run, and why.
  *
- * The rule is a single `run()` costing more than ~12 seconds on the reference
- * machine (M-series macOS, serial). Every one below is expensive BY DESIGN —
+ * SIX are excluded on cost: a single `run()` costing more than ~12 seconds on
+ * the reference machine (M-series macOS, serial). Each is expensive BY DESIGN —
  * it idles for a fixed wall-clock window, or builds real multi-worktree git
  * topologies — so no amount of harness work makes it cheap, and a guard that
- * waited for them would cost ~5 minutes and get switched off.
+ * waited for them would cost ~5 minutes and get switched off. Their entries
+ * carry the measured serial cost of ONE `run()`, so the next person can
+ * re-judge the trade rather than inherit it, and so an entry that stops being
+ * expensive is visible rather than permanent.
  *
- * Times are the measured serial cost of ONE `run()`. They are here so the next
- * person can re-judge the trade rather than inherit it, and so that an entry
- * that stops being expensive is visible rather than permanent.
+ * The SEVENTH, PERF-004, is not a cost exclusion at all: it launches the
+ * packaged binary, so it cannot run without a `npm run package` build under
+ * `release/` that no test environment has. Cheap or not, there is nothing here
+ * for it to drive.
  *
- * This is a REAL GAP: these six are exactly as capable of dying silently as the
+ * All seven are a REAL GAP, and exactly as capable of dying silently as the
  * thirteen that did. Run them by hand after touching `lib/idleWindow*`,
  * `lib/gitPipeline*` or `lib/worktreeSidebar*`:
  *   npx tsx scripts/perf/__tests__/scenarioSmokeDriver.ts PERF-092
@@ -94,6 +134,80 @@ const EXPENSIVE_SCENARIOS: Readonly<Record<string, string>> = {
  * asked for it, and all seven measure again.
  */
 const KNOWN_DEAD: Readonly<Record<string, string>> = {};
+
+/**
+ * Correctness terms this guard does not assert to be zero, and why.
+ *
+ * Each one's expectation includes "the timer had NOT fired yet", which is the
+ * one shape a loaded machine can break without anything being wrong.
+ * `gradeFlushCadence` waits `PORT_BATCH_THROUGHPUT_DELAY_MS * 2 + 8` for the
+ * real PortBatcher cadence; under four concurrent children plus Vitest's own
+ * workers that window slips, and the scenario reports a miss for a subject that
+ * is fine. Observed once during development, on exactly that shape.
+ *
+ * They remain fully graded through `run.ts`, which is where a number is taken
+ * and where nothing else is competing for the box. This exemption is only about
+ * what is safe to assert inside the unit suite.
+ */
+const TIMING_DEPENDENT_TERMS: ReadonlySet<string> = new Set([
+  // PERF-370/371/063 — the PortBatcher idle -> latency -> throughput machine.
+  "immediateFlushMisses",
+  "throughputFlushMisses",
+]);
+
+/**
+ * Scenarios that decline to self-time, and why — named, because otherwise the
+ * duration rule cannot exist.
+ *
+ * `run.ts:799` substitutes its own wall-clock bracket for any non-positive
+ * `durationMs`: `sample.durationMs > 0 ? sample.durationMs : wallClockMs`. That
+ * sentinel is legitimate, and these sixteen use it on purpose. It is also,
+ * character for character, what a scenario rewritten to hardcode
+ * `durationMs: 0` returns — the shape that zeroed a p95 once already, when a
+ * `>= 0` filter read the sentinel as a measurement.
+ *
+ * Nothing in the sample distinguishes the two, so they are separated BY NAME.
+ * Every scenario not listed here must return a positive self-measured duration;
+ * every scenario listed here must still be returning the sentinel. Both
+ * directions fail loudly: adopting the sentinel means adding a line and saying
+ * why, and a listed scenario that starts self-timing means deleting one.
+ *
+ * Only scenarios this guard actually drives are listed. PERF-092/093/094 and
+ * PERF-105/106 also use the sentinel and are not here, because they are excluded
+ * above and never run.
+ */
+const WALL_CLOCK_TIMED: Readonly<Record<string, string>> = {
+  "PERF-020": "-1 — one synchronous replay pass; the whole run() body is the measurement",
+  "PERF-021": "-1 — one synchronous replay pass; the whole run() body is the measurement",
+  "PERF-022": "-1 — one synchronous replay pass; the whole run() body is the measurement",
+  "PERF-023": "-1 — one synchronous replay pass; the whole run() body is the measurement",
+  "PERF-024": "-1 — one synchronous replay pass; the whole run() body is the measurement",
+  "PERF-030": "-1 — the pipeline plans ARE the bracket; no sub-timing to report",
+  "PERF-031": "-1 — the pipeline plans ARE the bracket; no sub-timing to report",
+  "PERF-032": "-1 — the pipeline plans ARE the bracket; no sub-timing to report",
+  "PERF-033": "-1 — the pipeline plans ARE the bracket; no sub-timing to report",
+  "PERF-034": "-1 — the pipeline plans ARE the bracket; no sub-timing to report",
+  "PERF-035": "-1 — the awaited fleet sweep is the workload; cost is reported as cpuMs metrics",
+  "PERF-042":
+    "0 — reports event-loop lag; its own elapsed time is the synthetic load, not a reading",
+  "PERF-074": "0 — counts only: no renderer, so no phase on the switch path has an honest duration",
+  "PERF-075": "0 — counts only: no renderer, so no phase on the switch path has an honest duration",
+  "PERF-076": "0 — counts only: no renderer, so no phase on the switch path has an honest duration",
+  "PERF-077": "0 — counts only: no renderer, so no phase on the switch path has an honest duration",
+};
+
+/**
+ * Slack on the containment rule, in milliseconds.
+ *
+ * A scenario's own bracket is nested inside the driver's, so a real measurement
+ * can never exceed it — same process, same `performance.now()`. One millisecond
+ * absorbs the one honest way that could read false: a scenario timing itself
+ * with `Date.now()`, which quantizes to whole milliseconds and can round its
+ * bracket up past the driver's on a sub-millisecond run. It is nowhere near
+ * wide enough to admit a hardcoded constant: the widest real ratio measured
+ * across all 149 scenarios is 0.993.
+ */
+const CONTAINMENT_SLACK_MS = 1;
 
 /** Ceiling for one scenario's child. Generous: the pool runs several at once. */
 const CHILD_TIMEOUT_MS = 120_000;
@@ -205,7 +319,18 @@ function explain(result: DriverResult): string {
   return `died before the scenario ran (exit ${String(result.exitCode)}): ${stderrLines.join(" | ")}`;
 }
 
-function parseOk(result: DriverResult): { missingCorrectness?: string[] } | null {
+/** The driver's JSON line. Everything it reports is judged below, not there. */
+interface DriverReport {
+  missingCorrectness?: string[];
+  /** Value of every declared correctness metric the sample actually emitted. */
+  correctness?: Record<string, number>;
+  /** What the scenario says it measured. Non-positive is the sentinel. */
+  durationMs?: number;
+  /** The driver's own bracket around `run()`, unrounded. */
+  elapsedMs?: number;
+}
+
+function parseOk(result: DriverResult): DriverReport | null {
   const line = result.stdout
     .split("\n")
     .map((raw) => raw.trim())
@@ -213,10 +338,83 @@ function parseOk(result: DriverResult): { missingCorrectness?: string[] } | null
     .at(-1);
   if (line === undefined) return null;
   try {
-    return JSON.parse(line) as { missingCorrectness?: string[] };
+    return JSON.parse(line) as DriverReport;
   } catch {
     return null;
   }
+}
+
+/**
+ * Everything wrong with one scenario's sample, as sentences.
+ *
+ * Collected rather than short-circuited: a scenario that has both stopped
+ * measuring and started missing should say both, because "durationMs is 0" on
+ * its own reads as a sentinel question and reads very differently beside 16
+ * misses.
+ */
+function verdicts(id: string, report: DriverReport): string[] {
+  const problems: string[] = [];
+
+  const missing = report.missingCorrectness ?? [];
+  if (missing.length > 0) {
+    problems.push(`${id} ran but emitted no ${missing.join(", ")} — declared in correctness`);
+  }
+
+  // Every correctness metric is a miss count, so a healthy run is 0. This is
+  // the term that catches a subject that still returns the right SHAPE while
+  // having stopped doing the work.
+  //
+  // TIMING_DEPENDENT_TERMS are exempt. They are not weaker predicates — through
+  // `run.ts` they grade exactly like the rest, and a real defect still moves
+  // them. They are exempt HERE because this guard runs four children at a time
+  // inside the unit suite, and a term whose expectation is "the timer had not
+  // fired yet" slips when the box is loaded. Asserting them here would make the
+  // guard flaky, and a flaky guard gets switched off — which would cost the
+  // other ~800 terms it does check. Named, not hidden, and asserted in both
+  // directions below so an entry cannot outlive its cause.
+  const nonZero = Object.entries(report.correctness ?? {}).filter(
+    ([key, value]) => value !== 0 && !TIMING_DEPENDENT_TERMS.has(key)
+  );
+  if (nonZero.length > 0) {
+    const detail = nonZero.map(([key, value]) => `${key}=${value}`).join(", ");
+    problems.push(`${id} reported misses: ${detail} — a healthy run reads 0 on every one`);
+  }
+
+  const durationMs = report.durationMs;
+  const elapsedMs = report.elapsedMs;
+  if (typeof durationMs !== "number" || typeof elapsedMs !== "number") {
+    problems.push(`${id} reported no durationMs/elapsedMs — driver output changed?`);
+    return problems;
+  }
+
+  const declaredSentinel = id in WALL_CLOCK_TIMED;
+  if (declaredSentinel) {
+    // The other direction on the sentinel list, in the same shape as KNOWN_DEAD.
+    if (durationMs > 0) {
+      problems.push(
+        `${id} now self-times (durationMs ${durationMs}) — delete it from WALL_CLOCK_TIMED in this file`
+      );
+    }
+    if (!(elapsedMs > 0)) {
+      problems.push(`${id} took no measurable time at all (bracket ${elapsedMs}ms)`);
+    }
+    return problems;
+  }
+
+  if (!(durationMs > 0)) {
+    problems.push(
+      `${id} returned durationMs ${durationMs} — the harness reads a non-positive duration as ` +
+        `the "wall-clock me instead" sentinel (run.ts:799), which is also what a hardcoded stub ` +
+        `returns. If it is deliberate, name it in WALL_CLOCK_TIMED with the reason`
+    );
+  } else if (durationMs > elapsedMs + CONTAINMENT_SLACK_MS) {
+    problems.push(
+      `${id} claims ${durationMs.toFixed(3)}ms inside a ${elapsedMs.toFixed(3)}ms call — a ` +
+        `measurement cannot outlast the bracket it was taken in, so this number was not measured`
+    );
+  }
+
+  return problems;
 }
 
 /** Content hash of a directory's files, so "nothing was written" is provable. */
@@ -252,14 +450,37 @@ describe("perf scenario liveness", () => {
   );
 
   it("names only real scenarios in its exclusion lists", () => {
-    // A stale id is a gap that reads as a decision. Both lists are checked
+    // A stale id is a gap that reads as a decision. All three lists are checked
     // against the matrix rather than against each other.
     const known = new Set(matrixIds);
-    const stale = [...Object.keys(EXPENSIVE_SCENARIOS), ...Object.keys(KNOWN_DEAD)].filter(
-      (id) => !known.has(id)
-    );
+    const stale = [
+      ...Object.keys(EXPENSIVE_SCENARIOS),
+      ...Object.keys(KNOWN_DEAD),
+      ...Object.keys(WALL_CLOCK_TIMED),
+    ].filter((id) => !known.has(id));
     expect(stale).toEqual([]);
     expect(Object.keys(EXPENSIVE_SCENARIOS).filter((id) => id in KNOWN_DEAD)).toEqual([]);
+
+    // A sentinel entry for a scenario this guard never drives could never be
+    // checked in the other direction, so it would sit here forever whether or
+    // not it stayed true.
+    const unrunnable = Object.keys(WALL_CLOCK_TIMED).filter(
+      (id) => id in EXPENSIVE_SCENARIOS || id in KNOWN_DEAD
+    );
+    expect(unrunnable).toEqual([]);
+
+    // The timing exemption in the other direction: a term no live scenario
+    // declares any more is an exemption that outlived its cause, and it would
+    // silently keep excusing that name if some future scenario reused it.
+    const declaredTerms = new Set(
+      allScenarios
+        .filter((scenario) => liveIds.includes(scenario.id))
+        .flatMap((scenario) => scenario.correctness ?? [])
+    );
+    const orphanedExemptions = [...TIMING_DEPENDENT_TERMS].filter(
+      (term) => !declaredTerms.has(term)
+    );
+    expect(orphanedExemptions).toEqual([]);
   });
 
   it("accounts for every scenario in the matrix", () => {
@@ -289,10 +510,11 @@ describe("perf scenario liveness", () => {
         continue;
       }
       const parsed = parseOk(result);
-      const missing = parsed?.missingCorrectness ?? [];
-      if (missing.length > 0) {
-        failures.push(`${id} ran but emitted no ${missing.join(", ")} — declared in correctness`);
+      if (parsed === null) {
+        failures.push(`${id} exited 0 but printed no parseable result line`);
+        continue;
       }
+      failures.push(...verdicts(id, parsed));
     }
 
     // The other direction: a scenario on the known-dead inventory that has

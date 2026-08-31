@@ -9,10 +9,14 @@ import {
   expectedTrimOrder,
   expectedVictimSet,
   extractIpcFallbackSequence,
+  extractIpcFallbackSequences,
   FOCUSED_ID,
   gradeFlushCadence,
+  ipcFallbackMirrorMisses,
+  ipcFallbackMirrorMissesIn,
   ipcFallbackSequenceMisses,
   ipcFallbackSequenceMissesIn,
+  observeIpcFallbackSequences,
   IPC_FALLBACK_HOST_SEQUENCE,
   loadFlowControlModules,
   measureTimerOverheadNs,
@@ -319,6 +323,73 @@ describe("pty-host IPC fallback drift guard", () => {
 
   it("agrees with the shipped pty-host.ts today", () => {
     expect(ipcFallbackSequenceMisses()).toBe(0);
+  });
+
+  /**
+   * The half the constant check cannot do.
+   *
+   * `ipcFallbackSequenceMissesIn` compares the HOST SOURCE against
+   * `IPC_FALLBACK_HOST_SEQUENCE`, both of which sit still while `runIpcFlood`'s
+   * own calls are reordered or dropped — the mirror could diverge from both and
+   * score zero. `ipcFallbackMirrorMissesIn` compares what the mirror EXECUTES,
+   * recorded as it enters each `ipcQueueManager` member, against the branch of
+   * the host it is mirroring.
+   */
+  it("splits the shipped block into the accept and drop paths", () => {
+    expect(extractIpcFallbackSequences(SHIPPED)).toEqual({
+      accept: ["isAtCapacity", "addBytes", "getUtilization", "applyBackpressure"],
+      drop: ["isAtCapacity", "getUtilization"],
+    });
+  });
+
+  it("observes the mirror's own two paths rather than declaring them", () => {
+    expect(observeIpcFallbackSequences()).toEqual({
+      accept: ["isAtCapacity", "addBytes", "getUtilization", "applyBackpressure"],
+      drop: ["isAtCapacity", "getUtilization"],
+    });
+  });
+
+  it("scores a host whose accepting path the mirror no longer performs", () => {
+    // The gate stays put and both branches still exist, so the flat sequence is
+    // a permutation the constant check happens to tolerate in length — but the
+    // mirror does not call `clearQueue`, and it calls `addBytes` first.
+    const reordered = block(`        if (ipcQueueManager.isAtCapacity(id, dataBytes)) {
+          const utilization = ipcQueueManager.getUtilization(id);
+          return;
+        }
+        const utilization = ipcQueueManager.getUtilization(id);
+        ipcQueueManager.applyBackpressure(id, utilization);
+        ipcQueueManager.addBytes(id, dataBytes);`);
+    expect(ipcFallbackMirrorMissesIn(reordered)).toBeGreaterThan(0);
+  });
+
+  it("scores a host whose drop branch grew a step the mirror does not take", () => {
+    const grown = block(`        if (ipcQueueManager.isAtCapacity(id, dataBytes)) {
+          const utilization = ipcQueueManager.getUtilization(id);
+          ipcQueueManager.clearQueue(id);
+          return;
+        }
+        ipcQueueManager.addBytes(id, dataBytes);
+        const utilization = ipcQueueManager.getUtilization(id);
+        ipcQueueManager.applyBackpressure(id, utilization);`);
+    expect(ipcFallbackMirrorMissesIn(grown)).toBe(1);
+  });
+
+  it("fails closed when the drop branch has no braced body", () => {
+    // `if (…) return;` — a real restructure, and one this lexical matcher
+    // cannot split. Reported, never resolved in the convenient direction.
+    const braceless = block(`        if (ipcQueueManager.isAtCapacity(id, dataBytes)) return;
+        ipcQueueManager.addBytes(id, dataBytes);
+        const utilization = ipcQueueManager.getUtilization(id);
+        ipcQueueManager.applyBackpressure(id, utilization);`);
+    expect(extractIpcFallbackSequences(braceless)).toBeNull();
+    expect(ipcFallbackMirrorMissesIn(braceless)).toBe(6);
+    expect(extractIpcFallbackSequences("nothing here")).toBeNull();
+    expect(ipcFallbackMirrorMissesIn("nothing here")).toBe(6);
+  });
+
+  it("agrees with what the shipped pty-host.ts actually contains today", () => {
+    expect(ipcFallbackMirrorMisses()).toBe(0);
   });
 });
 

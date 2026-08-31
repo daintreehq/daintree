@@ -198,6 +198,8 @@ let hooksInstalled = false;
  * `module.register` — whose hooks run in a worker — is the fallback. Under
  * Vitest neither fires because Vite resolves imports itself, which is why the
  * unit test hands {@link perfIpcEnvelopeElectronStub} to `vi.mock` instead.
+ *
+ * Called LAZILY, from `loadEnvelopeHarness()` — see the note below the body.
  */
 function installModuleStubs(): void {
   if (hooksInstalled) return;
@@ -231,7 +233,16 @@ function installModuleStubs(): void {
   nodeModule.register(dataUrl(HOOKS_SOURCE));
 }
 
-installModuleStubs();
+// NOT called at module scope. `scenarios/index.ts` imports every scenario
+// module, so a hook registered here would be live in every run of every family
+// — and this one answers for the bare `electron` specifier and for
+// `TelemetryService` process-wide. Its `TelemetryService` stub exports two
+// names; `GpuCrashMonitorService.ts` imports a third, so PERF-074..077 died at
+// link time on `does not provide an export named 'closeTelemetry'` before a
+// single iteration ran. Registering from `loadEnvelopeHarness()` instead keeps
+// the seam to the runs that asked for it.
+// `__tests__/moduleHookHygiene.test.ts` pins that: importing the whole scenario
+// matrix must register no module hook at all.
 
 const noop = (): undefined => undefined;
 
@@ -560,7 +571,10 @@ async function buildHarness(): Promise<EnvelopeHarness> {
 
 /** Load the graph and register the benchmark channels. Once per process. */
 export function loadEnvelopeHarness(): Promise<EnvelopeHarness> {
-  harnessPromise ??= buildHarness();
+  if (harnessPromise === null) {
+    installModuleStubs();
+    harnessPromise = buildHarness();
+  }
   return harnessPromise;
 }
 

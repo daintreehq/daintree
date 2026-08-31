@@ -78,7 +78,8 @@ import type { WorkerMemoryAccounting } from "../../../electron/services/pty/anal
  *     `FORCE_RESUME_MS` (10 s, the bounded-pause guarantee) and
  *     `REENGAGE_COOLDOWN_MS` (30 s) are wall-clock gates that back-to-back ticks
  *     never trip, so both are **out of frame** here.
- *   - **`DAINTREE_TERMINAL_METRICS` is forced on** (below), so the governor
+ *   - **`DAINTREE_TERMINAL_METRICS` is forced on** by `ensureFlowControlEnv()`,
+ *     from this family's own loader and nowhere else, so the governor
  *     sweep cost includes all five gated gauges. Production leaves them off by
  *     default, so the reported sweep duration is an upper bound;
  *     `gaugeEventCount` says how much of it is gauge work.
@@ -87,30 +88,52 @@ import type { WorkerMemoryAccounting } from "../../../electron/services/pty/anal
 // --- Environment, set before the subject graph is imported -------------------
 
 /**
- * Both of these are read ONCE, at module evaluation of the subject: `metrics.ts`
- * caches `DAINTREE_TERMINAL_METRICS` in a module constant, and
- * `ResourceGovernor.ts` resolves `DAINTREE_PTY_HEAP_BUDGET_MB` into
- * `HEAP_BUDGET_MB` at import. They are therefore set here at fixture module
- * scope, before the dynamic `import()` inside `loadFlowControlModules` runs.
- *
- * `??=` so an explicitly configured environment wins; the mirrored arithmetic
- * below reads the same variable back rather than assuming this file's default.
+ * The heap budget this family asks the governor for when the environment has no
+ * opinion of its own.
  *
  * 2048 MiB is a shipped value, not an invented one: it is what `PtyHostLifecycle`
  * gives a RAM-scaled fabric shard. It is preferred over the 512 legacy default
  * so the scripted worker-memory term stays the binding constraint by a wide
  * margin at every rung of the utilization ladder — see `workerTermDominates`.
  */
-process.env.DAINTREE_TERMINAL_METRICS ??= "1";
-process.env.DAINTREE_PTY_HEAP_BUDGET_MB ??= "2048";
+const PERF_HEAP_BUDGET_MB = 2048;
+
+/**
+ * Both variables are read ONCE, at module evaluation of the SUBJECT:
+ * `metrics.ts` caches `DAINTREE_TERMINAL_METRICS` in a module constant, and
+ * `ResourceGovernor.ts` resolves `DAINTREE_PTY_HEAP_BUDGET_MB` into its own
+ * `HEAP_BUDGET_MB` at import. So they only have to be set before the dynamic
+ * `import()` inside {@link loadFlowControlModules} runs, which is where this is
+ * called from.
+ *
+ * NOT at module scope. `scenarios/index.ts` imports every scenario module, so a
+ * write here would put `DAINTREE_TERMINAL_METRICS=1` into every perf process —
+ * and `process.env` is inherited by children, so the pty-host that
+ * `lib/ipcFixture.ts` forks for PERF-043..046 would emit gated gauges that
+ * production leaves off, in a family that never asked for them. Same defect
+ * class as a module-scope resolve hook, different global.
+ *
+ * `??=` so an explicitly configured environment still wins, and
+ * {@link mirroredHeapBudgetMb} falls back to the same default this sets, so the
+ * fixture's arithmetic and the subject's resolution agree in both cases.
+ */
+function ensureFlowControlEnv(): void {
+  process.env.DAINTREE_TERMINAL_METRICS ??= "1";
+  process.env.DAINTREE_PTY_HEAP_BUDGET_MB ??= String(PERF_HEAP_BUDGET_MB);
+}
 
 /**
  * A mirror of `ResourceGovernor.resolveHeapBudgetMb`, which is module-private
  * and cannot be imported. Mirrored rather than guessed so the predicted
  * utilization series is computed from the same rule the subject applies.
+ *
+ * Reads the environment when it carries a value and {@link PERF_HEAP_BUDGET_MB}
+ * when it does not — which is exactly what {@link ensureFlowControlEnv} will
+ * put there before the subject resolves its own copy.
  */
 function mirroredHeapBudgetMb(): number {
-  const raw = Number(process.env.DAINTREE_PTY_HEAP_BUDGET_MB);
+  const configured = process.env.DAINTREE_PTY_HEAP_BUDGET_MB;
+  const raw = Number(configured ?? PERF_HEAP_BUDGET_MB);
   if (Number.isFinite(raw) && raw >= 256 && raw <= 8192) return Math.floor(raw);
   return 512;
 }
@@ -178,7 +201,10 @@ async function importModules(): Promise<FlowControlModules> {
 
 /** Load the real pty-host flow-control graph. Once per process. */
 export function loadFlowControlModules(): Promise<FlowControlModules> {
-  modulesPromise ??= importModules();
+  if (modulesPromise === null) {
+    ensureFlowControlEnv();
+    modulesPromise = importModules();
+  }
   return modulesPromise;
 }
 
@@ -771,6 +797,20 @@ export function measureTimerOverheadNs(samples = 20_000): number {
 }
 
 /**
+ * Upper bound on the clock-read residual left inside a bracketed reading, in
+ * milliseconds.
+ *
+ * A bracket is two samples and carries roughly one sample's worth of overhead,
+ * so the residual is `samples / 2 ×` the per-sample cost. Every scenario that
+ * brackets per-operation must report this beside its headline: a scenario that
+ * measured the overhead and then dropped it is worse than one that never
+ * measured it, because the number looks clean and is not.
+ */
+export function timerOverheadMsFor(sampleCount: number, nsPerSample: number): number {
+  return (sampleCount / 2) * (nsPerSample / 1e6);
+}
+
+/**
  * Round-robin the fleet, one chunk per terminal per round, the way a fleet of
  * agents actually interleaves at the host.
  *
@@ -1012,23 +1052,93 @@ export async function gradeFlushCadence(
 }
 
 /**
+ * The collaborators `electron/pty-host.ts`'s IPC-fallback block touches.
+ *
+ * Narrow on purpose: the four `ipcQueueManager` members the block calls and
+ * nothing else. The real `IpcQueueManager` satisfies it structurally, and so
+ * does the recording stand-in {@link observeIpcFallbackSequences} drives the
+ * same mirror against — which is what lets the observation come from the real
+ * call sites rather than from a second hand-written list.
+ */
+export interface IpcFallbackQueue {
+  isAtCapacity(id: string, additionalBytes: number): boolean;
+  addBytes(id: string, bytes: number): number;
+  getUtilization(id: string): number;
+  applyBackpressure(id: string, utilization: number): boolean;
+}
+
+/** Accumulator {@link ipcFallbackWrite} adds into, reused across every write. */
+interface IpcWriteTally {
+  subjectMs: number;
+  timerSampleCount: number;
+}
+
+/**
+ * ONE chunk through the mirrored fallback block. Returns whether it was
+ * accepted.
+ *
+ * This is the single copy of the host's call order in the harness:
+ * {@link runIpcFlood} drives it under the real `IpcQueueManager`, and
+ * {@link observeIpcFallbackSequences} drives it under a recording stand-in to
+ * learn what order it actually performs. Both go through this body, so an edit
+ * here moves the measurement and the observation together — there is no second
+ * place to keep in sync.
+ *
+ * The drop branch reads utilization exactly as the host does before returning.
+ * The arms in this family never reach it (nothing in them is at capacity), so
+ * the observation is the only thing that exercises it.
+ */
+function ipcFallbackWrite(
+  queue: IpcFallbackQueue,
+  noteAccepted: ((id: string, bytes: number) => void) | null,
+  id: string,
+  bytes: number,
+  into: IpcWriteTally
+): boolean {
+  const gateAt = performance.now();
+  const atCapacity = queue.isAtCapacity(id, bytes);
+  into.subjectMs += performance.now() - gateAt;
+  into.timerSampleCount += 2;
+
+  if (atCapacity) {
+    const dropAt = performance.now();
+    queue.getUtilization(id);
+    into.subjectMs += performance.now() - dropAt;
+    into.timerSampleCount += 2;
+    return false;
+  }
+
+  // Ledger first, and OUTSIDE the bracket: `applyBackpressure` can emit, and an
+  // emission must be stamped with a ledger that already holds the chunk in
+  // flight.
+  noteAccepted?.(id, bytes);
+
+  const at = performance.now();
+  queue.addBytes(id, bytes);
+  queue.applyBackpressure(id, queue.getUtilization(id));
+  into.subjectMs += performance.now() - at;
+  into.timerSampleCount += 2;
+  return true;
+}
+
+/**
  * The IPC fallback's own drive shape.
  *
  * **This is a MIRROR of `electron/pty-host.ts`'s fallback block, not a call
  * into it.** `pty-host.ts` is a UtilityProcess entry point: it has zero
  * exports, and its module body throws at line 89 when `process.parentPort` is
  * absent, which it is in every plain Node process. There is no seam to import,
- * so the ordered call sequence below is reproduced here — the manager methods
- * are the real ones, but the ORDER they are called in is this fixture's copy of
- * the host's.
+ * so the ordered call sequence in {@link ipcFallbackWrite} is reproduced here —
+ * the manager methods are the real ones, but the ORDER they are called in is
+ * this fixture's copy of the host's.
  *
  * What can therefore drift without any queue-manager change: the capacity gate
  * moving after `addBytes`, the utilization read being hoisted or dropped, an
  * `applyBackpressure` call being added or removed, or the drop branch growing a
- * step. {@link ipcFallbackSequenceMisses} reads that ordered sequence back out
- * of `pty-host.ts`'s own source and compares it to what this function does, so
- * the drift is graded rather than trusted — see PERF-371's
- * `ipcFallbackSequenceMisses`.
+ * step. {@link ipcFallbackMirrorMisses} grades that in the direction that
+ * matters — what this fixture EXECUTES against what `pty-host.ts` contains —
+ * and {@link ipcFallbackSequenceMisses} pins the host source against the
+ * declared constant beside it. See PERF-371.
  *
  * There is no batcher on this path — the fallback writes chunk by chunk — and
  * `IpcQueueDeps` has no focused-terminal member, so this arm is where the focus
@@ -1042,45 +1152,92 @@ export function runIpcFlood(fleet: FlowControlFleet, plan: FloodPlan): FloodResu
   let writeCount = 0;
   let acceptedWriteCount = 0;
   let rejectedWriteCount = 0;
-  let subjectMs = 0;
-  let timerSampleCount = 0;
+  const tally: IpcWriteTally = { subjectMs: 0, timerSampleCount: 0 };
+  const noteAccepted = (writeId: string, bytes: number): void => {
+    fleet.recordWrite(writeId, bytes);
+  };
 
   const wallStart = performance.now();
   for (let round = 0; round < maxRounds; round += 1) {
     for (const id of ids) {
       if ((plan.chunksById.get(id) ?? 0) <= round) continue;
       writeCount += 1;
-      const gateAt = performance.now();
-      const atCapacity = fleet.ipcQueue.isAtCapacity(id, plan.chunkBytes);
-      subjectMs += performance.now() - gateAt;
-      timerSampleCount += 2;
-      if (atCapacity) {
+      if (ipcFallbackWrite(fleet.ipcQueue, noteAccepted, id, plan.chunkBytes, tally)) {
+        acceptedWriteCount += 1;
+      } else {
         rejectedWriteCount += 1;
-        continue;
       }
-      // Ledger first, and OUTSIDE the bracket: `applyBackpressure` can emit,
-      // and an emission must be stamped with a ledger that already holds the
-      // chunk in flight.
-      fleet.recordWrite(id, plan.chunkBytes);
-      acceptedWriteCount += 1;
-      const at = performance.now();
-      fleet.ipcQueue.addBytes(id, plan.chunkBytes);
-      fleet.ipcQueue.applyBackpressure(id, fleet.ipcQueue.getUtilization(id));
-      subjectMs += performance.now() - at;
-      timerSampleCount += 2;
     }
   }
   const wallMs = performance.now() - wallStart;
 
   return {
-    ms: subjectMs,
+    ms: tally.subjectMs,
     wallMs,
     writeCount,
     acceptedWriteCount,
     rejectedWriteCount,
     chunkBytes: plan.chunkBytes,
-    timerSampleCount,
+    timerSampleCount: tally.timerSampleCount,
   };
+}
+
+/** The two paths through the host's fallback block, as sequences of calls. */
+export interface IpcFallbackSequences {
+  /** The path an under-capacity chunk takes. */
+  accept: string[];
+  /** The path an at-capacity chunk takes, ending in the host's `return`. */
+  drop: string[];
+}
+
+/** Ignored by the recording stand-in; no real queue is involved. */
+const MIRROR_WITNESS_ID = "perf-ipc-fallback-witness";
+const MIRROR_WITNESS_BYTES = 4096;
+
+/**
+ * What {@link ipcFallbackWrite} ACTUALLY calls, in order, on each of its two
+ * paths — observed, not declared.
+ *
+ * The mirror is driven against a stand-in queue that records each member as it
+ * is entered and answers `atCapacity` for the arm being observed. Nothing is
+ * written down at the call sites and nothing is asserted about them: the names
+ * come from the interface members the mirror actually enters, so reordering the
+ * calls reorders this and deleting one deletes it. That is the half the old
+ * guard did not have — it compared `pty-host.ts` against a hand-written
+ * constant, so the mirror itself could drift from both and still score zero.
+ *
+ * Hermetic and free: no fleet, no real manager, no product import. Called once
+ * per iteration, outside every measured bracket.
+ */
+export function observeIpcFallbackSequences(): IpcFallbackSequences {
+  const observe = (atCapacity: boolean): string[] => {
+    const calls: string[] = [];
+    const recorder: IpcFallbackQueue = {
+      isAtCapacity(): boolean {
+        calls.push("isAtCapacity");
+        return atCapacity;
+      },
+      addBytes(): number {
+        calls.push("addBytes");
+        return MIRROR_WITNESS_BYTES;
+      },
+      getUtilization(): number {
+        calls.push("getUtilization");
+        return 0;
+      },
+      applyBackpressure(): boolean {
+        calls.push("applyBackpressure");
+        return false;
+      },
+    };
+    ipcFallbackWrite(recorder, null, MIRROR_WITNESS_ID, MIRROR_WITNESS_BYTES, {
+      subjectMs: 0,
+      timerSampleCount: 0,
+    });
+    return calls;
+  };
+
+  return { accept: observe(false), drop: observe(true) };
 }
 
 /**
@@ -1118,6 +1275,11 @@ const IPC_FALLBACK_BLOCK_MARKER = "if (!visualWritten && !isBackgrounded && !isS
  * that is dropped or hoisted, or an added step scores, and so does a block this
  * cannot find at all — the failure is reported, never resolved in the
  * convenient direction.
+ *
+ * It is NOT the whole guard, and on its own it was not enough: both sides of
+ * this comparison are outside the fixture, so `runIpcFlood`'s own calls could
+ * be reordered or dropped without moving either. {@link ipcFallbackMirrorMisses}
+ * is the term that grades the mirror itself.
  */
 export function ipcFallbackSequenceMisses(): number {
   let source: string;
@@ -1137,42 +1299,150 @@ export function ipcFallbackSequenceMisses(): number {
 export function ipcFallbackSequenceMissesIn(source: string): number {
   const calls = extractIpcFallbackSequence(source);
   if (calls === null) return IPC_FALLBACK_HOST_SEQUENCE.length;
+  return sequenceMisses(calls, IPC_FALLBACK_HOST_SEQUENCE);
+}
 
-  let misses = Math.abs(calls.length - IPC_FALLBACK_HOST_SEQUENCE.length);
-  const shared = Math.min(calls.length, IPC_FALLBACK_HOST_SEQUENCE.length);
-  for (let index = 0; index < shared; index += 1) {
-    if (calls[index] !== IPC_FALLBACK_HOST_SEQUENCE[index]) misses += 1;
+/**
+ * Index just past the delimiter that closes the one opening at `openAt`, or -1
+ * when they do not balance before the source ends.
+ *
+ * **Lexical, not syntax-aware.** It counts characters; it does not know about
+ * comments, string literals, template literals or regexes. A stray brace inside
+ * a comment or a string in the fallback block would move the block boundary and
+ * a literal `ipcQueueManager.foo(` in a comment would be counted as a call.
+ * Neither is true of `pty-host.ts` today, and the unit test drives the real
+ * file, but a full parse is the only thing that would make it impossible. What
+ * IS guaranteed is the failure direction: unbalanced input returns -1 and every
+ * caller turns that into the maximum miss count, never into a clean pass.
+ */
+function matchDelimiter(source: string, openAt: number, open: string, close: string): number {
+  let cursor = openAt + 1;
+  let depth = 1;
+  while (cursor < source.length && depth > 0) {
+    const char = source[cursor];
+    if (char === open) depth += 1;
+    else if (char === close) depth -= 1;
+    cursor += 1;
   }
-  return misses;
+  return depth === 0 ? cursor : -1;
+}
+
+/** Every `ipcQueueManager.<method>(` in a slice of source, in order. */
+function ipcQueueCallsIn(text: string): string[] {
+  const calls: string[] = [];
+  const pattern = /ipcQueueManager\.([A-Za-z0-9_]+)\s*\(/g;
+  let match = pattern.exec(text);
+  while (match !== null) {
+    calls.push(match[1] as string);
+    match = pattern.exec(text);
+  }
+  return calls;
+}
+
+/**
+ * The host's IPC-fallback block, or null when it cannot be located or its
+ * braces do not balance.
+ */
+function ipcFallbackBlock(source: string): string | null {
+  const markerAt = source.indexOf(IPC_FALLBACK_BLOCK_MARKER);
+  if (markerAt === -1) return null;
+  const openAt = markerAt + IPC_FALLBACK_BLOCK_MARKER.length - 1;
+  const end = matchDelimiter(source, openAt, "{", "}");
+  return end === -1 ? null : source.slice(markerAt, end);
 }
 
 /**
  * The ordered `ipcQueueManager.<method>` calls inside the host's IPC-fallback
  * block, or null when the block cannot be located or its braces do not balance.
+ *
+ * Flat: both branches in source order, which is the shape
+ * {@link IPC_FALLBACK_HOST_SEQUENCE} declares.
  */
 export function extractIpcFallbackSequence(source: string): string[] | null {
-  const markerAt = source.indexOf(IPC_FALLBACK_BLOCK_MARKER);
-  if (markerAt === -1) return null;
+  const block = ipcFallbackBlock(source);
+  return block === null ? null : ipcQueueCallsIn(block);
+}
 
-  let cursor = markerAt + IPC_FALLBACK_BLOCK_MARKER.length;
-  let depth = 1;
-  while (cursor < source.length && depth > 0) {
-    const char = source[cursor];
-    if (char === "{") depth += 1;
-    else if (char === "}") depth -= 1;
-    cursor += 1;
-  }
-  if (depth !== 0) return null;
+/** The `if` that opens the host's drop branch, inside the fallback block. */
+const IPC_DROP_BRANCH_MARKER = "if (ipcQueueManager.isAtCapacity(";
 
-  const block = source.slice(markerAt, cursor);
-  const calls: string[] = [];
-  const pattern = /ipcQueueManager\.([A-Za-z0-9_]+)\s*\(/g;
-  let match = pattern.exec(block);
-  while (match !== null) {
-    calls.push(match[1] as string);
-    match = pattern.exec(block);
+/**
+ * The host's fallback block split into the two paths a chunk can take, so the
+ * mirror can be compared against the branch it actually ran rather than against
+ * a flattened concatenation of both.
+ *
+ * Null when the block, the drop branch or its body cannot be located — a drop
+ * branch with no braced body (`if (…) return;`) included, which is a real
+ * enough restructure that resolving it in the convenient direction would be
+ * wrong.
+ */
+export function extractIpcFallbackSequences(source: string): IpcFallbackSequences | null {
+  const block = ipcFallbackBlock(source);
+  if (block === null) return null;
+
+  const dropAt = block.indexOf(IPC_DROP_BRANCH_MARKER);
+  if (dropAt === -1) return null;
+
+  // Past the `if (…)` condition, which is where the gate call itself lives.
+  const conditionOpenAt = dropAt + "if ".length;
+  const conditionEnd = matchDelimiter(block, conditionOpenAt, "(", ")");
+  if (conditionEnd === -1) return null;
+
+  const bodyOpenAt = block.slice(conditionEnd).search(/\S/) + conditionEnd;
+  if (block[bodyOpenAt] !== "{") return null;
+  const bodyEnd = matchDelimiter(block, bodyOpenAt, "{", "}");
+  if (bodyEnd === -1) return null;
+
+  const gate = ipcQueueCallsIn(block.slice(0, conditionEnd));
+  return {
+    accept: [...gate, ...ipcQueueCallsIn(block.slice(bodyEnd))],
+    drop: [...gate, ...ipcQueueCallsIn(block.slice(bodyOpenAt, bodyEnd))],
+  };
+}
+
+/** Positional diff of two call sequences; length differences count too. */
+function sequenceMisses(observed: readonly string[], expected: readonly string[]): number {
+  let misses = Math.abs(observed.length - expected.length);
+  const shared = Math.min(observed.length, expected.length);
+  for (let index = 0; index < shared; index += 1) {
+    if (observed[index] !== expected[index]) misses += 1;
   }
-  return calls;
+  return misses;
+}
+
+/**
+ * Whether the sequence this fixture EXECUTES is still the sequence
+ * `pty-host.ts` contains. 0 = no drift.
+ *
+ * The term {@link ipcFallbackSequenceMisses} could not provide. That one grades
+ * the host's source against {@link IPC_FALLBACK_HOST_SEQUENCE}, a constant
+ * maintained by hand — so {@link runIpcFlood}'s own calls could be reordered,
+ * or a step dropped, and both the constant and the source would sit unchanged
+ * at zero. This one takes the executed sequence from
+ * {@link observeIpcFallbackSequences} — recorded as the mirror enters each
+ * member, never declared — and compares each of its two paths against the
+ * matching branch parsed out of the host. The declared constant is now a third
+ * check rather than the only one.
+ */
+export function ipcFallbackMirrorMisses(): number {
+  let source: string;
+  try {
+    source = readFileSync(PTY_HOST_SOURCE_URL, "utf8");
+  } catch {
+    return IPC_FALLBACK_HOST_SEQUENCE.length;
+  }
+  return ipcFallbackMirrorMissesIn(source);
+}
+
+/**
+ * {@link ipcFallbackMirrorMisses} over a supplied source, so the unit test can
+ * drive the drift cases without editing product code.
+ */
+export function ipcFallbackMirrorMissesIn(source: string): number {
+  const observed = observeIpcFallbackSequences();
+  const host = extractIpcFallbackSequences(source);
+  if (host === null) return observed.accept.length + observed.drop.length;
+  return sequenceMisses(observed.accept, host.accept) + sequenceMisses(observed.drop, host.drop);
 }
 
 /**

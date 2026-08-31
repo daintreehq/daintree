@@ -22,7 +22,9 @@ import {
   createFleet,
   gradeFlushCadence,
   loadFlowControlModules,
+  measureTimerOverheadNs,
   runFlood,
+  timerOverheadMsFor,
   type FleetSpec,
 } from "../lib/ptyFlowControlFixture";
 import {
@@ -393,7 +395,7 @@ export const soakScenarios: PerfScenario[] = [
     id: "PERF-063",
     name: "PortBatcher Flush Allocation: Zero-Copy vs Copy",
     description:
-      "The real PortBatcher's flush allocation under a 400 MiB agent-output flood, in both of the shapes production actually produces. pty-host.ts sets `owned = targets.length === 1`, so a one-window app takes mergeChunks' zero-copy fast path on every single-chunk flush and a two-window app takes the allocate-and-copy on every flush of the same bytes for both of its batchers. Minor-GC count and pause are reported per arm, so the number is what the second window costs rather than what a retired code path used to cost. Graded in BOTH directions on the merge branch, which is also the PR #4639 invariant: the one-window arm's payload must be the exact object that was written (a batcher that copies anyway scores zeroCopyMisses) and the two-window arm's payload must never be (a batcher that hands on a shared chunk for transfer would detach a node-pty slab under its sibling, and scores copyPathMisses). The reported duration is the two arms' own write-and-flush time, not the outer wall clock: fleet construction, the queue acknowledgements between batches, the GC observer's timer turns and disposal are none of them the subject.",
+      "The real PortBatcher's flush allocation under a 400 MiB agent-output flood, in both of the shapes production actually produces. pty-host.ts sets `owned = targets.length === 1`, so a one-window app takes mergeChunks' zero-copy fast path on every single-chunk flush and a two-window app takes the allocate-and-copy on every flush of the same bytes for both of its batchers. Minor-GC count and pause are reported per arm, so the number is what the second window costs rather than what a retired code path used to cost. Graded in BOTH directions on the merge branch, which is also the PR #4639 invariant: the one-window arm's payload must be the exact object that was written (a batcher that copies anyway scores zeroCopyMisses) and the two-window arm's payload must never be (a batcher that hands on a shared chunk for transfer would detach a node-pty slab under its sibling, and scores copyPathMisses). The reported duration is the two arms' own write-and-flush time, not the outer wall clock: fleet construction, the queue acknowledgements between batches, the GC observer's timer turns and disposal are none of them the subject. What that isolation costs is on the record rather than buried in the headline: the per-write bracketing takes two performance.now() calls per write across ~409,600 writes, and timerSampleCount, timerSampleNs and timerOverheadMs report the residual for the pair and for each arm.",
     tier: "soak",
     modes: ["nightly", "soak"],
     iterations: { nightly: 3, soak: 6 },
@@ -435,6 +437,7 @@ export const soakScenarios: PerfScenario[] = [
         let rejected = 0;
         let ms = 0;
         let wallMs = 0;
+        let timerSampleCount = 0;
         try {
           const gc = await measureMinorGc(() => {
             for (let batch = 0; batch < batches; batch += 1) {
@@ -451,6 +454,7 @@ export const soakScenarios: PerfScenario[] = [
               rejected += flood.rejectedWriteCount;
               ms += flood.ms;
               wallMs += flood.wallMs;
+              timerSampleCount += flood.timerSampleCount;
               // Acknowledge so no watermark is ever reached: a pause on either
               // arm would put different work in the two brackets.
               ackAllQueues(fleet);
@@ -460,6 +464,7 @@ export const soakScenarios: PerfScenario[] = [
             gc,
             ms,
             wallMs,
+            timerSampleCount,
             accepted,
             rejected,
             windowCount,
@@ -476,6 +481,13 @@ export const soakScenarios: PerfScenario[] = [
           fleet.dispose();
         }
       };
+
+      // Outside every bracket below, and reported rather than folded away:
+      // runFlood isolates the subject with two performance.now() calls per
+      // write, and at ~409,600 writes across the two arms that residual is
+      // part of the headline whether or not anybody names it. PERF-370/371
+      // report the same three terms.
+      const timerOverheadNs = measureTimerOverheadNs();
 
       const outerStartedAt = performance.now();
       const single = await armResult(1);
@@ -541,6 +553,14 @@ export const soakScenarios: PerfScenario[] = [
           copyPathArmMs: dual.ms,
           floodWallMs: single.wallMs + dual.wallMs,
           outerWallMs,
+          timerSampleCount: single.timerSampleCount + dual.timerSampleCount,
+          timerSampleNs: timerOverheadNs,
+          timerOverheadMs: timerOverheadMsFor(
+            single.timerSampleCount + dual.timerSampleCount,
+            timerOverheadNs
+          ),
+          timerOverheadMsZeroCopy: timerOverheadMsFor(single.timerSampleCount, timerOverheadNs),
+          timerOverheadMsCopyPath: timerOverheadMsFor(dual.timerSampleCount, timerOverheadNs),
           cadenceImmediateDeliveryCount: cadence.immediateDeliveryCount,
           cadenceThroughputDeliveryCount: cadence.throughputDeliveryCount,
           deliveryMisses,
