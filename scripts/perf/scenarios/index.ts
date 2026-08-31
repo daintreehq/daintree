@@ -20,6 +20,7 @@ import { fileSearchScenarios } from "./fileSearch";
 import { terminalSearchScenarios } from "./terminalSearch";
 import { scrollbackSnapshotScenarios } from "./scrollbackSnapshot";
 import { actionDispatchScenarios } from "./actionDispatch";
+import { pluginHostScenarios } from "./pluginHost";
 
 export const allScenarios: PerfScenario[] = [
   ...startupScenarios,
@@ -43,6 +44,7 @@ export const allScenarios: PerfScenario[] = [
   ...terminalSearchScenarios,
   ...scrollbackSnapshotScenarios,
   ...actionDispatchScenarios,
+  ...pluginHostScenarios,
 ];
 
 export function getScenariosForMode(mode: PerfMode): PerfScenario[] {
@@ -144,6 +146,12 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-203",
   "PERF-204",
   "PERF-205",
+  "PERF-220",
+  "PERF-221",
+  "PERF-222",
+  "PERF-223",
+  "PERF-224",
+  "PERF-225",
 ]);
 
 /**
