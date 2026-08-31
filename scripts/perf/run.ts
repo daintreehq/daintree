@@ -612,12 +612,16 @@ function sanitizeForFilename(value: string): string {
 }
 
 /**
- * One small tracked file per mode per machine, overwritten each run.
+ * One small UNTRACKED file per mode per machine, merged into on each run.
  *
- * `git log -p scripts/perf/history/` is the point — one measurement per line,
- * so a diff names which scenario moved and by how much. It carries p95 and each
- * metric's max and sum, and nothing else; a full summary per run would be too
- * large to read a diff of, which is the only thing this file is for.
+ * It was tracked, on the theory that `git log -p scripts/perf/history/` would
+ * answer "when did this get slower" months later. That is no longer true and
+ * the claim is removed rather than left standing: the file runs to thousands of
+ * lines, is rewritten by every canonical run, and its name carries a machine
+ * label, which in a public repo is somebody's hostname. Read the file directly.
+ * It carries p95 and each metric's max and sum, and nothing else; a full
+ * summary per run would be too large to read, which is the only thing this file
+ * is for.
  *
  * Metric stats are flattened to `<metric>.max` / `<metric>.sum` scalars rather
  * than nested as an array or a sub-object. Two reasons, same root: an array

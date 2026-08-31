@@ -161,11 +161,47 @@ describe("checkBaselineCoverage", () => {
 describe("committed baselines name only live scenarios", () => {
   const CONFIG_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "config");
 
-  const liveIds = new Set(allScenarios.map((entry) => entry.id));
-
   const baselineFiles = readdirSync(CONFIG_DIR)
     .filter((name) => name.startsWith("baseline.") && name.endsWith(".json"))
     .sort();
+
+  /**
+   * Ids a given mode can actually compare against.
+   *
+   * Scoped per mode, not to the whole matrix: `baseline.soak.json` holding a
+   * reference for a smoke-only scenario is exactly as uncomparable as one for a
+   * scenario that was deleted, because no soak run will ever produce a number
+   * to put beside it.
+   */
+  function liveIdsForMode(mode: string): Set<string> {
+    return new Set(
+      allScenarios
+        .filter((entry) => (entry.modes as readonly string[]).includes(mode))
+        .map((entry) => entry.id)
+    );
+  }
+
+  /**
+   * Both supported shapes, merged rather than preferred.
+   *
+   * `scenarios ?? p95ByScenario` silently ignores legacy entries in a file
+   * carrying both, which is the state a partly-migrated baseline is in — and a
+   * partly-migrated baseline is precisely where an orphan hides.
+   */
+  function referencedIds(parsed: unknown): { ids: string[]; keysFound: string[] } {
+    if (typeof parsed !== "object" || parsed === null) return { ids: [], keysFound: [] };
+    const record = parsed as Record<string, unknown>;
+    const ids: string[] = [];
+    const keysFound: string[] = [];
+    for (const key of ["scenarios", "p95ByScenario"] as const) {
+      const map = record[key];
+      if (typeof map === "object" && map !== null) {
+        keysFound.push(key);
+        ids.push(...Object.keys(map));
+      }
+    }
+    return { ids: [...new Set(ids)], keysFound };
+  }
 
   it("finds baseline files to check", () => {
     // A rename that emptied this list would turn every assertion below into a
@@ -173,19 +209,33 @@ describe("committed baselines name only live scenarios", () => {
     expect(baselineFiles.length).toBeGreaterThan(0);
   });
 
-  it.each(baselineFiles)("%s references no retired scenario", (name) => {
+  it.each(baselineFiles)("%s is readable and carries references", (name) => {
+    // Asserted separately from the orphan check below, because every way this
+    // can go wrong — a renamed key, an empty map, a shape nobody recognises —
+    // yields ZERO ids, and zero ids pass an orphan check trivially. A guard
+    // whose silent-failure mode is a green tick is not a guard.
     const parsed: unknown = JSON.parse(readFileSync(path.join(CONFIG_DIR, name), "utf8"));
-    const entries =
-      typeof parsed === "object" && parsed !== null
-        ? ((parsed as Record<string, unknown>).scenarios ??
-          (parsed as Record<string, unknown>).p95ByScenario)
-        : undefined;
-    const ids = typeof entries === "object" && entries !== null ? Object.keys(entries) : [];
+    const { ids, keysFound } = referencedIds(parsed);
+    expect(keysFound, `${name} has neither a "scenarios" nor a "p95ByScenario" map`).not.toEqual(
+      []
+    );
+    expect(ids.length, `${name} carries no references at all`).toBeGreaterThan(0);
+  });
 
-    const orphans = ids.filter((id) => !liveIds.has(id));
+  it.each(baselineFiles)("%s references no scenario its mode cannot run", (name) => {
+    const parsed: unknown = JSON.parse(readFileSync(path.join(CONFIG_DIR, name), "utf8"));
+    const mode = name.replace(/^baseline\./, "").replace(/\.json$/, "");
+    const live = liveIdsForMode(mode);
+    expect(
+      live.size,
+      `no scenario declares mode "${mode}" — is the filename right?`
+    ).toBeGreaterThan(0);
+
+    const { ids } = referencedIds(parsed);
+    const orphans = ids.filter((id) => !live.has(id));
     expect(
       orphans,
-      `${name} carries references for scenarios that no longer exist: ${orphans.join(", ")}. ` +
+      `${name} carries references for scenarios ${mode} cannot run: ${orphans.join(", ")}. ` +
         "A reference that can never be compared is litter — delete the entries."
     ).toEqual([]);
   });
