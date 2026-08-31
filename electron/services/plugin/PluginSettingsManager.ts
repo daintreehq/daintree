@@ -1,5 +1,9 @@
 import path from "path";
-import { SCOPED_PLUGIN_NAME_PATTERN } from "../../schemas/pluginIdentifiers.js";
+import {
+  isSafePluginInstanceId,
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
+} from "./projectPluginIdentity.js";
 import { PluginSettingsStore } from "../PluginSettingsStore.js";
 import { projectStore } from "../ProjectStore.js";
 import type {
@@ -103,7 +107,15 @@ export class PluginSettingsManager {
       // app-global active project is the only target they can mean.
       const root = projectRoot == null ? projectStore.getCurrentProject()?.path : projectRoot;
       if (!root) return undefined;
-      return path.join(root, ".daintree", "plugin-settings", `${pluginId}.json`);
+      // Named by the MANIFEST id, not the instance key: this file lives in the
+      // git-tracked `<projectRoot>/.daintree/`, and an instance key carries this
+      // machine's project id. The project root already isolates it.
+      return path.join(
+        root,
+        ".daintree",
+        "plugin-settings",
+        `${pluginManifestIdFromInstanceKey(pluginId)}.json`
+      );
     }
     return path.join(this.settingsRoot(), `${pluginId}.json`);
   }
@@ -325,7 +337,7 @@ export class PluginSettingsManager {
     // Defense-in-depth: pluginId is joined onto the settings root for fs reads
     // and writes, so reject anything that isn't a scoped plugin name before any
     // path.join — blocks `..` traversal and separators (mirrors uninstallPlugin).
-    if (!SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+    if (!isSafePluginInstanceId(pluginId)) {
       throw new Error("plugin settings: pluginId must be a scoped plugin name (publisher.name)");
     }
     if (scope !== "user" && scope !== "project") {
@@ -333,9 +345,22 @@ export class PluginSettingsManager {
     }
     if (scope === "project") {
       if (!projectId) return null;
+      // A project plugin's settings form may only address ITS OWN project. Both
+      // halves come from the renderer here, so without this check a form could
+      // pair project A's plugin instance with project B's id and read or write
+      // B's git-tracked settings file under A's plugin name.
+      const boundProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (boundProjectId !== null && boundProjectId !== projectId) {
+        throw new Error("plugin settings: plugin belongs to a different project");
+      }
       const root = projectStore.getProjectById(projectId)?.path;
       if (!root) return null;
-      return path.join(root, ".daintree", "plugin-settings", `${pluginId}.json`);
+      return path.join(
+        root,
+        ".daintree",
+        "plugin-settings",
+        `${pluginManifestIdFromInstanceKey(pluginId)}.json`
+      );
     }
     return path.join(this.settingsRoot(), `${pluginId}.json`);
   }

@@ -1209,6 +1209,22 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, request: import("../plugin.js").PluginPickPathRequest];
     result: string | null;
   };
+  "plugin:project-activate-staged": {
+    args: [pluginId: string];
+    result: void;
+  };
+  "plugin:project-list": {
+    args: [];
+    result: import("../plugin.js").ProjectPluginInfo[];
+  };
+  "plugin:project-reload": {
+    args: [];
+    result: void;
+  };
+  "plugin:project-set-trust": {
+    args: [decision: import("../plugin.js").ProjectPluginTrustDecision];
+    result: void;
+  };
   "plugin:recipe-metadata-update": {
     args: [recipeId: string, updates: import("../project.js").PluginRecipeMetadataPatch];
     result: import("../project.js").TerminalRecipe;

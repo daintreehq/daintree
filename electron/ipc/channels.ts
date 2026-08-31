@@ -992,6 +992,14 @@ export const CHANNELS = {
   PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
   PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",
   PLUGIN_PANEL_KINDS_GET: "plugin:panel-kinds-get",
+  /** Project-local plugins: the sender project's rows, valid and invalid alike. */
+  PLUGIN_PROJECT_LIST: "plugin:project-list",
+  /** Project-local plugins: record the trust decision for the SENDER's project. */
+  PLUGIN_PROJECT_SET_TRUST: "plugin:project-set-trust",
+  /** Project-local plugins: one-click activation of a staged plugin. */
+  PLUGIN_PROJECT_ACTIVATE_STAGED: "plugin:project-activate-staged",
+  /** Project-local plugins: manual re-scan of the sender project's plugins folder. */
+  PLUGIN_PROJECT_RELOAD: "plugin:project-reload",
   /** Lazy activation: force the plugin owning a contributed panel view to `activate()` before its module loads. */
   PLUGIN_ACTIVATE_FOR_VIEW: "plugin:activate-for-view",
   /** Renderer reports plugin panel lifecycle transitions (mounted/hidden/trashed/removed) for worker delivery. */

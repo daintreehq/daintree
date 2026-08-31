@@ -1,5 +1,6 @@
 import path from "path";
 import { PluginSettingsStore } from "../PluginSettingsStore.js";
+import { pluginManifestIdFromInstanceKey } from "./projectPluginIdentity.js";
 import { projectStore } from "../ProjectStore.js";
 import type { PluginStorageScope } from "../../../shared/types/plugin.js";
 import {
@@ -110,6 +111,13 @@ export class PluginStorageManager {
     scope: PluginStorageScope,
     target?: ExplicitStorageTarget
   ): Promise<string | undefined> {
+    // In-repository files are named by the MANIFEST id, never by the instance
+    // key. A project plugin's instance key embeds this machine's project id,
+    // and `<projectRoot>/.daintree/` is git-tracked — writing that id into a
+    // filename would commit one developer's local identity into everyone's
+    // checkout, and a fresh clone at a different path would then read nothing.
+    // The project root already provides the isolation the key would.
+    const repoFileId = pluginManifestIdFromInstanceKey(pluginId);
     if (scope === "worktree") {
       // Nullish, not falsy: an empty-string path is a caller bug, and treating it
       // as "unbound" would silently target whatever worktree is active instead.
@@ -120,15 +128,17 @@ export class PluginStorageManager {
           ? await this.deps.getActiveWorktreePath()
           : target.worktreePath;
       if (!root) return undefined;
-      return path.join(root, ".daintree", "plugin-storage", `${pluginId}.json`);
+      return path.join(root, ".daintree", "plugin-storage", `${repoFileId}.json`);
     }
     if (scope === "project") {
       // Same nullish rule, and the same app-global fallback for an unbound plugin.
       const root =
         target?.projectRoot == null ? projectStore.getCurrentProject()?.path : target.projectRoot;
       if (!root) return undefined;
-      return path.join(root, ".daintree", "plugin-storage", `${pluginId}.json`);
+      return path.join(root, ".daintree", "plugin-storage", `${repoFileId}.json`);
     }
+    // User scope stays keyed by the INSTANCE: two projects shipping the same
+    // manifest id are two different plugins, and they must not share a store.
     return path.join(this.storageRoot(), `${pluginId}.json`);
   }
 

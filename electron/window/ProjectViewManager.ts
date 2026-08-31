@@ -25,6 +25,7 @@ import type { AgentState } from "../../shared/types/agent.js";
 import * as PaintGateController from "./ProjectViewPaintGateController.js";
 import { performSwitch } from "./ProjectViewSwitchController.js";
 import { cleanupEntry } from "./ProjectViewLifecycleController.js";
+import { notifyProjectPluginsOpened } from "./projectPluginLifecycle.js";
 import * as EvictionController from "./ProjectViewEvictionController.js";
 import { hasActiveAgent, initAgentStateCache } from "./ProjectViewAgentStateCache.js";
 import type { PaintGate, PaintGateOutcome, ViewEntry } from "./ProjectViewManagerTypes.js";
@@ -480,6 +481,10 @@ export class ProjectViewManager {
     this.webContentsToProject.set(view.webContents.id, projectId);
     registerProjectView(projectId, view.webContents);
     this.activeProjectId = projectId;
+    // The startup view never goes through `performSwitch`, so it needs its own
+    // open signal — otherwise a relaunch straight into a trusted project would
+    // load none of its plugins until the user switched away and back.
+    notifyProjectPluginsOpened(projectId, projectPath);
   }
 
   /**

@@ -3,6 +3,7 @@ import path from "path";
 import { CHANNELS } from "../../channels.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { notifyProjectPluginsClosed } from "../../../window/projectPluginLifecycle.js";
 import {
   collectActiveProjectIds,
   projectViewManagersFrom,
@@ -135,6 +136,11 @@ export async function removeProjectWithCleanup(
       });
     }
   }
+
+  // Before the row disappears: a removed project's plugins must not outlive it,
+  // and after `removeProject` the controller could no longer resolve the
+  // project to reconcile it away.
+  notifyProjectPluginsClosed(projectId);
 
   await projectStore.removeProject(projectId);
   if (removedPath) {
@@ -339,6 +345,14 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
           projectStore.clearCurrentProject();
         }
         projectStore.updateProjectStatus(projectId, "closed");
+
+        // The user closed this project, so every plugin it owns unloads now:
+        // contributions unregistered, `plugin://` authorities invalidated,
+        // workers killed by the unload cascade. Deliberately NOT wired to
+        // `cleanupEntry` — that funnel is also how a memory-pressure eviction
+        // reclaims a renderer, and an eviction is not a close. The trust
+        // decision is not forgotten here; a close is not a revoke.
+        notifyProjectPluginsClosed(projectId);
 
         // After the "closed" write, not merely after clearCurrentProject(): the
         // closing window's ProjectViewManager still points at this project, so

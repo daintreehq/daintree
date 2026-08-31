@@ -1,4 +1,8 @@
-import type { PluginManifest } from "../../../shared/types/plugin.js";
+import type {
+  PluginHostBinding,
+  PluginManifest,
+  PluginOrigin,
+} from "../../../shared/types/plugin.js";
 
 export interface ValidateFn {
   (data: unknown): boolean;
@@ -13,6 +17,19 @@ export interface LoadedPlugin {
   resolvedMain?: string;
   loadedAt: number;
   isBuiltin: boolean;
+  /**
+   * Which root this instance was discovered under. `isBuiltin` still answers
+   * "does it run on the in-process loader?"; this answers "where did it come
+   * from?", which is the question the three roots could not express once a
+   * fourth, project-owned one existed.
+   */
+  origin?: PluginOrigin;
+  /**
+   * The project this instance belongs to, captured at load and handed to every
+   * host closure. Absent (or unbound) for installed and builtin plugins, which
+   * stay app-global by design.
+   */
+  binding?: PluginHostBinding;
   /** SHA-256 hex digest of the `.dntr` archive, set by the installer at install time. */
   archiveHash?: string;
   /**

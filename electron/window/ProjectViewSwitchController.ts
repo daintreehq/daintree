@@ -31,6 +31,7 @@ import {
   getUnboundOutgoingView,
   pruneOrphanedChildren,
 } from "./ProjectViewLifecycleController.js";
+import { notifyProjectPluginsOpened } from "./projectPluginLifecycle.js";
 import { setupViewHandlers } from "./ProjectViewHandlers.js";
 import { evictStaleViews } from "./ProjectViewEvictionController.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
@@ -227,6 +228,7 @@ export async function performSwitch(
     } catch (error) {
       console.error("[ProjectViewManager] pruneOrphanedChildren threw:", error);
     }
+    notifyProjectPluginsOpened(projectId, projectPath);
     return { view: cached.view, isNew: false };
   }
 
@@ -641,6 +643,12 @@ export async function performSwitch(
   } catch (error) {
     console.error("[ProjectViewManager] pruneOrphanedChildren threw:", error);
   }
+
+  // After `registerProjectView` above, never before: registration alone fires
+  // no contribution broadcast, so a plugin loaded into an unregistered view
+  // would stay invisible to it until some unrelated mutation happened to
+  // publish a fresh snapshot.
+  notifyProjectPluginsOpened(projectId, projectPath);
 
   return { view, isNew: true };
 }

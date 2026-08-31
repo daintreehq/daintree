@@ -1616,11 +1616,18 @@ async function ensureCapabilityConsent(
   // capability disclosure and likewise skip JIT consent.
   if (plugin.isBuiltin) return;
   const displayName = plugin.manifest.displayName ?? plugin.manifest.name;
+  // The scope is taken from the instance's own binding, not from a parameter
+  // and not from focus. `ensureAllowed`'s scope argument is optional, so nothing
+  // in the type system would have caught omitting it — and omitting it keys
+  // every grant under `"global"`, which would let one project's approval of
+  // `shell:exec` answer for a different project's copy of the same plugin id.
+  const scopeKey = plugin.binding?.projectId ?? "global";
   await getPluginCapabilityConsentService().ensureAllowed(
     pluginId,
     displayName,
     capability,
-    plugin.manifest.capabilities ?? []
+    plugin.manifest.capabilities ?? [],
+    scopeKey
   );
 }
 

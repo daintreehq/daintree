@@ -19,6 +19,10 @@ const mockGetActiveWorktreeIdForWindow =
 const mockGetProjectForWebContents = vi.fn<(webContentsId: number) => string | null>();
 const mockGetWindowForWebContents = vi.fn<(wc: { id: number }) => { id: number } | null>();
 const mockIsCachedViewWebContents = vi.fn<(webContentsId: number) => boolean>();
+const mockListProjectPlugins = vi.fn();
+const mockSetProjectPluginTrust = vi.fn();
+const mockActivateStagedProjectPlugin = vi.fn();
+const mockReloadProjectPlugins = vi.fn();
 
 // plugin:invoke resolves the sender's project/worktree through the registry
 // (#11297). Mocked so a test can register a sender without standing up a real
@@ -68,6 +72,10 @@ vi.mock("../../../services/PluginService.js", () => ({
       mockRecordPluginRecipeUse(recipeId, timestamp),
     updatePluginRecipeMetadata: (recipeId: string, updates: unknown) =>
       mockUpdatePluginRecipeMetadata(recipeId, updates),
+    listProjectPlugins: (...args: unknown[]) => mockListProjectPlugins(...args),
+    setProjectPluginTrust: (...args: unknown[]) => mockSetProjectPluginTrust(...args),
+    activateStagedProjectPlugin: (...args: unknown[]) => mockActivateStagedProjectPlugin(...args),
+    reloadProjectPlugins: (...args: unknown[]) => mockReloadProjectPlugins(...args),
   },
 }));
 
@@ -161,7 +169,7 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(43);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(47);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:recipes-get", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
@@ -2611,5 +2619,125 @@ describe("plugin install jobs (#11302)", () => {
       mockRecordPluginRecipeUse.mockRejectedValueOnce(new Error("Plugin recipe x not found"));
       await expect(handler({}, "ghost.plugin.x", 1)).rejects.toThrow(/not found/);
     });
+  });
+});
+
+describe("project-local plugin handlers", () => {
+  const PROJECT = "a".repeat(64);
+
+  function getHandler(channel: string) {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === channel)![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  beforeEach(() => {
+    mockListProjectPlugins.mockReturnValue([]);
+    mockSetProjectPluginTrust.mockResolvedValue(undefined);
+    mockActivateStagedProjectPlugin.mockResolvedValue(undefined);
+    mockReloadProjectPlugins.mockResolvedValue(undefined);
+  });
+
+  it("resolves the project from the SENDER, never from an argument", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    mockListProjectPlugins.mockReturnValue([{ projectId: PROJECT, id: "acme.dashboard" }]);
+
+    const result = await getHandler("plugin:project-list")({ sender: { id: 1 } });
+
+    expect(mockListProjectPlugins).toHaveBeenCalledWith(PROJECT);
+    expect(result).toEqual([{ projectId: PROJECT, id: "acme.dashboard" }]);
+  });
+
+  it("returns an empty list for a sender with no project binding", async () => {
+    mockGetProjectForWebContents.mockReturnValue(null);
+    expect(await getHandler("plugin:project-list")({ sender: { id: 1 } })).toEqual([]);
+    expect(mockListProjectPlugins).not.toHaveBeenCalled();
+  });
+
+  it("records a trust decision against the sender's project", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    await getHandler("plugin:project-set-trust")({ sender: { id: 1 } }, "enabled");
+    expect(mockSetProjectPluginTrust).toHaveBeenCalledWith(PROJECT, "enabled");
+  });
+
+  it("rejects an unknown trust decision", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    await expect(
+      getHandler("plugin:project-set-trust")({ sender: { id: 1 } }, "always")
+    ).rejects.toThrow(/invalid trust decision/);
+    expect(mockSetProjectPluginTrust).not.toHaveBeenCalled();
+  });
+
+  it("refuses to record trust for a sender with no project", async () => {
+    mockGetProjectForWebContents.mockReturnValue(null);
+    await expect(
+      getHandler("plugin:project-set-trust")({ sender: { id: 1 } }, "enabled")
+    ).rejects.toThrow(/no project/);
+  });
+
+  it("activates a staged plugin by manifest id and rejects a malformed one", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    await getHandler("plugin:project-activate-staged")({ sender: { id: 1 } }, "acme.dashboard");
+    expect(mockActivateStagedProjectPlugin).toHaveBeenCalledWith(PROJECT, "acme.dashboard");
+
+    await expect(
+      getHandler("plugin:project-activate-staged")({ sender: { id: 1 } }, "../../etc/passwd")
+    ).rejects.toThrow(/scoped plugin name/);
+  });
+
+  it("reloads the sender's project only", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    await getHandler("plugin:project-reload")({ sender: { id: 1 } });
+    expect(mockReloadProjectPlugins).toHaveBeenCalledWith(PROJECT);
+  });
+});
+
+describe("plugin:invoke project binding", () => {
+  const PROJECT_A = "a".repeat(64);
+  const PROJECT_B = "b".repeat(64);
+  const INSTANCE_A = `project__${PROJECT_A}__acme.dashboard`;
+  const trustedEvent = { senderFrame: { url: "app://daintree/" }, sender: { id: 33 } };
+
+  function invokeHandler() {
+    registerPluginHandlers();
+    return mockIpcMainHandle.mock.calls.find((c: unknown[]) => c[0] === "plugin:invoke")![1] as (
+      ...args: unknown[]
+    ) => unknown;
+  }
+
+  it("rejects a project plugin invoked from a different project's renderer", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(invokeHandler()(trustedEvent, INSTANCE_A, "get-data")).rejects.toThrow(
+      /different project/
+    );
+    expect(mockDispatchHandler).not.toHaveBeenCalled();
+  });
+
+  it("rejects a project plugin invoked from a renderer with no project", async () => {
+    mockGetProjectForWebContents.mockReturnValue(null);
+    await expect(invokeHandler()(trustedEvent, INSTANCE_A, "get-data")).rejects.toThrow(
+      /different project/
+    );
+    expect(mockDispatchHandler).not.toHaveBeenCalled();
+  });
+
+  it("allows a project plugin invoked from its own project's renderer", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_A);
+    mockDispatchHandler.mockResolvedValue({ ok: true });
+    await invokeHandler()(trustedEvent, INSTANCE_A, "get-data");
+    expect(mockDispatchHandler).toHaveBeenCalledWith(
+      INSTANCE_A,
+      "get-data",
+      expect.objectContaining({ projectId: PROJECT_A, pluginId: INSTANCE_A }),
+      []
+    );
+  });
+
+  it("leaves an app-global plugin id unconstrained by the sender's project", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    mockDispatchHandler.mockResolvedValue({ ok: true });
+    await invokeHandler()(trustedEvent, "acme.dashboard", "get-data");
+    expect(mockDispatchHandler).toHaveBeenCalled();
   });
 });

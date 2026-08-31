@@ -82,6 +82,14 @@ import type {
   PluginPanelLifecycleEvent,
 } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
+import {
+  isSafePluginInstanceId,
+  projectIdFromPluginInstanceKey,
+} from "../../services/plugin/projectPluginIdentity.js";
+import type {
+  ProjectPluginInfo,
+  ProjectPluginTrustDecision,
+} from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
 import {
@@ -1148,6 +1156,59 @@ async function handleSettingsRevealSecret(
   return (await getPluginService()).revealSecretSettingForUi(pluginId, key, scope, projectId);
 }
 
+/**
+ * Project-local plugin rows for the SENDER's project.
+ *
+ * The project is resolved from the sender's own view registration, never from a
+ * renderer-supplied id — the same reason the pull-on-mount contribution
+ * handlers do it: a compromised or merely confused renderer must not be able to
+ * read, or act on, another project's plugin state. A sender with no project
+ * binding (the picker window, an unbound window) legitimately has none, and
+ * gets an empty list rather than the active project's.
+ */
+async function handleProjectPluginsList(ctx: IpcContext): Promise<ProjectPluginInfo[]> {
+  if (!ctx.projectId) return [];
+  const svc = await getPluginService();
+  return svc.listProjectPlugins(ctx.projectId);
+}
+
+/**
+ * Record the trust decision for the sender's project. `"session"` is held in
+ * memory only; `"enabled"` and `"disabled"` persist. Revoking (`"disabled"`)
+ * unloads every plugin the project owns and purges its capability grants.
+ */
+async function handleProjectPluginsSetTrust(
+  ctx: IpcContext,
+  decision: ProjectPluginTrustDecision
+): Promise<void> {
+  if (!ctx.projectId) throw new Error("project plugins: sender has no project");
+  if (decision !== "enabled" && decision !== "disabled" && decision !== "session") {
+    throw new Error("project plugins: invalid trust decision");
+  }
+  const svc = await getPluginService();
+  await svc.setProjectPluginTrust(ctx.projectId, decision);
+}
+
+/** One-click activation of a plugin the project staged rather than ran. */
+async function handleProjectPluginsActivateStaged(
+  ctx: IpcContext,
+  pluginId: string
+): Promise<void> {
+  if (!ctx.projectId) throw new Error("project plugins: sender has no project");
+  if (typeof pluginId !== "string" || !SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+    throw new Error("project plugins: pluginId must be a scoped plugin name (publisher.name)");
+  }
+  const svc = await getPluginService();
+  await svc.activateStagedProjectPlugin(ctx.projectId, pluginId);
+}
+
+/** Manual re-scan. Runs the same trust gate and staging rules as a project open. */
+async function handleProjectPluginsReload(ctx: IpcContext): Promise<void> {
+  if (!ctx.projectId) throw new Error("project plugins: sender has no project");
+  const svc = await getPluginService();
+  await svc.reloadProjectPlugins(ctx.projectId);
+}
+
 // Native folder/file chooser for `path` / `directory` / `file` settings fields.
 // User-initiated from the settings form's "Browse" button, so it carries no
 // capability gate — but `pluginId` must be a well-formed scoped name so the
@@ -1159,7 +1220,7 @@ async function handlePickPath(
   pluginId: string,
   request: PluginPickPathRequest
 ): Promise<string | null> {
-  if (typeof pluginId !== "string" || !SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
     throw new Error("pickPath: pluginId must be a scoped plugin name (publisher.name)");
   }
   const isDirectory = request.kind === "directory";
@@ -1196,7 +1257,7 @@ async function handlePickPath(
 // resolves false rather than throwing so a stale stored value can't crash the
 // form.
 async function handlePathExists(pluginId: string, targetPath: string): Promise<boolean> {
-  if (typeof pluginId !== "string" || !SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
     throw new Error("pathExists: pluginId must be a scoped plugin name (publisher.name)");
   }
   if (typeof targetPath !== "string" || !isAbsolute(targetPath)) {
@@ -1242,6 +1303,24 @@ export const pluginNamespace = defineIpcNamespace({
     getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet, {
       withContext: true,
     }),
+    getProjectPlugins: op(PLUGIN_METHOD_CHANNELS.getProjectPlugins, handleProjectPluginsList, {
+      withContext: true,
+    }),
+    setProjectPluginTrust: op(
+      PLUGIN_METHOD_CHANNELS.setProjectPluginTrust,
+      handleProjectPluginsSetTrust,
+      { withContext: true }
+    ),
+    activateStagedProjectPlugin: op(
+      PLUGIN_METHOD_CHANNELS.activateStagedProjectPlugin,
+      handleProjectPluginsActivateStaged,
+      { withContext: true }
+    ),
+    reloadProjectPlugins: op(
+      PLUGIN_METHOD_CHANNELS.reloadProjectPlugins,
+      handleProjectPluginsReload,
+      { withContext: true }
+    ),
     activateForView: op(PLUGIN_METHOD_CHANNELS.activateForView, handleActivateForView),
     reportPanelLifecycle: op(
       PLUGIN_METHOD_CHANNELS.reportPanelLifecycle,
@@ -1345,6 +1424,26 @@ export function registerPluginHandlers(): () => void {
         });
         throw new Error(`plugin:invoke rejected: untrusted sender (url=${senderUrl ?? "unknown"})`);
       }
+      // A project plugin answers only to its own project's renderers. The
+      // instance key names its project and is not a secret, so without this a
+      // renderer for project B could invoke project A's plugin handler and make
+      // it act on A — with A's host binding, A's capabilities and A's files.
+      // Checked against the sender's own registration, never a supplied id.
+      const boundProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (boundProjectId !== null && boundProjectId !== senderProjectId) {
+        safeAppend({
+          pluginId,
+          actionId: channel,
+          recordType: "ipc-invoke",
+          channel: CHANNELS.PLUGIN_INVOKE,
+          result: "restricted",
+          errorMessage: "sender belongs to a different project",
+          argsHash: "",
+          durationMs: Date.now() - start,
+        });
+        throw new Error("plugin:invoke rejected: plugin belongs to a different project");
+      }
+
       try {
         const service = await getPluginService();
         // No trustworthy window means no worktree — short-circuit rather than

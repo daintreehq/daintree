@@ -93,3 +93,26 @@ describe("PluginSettingsManager explicit project root", () => {
     expect(mgr.getOrCreateSettingsStore(PLUGIN_ID, "project", a)).toBe(storeA);
   });
 });
+
+describe("project plugin instance keys", () => {
+  const PROJECT_A = "a".repeat(64);
+  const PROJECT_B = "b".repeat(64);
+  const INSTANCE_A = `project__${PROJECT_A}__acme.settings-target`;
+
+  it("names the in-repo project file by the manifest id, not the instance key", () => {
+    const file = managerFor().resolveSettingsFilePath(INSTANCE_A, "project", "/repo");
+    expect(file).toBe(
+      path.join("/repo", ".daintree", "plugin-settings", "acme.settings-target.json")
+    );
+  });
+
+  it("keys the user-scope file by the instance, so two projects do not share it", () => {
+    const manager = managerFor();
+    const a = manager.resolveSettingsFilePath(INSTANCE_A, "user");
+    const b = manager.resolveSettingsFilePath(
+      `project__${PROJECT_B}__acme.settings-target`,
+      "user"
+    );
+    expect(a).not.toBe(b);
+  });
+});
