@@ -209,6 +209,20 @@ export interface IssueMutationError {
 }
 
 /**
+ * The clause `WorkspaceService.deleteWorktree` uses when the safe `branch -d`
+ * refused a branch Git does not consider fully merged. Two things key off it:
+ * the delete is permanent-failed rather than retried (a retry can only find
+ * the worktree already gone), and the toast reports a branch deliberately kept
+ * rather than a broken delete. Matched as a substring so a wrapped or prefixed
+ * variant still classifies.
+ */
+const BRANCH_KEPT_MARKER = "was kept because Git reports it isn't fully merged";
+
+function isBranchKeptError(message: string): boolean {
+  return message.includes(BRANCH_KEPT_MARKER);
+}
+
+/**
  * Error patterns that cannot be remedied by retrying — e.g. uncommitted
  * changes block the delete until the user resolves them. These flip the
  * outbox entry to `failed` after a single attempt rather than burning the
@@ -223,7 +237,7 @@ const PERMANENT_ERROR_PATTERNS = [
   "Cannot delete the main worktree",
   "Cannot delete active worktree",
   "Cannot delete branch:",
-  "has unmerged changes",
+  BRANCH_KEPT_MARKER,
   "(detached HEAD)",
 ];
 
@@ -1480,7 +1494,11 @@ async function runDeleteAsync(
     const existingDevPreview = await window.electron.devPreview.getByWorktree({ worktreeId });
     const hadDevPreview = existingDevPreview !== null;
     await window.electron.devPreview.stopByWorktree({ worktreeId });
-    await worktreeClient.delete(worktreeId, options.force, options.deleteBranch, mutationId);
+    await worktreeClient.delete(worktreeId, {
+      force: options.force,
+      deleteBranch: options.deleteBranch,
+      mutationId,
+    });
     if (hadDevPreview) {
       notify({
         type: "success",
@@ -1500,26 +1518,48 @@ async function runDeleteAsync(
   } catch (err) {
     const message = formatErrorMessage(err, "Failed to delete worktree");
     const prev = get();
-    // Partial-success path: the backend emits `worktree-removed` BEFORE the
-    // branch-delete step (WorkspaceService.deleteWorktree:1587 vs :1592), so a
-    // branch-delete failure arrives after `applyRemove` has already cleared
-    // the card. The card surface is gone — fall back to a toast so the user
-    // learns the branch was not cleaned up. Without this, the failure is
-    // silently swallowed (the original race guard's bug).
+    // Partial-success path: the backend removes the worktree and emits
+    // `worktree-removed` BEFORE it touches the branch, so a branch-delete
+    // failure arrives after `applyRemove` has already cleared the card. The
+    // card surface is gone — fall back to a toast so the user learns the
+    // branch was not cleaned up. Without this, the failure is silently
+    // swallowed (the original race guard's bug).
     if (!prev.deletingIds.has(worktreeId) && !prev.worktrees.has(worktreeId)) {
       // The worktree directory is already gone (only the branch delete failed),
       // so the closed terminals have no home to come back to — drop the snapshot
       // rather than relaunch them against a deleted worktree.
       pendingTerminalRestores.delete(mutationId);
       pruneOutboxEntry(get, set, mutationId);
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({
-        type: "error",
-        title: "Couldn't delete branch",
-        message,
-        priority: "high",
-        context: { worktreeId },
-      });
+      // Deliberately NO `worktreeId` in the context here, unlike every other
+      // notify in this store. `notify`'s origin-surface gate reads it as "the
+      // card is on screen, so the signal is already visible inline" and routes
+      // the toast to the inbox — but this branch exists precisely because the
+      // card is gone, and a surviving ghost row (terminals outlived the
+      // worktree) still answers to the id. Attaching it would suppress the one
+      // surface that reports the outcome. The message names the branch, so
+      // nothing is lost by dropping it.
+      if (isBranchKeptError(message)) {
+        // Not a malfunction: the safe `branch -d` refused rather than discard
+        // work Git does not consider merged. A warning keeps that legible as a
+        // deliberate outcome instead of dressing a working safeguard as a fault
+        // — and as a fault the user could fix by retrying, which they can't.
+        notify({
+          type: "warning",
+          title: "Branch kept",
+          message,
+          priority: "high",
+          context: { eventKind: "git" },
+        });
+      } else {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          title: "Couldn't delete branch",
+          message,
+          priority: "high",
+          context: { eventKind: "git" },
+        });
+      }
       return;
     }
     handleDeleteFailure(get, set, worktreeId, options, mutationId, message);

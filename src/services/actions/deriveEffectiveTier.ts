@@ -4,11 +4,16 @@
  * The static `danger` metadata on an action classifies its worst-case tier;
  * this pure function derives the *effective* tier for a concrete invocation
  * from runtime context (the `force` flag, branch protection, how many tabs
- * would actually close). Both the UI that gates the action (e.g.
- * `WorktreeDeleteDialog`'s typed-name input) and the action `run()` body that
- * decides whether to escalate to a confirm consult this same rule, so the
- * dialog and the dispatch path can never disagree about whether a given call
- * is high-tier.
+ * would actually close). The UI that gates the action (e.g.
+ * `WorktreeDeleteDialog`'s typed-name input) consults this rule, and so do the
+ * portal close actions' `run()` bodies, so those surfaces cannot disagree with
+ * their dispatch path about whether a call is high-tier.
+ *
+ * `worktree.delete` is the exception and it is a real gap, not a design: its
+ * `run()` does NOT consult this, so a `force: true` dispatch that never passes
+ * through `WorktreeDeleteDialog` — an agent calling it over MCP — is gated by
+ * the static `danger: "confirm"` metadata alone and never reaches the D3
+ * typed-name gate the same arguments would trigger locally.
  *
  * Keep this module pure — no store, React, or IPC imports — so the policy is
  * unit-testable in isolation.
@@ -30,6 +35,16 @@ export interface WorktreeDeleteTierCtx {
    * typed-name gate).
    */
   hasTrackedChanges: boolean;
+  /**
+   * A completed inventory found modified or untracked files inside this
+   * worktree's submodules. Working-tree content, which is exactly what `force`
+   * consents to everywhere else — so it escalates under `force` and never
+   * without it, the same shape as `hasTrackedChanges`.
+   *
+   * The parent's own status cannot stand in for this: it collapses a submodule
+   * into one ` M vendor/lib` row, and can be configured not to report it at all.
+   */
+  submoduleFilesAtRisk: boolean;
 }
 
 export interface PortalCloseTierCtx {
@@ -58,7 +73,27 @@ export function deriveEffectiveTier(
   // `in`-operator narrowing keeps each branch type-safe without a cast — the
   // two ctx shapes have disjoint fields, so the discriminant is structural.
   if (actionId === "worktree.delete" && "force" in ctx) {
-    return ctx.force && (ctx.isProtectedBranch || ctx.isMainWorktree || ctx.hasTrackedChanges)
+    // Every input is conditioned on `force`, and that is sound because a
+    // backend invariant stands behind each: `git worktree remove` refuses a
+    // dirty tree and `WorkspaceService.guardSubmoduleDelete` refuses nested
+    // working-tree content, so a non-force delete cannot destroy either and the
+    // gate can wait for the flag that lifts the refusal.
+    //
+    // The two submodule states that have NO such flag — commits held only in
+    // this worktree's own module store, and an inventory that could not be
+    // completed — are deliberately absent. The host throws on both before it
+    // reads `force`, so they are not a tier at all: they are blocked, and the
+    // surfaces model them that way (`submoduleDeleteBlock`). Ranking a refusal
+    // as a tier is what produced a typed-name gate leading to a toast.
+    //
+    // #4927 is not regressed: `submoduleFilesAtRisk` covers nested content,
+    // which the parent reports as a tracked ` M vendor/lib` row anyway, and an
+    // untracked-only parent worktree still never demands the gate on its own.
+    return ctx.force &&
+      (ctx.isProtectedBranch ||
+        ctx.isMainWorktree ||
+        ctx.hasTrackedChanges ||
+        ctx.submoduleFilesAtRisk)
       ? "D3"
       : "D2";
   }

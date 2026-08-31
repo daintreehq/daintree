@@ -1,3 +1,5 @@
+import type { SubmoduleInitPolicy } from "./submodule.js";
+
 /** Git file status */
 export type GitStatus =
   "modified" | "added" | "deleted" | "untracked" | "ignored" | "renamed" | "copied" | "conflicted";
@@ -386,6 +388,18 @@ export interface CreateWorktreeOptions {
    * or a body-parse of `Closes/Fixes/Resolves #N`. Undefined when the PR closes no issue.
    */
   sourcePrLinkedIssueNumber?: number;
+  /**
+   * How to populate submodules in the new worktree. Defaults to `inherit`.
+   *
+   * `git worktree add` never populates submodules — not even with
+   * `submodule.recurse=true`, which has no effect on that path — so without
+   * this a worktree of a submodule repository is born unbuildable and the
+   * agent launched into it debugs a phantom missing dependency.
+   *
+   * A setting rather than a prompt: recipes, fleet creation and MCP-driven
+   * creation have nobody to ask.
+   */
+  submoduleInit?: SubmoduleInitPolicy;
 }
 
 /** Git commit author */

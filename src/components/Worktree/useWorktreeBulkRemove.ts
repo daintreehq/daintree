@@ -66,7 +66,10 @@ export interface UseWorktreeBulkRemoveReturn {
 // Per-target dirty detection — tracked changes only (lesson #4927). The
 // confirm dialog flags this as the "force-required" risk; the IPC layer
 // still gets `force: true` for every bulk remove (the user typed the
-// count, so the gate has consumed the irreversibility consent).
+// count, so the gate has consumed the irreversibility consent). That
+// consent covers the working tree and nothing else — the run sends
+// `deleteBranch: false`, so no branch is touched and the separate
+// `forceDeleteBranch` consent never arises here.
 function deriveTargets(
   selectedIds: Set<string>,
   worktreeMap: Map<string, WorktreeState>
@@ -225,7 +228,7 @@ export function useWorktreeBulkRemove({
               stoppedDevServerCount++;
               stoppedDevServerName = target.name;
             }
-            await worktreeClient.delete(target.id, true, false);
+            await worktreeClient.delete(target.id, { force: true, deleteBranch: false });
             successCount++;
           } catch (err) {
             const reason = formatErrorMessage(err, "Removal failed");

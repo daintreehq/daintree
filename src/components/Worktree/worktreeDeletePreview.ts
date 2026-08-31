@@ -1,5 +1,6 @@
 import { worktreeClient } from "@/clients";
 import type { FileChangeDetail, WorktreeChanges } from "@shared/types/git";
+import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
 import { MCP_PREVIEW_CAUTION_PREFIX } from "@/lib/mcpPreviewLines";
 
 /**
@@ -35,6 +36,128 @@ export interface WorktreeDeletePreview extends WorktreeChangeSummary {
    * whole worktree path on every row and buries the filename.
    */
   rootPath: string;
+  /**
+   * What the same delete would destroy INSIDE this worktree's submodules —
+   * work the parent's `git status` either describes as a single ` M vendor/lib`
+   * row or cannot see at all. Never optional: a preview that could omit it
+   * would let a caller read "absent" as "nothing at risk", which is the exact
+   * misreading {@link WorktreeSubmoduleRiskState} exists to make impossible.
+   */
+  submodules: WorktreeSubmoduleRiskState;
+}
+
+/**
+ * The submodule half of a delete preview, in the only two states a caller can
+ * act on.
+ *
+ * There is deliberately no third "no submodules" state. `verified` with an
+ * empty risk already says that, and adding a distinct spelling for it would
+ * hand callers a shape to confuse with `unverified` — the failure mode this
+ * union is built to prevent.
+ *
+ * `unverified` covers all three ways the inventory can fail to answer: the
+ * fetch rejected, it resolved `null` (the monitor is gone, so nobody looked),
+ * or the host completed a partial walk and set `incomplete`. The partial walk
+ * still carries its `risk`, because half an inventory is real evidence — it is
+ * just not a floor.
+ */
+export type WorktreeSubmoduleRiskState =
+  | { status: "verified"; risk: SubmoduleDeleteRisk }
+  | { status: "unverified"; risk: SubmoduleDeleteRisk | null };
+
+/**
+ * A preview whose PARENT status fetch failed, carrying whatever the submodule
+ * arm managed to establish on its own.
+ *
+ * The two fetches are independent and only one of them failed, so the surviving
+ * answer is real evidence. A `verified` one is as good here as on the happy
+ * path: the host runs the same inventory at delete time and will refuse, or
+ * demand force, on exactly what it reports.
+ */
+export class WorktreeDeletePreviewError extends Error {
+  readonly submodules: WorktreeSubmoduleRiskState;
+
+  constructor(submodules: WorktreeSubmoduleRiskState, cause: unknown) {
+    super("Worktree delete preview could not read the parent status", { cause });
+    this.name = "WorktreeDeletePreviewError";
+    this.submodules = submodules;
+  }
+}
+
+/** The submodule half of a failed preview, or `null` when it failed too. */
+export function submodulesFromPreviewError(error: unknown): WorktreeSubmoduleRiskState | null {
+  return error instanceof WorktreeDeletePreviewError ? error.submodules : null;
+}
+
+/** Max at-risk commit rows shown before the tail is collapsed. */
+export const SUBMODULE_COMMIT_LIMIT = 5;
+
+/**
+ * Why the host will refuse this delete outright, or `null` when it won't.
+ *
+ * This is a "blocked" state, NOT a tier. A tier asks for consent proportional
+ * to the damage; these two states have no consent that makes them safe, because
+ * `WorkspaceService.guardSubmoduleDelete` throws on both BEFORE it looks at
+ * `force`. Offering a typed-name gate for them would take the user through the
+ * most emphatic confirmation the app has and then hand them a toast.
+ *
+ * Mirrors `describeUnrecoverableSubmoduleLoss` in the host — including its
+ * ordering, so the reason shown is the reason thrown. `incomplete` sits here
+ * rather than with the working-tree content for the host's reason: a failed rev
+ * walk sets it just as readily as an unreadable working tree, so an incomplete
+ * inventory with no observed commits means "we could not tell whether commits
+ * are at stake", never "none are".
+ */
+export type WorktreeSubmoduleDeleteBlock = "at-risk-commits" | "unverified";
+
+export function submoduleDeleteBlock(
+  state: WorktreeSubmoduleRiskState
+): WorktreeSubmoduleDeleteBlock | null {
+  // Observed commits are observed regardless of whether the walk finished, and
+  // they carry the more specific remedy, so they win the ordering.
+  if ((state.risk?.atRiskCommits.length ?? 0) > 0) return "at-risk-commits";
+  if (state.status === "unverified") return "unverified";
+  return null;
+}
+
+/**
+ * True when the user's `force` is what stands between nested working-tree
+ * content and its deletion — the one submodule state `force` genuinely consents
+ * to, and the only one that still moves the tier.
+ *
+ * Deliberately NOT `requiresMechanicalForce`. That flag is about the mere
+ * existence of `<gitdir>/modules`, which the host now supplies `--force` for on
+ * its own account, so demanding the checkbox for it asked the user to consent to
+ * nothing. The inverse matters more: an old-form submodule with an embedded
+ * `.git` directory produces no modules directory at all, so the flag is false
+ * while its dirty files are just as destroyed. The file count is the fact.
+ *
+ * Only on a completed inventory: an unverified one is blocked outright
+ * ({@link submoduleDeleteBlock}), so there is no state left where this would be
+ * deciding anything on evidence we do not have.
+ */
+export function submoduleForceRequired(state: WorktreeSubmoduleRiskState): boolean {
+  return state.status === "verified" && submoduleFileCount(state) > 0;
+}
+
+/**
+ * True when the at-risk commit list is a FLOOR rather than a total.
+ *
+ * The host marks the inventory incomplete when the rev walk hits its ceiling,
+ * so a submodule holding two hundred unpushed commits arrives here as fifty
+ * plus `incomplete`. Stating that fifty as the count is the same confident
+ * undercount as the single `M vendor/lib` row this surface replaced, so every
+ * sentence that names the number has to say "at least" instead.
+ */
+export function submoduleCommitsAreCapped(state: WorktreeSubmoduleRiskState): boolean {
+  return state.status === "unverified" && (state.risk?.atRiskCommits.length ?? 0) > 0;
+}
+
+/** Total nested files (dirty + untracked) a delete would discard. */
+export function submoduleFileCount(state: WorktreeSubmoduleRiskState): number {
+  const risk = state.risk;
+  if (!risk) return 0;
+  return risk.dirtyFiles.length + risk.untrackedFiles.length;
 }
 
 /**
@@ -71,10 +194,50 @@ export function summarizeWorktreeChanges(
 export async function buildWorktreeDeletePreview(
   worktreeId: string
 ): Promise<WorktreeDeletePreview | null> {
-  const fresh: WorktreeChanges | null = await worktreeClient.getFreshChanges(worktreeId);
-  if (!fresh) return null;
+  // Both fetches start together — the submodule inventory walks module
+  // directories and is the slower of the two, and serialising them would add
+  // its latency to a dialog the user is already waiting in front of.
+  //
+  // The submodule arm settles to `unverified` instead of rejecting: the
+  // parent's status is what the fail-closed contract above is about, and
+  // letting a submodule inventory failure reject the whole preview would turn
+  // a partial answer into no answer, which is strictly less safe.
+  const submodulePromise: Promise<WorktreeSubmoduleRiskState> = worktreeClient
+    .getSubmoduleDeleteRisk(worktreeId)
+    .then((risk) =>
+      risk === null || risk.incomplete
+        ? ({ status: "unverified", risk } as const)
+        : ({ status: "verified", risk } as const)
+    )
+    .catch(() => ({ status: "unverified", risk: null }) as const);
+  let fresh: WorktreeChanges | null;
+  try {
+    fresh = await worktreeClient.getFreshChanges(worktreeId);
+  } catch (error) {
+    // The two arms are independent, so a parent failure must not throw the
+    // submodule answer away. It used to: the rejection propagated before the
+    // settled submodule arm was ever read, and the dialog then rendered its
+    // generic "couldn't verify" warning over an inventory that had completed
+    // and found nested files. A force delete from that state destroys content
+    // the D2 preview never showed, which is the one thing this module exists
+    // to prevent. Carried on the error so the parent arm keeps rejecting and
+    // callers keep their existing fail-closed branch.
+    throw new WorktreeDeletePreviewError(await submodulePromise, error);
+  }
+  if (!fresh) {
+    // Monitor gone — the worktree is already removed, so there is nothing left
+    // to gate. Await the settled submodule arm anyway so it can never surface
+    // as an unhandled rejection.
+    await submodulePromise;
+    return null;
+  }
   const changes = fresh.changes ?? [];
-  return { ...summarizeWorktreeChanges(changes), changes, rootPath: fresh.rootPath };
+  return {
+    ...summarizeWorktreeChanges(changes),
+    changes,
+    rootPath: fresh.rootPath,
+    submodules: await submodulePromise,
+  };
 }
 
 /** Max file rows shown in a compact preview before collapsing the tail. */
@@ -201,6 +364,141 @@ export function buildWorktreeChangeRows(
   return rows;
 }
 
+/** One at-risk commit, split for layout. */
+export interface SubmoduleCommitRow {
+  /** Full OID. Identity — seven characters is short enough to collide. */
+  oid: string;
+  /** Git's own abbreviation, for display. */
+  shortOid: string;
+  subject: string;
+  /** True for the synthesised overflow tail, which is not a commit. */
+  isOverflow: boolean;
+}
+
+/** Git's own abbreviation length — the form every other tool prints. */
+function shortOid(oid: string): string {
+  return oid.slice(0, 7);
+}
+
+/**
+ * The nested files a delete would discard, as the same structured rows the
+ * parent's change list uses.
+ *
+ * The paths arrive already prefixed with their submodule path, so they read as
+ * `vendor/lib/src/main.c` — the whole point being that the parent's own status
+ * collapses every one of them into a single ` M vendor/lib`.
+ */
+export function buildSubmoduleFileRows(
+  risk: SubmoduleDeleteRisk | null,
+  limit: number = PREVIEW_FILE_LIMIT
+): WorktreeChangeRow[] {
+  if (!risk) return [];
+  const all: WorktreeChangeRow[] = [
+    ...risk.dirtyFiles.map((path) => ({
+      glyph: STATUS_GLYPH.modified,
+      statusLabel: STATUS_LABEL.modified,
+      label: path,
+      isOverflow: false,
+    })),
+    ...risk.untrackedFiles.map((path) => ({
+      glyph: STATUS_GLYPH.untracked,
+      statusLabel: STATUS_LABEL.untracked,
+      label: path,
+      isOverflow: false,
+    })),
+  ];
+  const rows = all.slice(0, limit);
+  if (all.length > limit) {
+    rows.push({
+      glyph: null,
+      statusLabel: null,
+      label: `…and ${all.length - limit} more`,
+      isOverflow: true,
+    });
+  }
+  return rows;
+}
+
+/** The at-risk commits, capped, as structured rows. */
+export function buildSubmoduleCommitRows(
+  risk: SubmoduleDeleteRisk | null,
+  limit: number = SUBMODULE_COMMIT_LIMIT
+): SubmoduleCommitRow[] {
+  if (!risk) return [];
+  const rows: SubmoduleCommitRow[] = risk.atRiskCommits.slice(0, limit).map((commit) => ({
+    oid: commit.oid,
+    shortOid: shortOid(commit.oid),
+    subject: commit.subject,
+    isOverflow: false,
+  }));
+  if (risk.atRiskCommits.length > limit) {
+    rows.push({
+      oid: "",
+      shortOid: "",
+      subject: `…and ${risk.atRiskCommits.length - limit} more`,
+      isOverflow: true,
+    });
+  }
+  return rows;
+}
+
+/** `N commits` / `N files`, for a heading that must not overstate precision. */
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The submodule half of the MCP preview.
+ *
+ * Renders the real nested paths and the real commit subjects rather than a
+ * count, for the same reason the parent list does — except the stakes are
+ * higher here, because the parent's own status shows these two hundred files
+ * as one row that reads as precise, and shows the commits as nothing at all.
+ */
+export function formatSubmodulePreviewLines(state: WorktreeSubmoduleRiskState): string[] {
+  const lines: string[] = [];
+  const risk = state.risk;
+  const fileRows = buildSubmoduleFileRows(risk);
+  const commitRows = buildSubmoduleCommitRows(risk);
+  if (fileRows.length > 0) {
+    lines.push(
+      `Inside submodules — ${plural(submoduleFileCount(state), "file")} the parent's status shows as one entry:`
+    );
+    for (const row of fileRows) {
+      lines.push(row.isOverflow ? `  ${row.label}` : `  ${row.glyph} ${row.label}`);
+    }
+  }
+  if (commitRows.length > 0 && risk) {
+    // "On no remote this clone knows about" and not "exists nowhere else":
+    // the inventory can only prove a commit is unreachable from this module
+    // repository's own remote-tracking refs. A commit someone already pushed
+    // from another checkout looks identical from here, so the claim is scoped
+    // to what was actually measured.
+    //
+    // Stated as a refusal, not a risk: the host throws on this before it reads
+    // `force`, so an approver told the delete "may destroy" these commits would
+    // be consenting to something that cannot happen either way.
+    const count = risk.atRiskCommits.length;
+    // "At least" when the walk was capped: the host reports a ceiling hit as an
+    // incomplete inventory, and naming the retained length as the total there
+    // understates it by however many it stopped short of.
+    const capped = submoduleCommitsAreCapped(state);
+    const measured = capped ? `at least ${plural(count, "commit")}` : plural(count, "commit");
+    lines.push(
+      `${MCP_PREVIEW_CAUTION_PREFIX}${measured} inside submodules ${count === 1 && !capped ? "is" : "are"} on no remote this clone knows about — the worktree cannot be deleted until ${count === 1 && !capped ? "it is" : "they are"} pushed:`
+    );
+    for (const row of commitRows) {
+      lines.push(row.isOverflow ? `  ${row.subject}` : `  ${row.shortOid} ${row.subject}`);
+    }
+  }
+  if (state.status === "unverified") {
+    lines.push(
+      `${MCP_PREVIEW_CAUTION_PREFIX}Could not finish checking this worktree's submodules — the worktree cannot be deleted until that check completes.`
+    );
+  }
+  return lines;
+}
+
 /**
  * Render a preview as plain lines for the MCP confirm surface — a header
  * naming the tracked/untracked counts, then the actual file list (capped), so
@@ -215,9 +513,15 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
       `${MCP_PREVIEW_CAUTION_PREFIX}Could not verify current changes — proceed with caution.`,
     ];
   }
-  const { trackedChangeCount, untrackedFileCount, changes, rootPath } = preview;
+  const { trackedChangeCount, untrackedFileCount, changes, rootPath, submodules } = preview;
+  const submoduleLines = formatSubmodulePreviewLines(submodules);
   if (changes.length === 0) {
-    return ["No uncommitted changes."];
+    // Only claim a clean tree when nothing nested contradicts it. Saying "No
+    // uncommitted changes." above a list of submodule commits about to be
+    // destroyed is the misleading-precision failure this whole surface exists
+    // to avoid — the parent really IS clean in that state, which is the point.
+    if (submoduleLines.length === 0) return ["No uncommitted changes."];
+    return ["No uncommitted changes in the worktree itself.", ...submoduleLines];
   }
   const parts: string[] = [];
   if (trackedChangeCount > 0) {
@@ -231,5 +535,6 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
   return [
     `${parts.join(" and ")}:`,
     ...formatWorktreeChangeRows(changes, PREVIEW_FILE_LIMIT, rootPath),
+    ...submoduleLines,
   ];
 }
