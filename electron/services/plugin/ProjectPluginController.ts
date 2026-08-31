@@ -206,11 +206,17 @@ export class ProjectPluginController {
     // load already awaiting sees the bump the moment it resumes.
     const entry = this.entries.get(projectId);
     if (entry) entry.generation++;
-    return this.serialize(projectId, async () => {
+    const done = this.serialize(projectId, async () => {
       await this.unloadAll(projectId);
       this.entries.delete(projectId);
-      this.chains.delete(projectId);
     });
+    void done.then(() => {
+      // Only drop the chain when nothing was queued behind this close. Deleting
+      // it unconditionally would let the next task start from a fresh resolved
+      // promise and run concurrently with a successor that is still pending.
+      if (this.chains.get(projectId) === done) this.chains.delete(projectId);
+    });
+    return done;
   }
 
   /**
@@ -262,6 +268,60 @@ export class ProjectPluginController {
     await this.reconcileLoaded(projectId, entry, valid, { announceStaged: false });
     this.emitChanged(projectId);
   }
+
+  // --- hot-reload hook (§7.10) ------------------------------------------
+  //
+  // The one affordance the watcher needs and cannot build itself. `reconcileLoaded`
+  // skips a plugin that is already loaded — correct for a project switch, and
+  // exactly wrong for a `dist/` rebuild, where the id is unchanged and the code
+  // is not. These two methods let the watcher say "these ids are stale" and then
+  // hand the work back to the ordinary open path. Nothing else about a hot
+  // reload is special: same trust gate, same staging rules, same serialization
+  // chain, same generation guard.
+
+  /** Manifest ids currently loaded for this project. */
+  loadedManifestIds(projectId: string): string[] {
+    return [...(this.entries.get(projectId)?.loaded.keys() ?? [])];
+  }
+
+  /**
+   * Unload `manifestIds` and re-run the open path, in ONE serialized task —
+   * so no other queued work can interleave between the drop and the reload,
+   * and the whole reload emits a single change event.
+   *
+   * A hot reload can only ever reload: it refuses to *start* a project. The
+   * entry must already exist when the reload is requested, and its generation
+   * must still be the one it was requested under — so a close or a revoke that
+   * lands between the filesystem event and the queued task cancels the reload
+   * outright, rather than being undone by the teardown queued behind it.
+   *
+   * The caller is expected to have already re-validated the manifests on disk:
+   * anything that arrives here is unloaded before it is re-read, and a plugin
+   * whose manifest has stopped parsing will not come back.
+   */
+  async reloadChanged(
+    projectId: string,
+    projectRoot: string,
+    manifestIds: readonly string[]
+  ): Promise<void> {
+    if (this.disposed) return;
+    if (!projectId || !projectRoot) return;
+    const requested = this.entries.get(projectId);
+    if (!requested) return;
+    const requestedGeneration = requested.generation;
+    return this.serialize(projectId, async () => {
+      const entry = this.entries.get(projectId);
+      if (entry !== requested || entry.generation !== requestedGeneration) return;
+      if (!this.isEnabled(entry)) return;
+      for (const manifestId of manifestIds) {
+        const instanceKey = entry.loaded.get(manifestId);
+        if (instanceKey) this.unloadOne(entry, manifestId, instanceKey);
+      }
+      await this.doOpen(projectId, projectRoot);
+    });
+  }
+
+  // ----------------------------------------------------------------------
 
   /** One-click activation of a plugin that was staged rather than run. */
   async activateStaged(projectId: string, manifestId: string): Promise<void> {

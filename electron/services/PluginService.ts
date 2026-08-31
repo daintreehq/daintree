@@ -83,6 +83,7 @@ import {
   type ProjectPluginControllerDeps,
 } from "./plugin/ProjectPluginController.js";
 import { discoverProjectPlugins } from "./plugin/projectPluginDiscovery.js";
+import { ProjectPluginWatcher } from "./plugin/ProjectPluginWatcher.js";
 import { getPluginCapabilityConsentService } from "./plugin-capability/instances.js";
 import { getWebContentsForProject } from "../window/webContentsRegistry.js";
 import { projectStore } from "./ProjectStore.js";
@@ -374,6 +375,15 @@ let nextPluginViewGeneration = 1;
 /** Allocate the generation stamped into a plugin's view URLs for this load. */
 export function allocatePluginViewGeneration(): number {
   return nextPluginViewGeneration++;
+}
+
+/**
+ * How many view generations this session has minted. Each one permanently adds
+ * a module record to a renderer's map (Chromium has no eviction API), so the
+ * hot-reload path reports it rather than assuming the growth is negligible.
+ */
+export function pluginViewGenerationsAllocated(): number {
+  return nextPluginViewGeneration - 1;
 }
 
 /**
@@ -1025,6 +1035,10 @@ export class PluginService {
    */
   dispose(): void {
     this.disposed = true;
+    // Native watchers go first: a settled burst arriving mid-teardown would
+    // otherwise queue a reload into a service that is going away.
+    this.projectPluginWatcherRegistry?.dispose();
+    this.projectPluginWatcherRegistry = null;
     // Forget every project's plugin bookkeeping BEFORE the unload sweep below,
     // so the controller cannot re-load into a service that is going away.
     this.projectPluginController?.dispose();
@@ -3603,10 +3617,14 @@ export class PluginService {
     if (this.disposed) return;
     await this.projectPlugins.onProjectOpened(projectId, projectRoot);
     await this.pushSnapshotToProject(projectId);
+    await this.syncProjectPluginWatcher(projectId, projectRoot);
   }
 
   /** The user closed this project: unload everything it owns. */
   async onProjectClosed(projectId: string): Promise<void> {
+    // Stop the watcher first: it is the one thing that could otherwise queue a
+    // reload behind the teardown.
+    this.projectPluginWatcherRegistry?.stop(projectId);
     if (!this.projectPluginController) return;
     await this.projectPluginController.onProjectClosed(projectId);
     await this.pushSnapshotToProject(projectId);
@@ -3618,10 +3636,96 @@ export class PluginService {
   ): Promise<void> {
     await this.projectPlugins.setTrust(projectId, decision);
     await this.pushSnapshotToProject(projectId);
+    await this.syncProjectPluginWatcher(projectId);
   }
 
   async activateStagedProjectPlugin(projectId: string, pluginId: string): Promise<void> {
     await this.projectPlugins.activateStaged(projectId, pluginId);
+    await this.pushSnapshotToProject(projectId);
+    await this.syncProjectPluginWatcher(projectId);
+  }
+
+  // ----- project-local plugin hot reload (§7.10) -------------------------
+
+  private projectPluginWatcherRegistry: ProjectPluginWatcher | null = null;
+
+  private get projectPluginWatchers(): ProjectPluginWatcher {
+    if (!this.projectPluginWatcherRegistry) {
+      this.projectPluginWatcherRegistry = new ProjectPluginWatcher({
+        discover: (projectRoot) => discoverProjectPlugins(projectRoot),
+        loadedManifestIds: (projectId) => this.projectPlugins.loadedManifestIds(projectId),
+        reload: (projectId, projectRoot, manifestIds) =>
+          this.hotReloadProjectPlugins(projectId, projectRoot, manifestIds),
+        viewGenerationsAllocated: () => pluginViewGenerationsAllocated(),
+        onAppQuit: (dispose) => {
+          try {
+            app.once("before-quit", dispose);
+          } catch {
+            // No app object (tests, or a headless harness): nothing to hook.
+          }
+        },
+      });
+    }
+    return this.projectPluginWatcherRegistry;
+  }
+
+  /**
+   * A watcher exists for exactly the projects whose plugins are trusted and
+   * open. Trust is the gate: an untrusted project's folder is never watched,
+   * so a revoke or a "no" tears the native subscription down with everything
+   * else.
+   */
+  private async syncProjectPluginWatcher(projectId: string, projectRoot?: string): Promise<void> {
+    // A close can land while an open is still awaiting its snapshot push, and
+    // the idle auto-close service and the free-memory IPC flip a row to
+    // "closed" without ever reaching `onProjectClosed`. Re-reading the row here
+    // is what keeps either from leaving a live native watcher behind.
+    if (
+      this.disposed ||
+      this.isProjectRowClosed(projectId) ||
+      !this.projectPlugins.getTrustState(projectId).enabled
+    ) {
+      this.projectPluginWatcherRegistry?.stop(projectId);
+      return;
+    }
+    const root = projectRoot ?? projectStore.getProjectById(projectId)?.path;
+    if (!root) {
+      this.projectPluginWatcherRegistry?.stop(projectId);
+      return;
+    }
+    await this.projectPluginWatchers.ensure(projectId, root);
+  }
+
+  /** A store read failure must never be read as "closed" — that would unload a live project. */
+  private isProjectRowClosed(projectId: string): boolean {
+    try {
+      return projectStore.getProjectById(projectId)?.status === "closed";
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The watcher's reload edge. Drops the plugins it named and re-runs the
+   * project-open reconcile in one serialized task, so the swap inherits the
+   * trust gate, the staging rules and the generation guard rather than
+   * reimplementing them — and a fresh `plugin://` authority and `__dtv-N` view
+   * generation are minted by the load itself.
+   */
+  private async hotReloadProjectPlugins(
+    projectId: string,
+    projectRoot: string,
+    manifestIds: readonly string[]
+  ): Promise<void> {
+    if (this.disposed) return;
+    // The watcher is stopped by close and revoke, but a burst can already be
+    // in flight when either lands — and a project closed behind our back never
+    // stops it at all. Refuse at the edge as well as at the source.
+    if (this.isProjectRowClosed(projectId)) {
+      this.projectPluginWatcherRegistry?.stop(projectId);
+      return;
+    }
+    await this.projectPlugins.reloadChanged(projectId, projectRoot, manifestIds);
     await this.pushSnapshotToProject(projectId);
   }
 

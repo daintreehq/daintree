@@ -436,3 +436,95 @@ describe("races", () => {
     expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("hot-reload hook", () => {
+  function enable(projectId: string, ids: string[]): void {
+    h.trust.set(projectId, {
+      decision: "enabled",
+      decidedAt: 0,
+      knownPluginIds: ids,
+      stagedPluginIds: [],
+    });
+  }
+
+  it("reports what is loaded, and nothing for an unknown project", async () => {
+    enable(PROJECT_A, ["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.dashboard"]);
+    expect(h.controller.loadedManifestIds(PROJECT_B)).toEqual([]);
+  });
+
+  it("unloads and re-loads the named plugin, which the open path alone would skip", async () => {
+    enable(PROJECT_A, ["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(1);
+
+    // A plain re-open is idempotent: an already-loaded plugin is left alone.
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(1);
+    expect(h.deps.unloadProjectPlugin).not.toHaveBeenCalled();
+
+    await h.controller.reloadChanged(PROJECT_A, ROOT_A, ["acme.dashboard"]);
+
+    const instanceKey = makeProjectPluginInstanceKey(PROJECT_A, "acme.dashboard");
+    expect(h.deps.unloadProjectPlugin).toHaveBeenCalledWith(instanceKey);
+    expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(2);
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.dashboard"]);
+  });
+
+  it("leaves plugins it was not asked to reload alone", async () => {
+    enable(PROJECT_A, ["acme.dashboard", "acme.deploy"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard"), discovered("acme.deploy")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(2);
+
+    await h.controller.reloadChanged(PROJECT_A, ROOT_A, ["acme.deploy"]);
+
+    expect(h.deps.unloadProjectPlugin).toHaveBeenCalledTimes(1);
+    expect(h.deps.unloadProjectPlugin).toHaveBeenCalledWith(
+      makeProjectPluginInstanceKey(PROJECT_A, "acme.deploy")
+    );
+    expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not re-load into a project whose trust was revoked mid-reload", async () => {
+    enable(PROJECT_A, ["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    let releaseScan: (() => void) | undefined;
+    h.deps.discover.mockImplementation(
+      async () =>
+        new Promise<ProjectPluginDiscoveryResult>((resolve) => {
+          releaseScan = () => resolve({ root: "/x", plugins: [discovered("acme.dashboard")] });
+        })
+    );
+
+    const reloading = h.controller.reloadChanged(PROJECT_A, ROOT_A, ["acme.dashboard"]);
+    await Promise.resolve();
+    const revoking = h.controller.setTrust(PROJECT_A, "disabled");
+    releaseScan!();
+    await reloading;
+    await revoking;
+
+    // Only the reload's own unload ran; the revoked project got no second load.
+    expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(1);
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual([]);
+  });
+
+  it("does nothing for a project that was already closed", async () => {
+    enable(PROJECT_A, ["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.onProjectClosed(PROJECT_A);
+    h.deps.loadProjectPlugin.mockClear();
+
+    h.controller.dispose();
+    await h.controller.reloadChanged(PROJECT_A, ROOT_A, ["acme.dashboard"]);
+
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+  });
+});
