@@ -1,95 +1,127 @@
 import type { PerfScenario } from "../types";
 import {
-  createPersistedLayout,
-  simulateLayoutHydration,
-  simulateProjectSwitchCycle,
-  spinEventLoop,
-  type PersistedLayout,
-} from "../lib/workloads";
+  buildHydrationPlan,
+  hydrationPassMisses,
+  loadStatePatcherModule,
+  runHydrationPass,
+  type HydrationPlan,
+} from "../lib/hydrationFixture";
 import { findPackagedExecutable, launchPackagedAndMeasure } from "../lib/packagedLaunch";
 
 /**
- * Panels and tab groups the hydration was handed but did not restore.
+ * PERF-001..003 — the real renderer hydration path, in process.
  *
- * The expectation comes from the layout that went IN, so no change to
- * `simulateLayoutHydration` can satisfy it without actually rebuilding the
- * workspace: a hydration reduced to `return { restoredPanels: 0 }` is the
- * fastest one possible, and `restoredPanels`/`restoredGroups` on their own
- * report that as the best sample the harness has recorded.
+ * These three used to call `simulateLayoutHydration`, a `Map.set` plus a
+ * string-length checksum over a synthetic layout. Nothing in
+ * `src/utils/stateHydration/` was reached, so the numbers described the
+ * benchmark's own loop.
+ *
+ * They now drive the production argument builders in
+ * `src/utils/stateHydration/statePatcher.ts` over a saved layout that exercises
+ * every restore route hydration has — a live backend PTY, a reconnect fallback,
+ * a respawn that replays its saved session, a respawn whose session is withheld
+ * because a sibling owns it, the four non-PTY kinds through their real
+ * deserializers, and orphan adoption. `lib/hydrationFixture.ts` states exactly
+ * where the real code stops.
+ *
+ * WHAT THESE ARE NOT. Not a binary launch — PERF-004 below is the only real
+ * cold start here. And not wall-clock restore: `restorePanelsPhase` awaits a
+ * terminal-instance attach per panel against a real DOM and a live PTY host,
+ * and none of that can run in a plain Node process. These price the CPU
+ * hydration spends deciding what to restore, which is the part that scales with
+ * panel count.
  */
-function hydrationMissesFor(
-  layout: PersistedLayout,
-  hydrated: { restoredPanels: number; restoredGroups: number }
-): number {
-  return (
-    Math.abs(layout.panels.length - hydrated.restoredPanels) +
-    Math.abs(layout.tabGroups.length - hydrated.restoredGroups)
-  );
+
+const EMPTY_PLAN = buildHydrationPlan("empty", 10, 2);
+const HEAVY_PLAN = buildHydrationPlan("heavy", 260, 16);
+const HEAVY_PLAN_SERIALIZED = JSON.stringify({
+  panels: HEAVY_PLAN.panels.map((planned) => planned.saved),
+});
+
+/** Metric names for one graded hydration pass, flattened for the report. */
+function hydrationMetrics(plan: HydrationPlan, observed: ReturnType<typeof runHydrationPass>) {
+  const misses = hydrationPassMisses(plan, observed);
+  return {
+    restoredPanels: observed.builtPanelCount,
+    backendRestoreCount: observed.backendCount,
+    reconnectRestoreCount: observed.reconnectedCount,
+    respawnResumeCount: observed.respawnResumeCount,
+    respawnWithheldCount: observed.respawnWithheldCount,
+    nonPtyRestoreCount: observed.nonPtyCount,
+    orphanAdoptionCount: observed.orphanCount,
+    ...misses,
+  };
 }
 
-const EMPTY_LAYOUT = createPersistedLayout(10, 2, 101);
-const HEAVY_LAYOUT = createPersistedLayout(260, 16, 202);
-const HEAVY_LAYOUT_SERIALIZED = JSON.stringify(HEAVY_LAYOUT);
+const HYDRATION_CORRECTNESS = [
+  "kindInferenceMisses",
+  "backendRestoreMisses",
+  "reconnectRestoreMisses",
+  "respawnResumeMisses",
+  "resumeSuppressionMisses",
+  "nonPtyRestoreMisses",
+  "sanitizerMisses",
+  "orphanMisses",
+  "routeCoverageMisses",
+] as const;
 
 export const startupScenarios: PerfScenario[] = [
   {
     id: "PERF-001",
-    name: "Startup Simulation - Empty Project",
+    name: "Startup Hydration - Empty Project",
     description:
-      "In-process hydration of a near-empty layout (NOT a real binary launch — see PERF-004 for real cold start).",
+      "Deserialize a near-empty saved layout and run the real statePatcher restore builders over every panel (NOT a binary launch — see PERF-004; and NOT wall-clock restore, since the per-panel terminal attach needs a DOM).",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 20, nightly: 30 },
     warmups: 2,
-    correctness: ["hydrationMisses"],
+    correctness: HYDRATION_CORRECTNESS,
     async run() {
-      const payload = JSON.stringify(EMPTY_LAYOUT);
-      const parsed = JSON.parse(payload) as ReturnType<typeof createPersistedLayout>;
-      const hydrated = simulateLayoutHydration(parsed);
-      await spinEventLoop(1);
+      const mod = await loadStatePatcherModule();
+      // The on-disk round trip a cold start actually pays before hydration.
+      const parseStartedAt = performance.now();
+      const payload = JSON.stringify({ panels: EMPTY_PLAN.panels.map((p) => p.saved) });
+      JSON.parse(payload);
+      const parseMs = performance.now() - parseStartedAt;
+
+      const observed = runHydrationPass(mod, EMPTY_PLAN);
 
       return {
-        durationMs: 0,
+        durationMs: parseMs + observed.elapsedMs,
         metrics: {
-          restoredPanels: hydrated.restoredPanels,
-          restoredGroups: hydrated.restoredGroups,
-          checksum: hydrated.checksum,
-          hydrationMisses: hydrationMissesFor(parsed, hydrated),
+          parseMs,
+          hydrateMs: observed.elapsedMs,
+          payloadBytes: payload.length,
+          ...hydrationMetrics(EMPTY_PLAN, observed),
         },
       };
     },
   },
   {
     id: "PERF-002",
-    name: "Startup Simulation - Heavy Layout",
+    name: "Startup Hydration - Heavy Layout",
     description:
-      "In-process deserialize + hydration of a high-density panel/tab-group workspace (NOT a real binary launch — see PERF-004).",
+      "Deserialize a 260-panel, 16-worktree saved layout and run the real statePatcher restore builders over all of it, including the agent preset/flag/resume resolution each agent pane pays (NOT a binary launch — see PERF-004).",
     tier: "heavy",
     modes: ["ci", "nightly"],
     iterations: { ci: 8, nightly: 12 },
     warmups: 1,
-    correctness: ["hydrationMisses"],
+    correctness: HYDRATION_CORRECTNESS,
     async run() {
-      const parsed = JSON.parse(HEAVY_LAYOUT_SERIALIZED) as ReturnType<
-        typeof createPersistedLayout
-      >;
-      const hydrated = simulateLayoutHydration(parsed);
+      const mod = await loadStatePatcherModule();
+      const parseStartedAt = performance.now();
+      JSON.parse(HEAVY_PLAN_SERIALIZED);
+      const parseMs = performance.now() - parseStartedAt;
 
-      const switchResult = simulateProjectSwitchCycle({
-        outgoingStateSize: 120,
-        incomingLayout: parsed,
-        iterations: 1,
-      });
-
-      await spinEventLoop(2);
+      const observed = runHydrationPass(mod, HEAVY_PLAN);
 
       return {
-        durationMs: 0,
+        durationMs: parseMs + observed.elapsedMs,
         metrics: {
-          restoredPanels: hydrated.restoredPanels,
-          restoredGroups: hydrated.restoredGroups,
-          checksum: hydrated.checksum + switchResult.checksum,
-          hydrationMisses: hydrationMissesFor(parsed, hydrated),
+          parseMs,
+          hydrateMs: observed.elapsedMs,
+          payloadBytes: HEAVY_PLAN_SERIALIZED.length,
+          ...hydrationMetrics(HEAVY_PLAN, observed),
         },
       };
     },
@@ -97,22 +129,22 @@ export const startupScenarios: PerfScenario[] = [
   {
     id: "PERF-003",
     name: "Warm Start",
-    description: "Re-hydrate from already-loaded state to simulate rapid close/re-open behavior.",
+    description:
+      "Re-run the real statePatcher restore builders over an already-parsed heavy layout — the rapid close/re-open path, with the deserialize cost removed so the per-panel decision cost stands alone.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 15, ci: 25, nightly: 35 },
     warmups: 3,
-    correctness: ["hydrationMisses"],
+    correctness: HYDRATION_CORRECTNESS,
     async run() {
-      const hydrated = simulateLayoutHydration(HEAVY_LAYOUT);
-      await spinEventLoop(0.5);
+      const mod = await loadStatePatcherModule();
+      const observed = runHydrationPass(mod, HEAVY_PLAN);
+
       return {
-        durationMs: 0,
+        durationMs: observed.elapsedMs,
         metrics: {
-          restoredPanels: hydrated.restoredPanels,
-          restoredGroups: hydrated.restoredGroups,
-          checksum: hydrated.checksum,
-          hydrationMisses: hydrationMissesFor(HEAVY_LAYOUT, hydrated),
+          hydrateMs: observed.elapsedMs,
+          ...hydrationMetrics(HEAVY_PLAN, observed),
         },
       };
     },

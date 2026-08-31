@@ -1,16 +1,29 @@
 import { PerformanceObserver, constants } from "node:perf_hooks";
 import type { PerfScenario } from "../types";
 import {
-  createPersistedLayout,
-  projectSwitchCycleMisses,
-  simulateLayoutHydration,
-  simulateProjectSwitchCycle,
   makeTerminalStream,
   simulateTerminalOutputPass,
   terminalOutputPassMisses,
   createLargeStateSnapshot,
   spinEventLoop,
 } from "../lib/workloads";
+import {
+  addLayoutMergeMisses,
+  buildLayoutMergePlan,
+  layoutMergeMisses,
+  runLayoutMergePass,
+  zeroLayoutMergeMisses,
+  type LayoutMergeMisses,
+} from "../lib/layoutMergeFixture";
+import {
+  addHydrationMisses,
+  buildHydrationPlan,
+  hydrationPassMisses,
+  loadStatePatcherModule,
+  runHydrationPass,
+  zeroHydrationMisses,
+  type HydrationMisses,
+} from "../lib/hydrationFixture";
 
 function memoryUsedMb(): number {
   return process.memoryUsage().heapUsed / (1024 * 1024);
@@ -99,9 +112,30 @@ async function measureMinorGc(body: () => void): Promise<GcStats> {
   return stats;
 }
 
-const SOAK_LAYOUT_A = createPersistedLayout(110, 8, 601);
-const SOAK_LAYOUT_B = createPersistedLayout(140, 10, 602);
+/**
+ * The soak workloads are the real subjects now, not simulations.
+ *
+ * PERF-060 and PERF-061 previously churned `simulateLayoutHydration` and
+ * `simulateProjectSwitchCycle` — a `Map.set` loop and a `JSON.stringify`. The
+ * allocation profile they soaked was the benchmark's own. Each cycle now runs
+ * the production layout merge (`shared/utils/layoutMerge.ts`) and the
+ * production restore builders (`src/utils/stateHydration/statePatcher.ts`), so
+ * the retained-heap envelope is over the objects the app actually allocates on
+ * a switch.
+ */
+const SOAK_MERGE_PLAN_A = buildLayoutMergePlan("soak-A", 110, 601);
+const SOAK_MERGE_PLAN_B = buildLayoutMergePlan("soak-B", 140, 602);
+const SOAK_HYDRATION_PLAN_A = buildHydrationPlan("soak-A", 110, 8);
+const SOAK_HYDRATION_PLAN_B = buildHydrationPlan("soak-B", 140, 10);
 const SOAK_STREAM = makeTerminalStream(2500, 130);
+
+/** Total misses across both graded subjects, flattened for the report. */
+function soakMissTotals(
+  merge: LayoutMergeMisses,
+  hydration: HydrationMisses
+): Record<string, number> {
+  return { ...merge, ...hydration };
+}
 const SOAK_SCROLLBACK = 6000;
 /** Cycles per iteration. Named so the oracles can hold the loops to them. */
 const MIXED_SOAK_CYCLES = 120;
@@ -169,38 +203,62 @@ export const soakScenarios: PerfScenario[] = [
   {
     id: "PERF-060",
     name: "2h Mixed Activity Soak (Scaled)",
-    description: "Scaled mixed activity soak run to detect unbounded memory/latency growth.",
+    description:
+      "Scaled mixed activity soak: 120 cycles of the real layout merge, the real per-panel restore builders and a terminal output pass, to detect unbounded memory growth over the objects a switch actually allocates.",
     tier: "soak",
     modes: ["nightly", "soak"],
     iterations: { nightly: 4, soak: 8 },
     warmups: 1,
-    correctness: ["soakMisses"],
+    correctness: [
+      "soakCycleMisses",
+      "terminalPassMisses",
+      "terminalDeltaMisses",
+      "tabGroupDeltaMisses",
+      "draftDeltaMisses",
+      "payloadMisses",
+      "terminalMergeMisses",
+      "tabGroupMergeMisses",
+      "draftMergeMisses",
+      "identicalPassMisses",
+      "singleChangeMisses",
+      "equalityProbeMisses",
+      "kindInferenceMisses",
+      "backendRestoreMisses",
+      "reconnectRestoreMisses",
+      "respawnResumeMisses",
+      "resumeSuppressionMisses",
+      "nonPtyRestoreMisses",
+      "sanitizerMisses",
+      "orphanMisses",
+      "routeCoverageMisses",
+    ],
     async run() {
+      const mod = await loadStatePatcherModule();
       maybeRunGc();
       const baselineMb = memoryUsedMb();
       const startedAt = performance.now();
       let checksum = 0;
-      let soakMisses = 0;
+      let terminalPassMisses = 0;
+      let mergeMisses = zeroLayoutMergeMisses();
+      let hydrationMisses = zeroHydrationMisses();
       let cycles = 0;
 
       for (let i = 0; i < MIXED_SOAK_CYCLES; i += 1) {
-        const layout = i % 2 === 0 ? SOAK_LAYOUT_A : SOAK_LAYOUT_B;
-        const hydrated = simulateLayoutHydration(layout);
-        const spec = {
-          outgoingStateSize: 90 + (i % 8) * 12,
-          incomingLayout: layout,
-          iterations: 1,
-        };
-        const switched = simulateProjectSwitchCycle(spec);
+        const mergePlan = i % 2 === 0 ? SOAK_MERGE_PLAN_A : SOAK_MERGE_PLAN_B;
+        const hydrationPlan = i % 2 === 0 ? SOAK_HYDRATION_PLAN_A : SOAK_HYDRATION_PLAN_B;
+
+        const merged = runLayoutMergePass(mergePlan);
+        const hydrated = runHydrationPass(mod, hydrationPlan);
         const terminal = simulateTerminalOutputPass(SOAK_STREAM.chunks, SOAK_SCROLLBACK);
 
-        checksum += hydrated.checksum + switched.checksum + terminal.checksum;
+        checksum += merged.payloadBytes + hydrated.builtPanelCount + terminal.checksum;
         cycles += 1;
-        soakMisses +=
-          Math.abs(layout.panels.length - hydrated.restoredPanels) +
-          Math.abs(layout.tabGroups.length - hydrated.restoredGroups) +
-          projectSwitchCycleMisses(spec, switched) +
-          terminalOutputPassMisses(SOAK_STREAM, SOAK_SCROLLBACK, terminal);
+        mergeMisses = addLayoutMergeMisses(mergeMisses, layoutMergeMisses(mergePlan, merged));
+        hydrationMisses = addHydrationMisses(
+          hydrationMisses,
+          hydrationPassMisses(hydrationPlan, hydrated)
+        );
+        terminalPassMisses += terminalOutputPassMisses(SOAK_STREAM, SOAK_SCROLLBACK, terminal);
 
         if (i % 15 === 0) {
           await spinEventLoop(0.8);
@@ -222,7 +280,9 @@ export const soakScenarios: PerfScenario[] = [
           checksum,
           // A soak that stopped churning holds its heap flat, which reads as the
           // cleanest run this scenario has ever recorded.
-          soakMisses: soakMisses + Math.abs(MIXED_SOAK_CYCLES - cycles),
+          soakCycleMisses: Math.abs(MIXED_SOAK_CYCLES - cycles),
+          terminalPassMisses,
+          ...soakMissTotals(mergeMisses, hydrationMisses),
         },
       };
     },
@@ -230,36 +290,49 @@ export const soakScenarios: PerfScenario[] = [
   {
     id: "PERF-061",
     name: "Overnight Soak Switch/Restart (Scaled)",
-    description: "Scaled overnight churn with repeated switching and restart-like cycles.",
+    description:
+      "Scaled overnight churn: 180 cycles of the real switch merge alongside a large snapshot build, for the restart-like allocation pattern.",
     tier: "soak",
     modes: ["nightly", "soak"],
     iterations: { nightly: 3, soak: 6 },
     warmups: 1,
-    correctness: ["churnMisses"],
+    correctness: [
+      "churnCycleMisses",
+      "snapshotBuildMisses",
+      "terminalDeltaMisses",
+      "tabGroupDeltaMisses",
+      "draftDeltaMisses",
+      "payloadMisses",
+      "terminalMergeMisses",
+      "tabGroupMergeMisses",
+      "draftMergeMisses",
+      "identicalPassMisses",
+      "singleChangeMisses",
+      "equalityProbeMisses",
+    ],
     async run() {
       maybeRunGc();
       const baselineMb = memoryUsedMb();
       const startedAt = performance.now();
       let checksum = 0;
-      let churnMisses = 0;
+      let snapshotBuildMisses = 0;
+      let mergeMisses = zeroLayoutMergeMisses();
       let cycles = 0;
 
       for (let i = 0; i < CHURN_SOAK_CYCLES; i += 1) {
-        const layout = i % 3 === 0 ? SOAK_LAYOUT_A : SOAK_LAYOUT_B;
-        const spec = { outgoingStateSize: 120, incomingLayout: layout, iterations: 1 };
-        const switched = simulateProjectSwitchCycle(spec);
+        const mergePlan = i % 3 === 0 ? SOAK_MERGE_PLAN_A : SOAK_MERGE_PLAN_B;
+        const merged = runLayoutMergePass(mergePlan);
         const scale = 800 + (i % 6) * 120;
         const snapshot = createLargeStateSnapshot(scale);
         const payload = JSON.stringify(snapshot);
-        checksum += switched.checksum + payload.length;
+        checksum += merged.payloadBytes + payload.length;
         cycles += 1;
-        churnMisses +=
-          projectSwitchCycleMisses(spec, switched) +
+        mergeMisses = addLayoutMergeMisses(mergeMisses, layoutMergeMisses(mergePlan, merged));
+        snapshotBuildMisses +=
           // The snapshot builder is the restart-like half of the churn: its
           // panel count follows `scale` by construction, so a builder that
           // stopped building scores here instead of allocating nothing.
-          Math.abs(scale - snapshot.appState.terminals.length) +
-          (payload.length > 0 ? 0 : 1);
+          Math.abs(scale - snapshot.appState.terminals.length) + (payload.length > 0 ? 0 : 1);
 
         if (i % 18 === 0) {
           await spinEventLoop(1.1);
@@ -279,7 +352,9 @@ export const soakScenarios: PerfScenario[] = [
           memoryGrowthPct,
           memoryGrowthMb,
           checksum,
-          churnMisses: churnMisses + Math.abs(CHURN_SOAK_CYCLES - cycles),
+          churnCycleMisses: Math.abs(CHURN_SOAK_CYCLES - cycles),
+          snapshotBuildMisses,
+          ...mergeMisses,
         },
       };
     },

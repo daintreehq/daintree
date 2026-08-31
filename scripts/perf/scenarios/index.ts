@@ -28,6 +28,7 @@ import { themeScenarios } from "./theme";
 import { notificationScenarios } from "./notifications";
 import { forgeRegistryScenarios } from "./forgeRegistry";
 import { agentRosterScenarios } from "./agentRoster";
+import { ipcEnvelopeScenarios } from "./ipcEnvelope";
 
 export const allScenarios: PerfScenario[] = [
   ...startupScenarios,
@@ -59,6 +60,7 @@ export const allScenarios: PerfScenario[] = [
   ...notificationScenarios,
   ...forgeRegistryScenarios,
   ...agentRosterScenarios,
+  ...ipcEnvelopeScenarios,
 ];
 
 export function getScenariosForMode(mode: PerfMode): PerfScenario[] {
@@ -204,6 +206,11 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-351",
   "PERF-352",
   "PERF-353",
+  "PERF-360",
+  "PERF-361",
+  "PERF-362",
+  "PERF-363",
+  "PERF-364",
 ]);
 
 /**

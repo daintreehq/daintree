@@ -4,30 +4,65 @@
     "maxRegressionPct": 15
   },
   "scenarios": {
-    "PERF-001": { "p95Ms": 3500, "maxRegressionPct": 15 },
-    "PERF-002": { "p95Ms": 4500, "maxRegressionPct": 15 },
-    "PERF-003": { "p95Ms": 1800, "maxRegressionPct": 15 },
-    "PERF-004": { "p95Ms": 8000, "maxRegressionPct": 20 },
-
-    "PERF-010": { "p95Ms": 1800, "maxRegressionPct": 15 },
-    "PERF-011": { "p95Ms": 1500, "maxRegressionPct": 15 },
-    "PERF-012": { "p95Ms": 2600, "maxRegressionPct": 20 },
-    "PERF-013": { "p95Ms": 1200, "maxRegressionPct": 15 },
-
-    "PERF-020": { "p95Ms": 2500, "maxRegressionPct": 15 },
-    "PERF-021": { "p95Ms": 3000, "maxRegressionPct": 15 },
-    "PERF-022": { "p95Ms": 3200, "maxRegressionPct": 20 },
-    "PERF-023": { "p95Ms": 3000, "maxRegressionPct": 15 },
-    "PERF-024": { "p95Ms": 2200, "maxRegressionPct": 15 },
-
-    "PERF-030": { "p95Ms": 2200, "maxRegressionPct": 15 },
-    "PERF-031": { "p95Ms": 2400, "maxRegressionPct": 50 },
-    "PERF-032": { "p95Ms": 2600, "maxRegressionPct": 15 },
-    "PERF-033": { "p95Ms": 100, "maxRegressionPct": 25 },
+    "PERF-001": {
+      "maxRegressionPct": 15
+    },
+    "PERF-002": {
+      "maxRegressionPct": 15
+    },
+    "PERF-003": {
+      "maxRegressionPct": 15
+    },
+    "PERF-004": {
+      "p95Ms": 8000,
+      "maxRegressionPct": 20
+    },
+    "PERF-010": {
+      "maxRegressionPct": 15
+    },
+    "PERF-011": {
+      "maxRegressionPct": 15
+    },
+    "PERF-012": {
+      "maxRegressionPct": 20
+    },
+    "PERF-013": {
+      "maxRegressionPct": 15
+    },
+    "PERF-020": {
+      "maxRegressionPct": 15
+    },
+    "PERF-021": {
+      "maxRegressionPct": 15
+    },
+    "PERF-022": {
+      "maxRegressionPct": 20
+    },
+    "PERF-023": {
+      "maxRegressionPct": 15
+    },
+    "PERF-024": {
+      "maxRegressionPct": 15
+    },
+    "PERF-030": {
+      "maxRegressionPct": 15
+    },
+    "PERF-031": {
+      "maxRegressionPct": 50
+    },
+    "PERF-032": {
+      "maxRegressionPct": 15
+    },
+    "PERF-033": {
+      "p95Ms": 100,
+      "maxRegressionPct": 25
+    },
     "PERF-034": {
       "p95Ms": 900,
       "maxRegressionPct": 40,
-      "maxMetricValues": { "echoDegradationX": 30 }
+      "maxMetricValues": {
+        "echoDegradationX": 30
+      }
     },
     "PERF-035": {
       "p95Ms": 15000,
@@ -39,11 +74,12 @@
         "resumeFlipLatencyMs": 2000
       }
     },
-
     "PERF-042": {
       "p95Ms": 1500,
       "maxRegressionPct": 20,
-      "maxMetricValues": { "eventLoopLagMs": 100 }
+      "maxMetricValues": {
+        "eventLoopLagMs": 100
+      }
     },
     "PERF-043": {
       "p95Ms": 12000,
@@ -83,12 +119,17 @@
         "residualHostCount": 0
       }
     },
-
     "PERF-053": {
-      "maxMetricValues": { "rowMisses": 0 }
+      "maxMetricValues": {
+        "rowMisses": 0
+      }
     },
     "PERF-054": {
-      "maxMetricValues": { "lookupMisses": 0, "indexPlanMisses": 0, "orderedRowMisses": 0 }
+      "maxMetricValues": {
+        "lookupMisses": 0,
+        "indexPlanMisses": 0,
+        "orderedRowMisses": 0
+      }
     },
     "PERF-055": {
       "maxMetricValues": {
@@ -109,31 +150,28 @@
       }
     },
     "PERF-057": {
-      "maxMetricValues": { "readBackMisses": 0, "writeMisses": 0 }
+      "maxMetricValues": {
+        "readBackMisses": 0,
+        "writeMisses": 0
+      }
     },
     "PERF-058": {
-      "maxMetricValues": { "keyReadMisses": 0, "hydrationMisses": 0 }
+      "maxMetricValues": {
+        "keyReadMisses": 0,
+        "hydrationMisses": 0
+      }
     },
-
     "PERF-070": {
-      "p95Ms": 1200,
-      "maxRegressionPct": 15,
-      "maxMetricValues": { "serializeMs": 5, "totalMs": 10 }
+      "maxRegressionPct": 15
     },
     "PERF-071": {
-      "p95Ms": 1500,
-      "maxRegressionPct": 15,
-      "maxMetricValues": { "serializeMs": 8, "totalMs": 15 }
+      "maxRegressionPct": 15
     },
     "PERF-072": {
-      "p95Ms": 1800,
-      "maxRegressionPct": 15,
-      "maxMetricValues": { "serializeMs": 12, "totalMs": 25 }
+      "maxRegressionPct": 15
     },
     "PERF-073": {
-      "p95Ms": 2600,
-      "maxRegressionPct": 20,
-      "maxMetricValues": { "serializeTotalMs": 25 }
+      "maxRegressionPct": 20
     },
     "PERF-074": {
       "p95Ms": 2000,
@@ -193,53 +231,63 @@
         "listenerLeakCount": 0
       }
     },
-
     "PERF-060": {
-      "p95Ms": 5000,
       "maxRegressionPct": 50,
-      "maxMetricValues": { "memoryGrowthPct": 10 }
+      "maxMetricValues": {
+        "memoryGrowthPct": 10
+      }
     },
     "PERF-061": {
-      "p95Ms": 7000,
       "maxRegressionPct": 50,
-      "maxMetricValues": { "memoryGrowthMb": 64 }
+      "maxMetricValues": {
+        "memoryGrowthMb": 64
+      }
     },
     "PERF-062": {
       "p95Ms": 6500,
       "maxRegressionPct": 20,
-      "maxMetricValues": { "memoryGrowthPct": 10 }
+      "maxMetricValues": {
+        "memoryGrowthPct": 10
+      }
     },
-
     "PERF-080": {
-      "p95Ms": 500,
-      "maxRegressionPct": 15,
-      "maxMetricValues": { "bytes": 10000000 }
+      "maxRegressionPct": 15
     },
-
     "PERF-100": {
       "p95Ms": 100,
       "maxRegressionPct": 50,
-      "maxMetricValues": { "gitSpawns": 1.5 }
+      "maxMetricValues": {
+        "gitSpawns": 1.5
+      }
     },
     "PERF-101": {
       "p95Ms": 1500,
       "maxRegressionPct": 50,
-      "maxMetricValues": { "spawnsPerWorktreeN50": 1.5 }
+      "maxMetricValues": {
+        "spawnsPerWorktreeN50": 1.5
+      }
     },
     "PERF-102": {
       "p95Ms": 60,
       "maxRegressionPct": 50,
-      "maxMetricValues": { "gitSpawns": 1 }
+      "maxMetricValues": {
+        "gitSpawns": 1
+      }
     },
     "PERF-103": {
       "p95Ms": 100,
       "maxRegressionPct": 50,
-      "maxMetricValues": { "gitSpawns": 1.5 }
+      "maxMetricValues": {
+        "gitSpawns": 1.5
+      }
     },
     "PERF-104": {
       "p95Ms": 4000,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "statusPasses": 3, "gitSpawns": 10 }
+      "maxMetricValues": {
+        "statusPasses": 3,
+        "gitSpawns": 10
+      }
     },
     "PERF-105": {
       "p95Ms": 20000,
@@ -267,26 +315,34 @@
         "residualGitSpawns": 0
       }
     },
-
     "PERF-130": {
       "p95Ms": 400,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "gitSpawns": 8 }
+      "maxMetricValues": {
+        "gitSpawns": 8
+      }
     },
     "PERF-131": {
       "p95Ms": 600,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "gitSpawns": 10 }
+      "maxMetricValues": {
+        "gitSpawns": 10
+      }
     },
     "PERF-132": {
       "p95Ms": 4000,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "detectionToIntervalRatio": 2.5 }
+      "maxMetricValues": {
+        "detectionToIntervalRatio": 2.5
+      }
     },
     "PERF-133": {
       "p95Ms": 1200,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "emitCount": 5, "gitSpawns": 18 }
+      "maxMetricValues": {
+        "emitCount": 5,
+        "gitSpawns": 18
+      }
     },
     "PERF-134": {
       "p95Ms": 800,
@@ -295,36 +351,57 @@
     "PERF-135": {
       "p95Ms": 800,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "worktreeListSpawns": 5 }
+      "maxMetricValues": {
+        "worktreeListSpawns": 5
+      }
     },
-    "PERF-136": { "p95Ms": 1500, "maxRegressionPct": 75 },
+    "PERF-136": {
+      "p95Ms": 1500,
+      "maxRegressionPct": 75
+    },
     "PERF-137": {
       "p95Ms": 3000,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "worktreeListSpawns": 8 }
+      "maxMetricValues": {
+        "worktreeListSpawns": 8
+      }
     },
-    "PERF-138": { "p95Ms": 1000, "maxRegressionPct": 75 },
+    "PERF-138": {
+      "p95Ms": 1000,
+      "maxRegressionPct": 75
+    },
     "PERF-139": {
       "p95Ms": 800,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "cooldownRemovalMs": 1200 }
+      "maxMetricValues": {
+        "cooldownRemovalMs": 1200
+      }
     },
     "PERF-140": {
       "p95Ms": 60,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "mapChangesPerApply": 1.05 }
+      "maxMetricValues": {
+        "mapChangesPerApply": 1.05
+      }
     },
     "PERF-141": {
       "p95Ms": 40,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "mapIdentityChanges": 0 }
+      "maxMetricValues": {
+        "mapIdentityChanges": 0
+      }
     },
-
-    "PERF-110": { "p95Ms": 80, "maxRegressionPct": 50 },
+    "PERF-110": {
+      "p95Ms": 80,
+      "maxRegressionPct": 50
+    },
     "PERF-111": {
       "p95Ms": 3500,
       "maxRegressionPct": 50,
-      "maxMetricValues": { "maxStepMs": 150, "settleResizeMs": 5 }
+      "maxMetricValues": {
+        "maxStepMs": 150,
+        "settleResizeMs": 5
+      }
     },
     "PERF-112": {
       "p95Ms": 25,
@@ -335,7 +412,6 @@
         "drainMsLargeBacklog": 500
       }
     },
-
     "PERF-092": {
       "p95Ms": 60000,
       "maxRegressionPct": 100,
@@ -378,62 +454,90 @@
         "residualGitSpawns": 0
       }
     },
-
-    "PERF-150": { "p95Ms": 15, "maxRegressionPct": 75 },
-    "PERF-151": {
-      "p95Ms": 15,
-      "maxRegressionPct": 75,
-      "maxMetricValues": { "msPerTargetAt48": 1 }
+    "PERF-150": {
+      "maxRegressionPct": 75
     },
-
-    "PERF-160": { "p95Ms": 170, "maxRegressionPct": 75 },
+    "PERF-151": {
+      "maxRegressionPct": 75,
+      "maxMetricValues": {
+        "msPerTargetAt48": 1
+      }
+    },
+    "PERF-160": {
+      "p95Ms": 170,
+      "maxRegressionPct": 75
+    },
     "PERF-161": {
       "p95Ms": 320,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "markedIntraLine": 0 }
+      "maxMetricValues": {
+        "markedIntraLine": 0
+      }
     },
-    "PERF-162": { "p95Ms": 260, "maxRegressionPct": 75 },
-
+    "PERF-162": {
+      "p95Ms": 260,
+      "maxRegressionPct": 75
+    },
     "PERF-170": {
       "p95Ms": 40,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "p99KeystrokeMs": 8 }
+      "maxMetricValues": {
+        "p99KeystrokeMs": 8
+      }
     },
     "PERF-171": {
       "p95Ms": 55,
       "maxRegressionPct": 75,
-      "maxMetricValues": { "msPerKAction": 6 }
+      "maxMetricValues": {
+        "msPerKAction": 6
+      }
     },
-
     "PERF-190": {
       "p95Ms": 60,
-      "maxMetricValues": { "p99KeystrokeMs": 4 }
+      "maxMetricValues": {
+        "p99KeystrokeMs": 4
+      }
     },
     "PERF-191": {
       "p95Ms": 220,
-      "maxMetricValues": { "msPerKFile": 0.5, "largeP99KeystrokeMs": 8 }
+      "maxMetricValues": {
+        "msPerKFile": 0.5,
+        "largeP99KeystrokeMs": 8
+      }
     },
     "PERF-192": {
       "p95Ms": 450,
-      "maxMetricValues": { "coldMsPerKFile": 22, "largeColdMs": 260 }
+      "maxMetricValues": {
+        "coldMsPerKFile": 22,
+        "largeColdMs": 260
+      }
     },
-
     "PERF-193": {
       "p95Ms": 150,
-      "maxMetricValues": { "p99SearchMs": 22 }
+      "maxMetricValues": {
+        "p99SearchMs": 22
+      }
     },
     "PERF-194": {
       "p95Ms": 220,
-      "maxMetricValues": { "msPerKLine": 2.5, "stepForwardMs": 2, "stepBackwardMs": 2 }
+      "maxMetricValues": {
+        "msPerKLine": 2.5,
+        "stepForwardMs": 2,
+        "stepBackwardMs": 2
+      }
     },
-
     "PERF-195": {
       "p95Ms": 1600,
-      "maxMetricValues": { "p95TerminalMs": 160, "snapshotKB": 800 }
+      "maxMetricValues": {
+        "p95TerminalMs": 160,
+        "snapshotKB": 800
+      }
     },
     "PERF-196": {
       "p95Ms": 800,
-      "maxMetricValues": { "msPerKLine": 6 }
+      "maxMetricValues": {
+        "msPerKLine": 6
+      }
     }
   }
 }

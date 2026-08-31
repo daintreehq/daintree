@@ -24,6 +24,50 @@ function scenario(id: string) {
  * moves. A scenario that quietly began measuring nothing reports all-zero
  * counts, which is exactly what the lower bounds here reject.
  */
+/**
+ * PERF-070..073 used to run `simulateProjectSwitchPhased` end to end. Five of
+ * its seven phases now drive the real layout merge and the real restore
+ * builders; the remaining four are still simulations and say so. These pin the
+ * split: the real phases must produce their real outputs, and the simulated
+ * ones must still produce the counts that stop a skipped phase reading as the
+ * fastest phase on record.
+ */
+describe("PERF-070..073 phase split", () => {
+  it.each(["PERF-070", "PERF-071", "PERF-072", "PERF-073"])(
+    "%s grades every real operation and every simulated phase",
+    async (id) => {
+      const found = scenario(id);
+      const sample = await found.run(context);
+      const metrics = sample.metrics!;
+
+      for (const name of found.correctness!) {
+        expect(metrics[name], `${id}.${name}`).toBe(0);
+      }
+      // The real halves produced something.
+      expect(metrics.payloadBytes).toBeGreaterThan(0);
+      expect(metrics.deepEqualCalls).toBeGreaterThan(0);
+      expect(metrics.mergedEntries).toBeGreaterThan(0);
+      expect(metrics.restoredPanels).toBeGreaterThan(0);
+      // The simulated halves still report their counts.
+      expect(metrics.hibernatedTerminals).toBeGreaterThan(0);
+      expect(metrics.ptyDescriptors).toBeGreaterThan(0);
+      expect(metrics.fileStatuses).toBeGreaterThan(0);
+      // The budget file references these three by name; a rename would drop
+      // them from the report as a silent measurement issue.
+      expect(Number.isFinite(metrics.serializeMs)).toBe(true);
+      expect(Number.isFinite(metrics.totalMs)).toBe(true);
+      expect(sample.durationMs).toBeGreaterThan(0);
+    },
+    30_000
+  );
+
+  it("PERF-073 sweeps three layout sizes and reports serializeTotalMs", async () => {
+    const sample = await scenario("PERF-073").run(context);
+    expect(sample.metrics!.sweepSteps).toBe(3);
+    expect(sample.metrics!.serializeTotalMs).toBeGreaterThan(0);
+  }, 30_000);
+});
+
 describe("project-view perf scenarios", () => {
   it("PERF-074 rotates inside the cache limit without cold-starting", async () => {
     const sample = await scenario("PERF-074").run(context);

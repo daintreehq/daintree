@@ -1,15 +1,229 @@
+import { performance } from "node:perf_hooks";
 import type { PerfScenario } from "../types";
+import { simulateUnreachableSwitchPhases, unreachablePhaseMisses } from "../lib/workloads";
 import {
-  createPersistedLayout,
-  projectSwitchPhaseMisses,
-  simulateProjectSwitchPhased,
-  spinEventLoop,
-} from "../lib/workloads";
+  buildLayoutMergePlan,
+  layoutMergeMisses,
+  runLayoutMergePass,
+  type LayoutMergePlan,
+} from "../lib/layoutMergeFixture";
+import {
+  buildHydrationPlan,
+  hydrationPassMisses,
+  loadStatePatcherModule,
+  runHydrationPass,
+  type HydrationPlan,
+} from "../lib/hydrationFixture";
 import { ProjectViewHarness, flushImmediates } from "../lib/projectViewFixture";
 
-const SMALL_LAYOUT = createPersistedLayout(60, 6, 310);
-const MEDIUM_LAYOUT = createPersistedLayout(90, 6, 311);
-const LARGE_LAYOUT = createPersistedLayout(140, 10, 312);
+/**
+ * PERF-070..073 — the phase-instrumented project switch.
+ *
+ * These four used to run `simulateProjectSwitchPhased`, seven hand-written
+ * loops that built objects and timed the transform. Five of the seven now run
+ * the production code the phase names claim:
+ *
+ * | Phase                | Subject                                                     |
+ * | -------------------- | ----------------------------------------------------------- |
+ * | `serializeMs`        | REAL — `computeIdArrayDelta` x2 + `computeRecordDelta` over  |
+ * |                      | `deepEqualIgnoringUndefined`, then the outgoing JSON payload |
+ * | `ptyHibernateMs`     | simulated — see `simulateUnreachableSwitchPhases`            |
+ * | `storeResetMs`       | simulated — no React here, so no subscriber fan-out          |
+ * | `projectLoadMs`      | REAL — `mergeIdArray` x2 + `mergeRecord`, Main's side of the |
+ * |                      | switch (`projectCrud/switch.ts` 373/391/423)                 |
+ * | `terminalRestoreMs`  | REAL — the `statePatcher` restore builders, per panel        |
+ * | `ptyWarmupMs`        | simulated — no pty-host                                      |
+ * | `gitFetchMs`         | simulated — no git subprocess (PERF-100..104 measure that)   |
+ *
+ * `visibleMs` is the pre-swap half (serialize + hibernate + store reset +
+ * project load) and `hydrateMs` the post-visible half, as before. Both now
+ * carry two simulated terms each, so read them as a switch's SHAPE rather than
+ * as a latency a user experiences — and read the counts, which are what a
+ * skipped phase cannot post.
+ */
+
+const SMALL_MERGE_PLAN = buildLayoutMergePlan("small", 60, 310);
+const MEDIUM_MERGE_PLAN = buildLayoutMergePlan("medium", 90, 311);
+const LARGE_MERGE_PLAN = buildLayoutMergePlan("large", 140, 312);
+
+const SMALL_HYDRATION_PLAN = buildHydrationPlan("small", 60, 6);
+const MEDIUM_HYDRATION_PLAN = buildHydrationPlan("medium", 90, 6);
+const LARGE_HYDRATION_PLAN = buildHydrationPlan("large", 140, 10);
+
+const PHASE_CORRECTNESS = [
+  // The real merge pipeline, one term per operation.
+  "terminalDeltaMisses",
+  "tabGroupDeltaMisses",
+  "draftDeltaMisses",
+  "payloadMisses",
+  "terminalMergeMisses",
+  "tabGroupMergeMisses",
+  "draftMergeMisses",
+  "identicalPassMisses",
+  "singleChangeMisses",
+  "equalityProbeMisses",
+  // The real per-panel restore builders.
+  "kindInferenceMisses",
+  "backendRestoreMisses",
+  "reconnectRestoreMisses",
+  "respawnResumeMisses",
+  "resumeSuppressionMisses",
+  "nonPtyRestoreMisses",
+  "sanitizerMisses",
+  "orphanMisses",
+  "routeCoverageMisses",
+  // The four phases that are still simulations — they report only durations,
+  // so a phase reduced to a no-op posts the best number here without these.
+  "hibernateMisses",
+  "storeResetMisses",
+  "ptyWarmupMisses",
+  "gitFetchMisses",
+] as const;
+
+interface PhasedSwitchSample {
+  durationMs: number;
+  metrics: Record<string, number>;
+}
+
+/**
+ * One phased switch, in the order Main and the renderer run the phases.
+ *
+ * Every duration is measured around its own phase, and the two oracles are
+ * evaluated afterwards so neither shows up in a phase it grades.
+ */
+async function runPhasedSwitch(
+  mergePlan: LayoutMergePlan,
+  hydrationPlan: HydrationPlan,
+  outgoingTerminalCount: number
+): Promise<PhasedSwitchSample> {
+  const mod = await loadStatePatcherModule();
+  const residualSpec = {
+    outgoingTerminalCount,
+    incomingPanelCount: hydrationPlan.panels.length,
+    worktreeCount: 10,
+  };
+
+  const merge = runLayoutMergePass(mergePlan);
+  const residual = simulateUnreachableSwitchPhases(residualSpec);
+  const hydration = runHydrationPass(mod, hydrationPlan);
+
+  const serializeMs = merge.captureMs;
+  const projectLoadMs = merge.mergeMs;
+  const terminalRestoreMs = hydration.elapsedMs;
+  const visibleMs = serializeMs + residual.ptyHibernateMs + residual.storeResetMs + projectLoadMs;
+  const hydrateMs = terminalRestoreMs + residual.ptyWarmupMs + residual.gitFetchMs;
+  const totalMs = visibleMs + hydrateMs;
+
+  return {
+    durationMs: totalMs,
+    metrics: {
+      serializeMs,
+      ptyHibernateMs: residual.ptyHibernateMs,
+      storeResetMs: residual.storeResetMs,
+      projectLoadMs,
+      terminalRestoreMs,
+      ptyWarmupMs: residual.ptyWarmupMs,
+      gitFetchMs: residual.gitFetchMs,
+      totalMs,
+      visibleMs,
+      hydrateMs,
+      // Outside `totalMs`: the null/unit merge probes are this scenario's own
+      // oracle, not part of the switch it describes.
+      correctnessProbeMs: merge.probeMs,
+      payloadBytes: merge.payloadBytes,
+      deepEqualCalls: merge.deepEqualCalls,
+      mergedEntries: merge.mergedTerminals.length,
+      restoredPanels: hydration.builtPanelCount,
+      hibernatedTerminals: residual.hibernatedTerminals,
+      ptyDescriptors: residual.ptyDescriptors,
+      fileStatuses: residual.fileStatuses,
+      ...layoutMergeMisses(mergePlan, merge),
+      ...hydrationPassMisses(hydrationPlan, hydration),
+      ...unreachablePhaseMisses(residualSpec, residual),
+    },
+  };
+}
+
+const phasedSwitchScenarios: PerfScenario[] = [
+  {
+    id: "PERF-070",
+    name: "Project Switch Phases - Small",
+    description:
+      "Phase-instrumented project switch with a small layout (60 panels, 6 worktrees). Serialize, project-load and terminal-restore drive the real layout merge and the real restore builders; PTY hibernate/warmup, store reset and git fetch remain simulations and are labelled as such.",
+    tier: "fast",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 10, ci: 20, nightly: 28 },
+    warmups: 2,
+    correctness: PHASE_CORRECTNESS,
+    run: () => runPhasedSwitch(SMALL_MERGE_PLAN, SMALL_HYDRATION_PLAN, 40),
+  },
+  {
+    id: "PERF-071",
+    name: "Project Switch Phases - Medium",
+    description:
+      "Phase-instrumented project switch with a medium layout (90 panels, 6 worktrees). Same real/simulated phase split as PERF-070.",
+    tier: "fast",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 10, ci: 20, nightly: 28 },
+    warmups: 2,
+    correctness: PHASE_CORRECTNESS,
+    run: () => runPhasedSwitch(MEDIUM_MERGE_PLAN, MEDIUM_HYDRATION_PLAN, 80),
+  },
+  {
+    id: "PERF-072",
+    name: "Project Switch Phases - Large",
+    description:
+      "Phase-instrumented project switch with a large layout (140 panels, 10 worktrees). Same real/simulated phase split as PERF-070.",
+    tier: "fast",
+    modes: ["ci", "nightly"],
+    iterations: { ci: 16, nightly: 24 },
+    warmups: 2,
+    correctness: PHASE_CORRECTNESS,
+    run: () => runPhasedSwitch(LARGE_MERGE_PLAN, LARGE_HYDRATION_PLAN, 150),
+  },
+  {
+    id: "PERF-073",
+    name: "Project Switch Phase Regression - Serialize Heavy",
+    description:
+      "Sweeps three layout sizes in one iteration so the real delta+merge cost can be read against panel count — the shape a superlinear regression in deepEqualIgnoringUndefined or mergeIdArray would show up as.",
+    tier: "heavy",
+    modes: ["ci", "nightly"],
+    iterations: { ci: 6, nightly: 10 },
+    warmups: 1,
+    correctness: PHASE_CORRECTNESS,
+    async run() {
+      const sweep: Array<[LayoutMergePlan, HydrationPlan, number]> = [
+        [SMALL_MERGE_PLAN, SMALL_HYDRATION_PLAN, 50],
+        [MEDIUM_MERGE_PLAN, MEDIUM_HYDRATION_PLAN, 100],
+        [LARGE_MERGE_PLAN, LARGE_HYDRATION_PLAN, 200],
+      ];
+
+      const totals: Record<string, number> = {};
+      let serializeTotalMs = 0;
+      let totalSwitchWorkMs = 0;
+      const startedAt = performance.now();
+
+      for (const [mergePlan, hydrationPlan, outgoing] of sweep) {
+        const sample = await runPhasedSwitch(mergePlan, hydrationPlan, outgoing);
+        serializeTotalMs += sample.metrics.serializeMs;
+        totalSwitchWorkMs += sample.metrics.totalMs;
+        for (const [name, value] of Object.entries(sample.metrics)) {
+          totals[name] = (totals[name] ?? 0) + value;
+        }
+      }
+
+      return {
+        durationMs: performance.now() - startedAt,
+        metrics: {
+          ...totals,
+          serializeTotalMs,
+          totalSwitchWorkMs,
+          sweepSteps: sweep.length,
+        },
+      };
+    },
+  },
+];
 
 /**
  * PERF-074..077 — the real per-project view machinery.
@@ -475,123 +689,6 @@ const projectViewScenarios: PerfScenario[] = [
 ];
 
 export const projectSwitchScenarios: PerfScenario[] = [
-  {
-    id: "PERF-070",
-    name: "Project Switch Phases - Small",
-    description: "Phase-instrumented project switch with a small layout (60 panels, 6 worktrees).",
-    tier: "fast",
-    modes: ["smoke", "ci", "nightly"],
-    iterations: { smoke: 10, ci: 20, nightly: 28 },
-    warmups: 2,
-    correctness: ["phaseMisses"],
-    async run() {
-      const spec = { outgoingStateSize: 40, incomingLayout: SMALL_LAYOUT };
-      const result = simulateProjectSwitchPhased(spec);
-      await spinEventLoop(0.5);
-
-      return {
-        durationMs: 0,
-        metrics: {
-          ...result.phases,
-          checksum: result.checksum,
-          phaseMisses: projectSwitchPhaseMisses(spec, result),
-        },
-      };
-    },
-  },
-  {
-    id: "PERF-071",
-    name: "Project Switch Phases - Medium",
-    description: "Phase-instrumented project switch with a medium layout (90 panels, 6 worktrees).",
-    tier: "fast",
-    modes: ["smoke", "ci", "nightly"],
-    iterations: { smoke: 10, ci: 20, nightly: 28 },
-    warmups: 2,
-    correctness: ["phaseMisses"],
-    async run() {
-      const spec = { outgoingStateSize: 80, incomingLayout: MEDIUM_LAYOUT };
-      const result = simulateProjectSwitchPhased(spec);
-      await spinEventLoop(0.5);
-
-      return {
-        durationMs: 0,
-        metrics: {
-          ...result.phases,
-          checksum: result.checksum,
-          phaseMisses: projectSwitchPhaseMisses(spec, result),
-        },
-      };
-    },
-  },
-  {
-    id: "PERF-072",
-    name: "Project Switch Phases - Large",
-    description:
-      "Phase-instrumented project switch with a large layout (140 panels, 10 worktrees).",
-    tier: "fast",
-    modes: ["ci", "nightly"],
-    iterations: { ci: 16, nightly: 24 },
-    warmups: 2,
-    correctness: ["phaseMisses"],
-    async run() {
-      const spec = { outgoingStateSize: 150, incomingLayout: LARGE_LAYOUT };
-      const result = simulateProjectSwitchPhased(spec);
-      await spinEventLoop(0.5);
-
-      return {
-        durationMs: 0,
-        metrics: {
-          ...result.phases,
-          checksum: result.checksum,
-          phaseMisses: projectSwitchPhaseMisses(spec, result),
-        },
-      };
-    },
-  },
-  {
-    id: "PERF-073",
-    name: "Project Switch Phase Regression - Serialize Heavy",
-    description:
-      "Varies outgoing state size across iterations to detect O(n^2) serialize regressions.",
-    tier: "heavy",
-    modes: ["ci", "nightly"],
-    iterations: { ci: 6, nightly: 10 },
-    warmups: 1,
-    correctness: ["phaseMisses"],
-    async run() {
-      const sizes = [50, 100, 200];
-      let checksum = 0;
-      let serializeTotalMs = 0;
-      let totalSwitchWorkMs = 0;
-      let visibleTotalMs = 0;
-      let hydrateTotalMs = 0;
-      let phaseMisses = 0;
-
-      for (const size of sizes) {
-        const spec = { outgoingStateSize: size, incomingLayout: MEDIUM_LAYOUT };
-        const result = simulateProjectSwitchPhased(spec);
-        checksum += result.checksum;
-        serializeTotalMs += result.phases.serializeMs;
-        totalSwitchWorkMs += result.phases.totalMs;
-        visibleTotalMs += result.phases.visibleMs;
-        hydrateTotalMs += result.phases.hydrateMs;
-        phaseMisses += projectSwitchPhaseMisses(spec, result);
-      }
-
-      await spinEventLoop(1);
-
-      return {
-        durationMs: 0,
-        metrics: {
-          checksum,
-          serializeTotalMs,
-          totalSwitchWorkMs,
-          visibleTotalMs,
-          hydrateTotalMs,
-          phaseMisses,
-        },
-      };
-    },
-  },
+  ...phasedSwitchScenarios,
   ...projectViewScenarios,
 ];
