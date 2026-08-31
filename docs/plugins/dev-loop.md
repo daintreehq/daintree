@@ -72,6 +72,30 @@ Each `install` replaces the previously installed copy. Daintree unloads the old 
 
 **Error surfacing:** if the plugin throws during activate or render, Daintree shows an inline error boundary with the stack trace. The rest of Daintree continues to work.
 
+### The project-local edit loop
+
+A project-local plugin has no package-and-install step and does not use `daintree-plugin dev` — it already sits where the host reads it, so a rebuilt `dist/` is picked up in place:
+
+```bash
+cd .daintree/plugins/acme.dashboard
+npm install
+npm run dev        # vite build --watch, rebuilding dist/ in place
+```
+
+The scaffolded recipe in `.daintree/recipes/` starts the same watcher as a project terminal, so the build comes up with the rest of the environment.
+
+Daintree watches `plugin.json` and `dist/` for every trusted project. **`src/` is never watched** — the host doesn't know how your plugin builds, so a source write says nothing about whether a loadable artifact exists yet. Keep the build watcher running; editing `src/` alone reloads nothing.
+
+Three behaviours shape what you see while iterating:
+
+- A **~200 ms trailing debounce**, so a rebuild that writes a whole `dist/` reloads once rather than per file.
+- Reloads **defer while `.git/index.lock` exists**, so a branch switch or a pull reconciles against the settled tree rather than a half-applied one.
+- A **half-written `plugin.json` keeps the running version.** The re-read is retried with a short backoff; only a manifest still broken afterwards disables the plugin and leaves an `invalid` row in the plugin manager. A plugin directory that has _vanished_ unloads immediately, which is what a branch switch should do.
+
+Reloads are per plugin directory, not per project — rebuilding one plugin doesn't restart its siblings. Your `settings` values and `host.storage` survive a reload; module-scope state in the worker and React state in your views do not, exactly as for an installed plugin.
+
+Full detail, including the trust gate and the contribution restrictions, is in [Project-local plugins](./project-local.md).
+
 ### `daintree-plugin dev`
 
 Starts a hot-reload dev loop against a running Daintree instance:

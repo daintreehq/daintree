@@ -57,6 +57,7 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 | Doc | Purpose |
 | --- | --- |
 | [plugins/README.md](./plugins/README.md) | Sub-index for the plugin system — start here for everything plugin-author-facing. |
+| [plugins/project-local.md](./plugins/project-local.md) | Plugins a project ships in its own repository — on-disk layout, the committed `dist/` contract, the trust gate, hot reload, contribution scoping. |
 
 The plugin sub-index links onward to getting-started, manifest reference, contribution points, host API, agent extensions, distribution, the dev loop, trust model, architecture, and the [1.0 freeze plan](./plugins/freeze-plan.md) (the roadmap to a stable, freezeable plugin API).
 

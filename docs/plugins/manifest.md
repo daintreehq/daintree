@@ -40,6 +40,11 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     { "name": "Grace Hopper", "email": "grace@example.com" },
   ],
 
+  // Declares the plugin is only ever loaded from a project's own
+  // .daintree/plugins/. REQUIRED there, REJECTED under the user and builtin
+  // roots. Omit it for a normal, app-wide plugin. See "scope" below.
+  "scope": "project",
+
   // Path to the compiled ESM entry, relative to the plugin directory.
   // Optional — plugins with only static contributions (themes, static MCP
   // server configs) don't need one.
@@ -86,6 +91,7 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "forgeProviders": [/* ... */],
     "fileDecorationProviders": [/* ... */],
     "processTools": [/* command → terminal-tab icon detections */],
+    "surfaces": {/* project-scope only; see "contributes.surfaces" below */},
   },
 }
 ```
@@ -167,6 +173,19 @@ If the running Daintree version doesn't satisfy the range, the plugin is rejecte
 
 Daintree is pre-1.0. Pin to a current minor during this phase — a plugin that works on Daintree 0.11 may not work on 0.12 without changes.
 
+### `scope`
+
+The only accepted value is `"project"`, and it declares that the plugin is a **project-local** plugin — one that lives in a project's own repository at `<projectRoot>/.daintree/plugins/` and loads only while that project is open. Omit the field entirely for a normal, app-wide plugin.
+
+The manifest gate enforces it in both directions, against the root the manifest was discovered under:
+
+- Discovered under a project's `.daintree/plugins/` **without** `"scope": "project"` → rejected (`project_scope_required`). The host will not load a project-local plugin that has not opted in.
+- Discovered under the user or builtin plugins root **with** `"scope": "project"` → rejected (`project_scope_not_allowed`).
+
+This is a guardrail against accidental promotion, not a security control — the trust decision is the project folder, not this field. What it prevents is a plugin loading under assumptions its author never made: a project plugin copied into the user directory would go app-wide with project-shaped expectations about its settings tier and its bound project, and a user plugin dropped into `.daintree/plugins/` would load with none of the project-local guarantees. Neither failure is visible at runtime, so both are refused at the gate.
+
+Declaring `"scope": "project"` also changes what the manifest may contribute. `contributes.surfaces` becomes available, and eight contribution groups become unavailable — `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `processTools`, `mcpServers` and `forgeProviders`, each rejected with an error naming the structural reason it cannot yet be narrowed to one project. See [Project-local plugins](./project-local.md) and the per-point status in [Contribution points](./contribution-points.md).
+
 ### `capabilities`
 
 Array of capability tokens the plugin wants. The model is **disclosure-first with host-side policy effects** — there is no Node sandbox, so a plugin is not blocked from doing anything regardless of what it declares, but declared tokens are not purely advisory. Seven high-risk tokens (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`, `agent:register`, `agent:input`) raise the plugin's actions to a confirm dialog (`effectiveDanger: "confirm"`) via the host's `CONFIRM_TRIGGERING_CAPABILITIES` set — by default every action, though a command can narrow which capabilities that derivation consults with [`requires`](./contribution-points.md#commands--shipped). `socket:connect` is deliberately excluded from that set: the host has no interception point for `node:net`, so elevating on a token it cannot enforce would buy friction without buying safety. See the [trust model](./trust-model.md) for the full contract.
@@ -214,6 +233,8 @@ Object containing arrays for each contribution type. All fields are optional; un
 - `views` — `location: "panel"` is wired today (the renderer host mounts the contributed component in a grid panel). `location: "sidebar"` is rejected at manifest validation — the sidebar host does not exist yet, so accepting it would validate a view the runtime cannot render.
 - `mcpServers` — the declared `command` is lazily spawned as a real subprocess the first time its tools are enumerated, and is supervised (killed on Daintree exit; on crash it transitions to `crashed` and tool calls reject until an explicit manual restart — there is no automatic retry or backoff). Treat a contributed MCP server as trust-gated, not inert.
 - `settings` — beyond `string` / `number` / `boolean` / `enum` / `json` / `secret`, the field `type` accepts `path` / `directory` / `file`, which render a read-only path input plus a native folder/file chooser (`file` narrows the chooser by an `extensions` array; `mustExist` advisory-flags a stored path that no longer resolves). A `secret`-typed setting is encrypted at rest through the OS keychain when one is available, transparently to the plugin. Full field reference in the [Contribution points → Settings schema](./contribution-points.md#settings-schema--shipped).
+
+- `surfaces` — **project-scope only.** An object, not an array: fixed slots a project-local plugin claims to replace one of the host's own surfaces for its own project. `emptyCanvas` (`{ "viewId": "..." }`) is the only slot accepted today; `viewId` must name a declared `contributes.views` entry, and at most one plugin may claim a slot per project. A manifest without `"scope": "project"` that declares any surface is rejected. See [Project-local plugins → Surfaces](./project-local.md#surfaces).
 
 > These two points were named `experimental_views` and `experimental_mcpServers` before the 1.0 freeze. The old keys are still accepted as deprecated aliases — a manifest using them parses and runs identically, but logs a one-time deprecation warning naming the stable replacement. Rename to `views` / `mcpServers`; the aliases may be removed in a future major.
 
