@@ -198,24 +198,46 @@ describe("PERF-302 colour maths oracle", () => {
     const stubbed = await import("../lib/themeFixture");
     const stubbedCorpus = stubbed.buildColourCorpus();
     const stubbedPass = stubbed.runColourMathPass(stubbedCorpus);
-    expect(stubbedPass.checksum).not.toBe(0);
+    // Per-operation sums make this sharper than the old aggregate could be: the
+    // other three accumulators are untouched and non-zero, and only the stubbed
+    // operation's own term collapses.
+    expect(stubbedPass.sums.contrast).not.toBe(0);
+    expect(stubbedPass.sums.apca).not.toBe(0);
+    expect(stubbedPass.sums.deltaEOK).toBe(0);
     expect(stubbed.colourMathMisses(stubbedCorpus, stubbedPass)).toBeGreaterThan(0);
     vi.doUnmock("../../../shared/theme/index.js");
     vi.resetModules();
   });
 
   it("scores a pass that converted nothing", () => {
-    expect(colourMathMisses(corpus, { conversions: 0, checksum: 0 })).toBeGreaterThan(0);
+    const empty = { conversions: 0, sums: { deltaOklch: 0, contrast: 0, apca: 0, deltaEOK: 0 } };
+    expect(colourMathMisses(corpus, empty)).toBeGreaterThan(0);
   });
 
-  it("scores a pass whose accumulator never moved", () => {
-    expect(colourMathMisses(corpus, { ...pass, checksum: 0 })).toBeGreaterThan(0);
+  it.each(["deltaOklch", "contrast", "apca", "deltaEOK"] as const)(
+    "scores a loop that stopped calling %s",
+    (operation) => {
+      // The defect this shape exists for: one operation deleted from the timed
+      // loop while the other three keep every aggregate non-zero.
+      const starved = { ...pass, sums: { ...pass.sums, [operation]: 0 } };
+      expect(colourMathMisses(corpus, starved)).toBeGreaterThan(0);
+    }
+  );
+
+  it("scores a loop whose accumulator drifted from the oracle's own maths", () => {
+    const drifted = {
+      ...pass,
+      sums: { ...pass.sums, contrast: pass.sums.contrast * 1.000001 },
+    };
+    expect(colourMathMisses(corpus, drifted)).toBeGreaterThan(0);
   });
 
   it("reports a deterministic conversion count through run()", async () => {
     const sample = await scenario("PERF-302").run(context);
     expect(sample.metrics!.hexTokens).toBe(corpus.pairs.length);
-    expect(sample.metrics!.conversionCount).toBe(corpus.pairs.length * 5);
+    // Five per pair plus one distance for each pair that converted, counted
+    // at the call site rather than as a literal.
+    expect(sample.metrics!.conversionCount).toBe(corpus.pairs.length * 6);
     expect(sample.metrics!.usPerKConversions).toBeGreaterThan(0);
     expect(sample.metrics!.mathMisses).toBe(0);
   });

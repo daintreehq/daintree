@@ -462,24 +462,66 @@ export function buildColourCorpus(): ColourCorpus {
 
 export interface ColourMathPass {
   conversions: number;
-  /** Kept so nothing in the loop is dead-code-eliminated by the JIT. */
-  checksum: number;
+  /**
+   * One accumulator per operation, not one checksum for all of them.
+   *
+   * A single aggregate cannot see a deleted term: drop `deltaEOK` from the loop
+   * and the other four keep the total non-zero, so the scenario gets 23% faster
+   * at zero misses. Per-operation sums make each call site its own evidence —
+   * deleting one zeroes its own accumulator while its expectation stays
+   * non-zero.
+   */
+  sums: {
+    deltaOklch: number;
+    contrast: number;
+    apca: number;
+    deltaEOK: number;
+  };
 }
 
 /** Five operations over every colour a cohort audit has to consider. */
 export function runColourMathPass(corpus: ColourCorpus): ColourMathPass {
-  let checksum = 0;
+  const sums = { deltaOklch: 0, contrast: 0, apca: 0, deltaEOK: 0 };
   let conversions = 0;
   for (const { hex, canvas } of corpus.pairs) {
     const a = hexToOklch(hex);
     const b = hexToOklch(canvas);
-    if (a && b) checksum += deltaOklch(a, b);
-    checksum += contrastRatio(hex, canvas);
-    checksum += apcaLc(hex, canvas);
-    checksum += deltaEOK(hex, canvas);
-    conversions += 5;
+    conversions += 2;
+    if (a && b) {
+      sums.deltaOklch += deltaOklch(a, b);
+      conversions += 1;
+    }
+    sums.contrast += contrastRatio(hex, canvas);
+    sums.apca += apcaLc(hex, canvas);
+    sums.deltaEOK += deltaEOK(hex, canvas);
+    // Counted at the call, never as a literal. `conversions += 5` was a
+    // constant that stayed correct after an operation was removed.
+    conversions += 3;
   }
-  return { conversions, checksum };
+  return { conversions, sums };
+}
+
+/**
+ * What each accumulator must hold, computed outside the timed bracket.
+ *
+ * Three come from the fixture's own maths and therefore catch a WRONG
+ * implementation as well as a missing call. `deltaOklch` is recomputed by
+ * calling the subject, because reproducing its exact OKLCh metric here would
+ * be guessing at a formula rather than deriving one — that term catches a call
+ * deleted from the loop, which is the defect this exists for, and the grey-pair
+ * identity below is what catches the implementation being wrong.
+ */
+export function expectedColourMathSums(corpus: ColourCorpus): ColourMathPass["sums"] {
+  const sums = { deltaOklch: 0, contrast: 0, apca: 0, deltaEOK: 0 };
+  for (const { hex, canvas } of corpus.pairs) {
+    const a = hexToOklch(hex);
+    const b = hexToOklch(canvas);
+    if (a && b) sums.deltaOklch += deltaOklch(a, b);
+    sums.contrast += wcagRatio(hex, canvas);
+    sums.apca += apcaWeight(hex, canvas);
+    sums.deltaEOK += oklabDistance(hex, canvas);
+  }
+  return sums;
 }
 
 /** Greys the corpus does not contain, so the identity is tested, not replayed. */
@@ -495,8 +537,28 @@ function greyHex(channel: number): string {
  */
 export function colourMathMisses(corpus: ColourCorpus, pass: ColourMathPass): number {
   let misses = 0;
-  if (pass.conversions !== corpus.pairs.length * 5) misses += 1;
-  if (!Number.isFinite(pass.checksum) || pass.checksum === 0) misses += 1;
+  // Each accumulator against what the loop owed it. This is the term that sees
+  // a call deleted from the timed pass: re-invoking a healthy export in the
+  // oracle proves the export works, never that the bracket ran it.
+  const expected = expectedColourMathSums(corpus);
+  for (const key of ["deltaOklch", "contrast", "apca", "deltaEOK"] as const) {
+    const actual = pass.sums[key];
+    if (!Number.isFinite(actual) || actual === 0) {
+      misses += 1;
+      continue;
+    }
+    // Relative, because these are sums over ~1,000 terms and an exact
+    // comparison would fail on float association alone.
+    if (Math.abs(actual - expected[key]) > Math.abs(expected[key]) * 1e-9) misses += 1;
+  }
+
+  // Two conversions plus three metrics per pair, and one distance per pair that
+  // converted. Derived from the corpus, so an operation dropped from the loop
+  // moves it.
+  const convertible = corpus.pairs.filter(
+    ({ hex, canvas }) => hexToOklch(hex) !== null && hexToOklch(canvas) !== null
+  ).length;
+  if (pass.conversions !== corpus.pairs.length * 5 + convertible) misses += 1;
 
   for (const channel of GREY_PROBES) {
     const hex = greyHex(channel);
@@ -541,7 +603,7 @@ export function colourMathMisses(corpus: ColourCorpus, pass: ColourMathPass): nu
 
   // Every operation the timed loop pays for, against the oracle's own maths,
   // over the real corpus edges rather than over anchors alone.
-  for (const { hex, canvas } of corpus.pairs.slice(0, 64)) {
+  for (const { hex, canvas } of corpus.pairs) {
     if (Math.abs(contrastRatio(hex, canvas) - wcagRatio(hex, canvas)) > 1e-6) misses += 1;
     if (Math.abs(deltaEOK(hex, canvas) - oklabDistance(hex, canvas)) > 1e-9) misses += 1;
     if (Math.abs(apcaLc(hex, canvas) - apcaWeight(hex, canvas)) > 1e-9) misses += 1;

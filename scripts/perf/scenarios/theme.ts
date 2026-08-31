@@ -145,8 +145,10 @@ export const themeScenarios: PerfScenario[] = [
       "neutral grey's OKLab lightness is the cube root of its linearised channel, which fixes " +
       "both OKLab distances exactly on any pair of greys; white-on-black is exactly 21:1; and " +
       "the APCA-W3 reference pair is 106.04 / -107.88. contrastRatio, deltaEOK and apcaLc are " +
-      "each additionally compared against the oracle's own arithmetic over the real corpus, so " +
-      "an operation stubbed out cannot hide behind the aggregate checksum.",
+      "each additionally compared against the oracle's own arithmetic over the whole corpus. The " +
+      "loop accumulates a sum PER OPERATION rather than one checksum for all five, because an " +
+      "aggregate cannot see a deleted term — dropping deltaEOK left the other four keeping the " +
+      "total non-zero, which made the scenario 23% faster at zero misses.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 16, nightly: 22 },
