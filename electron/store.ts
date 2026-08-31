@@ -533,11 +533,12 @@ export interface StoreSchema {
   };
   /**
    * Just-in-time (JIT) consent grants for plugin host capabilities (#10524).
-   * Each grant is a `(pluginId, capability)` pair the user approved on first
-   * use of a high-risk host surface (`shell:exec`, `fs:*-write`, `git:write`),
-   * so later calls run without re-prompting. Plaintext, matching the
-   * `pluginMcpConsent` precedent — a grant holds no secret, only the pair and a
-   * timestamp.
+   * Each grant is a `(scopeKey, pluginId, capability)` triple the user approved
+   * on first use of a high-risk host surface (`shell:exec`, `fs:*-write`,
+   * `git:write`), so later calls run without re-prompting. Plaintext, matching
+   * the `pluginMcpConsent` precedent — a grant holds no secret, only the triple
+   * and a timestamp. Records written before the scope key existed have no
+   * `scopeKey` field and hydrate as `"global"`.
    */
   pluginCapabilityConsent: {
     grants?: PluginCapabilityConsentRecord[];
