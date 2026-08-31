@@ -55,8 +55,7 @@ vi.mock("@/store/helpPanelStore", () => ({
   },
   // #12108: the wake fan-out covers every assistant lane, not just the focused
   // one — a background assistant's xterm still needs waking on view reveal.
-  selectSlotTerminalIds: (s: { terminalId: string | null }) =>
-    s.terminalId ? [s.terminalId] : [],
+  selectSlotTerminalIds: (s: { terminalId: string | null }) => (s.terminalId ? [s.terminalId] : []),
 }));
 
 const { wakeActiveWorktreeTerminals, repaintActiveWorktreeTerminals } =
