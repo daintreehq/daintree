@@ -299,15 +299,15 @@ describe("DiffViewer centered split", () => {
 
     expect(container.querySelector(".diff-file-centered")).not.toBeNull();
     expect(container.querySelector(".diff-file-scroll")).toBeNull();
-    expect(screen.getByTestId("diff-hscrollbar")).toBeTruthy();
+    expect(screen.getByTestId("diff-hscrollbar").getAttribute("data-scroll-mode")).toBe("centered");
   });
 
-  it("keeps the native scroller in unified view", () => {
+  it("keeps the native scroller in unified view, with a proxy strip beside it", () => {
     const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
 
     expect(container.querySelector(".diff-file-centered")).toBeNull();
     expect(container.querySelector(".diff-file-scroll")).not.toBeNull();
-    expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
+    expect(screen.getByTestId("diff-hscrollbar").getAttribute("data-scroll-mode")).toBe("native");
   });
 
   it("keeps the native scroller when wrapping lines", () => {
@@ -324,7 +324,7 @@ describe("DiffViewer centered split", () => {
     // the horizontal-scroll fallback path rather than the two-column centered split.
     expect(container.querySelector(".diff-file-centered")).toBeNull();
     expect(container.querySelector(".diff-file-scroll")).not.toBeNull();
-    expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
+    expect(screen.getByTestId("diff-hscrollbar").getAttribute("data-scroll-mode")).toBe("native");
   });
 
   it("keeps the native scroller for single-side deleted-file diffs", () => {
@@ -332,7 +332,7 @@ describe("DiffViewer centered split", () => {
 
     expect(container.querySelector(".diff-file-centered")).toBeNull();
     expect(container.querySelector(".diff-file-scroll")).not.toBeNull();
-    expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
+    expect(screen.getByTestId("diff-hscrollbar").getAttribute("data-scroll-mode")).toBe("native");
   });
 
   it("mirrors the scrollbar strip's scrollLeft into --diff-hscroll", () => {
@@ -778,5 +778,215 @@ describe("DiffViewer token CSS contract (Tailwind display-utility collision)", (
     // With the real stylesheet the reset pins the token back to inline.
     const css = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
     expect(computeTokenDisplay(css)).toBe("inline");
+  });
+});
+
+// The unified / single-side path keeps a REAL native scroller and adds the
+// sticky strip as its sibling, so the strip resolves against .diff-scroll-root
+// and stays reachable mid-file. jsdom has no layout, so these tests stub the
+// widths the measurement reads and drive ResizeObserver by hand — the global
+// stub installed in vitest.setup.ts is a no-op and would never call back.
+type FakeObserver = { callback: () => void; targets: Set<Element> };
+
+describe("DiffViewer native scroll proxy", () => {
+  const observers: FakeObserver[] = [];
+  let originalResizeObserver: typeof ResizeObserver;
+
+  class FakeResizeObserver {
+    private readonly entry: FakeObserver;
+    constructor(callback: () => void) {
+      this.entry = { callback, targets: new Set() };
+      observers.push(this.entry);
+    }
+    observe(target: Element) {
+      this.entry.targets.add(target);
+    }
+    unobserve(target: Element) {
+      this.entry.targets.delete(target);
+    }
+    disconnect() {
+      this.entry.targets.clear();
+    }
+  }
+
+  beforeEach(() => {
+    observers.length = 0;
+    originalResizeObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
+  });
+
+  afterEach(() => {
+    globalThis.ResizeObserver = originalResizeObserver;
+  });
+
+  /** Fire every observer currently watching `target`; the callback sets state. */
+  function resize(target: Element) {
+    act(() => {
+      for (const observer of observers) {
+        if (observer.targets.has(target)) observer.callback();
+      }
+    });
+  }
+
+  /** jsdom reports 0 for every layout box; hand the element real numbers. */
+  function stubLayout(element: Element, clientWidth: number, scrollWidth: number) {
+    const state = { scrollWidth };
+    Object.defineProperty(element, "scrollWidth", {
+      get: () => state.scrollWidth,
+      configurable: true,
+    });
+    Object.defineProperty(element, "clientWidth", {
+      get: () => clientWidth,
+      configurable: true,
+    });
+    return state;
+  }
+
+  function parts(container: HTMLElement) {
+    const shell = container.querySelector<HTMLElement>(".diff-file-shell");
+    const scroller = container.querySelector<HTMLElement>(".diff-file-scroll");
+    const proxy = screen.getByTestId("diff-hscrollbar");
+    return { shell, scroller, proxy };
+  }
+
+  it("makes the strip a sibling of the scroller, never a descendant of it", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
+    const { shell, scroller, proxy } = parts(container);
+
+    expect(shell).not.toBeNull();
+    expect(scroller?.parentElement).toBe(shell);
+    expect(proxy.parentElement).toBe(shell);
+    // The whole point: a sticky strip inside the horizontally scrolling box
+    // would slide sideways with the user's own scroll.
+    expect(scroller?.contains(proxy)).toBe(false);
+    expect(scroller?.contains(screen.getByTestId("diff-element"))).toBe(true);
+  });
+
+  it("leaves the region semantics on the element that actually scrolls", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
+    const { shell, scroller } = parts(container);
+
+    expect(scroller?.getAttribute("role")).toBe("region");
+    expect(scroller?.getAttribute("tabindex")).toBe("0");
+    expect(scroller?.id.startsWith("diff-region-")).toBe(true);
+    expect(shell?.hasAttribute("id")).toBe(false);
+  });
+
+  it("keeps the native bar and an inert strip until overflow is measured", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
+    const { scroller, proxy } = parts(container);
+
+    expect(proxy.hasAttribute("data-active")).toBe(false);
+    expect(scroller?.hasAttribute("data-proxy-active")).toBe(false);
+  });
+
+  it("activates both halves of the handoff and sizes the strip to the content", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
+    const { scroller, proxy } = parts(container);
+    stubLayout(scroller!, 200, 500);
+
+    resize(scroller!);
+
+    expect(proxy.getAttribute("data-active")).toBe("true");
+    expect(scroller?.getAttribute("data-proxy-active")).toBe("true");
+    expect(proxy.style.getPropertyValue("--diff-native-scroll-width")).toBe("500px");
+  });
+
+  it("re-measures from the content box, which is where a scrollWidth-only change shows up", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
+    const { scroller, proxy } = parts(container);
+    const layout = stubLayout(scroller!, 200, 500);
+    resize(scroller!);
+    expect(proxy.getAttribute("data-active")).toBe("true");
+
+    // The scroller's own border box never changes here — only its content
+    // narrows, so ResizeObserver fires for the table, not the container.
+    layout.scrollWidth = 200;
+    resize(scroller!.firstElementChild!);
+
+    expect(proxy.hasAttribute("data-active")).toBe(false);
+    expect(scroller?.hasAttribute("data-proxy-active")).toBe(false);
+  });
+
+  it("mirrors scrollLeft both ways and settles instead of ping-ponging", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
+    const { scroller, proxy } = parts(container);
+
+    scroller!.scrollLeft = 80;
+    fireEvent.scroll(scroller!);
+    expect(proxy.scrollLeft).toBe(80);
+
+    proxy.scrollLeft = 30;
+    fireEvent.scroll(proxy);
+    expect(scroller!.scrollLeft).toBe(30);
+
+    // The echo event each write triggers finds the pair equal and stops.
+    fireEvent.scroll(scroller!);
+    fireEvent.scroll(proxy);
+    expect(scroller!.scrollLeft).toBe(30);
+    expect(proxy.scrollLeft).toBe(30);
+  });
+
+  it("drops the strip while wrapping and restores it on the way back", () => {
+    const { container, rerender } = render(
+      wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />)
+    );
+    const scroller = container.querySelector<HTMLElement>(".diff-file-scroll");
+    const layout = stubLayout(scroller!, 200, 500);
+    resize(scroller!);
+    expect(scroller?.getAttribute("data-proxy-active")).toBe("true");
+
+    rerender(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" wrapLines />));
+    expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
+    expect(container.querySelector(".diff-file-scroll")?.hasAttribute("data-proxy-active")).toBe(
+      false
+    );
+
+    rerender(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
+    const restored = container.querySelector<HTMLElement>(".diff-file-scroll");
+    layout.scrollWidth = 500;
+    resize(restored!);
+    expect(screen.getByTestId("diff-hscrollbar").getAttribute("data-active")).toBe("true");
+  });
+
+  it("re-syncs the strip after hunk expansion changes the content width", () => {
+    const { container } = render(
+      wrap(<DiffViewer diff={FAR_HUNKS_DIFF} source={FAR_HUNKS_SOURCE} viewType="unified" />)
+    );
+    const { scroller, proxy } = parts(container);
+    stubLayout(scroller!, 200, 500);
+
+    // A scroll the strip never saw: the browser can move the real scroller
+    // through find-in-page, scrollIntoView or drag-select without one either.
+    scroller!.scrollLeft = 90;
+    expect(proxy.scrollLeft).toBe(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /Expand down/ }));
+
+    expect(screen.getByTestId("diff-hscrollbar").scrollLeft).toBe(90);
+  });
+
+  it("gives each stacked file its own strip and its own offset", () => {
+    const { container } = render(
+      wrap(<DiffViewer diff={`${ADDED_FILE_DIFF}\n${DELETED_FILE_DIFF}`} viewType="unified" />)
+    );
+
+    const shells = container.querySelectorAll(".diff-file-shell");
+    const scrollers = container.querySelectorAll<HTMLElement>(".diff-file-scroll");
+    const proxies = screen.getAllByTestId("diff-hscrollbar");
+    expect(shells.length).toBe(2);
+    expect(proxies.length).toBe(2);
+    for (const shell of shells) {
+      expect(shell.querySelectorAll('[data-testid="diff-hscrollbar"]').length).toBe(1);
+    }
+
+    const [firstScroller, secondScroller] = Array.from(scrollers);
+    const [firstProxy, secondProxy] = proxies;
+    firstScroller!.scrollLeft = 70;
+    fireEvent.scroll(firstScroller!);
+
+    expect(firstProxy!.scrollLeft).toBe(70);
+    expect(secondProxy!.scrollLeft).toBe(0);
+    expect(secondScroller!.scrollLeft).toBe(0);
   });
 });
