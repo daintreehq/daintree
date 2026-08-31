@@ -47,7 +47,7 @@ What `--project` changes relative to an installed scaffold:
 - no `.dntrignore` — that file only shapes a `.dntr` archive
 - a watcher recipe lands in `<projectRoot>/.daintree/recipes/`, so Daintree can start the build alongside the rest of the project environment
 
-Use the `command` or `view` template with `--project`. The `mcp` and `full` templates scaffold `contributes.mcpServers`, which a project-scoped manifest may not declare (see [What a project plugin may contribute](#what-a-project-plugin-may-contribute)) — the scaffold emits it anyway, and the manifest is then rejected at load.
+Use the `command` or `view` template with `--project`. The `mcp` and `full` templates scaffold `contributes.mcpServers`, which a project-scoped manifest may not declare (see [What a project plugin may contribute](#what-a-project-plugin-may-contribute)), so the scaffold refuses those two combinations rather than writing a manifest the host would decline to load.
 
 Run `npx daintree-plugin validate` in the plugin directory to check the manifest before committing. It reads your declared `scope` and validates under the matching origin, so a `"scope": "project"` manifest is checked against the project rules.
 
@@ -198,6 +198,8 @@ Installed and builtin plugins keep their existing ambient behaviour — they hav
 In-repository files are named by the **manifest id**, never by the instance key: the instance key embeds this machine's project id, and writing that into a tracked filename would commit one developer's local identity into everyone's checkout. The project root already provides the isolation. Files under the user's own directory are keyed by the **instance key**, so two projects shipping the same manifest id keep separate state.
 
 The project root a bound plugin writes to is the one from its binding, not the focused project. The `"worktree"` storage scope is the exception today — it still resolves the app-global active worktree, so it can follow the user's focus rather than your project.
+
+The `${worktree}` and `${project}` tokens in `scopes.fs.allowedPaths` expand against the bound project's own worktrees, so a project plugin's containment roots do not move when the user switches projects. An installed or builtin plugin keeps expanding them ambiently — it has no project of its own.
 
 The same containment applies to the settings UI: a project plugin's settings form can only address its own project.
 
