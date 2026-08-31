@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import os from "node:os";
 import path from "node:path";
@@ -293,9 +294,15 @@ function resolveScenarioIds(tokens: string[], mode: PerfMode): string[] {
  *
  * Without this a results file cannot be safely diffed against another: latency
  * is only comparable to itself on one machine, and nothing recorded the machine.
- * `--machine` beats `PERF_MACHINE_LABEL`, which beats the hostname, so a laptop
- * can carry a stable name across reboots and one run can be relabelled without
- * touching the environment.
+ * `--machine` beats `PERF_MACHINE_LABEL`, which beats a HASH of the hostname,
+ * so a laptop can carry a stable name across reboots and one run can be
+ * relabelled without touching the environment.
+ *
+ * The default is hashed rather than the hostname itself because these labels
+ * are written into `config/baseline.*.json`, which is committed. A hostname is
+ * usually a person's name and their machine; the guard that needs this only
+ * needs machines to be DISTINCT and STABLE, never named. Anyone who wants a
+ * readable label can set one — that is what the two overrides are for.
  */
 function defaultMachineLabel(override?: string): string {
   const explicit = override?.trim() || process.env.PERF_MACHINE_LABEL?.trim();
@@ -316,7 +323,10 @@ function defaultMachineLabel(override?: string): string {
     return `gh-${osName}-${process.arch}-${job}-${runId}.${attempt}`.toLowerCase();
   }
 
-  return `${os.hostname()}-${process.platform}-${process.arch}`.toLowerCase();
+  // Truncated to 8 hex chars: collision risk across one person's handful of
+  // machines is negligible, and a full digest would bloat every filename.
+  const fingerprint = createHash("sha256").update(os.hostname()).digest("hex").slice(0, 8);
+  return `host-${fingerprint}-${process.platform}-${process.arch}`.toLowerCase();
 }
 
 /**

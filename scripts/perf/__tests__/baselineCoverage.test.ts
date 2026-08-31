@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { allScenarios } from "../scenarios";
 import {
   BASELINE_FRESHNESS_DAYS,
   checkBaselineCoverage,
@@ -136,5 +140,53 @@ describe("checkBaselineCoverage", () => {
     ]);
     // PERF-072 is missing from the baseline but is not in this run's scenario set.
     expect(gaps).toEqual([]);
+  });
+});
+
+/**
+ * The direction `checkBaselineCoverage` does not cover.
+ *
+ * It answers "which scenario has a budget but no reference". The inverse —
+ * a reference naming a scenario that no longer exists — has no reader at all:
+ * nothing prunes `config/baseline.*.json` when an id is retired, so the entry
+ * survives every future run, is never compared against anything, and reads to
+ * the next person as a measurement rather than as litter. Four such entries
+ * (PERF-040/041/050/051, dated 2026-08-04) outlived their scenarios and were
+ * only found by counting a live baseline against a live run.
+ *
+ * This drives the REAL committed files rather than a fixture, because the
+ * defect is rot in those files specifically; a fixture would pass forever
+ * while the shipped baselines drifted.
+ */
+describe("committed baselines name only live scenarios", () => {
+  const CONFIG_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "config");
+
+  const liveIds = new Set(allScenarios.map((entry) => entry.id));
+
+  const baselineFiles = readdirSync(CONFIG_DIR)
+    .filter((name) => name.startsWith("baseline.") && name.endsWith(".json"))
+    .sort();
+
+  it("finds baseline files to check", () => {
+    // A rename that emptied this list would turn every assertion below into a
+    // vacuous pass, which is the failure mode this whole file exists to catch.
+    expect(baselineFiles.length).toBeGreaterThan(0);
+  });
+
+  it.each(baselineFiles)("%s references no retired scenario", (name) => {
+    const parsed: unknown = JSON.parse(readFileSync(path.join(CONFIG_DIR, name), "utf8"));
+    const entries =
+      typeof parsed === "object" && parsed !== null
+        ? ((parsed as Record<string, unknown>).scenarios ??
+          (parsed as Record<string, unknown>).p95ByScenario)
+        : undefined;
+    const ids = typeof entries === "object" && entries !== null ? Object.keys(entries) : [];
+
+    const orphans = ids.filter((id) => !liveIds.has(id));
+    expect(
+      orphans,
+      `${name} carries references for scenarios that no longer exist: ${orphans.join(", ")}. ` +
+        "A reference that can never be compared is litter — delete the entries."
+    ).toEqual([]);
   });
 });

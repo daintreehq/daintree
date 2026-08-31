@@ -136,7 +136,7 @@ Counts still compare through a refusal — that cross-machine comparison is the 
 
 ### Results history
 
-Every run that does not override sampling writes `scripts/perf/history/<mode>.<machineLabel>.json` — a small **tracked** file, so `git log -p scripts/perf/history/` answers "when did this get slower" months later. It records p50, p95 and each metric's max, sum and own sample count, and **merges**: a run touches only its own scenario's entry and leaves every other one alone.
+Every run that does not override sampling writes `scripts/perf/history/<mode>.<machineLabel>.json` — an **untracked** file, local to your machine, so `git log` cannot answer "when did this get slower" and you read the file itself instead. It was tracked briefly and should not have been: it is ~5,000 lines rewritten on every canonical run, and a per-machine filename in a public repo is a person's hostname. It records p50, p95 and each metric's max, sum and own sample count, and **merges**: a run touches only its own scenario's entry and leaves every other one alone.
 
 A run with `--iterations` or `--warmups` is excluded, because a spot check at three iterations is not comparable with the eight the mode normally takes. The scenario filter is no longer part of that test — every run is filtered now.
 
@@ -314,7 +314,7 @@ Baselines are **machine-specific, and that is now the point**. The old rule — 
 
 `generatedAt` is now only when the file was last written and dates nothing in it. Freshness is judged per entry against a 30-day threshold and stays advisory: a stale reference for the scenario you are running is named on its own line, the rest collapse into a count.
 
-`--update-baseline` **merges, and re-dates only the scenario it measured**. Every run measures one scenario, so writing the file wholesale would leave a baseline holding a single reference and looking complete — and stamping the whole file with today's date would make forty six-month-old references read as measured this morning. Inherited entries keep their original date and machine, including entries for a scenario that is `diagnostic` or `unsupported` here: regenerating where a scenario cannot be measured must not delete, or re-date, the reference from a platform where it can. The results history under `history/` merges on the same rule.
+`--update-baseline` **merges, and re-dates only the scenario it measured**. Every run measures one scenario, so writing the file wholesale would leave a baseline holding a single reference and looking complete — and stamping the whole file with today's date would make forty six-month-old references read as measured this morning. Inherited entries keep their original date and machine, including entries for a scenario that is `diagnostic` or `unsupported` here: regenerating where a scenario cannot be measured must not delete, or re-date, the reference from a platform where it can. The results history under `history/` merges on the same rule, though it is untracked.
 
 **A reference from another machine is reported but not compared.** A p95 is a `duration`, so a drift verdict against a number measured on a different laptop is a claim about two laptops. The value is still shown — it is often the only reference a scenario has — and the verdict is replaced with `reference 5.5ms not compared: different machines (greg-thinkpad vs gregs-mac-studio-2)`. Without this guard a Windows reference against a Mac run produced a fabricated 2200% regression.
 
