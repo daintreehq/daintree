@@ -27,9 +27,11 @@ import { SCROLLBAR_GUTTER_VAR } from "@/lib/scrollbarGutter";
 //     is outside this file's view.
 //   - Only the specific `calc(<column> + <literal>)` shape is rejected. A fresh
 //     magic number spelled some other way (`px-[35px]`) would pass.
-//   - Custom scrollports that are not `AppDialog.Body`/`BodyScroll` are not
-//     inspected. `HybridInputBar`'s expanded editor deliberately sits on a
-//     tighter column than the dialog's, and is not a defect.
+//   - Custom scrollports are inspected only if listed in `CUSTOM_SCROLLPORTS`.
+//     `HybridInputBar`'s expanded editor deliberately sits on a tighter column
+//     than the dialog's, and is not a defect, so it is not listed.
+//   - Only the class expression carrying the inset is scanned, so a nested
+//     child inside the header or footer may pad itself freely.
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
@@ -123,6 +125,11 @@ function stringLiteralsIn(node: ts.Node): string[] {
   walk(node, (child) => {
     if (ts.isStringLiteral(child) || ts.isNoSubstitutionTemplateLiteral(child)) {
       found.push(child.text);
+    } else if (ts.isTemplateHead(child) || ts.isTemplateMiddle(child) || ts.isTemplateTail(child)) {
+      // `className={`p-0 ${extra}`}` is a TemplateExpression, whose literal
+      // halves are these — not a NoSubstitutionTemplateLiteral. Missing them
+      // would let an interpolated class string past the scan entirely.
+      found.push(child.text);
     }
   });
   return found;
@@ -155,10 +162,50 @@ function attribute(el: ts.JsxOpeningLikeElement, name: string): ts.JsxAttribute 
 /** A horizontal-padding utility, in any of Tailwind's spellings for one. */
 const HORIZONTAL_PADDING = /(?:^|\s|:)!?(?:p|px|ps|pe|pl|pr)-\S+/;
 
-/** The shape the old chrome compensation took: the column plus a literal. */
-const COMPENSATED_INSET = /calc\(\s*1\.5rem\s*\+/;
+/**
+ * The shape the old chrome compensation took: the column plus a literal.
+ * `[\s_]` because Tailwind spells a space in an arbitrary value as an
+ * underscore, so `calc(1.5rem_+_11px)` is the same class as `calc(1.5rem + 11px)`.
+ */
+const COMPENSATED_INSET = /calc\([\s_]*1\.5rem[\s_]*\+/;
+
+/**
+ * Scrollports that are not `AppDialog.Body`/`BodyScroll` but are still the
+ * dialog's form body, and so still have to sit on the dialog column. Without
+ * this list, dropping the class from one of them would fail nothing: they are
+ * ordinary elements, invisible to the `AppDialog.*` scan below.
+ */
+const CUSTOM_SCROLLPORTS = [
+  { file: "src/components/Settings/SettingsDialog.tsx", what: "the right pane's form scrollport" },
+  { file: "src/components/Worktree/IssuePickerDialog.tsx", what: "the issue list scrollport" },
+];
 
 const ALL_FILES = SCAN_ROOTS.flatMap((root) => tsxFiles(root));
+
+/** Does any class string in this node name the class? */
+function carriesClass(node: ts.Node, className: string): boolean {
+  return stringLiteralsIn(node).some((literal) => literal.split(/\s+/).includes(className));
+}
+
+/**
+ * The class expression that carries `token` — the `cn(...)` call the inset is
+ * passed to. Narrowing to it keeps the padding scan off nested children, whose
+ * own padding cannot move the outer box.
+ */
+function insetExpression(member: ts.Node, token: string, isIdentifier: boolean): ts.Node | null {
+  let found: ts.Node | null = null;
+  walk(member, (node) => {
+    if (found || !ts.isCallExpression(node)) return;
+    const names = node.arguments.some((arg) =>
+      isIdentifier
+        ? ts.isIdentifier(arg) && arg.text === token
+        : (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) &&
+          arg.text.split(/\s+/).includes(token)
+    );
+    if (names) found = node;
+  });
+  return found;
+}
 
 describe("dialog inset contract — one column for header, body and footer", () => {
   const appDialog = parse(APP_DIALOG_PATH);
@@ -192,17 +239,12 @@ describe("dialog inset contract — one column for header, body and footer", () 
   });
 
   it.each(["Header", "Footer"])(
-    "%s takes its inset from the shared constant and adds no padding of its own",
+    "%s takes its inset from the shared constant and adds no padding beside it",
     (name) => {
-      const member = chromeMember(name);
+      const expression = insetExpression(chromeMember(name), INSET_CONST, true);
+      expect(expression, `AppDialog.${name} must inset via ${INSET_CONST}`).not.toBeNull();
 
-      let usesConstant = false;
-      walk(member, (node) => {
-        if (ts.isIdentifier(node) && node.text === INSET_CONST) usesConstant = true;
-      });
-      expect(usesConstant, `AppDialog.${name} must inset via ${INSET_CONST}`).toBe(true);
-
-      for (const literal of stringLiteralsIn(member)) {
+      for (const literal of stringLiteralsIn(expression as ts.Node)) {
         expect(
           HORIZONTAL_PADDING.test(literal),
           `AppDialog.${name} hard-codes horizontal padding in ${JSON.stringify(literal)}, ` +
@@ -213,14 +255,10 @@ describe("dialog inset contract — one column for header, body and footer", () 
   );
 
   it.each(["Body", "BodyScroll"])("%s absorbs the reserved gutter into its padding", (name) => {
-    const literals = stringLiteralsIn(chromeMember(name));
+    const expression = insetExpression(chromeMember(name), BODY_INSET_CLASS, false);
+    expect(expression, `AppDialog.${name} must carry \`${BODY_INSET_CLASS}\``).not.toBeNull();
 
-    expect(
-      literals.some((literal) => literal.split(/\s+/).includes(BODY_INSET_CLASS)),
-      `AppDialog.${name} must carry \`${BODY_INSET_CLASS}\``
-    ).toBe(true);
-
-    for (const literal of literals) {
+    for (const literal of stringLiteralsIn(expression as ts.Node)) {
       expect(
         HORIZONTAL_PADDING.test(literal),
         `AppDialog.${name} hard-codes horizontal padding in ${JSON.stringify(literal)}, ` +
@@ -229,24 +267,41 @@ describe("dialog inset contract — one column for header, body and footer", () 
     }
   });
 
-  it("keeps the measured-gutter plumbing joined up from module to stylesheet", () => {
-    const css = fs.readFileSync(INDEX_CSS_PATH, "utf8");
+  it.each(CUSTOM_SCROLLPORTS)("$what stays on the dialog column", ({ file }) => {
+    const source = parse(path.join(REPO_ROOT, file));
 
-    // Take the rule body first. The comment above the selector quotes the very
-    // figures asserted below, so a scan of the whole file would pass on prose.
-    const rule = new RegExp(`\\.${BODY_INSET_CLASS}\\s*\\{([^}]*)\\}`).exec(css);
-    const body = rule?.[1];
-    if (body === undefined) {
-      throw new Error(`\`.${BODY_INSET_CLASS}\` must be declared in index.css`);
-    }
-
-    expect(body, "the padding must subtract the measured gutter from the column").toMatch(
-      new RegExp(`padding-inline:\\s*max\\(\\s*0px\\s*,\\s*calc\\(\\s*${COLUMN_REM}\\s*-`)
-    );
     expect(
-      body.includes(`var(${SCROLLBAR_GUTTER_VAR}`),
-      `the padding must read ${SCROLLBAR_GUTTER_VAR}, the property the probe publishes`
+      carriesClass(source, BODY_INSET_CLASS),
+      `${file} is a dialog form body, so it must carry \`${BODY_INSET_CLASS}\` — ` +
+        "without it the fields drift off the chrome's column wherever the platform " +
+        "reserves a scrollbar gutter"
     ).toBe(true);
+  });
+
+  it("keeps the measured-gutter plumbing joined up from module to stylesheet", () => {
+    // Comments go first: the block above the selector quotes the very figures
+    // asserted below, and a commented-out rule must not satisfy the contract.
+    const css = fs.readFileSync(INDEX_CSS_PATH, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+
+    // Exactly one — a second rule for the same selector would silently win.
+    const declarations = css.match(new RegExp(`\\.${BODY_INSET_CLASS}\\s*\\{`, "g")) ?? [];
+    expect(
+      declarations.length,
+      `\`.${BODY_INSET_CLASS}\` must be declared exactly once in index.css`
+    ).toBe(1);
+
+    const rule = new RegExp(`\\.${BODY_INSET_CLASS}\\s*\\{([^}]*)\\}`).exec(css);
+    const body = rule?.[1] ?? "";
+
+    // One assertion, not two: the column, the subtraction and the property the
+    // probe publishes have to appear in that order in the same declaration.
+    // Checked separately, `var(--app-scrollbar-gutter-v2)` would satisfy both.
+    expect(body, "the padding must subtract the measured gutter from the column").toMatch(
+      new RegExp(
+        `padding-inline:\\s*max\\(\\s*0px\\s*,\\s*calc\\(\\s*${COLUMN_REM}\\s*-\\s*` +
+          `var\\(\\s*${SCROLLBAR_GUTTER_VAR}\\s*[,)]`
+      )
+    );
     // Reserving the gutter is what stops the body shifting sideways the moment
     // it starts to overflow; `both-edges` is what keeps that symmetric.
     expect(body).toMatch(/scrollbar-gutter:\s*stable\s+both-edges/);
@@ -272,8 +327,11 @@ describe("dialog inset contract — one column for header, body and footer", () 
     const offenders: string[] = [];
     for (const file of ALL_FILES) {
       const source = parse(file);
+      const binding = dialogBinding(source);
       for (const el of openingElements(source)) {
-        if (attribute(el, "plainBody")) {
+        // Scoped to `AppDialog.*`: an unrelated component is free to have a
+        // prop of the same name.
+        if (memberName(el.tagName, binding) && attribute(el, "plainBody")) {
           offenders.push(path.relative(REPO_ROOT, file));
         }
       }

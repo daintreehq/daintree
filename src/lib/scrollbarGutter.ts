@@ -21,6 +21,29 @@
 export const SCROLLBAR_GUTTER_VAR = "--app-scrollbar-gutter";
 
 /**
+ * The probe's configuration, which is the whole measurement: `overflow: scroll`
+ * and `scrollbar-gutter: stable` force exactly one gutter to be reserved, and
+ * `scrollbar-width: thin` matches what a dialog body inherits from
+ * `* { scrollbar-width: thin }` in `index.css` — a probe left on `auto` would
+ * measure the wider bar and over-subtract. It needs a real size and no border
+ * or padding of its own for `offsetWidth - clientWidth` to be the gutter alone.
+ */
+const PROBE_STYLE = [
+  "position:absolute",
+  "top:-9999px",
+  "left:-9999px",
+  "width:100px",
+  "height:100px",
+  "padding:0",
+  "border:0",
+  "overflow:scroll",
+  "scrollbar-gutter:stable",
+  "scrollbar-width:thin",
+  "visibility:hidden",
+  "pointer-events:none",
+].join(";");
+
+/**
  * The width of one reserved gutter, in CSS px. 0 under overlay scrollbars.
  *
  * The probe has to be in the document to have layout at all — a detached
@@ -35,22 +58,12 @@ export const SCROLLBAR_GUTTER_VAR = "--app-scrollbar-gutter";
 export function measureScrollbarGutter(): number {
   const probe = document.createElement("div");
   probe.setAttribute("aria-hidden", "true");
-  probe.style.cssText = [
-    "position:absolute",
-    "top:-9999px",
-    "left:-9999px",
-    "width:100px",
-    "height:100px",
-    "padding:0",
-    "border:0",
-    "overflow:scroll",
-    "scrollbar-gutter:stable",
-    // Matches what dialog bodies inherit from `* { scrollbar-width: thin }`.
-    // A probe left on `auto` would measure the wider bar and over-subtract.
-    "scrollbar-width:thin",
-    "visibility:hidden",
-    "pointer-events:none",
-  ].join(";");
+  // `setAttribute` rather than `style.cssText` so the declaration survives
+  // verbatim on the attribute: a CSSOM that does not implement
+  // `scrollbar-gutter` drops it when re-serialising `cssText`, and the probe's
+  // configuration would then be unassertable in a test. It changes nothing in
+  // an engine that supports the property.
+  probe.setAttribute("style", PROBE_STYLE);
 
   document.body.appendChild(probe);
   try {
@@ -78,4 +91,29 @@ export function publishScrollbarGutter(): number | null {
     root.style.setProperty(SCROLLBAR_GUTTER_VAR, next);
   }
   return gutter;
+}
+
+/**
+ * Keep the published figure current for the lifetime of the renderer, and
+ * return a disposer.
+ *
+ * `AppDialog` re-measures as it opens, which covers the usual path — change the
+ * setting, then open a dialog. It does not cover a dialog that is *already*
+ * open: Chromium re-lays out its scrollport straight away, and the published
+ * figure would stay stale until that dialog was reopened, leaving its content
+ * a gutter's width off the chrome's column in the meantime.
+ *
+ * Focus is the event that catches it, because changing the setting means going
+ * to System Settings and coming back. The measurement is one off-screen probe
+ * and the write is skipped unless the figure actually moved, so an ordinary
+ * alt-tab costs a layout read and nothing else.
+ */
+export function watchScrollbarGutter(): () => void {
+  if (typeof window === "undefined") return () => {};
+
+  const onFocus = () => {
+    publishScrollbarGutter();
+  };
+  window.addEventListener("focus", onFocus);
+  return () => window.removeEventListener("focus", onFocus);
 }

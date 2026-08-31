@@ -4,6 +4,7 @@ import {
   SCROLLBAR_GUTTER_VAR,
   measureScrollbarGutter,
   publishScrollbarGutter,
+  watchScrollbarGutter,
 } from "../scrollbarGutter";
 
 /**
@@ -67,16 +68,44 @@ describe("measureScrollbarGutter", () => {
     expect(measureScrollbarGutter()).toBe(0);
   });
 
-  it("measures the probe while it is in the document — a detached box has no layout", () => {
-    let connectedWhenMeasured: boolean | null = null;
+  it("measures a dedicated probe, in the document and configured to reserve a gutter", () => {
+    // The stub answers for ANY element, so without pinning down *which* element
+    // was read, an implementation that measured `document.body` — or a probe
+    // missing `overflow: scroll` and thus reserving nothing — would pass every
+    // other test here and still report 0 on Windows.
+    const reads: { el: Element; connected: boolean; style: string | null }[] = [];
     stubProbeBox((probe) => {
-      connectedWhenMeasured = probe.isConnected;
+      reads.push({ el: probe, connected: probe.isConnected, style: probe.getAttribute("style") });
       return { offsetWidth: 100, clientWidth: 89 };
     });
 
-    measureScrollbarGutter();
+    expect(measureScrollbarGutter()).toBe(11);
 
-    expect(connectedWhenMeasured).toBe(true);
+    expect(reads.length, "both box metrics must be read").toBeGreaterThanOrEqual(2);
+    const probe = reads[0]!.el;
+    expect(
+      reads.every((read) => read.el === probe),
+      "both metrics must come off the same element"
+    ).toBe(true);
+    expect(probe).not.toBe(document.body);
+    expect(probe).not.toBe(document.documentElement);
+    expect(probe.tagName).toBe("DIV");
+
+    expect(
+      reads.every((read) => read.connected),
+      "a detached element has no layout, so the gutter would read as 0 everywhere"
+    ).toBe(true);
+
+    const style = reads[0]!.style ?? "";
+    // Each of these is load-bearing: drop one and the probe measures nothing.
+    expect(style, "must force a scrollbar to be reserved").toMatch(/overflow:\s*scroll/);
+    expect(style, "one gutter, not two").toMatch(/scrollbar-gutter:\s*stable(?!\s+both-edges)/);
+    expect(style, "must match what dialog bodies inherit").toMatch(/scrollbar-width:\s*thin/);
+    expect(style, "needs a real box to put a scrollbar in").toMatch(/width:\s*100px/);
+    expect(style, "border and padding would be counted as gutter").toMatch(/border:\s*0/);
+    expect(style).toMatch(/padding:\s*0/);
+
+    expect(probe.isConnected, "the probe must not outlive the measurement").toBe(false);
   });
 
   it("leaves no probe behind", () => {
@@ -89,12 +118,20 @@ describe("measureScrollbarGutter", () => {
   });
 
   it("leaves no probe behind when the measurement throws", () => {
-    stubProbeBox(() => {
+    let probe: Element | null = null;
+    stubProbeBox((el) => {
+      probe = el;
       throw new Error("layout exploded");
     });
     const before = document.body.childElementCount;
 
     expect(() => measureScrollbarGutter()).toThrow("layout exploded");
+
+    // Not just a body-count check: that would pass if the probe were never
+    // appended at all. The element that threw must have been attached, and
+    // must have been taken back out by the `finally`.
+    expect(probe, "the probe must have been measured").not.toBeNull();
+    expect((probe as unknown as Element).isConnected).toBe(false);
     expect(document.body.childElementCount).toBe(before);
   });
 });
@@ -144,5 +181,34 @@ describe("publishScrollbarGutter", () => {
 
     expect(publishScrollbarGutter()).toBe(11);
     expect(document.documentElement.style.getPropertyValue(SCROLLBAR_GUTTER_VAR)).toBe("11px");
+  });
+});
+
+describe("watchScrollbarGutter", () => {
+  it("re-publishes on focus, so a dialog that is already open does not stay stale", () => {
+    stubGutter(0);
+    const stop = watchScrollbarGutter();
+    publishScrollbarGutter();
+    expect(document.documentElement.style.getPropertyValue(SCROLLBAR_GUTTER_VAR)).toBe("0px");
+
+    for (const undo of restore.splice(0)) undo();
+    stubGutter(11);
+    window.dispatchEvent(new Event("focus"));
+
+    expect(document.documentElement.style.getPropertyValue(SCROLLBAR_GUTTER_VAR)).toBe("11px");
+    stop();
+  });
+
+  it("stops measuring once disposed", () => {
+    stubGutter(0);
+    const stop = watchScrollbarGutter();
+    publishScrollbarGutter();
+    stop();
+
+    for (const undo of restore.splice(0)) undo();
+    stubGutter(11);
+    window.dispatchEvent(new Event("focus"));
+
+    expect(document.documentElement.style.getPropertyValue(SCROLLBAR_GUTTER_VAR)).toBe("0px");
   });
 });
