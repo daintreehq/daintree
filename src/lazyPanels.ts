@@ -269,6 +269,15 @@ export const LazyGitPullRebaseConfirmDialog = lazy(() =>
   }))
 );
 
+export function preloadGitWorktreeOperationConfirmDialog() {
+  return import("./components/Git/GitWorktreeOperationConfirmDialog");
+}
+export const LazyGitWorktreeOperationConfirmDialog = lazy(() =>
+  preloadGitWorktreeOperationConfirmDialog().then((m) => ({
+    default: m.GitWorktreeOperationConfirmDialog,
+  }))
+);
+
 export function preloadRecipeConflictDialog() {
   return import("./components/TerminalRecipe/RecipeConflictDialog");
 }

@@ -652,6 +652,17 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; prune?: boolean | undefined }];
     result: void;
   };
+  "git:list-base-integration-commits": {
+    args: [
+      payload: {
+        cwd: string;
+        baseBranch: string;
+        kind: import("../git.js").GitBaseIntegrationKind;
+        limit?: number | undefined;
+      },
+    ];
+    result: import("../git.js").GitBaseIntegrationCommitPreview;
+  };
   "git:list-push-commits": {
     args: [payload: { cwd: string; branchName: string; limit?: number | undefined }];
     result: import("../git.js").GitPushCommitPreview;
@@ -659,6 +670,14 @@ export interface GeneratedIpcInvokeMap {
   "git:list-rebase-commits": {
     args: [payload: { cwd: string; branchName: string; limit?: number | undefined }];
     result: import("../git.js").GitRebaseCommitPreview;
+  };
+  "git:merge-base-into-branch": {
+    args: [payload: { cwd: string; baseBranch: string }];
+    result: void;
+  };
+  "git:rebase-onto-base": {
+    args: [payload: { cwd: string; baseBranch: string }];
+    result: void;
   };
   "global-env:get": {
     args: [];

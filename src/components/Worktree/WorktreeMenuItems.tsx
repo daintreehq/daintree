@@ -26,6 +26,7 @@ import {
   GitBranch,
   GitCommitHorizontal,
   GitCompare,
+  GitMerge,
   GitPullRequest,
   Globe,
   History,
@@ -67,6 +68,8 @@ import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
 import { fileManagerRevealLabel } from "@/lib/platform";
 import { useMenuActionSource, type MenuActionSourceValue } from "@/components/ui/menu-source";
 import { actionService } from "@/services/ActionService";
+import type { ActionId } from "@shared/types/actions";
+import { OPERATION_LABEL, toRepoOperationState } from "@/components/Git/repoOperationCopy";
 import { resourceLifecycleVisibility } from "./utils/resourceLifecycle";
 import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuItems";
 
@@ -416,10 +419,49 @@ export function WorktreeMenuItems({
   );
 
   // ------------------------------------------------------------------- Git
-  // Shared submenu: #12090 adds pull/push rows and #12092 adds base-branch and
-  // recovery rows to this same `gitRows` array. Kept as an array rather than
-  // inlined children so those land as additional entries instead of a conflict
-  // over one JSX block.
+  // Shared submenu: #12090 adds pull/push rows to this same `gitRows` array.
+  // Kept as an array rather than inlined children so those land as additional
+  // entries instead of a conflict over one JSX block.
+  //
+  // Acting on the base branch the card already measures itself against
+  // (#12092). Rows dispatch through ActionService rather than taking callback
+  // props: the confirm, the halt routing and the refresh all live in the action
+  // and are the same wherever it is dispatched from, so threading four more
+  // callbacks through both menu surfaces would only add places to forget one.
+  //
+  // Recovery REPLACES the start rows while an operation is in flight, rather
+  // than sitting beside them disabled. A worktree mid-rebase has exactly one
+  // useful next move and it is not "start another rebase" — and the main-process
+  // handler refuses that anyway, so a disabled row would only restate a
+  // prohibition the menu is already able to express by omission.
+  const baseBranchName = worktree.baseBranchName ?? null;
+  const baseOperation = toRepoOperationState(worktree.repoState);
+  // `worktreeChanges`, NOT `repoState`: the snapshot only publishes `repoState`
+  // while an operation is in progress (`GitStatusPass` skips the CLEAN/DIRTY
+  // publication entirely), so reading dirtiness from it would call every clean
+  // worktree dirty and every dirty one clean.
+  const hasUncommittedChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
+  const isStatusUnknown = worktree.worktreeChanges == null;
+  const baseBehind = worktree.baseBehindCount ?? null;
+
+  // Ordered by which the user can act on first, and every one of them is a
+  // reason the operation would fail rather than a guess at intent — a row
+  // disabled for a reason the user cannot see reads as arbitrary.
+  const baseBlockedReason = !baseBranchName
+    ? "No base branch"
+    : worktree.isDetached
+      ? "No branch checked out"
+      : isStatusUnknown
+        ? "Checking status…"
+        : hasUncommittedChanges
+          ? "Commit or stash first"
+          : baseBehind === 0
+            ? "Up to date"
+            : null;
+
+  const dispatchGit = (actionId: ActionId, args: Record<string, unknown>) =>
+    void actionService.dispatch(actionId, { worktreeId: worktree.id, ...args }, { source });
+
   const gitRows = [
     <C.Item
       key="fetch"
@@ -443,6 +485,50 @@ export function WorktreeMenuItems({
       <Scissors className={ICON} />
       Fetch and prune
     </C.Item>,
+    ...(baseOperation
+    ? [
+        <C.Item
+          key="git-continue"
+          onSelect={() => dispatchGit("git.continueRepositoryOperation", {})}
+        >
+          <Play className={ICON} />
+          Continue {OPERATION_LABEL[baseOperation].toLowerCase()}
+        </C.Item>,
+        <C.Item
+          key="git-abort"
+          onSelect={() => dispatchGit("git.abortRepositoryOperation", { operation: baseOperation })}
+          destructive
+        >
+          <OctagonX className={ICON} />
+          Abort {OPERATION_LABEL[baseOperation].toLowerCase()}…
+        </C.Item>,
+      ]
+    : [
+        <C.Item
+          key="git-rebase-onto-base"
+          onSelect={() => dispatchGit("git.rebaseOntoBase", { baseBranch: baseBranchName ?? "" })}
+          disabled={baseBlockedReason !== null}
+        >
+          <GitBranch className={ICON} />
+          {baseBranchName ? `Rebase onto ${baseBranchName}…` : "Rebase onto base branch…"}
+          {baseBlockedReason ? (
+            <C.Meta>{baseBlockedReason}</C.Meta>
+          ) : (
+            baseBehind != null && baseBehind > 0 && <C.Meta>{baseBehind}</C.Meta>
+          )}
+        </C.Item>,
+        <C.Item
+          key="git-merge-base"
+          onSelect={() =>
+            dispatchGit("git.mergeBaseIntoBranch", { baseBranch: baseBranchName ?? "" })
+          }
+          disabled={baseBlockedReason !== null}
+        >
+          <GitMerge className={ICON} />
+          {baseBranchName ? `Merge ${baseBranchName} in…` : "Merge base branch in…"}
+          {baseBlockedReason && <C.Meta>{baseBlockedReason}</C.Meta>}
+        </C.Item>,
+      ]),
   ].filter(Boolean);
 
   const gitSub = gitRows.length > 0 && (

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { RebaseAction, RebaseEntry, RepoState, StagingStatus } from "@shared/types";
+import type { RebaseAction, RebaseEntry, StagingStatus } from "@shared/types";
 import type { ConflictMarkerScanEntry } from "@shared/types/ipc/git";
 import { cn } from "@/lib/utils";
 import {
@@ -20,22 +20,12 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Spinner } from "@/components/ui/Spinner";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { REVIEW_HUB_STICKY_BAND } from "./reviewHubUtils";
-
-type ConflictOperationState = Exclude<RepoState, "CLEAN" | "DIRTY">;
-
-const OPERATION_LABEL: Record<ConflictOperationState, string> = {
-  MERGING: "Merge",
-  REBASING: "Rebase",
-  CHERRY_PICKING: "Cherry-pick",
-  REVERTING: "Revert",
-};
-
-const ABORT_RESTORE_SUFFIX: Record<ConflictOperationState, string> = {
-  MERGING: "restores the working tree to its pre-merge state.",
-  REBASING: "returns HEAD to the original branch tip.",
-  CHERRY_PICKING: "restores the working tree to the state before the operation started.",
-  REVERTING: "restores the working tree to the state before the operation started.",
-};
+import {
+  OPERATION_LABEL,
+  buildAbortDescription,
+  toRepoOperationState,
+  type RepoOperationState,
+} from "@/components/Git/repoOperationCopy";
 
 const REBASE_ACTION_LABEL: Record<RebaseAction, string> = {
   pick: "pick",
@@ -180,46 +170,6 @@ function splitPath(filePath: string): { dir: string; base: string } {
   return { dir: normalized.slice(0, lastSlash), base: normalized.slice(lastSlash + 1) };
 }
 
-function buildAbortDescription(
-  operationState: ConflictOperationState,
-  status: StagingStatus
-): string {
-  const stagedCount = status.staged.length;
-  const parts: string[] = [];
-
-  if (stagedCount > 0) {
-    parts.push(`Discards ${stagedCount} staged resolution${stagedCount === 1 ? "" : "s"}`);
-  }
-
-  if (
-    operationState === "REBASING" &&
-    status.rebaseStep != null &&
-    status.rebaseTotalSteps != null &&
-    status.rebaseTotalSteps > 0
-  ) {
-    // `rebaseStep` from `git status` is the *next* commit to replay, so the
-    // already-replayed count is one less. Clamp to 0 to be safe.
-    const replayed = Math.max(0, status.rebaseStep - 1);
-    if (replayed > 0) {
-      const replayFragment = `reverts ${replayed} of ${status.rebaseTotalSteps} replayed commit${
-        replayed === 1 ? "" : "s"
-      }`;
-      if (parts.length > 0) {
-        parts.push(`and ${replayFragment}`);
-      } else {
-        parts.push(replayFragment.charAt(0).toUpperCase() + replayFragment.slice(1));
-      }
-    }
-  }
-
-  const restore = ABORT_RESTORE_SUFFIX[operationState];
-
-  if (parts.length === 0) {
-    return `Discards the in-progress ${OPERATION_LABEL[operationState].toLowerCase()} and ${restore}`;
-  }
-  return `${parts.join(" ")} and ${restore}`;
-}
-
 export function ConflictPanel({
   status,
   worktreePath,
@@ -243,17 +193,10 @@ export function ConflictPanel({
   const scanKeyRef = useRef<string>("");
 
   const operationState = status.repoState;
-  const operationKey: ConflictOperationState | null = useMemo(() => {
-    if (
-      operationState === "MERGING" ||
-      operationState === "REBASING" ||
-      operationState === "CHERRY_PICKING" ||
-      operationState === "REVERTING"
-    ) {
-      return operationState;
-    }
-    return null;
-  }, [operationState]);
+  const operationKey: RepoOperationState | null = useMemo(
+    () => toRepoOperationState(operationState),
+    [operationState]
+  );
   const operationLabel = operationKey ? OPERATION_LABEL[operationKey] : "Operation";
 
   // Filter optimistic resolves out of the live worklist so the row leaves the

@@ -90,6 +90,12 @@ describe("classifyGitError — table-driven", () => {
       "worktree-dirty",
       "error: Your local changes to the following files would be overwritten by merge:\n\tfoo.ts",
     ],
+    // A RAW `git rebase <ref>` refuses differently from `git pull --rebase`,
+    // and the base-branch integration issues the raw form (#12092). Without
+    // these arms both fell through to `unknown` and the user got a generic
+    // failure where the diagnosis is the whole fix.
+    ["worktree-dirty", "error: cannot rebase: You have unstaged changes."],
+    ["worktree-dirty", "error: cannot rebase: Your index contains uncommitted changes."],
     ["pathspec-invalid", "fatal: bad revision 'HEAD~999'"],
     ["pathspec-invalid", "fatal: pathspec 'nonexistent' did not match any file(s) known to git"],
     ["pathspec-invalid", "fatal: couldn't find remote ref pull/99999/head"],

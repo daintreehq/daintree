@@ -105,8 +105,15 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     /CONFLICT \(|Merge conflict in |error: (?:merge is not possible because you have unmerged files|pull is not possible because you have unmerged files)/i,
   ],
   [
+    // The `cannot rebase` arm is NOT redundant with `cannot pull with rebase`
+    // (#12092). `git pull --rebase` refuses with its own wording, which is what
+    // `git.pullRebase` hits; a RAW `git rebase <ref>` — which the base-branch
+    // integration issues directly — refuses with "error: cannot rebase: You
+    // have unstaged changes." / "…Your index contains uncommitted changes."
+    // instead. Without the arm those fall through to `unknown`, and the user
+    // gets a generic failure where the diagnosis is the whole fix.
     "worktree-dirty",
-    /Your local changes to the following files would be overwritten by (?:merge|checkout|pull)|error: (?:cannot|Cannot) (?:pull with rebase|pull )/i,
+    /Your local changes to the following files would be overwritten by (?:merge|checkout|pull)|error: (?:cannot|Cannot) (?:pull with rebase|pull |rebase:)/i,
   ],
   [
     "pathspec-invalid",

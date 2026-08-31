@@ -2129,6 +2129,22 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.GIT_LIST_PUSH_COMMITS, { cwd, branchName, limit }),
       listRebaseCommits: (cwd: string, branchName: string, limit?: number) =>
         _unwrappingInvoke(CHANNELS.GIT_LIST_REBASE_COMMITS, { cwd, branchName, limit }),
+      listBaseIntegrationCommits: (
+        cwd: string,
+        baseBranch: string,
+        kind: "rebase-onto-base" | "merge-base",
+        limit?: number
+      ) =>
+        _unwrappingInvoke(CHANNELS.GIT_LIST_BASE_INTEGRATION_COMMITS, {
+          cwd,
+          baseBranch,
+          kind,
+          limit,
+        }),
+      rebaseOntoBase: (cwd: string, baseBranch: string) =>
+        _unwrappingInvoke(CHANNELS.GIT_REBASE_ONTO_BASE, { cwd, baseBranch }),
+      mergeBaseIntoBranch: (cwd: string, baseBranch: string) =>
+        _unwrappingInvoke(CHANNELS.GIT_MERGE_BASE_INTO_BRANCH, { cwd, baseBranch }),
 
       onPushProgress: (callback: (event: PushProgressEvent) => void) =>
         _typedOn(CHANNELS.GIT_PUSH_PROGRESS, callback),
