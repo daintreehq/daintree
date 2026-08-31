@@ -10,9 +10,11 @@ import {
   HOST_CALL_ACTION,
   expectedRegistrationKeys,
   livePluginChildCount,
+  missingRegistrationCount,
   nonce,
   pluginCorpus,
   workerFixtureBundle,
+  type PluginWorker,
 } from "../lib/pluginHostFixture";
 import { pluginHostScenarios } from "../scenarios/pluginHost";
 
@@ -92,6 +94,25 @@ describe("worker fixture plugin", () => {
     expect(source).toContain(HOST_CALL_ACTION);
   });
 
+  it("scores a registration forward that never arrived", () => {
+    const keys = [...expectedRegistrationKeys("acme.demo")];
+    const complete = {
+      registrations: keys.map((key) => ({ method: "registerAction", registrationKey: key })),
+    } as unknown as PluginWorker;
+    expect(missingRegistrationCount(complete, "acme.demo")).toBe(0);
+
+    // The shape the oracle exists for: a worker that boots, activates, returns
+    // its disposer and exits zero, having forwarded nothing.
+    const silent = { registrations: [] } as unknown as PluginWorker;
+    expect(missingRegistrationCount(silent, "acme.demo")).toBe(keys.length);
+
+    // A registration that arrived without its key is not evidence it happened.
+    const keyless = {
+      registrations: keys.map(() => ({ method: "registerAction", registrationKey: null })),
+    } as unknown as PluginWorker;
+    expect(missingRegistrationCount(keyless, "acme.demo")).toBe(keys.length);
+  });
+
   it("mints nonces long enough to be a real payload check", () => {
     const a = nonce("perf-223-0");
     const b = nonce("perf-223-0");
@@ -148,6 +169,16 @@ describe("plugin host scenario family", () => {
     for (const scenario of pluginHostScenarios) {
       expect(scenario.correctness?.length ?? 0).toBeGreaterThan(0);
       expect(scenario.modes).toContain("smoke");
+    }
+  });
+
+  it("predicates registrations wherever the worker is activated", () => {
+    // Boot, activation, cleanup and dispose all pass against a host that
+    // forwards no registrations at all, so both scenarios that activate the
+    // fixture plugin have to grade what arrived against what it owed.
+    for (const id of ["PERF-220", "PERF-223"]) {
+      const scenario = pluginHostScenarios.find((entry) => entry.id === id);
+      expect(scenario?.correctness).toContain("registrationMisses");
     }
   });
 

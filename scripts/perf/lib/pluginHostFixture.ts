@@ -565,6 +565,23 @@ export function expectedRegistrationKeys(pluginId: string): Set<string> {
   return keys;
 }
 
+/**
+ * Registration keys the fixture plugin owed that never crossed the boundary.
+ *
+ * The reading that makes `registrationCount` mean something. A worker whose
+ * `host.registerAction` forwards nothing still boots, still reports `activated`,
+ * still returns its disposer and still exits zero — faster than one that does
+ * the work — so counting what arrived is not enough on its own.
+ */
+export function missingRegistrationCount(worker: PluginWorker, pluginId: string): number {
+  const arrived = new Set(
+    worker.registrations
+      .filter((record) => record.registrationKey !== null)
+      .map((record) => record.registrationKey as string)
+  );
+  return [...expectedRegistrationKeys(pluginId)].filter((key) => !arrived.has(key)).length;
+}
+
 /** A requestId whose body is a nonce, so an echo proves the payload survived. */
 export function nonce(prefix: string): string {
   let body = "";

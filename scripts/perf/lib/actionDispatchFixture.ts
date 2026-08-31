@@ -466,11 +466,98 @@ function probeDefinitions(): unknown[] {
 
 // --- Catalog ----------------------------------------------------------------
 
+/**
+ * What one definition declares about itself, read off the definition OBJECT
+ * before it is handed to `register()`.
+ *
+ * The oracle for the MCP tool surface has to sit outside both halves of the
+ * subject — `ActionService`'s zod-to-JSON-Schema compile and the main-process
+ * projection that reads its output. A schema builder that emits tools with no
+ * `inputSchema` and empty annotations is strictly cheaper than one that works,
+ * and the advertised payload is the headline number, so a smaller payload reads
+ * as an improvement. Only a declaration taken from the definitions themselves
+ * can tell "we trimmed the surface" from "we stopped emitting it".
+ */
+export interface SurfaceExpectation {
+  title: string;
+  /** The definition carries an argument schema, so a JSON Schema is owed. */
+  expectsInputSchema: boolean;
+  /** Top-level argument names, when the schema resolves to a plain object. */
+  argNames: readonly string[];
+  /** `mcpOutputSchema` opted in with a result schema behind it. */
+  expectsOutputSchema: boolean;
+  readOnlyHint: boolean;
+  idempotentHint: boolean;
+  destructiveHint: boolean;
+}
+
+interface ZodShapeCarrier {
+  shape?: Record<string, unknown>;
+  def?: { innerType?: ZodShapeCarrier; in?: ZodShapeCarrier };
+}
+
+/**
+ * Top-level argument names by structural reflection on zod's own `shape`,
+ * unwrapping the `.optional()` / `.default()` / `.pipe()` layers a third of the
+ * catalog wraps around its object schema.
+ *
+ * Deliberately NOT `z.toJSONSchema` — that is the conversion being graded, and
+ * an oracle that re-runs the subject grades nothing. Schemas that resolve to no
+ * object shape (an intersection, say) contribute no expectation rather than a
+ * false one.
+ */
+function argNamesOf(schema: unknown): string[] {
+  let cursor = schema as ZodShapeCarrier | undefined;
+  for (let depth = 0; depth < 8 && cursor; depth += 1) {
+    if (cursor.shape && typeof cursor.shape === "object") return Object.keys(cursor.shape);
+    cursor = cursor.def?.innerType ?? cursor.def?.in;
+  }
+  return [];
+}
+
+function describeDefinition(definition: unknown): SurfaceExpectation {
+  const def = definition as {
+    title: string;
+    kind?: string;
+    danger?: string;
+    argsSchema?: unknown;
+    rawInputSchema?: unknown;
+    mcpOutputSchema?: unknown;
+    resultSchema?: unknown;
+    rawOutputSchema?: unknown;
+    mcpAnnotations?: {
+      readOnlyHint?: boolean;
+      idempotentHint?: boolean;
+      destructiveHint?: boolean;
+    };
+  };
+  const isQuery = def.kind === "query";
+  return {
+    title: def.title,
+    expectsInputSchema: Boolean(def.argsSchema ?? def.rawInputSchema),
+    argNames: def.argsSchema ? argNamesOf(def.argsSchema) : [],
+    expectsOutputSchema: Boolean(def.mcpOutputSchema && (def.resultSchema ?? def.rawOutputSchema)),
+    readOnlyHint: def.mcpAnnotations?.readOnlyHint ?? isQuery,
+    idempotentHint: def.mcpAnnotations?.idempotentHint ?? isQuery,
+    destructiveHint: def.mcpAnnotations?.destructiveHint ?? def.danger === "confirm",
+  };
+}
+
 export interface CatalogService {
   /** A real `ActionService` with the real catalog registered into it. */
   service: ActionServiceLike;
   /** Actions registered, probes included. */
   actionCount: number;
+  /**
+   * Every id handed to `register()`, taken from the definition objects.
+   *
+   * The projection oracle: `list()` owes back everything that went in, and an
+   * expectation derived from `list()` itself makes an empty listing vacuously
+   * correct — the fastest sweep and the best slope the harness can record.
+   */
+  registeredIds: readonly string[];
+  /** Per-id declaration, read off the definitions rather than the manifest. */
+  expectations: ReadonlyMap<string, SurfaceExpectation>;
   /** Time spent building the definition objects from their factories. */
   factoryMs: number;
   /** Time spent inside `ActionService.register()` for every definition. */
@@ -531,7 +618,24 @@ export function buildCatalogService(
   // against a context no window ever has.
   service.setContextProvider(() => FULL_CONTEXT);
 
-  return { service, actionCount: definitions.length, factoryMs, registerMs };
+  // Read after `registerMs` is taken: this is oracle bookkeeping and must not
+  // land inside PERF-200's timed bracket.
+  const registeredIds: string[] = [];
+  const expectations = new Map<string, SurfaceExpectation>();
+  for (const definition of definitions) {
+    const id = (definition as { id: string }).id;
+    registeredIds.push(id);
+    expectations.set(id, describeDefinition(definition));
+  }
+
+  return {
+    service,
+    actionCount: definitions.length,
+    registeredIds,
+    expectations,
+    factoryMs,
+    registerMs,
+  };
 }
 
 let sharedCatalogPromise: Promise<{ mods: ActionModules; catalog: CatalogService }> | null = null;
@@ -662,11 +766,29 @@ export interface KeybindingHarness {
   service: KeybindingServiceLike;
   /** Bindings the resolver scans on every keydown. */
   bindingCount: number;
+  /** What the real table plus the harness's own bindings add up to. */
+  expectedBindingCount: number;
+  /** Rows of `DEFAULT_KEYBINDINGS` the service did not take. */
+  missingDefaultBindings: number;
   /** `when`-carrying bindings `registerBinding` actually accepted. */
   registeredWhenBindings: number;
 }
 
-/** A fresh `KeybindingService` with the real defaults plus the `when` bindings. */
+/** Identity of a binding as the resolver scans it: action, combo and scope. */
+function bindingKey(binding: KeybindingRow): string {
+  return `${binding.actionId} ${binding.combo} ${binding.scope}`;
+}
+
+/**
+ * A fresh `KeybindingService` with the real defaults plus the `when` bindings.
+ *
+ * `missingDefaultBindings` is the cardinality oracle. Every keydown is a full
+ * scan, so a service that seeded a short table resolves faster on every sample
+ * the scenario takes, and the probed combos — twelve of the hundred-plus in the
+ * table — would keep matching. `DEFAULT_KEYBINDINGS` is the declaration the
+ * service is supposed to have loaded, so reading the registered set back
+ * against it is what stops an unprobed row from being free to delete.
+ */
 export function buildKeybindingHarness(mods: ActionModules): KeybindingHarness {
   const service = new mods.KeybindingService();
   const before = service.getAllBindings().length;
@@ -682,10 +804,17 @@ export function buildKeybindingHarness(mods: ActionModules): KeybindingHarness {
       pluginId: "perf-harness",
     });
   }
+  const registered = new Set(service.getAllBindings().map(bindingKey));
+  let missingDefaultBindings = 0;
+  for (const binding of mods.DEFAULT_KEYBINDINGS) {
+    if (!registered.has(bindingKey(binding))) missingDefaultBindings += 1;
+  }
   const bindingCount = service.getAllBindings().length;
   return {
     service,
     bindingCount,
+    expectedBindingCount: mods.DEFAULT_KEYBINDINGS.length + WHEN_BINDINGS.length,
+    missingDefaultBindings,
     registeredWhenBindings: bindingCount - before,
   };
 }

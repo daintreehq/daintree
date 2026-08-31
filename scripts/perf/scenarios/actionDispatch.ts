@@ -20,7 +20,6 @@ import {
   WHEN_CONTEXT_MODAL,
   WHEN_CONTEXT_TERMINAL,
   type ActionManifestRow,
-  type ActionModules,
   type CatalogService,
 } from "../lib/actionDispatchFixture";
 
@@ -42,6 +41,16 @@ const MCP_TIERS = ["workbench", "action", "system", "external"] as const;
  */
 const REJECT_SAMPLE = 12;
 const OK_DISPATCHES = 24;
+
+/** One row of the `tools/list` payload, as sessionServer assembles it. */
+interface ProjectedTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  annotations: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  _meta?: { examples: unknown[] };
+}
 
 interface DispatchStep {
   actionId: string;
@@ -153,7 +162,6 @@ function getDispatchPlan(): Promise<DispatchPlan> {
 }
 
 interface ScaledCatalogs {
-  mods: ActionModules;
   scales: Array<{ size: number; catalog: CatalogService }>;
 }
 
@@ -174,7 +182,7 @@ function getScaledCatalogs(): Promise<ScaledCatalogs> {
       });
       scales.push({ size: catalog.actionCount, catalog });
     }
-    return { mods, scales };
+    return { scales };
   })();
   return scaledCatalogsPromise;
 }
@@ -382,12 +390,14 @@ export const actionDispatchScenarios: PerfScenario[] = [
       "first MCP connection), then runs the real tools/list projection — shouldExposeTool, " +
       "buildToolInputSchema, buildAnnotations, buildToolOutputSchema — at all four tiers, plus " +
       "buildSurfaceManifest's sha256 compatibility digest. The advertised payload bytes are a " +
-      "public contract billed on every turn, and are machine-independent.",
+      "public contract billed on every turn, and are machine-independent — so every advertised tool " +
+      "is graded against what its definition declared, since a surface stripped of its schemas and " +
+      "annotations is both cheaper and smaller.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 6, ci: 12, nightly: 16 },
     warmups: 2,
-    correctness: ["surfaceMisses"],
+    correctness: ["surfaceMisses", "toolSchemaMisses"],
     async run() {
       const mods = await loadActionModules();
       // Fresh service: the schema cache is per-service and this scenario's
@@ -406,7 +416,8 @@ export const actionDispatchScenarios: PerfScenario[] = [
 
       const toolCountByTier: Record<string, number> = {};
       const payloadBytesByTier: Record<string, number> = {};
-      let surfaceMisses = 0;
+      const toolsByTier = new Map<string, ProjectedTool[]>();
+      const surfaceByTier = new Map<string, { hash: string; toolCount: number }>();
       let surfaceHashMs = 0;
 
       const projectionStart = performance.now();
@@ -415,7 +426,7 @@ export const actionDispatchScenarios: PerfScenario[] = [
           mods.shouldExposeTool(entry, tier, mods.UNBOUND_SESSION_SURFACE)
         );
         // The exact shape sessionServer's ListToolsRequest handler returns.
-        const tools = exposed.map((entry) => {
+        const tools: ProjectedTool[] = exposed.map((entry) => {
           const outputSchema = mods.buildToolOutputSchema(entry);
           const meta =
             entry.examples && entry.examples.length > 0 ? { examples: entry.examples } : undefined;
@@ -423,48 +434,123 @@ export const actionDispatchScenarios: PerfScenario[] = [
             name: entry.id,
             description: entry.description,
             inputSchema: mods.buildToolInputSchema(entry),
-            annotations: mods.buildAnnotations(entry),
+            annotations: mods.buildAnnotations(entry) as Record<string, unknown>,
             ...(outputSchema ? { outputSchema } : {}),
             ...(meta ? { _meta: meta } : {}),
           };
         });
         toolCountByTier[tier] = tools.length;
         payloadBytesByTier[tier] = Buffer.byteLength(JSON.stringify({ tools }), "utf8");
-
-        // Independent oracle: re-derive the exposure set from the tier
-        // allowlist and the manifest's own fields, never from shouldExposeTool.
-        // The two disagreeing is the whole point of the reading.
-        const permitted = mods.getTierPermittedActionIds(tier);
-        const expected = new Set(
-          manifest
-            .filter(
-              (entry) =>
-                permitted.has(entry.id) &&
-                entry.danger !== "restricted" &&
-                entry.mcpVisibility !== "hidden"
-            )
-            .map((entry) => entry.id)
-        );
-        const actual = new Set(exposed.map((entry) => entry.id));
-        for (const id of expected) if (!actual.has(id)) surfaceMisses += 1;
-        for (const id of actual) if (!expected.has(id)) surfaceMisses += 1;
+        toolsByTier.set(tier, tools);
 
         const hashStart = performance.now();
         const surface = mods.buildSurfaceManifest(manifest, tier, "0.0.0-perf");
         surfaceHashMs += performance.now() - hashStart;
-        if (!/^[0-9a-f]{64}$/.test(surface.hash) || surface.tools.length !== tools.length) {
-          surfaceMisses += 1;
-        }
+        surfaceByTier.set(tier, { hash: surface.hash, toolCount: surface.tools.length });
       }
       const projectionMs = performance.now() - projectionStart;
       const durationMs = performance.now() - start;
+
+      // Grading is outside the timed bracket: it is oracle work, not projection
+      // work, and the advertised payload is what this scenario prices.
+
+      // The listing owes back every action that was registered. Read against
+      // the ids that went INTO register(), never against the listing itself —
+      // an expectation derived from `list()` makes an empty listing vacuously
+      // correct, and an empty listing is the smallest payload and the fastest
+      // compile the harness could ever record.
+      let surfaceMisses = 0;
+      const entryById = new Map(manifest.map((entry) => [entry.id, entry]));
+      for (const id of catalog.registeredIds) {
+        if (!entryById.has(id)) surfaceMisses += 1;
+      }
+
+      let toolSchemaMisses = 0;
+      // The compile half, over the whole manifest: a definition that declares an
+      // argument schema is owed a JSON Schema in its entry. A builder that
+      // emitted none would still produce well-formed, much cheaper tools.
+      for (const [id, want] of catalog.expectations) {
+        const entry = entryById.get(id);
+        if (!entry) continue;
+        if (want.expectsInputSchema && !entry.inputSchema) toolSchemaMisses += 1;
+        if (want.expectsOutputSchema && !entry.outputSchema) toolSchemaMisses += 1;
+      }
+
+      for (const tier of MCP_TIERS) {
+        // Re-derive the exposure set from the tier allowlist and the manifest's
+        // own fields, never from shouldExposeTool. The two disagreeing is the
+        // whole point of the reading.
+        const permitted = mods.getTierPermittedActionIds(tier);
+        const expected = new Set<string>();
+        for (const id of permitted) {
+          const entry = entryById.get(id);
+          // An id the allowlist advertises that the catalog never produced.
+          if (!entry) {
+            surfaceMisses += 1;
+            continue;
+          }
+          if (entry.danger !== "restricted" && entry.mcpVisibility !== "hidden") expected.add(id);
+        }
+        const tools = toolsByTier.get(tier) ?? [];
+        const actual = new Set(tools.map((tool) => tool.name));
+        for (const id of expected) if (!actual.has(id)) surfaceMisses += 1;
+        for (const id of actual) if (!expected.has(id)) surfaceMisses += 1;
+
+        const surface = surfaceByTier.get(tier);
+        if (
+          !surface ||
+          !/^[0-9a-f]{64}$/.test(surface.hash) ||
+          surface.toolCount !== expected.size
+        ) {
+          surfaceMisses += 1;
+        }
+
+        // The projection half, per advertised tool. Payload BYTES are the
+        // headline and a tool stripped of its schema and annotations is much
+        // cheaper, so each one is checked against what its definition declared.
+        for (const tool of tools) {
+          const want = catalog.expectations.get(tool.name);
+          if (!want) {
+            toolSchemaMisses += 1;
+            continue;
+          }
+          const input = tool.inputSchema;
+          if (input?.["type"] !== "object" || input["additionalProperties"] !== false) {
+            toolSchemaMisses += 1;
+          }
+          const properties = input?.["properties"] as Record<string, unknown> | undefined;
+          for (const name of want.argNames) {
+            if (!properties || !(name in properties)) toolSchemaMisses += 1;
+          }
+          const annotations = tool.annotations;
+          if (
+            annotations?.["title"] !== want.title ||
+            annotations["readOnlyHint"] !== want.readOnlyHint ||
+            annotations["idempotentHint"] !== want.idempotentHint ||
+            annotations["destructiveHint"] !== want.destructiveHint
+          ) {
+            toolSchemaMisses += 1;
+          }
+          const entry = entryById.get(tool.name);
+          if (entry?.outputSchema?.["type"] === "object" && !tool.outputSchema) {
+            toolSchemaMisses += 1;
+          }
+        }
+      }
+
+      const advertisedArgNames = [...catalog.expectations.values()].reduce(
+        (sum, want) => sum + want.argNames.length,
+        0
+      );
 
       return {
         durationMs,
         metrics: {
           manifestEntryCount: manifest.length,
+          registeredActionCount: catalog.actionCount,
           inputSchemaCount: manifest.filter((entry) => entry.inputSchema).length,
           outputSchemaCount: manifest.filter((entry) => entry.outputSchema).length,
+          declaredArgNameCount: advertisedArgNames,
           workbenchToolCount: toolCountByTier.workbench ?? 0,
           externalToolCount: toolCountByTier.external ?? 0,
           systemToolCount: toolCountByTier.system ?? 0,
@@ -476,6 +562,7 @@ export const actionDispatchScenarios: PerfScenario[] = [
           projectionMs,
           surfaceHashMs,
           surfaceMisses,
+          toolSchemaMisses,
         },
       };
     },
@@ -490,12 +577,14 @@ export const actionDispatchScenarios: PerfScenario[] = [
       "the app pays for most keys a user presses — is the worst case and is reported separately. " +
       "Covers chord prefixes, chord completion and the cancelled-chord path. The when-clause " +
       "parser and evaluator are real; the context snapshot is supplied through setWhenContext " +
-      "because the live builder reads the DOM.",
+      "because the live builder reads the DOM. bindingTableMisses predicates the scanned table " +
+      "against DEFAULT_KEYBINDINGS itself, because a shorter table resolves faster on every " +
+      "sample and the probed combos would keep matching.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 10, ci: 16, nightly: 22 },
     warmups: 2,
-    correctness: ["resolutionMisses"],
+    correctness: ["resolutionMisses", "bindingTableMisses"],
     async run() {
       const mods = await loadActionModules();
       const harness = buildKeybindingHarness(mods);
@@ -598,9 +687,16 @@ export const actionDispatchScenarios: PerfScenario[] = [
       }
       const durationMs = performance.now() - start;
 
-      // A binding the registration guard refused would silently remove a whole
-      // clause from the scan, so the accepted count is checked too.
-      if (harness.registeredWhenBindings !== WHEN_BINDINGS.length) resolutionMisses += 1;
+      // Every keydown is a full scan, so the twelve probed combos price a table
+      // the other hundred-odd rows are in. Deleting an unprobed default makes
+      // every sample above faster and leaves each individual probe still
+      // matching, so the scan's cardinality is predicated against the real
+      // DEFAULT_KEYBINDINGS table rather than merely reported beside it. A
+      // binding the registration guard refused removes a whole when-clause from
+      // the scan, so the accepted count is graded the same way.
+      let bindingTableMisses = harness.missingDefaultBindings;
+      bindingTableMisses += Math.abs(harness.expectedBindingCount - harness.bindingCount);
+      bindingTableMisses += Math.abs(WHEN_BINDINGS.length - harness.registeredWhenBindings);
 
       const all = [...hitSamples, ...missSamples, ...otherSamples];
       const avgUs = (samples: number[]) =>
@@ -611,12 +707,14 @@ export const actionDispatchScenarios: PerfScenario[] = [
         metrics: {
           resolutionCount,
           bindingCount: harness.bindingCount,
+          expectedBindingCount: harness.expectedBindingCount,
           whenBindingCount: harness.registeredWhenBindings,
           hitResolveUs: avgUs(hitSamples),
           missResolveUs: avgUs(missSamples),
           avgResolveUs: avgUs(all),
           p95ResolveUs: percentile(all, 95) * 1000,
           resolutionMisses,
+          bindingTableMisses,
         },
       };
     },
@@ -629,18 +727,19 @@ export const actionDispatchScenarios: PerfScenario[] = [
       "built from id-renamed clones of the real definitions so the per-action predicate work is " +
       "the shipped work. list() is O(actions) and is re-run on every palette context change and " +
       "every MCP manifest fetch, so msPerKAction is the slope that decides whether the plugin " +
-      "ecosystem can grow the catalog without the palette stuttering. Registration is outside " +
-      "the timed bracket — PERF-200 owns that.",
+      "ecosystem can grow the catalog without the palette stuttering. Each scale must project back " +
+      "every id registered into it, clones included: an implementation that caps the listing has " +
+      "the flattest slope available. Registration is outside the timed bracket — PERF-200 owns that.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 14, nightly: 20 },
     warmups: 2,
     correctness: ["scalingMisses"],
     async run() {
-      const { mods, scales } = await getScaledCatalogs();
+      const { scales } = await getScaledCatalogs();
       const REPEATS = 6;
       const sweepBySize = new Map<number, number>();
-      let scalingMisses = 0;
+      const projectedBySize = new Map<number, ActionManifestRow[]>();
       let entriesProjected = 0;
 
       const start = performance.now();
@@ -654,27 +753,33 @@ export const actionDispatchScenarios: PerfScenario[] = [
         }
         entriesProjected += entries.length;
         sweepBySize.set(size, percentile(samples, 95));
-
-        // Same oracle at every scale: the shipped catalog must still come back
-        // whole, and past the base scale the added actions must be in the
-        // projection too. An empty listing is the fastest possible slope.
-        const ids = new Set(entries.map((entry) => entry.id));
-        let missingBuiltIn = false;
-        for (const id of mods.BUILT_IN_ACTION_IDS) {
-          if (!ids.has(id)) {
-            missingBuiltIn = true;
-            break;
-          }
-        }
-        if (missingBuiltIn) scalingMisses += 1;
-        if (size > scales[0]!.size && !entries.some((entry) => entry.id.includes("#perfclone"))) {
-          scalingMisses += 1;
-        }
+        projectedBySize.set(size, entries);
       }
       const durationMs = performance.now() - start;
 
+      // Graded outside the bracket: the slope is what this scenario prices, and
+      // the oracle grows with the catalog while the sweep is what must.
+      //
+      // The whole point is the slope across 1x/2x/4x, so requiring only the
+      // built-ins plus "at least one clone" pays an implementation that caps the
+      // listing: it returns a constant number of rows at every scale, which is
+      // the flattest and best-looking slope available. Each scale therefore owes
+      // back the FULL projected set — every id that was registered into that
+      // catalog, clones included.
+      let scalingMisses = 0;
+      for (const { size, catalog } of scales) {
+        const ids = new Set((projectedBySize.get(size) ?? []).map((entry) => entry.id));
+        for (const id of catalog.registeredIds) {
+          if (!ids.has(id)) scalingMisses += 1;
+        }
+      }
+
       const largest = scales[scales.length - 1]!.size;
       const worstLargeMs = sweepBySize.get(largest) ?? 0;
+      const expectedEntries = scales.reduce(
+        (sum, scale) => sum + scale.catalog.registeredIds.length,
+        0
+      );
 
       return {
         durationMs,
@@ -682,6 +787,7 @@ export const actionDispatchScenarios: PerfScenario[] = [
           baseActionCount: scales[0]!.size,
           largestActionCount: largest,
           entriesProjectedCount: entriesProjected,
+          expectedEntriesCount: expectedEntries,
           sweepMsBase: sweepBySize.get(scales[0]!.size) ?? 0,
           sweepMsLargest: worstLargeMs,
           msPerKAction: worstLargeMs / (largest / 1000),

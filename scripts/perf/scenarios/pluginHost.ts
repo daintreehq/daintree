@@ -9,6 +9,7 @@ import {
   HOST_CALL_ACTION,
   expectedRegistrationKeys,
   livePluginChildCount,
+  missingRegistrationCount,
   nonce,
   pluginCorpus,
   spawnPluginServiceHost,
@@ -127,12 +128,18 @@ export const pluginHostScenarios: PerfScenario[] = [
     id: "PERF-220",
     name: "Plugin Worker Boot, Activation and Clean Dispose",
     description:
-      "Fork the real plugin worker (electron/plugin-dev-worker.ts, the same entry packaged prod plugins run in) into its own process, time the ready handshake, activate a generated fixture plugin, then ask it to shut down and confirm the process actually exits zero. The main-side supervisor (PluginDevWorkerHost) and bridge (PluginDevWorkerMainBridge) are NOT in the loop — the parent here is a counting stand-in.",
+      "Fork the real plugin worker (electron/plugin-dev-worker.ts, the same entry packaged prod plugins run in) into its own process, time the ready handshake, activate a generated fixture plugin, then ask it to shut down and confirm the process actually exits zero. Activation is graded against the registration keys the fixture plugin's activate() owes, so a host that forwards no registrations cannot pass on boot, cleanup and dispose alone. The main-side supervisor (PluginDevWorkerHost) and bridge (PluginDevWorkerMainBridge) are NOT in the loop — the parent here is a counting stand-in.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 5, nightly: 8 },
     warmups: 1,
-    correctness: ["bootReadyMisses", "activateMisses", "cleanupMisses", "disposeExitMisses"],
+    correctness: [
+      "bootReadyMisses",
+      "activateMisses",
+      "registrationMisses",
+      "cleanupMisses",
+      "disposeExitMisses",
+    ],
     async run() {
       const worker = spawnPluginWorker();
       try {
@@ -141,6 +148,7 @@ export const pluginHostScenarios: PerfScenario[] = [
           return failClosed(`plugin worker never became ready: ${worker.stderr.slice(-400)}`, {
             bootReadyMisses: 1,
             activateMisses: 1,
+            registrationMisses: expectedRegistrationKeys(PLUGIN_ID).size,
             cleanupMisses: 1,
             disposeExitMisses: 1,
             bootMessages: worker.responseMessages,
@@ -160,6 +168,11 @@ export const pluginHostScenarios: PerfScenario[] = [
           PLUGIN_ID,
           WORKER_ACTIVATE_TIMEOUT_MS
         );
+        // Read before teardown, and read as a MISS rather than a tally: the
+        // fixture plugin's registration keys are declared in the parent, so a
+        // registration forward that quietly does nothing cannot ride out on
+        // activation, cleanup and dispose all passing.
+        const registrationMisses = missingRegistrationCount(worker, PLUGIN_ID);
         const disposeMs = await worker.disposeGracefully(DISPOSE_TIMEOUT_MS);
         const residualChildCount = await teardown(worker);
 
@@ -169,13 +182,14 @@ export const pluginHostScenarios: PerfScenario[] = [
             bootMessages,
             bootBytes,
             activateMs: activated?.activateMs ?? WORKER_ACTIVATE_TIMEOUT_MS,
-            // Registrations that crossed the boundary during activate(). Read
-            // beside `activateMisses`: an activation that registered nothing
-            // is the fastest one available.
+            // Registrations that crossed the boundary during activate(), beside
+            // the count the fixture plugin owed.
             registrationCount: worker.registrations.length,
+            expectedRegistrationCount: expectedRegistrationKeys(PLUGIN_ID).size,
             disposeMs: disposeMs ?? DISPOSE_TIMEOUT_MS,
             bootReadyMisses: 0,
             activateMisses: activated ? 0 : 1,
+            registrationMisses,
             // `activate()` returns a disposer and the worker must retain it —
             // a worker that dropped it exits just as promptly and leaks the
             // plugin's cleanup on every reload.
@@ -388,13 +402,7 @@ export const pluginHostScenarios: PerfScenario[] = [
         // the cost of starting. PERF-220 owns the boot and activation numbers.
         const channelMark = worker.mark();
 
-        const wanted = expectedRegistrationKeys(PLUGIN_ID);
-        const arrived = new Set(
-          worker.registrations
-            .filter((r) => r.registrationKey !== null)
-            .map((r) => r.registrationKey as string)
-        );
-        const registrationMisses = [...wanted].filter((key) => !arrived.has(key)).length;
+        const registrationMisses = missingRegistrationCount(worker, PLUGIN_ID);
 
         const started = performance.now();
         let invokeMisses = 0;

@@ -140,6 +140,61 @@ describe("action dispatch perf bundle", () => {
   );
 
   it(
+    "declares each action's schemas and annotations independently of the manifest",
+    async () => {
+      const mods = await loadActionModules();
+      const catalog = buildCatalogService(mods);
+
+      // The oracle PERF-203 grades against. It has to come off the definition
+      // objects: an expectation read out of `list()` makes an empty listing
+      // vacuously correct, and an empty listing is the smallest advertised
+      // payload the harness could ever record.
+      expect(catalog.registeredIds.length).toBe(catalog.actionCount);
+      expect(catalog.expectations.size).toBe(catalog.actionCount);
+
+      const listedIds = new Set(
+        catalog.service.list(FULL_CONTEXT, { includeSchemas: false }).map((entry) => entry.id)
+      );
+      expect(catalog.registeredIds.filter((id) => !listedIds.has(id))).toEqual([]);
+
+      const declaringInput = [...catalog.expectations.values()].filter(
+        (want) => want.expectsInputSchema
+      );
+      expect(declaringInput.length).toBeGreaterThan(200);
+      // Names, not merely "a schema exists" — a builder that emits every tool
+      // with an empty `properties` object passes the weaker reading.
+      expect(declaringInput.filter((want) => want.argNames.length > 0).length).toBeGreaterThan(200);
+
+      const declared = catalog.expectations.get("terminal.getOutput");
+      expect(declared?.argNames).toContain("terminalId");
+      const listed = catalog.service
+        .list(FULL_CONTEXT, { includeSchemas: false })
+        .find((entry) => entry.id === "terminal.getOutput");
+      expect(declared?.title).toBe(listed?.title);
+    },
+    BUNDLE_TIMEOUT_MS
+  );
+
+  it(
+    "seeds the resolver with the whole real keybinding table",
+    async () => {
+      const mods = await loadActionModules();
+      const harness = buildKeybindingHarness(mods);
+
+      // PERF-204's cardinality oracle. Every keydown is a full scan, so a
+      // service seeded with a short table is faster on every sample while the
+      // twelve probed combos keep matching.
+      expect(mods.DEFAULT_KEYBINDINGS.length).toBeGreaterThan(50);
+      expect(harness.missingDefaultBindings).toBe(0);
+      expect(harness.expectedBindingCount).toBe(
+        mods.DEFAULT_KEYBINDINGS.length + WHEN_BINDINGS.length
+      );
+      expect(harness.bindingCount).toBe(harness.expectedBindingCount);
+    },
+    BUNDLE_TIMEOUT_MS
+  );
+
+  it(
     "resolves keystrokes, chords and when-gated bindings through the real service",
     async () => {
       const mods = await loadActionModules();
