@@ -36,7 +36,6 @@ interface FileChangeListProps {
   changes: FileChangeDetail[];
   maxVisible?: number;
   rootPath: string;
-  groupByFolder?: boolean;
   isStale?: boolean;
   /** Extra classes for the scroll container (surface, radius, padding). */
   className?: string;
@@ -68,7 +67,6 @@ interface FolderGroup {
 
 interface FileChangeRowProps {
   change: WorkingTreeFileChange;
-  showDir: boolean;
   rootPath: string;
   isNew: boolean;
   index: number;
@@ -86,7 +84,6 @@ interface FileChangeRowProps {
 // analysis; a component boundary resolves that ambiguity.
 function FileChangeRow({
   change,
-  showDir,
   rootPath,
   isNew,
   index,
@@ -96,8 +93,7 @@ function FileChangeRow({
   rememberMenuTrigger,
 }: FileChangeRowProps) {
   const presentation = getGitStatusPresentation(change.status);
-  const { dir, base } = splitPath(change.relativePath);
-  const displayDir = formatDirForDisplay(dir);
+  const { base } = splitPath(change.relativePath);
 
   const absolutePath = isAbsolute(change.path) ? change.path : join(rootPath, change.relativePath);
 
@@ -147,7 +143,7 @@ function FileChangeRow({
               tabIndex={0}
               aria-label={`Open ${change.relativePath}`}
               className={cn(
-                "group/filerow flex items-center text-xs font-mono hover:bg-tint/5 rounded px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors",
+                "group/filerow flex items-center text-xs font-mono hover:bg-tint/5 rounded-[var(--radius-md)] px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary",
                 // The row whose menu is open lifts to a neutral raised tier
                 // so it reads as "the menu targets this row" — these rows
@@ -176,18 +172,17 @@ function FileChangeRow({
                 {presentation.marker}
               </span>
 
-              <div className="flex-1 min-w-0 flex items-center mr-2">
-                {showDir && displayDir && (
-                  <span className="truncate min-w-0 text-daintree-text/60 opacity-60 group-hover/filerow:opacity-80">
-                    {displayDir}/
-                  </span>
-                )}
-                <span className="text-text-primary group-hover/filerow:text-text-primary font-medium truncate min-w-0">
-                  {base}
-                </span>
-              </div>
+              {/* The one flexible item in the row. It used to share that
+                  budget with a truncated directory prefix, and in a 240px
+                  column the prefix won — rows came out as `…/2026-08-31-dain…`
+                  with the only identifying piece of text cut off (#12102). The
+                  directory lives in the group header above now, so the
+                  filename shrinks alone and spends the whole budget on itself. */}
+              <span className="text-text-primary group-hover/filerow:text-text-primary font-medium truncate min-w-0 flex-1">
+                {base}
+              </span>
 
-              <div className="flex items-center gap-2 shrink-0 text-2xs">
+              <div className="ml-2 flex items-center gap-2 shrink-0 text-2xs">
                 {(change.insertions ?? 0) > 0 && (
                   <span className="text-status-success/80">+{change.insertions}</span>
                 )}
@@ -224,10 +219,7 @@ function FileChangeRow({
 }
 
 export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListProps>(
-  function FileChangeList(
-    { changes, maxVisible = 8, rootPath, groupByFolder = false, isStale = false, className },
-    ref
-  ) {
+  function FileChangeList({ changes, maxVisible = 8, rootPath, isStale = false, className }, ref) {
     const [diffPanelId, setDiffPanelId] = useState<string | null>(null);
     const worktreeId = useWorktreeIdForPath(rootPath);
     // The shared file-row menu, built once for the list and rendered per row.
@@ -347,32 +339,37 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
       if (diffPanelId && !dialogStack.includes(diffPanelId)) setDiffPanelId(null);
     }, [dialogStack, diffPanelId]);
 
+    // Grouping is an invariant, not an option. It used to be gated on
+    // `changedFileCount > 5`, which meant the list restructured itself as
+    // files arrived — a four-file worktree and a six-file worktree read as two
+    // different components — and below the gate every row paid for its own
+    // directory prefix out of the filename's width (#12102). The header is now
+    // the only place a path appears, and it is what disambiguates two files
+    // sharing a basename.
     const groupedChanges = useMemo((): FolderGroup[] => {
-      if (!groupByFolder) return [];
-
       const groups = new Map<string, WorkingTreeFileChange[]>();
 
+      // Root is the empty string internally and `(root)` only on screen, so a
+      // directory literally named `(root)` cannot collide with it.
       visibleChanges.forEach((change) => {
         const { dir } = splitPath(change.relativePath);
-        const groupKey = dir || "(root)";
-        if (!groups.has(groupKey)) {
-          groups.set(groupKey, []);
-        }
-        groups.get(groupKey)!.push(change);
+        const bucket = groups.get(dir);
+        if (bucket) bucket.push(change);
+        else groups.set(dir, [change]);
       });
 
       return Array.from(groups.entries())
         .map(([dir, files]) => ({
           dir,
-          displayDir: dir === "(root)" ? "(root)" : formatDirForDisplay(dir, 3),
+          displayDir: dir === "" ? "(root)" : formatDirForDisplay(dir, 3),
           files,
         }))
         .sort((a, b) => {
-          if (a.dir === "(root)") return -1;
-          if (b.dir === "(root)") return 1;
+          if (a.dir === "") return -1;
+          if (b.dir === "") return 1;
           return a.dir.localeCompare(b.dir);
         });
-    }, [visibleChanges, groupByFolder]);
+    }, [visibleChanges]);
 
     // `triggerEl: null` means "opened via the context menu, not a direct
     // click/keypress" — the row's `onContextMenu` handler already stamped
@@ -406,119 +403,85 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
       return null;
     }
 
-    if (groupByFolder && groupedChanges.length > 0) {
-      return (
-        <>
-          <div
-            className={cn(
-              "space-y-3 w-full max-h-64 overscroll-contain",
-              className,
-              // After `className` so no caller can undo it: the rows' -mx-1.5
-              // hover bleed overflows the container, and with overflow-y set,
-              // `visible` on x computes to `auto` — a horizontal scrollbar. The
-              // container's padding absorbs the bleed; anything longer truncates.
-              "overflow-y-auto overflow-x-hidden",
-              isStale && "surface-stale"
-            )}
-            aria-busy={isStale || undefined}
-          >
-            {groupedChanges.map((group) => (
-              <div key={group.dir}>
-                {/* `text-secondary` rather than the `/40` alpha this used to
-                    carry: the directory is what tells you WHERE a changed file
-                    lives, and at 40% it measured 2.40:1 on bondi and 3.07:1 on
-                    namib — the least legible part of the tree it exists to
-                    organise. The 11px size, the mono face and the file rows'
-                    indent under it already carry the hierarchy; the tone does
-                    not have to as well. The count beside it rides the same
-                    token for the same reason — how many files a folder holds
-                    is information, and `text-muted` has no contrast floor on
-                    the dark palettes (2.22:1 on namib) to carry it. */}
-                <div className="flex items-center gap-1.5 text-2xs text-text-secondary mb-1">
-                  <Folder className="w-3 h-3 shrink-0" />
-                  <span className="min-w-0 truncate font-mono">{group.displayDir}</span>
-                  <span className="shrink-0 text-text-secondary">({group.files.length})</span>
-                </div>
-                <div className="pl-4 flex flex-col gap-0.5">
-                  {group.files.map((file) => {
-                    const key = getWorkingTreeChangeKey(file);
-                    return (
-                      <FileChangeRow
-                        key={key}
-                        change={file}
-                        showDir={false}
-                        rootPath={rootPath}
-                        isNew={newRowKeys.has(key)}
-                        index={indexByKey.get(key) ?? 0}
-                        decoration={decorations[file.path]}
-                        openFileAt={openFileAt}
-                        renderItems={renderItems}
-                        rememberMenuTrigger={rememberMenuTrigger}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-            {remainingCount > 0 && (
-              <div className="text-2xs text-text-secondary pl-4 pt-1">
-                ...and {remainingCount} more
-                {remainingFiles.length > 0 && (
-                  <span className="ml-1 opacity-75">
-                    ({remainingFiles.map((f) => basename(f.relativePath)).join(", ")}
-                    {sortedChanges.length > maxVisible + 2 && ", ..."})
-                  </span>
-                )}
-              </div>
+    return (
+      <div
+        className={cn(
+          "space-y-3 w-full max-h-64 overscroll-contain",
+          className,
+          // After `className` so no caller can undo it: the rows' -mx-1.5
+          // hover bleed overflows the container, and with overflow-y set,
+          // `visible` on x computes to `auto` — a horizontal scrollbar. The
+          // container's padding absorbs the bleed; anything longer truncates.
+          "overflow-y-auto overflow-x-hidden",
+          isStale && "surface-stale"
+        )}
+        aria-busy={isStale || undefined}
+      >
+        {groupedChanges.map((group) => (
+          // Prefixed, because the root's identity is the empty string and a
+          // directory can legitimately be named `(root)` — `dir || "(root)"`
+          // hands both the same key and React reconciles the wrong group on
+          // the next poll.
+          <div key={`dir:${group.dir}`}>
+            {/* `text-secondary` rather than the `/40` alpha this used to
+                carry: the directory is what tells you WHERE a changed file
+                lives, and at 40% it measured 2.40:1 on bondi and 3.07:1 on
+                namib — the least legible part of the tree it exists to
+                organise. The 11px size, the mono face and the file rows'
+                indent under it already carry the hierarchy; the tone does
+                not have to as well. The count rides the same token for the
+                same reason — how many files a folder holds is information,
+                and `text-muted` has no contrast floor on the dark palettes
+                (2.22:1 on namib) to carry it.
+
+                `font-medium` and the trailing count are what make this read
+                as a label rather than another row: the header is the only
+                place a path appears now, so it has to look like structure
+                and not like more of the list it organises. The count sits on
+                the right so it forms one rail with the rows' churn figures
+                below it. */}
+            <div
+              data-testid="file-change-group-header"
+              className="flex items-center gap-1.5 text-2xs text-text-secondary mb-1"
+            >
+              <Folder className="w-3 h-3 shrink-0" />
+              <span className="min-w-0 truncate font-mono font-medium">{group.displayDir}</span>
+              <span className="ml-auto shrink-0 pl-2 text-text-secondary">
+                ({group.files.length})
+              </span>
+            </div>
+            <div className="pl-4 flex flex-col gap-0.5">
+              {group.files.map((file) => {
+                const key = getWorkingTreeChangeKey(file);
+                return (
+                  <FileChangeRow
+                    key={key}
+                    change={file}
+                    rootPath={rootPath}
+                    isNew={newRowKeys.has(key)}
+                    index={indexByKey.get(key) ?? 0}
+                    decoration={decorations[file.path]}
+                    openFileAt={openFileAt}
+                    renderItems={renderItems}
+                    rememberMenuTrigger={rememberMenuTrigger}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        {remainingCount > 0 && (
+          <div className="text-2xs text-text-secondary pl-4 pt-1">
+            ...and {remainingCount} more
+            {remainingFiles.length > 0 && (
+              <span className="ml-1 opacity-75">
+                ({remainingFiles.map((f) => basename(f.relativePath)).join(", ")}
+                {sortedChanges.length > maxVisible + 2 && ", ..."})
+              </span>
             )}
           </div>
-        </>
-      );
-    }
-
-    return (
-      <>
-        <div
-          className={cn(
-            "flex flex-col gap-0.5 w-full max-h-64 overscroll-contain",
-            className,
-            // Same post-className overflow guarantee as the grouped container.
-            "overflow-y-auto overflow-x-hidden",
-            isStale && "surface-stale"
-          )}
-          aria-busy={isStale || undefined}
-        >
-          {visibleChanges.map((change) => {
-            const key = getWorkingTreeChangeKey(change);
-            return (
-              <FileChangeRow
-                key={key}
-                change={change}
-                showDir={true}
-                rootPath={rootPath}
-                isNew={newRowKeys.has(key)}
-                index={indexByKey.get(key) ?? 0}
-                decoration={decorations[change.path]}
-                openFileAt={openFileAt}
-                renderItems={renderItems}
-                rememberMenuTrigger={rememberMenuTrigger}
-              />
-            );
-          })}
-
-          {remainingCount > 0 && (
-            <div className="text-2xs text-text-secondary pl-5 pt-1">
-              ...and {remainingCount} more
-              {remainingFiles.length > 0 && (
-                <span className="ml-1 opacity-75">
-                  ({remainingFiles.map((f) => basename(f.path)).join(", ")}
-                  {sortedChanges.length > maxVisible + 2 && ", ..."})
-                </span>
-              )}
-            </div>
-          )}
-        </div>
-      </>
+        )}
+      </div>
     );
   }
 );

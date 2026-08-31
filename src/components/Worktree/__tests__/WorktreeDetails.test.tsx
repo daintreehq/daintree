@@ -223,6 +223,66 @@ describe("WorktreeDetails — open changes button (#11041)", () => {
   });
 });
 
+describe("WorktreeDetails — changed-files surface (#12102)", () => {
+  const worktreeWithChanges: WorktreeState = {
+    ...baseWorktree,
+    worktreeChanges: {
+      ...baseWorktree.worktreeChanges,
+      changedFileCount: 2,
+      changes: [
+        { path: "src/a.ts", status: "modified", insertions: 5, deletions: 1 },
+        { path: "bin/b.ts", status: "added", insertions: 2, deletions: 0 },
+      ],
+      rootPath: "/tmp/wt",
+    } as WorktreeChanges,
+  };
+
+  function listSurface(container: HTMLElement): HTMLElement {
+    const el = container.querySelector<HTMLElement>(".overflow-y-auto");
+    if (!el) throw new Error("changed-files scroll container not found");
+    return el;
+  }
+
+  it.each(["sidebar", "grid"] as const)(
+    "gives the list a resting fill and no perimeter (%s)",
+    (variant) => {
+      // The rule the fill has to satisfy, in both densities: a surface of its
+      // own so the files stop reading as loose lines on the note rail's fill,
+      // but no border — Details already owns the card's one closed contour,
+      // and a hairline here is the nested well #11992 removed.
+      const { container } = render(
+        <TooltipProvider>
+          <WorktreeDetails
+            {...baseProps}
+            worktree={worktreeWithChanges}
+            hasChanges
+            variant={variant}
+          />
+        </TooltipProvider>
+      );
+
+      const cls = listSurface(container).className;
+      expect(/(^|\s)bg-(surface|overlay)-[a-z-]+(\s|$)/.test(` ${cls} `)).toBe(true);
+      expect(/(^|\s)border(\s|$|-)/.test(cls)).toBe(false);
+    }
+  );
+
+  it("groups by folder with no regard for how many files changed", () => {
+    // The caller used to gate this on `changedFileCount > 5`. Two files is
+    // below any threshold that ever existed here.
+    const { container } = render(
+      <TooltipProvider>
+        <WorktreeDetails {...baseProps} worktree={worktreeWithChanges} hasChanges />
+      </TooltipProvider>
+    );
+
+    const headers = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-testid="file-change-group-header"]')
+    ).map((el) => el.querySelector(".font-mono")?.textContent ?? "");
+    expect(headers).toEqual(["bin", "src"]);
+  });
+});
+
 describe("WorktreeDetails error overflow", () => {
   const errors = (count: number) =>
     Array.from({ length: count }, (_, i) => ({

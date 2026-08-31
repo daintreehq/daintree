@@ -118,13 +118,15 @@ describe("FileChangeList — the file row owns its menu", () => {
     expect(row.getAttribute("data-state")).toBe("open");
   });
 
-  it("opens the file menu on a grouped row too", async () => {
+  it("opens the file menu on a row in the last folder group", async () => {
+    // `zzz` sorts after `src`, so this row is genuinely the second group's —
+    // with `bin` it was the FIRST one rendered and the test proved nothing
+    // about rows reached after a group reorder.
     renderInWorktreeCard({
-      changes: [file("src/a.ts"), file("bin/b.ts")],
-      groupByFolder: true,
+      changes: [file("src/a.ts"), file("zzz/b.ts")],
     });
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Open bin/b.ts" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Open zzz/b.ts" }));
 
     const menu = await screen.findByRole("menu");
     expect(within(menu).getByRole("menuitem", { name: /Open file/ })).toBeTruthy();
@@ -136,7 +138,6 @@ describe("FileChangeList — the file row owns its menu", () => {
     // filesystem object — it must keep falling through to the card.
     const { container } = renderInWorktreeCard({
       changes: [file("bin/b.ts")],
-      groupByFolder: true,
     });
 
     const header = container.querySelector("[data-testid='card'] .font-mono");
