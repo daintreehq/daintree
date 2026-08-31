@@ -406,6 +406,17 @@ export function createHost(
    * outright. The routing id is read off the raw event; the plugin-facing
    * projection deliberately drops it (see `toPluginAgentSnapshot`).
    */
+  /**
+   * The project root a `"project"`-scoped settings or storage call targets.
+   *
+   * Unbound stays `null`, which both managers read as "use the app-global
+   * active project" — the only thing an installed or builtin plugin can mean.
+   * A bound-but-rootless binding is malformed and resolves to `""`, which they
+   * reject outright: falling through to the ambient read there would hand the
+   * plugin whichever project happens to be focused.
+   */
+  const boundScopeRoot: string | null = boundProjectId === null ? null : (boundProjectRoot ?? "");
+
   const isAgentEventForBoundProject = (payload: AgentStateChangePayload): boolean => {
     if (boundProjectId === null) return true;
     const terminalId = (payload as { terminalId?: unknown }).terminalId;
@@ -1257,7 +1268,11 @@ export function createHost(
           );
         }
         const effectiveScope = declaredScope ?? scope ?? "user";
-        const filePath = deps.settings.resolveSettingsFilePath(pluginId, effectiveScope);
+        const filePath = deps.settings.resolveSettingsFilePath(
+          pluginId,
+          effectiveScope,
+          boundScopeRoot
+        );
         // Project scope with no active project: read resolves to undefined
         // rather than throwing, matching the "unset key" return.
         if (!filePath) return undefined;
@@ -1278,7 +1293,7 @@ export function createHost(
         }
         deps.settings.assertSettingSerializable(pluginId, key, value);
         deps.settings.assertSettingDeclared(pluginId, key, scope);
-        const filePath = deps.settings.resolveSettingsFilePath(pluginId, scope);
+        const filePath = deps.settings.resolveSettingsFilePath(pluginId, scope, boundScopeRoot);
         if (!filePath) {
           throw new Error(
             `Plugin "${pluginId}" settings.set: no active project — "project" scope has no target`
@@ -1326,7 +1341,9 @@ export function createHost(
         scope: PluginStorageScope = "user"
       ): Promise<T | undefined> => {
         assertStorageKey(pluginId, "get", key);
-        const filePath = await deps.storage.resolveStorageFilePath(pluginId, scope);
+        const filePath = await deps.storage.resolveStorageFilePath(pluginId, scope, {
+          projectRoot: boundScopeRoot,
+        });
         // No active project/worktree (or unset key): read resolves to undefined
         // rather than throwing, matching the "unset key" return.
         if (!filePath || !isBound()) return undefined;
@@ -1344,7 +1361,9 @@ export function createHost(
           );
         }
         deps.storage.assertStorageSerializable(pluginId, key, value);
-        const filePath = await deps.storage.resolveStorageFilePath(pluginId, scope);
+        const filePath = await deps.storage.resolveStorageFilePath(pluginId, scope, {
+          projectRoot: boundScopeRoot,
+        });
         // Re-check liveness after the async resolve so a racing unloadPlugin()
         // doesn't write into a torn-down plugin's storage file.
         if (!isBound()) return;
@@ -1359,7 +1378,9 @@ export function createHost(
       },
       delete: async (key: string, scope: PluginStorageScope = "user"): Promise<void> => {
         assertStorageKey(pluginId, "delete", key);
-        const filePath = await deps.storage.resolveStorageFilePath(pluginId, scope);
+        const filePath = await deps.storage.resolveStorageFilePath(pluginId, scope, {
+          projectRoot: boundScopeRoot,
+        });
         // Missing target or unloaded plugin: a delete is a no-op rather than a
         // throw (matching the "already absent" return of the store).
         if (!filePath || !isBound()) return;

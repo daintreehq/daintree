@@ -570,33 +570,38 @@ describe("settings and storage roots", () => {
     expect(JSON.parse(await fs.readFile(bPath, "utf8"))).toEqual({ token: "b-value" });
   });
 
-  it("KNOWN GAP: host.settings still resolves project scope ambiently, so a bound host writes into B", async () => {
-    // Documents CURRENT behaviour, not desired behaviour. `createHost` accepts
-    // `binding.projectRoot` but does not yet hand it to
-    // `resolveSettingsFilePath` / `resolveStorageFilePath` (PluginHostFactory
-    // `settings.set` and `storage.set`), so the persistence surfaces still take
-    // the app-global active project — focused B — for a host bound to A. The
-    // managers already accept the explicit root; wiring the caller is a later
-    // phase, and when it lands THIS TEST MUST FLIP to expect A's tree.
+  it("writes project-scoped settings and storage into A's tree, never focused B's", async () => {
+    // The persistence half of the confused deputy. `createHost` hands
+    // `binding.projectRoot` to both resolvers, so a host bound to A writes
+    // under A even while B is the focused project. Before that wiring these
+    // two calls landed in B's tree.
     const host = hostBoundTo({ projectId: PROJECT_A, projectRoot: projectRootOf(PROJECT_A) });
 
     await host.settings.set("token", "written-by-a", "project");
     await host.storage.set("cursor", 7, "project");
 
-    const settingsInB = path.join(
-      projectRootOf(PROJECT_B),
-      ".daintree",
-      "plugin-settings",
-      `${PLUGIN_ID}.json`
-    );
-    const storageInB = path.join(
-      projectRootOf(PROJECT_B),
-      ".daintree",
-      "plugin-storage",
-      `${PLUGIN_ID}.json`
-    );
-    expect(await exists(settingsInB)).toBe(true);
-    expect(await exists(storageInB)).toBe(true);
+    const settingsIn = (project: string): string =>
+      path.join(projectRootOf(project), ".daintree", "plugin-settings", `${PLUGIN_ID}.json`);
+    const storageIn = (project: string): string =>
+      path.join(projectRootOf(project), ".daintree", "plugin-storage", `${PLUGIN_ID}.json`);
+
+    expect(JSON.parse(await fs.readFile(settingsIn(PROJECT_A), "utf8"))).toEqual({
+      token: "written-by-a",
+    });
+    expect(JSON.parse(await fs.readFile(storageIn(PROJECT_A), "utf8"))).toEqual({ cursor: 7 });
+    expect(await exists(path.join(projectRootOf(PROJECT_B), ".daintree"))).toBe(false);
+  });
+
+  it("fails closed for a malformed bound-but-rootless binding rather than writing into B", async () => {
+    // A binding that names a project but carries no root is a loader bug. The
+    // host resolves it to "", which both managers reject — the ambient
+    // fallback would silently target focused B.
+    const host = hostBoundTo({ projectId: PROJECT_A, projectRoot: null });
+
+    await expect(host.settings.set("token", "nowhere", "project")).rejects.toThrow();
+    await expect(host.storage.set("cursor", 7, "project")).rejects.toThrow();
+
+    expect(await exists(path.join(projectRootOf(PROJECT_B), ".daintree"))).toBe(false);
     expect(await exists(path.join(projectRootOf(PROJECT_A), ".daintree"))).toBe(false);
   });
 });
