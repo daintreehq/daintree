@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "child_process";
-import { findWindowsShell, getDefaultShell, getDefaultShellArgs } from "../terminalShell.js";
+import {
+  findWindowsShell,
+  getDefaultShell,
+  getDefaultShellArgs,
+  resetWindowsShellCache,
+} from "../terminalShell.js";
 
 vi.mock("child_process", () => ({ execFileSync: vi.fn() }));
 
@@ -115,9 +120,11 @@ describe("findWindowsShell (Windows shell discovery)", () => {
 
   beforeEach(() => {
     execFileSyncMock.mockReset();
+    resetWindowsShellCache();
   });
 
   afterEach(() => {
+    resetWindowsShellCache();
     if (originalComspec === undefined) {
       delete process.env.COMSPEC;
     } else {
@@ -133,7 +140,36 @@ describe("findWindowsShell (Windows shell discovery)", () => {
     expect(execFileSyncMock).toHaveBeenCalledWith("where", ["pwsh.exe"], {
       stdio: "ignore",
       timeout: 3000,
+      windowsHide: true,
     });
+  });
+
+  it("probes the shell once, however many terminals launch", () => {
+    // getDefaultShell() runs per terminal spawn and per shell-quoting decision;
+    // an unmemoized probe is where the reporter's 53 `where.exe` came from.
+    execFileSyncMock.mockReturnValue(Buffer.from("") as never);
+
+    expect(findWindowsShell()).toBe("pwsh.exe");
+    // Pinned, not captured: a memo that never probed at all would make a
+    // "count didn't grow" assertion pass for the wrong reason.
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+
+    for (let i = 0; i < 20; i++) expect(findWindowsShell()).toBe("pwsh.exe");
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("memoizes the COMSPEC fallback too, so a PowerShell-less box stops probing", () => {
+    // The failure path costs two spawns per call, so it is the one that most
+    // needs the memo.
+    execFileSyncMock.mockImplementation(throwOnce);
+    process.env.COMSPEC = "C:\\custom\\cmd.exe";
+
+    expect(findWindowsShell()).toBe("C:\\custom\\cmd.exe");
+    // Both PowerShell probes ran once, and never again.
+    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
+
+    for (let i = 0; i < 5; i++) findWindowsShell();
+    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to powershell.exe when pwsh.exe is not on PATH", () => {
@@ -174,9 +210,11 @@ describe("getDefaultShell", () => {
 
   beforeEach(() => {
     execFileSyncMock.mockReset();
+    resetWindowsShellCache();
   });
 
   afterEach(() => {
+    resetWindowsShellCache();
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);
     }

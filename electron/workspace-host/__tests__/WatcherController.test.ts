@@ -995,4 +995,192 @@ describe("WatcherController", () => {
       expect(result).toBe(true);
     });
   });
+  describe("dark-watcher recovery (#12042)", () => {
+    // Mode "none" is the only mode whose poll cadence falls back to the
+    // adaptive profile interval, so a git-only arm that fails leaves the
+    // monitor polling git several times a second. These cases pin that the
+    // controller digs itself out without an external reconcile.
+
+    it("re-arms after a git-only arm failure with no external ensureState call", async () => {
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+      expect(ctrl.currentMode).toBe("none");
+      const armsAfterFailure = watcherStartCallCount;
+
+      // The fs error clears; nothing external touches the controller.
+      mockWatcherStartResult = true;
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settle();
+
+      expect(watcherStartCallCount).toBeGreaterThan(armsAfterFailure);
+      expect(ctrl.currentMode).toBe("git-only");
+    });
+
+    it("stops re-arming once the retry budget is spent, however long it idles", async () => {
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+      const armsAfterFirstFailure = watcherStartCallCount;
+
+      for (let i = 0; i < 10; i++) {
+        await vi.advanceTimersByTimeAsync(31_000);
+        await settle();
+      }
+      const armsAfterExhaustion = watcherStartCallCount;
+      // Retries genuinely happened (otherwise "it stopped" is vacuous)...
+      expect(armsAfterExhaustion).toBeGreaterThan(armsAfterFirstFailure);
+      // ...and they were charged to the shared budget, not a private counter:
+      // resetRetryBudget only reports true for a non-zero count.
+      expect(ctrl.resetRetryBudget()).toBe(true);
+
+      // Hours of idling must not resurrect the loop — the whole point is that a
+      // genuinely broken path stops paying for retries. (Measured before the
+      // reset above hands it a fresh budget: re-read the count now.)
+      const armsBeforeIdle = watcherStartCallCount;
+      await vi.advanceTimersByTimeAsync(4 * 60 * 60 * 1000);
+      await settle();
+      expect(watcherStartCallCount).toBe(armsBeforeIdle);
+    });
+
+    it("does not spend a retry when something else armed the watcher first", async () => {
+      // The budget exists for genuine failures. A retry that fires to find the
+      // topology reconcile already armed a watcher has nothing to attempt, and
+      // consuming an attempt for it would starve the next real failure.
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+
+      // External recovery lands before the backoff elapses.
+      mockWatcherStartResult = true;
+      ctrl.ensureState();
+      await settle();
+      expect(ctrl.currentMode).toBe("git-only");
+
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settle();
+
+      expect(ctrl.resetRetryBudget()).toBe(false);
+    });
+
+    it("re-derives the target tier when elevation flips during the backoff", async () => {
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+      expect(ctrl.currentMode).toBe("none");
+
+      // The worktree gains focus while the re-arm is pending, and by the time
+      // it fires the recursive watcher is available again.
+      host.isElevated = true;
+      mockWatcherStartResult = true;
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settle();
+
+      expect(ctrl.currentMode).toBe("recursive");
+    });
+
+    it("does not stack a second retry loop when the git-only fallback also fails", async () => {
+      // Recursive fails, and its git-only fallback fails too: two independent
+      // failure paths both reach scheduleRetry. Counting arms can't distinguish
+      // one loop from two (start()'s idempotency guard hides the duplicate), so
+      // assert on the timer itself — the controller must own exactly one.
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: true });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+      expect(vi.getTimerCount()).toBe(1);
+
+      // And still exactly one after the retry fires and fails again.
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settle();
+      expect(vi.getTimerCount()).toBe(1);
+    });
+
+    it("arms exactly once per tick on the dark path", async () => {
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+      expect(vi.getTimerCount()).toBe(1);
+      const armsBeforeTick = watcherStartCallCount;
+
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settle();
+
+      expect(watcherStartCallCount - armsBeforeTick).toBe(1);
+      expect(vi.getTimerCount()).toBe(1);
+    });
+
+    it("lets a user refresh cut short the very first backoff", async () => {
+      // The budget is charged where the arm happens, so the first 30s of
+      // backoff sits at count 0. resetRetryBudget still has to report success
+      // there — WorktreeMonitor.refresh() only re-arms when it does, and that
+      // window is exactly when the user is most likely to hit Refresh.
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+      expect(vi.getTimerCount()).toBe(1);
+
+      expect(ctrl.resetRetryBudget()).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("does not re-arm after the controller is stopped mid-backoff", async () => {
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+      const armsAtStop = watcherStartCallCount;
+      // Precondition: there IS a backoff to interrupt.
+      expect(vi.getTimerCount()).toBe(1);
+
+      ctrl.stop();
+      mockWatcherStartResult = true;
+      await vi.advanceTimersByTimeAsync(120_000);
+      await settle();
+
+      expect(watcherStartCallCount).toBe(armsAtStop);
+      expect(ctrl.currentMode).toBe("none");
+    });
+
+    it("does not signal recovery for a cold start that never reached recursive", async () => {
+      // wasDegraded must stay false: the host never surfaced a degraded
+      // indicator, so there is nothing to clear.
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+
+      host.isElevated = true;
+      mockWatcherStartResult = true;
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settle();
+
+      expect(ctrl.currentMode).toBe("recursive");
+      expect(host.onWatcherRecovered).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -231,9 +231,22 @@ export class WatcherController {
           if (this.host.isElevated) {
             this.scheduleRetry();
           }
+        } else {
+          // git-only itself failed (e.g. getGitDir returned null, which is what
+          // a transient Windows fs error produces via the gitUtils cache).
+          // Staying dark is expensive, not cheap: mode "none" is the ONLY mode
+          // that falls back to the adaptive poll cadence (~1.5s on the
+          // Performance profile), and a null git dir also defeats
+          // GitStatusPass's stat pre-check — so a dark watcher forces a full
+          // `git status` several times a second, indefinitely (#12042).
+          // Retry on the same bounded budget the recursive arm uses; nothing
+          // else re-arms this on an idle window except an external reconcile.
+          // `wasDegraded` is deliberately NOT set: a cold-start arm that never
+          // reached recursive is not a degradation episode, and flagging it
+          // would fire `onWatcherRecovered` for a degradation the host never
+          // surfaced.
+          this.scheduleRetry({ requireElevation: false });
         }
-        // git-only itself failed (e.g. getGitDir returned null): stay dark
-        // and let the polling fallback cover it; no retry loop.
       }
     });
   }
@@ -411,13 +424,17 @@ export class WatcherController {
    * and doesn't need to wait for budget exhaustion before the recovery path
    * is available. The session cap still bounds total resets.
    *
-   * Returns `true` when the budget was actually reset (non-zero counter,
-   * under the cap); callers can use this to decide whether a re-arm attempt
-   * is worthwhile.
+   * Returns `true` when the budget was actually reset (a spent counter or a
+   * pending backoff, under the cap); callers can use this to decide whether a
+   * re-arm attempt is worthwhile.
    */
   resetRetryBudget(): boolean {
     if (this.disposed) return false;
-    if (this.watcherRetryCount === 0) return false;
+    // A pending timer counts even before it has charged an attempt: the budget
+    // is spent where the arm actually happens, so the first backoff window sits
+    // at count 0. Refusing there would make a user-triggered refresh during that
+    // window a silent no-op — exactly when they most want the immediate re-arm.
+    if (this.watcherRetryCount === 0 && this.watcherRetryTimer === null) return false;
     if (this.retryBudgetResetCount >= MAX_RESETS_PER_SESSION) return false;
 
     if (this.watcherRetryTimer) {
@@ -504,40 +521,69 @@ export class WatcherController {
     if (this.host.isElevated) {
       this.scheduleRetry();
     }
+    // A watcher that died mid-flight was, by definition, not reporting writes
+    // for some window before we noticed. Reconcile once on the way down rather
+    // than leaving whatever it missed invisible until the next heartbeat.
+    this.handleGitFileChange();
   }
 
-  private scheduleRetry(): void {
+  /**
+   * Arm the single bounded re-arm timer. One timer and one budget serve both
+   * recovery shapes so a failing worktree can never stack two retry loops:
+   *
+   * - `requireElevation: true` (the default) is the *upgrade* case — a
+   *   git-only watcher is live and we want the recursive one back. Only
+   *   elevated worktrees want recursive coverage at all, so a non-elevated
+   *   worktree shouldn't keep poking at it.
+   * - `requireElevation: false` is the *dark* case — there is no watcher of any
+   *   kind, so the monitor is on the adaptive poll cadence regardless of
+   *   elevation and every tier benefits from getting a watcher back.
+   *
+   * The target mode is re-derived when the timer fires, not captured here: an
+   * elevation flip during the backoff window should change what we re-arm.
+   */
+  private scheduleRetry(opts: { requireElevation?: boolean } = {}): void {
+    const { requireElevation = true } = opts;
     if (
       this.disposed ||
       !this.host.isRunning ||
       !this.host.gitWatchEnabled ||
       this.watcherRetryTimer ||
-      !this.host.isElevated
+      (requireElevation && !this.host.isElevated)
     ) {
       return;
     }
 
-    this.watcherRetryCount++;
-    if (this.watcherRetryCount > WATCHER_MAX_RETRIES) {
+    if (this.watcherRetryCount >= WATCHER_MAX_RETRIES) {
       return;
     }
 
     this.watcherRetryTimer = setTimeout(() => {
       this.watcherRetryTimer = null;
-      if (
-        !this.disposed &&
-        this.host.isRunning &&
-        this.host.gitWatchEnabled &&
-        this.host.isElevated &&
-        this.gitWatcherMode !== "recursive"
-      ) {
+      if (this.disposed || !this.host.isRunning || !this.host.gitWatchEnabled) {
+        return;
+      }
+      if (!this.hasWatcher) {
+        // Dark: no watcher at all. Re-arm at whatever tier elevation now wants
+        // — a worktree that gained focus during the backoff deserves recursive.
+        this.watcherRetryCount++;
+        this.start();
+        return;
+      }
+      if (this.host.isElevated && this.gitWatcherMode !== "recursive") {
         // Drop any current git-only instance so start()'s idempotent
         // guard doesn't bail; reconstruction installs the recursive variant.
+        this.watcherRetryCount++;
         this.cancelPendingArm();
         this.gitWatcher.clear();
         this.gitWatcherMode = "none";
         this.start("recursive");
       }
+      // Otherwise something external (ensureState, an elevation flip, the
+      // topology reconcile) already armed what this retry wanted. The budget is
+      // charged where the attempt is actually made, not where it's scheduled,
+      // so a retry that turned out to be unnecessary doesn't consume an attempt
+      // a later genuine failure will need.
     }, WATCHER_RETRY_INTERVAL_MS).unref();
   }
 

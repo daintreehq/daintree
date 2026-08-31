@@ -102,6 +102,18 @@ export interface GitFileWatcherOptions {
   onEmfileLimitReached?: () => void;
 }
 
+/**
+ * Distinguish @parcel/watcher's non-fatal "you missed some events, re-scan"
+ * signal from a genuine subscription failure. Only the macOS FSEvents backend
+ * emits it (for `kFSEventStreamEventFlagMustScanSubDirs` and its kernel/client
+ * drop variants), and only through the channel that leaves the subscription
+ * alive. Windows' superficially similar "Buffer overflow. Some events may have
+ * been lost." travels the fatal channel instead, so it must NOT match here.
+ */
+function isRescanRequest(message: string): boolean {
+  return /must be re-scanned/i.test(message);
+}
+
 export class GitFileWatcher {
   private watchers: FSWatcher[] = [];
   private readonly watchedFilesByDirectory = new Map<string, Set<string>>();
@@ -360,9 +372,38 @@ export class GitFileWatcher {
       path: this.worktreePath,
       error: message,
     });
-    if (phase === "startup") {
-      this.onWatcherFailed?.();
+
+    if (isRescanRequest(message)) {
+      // @parcel/watcher has two error channels and they mean opposite things.
+      // This one is `EventList::error()` (macOS FSEvents `MustScanSubDirs`),
+      // delivered through `Watcher::triggerCallbacks` — the callbacks stay
+      // installed and the stream keeps running. It reports dropped events, not
+      // a dead watcher. Tearing the subscription down here would rebuild a
+      // healthy FSEvents stream under exactly the file churn that provokes the
+      // overflow, and would burn the controller's bounded re-arm budget until
+      // the worktree stranded on the git-only fallback. Events WERE lost
+      // though, so force a refresh instead of ignoring it — through the
+      // worktree path, not the git-internal one: what overflowed was
+      // working-tree writes, and `flushWorktreeChange` fires both the
+      // raw-filesystem signal the file browser reads and the git-status
+      // recompute. `handleGitFileChange` would only do the latter, leaving
+      // writes to gitignored paths invisible (#11330).
+      this.handleWorktreeChange();
+      return;
     }
+
+    // Everything else arrives via `Watcher::notifyError`, which calls back and
+    // then `clearCallbacks()` — the subscription is dead and will never deliver
+    // another event. Runtime failures therefore have to downgrade, not just
+    // startup ones: leaving a dead watcher in place let the controller keep
+    // claiming "recursive" (and its 5-minute heartbeat cadence) over a watcher
+    // observing nothing (#12042). Deliberately not gated on errno — Windows
+    // reports its failure modes (ReadDirectoryChangesW buffer overflow, an
+    // AV/indexer lock, an ancestor rename) as message-only errors, so matching
+    // codes would leave the reporting platform uncovered. The linux/darwin
+    // branches above stay for their user-facing limit messaging, not for the
+    // downgrade itself.
+    this.onWatcherFailed?.();
   }
 
   /**

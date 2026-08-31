@@ -589,30 +589,104 @@ describe("ProcessTreeCache command/env construction", () => {
     expect(callOpts.env!.LANG).toBe(process.env.LANG);
   });
 
-  it("prepends UTF-8 encoding directives to PowerShell command", async () => {
-    mockExec.mockImplementation(
-      (
-        _cmd: string,
-        _opts: unknown,
-        cb: (err: null, result: { stdout: string; stderr: string }) => void
-      ) => {
-        cb(null, { stdout: "[]", stderr: "" });
-      }
-    );
+  describe("Windows refresh", () => {
+    function mockPowerShellOutput(stdout: string): void {
+      mockExecFile.mockImplementation(
+        (
+          _file: string,
+          _args: string[],
+          _opts: unknown,
+          cb: (err: null, result: { stdout: string; stderr: string }) => void
+        ) => {
+          cb(null, { stdout, stderr: "" });
+        }
+      );
+    }
 
-    const cache = new ProcessTreeCache(2500);
-    const internals = cache as unknown as {
-      isWindows: boolean;
-      refreshWindows: () => Promise<boolean>;
-    };
-    internals.isWindows = true;
-    await internals.refreshWindows();
+    async function runWindowsRefresh(): Promise<ProcessTreeCache> {
+      const cache = new ProcessTreeCache(2500);
+      const internals = cache as unknown as {
+        isWindows: boolean;
+        refreshWindows: () => Promise<boolean>;
+      };
+      internals.isWindows = true;
+      await internals.refreshWindows();
+      return cache;
+    }
 
-    expect(mockExec).toHaveBeenCalledTimes(1);
-    const psCommand = mockExec.mock.calls[0][0] as string;
-    expect(psCommand).toContain(
-      "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)"
-    );
-    expect(psCommand).toContain("$OutputEncoding = [System.Text.UTF8Encoding]::new($false)");
+    it("prepends UTF-8 encoding directives to the PowerShell script", async () => {
+      mockPowerShellOutput("[]");
+      await runWindowsRefresh();
+
+      const psScript = mockExecFile.mock.calls[0][1] as string[];
+      const command = psScript[psScript.indexOf("-Command") + 1];
+      expect(command).toContain(
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)"
+      );
+      expect(command).toContain("$OutputEncoding = [System.Text.UTF8Encoding]::new($false)");
+    });
+
+    it("spawns powershell directly and hidden, never through a shell", async () => {
+      // exec() would route via `cmd.exe /c`, which is both an extra process per
+      // poll and a console window the hide flag can't reliably cover for the
+      // grandchild (#12042).
+      mockPowerShellOutput("[]");
+      await runWindowsRefresh();
+
+      expect(mockExec).not.toHaveBeenCalled();
+      expect(mockExecFile).toHaveBeenCalledTimes(1);
+      const [file, args, opts] = mockExecFile.mock.calls[0] as [
+        string,
+        string[],
+        { windowsHide?: boolean },
+      ];
+      expect(file.toLowerCase()).toContain("powershell");
+      expect(args).toContain("-Command");
+      expect(opts.windowsHide).toBe(true);
+    });
+
+    it("keeps PowerShell's own $_ pipeline variable unexpanded", async () => {
+      // The script is built with string concatenation precisely so JS never
+      // interpolates these; argv form must not have re-escaped them either.
+      mockPowerShellOutput("[]");
+      await runWindowsRefresh();
+
+      const args = mockExecFile.mock.calls[0][1] as string[];
+      const command = args[args.indexOf("-Command") + 1];
+      expect(command).toContain("[string]$_.KernelModeTime");
+      expect(command).toContain("$_.CreationDate.ToString('o')");
+      expect(command).toContain("Get-CimInstance Win32_Process");
+    });
+
+    it("parses the CIM payload into the process cache", async () => {
+      mockPowerShellOutput(
+        JSON.stringify([
+          {
+            ProcessId: 100,
+            ParentProcessId: 1,
+            Name: "node.exe",
+            CommandLine: "node server.js",
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "1048576",
+            CreationDate: null,
+          },
+          {
+            ProcessId: 200,
+            ParentProcessId: 100,
+            Name: "git.exe",
+            CommandLine: "git status",
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "2097152",
+            CreationDate: null,
+          },
+        ])
+      );
+      const cache = await runWindowsRefresh();
+
+      expect(cache.getChildPids(100)).toEqual([200]);
+      expect(cache.getProcess(200)?.command).toContain("git status");
+    });
   });
 });
