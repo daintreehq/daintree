@@ -970,12 +970,21 @@ export function WorktreeCard({
               edge and the mark is now ON that edge, so anything that painted
               over it would bridge its segment gaps rather than just tint it.
 
+              A collapsed row gets the same mark as a 6x6 square rather than a
+              16px bar: one line has no corner for a bar that tall to sit on,
+              only an edge to run down. The count survives the shrink, because
+              it is the only thing that separates two of these states.
+
               The geometry, and the reason every number in it is what it is,
               lives in `WorktreeStatusTick`. */}
           {chipState !== null && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <WorktreeStatusTick state={chipState} variant={variant} />
+                <WorktreeStatusTick
+                  state={chipState}
+                  variant={variant}
+                  collapsed={effectiveIsCollapsed}
+                />
               </TooltipTrigger>
               <TooltipContent side="right" align="start" className="text-xs">
                 {CHIP_LABELS[chipState]}
