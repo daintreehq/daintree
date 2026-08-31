@@ -276,3 +276,33 @@ describe("UpstreamSyncBadge — the auth-failed tooltip (#12074)", () => {
     expect(document.body.textContent).not.toContain("Compared with");
   });
 });
+
+describe("UpstreamSyncBadge — the base-divergence tooltip line (#12110)", () => {
+  it("separates the two counts when a branch is both ahead of and behind its base", () => {
+    // Without the separator the ref and the next count fuse into
+    // `origin/develop82`, which parses as a branch name before it parses as
+    // two numbers.
+    renderBadge({
+      baseBranchName: "develop",
+      baseCompareRef: "origin/develop",
+      baseAheadCount: 8,
+      baseBehindCount: 82,
+    });
+
+    expect(document.body.textContent).toContain(
+      "8 ahead of origin/develop, 82 behind origin/develop"
+    );
+  });
+
+  it("leaves a single-sided divergence with no trailing separator", () => {
+    renderBadge({
+      baseBranchName: "develop",
+      baseCompareRef: "origin/develop",
+      baseAheadCount: 8,
+      baseBehindCount: 0,
+    });
+
+    expect(document.body.textContent).toContain("8 ahead of origin/develop");
+    expect(document.body.textContent).not.toContain("origin/develop,");
+  });
+});
