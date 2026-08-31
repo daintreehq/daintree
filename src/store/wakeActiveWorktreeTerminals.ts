@@ -1,6 +1,6 @@
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { isDocumentHidden, revealUntilStable } from "@/services/terminal/revealUntilStable";
-import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { logWarn } from "@/utils/logger";

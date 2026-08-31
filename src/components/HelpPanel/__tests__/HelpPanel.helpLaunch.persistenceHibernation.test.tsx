@@ -300,11 +300,12 @@ vi.mock("@/store/helpPanelStore", () => {
     // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
     // and these project that same object as the lane, so every existing
     // assertion keeps driving the controller unchanged.
-    selectSlot: (s) => s,
-    selectActiveSlot: (s) => s,
+    selectSlot: (s: typeof helpPanelState) => s,
+    selectActiveSlot: (s: typeof helpPanelState) => s,
     selectOpenSlots: () => [0],
-    selectSlotTerminalIds: (s) => (s.terminalId ? [s.terminalId] : []),
-    selectSlotForTerminal: (s, id) => (s.terminalId === id && id ? 0 : null),
+    selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
+      s.terminalId === id && id ? 0 : null,
     HELP_PANEL_MIN_WIDTH: 320,
     HELP_PANEL_MAX_WIDTH: 800,
   };
@@ -424,6 +425,8 @@ vi.mock("@/types", () => ({
 vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
+import { assistantSlotKey as slotKey } from "@shared/config/assistantSlots";
+import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
 
 // The real `app:view-revealed` bridge fans out to every registered listener;
 // HelpPanel registers the switch-back recovery effect against it (#10739).
@@ -530,6 +533,9 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  // #12108: controllers live in a per-view registry, not component
+  // state, so they outlive a render and must be reset between tests.
+  __resetHelpSessionControllersForTests();
   vi.clearAllMocks();
   resetState();
 
@@ -1002,8 +1008,8 @@ describe("HelpPanel — resume from main-captured hibernation (eviction recovery
     // observes the entry the controller just merged. Default mock just
     // tracks the call; here we also write through to the in-memory state.
     helpPanelState.setHibernateSession = vi.fn(
-      (projectId: string, entry: { sessionId: string; cwd: string; agentId: string }) => {
-        helpPanelState.hibernateSessions[projectId] = entry;
+      (projectId: string, slot: number, entry: { sessionId: string; cwd: string; agentId: string }) => {
+        helpPanelState.hibernateSessions[slotKey(projectId, slot)] = entry;
       }
     );
     panelStoreState.addPanel.mockResolvedValueOnce("term-resumed");
@@ -1019,9 +1025,13 @@ describe("HelpPanel — resume from main-captured hibernation (eviction recovery
       await Promise.resolve();
     });
 
-    expect(mockTakePendingHibernation).toHaveBeenCalledWith(projectStoreState.currentProject?.id);
+    expect(mockTakePendingHibernation).toHaveBeenCalledWith(
+      projectStoreState.currentProject?.id,
+      0
+    );
     expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith(
       projectStoreState.currentProject?.id,
+      0,
       expect.objectContaining({
         sessionId: "resume-id-from-main",
         agentId: "claude",
@@ -1045,7 +1055,8 @@ describe("HelpPanel — resume from main-captured hibernation (eviction recovery
     );
     // Resume consumes the hibernate entry once committed.
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith(
-      projectStoreState.currentProject?.id
+      projectStoreState.currentProject?.id,
+      0
     );
   });
 
@@ -1068,8 +1079,8 @@ describe("HelpPanel — resume from main-captured hibernation (eviction recovery
       cwd: "/help/session-dir",
     });
     helpPanelState.setHibernateSession = vi.fn(
-      (projectId: string, entry: { sessionId: string; cwd: string; agentId: string }) => {
-        helpPanelState.hibernateSessions[projectId] = entry;
+      (projectId: string, slot: number, entry: { sessionId: string; cwd: string; agentId: string }) => {
+        helpPanelState.hibernateSessions[slotKey(projectId, slot)] = entry;
       }
     );
     panelStoreState.addPanel.mockResolvedValueOnce("term-resumed-latest");
@@ -1087,6 +1098,7 @@ describe("HelpPanel — resume from main-captured hibernation (eviction recovery
 
     expect(helpPanelState.setHibernateSession).toHaveBeenCalledWith(
       projectStoreState.currentProject?.id,
+      0,
       expect.objectContaining({ sessionId: "", agentId: "claude" })
     );
     // Resume-latest spawns through addPanel with the `--continue` flag.

@@ -1559,7 +1559,7 @@ export class HelpSessionController {
       if (reservedId) {
         if (ownsGen) {
           this._pendingNewTerminalId = null;
-          useHelpPanelStore.getState().clearTerminal();
+          useHelpPanelStore.getState().clearTerminal(this.slot);
         }
         logError(options.force ? "Help run-anyway failed" : "Help new-session failed", error);
       } else {

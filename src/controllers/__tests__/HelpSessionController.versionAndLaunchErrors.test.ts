@@ -117,11 +117,12 @@ vi.mock("@/store/helpPanelStore", () => {
     // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
     // and these project that same object as the lane, so every existing
     // assertion keeps driving the controller unchanged.
-    selectSlot: (s) => s,
-    selectActiveSlot: (s) => s,
+    selectSlot: (s: typeof helpPanelState) => s,
+    selectActiveSlot: (s: typeof helpPanelState) => s,
     selectOpenSlots: () => [0],
-    selectSlotTerminalIds: (s) => (s.terminalId ? [s.terminalId] : []),
-    selectSlotForTerminal: (s, id) => (s.terminalId === id && id ? 0 : null),
+    selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
+      s.terminalId === id && id ? 0 : null,
   };
 });
 

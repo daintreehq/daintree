@@ -569,7 +569,7 @@ const EMPTY_SLOT: HelpSessionSlotState = Object.freeze({
   agentId: null,
   sessionId: null,
   conversationTouched: false,
-  figures: Object.freeze([]) as HelpFigure[],
+  figures: [] as HelpFigure[],
   activeFigureNumber: null,
 });
 

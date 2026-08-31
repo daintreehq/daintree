@@ -2184,7 +2184,7 @@ describe("HelpSessionService", () => {
       await revokePromise;
       await Promise.resolve();
 
-      expect(backing.get("proj-visible")).toBeUndefined();
+      expect(backing.get(slotKey("proj-visible", 0))).toBeUndefined();
     });
 
     it("placeholder gets overwritten with the real id when no take happens (#9639 baseline — finalize-block still updates an untouched capture)", async () => {
@@ -2232,7 +2232,7 @@ describe("HelpSessionService", () => {
 
       // Sanity: the empty-sentinel placeholder is observable during the kill
       // window, exactly as #9639 promises.
-      expect(backing.get("proj-no-take")?.agentSessionId).toBe("");
+      expect(backing.get(slotKey("proj-no-take", 0))?.agentSessionId).toBe("");
 
       // No take happens; gracefulKill yields the real resume id and the
       // finalize block is still the legitimate writer.
@@ -2240,7 +2240,7 @@ describe("HelpSessionService", () => {
       await revokePromise;
       await Promise.resolve();
 
-      expect(backing.get("proj-no-take")?.agentSessionId).toBe("real-resume-id-abc");
+      expect(backing.get(slotKey("proj-no-take", 0))?.agentSessionId).toBe("real-resume-id-abc");
     });
   });
 

@@ -68,13 +68,13 @@ const EMPTY_SNAPSHOT = {
  * a sibling lane's banner over the conversation the user is actually in.
  */
 describe("McpActivityTracker — lane gating (#12108)", () => {
-  let patch: ReturnType<typeof vi.fn>;
+  let patch: McpActivityTrackerHost["patch"] & ReturnType<typeof vi.fn>;
   let host: McpActivityTrackerHost;
   let mcp: ReturnType<typeof makeMcpBridge>;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    patch = vi.fn();
+    patch = vi.fn() as typeof patch;
     mcp = makeMcpBridge();
     Object.defineProperty(window, "electron", {
       value: { mcpServer: mcp.bridge },

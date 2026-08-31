@@ -223,11 +223,12 @@ vi.mock("@/store/helpPanelStore", () => {
     HELP_PANEL_MAX_WIDTH: 800,
     // #12108 selectors. Fixtures stay flat, so these project the same object
     // as the lane and every existing assertion keeps working.
-    selectSlot: (s) => s,
-    selectActiveSlot: (s) => s,
+    selectSlot: (s: typeof helpPanelState) => s,
+    selectActiveSlot: (s: typeof helpPanelState) => s,
     selectOpenSlots: () => [0],
-    selectSlotTerminalIds: (s) => (s.terminalId ? [s.terminalId] : []),
-    selectSlotForTerminal: (s, id) => (s.terminalId === id && id ? 0 : null),
+    selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
+      s.terminalId === id && id ? 0 : null,
   };
 });
 
@@ -301,6 +302,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
 vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
+import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
 import {
   _resetForTests as resetTooltipDismissRegistry,
   isTooltipFocusOpenSuppressed,
@@ -352,6 +354,9 @@ function anyFocusWriterCalled(): boolean {
 }
 
 beforeEach(() => {
+  // #12108: controllers live in a per-view registry, not component
+  // state, so they outlive a render and must be reset between tests.
+  __resetHelpSessionControllersForTests();
   resetTooltipDismissRegistry();
   rafQueue.clear();
   rafIdCounter = 0;

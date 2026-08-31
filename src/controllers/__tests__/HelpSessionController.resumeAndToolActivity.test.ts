@@ -117,11 +117,12 @@ vi.mock("@/store/helpPanelStore", () => {
     // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
     // and these project that same object as the lane, so every existing
     // assertion keeps driving the controller unchanged.
-    selectSlot: (s) => s,
-    selectActiveSlot: (s) => s,
+    selectSlot: (s: typeof helpPanelState) => s,
+    selectActiveSlot: (s: typeof helpPanelState) => s,
     selectOpenSlots: () => [0],
-    selectSlotTerminalIds: (s) => (s.terminalId ? [s.terminalId] : []),
-    selectSlotForTerminal: (s, id) => (s.terminalId === id && id ? 0 : null),
+    selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
+      s.terminalId === id && id ? 0 : null,
   };
 });
 
@@ -153,6 +154,7 @@ vi.mock("@/utils/safeFireAndForget", () => ({
 import { HelpSessionController, loadCustomLaunchFlags } from "../HelpSessionController";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
+import { assistantSlotKey as slotKey } from "@shared/config/assistantSlots";
 
 function resetState() {
   helpPanelState.isOpen = false;
@@ -347,7 +349,7 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
     ctrl.start();
     primeResumeInputs(ctrl);
     // Empty sessionId is the sentinel from main's LRU-eviction race.
-    helpPanelState.hibernateSessions["p1"] = {
+    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
       sessionId: "",
       cwd: "/repo",
       agentId: "claude",
@@ -378,7 +380,7 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
     primeResumeInputs(ctrl);
-    helpPanelState.hibernateSessions["p1"] = {
+    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
       sessionId: "abc-123",
       cwd: "/repo",
       agentId: "claude",
@@ -407,8 +409,8 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
   // it a pure spy; this writes through to helpPanelState.hibernateSessions.
   const seedThroughSetHibernate = () => {
     helpPanelState.setHibernateSession = vi.fn(
-      (projectId: string, entry: { sessionId: string; cwd: string; agentId: string }) => {
-        helpPanelState.hibernateSessions[projectId] = entry;
+      (projectId: string, slot: number, entry: { sessionId: string; cwd: string; agentId: string }) => {
+        helpPanelState.hibernateSessions[slotKey(projectId, slot)] = entry;
       }
     );
   };
@@ -463,7 +465,7 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
     (
       window.electron.help as unknown as { takePendingHibernation: ReturnType<typeof vi.fn> }
     ).takePendingHibernation = vi.fn().mockResolvedValue(null);
-    helpPanelState.hibernateSessions["p1"] = {
+    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
       sessionId: "stale-123",
       cwd: "/repo",
       agentId: "claude",
@@ -514,7 +516,7 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
     );
 
     // The take is the gate, and it runs before provisioning displaces anything.
-    expect(takeMock).toHaveBeenCalledWith("p1");
+    expect(takeMock).toHaveBeenCalledWith("p1", 0);
     const takeOrder = takeMock.mock.invocationCallOrder[0];
     const provisionOrder = provisionMock().mock.invocationCallOrder[0];
     expect(takeOrder).toBeDefined();
@@ -656,7 +658,7 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
     await ctrl["_executeLaunch"](7, { agentId: "claude" }, { id: "p1", path: "/repo" }, undefined);
 
     // _seedHibernateFromMain ran (the take is its only caller on this path).
-    expect(takeMock).toHaveBeenCalledWith("p1");
+    expect(takeMock).toHaveBeenCalledWith("p1", 0);
     expect(panelStoreState.addPanel).toHaveBeenCalled();
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
     expect(ctrl.getSnapshot().phase).toBe("live");
@@ -666,6 +668,9 @@ describe("HelpSessionController — resume-only auto-resume (#10815)", () => {
 
 describe("HelpSessionController — MCP tool activity strip (#9759)", () => {
   function startCtrl() {
+    // #12108: every MCP push is matched against the lane's own session id, and
+    // the fixtures below all fire for "s1".
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     return ctrl;
@@ -863,7 +868,6 @@ describe("HelpSessionController — MCP tool activity strip (#9759)", () => {
   it("handleTerminalPanelMissing clears the activity row", () => {
     const ctrl = startCtrl();
     helpPanelState.terminalId = "term-1";
-    helpPanelState.sessionId = "sess-1";
     fireStarted({ sessionId: "s1", toolId: "x", argsSummary: "{}", startedAt: 1, danger: false });
     expect(ctrl.getSnapshot().mcpActivity).not.toBeNull();
     ctrl.handleTerminalPanelMissing({ terminalId: "term-1", terminalExists: false });

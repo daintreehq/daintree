@@ -399,7 +399,7 @@ export function HelpPanel({
     }
     // Optional-chained like the `onViewRevealed` subscription below: a missing
     // binding degrades to the normal "Start assistant" CTA rather than throwing.
-    const peek = window.electron.help.peekPendingHibernation?.(activeWorkspaceId);
+    const peek = window.electron.help.peekPendingHibernation?.(activeWorkspaceId, activeSlot);
     if (!peek) {
       setResumablePending(null);
       return;
@@ -497,7 +497,7 @@ export function HelpPanel({
   useEffect(() => {
     if (!activeWorkspaceId || terminalId || !isReadyToLaunch) return;
     if (coldResumeArmedRef.current === activeWorkspaceId) return;
-    const peek = window.electron.help.peekPendingHibernation?.(activeWorkspaceId);
+    const peek = window.electron.help.peekPendingHibernation?.(activeWorkspaceId, activeSlot);
     if (!peek) return;
     let cancelled = false;
     void peek
