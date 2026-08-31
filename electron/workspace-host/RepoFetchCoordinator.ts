@@ -291,9 +291,15 @@ export type FetchResult = WorkspaceFetchResult;
       }
     }
 
-    return (
-      settled.get(primary) ?? { status: "skipped", skipReason: "stale-generation", remote: primary }
+    const primaryResult = settled.get(primary) ?? {
+      status: "skipped" as const,
+      skipReason: "stale-generation" as const,
+      remote: primary,
+    };
+    const auxiliaryFailed = remotes.some(
+      (remote) => remote !== primary && settled.get(remote)?.status === "failed"
     );
+    return auxiliaryFailed ? { ...primaryResult, auxiliaryFailed } : primaryResult;
   }
 
   /**
@@ -551,11 +557,16 @@ export type FetchResult = WorkspaceFetchResult;
       // contend on the same file. Requires Git ≥ 2.29 — all supported platforms
       // ship ≥ 2.34, so no version guard is needed.
       const prune = prunesRefs(opts);
+      // `--no-prune`, not merely omitting `--prune`: `fetch.prune=true` or
+      // `remote.<name>.prune=true` in the user's git config would otherwise
+      // prune anyway, and the whole point of the "Fetch" row is that it does
+      // not delete refs. The flag has to be explicit in BOTH directions or the
+      // choice the menu offers isn't one.
       await git.raw([
         "fetch",
         remote,
         "--no-auto-gc",
-        ...(prune ? ["--prune"] : []),
+        prune ? "--prune" : "--no-prune",
         "--no-write-fetch-head",
       ]);
 

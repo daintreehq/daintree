@@ -31,6 +31,8 @@ import {
 import type { ConflictedFileEntry, StagingFileEntry } from "@shared/types/git";
 import type { CommitItem, HeatCell } from "@shared/types/pulse";
 import { z } from "zod";
+import { notify } from "@/lib/notify";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(Math.trunc(value) || min, min), max);
@@ -548,13 +550,44 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       },
       { legacy: ["cwd"] }
     ).optional(),
+    // The context-menu rows dispatch this and drop the result on the floor, and
+    // the palette's fallback toast is the only one ActionService has — so a
+    // fetch that hit an auth wall from the menu would fail in total silence.
+    // Own the toast here instead, and it reaches every surface.
+    selfNotifiesOnExecutionError: true,
     run: async (args: unknown, ctx: ActionContext) => {
       const { prune, ...location } = (args ?? {}) as WorktreeLocationArgs & { prune?: boolean };
       const resolvedCwd = requireWorktreePath(location, ctx);
       // No confirm, unlike its push/pull-rebase neighbours: a fetch writes only
       // remote-tracking refs, so there is no local work it can destroy and
       // nothing a confirm would protect.
-      await window.electron.git.fetch({ cwd: resolvedCwd, prune: prune === true });
+      try {
+        await window.electron.git.fetch({ cwd: resolvedCwd, prune: prune === true });
+      } catch (err) {
+        const message = formatErrorMessage(err, "Could not reach the remote.");
+        notify({
+          type: "error",
+          priority: "high",
+          title: "Fetch failed",
+          message,
+          action: {
+            label: "Copy details",
+            successLabel: "Copied",
+            onClick: async () => {
+              try {
+                await navigator.clipboard.writeText(message);
+              } catch {
+                // Clipboard write is non-critical; the message is on screen.
+              }
+            },
+          },
+          // `git`, not `uiFeedback`: the latter is a silencing kind and would
+          // suppress this toast entirely, which is the one outcome a failed
+          // fetch must not have.
+          context: { eventKind: "git" },
+        });
+        throw err;
+      }
     },
   }));
 

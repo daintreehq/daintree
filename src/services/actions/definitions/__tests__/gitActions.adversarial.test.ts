@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const notifyMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import { registerGitActions } from "../gitActions";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -131,6 +135,7 @@ function setupActions(): {
 beforeEach(() => {
   // Lets the shared location resolver turn a `worktreeId` into its path.
   setWorktreePathIndexAccessor(() => new Map([["wt-1", "/repo/one"]]));
+  notifyMock.mockClear();
 });
 
 afterEach(() => {
@@ -221,12 +226,36 @@ describe("gitActions adversarial", () => {
     expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: true });
   });
 
-  it("git.fetch treats a non-boolean prune as absent rather than truthy", async () => {
-    // The args schema is the MCP surface too, so a client sending `prune: 1`
-    // must not silently get the destructive-looking variant.
+  it("git.fetch treats an absent prune as false, never as truthy", async () => {
     const { run, git } = setupActions();
     await run("git.fetch", { cwd: "/repo", prune: undefined });
     expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: false });
+  });
+
+  it("git.fetch's schema rejects a non-boolean prune instead of coercing it", async () => {
+    // The args schema is the MCP surface too: a client sending `prune: 1` must
+    // be refused, not quietly handed the ref-deleting variant. Goes through
+    // `runParsed`, because plain `run()` never sees `argsSchema` at all.
+    const { runParsed, git } = setupActions();
+
+    await expect(runParsed("git.fetch", { cwd: "/repo", prune: 1 })).rejects.toThrow();
+    expect(git.fetch).not.toHaveBeenCalled();
+
+    await runParsed("git.fetch", { cwd: "/repo", prune: true });
+    expect(git.fetch).toHaveBeenCalledWith({ cwd: "/repo", prune: true });
+  });
+
+  it("git.fetch surfaces a failure itself — the menu drops the dispatch result", async () => {
+    // ActionService's only fallback toast lives in the action palette, so an
+    // action dispatched from a context menu that does not own its own error
+    // fails in total silence.
+    const { run, git } = setupActions();
+    git.fetch.mockRejectedValue(new Error("Authentication failed"));
+
+    await expect(run("git.fetch", { cwd: "/repo" })).rejects.toThrow("Authentication failed");
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", title: "Fetch failed" })
+    );
   });
 
   it("git.pullRebase fires IPC only after the confirm gate is accepted", async () => {

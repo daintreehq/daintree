@@ -43,6 +43,7 @@ interface UpstreamSyncBadgeProps {
 }
 
 const STALENESS_MULTIPLIER = 1.5;
+const FLASH_DURATION_MS = 250;
 
 export function UpstreamSyncBadge({
   aheadCount,
@@ -79,6 +80,11 @@ export function UpstreamSyncBadge({
   // is the bare branch name where a healthy compare is `remote/branch`, so the
   // tooltip can say the counts are local rather than passing them off as
   // measured against the remote.
+  //
+  // What it must NOT say is WHY. The same fallback covers a pruned-away ref, a
+  // repo with no remote at all, and a transient git error, and the renderer
+  // cannot tell them apart — so the copy reports the comparison it got, not a
+  // cause it did not observe.
   const comparedWithLocalBase =
     hasBaseName && baseCompareRef != null && baseCompareRef === baseBranchName;
   // `||`, not `??`: an empty-string compare ref has to fall through to the
@@ -164,7 +170,7 @@ export function UpstreamSyncBadge({
     };
     if (!changed) return;
     setIsFlashing(true);
-    const safetyTimer = window.setTimeout(() => setIsFlashing(false), 250);
+    const safetyTimer = window.setTimeout(() => setIsFlashing(false), FLASH_DURATION_MS);
     return () => window.clearTimeout(safetyTimer);
   }, [displayedAhead, displayedBehind, displayedBaseAhead, displayedBaseBehind]);
 
@@ -368,7 +374,7 @@ export function UpstreamSyncBadge({
         )}
         {comparedWithLocalBase && showBaseSegment && (
           <div className="text-text-muted" data-testid="upstream-sync-local-base">
-            No remote ref for the base branch
+            Remote comparison unavailable
           </div>
         )}
         {hasNoUpstream && showBaseSegment && (

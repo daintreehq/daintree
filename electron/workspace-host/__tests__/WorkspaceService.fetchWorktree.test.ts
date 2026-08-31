@@ -122,6 +122,8 @@ vi.mock("child_process", () => ({
   spawn: vi.fn(),
 }));
 
+const startedMonitors: WorktreeMonitor[] = [];
+
 describe("WorkspaceService.fetchWorktree", () => {
   let service: WorkspaceService;
   let mockSendEvent: ReturnType<typeof vi.fn>;
@@ -142,6 +144,11 @@ describe("WorkspaceService.fetchWorktree", () => {
   });
 
   afterEach(() => {
+    // Monitors arm REAL 2-5s initial-status timers. `restoreAllMocks` does not
+    // cancel them, so an unstopped monitor fires its callback into whichever
+    // test happens to be running by then.
+    for (const monitor of startedMonitors) monitor.stop();
+    startedMonitors.length = 0;
     vi.restoreAllMocks();
   });
 
@@ -167,6 +174,7 @@ describe("WorkspaceService.fetchWorktree", () => {
       "main"
     );
     service["monitors"].set(id, monitor);
+    startedMonitors.push(monitor);
     return monitor;
   }
 
@@ -213,6 +221,24 @@ describe("WorkspaceService.fetchWorktree", () => {
     expect(event.requestId).toBe("req-3");
     expect(event.result).toBeUndefined();
     expect(event.error).toContain("/test/wt-missing");
+  });
+
+  it("finds the monitor by path when its id was minted differently", async () => {
+    // Creation mints an id from `realpath()`; enumeration from `pathResolve()`.
+    // Those diverge across a symlink, and the renderer reaches us holding the
+    // worktree's PATH — an id-only lookup would fail on exactly the symlinked
+    // checkouts that are hardest to debug.
+    const monitor = createMonitor("/real/wt-symlinked");
+    monitor.start();
+    Object.defineProperty(monitor, "path", { value: "/link/wt", configurable: true });
+    const trigger = vi
+      .spyOn(monitor, "triggerFetchNow")
+      .mockResolvedValue({ status: "success", remote: "origin" });
+
+    await service.fetchWorktree("req-path", "/link/wt", false);
+
+    expect(trigger).toHaveBeenCalledWith(false);
+    expect(lastResultEvent().error).toBeUndefined();
   });
 
   it("answers with a transport error for a monitor that exists but is stopped", async () => {
@@ -264,6 +290,11 @@ describe("WorkspaceService.executeFetchForWorktree", () => {
   });
 
   afterEach(() => {
+    // Monitors arm REAL 2-5s initial-status timers. `restoreAllMocks` does not
+    // cancel them, so an unstopped monitor fires its callback into whichever
+    // test happens to be running by then.
+    for (const monitor of startedMonitors) monitor.stop();
+    startedMonitors.length = 0;
     vi.restoreAllMocks();
   });
 
@@ -289,6 +320,7 @@ describe("WorkspaceService.executeFetchForWorktree", () => {
       "main"
     );
     service["monitors"].set(id, monitor);
+    startedMonitors.push(monitor);
     return monitor;
   }
 

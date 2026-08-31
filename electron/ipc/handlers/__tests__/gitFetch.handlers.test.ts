@@ -100,10 +100,46 @@ describe("git:fetch IPC", () => {
     await expect(invoke({ cwd: "/repo" })).rejects.toBeInstanceOf(GitOperationError);
   });
 
-  it("accepts a benign skip — a sibling's fetch seconds ago already refreshed the refs", async () => {
+  it("refuses a skip where git never ran, instead of reporting a refresh that did not happen", async () => {
+    // A sibling's recent fetch comes back as `success`, not `skipped` — every
+    // skip here means the refs on screen are exactly as stale as before.
     fetchWorktree.mockResolvedValue({ status: "skipped", skipReason: "no-common-dir" });
 
+    await expect(invoke({ cwd: "/repo" })).rejects.toBeInstanceOf(GitOperationError);
+  });
+
+  it("refuses a fetch cancelled by teardown", async () => {
+    fetchWorktree.mockResolvedValue({ status: "skipped", skipReason: "stale-generation" });
+
+    await expect(invoke({ cwd: "/repo" })).rejects.toBeInstanceOf(GitOperationError);
+  });
+
+  it("reports a partial refresh when an auxiliary remote failed", async () => {
+    // Fork layout: the base ref and the branch's own upstream live on different
+    // remotes. A primary success leaves half the counts stale.
+    fetchWorktree.mockResolvedValue({
+      status: "success",
+      remote: "upstream",
+      auxiliaryFailed: true,
+    });
+
+    await expect(invoke({ cwd: "/repo" })).rejects.toBeInstanceOf(GitOperationError);
+  });
+
+  it("accepts a plain single-remote success", async () => {
+    fetchWorktree.mockResolvedValue({ status: "success", remote: "origin" });
+
     await expect(invoke({ cwd: "/repo" })).resolves.toBeUndefined();
+  });
+
+  it("does not hand the renderer a pre-encoded GitError prefix", async () => {
+    // `reason` is serialized as `gitReason` and the preload rebuilds the
+    // `[GitError|…]` prefix from it — writing one here would double it.
+    fetchWorktree.mockResolvedValue({ status: "failed", reason: "network-unavailable" });
+
+    await expect(invoke({ cwd: "/repo" })).rejects.toThrow(
+      expect.objectContaining({ message: expect.not.stringContaining("[GitError|") })
+    );
   });
 
   it("fails loudly when no workspace service is available", async () => {

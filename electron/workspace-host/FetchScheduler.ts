@@ -183,9 +183,13 @@ export class FetchScheduler {
         // `WorkspaceService` will follow up with the freshly-resolved
         // `lastFetchedAt`/`fetchAuthFailed` via `setFetchState`, which emits
         // again only if those values changed.
-        if (this.host.hasInitialStatus) {
-          this.host.onUpdate();
-        }
+        //
+        // Isolated: this is a synchronous observer reaching arbitrary listeners
+        // (`sys:worktree:update`). Letting it throw past this point would strand
+        // a queued request on a promise nothing can now resolve AND leave the
+        // cadence timer un-armed, so one bad listener would stop background
+        // fetching for the rest of the session.
+        this.emitUpdate();
         if (queued) {
           // A queued request must settle even when the scheduler has since
           // stopped, or its caller waits forever. `run` returns undefined on a
@@ -197,11 +201,31 @@ export class FetchScheduler {
       });
     this._pendingFetchPromise = run;
     // Surface the in-flight transition immediately so the card pulses while
-    // git is talking to the remote, without waiting for a status poll.
-    if (this.host.hasInitialStatus) {
-      this.host.onUpdate();
-    }
+    // git is talking to the remote, without waiting for a status poll. Isolated
+    // for the same reason as the completion emit below — and this one is the
+    // sharper edge: a throw here escapes `run()` itself, which the scheduled
+    // path calls as `void this.run(false)`, so one bad listener becomes an
+    // unhandled rejection AND leaves the fetch un-awaited.
+    this.emitUpdate();
     return await run;
+  }
+
+  /**
+   * Emit a snapshot, absorbing anything the observer throws.
+   *
+   * `onUpdate` reaches arbitrary `sys:worktree:update` listeners. A throw that
+   * escaped would either surface as an unhandled rejection on the scheduled
+   * path or, from the completion hook, strand a queued request on a promise
+   * nothing can resolve and leave the cadence timer un-armed — one bad listener
+   * would stop background fetching for the rest of the session.
+   */
+  private emitUpdate(): void {
+    if (!this.host.hasInitialStatus) return;
+    try {
+      this.host.onUpdate();
+    } catch {
+      // The observer's problem, not the scheduler's.
+    }
   }
 
   /**

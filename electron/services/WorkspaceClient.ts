@@ -11,6 +11,7 @@
  */
 
 import { EventEmitter } from "events";
+import { resolve as pathResolve } from "path";
 import { CHANNELS } from "../ipc/channels.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { type ProcessEntry, sendToEntryWindows } from "./workspace-client/types.js";
@@ -394,7 +395,11 @@ export class WorkspaceClient extends EventEmitter {
       {
         type: "fetch-worktree",
         requestId,
-        worktreeId: worktreePath,
+        // Monitor ids are `path.resolve`d worktree paths, and so is the pool's
+        // routing key — but the caller's `worktreePath` is whatever the renderer
+        // sent. Normalizing here is what keeps a `/repo/./wt` or trailing-slash
+        // spelling from routing to the right host and then missing its monitor.
+        worktreeId: pathResolve(worktreePath),
         prune,
       },
       FETCH_WORKTREE_TIMEOUT_MS

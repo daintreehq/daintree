@@ -368,6 +368,17 @@ export interface WorkspaceFetchResult {
   networkFailed?: boolean;
   /** Remote this result describes. Absent only on the `no-common-dir` skip. */
   remote?: string;
+  /**
+   * True when a NON-primary remote of the same call failed. The rest of this
+   * result speaks only for the primary remote — deliberately, because an
+   * auxiliary success must never vouch for the counts the card renders. That
+   * leaves a gap in the other direction: on a fork layout the base ref and the
+   * branch's own upstream live on different remotes, so a call whose primary
+   * succeeded can still have left half the counts stale. A user-triggered fetch
+   * reports that as a partial failure instead of a clean success (#12091);
+   * scheduled fetches ignore it and let their own backoff handle the retry.
+   */
+  auxiliaryFailed?: boolean;
 }
 
 /**

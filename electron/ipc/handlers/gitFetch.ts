@@ -2,9 +2,33 @@ import { z } from "zod";
 import { defineIpcNamespace, opValidated } from "../define.js";
 import { checkRateLimit } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
+import type { WorkspaceFetchResult } from "../../../shared/types/workspace-host.js";
+import type { GitOperationReason } from "../../../shared/types/ipc/errors.js";
 import { validateCwd } from "../../utils/hardenedGit.js";
 import { GitOperationError } from "../../utils/errorTypes.js";
 import { GIT_FETCH_METHOD_CHANNELS } from "./gitFetch.preload.js";
+
+/**
+ * A skip carries no git error of its own, so map the reason we do have onto the
+ * closest classification the renderer already knows how to present.
+ */
+function skipReason(skip: WorkspaceFetchResult["skipReason"]): GitOperationReason {
+  return skip === "auth-suspended" ? "auth-failed" : "unknown";
+}
+
+function describeUnsuccessfulFetch(result: WorkspaceFetchResult): string {
+  if (result.status === "failed") return "Could not fetch from the remote.";
+  switch (result.skipReason) {
+    case "auth-suspended":
+      return "Fetch skipped — authentication to the remote is failing.";
+    case "no-common-dir":
+      return "Fetch skipped — this path is no longer a git worktree.";
+    case "stale-generation":
+      return "Fetch cancelled — the worktree was closed while it was running.";
+    default:
+      return "Fetch skipped — the remote was recently unreachable.";
+  }
+}
 
 const fetchPayloadSchema = z.object({
   cwd: z.string().min(1),
@@ -45,22 +69,29 @@ export function registerGitFetchHandlers(deps: HandlerDependencies): () => void 
 
           const result = await service.fetchWorktree(payload.cwd, payload.prune !== false);
 
-          // A fetch that ran and failed must surface as a failure, not as a
-          // quietly-successful no-op: the counts on the card would then be as
-          // stale as before the click, with nothing saying so.
-          if (result.status === "failed") {
+          // Resolve ONLY on a real success. Anything else means the refs on
+          // screen are as stale as they were before the click, and reporting
+          // that as done is the one answer the user cannot act on. The message
+          // is plain prose: `GitOperationError.reason` is serialized as
+          // `gitReason` and the preload re-encodes the `[GitError|…]` prefix
+          // from it, so writing the prefix here would double it.
+          if (result.status !== "success") {
             throw new GitOperationError(
-              result.reason ?? "unknown",
-              `[GitError|${result.reason ?? "unknown"}||] Fetch failed`,
+              result.reason ?? skipReason(result.skipReason),
+              describeUnsuccessfulFetch(result),
               { cwd: payload.cwd, op: "fetch" }
             );
           }
-          if (result.status === "skipped" && result.skipReason === "auth-suspended") {
-            throw new GitOperationError(
-              result.reason ?? "auth-failed",
-              `[GitError|${result.reason ?? "auth-failed"}||] Fetch skipped — authentication failed`,
-              { cwd: payload.cwd, op: "fetch" }
-            );
+          // The coordinator answers for the primary remote alone. On a fork
+          // layout the base ref and the branch's own upstream live on two
+          // different remotes, and a manual fetch that refreshed one of them is
+          // a partial refresh — say so rather than let half-stale counts read
+          // as freshly confirmed.
+          if (result.auxiliaryFailed === true) {
+            throw new GitOperationError("unknown", "Some remotes could not be reached.", {
+              cwd: payload.cwd,
+              op: "fetch",
+            });
           }
         }
       ),

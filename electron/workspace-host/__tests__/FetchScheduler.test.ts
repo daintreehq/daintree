@@ -282,37 +282,6 @@ describe("FetchScheduler", () => {
     await expect(forced).resolves.toEqual({ status: "success", remote: "origin" });
   });
 
-  it("coalesces queued force requests and keeps the pruning one", async () => {
-    // Two clicks land while a fetch is in flight. They share one deferred run,
-    // and "Fetch and prune" must not be satisfied by a queued plain "Fetch".
-    let resolveFirst: () => void = () => {};
-    let callCount = 0;
-    const host = makeHost({
-      onExecuteFetch: vi.fn().mockImplementation(() => {
-        callCount++;
-        if (callCount === 1) {
-          return new Promise<void>((resolve) => {
-            resolveFirst = resolve;
-          });
-        }
-        return Promise.resolve();
-      }),
-    });
-    const scheduler = new FetchScheduler(host as FetchSchedulerHost);
-
-    scheduler.schedule(true);
-    await vi.advanceTimersByTimeAsync(6_000);
-
-    const plain = scheduler.triggerNow(false);
-    const pruning = scheduler.triggerNow(true);
-
-    resolveFirst();
-    await Promise.all([plain, pruning]);
-
-    expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
-    expect(host.onExecuteFetch).toHaveBeenLastCalledWith(true, true);
-  });
-
   it("settles a queued force request even when the scheduler stops first", async () => {
     // A stranded promise would leave the renderer's action hanging forever.
     let resolveFirst: () => void = () => {};
@@ -339,6 +308,81 @@ describe("FetchScheduler", () => {
 
     await expect(forced).resolves.toBeUndefined();
     expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("still runs a queued request and re-arms the timer when the update observer throws", async () => {
+    // `onUpdate` reaches arbitrary `sys:worktree:update` listeners. One throwing
+    // listener must not strand a queued request on a promise nothing resolves,
+    // nor leave the cadence timer un-armed for the rest of the session.
+    let resolveFirst: () => void = () => {};
+    let callCount = 0;
+    const host = makeHost({
+      onExecuteFetch: vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return new Promise<void>((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        return Promise.resolve();
+      }),
+      onUpdate: vi.fn().mockImplementation(() => {
+        throw new Error("listener blew up");
+      }),
+    });
+    const scheduler = new FetchScheduler(host as FetchSchedulerHost);
+
+    scheduler.schedule(true);
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    const forced = scheduler.triggerNow(true);
+    resolveFirst();
+
+    await expect(forced).resolves.toBeUndefined();
+    expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
+
+    // And the cadence is still alive after the queued run settled.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(host.onExecuteFetch.mock.calls.length).toBeGreaterThan(2);
+  });
+
+  it.each([
+    // [firstQueued, secondQueued, expected] — `undefined` means "coordinator
+    // default", which prunes, so only two explicit `false`s stay non-pruning.
+    // A `Boolean(a) || Boolean(b)` implementation passes the false/true row and
+    // silently downgrades every row containing `undefined`.
+    [undefined, false, true],
+    [false, undefined, true],
+    [false, false, false],
+    [false, true, true],
+    [true, false, true],
+    [undefined, undefined, true],
+  ])("coalesces queued prune %s + %s into %s", async (firstPrune, secondPrune, expected) => {
+    let resolveFirst: () => void = () => {};
+    let callCount = 0;
+    const host = makeHost({
+      onExecuteFetch: vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return new Promise<void>((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        return Promise.resolve();
+      }),
+    });
+    const scheduler = new FetchScheduler(host as FetchSchedulerHost);
+
+    scheduler.schedule(true);
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    const a = scheduler.triggerNow(firstPrune);
+    const b = scheduler.triggerNow(secondPrune);
+    resolveFirst();
+    await Promise.all([a, b]);
+
+    expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
+    expect(host.onExecuteFetch).toHaveBeenLastCalledWith(true, expected);
   });
 
   it("does not execute fetch when host is not running", async () => {

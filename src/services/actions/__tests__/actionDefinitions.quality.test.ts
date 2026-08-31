@@ -320,7 +320,7 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // 50_400 → 50_600 for #12091's `git.fetch`. The floor above is 120 B, so a
   // new tool cannot land inside the old ceiling's 79 B of headroom at any
   // wording — the raise is the cost of the tool, not of its prose, and its
-  // description is 149 B against the 400 B per-description ceiling.
+  // description is 151 B against the 400 B per-description ceiling.
   const MAX_COHORT_TOTAL_BYTES = 50_600;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
