@@ -39,7 +39,18 @@ function seedVisibleDockPopover() {
     trashedTerminals: new Map(),
   });
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-a" });
-  useHelpPanelStore.setState({ terminalId: null });
+  useHelpPanelStore.setState({ sessions: { 0: emptyLane() }, activeSlot: 0 });
+}
+
+function emptyLane() {
+  return {
+  terminalId: null,
+  agentId: null,
+  sessionId: null,
+  conversationTouched: false,
+  figures: [],
+  activeFigureNumber: null,
+};
 }
 
 beforeEach(() => {
@@ -54,7 +65,7 @@ afterEach(() => {
     trashedTerminals: new Map(),
   });
   useWorktreeSelectionStore.setState({ activeWorktreeId: null });
-  useHelpPanelStore.setState({ terminalId: null });
+  useHelpPanelStore.setState({ sessions: { 0: emptyLane() }, activeSlot: 0 });
 });
 
 describe("useOpenDockPopoverId", () => {
@@ -82,7 +93,10 @@ describe("useOpenDockPopoverId", () => {
     expect(result.current).toBe("dock-1");
 
     act(() => {
-      useHelpPanelStore.setState({ terminalId: "dock-1" });
+      useHelpPanelStore.setState({
+        sessions: { 0: { ...emptyLane(), terminalId: "dock-1" } },
+        activeSlot: 0,
+      });
     });
 
     expect(result.current).toBeNull();

@@ -27,6 +27,14 @@ export interface HibernationManagerHost {
   resetPhase(): void;
   /** True when `gen` is still the controller's current launch generation. */
   isLaunchCurrent(gen: number): boolean;
+  /**
+   * The assistant lane this manager hibernates and resumes (#12108). A
+   * function because the controller builds this in a class field initializer,
+   * before its own constructor body has assigned the lane.
+   */
+  getSlot(): number;
+  /** This lane's live state, so a sibling's terminal is never mistaken for ours. */
+  getSlotState(): { terminalId: string | null; agentId: string | null; sessionId: string | null };
 }
 
 /**
@@ -87,7 +95,7 @@ export class HibernationManager {
     this.clearTimer();
     this._hibernateArmedFor = null;
     if (projectId) {
-      useHelpPanelStore.getState().clearHibernateSession(projectId);
+      useHelpPanelStore.getState().clearHibernateSession(projectId, this.host.getSlot());
     }
   }
 
@@ -127,7 +135,7 @@ export class HibernationManager {
     // `currentProject` null by design (#11068).
     this._hibernateArmedFor = {
       terminalId,
-      agentId: useHelpPanelStore.getState().agentId,
+      agentId: this.host.getSlotState().agentId,
       projectId: workspaceId,
     };
     const initialTerminalId = terminalId;
@@ -178,9 +186,9 @@ export class HibernationManager {
     this._hibernateTimer = null;
     if (!this._isStillArmedFor(initialTerminalId)) return;
 
-    const helpState = useHelpPanelStore.getState();
+    const helpState = this.host.getSlotState();
     if (helpState.terminalId !== initialTerminalId) return;
-    if (helpState.isOpen) return;
+    if (useHelpPanelStore.getState().isOpen) return;
     if (this._isSystemSuspended) return;
 
     const panelState = usePanelStore.getState();
@@ -218,8 +226,8 @@ export class HibernationManager {
         .gracefulKill(initialTerminalId)
         .then((capturedSessionId) => {
           const after = useHelpPanelStore.getState();
-          if (after.terminalId !== initialTerminalId) {
-            // Another flow took over the slot, or the panel was torn down
+          if (this.host.getSlotState().terminalId !== initialTerminalId) {
+            // Another flow took over the lane, or the panel was torn down
             // (e.g. `handleTerminalPanelMissing` cleared the terminal) while
             // the kill was in flight. If a new launch took over it already
             // wrote its own phase; only when the phase is still "hibernating"
@@ -237,7 +245,7 @@ export class HibernationManager {
             return;
           }
           if (capturedSessionId && projectId && liveAgentId && cwd) {
-            after.setHibernateSession(projectId, {
+            after.setHibernateSession(projectId, this.host.getSlot(), {
               sessionId: capturedSessionId,
               cwd,
               agentId: liveAgentId,
@@ -252,22 +260,21 @@ export class HibernationManager {
             // a sentinel hibernate entry (empty sessionId) so the next panel
             // open hits the `--continue`-style fallback in `_spawnResumed`
             // instead of starting a fresh session (#8787).
-            after.setHibernateSession(projectId, {
+            after.setHibernateSession(projectId, this.host.getSlot(), {
               sessionId: "",
               cwd,
               agentId: liveAgentId,
             });
           } else if (projectId) {
-            after.clearHibernateSession(projectId);
+            after.clearHibernateSession(projectId, this.host.getSlot());
           }
           usePanelStore.getState().removePanel(initialTerminalId);
           revokeHelpSession(sessionToRevoke);
-          useHelpPanelStore.getState().clearTerminal();
+          useHelpPanelStore.getState().clearTerminal(this.host.getSlot());
           this.host.resetPhase();
         })
         .catch((err) => {
-          const after = useHelpPanelStore.getState();
-          if (after.terminalId !== initialTerminalId) {
+          if (this.host.getSlotState().terminalId !== initialTerminalId) {
             // See the `.then()` guard: only reset when this hibernate is still
             // the phase's last writer.
             if (this.host.getSnapshot().phase === "hibernating") this.host.resetPhase();
@@ -279,11 +286,11 @@ export class HibernationManager {
           }
           logError("HelpPanel: gracefulKill during hibernate failed", err);
           if (projectId) {
-            useHelpPanelStore.getState().clearHibernateSession(projectId);
+            useHelpPanelStore.getState().clearHibernateSession(projectId, this.host.getSlot());
           }
           usePanelStore.getState().removePanel(initialTerminalId);
           revokeHelpSession(sessionToRevoke);
-          useHelpPanelStore.getState().clearTerminal();
+          useHelpPanelStore.getState().clearTerminal(this.host.getSlot());
           this.host.resetPhase();
         }),
       { context: "HelpPanel:hibernate gracefulKill" }
@@ -333,7 +340,10 @@ export class HibernationManager {
     // the mirror is ours to drop.
     let mirrored = false;
     try {
-      const pending = await window.electron.help.takePendingHibernation(projectId);
+      const pending = await window.electron.help.takePendingHibernation(
+        projectId,
+        this.host.getSlot()
+      );
       if (!pending) return { status: "empty" };
       claimId = pending.claimId;
       if (!this.host.isLaunchCurrent(gen)) {
@@ -350,7 +360,7 @@ export class HibernationManager {
       // branch — see the comment in `_spawnResumed` and `ResumeSpawnResult`.
       // The root-cause capture race is in main; the fix here is the
       // renderer-side truth-in-trigger only.
-      useHelpPanelStore.getState().setHibernateSession(projectId, {
+      useHelpPanelStore.getState().setHibernateSession(projectId, this.host.getSlot(), {
         sessionId: pending.agentSessionId,
         cwd: pending.cwd,
         agentId: pending.agentId,
@@ -399,9 +409,15 @@ export class HibernationManager {
     reason: string,
     opts: { clearMirror: boolean }
   ): Promise<void> {
-    if (opts.clearMirror) useHelpPanelStore.getState().clearHibernateSession(projectId);
+    if (opts.clearMirror) {
+      useHelpPanelStore.getState().clearHibernateSession(projectId, this.host.getSlot());
+    }
     try {
-      const restored = await window.electron.help.restorePendingHibernation(projectId, claimId);
+      const restored = await window.electron.help.restorePendingHibernation(
+        projectId,
+        claimId,
+        this.host.getSlot()
+      );
       logInfo("HelpPanel: released pending hibernation back to main", {
         projectId,
         reason,

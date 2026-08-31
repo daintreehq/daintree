@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots";
   HELP_PANEL_DEFAULT_WIDTH,
   HELP_PANEL_MAX_WIDTH,
   HELP_PANEL_MIN_WIDTH,
@@ -146,7 +147,7 @@ describe("helpPanelStore persistence migration", () => {
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
     expect(store.getState().droppedPreferredAgentId).toBe("gemini");
 
-    store.getState().setTerminal("term-1", "claude", null);
+    store.getState().setTerminal(0, "term-1", "claude", null);
     expect(store.getState().droppedPreferredAgentId).toBeNull();
   });
 
@@ -227,7 +228,7 @@ describe("helpPanelStore persistence migration", () => {
           introDismissed: boolean;
         };
       };
-      expect(parsed.version).toBe(5);
+      expect(parsed.version).toBe(6);
       expect(parsed.state.width).toBe(450);
       expect(parsed.state.preferredAgentId).toBeNull();
     } finally {
@@ -295,7 +296,7 @@ describe("helpPanelStore persistence migration", () => {
       expect(written).toBeDefined();
       const parsed: unknown = JSON.parse(written!);
       expect(parsed).toMatchObject({
-        version: 5,
+        version: 6,
         state: { introDismissed: true },
       });
     } finally {
@@ -357,7 +358,7 @@ describe("helpPanelStore persistence migration", () => {
         version: number;
         state: Record<string, unknown>;
       };
-      expect(parsed.version).toBe(5);
+      expect(parsed.version).toBe(6);
       expect(parsed.state).not.toHaveProperty("isOpen");
     } finally {
       vi.useRealTimers();
@@ -377,37 +378,37 @@ describe("helpPanelStore persistence migration", () => {
 
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
-    expect(store.getState().conversationTouched).toBe(false);
+    expect(store.getState().sessions[0]!.conversationTouched).toBe(false);
   });
 
   it("markConversationStarted sets conversationTouched to true", async () => {
     installLocalStorage({});
 
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().markConversationStarted();
+    store.getState().markConversationStarted(0);
 
-    expect(store.getState().conversationTouched).toBe(true);
+    expect(store.getState().sessions[0]!.conversationTouched).toBe(true);
   });
 
   it("markConversationStarted is idempotent (calling twice still yields true)", async () => {
     installLocalStorage({});
 
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().markConversationStarted();
-    store.getState().markConversationStarted();
+    store.getState().markConversationStarted(0);
+    store.getState().markConversationStarted(0);
 
-    expect(store.getState().conversationTouched).toBe(true);
+    expect(store.getState().sessions[0]!.conversationTouched).toBe(true);
   });
 
   it("setTerminal resets conversationTouched to false", async () => {
     installLocalStorage({});
 
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().markConversationStarted();
-    expect(store.getState().conversationTouched).toBe(true);
+    store.getState().markConversationStarted(0);
+    expect(store.getState().sessions[0]!.conversationTouched).toBe(true);
 
-    store.getState().setTerminal("term-1", "claude", null);
-    expect(store.getState().conversationTouched).toBe(false);
+    store.getState().setTerminal(0, "term-1", "claude", null);
+    expect(store.getState().sessions[0]!.conversationTouched).toBe(false);
   });
 
   it("setTerminal initializes preferredAgentId from the bound agent when none is set", async () => {
@@ -416,7 +417,7 @@ describe("helpPanelStore persistence migration", () => {
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
     expect(store.getState().preferredAgentId).toBeNull();
 
-    store.getState().setTerminal("term-1", "codex", null);
+    store.getState().setTerminal(0, "term-1", "codex", null);
     expect(store.getState().preferredAgentId).toBe("codex");
   });
 
@@ -428,36 +429,36 @@ describe("helpPanelStore persistence migration", () => {
 
     // A live terminal re-binds (resume/reconnect) to a different agent —
     // the user's explicit choice must survive, not get clobbered.
-    store.getState().setTerminal("term-1", "codex", null);
+    store.getState().setTerminal(0, "term-1", "codex", null);
     expect(store.getState().preferredAgentId).toBe("claude");
-    expect(store.getState().agentId).toBe("codex");
+    expect(store.getState().sessions[0]!.agentId).toBe("codex");
   });
 
   it("clearTerminal resets conversationTouched to false", async () => {
     installLocalStorage({});
 
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().markConversationStarted();
-    expect(store.getState().conversationTouched).toBe(true);
+    store.getState().markConversationStarted(0);
+    expect(store.getState().sessions[0]!.conversationTouched).toBe(true);
 
-    store.getState().clearTerminal();
-    expect(store.getState().conversationTouched).toBe(false);
+    store.getState().clearTerminal(0);
+    expect(store.getState().sessions[0]!.conversationTouched).toBe(false);
   });
 
   it("clearTerminal drops figures so a crash/hibernate teardown can't leak them into the next session (#9829)", async () => {
     installLocalStorage({});
 
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().addFigure({
+    store.getState().addFigure(0, {
       imageId: "img-1",
       figureNumber: 1,
       figureLabel: "image #1",
       url: "https://daintree.org/figure-1.png",
     });
-    expect(store.getState().figures).toHaveLength(1);
+    expect(store.getState().sessions[0]!.figures).toHaveLength(1);
 
-    store.getState().clearTerminal();
-    expect(store.getState().figures).toEqual([]);
+    store.getState().clearTerminal(0);
+    expect(store.getState().sessions[0]!.figures).toEqual([]);
   });
 
   it("conversationTouched is NOT persisted", async () => {
@@ -466,7 +467,7 @@ describe("helpPanelStore persistence migration", () => {
       const backing = installLocalStorage({});
 
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      store.getState().markConversationStarted();
+      store.getState().markConversationStarted(0);
       vi.advanceTimersByTime(400);
 
       const written = backing.get(STORAGE_KEY);
@@ -478,7 +479,7 @@ describe("helpPanelStore persistence migration", () => {
       // conversationTouched is excluded from the persisted blob
       expect(parsed.state).not.toHaveProperty("conversationTouched");
       // The field is still true in the store
-      expect(store.getState().conversationTouched).toBe(true);
+      expect(store.getState().sessions[0]!.conversationTouched).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -500,7 +501,152 @@ describe("helpPanelStore persistence migration", () => {
 
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
-    expect(store.getState().conversationTouched).toBe(false);
+    expect(store.getState().sessions[0]!.conversationTouched).toBe(false);
+  });
+
+  // #12108. The lane axis the pre-lane cases above never had: they all describe
+  // slot 0 and still pass unchanged, so these add what is genuinely new.
+  describe("assistant lanes (#12108)", () => {
+    it("openSlot takes the lowest free lane, focuses it, and refuses past the ceiling", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store, MAX_SLOTS } = await import("../helpPanelStore").then(
+        async (m) => ({
+          useHelpPanelStore: m.useHelpPanelStore,
+          MAX_SLOTS: (await import("../../../shared/config/assistantSlots")).MAX_ASSISTANT_SLOTS,
+        })
+      );
+
+      const opened: Array<number | null> = [];
+      for (let i = 0; i < MAX_SLOTS + 1; i += 1) {
+        opened.push(store.getState().openSlot());
+      }
+
+      // Slot 0 exists from the start, so the first call takes 1.
+      expect(opened.slice(0, MAX_SLOTS - 1)).toEqual([1, 2].slice(0, MAX_SLOTS - 1));
+      // Refuses rather than reusing a lane — reuse would displace a session the
+      // user never named.
+      expect(opened[opened.length - 1]).toBeNull();
+      expect(store.getState().activeSlot).toBe(MAX_SLOTS - 1);
+    });
+
+    it("keeps lanes independent: writing one leaves its sibling untouched", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().openSlot();
+
+      store.getState().setTerminal(0, "term-0", "claude", "sess-0");
+      store.getState().setTerminal(1, "term-1", "codex", "sess-1");
+
+      expect(store.getState().sessions[0]).toMatchObject({
+        terminalId: "term-0",
+        agentId: "claude",
+        sessionId: "sess-0",
+      });
+      expect(store.getState().sessions[1]).toMatchObject({
+        terminalId: "term-1",
+        agentId: "codex",
+        sessionId: "sess-1",
+      });
+
+      // Clearing one lane must not touch the other's terminal OR its figures.
+      store.getState().addFigure(1, {
+        imageId: "img-1",
+        figureNumber: 1,
+        figureLabel: "Figure 1",
+        url: "https://daintree.org/a.png",
+      });
+      store.getState().clearTerminal(0);
+
+      expect(store.getState().sessions[0]!.terminalId).toBeNull();
+      expect(store.getState().sessions[1]!.terminalId).toBe("term-1");
+      expect(store.getState().sessions[1]!.figures).toHaveLength(1);
+    });
+
+    it("closeSlot drops the lane and falls back to the lowest remaining one", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().openSlot();
+      store.getState().setTerminal(0, "term-0", "claude", null);
+      store.getState().setActiveSlot(1);
+
+      store.getState().closeSlot(1);
+
+      expect(store.getState().sessions[1]).toBeUndefined();
+      expect(store.getState().activeSlot).toBe(0);
+      expect(store.getState().sessions[0]!.terminalId).toBe("term-0");
+    });
+
+    it("never leaves the panel lane-less: closing the last lane resets slot 0", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().setTerminal(0, "term-0", "claude", "sess-0");
+
+      store.getState().closeSlot(0);
+
+      // Slot 0 still exists, but empty — the panel has an empty state to show
+      // rather than no lane at all.
+      expect(store.getState().activeSlot).toBe(0);
+      expect(store.getState().sessions[0]).toMatchObject({ terminalId: null, sessionId: null });
+    });
+
+    it("ignores writes to a lane the user already closed", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().openSlot();
+      store.getState().closeSlot(1);
+
+      // An in-flight launch resolving after its tab was closed must not
+      // resurrect the lane.
+      store.getState().setTerminal(1, "term-late", "claude", "sess-late");
+
+      expect(store.getState().sessions[1]).toBeUndefined();
+    });
+
+    it("keeps each lane's hibernation entry separate", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+      store.getState().setHibernateSession("proj-1", 0, {
+        sessionId: "s0",
+        cwd: "/tmp/a",
+        agentId: "claude",
+      });
+      store.getState().setHibernateSession("proj-1", 1, {
+        sessionId: "s1",
+        cwd: "/tmp/b",
+        agentId: "claude",
+      });
+      store.getState().clearHibernateSession("proj-1", 0);
+
+      expect(store.getState().hibernateSessions).toEqual({
+        [slotKey("proj-1", 1)]: { sessionId: "s1", cwd: "/tmp/b", agentId: "claude" },
+      });
+    });
+
+    it("migrates a v5 bare-projectId hibernation key onto slot 0", async () => {
+      // Without this an upgrading user silently loses every resume token: the
+      // old key would never be looked up again.
+      installLocalStorage({
+        "help-panel-storage": JSON.stringify({
+          version: 5,
+          state: {
+            hibernateSessions: {
+              "proj-legacy": { sessionId: "legacy-id", cwd: "/tmp/legacy", agentId: "claude" },
+            },
+          },
+        }),
+      });
+
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+      expect(store.getState().hibernateSessions).toEqual({
+        [slotKey("proj-legacy", 0)]: {
+          sessionId: "legacy-id",
+          cwd: "/tmp/legacy",
+          agentId: "claude",
+        },
+      });
+    });
   });
 
   describe("hibernateSessions", () => {
@@ -516,14 +662,14 @@ describe("helpPanelStore persistence migration", () => {
       installLocalStorage({});
 
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      store.getState().setHibernateSession("proj-1", {
+      store.getState().setHibernateSession("proj-1", 0, {
         sessionId: "abc-123",
         cwd: "/tmp/help",
         agentId: "claude",
       });
 
       expect(store.getState().hibernateSessions).toEqual({
-        "proj-1": { sessionId: "abc-123", cwd: "/tmp/help", agentId: "claude" },
+        [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help", agentId: "claude" },
       });
     });
 
@@ -531,20 +677,20 @@ describe("helpPanelStore persistence migration", () => {
       installLocalStorage({});
 
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      store.getState().setHibernateSession("proj-a", {
+      store.getState().setHibernateSession("proj-a", 0, {
         sessionId: "session-a",
         cwd: "/tmp/a",
         agentId: "claude",
       });
-      store.getState().setHibernateSession("proj-b", {
+      store.getState().setHibernateSession("proj-b", 0, {
         sessionId: "session-b",
         cwd: "/tmp/b",
         agentId: "claude",
       });
 
       expect(store.getState().hibernateSessions).toEqual({
-        "proj-a": { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
-        "proj-b": { sessionId: "session-b", cwd: "/tmp/b", agentId: "claude" },
+        [slotKey("proj-a", 0)]: { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
+        [slotKey("proj-b", 0)]: { sessionId: "session-b", cwd: "/tmp/b", agentId: "claude" },
       });
     });
 
@@ -552,20 +698,20 @@ describe("helpPanelStore persistence migration", () => {
       installLocalStorage({});
 
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      store.getState().setHibernateSession("proj-a", {
+      store.getState().setHibernateSession("proj-a", 0, {
         sessionId: "session-a",
         cwd: "/tmp/a",
         agentId: "claude",
       });
-      store.getState().setHibernateSession("proj-b", {
+      store.getState().setHibernateSession("proj-b", 0, {
         sessionId: "session-b",
         cwd: "/tmp/b",
         agentId: "claude",
       });
-      store.getState().clearHibernateSession("proj-a");
+      store.getState().clearHibernateSession("proj-a", 0);
 
       expect(store.getState().hibernateSessions).toEqual({
-        "proj-b": { sessionId: "session-b", cwd: "/tmp/b", agentId: "claude" },
+        [slotKey("proj-b", 0)]: { sessionId: "session-b", cwd: "/tmp/b", agentId: "claude" },
       });
     });
 
@@ -573,15 +719,15 @@ describe("helpPanelStore persistence migration", () => {
       installLocalStorage({});
 
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      store.getState().setHibernateSession("proj-a", {
+      store.getState().setHibernateSession("proj-a", 0, {
         sessionId: "session-a",
         cwd: "/tmp/a",
         agentId: "claude",
       });
-      store.getState().clearHibernateSession("proj-unknown");
+      store.getState().clearHibernateSession("proj-unknown", 0);
 
       expect(store.getState().hibernateSessions).toEqual({
-        "proj-a": { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
+        [slotKey("proj-a", 0)]: { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
       });
     });
 
@@ -591,7 +737,7 @@ describe("helpPanelStore persistence migration", () => {
         const backing = installLocalStorage({});
 
         let mod = await import("../helpPanelStore");
-        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", {
+        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", 0, {
           sessionId: "session-a",
           cwd: "/tmp/a",
           agentId: "claude",
@@ -604,16 +750,16 @@ describe("helpPanelStore persistence migration", () => {
           version: number;
           state: { hibernateSessions: Record<string, unknown> };
         };
-        expect(parsed.version).toBe(5);
+        expect(parsed.version).toBe(6);
         expect(parsed.state.hibernateSessions).toEqual({
-          "proj-a": { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
+          [slotKey("proj-a", 0)]: { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
         });
 
         vi.useRealTimers();
         vi.resetModules();
         mod = await import("../helpPanelStore");
         expect(mod.useHelpPanelStore.getState().hibernateSessions).toEqual({
-          "proj-a": { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
+          [slotKey("proj-a", 0)]: { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
         });
       } finally {
         vi.useRealTimers();
@@ -729,7 +875,7 @@ describe("helpPanelStore persistence migration", () => {
         const mod = await import("../helpPanelStore");
 
         // This view captures project A's session and flushes it to the shared partition.
-        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", {
+        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", 0, {
           sessionId: "a1",
           cwd: "/a",
           agentId: "claude",
@@ -737,7 +883,7 @@ describe("helpPanelStore persistence migration", () => {
         vi.advanceTimersByTime(400);
 
         // This (stale) view updates project A again — enqueued, not yet flushed.
-        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", {
+        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", 0, {
           sessionId: "a2",
           cwd: "/a",
           agentId: "claude",
@@ -746,7 +892,7 @@ describe("helpPanelStore persistence migration", () => {
         // A sibling view (project B) writes its own session DURING the debounce
         // window. The flush must read disk at flush time to preserve it.
         const disk = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
-        disk.state.hibernateSessions["proj-b"] = {
+        disk.state.hibernateSessions[slotKey("proj-b", 0)] = {
           sessionId: "b1",
           cwd: "/b",
           agentId: "claude",
@@ -757,8 +903,8 @@ describe("helpPanelStore persistence migration", () => {
 
         const written = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
         expect(written.state.hibernateSessions).toEqual({
-          "proj-a": { sessionId: "a2", cwd: "/a", agentId: "claude" },
-          "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
+          [slotKey("proj-a", 0)]: { sessionId: "a2", cwd: "/a", agentId: "claude" },
+          [slotKey("proj-b", 0)]: { sessionId: "b1", cwd: "/b", agentId: "claude" },
         });
       } finally {
         vi.useRealTimers();
@@ -777,14 +923,14 @@ describe("helpPanelStore persistence migration", () => {
         backing.set(
           STORAGE_KEY,
           JSON.stringify({
-            version: 5,
+            version: 6,
             state: {
               width: 500,
               preferredAgentId: null,
               autoLaunchEnabled: true,
               introDismissed: true,
               hibernateSessions: {
-                "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
+                [slotKey("proj-b", 0)]: { sessionId: "b1", cwd: "/b", agentId: "claude" },
               },
             },
           })
@@ -801,7 +947,7 @@ describe("helpPanelStore persistence migration", () => {
         expect(written.state.autoLaunchEnabled).toBe(true);
         expect(written.state.introDismissed).toBe(true);
         expect(written.state.hibernateSessions).toEqual({
-          "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
+          [slotKey("proj-b", 0)]: { sessionId: "b1", cwd: "/b", agentId: "claude" },
         });
       } finally {
         vi.useRealTimers();
@@ -816,7 +962,7 @@ describe("helpPanelStore persistence migration", () => {
         // the same clamped value so an unrelated write doesn't read it as an edit.
         const backing = installLocalStorage({
           [STORAGE_KEY]: JSON.stringify({
-            version: 5,
+            version: 6,
             state: {
               width: HELP_PANEL_MAX_WIDTH + 1000,
               preferredAgentId: null,
@@ -836,7 +982,7 @@ describe("helpPanelStore persistence migration", () => {
         backing.set(STORAGE_KEY, JSON.stringify(disk));
 
         // An unrelated write (a hibernate capture) must not clobber the sibling's width.
-        mod.useHelpPanelStore.getState().setHibernateSession("proj-x", {
+        mod.useHelpPanelStore.getState().setHibernateSession("proj-x", 0, {
           sessionId: "x1",
           cwd: "/x",
           agentId: "claude",
@@ -846,7 +992,7 @@ describe("helpPanelStore persistence migration", () => {
         const written = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
         expect(written.state.width).toBe(500);
         expect(written.state.hibernateSessions).toEqual({
-          "proj-x": { sessionId: "x1", cwd: "/x", agentId: "claude" },
+          [slotKey("proj-x", 0)]: { sessionId: "x1", cwd: "/x", agentId: "claude" },
         });
       } finally {
         vi.useRealTimers();
@@ -859,15 +1005,15 @@ describe("helpPanelStore persistence migration", () => {
         // Hydrate a blob holding two sessions, so both live in this view's memory.
         const backing = installLocalStorage({
           [STORAGE_KEY]: JSON.stringify({
-            version: 5,
+            version: 6,
             state: {
               width: HELP_PANEL_DEFAULT_WIDTH,
               preferredAgentId: null,
               autoLaunchEnabled: false,
               introDismissed: false,
               hibernateSessions: {
-                "proj-a": { sessionId: "a1", cwd: "/a", agentId: "claude" },
-                "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
+                [slotKey("proj-a", 0)]: { sessionId: "a1", cwd: "/a", agentId: "claude" },
+                [slotKey("proj-b", 0)]: { sessionId: "b1", cwd: "/b", agentId: "claude" },
               },
             },
           }),
@@ -876,7 +1022,7 @@ describe("helpPanelStore persistence migration", () => {
 
         // A sibling deletes proj-b on disk.
         const disk = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
-        delete disk.state.hibernateSessions["proj-b"];
+        delete disk.state.hibernateSessions[slotKey("proj-b", 0)];
         backing.set(STORAGE_KEY, JSON.stringify(disk));
 
         // This view writes an unrelated field; it still carries proj-b in memory,
@@ -886,7 +1032,7 @@ describe("helpPanelStore persistence migration", () => {
 
         const written = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
         expect(written.state.hibernateSessions).toEqual({
-          "proj-a": { sessionId: "a1", cwd: "/a", agentId: "claude" },
+          [slotKey("proj-a", 0)]: { sessionId: "a1", cwd: "/a", agentId: "claude" },
         });
         expect(written.state.width).toBe(500);
       } finally {
@@ -904,21 +1050,21 @@ describe("helpPanelStore persistence migration", () => {
         backing.set(
           STORAGE_KEY,
           JSON.stringify({
-            version: 5,
+            version: 6,
             state: {
               width: HELP_PANEL_DEFAULT_WIDTH,
               preferredAgentId: null,
               autoLaunchEnabled: false,
               introDismissed: false,
               hibernateSessions: {
-                "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
+                [slotKey("proj-b", 0)]: { sessionId: "b1", cwd: "/b", agentId: "claude" },
               },
             },
           })
         );
 
         // This view captures a resume-latest sentinel (empty sessionId) for its project.
-        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", {
+        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", 0, {
           sessionId: "",
           cwd: "/a",
           agentId: "claude",
@@ -927,8 +1073,8 @@ describe("helpPanelStore persistence migration", () => {
 
         const written = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
         expect(written.state.hibernateSessions).toEqual({
-          "proj-a": { sessionId: "", cwd: "/a", agentId: "claude" },
-          "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
+          [slotKey("proj-a", 0)]: { sessionId: "", cwd: "/a", agentId: "claude" },
+          [slotKey("proj-b", 0)]: { sessionId: "b1", cwd: "/b", agentId: "claude" },
         });
       } finally {
         vi.useRealTimers();
@@ -941,7 +1087,7 @@ describe("helpPanelStore persistence migration", () => {
         const backing = installLocalStorage({});
         const mod = await import("../helpPanelStore");
 
-        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", {
+        mod.useHelpPanelStore.getState().setHibernateSession("proj-a", 0, {
           sessionId: "a1",
           cwd: "/a",
           agentId: "claude",
@@ -949,7 +1095,7 @@ describe("helpPanelStore persistence migration", () => {
         vi.advanceTimersByTime(400);
 
         const disk = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
-        disk.state.hibernateSessions["proj-b"] = {
+        disk.state.hibernateSessions[slotKey("proj-b", 0)] = {
           sessionId: "b1",
           cwd: "/b",
           agentId: "claude",
@@ -957,12 +1103,12 @@ describe("helpPanelStore persistence migration", () => {
         backing.set(STORAGE_KEY, JSON.stringify(disk));
 
         // Clearing this view's own project must not resurrect it, and must keep B.
-        mod.useHelpPanelStore.getState().clearHibernateSession("proj-a");
+        mod.useHelpPanelStore.getState().clearHibernateSession("proj-a", 0);
         vi.advanceTimersByTime(400);
 
         const written = JSON.parse(backing.get(STORAGE_KEY)!) as PersistedBlob;
         expect(written.state.hibernateSessions).toEqual({
-          "proj-b": { sessionId: "b1", cwd: "/b", agentId: "claude" },
+          [slotKey("proj-b", 0)]: { sessionId: "b1", cwd: "/b", agentId: "claude" },
         });
       } finally {
         vi.useRealTimers();
@@ -1022,7 +1168,7 @@ describe("helpPanelStore persistence migration", () => {
 
     it("preserves autoLaunchEnabled: true from a persisted blob across rehydration", async () => {
       const blob = JSON.stringify({
-        version: 5,
+        version: 6,
         state: { width: 400, preferredAgentId: "claude", autoLaunchEnabled: true },
       });
       installLocalStorage({ [STORAGE_KEY]: blob });
@@ -1034,7 +1180,7 @@ describe("helpPanelStore persistence migration", () => {
 
     it("falls back to false when persisted autoLaunchEnabled has a non-boolean type", async () => {
       const malformed = JSON.stringify({
-        version: 5,
+        version: 6,
         state: { width: 400, preferredAgentId: null, autoLaunchEnabled: "true" },
       });
       installLocalStorage({ [STORAGE_KEY]: malformed });
@@ -1060,7 +1206,7 @@ describe("helpPanelStore persistence migration", () => {
           version: number;
           state: Record<string, unknown>;
         };
-        expect(parsed.version).toBe(5);
+        expect(parsed.version).toBe(6);
         expect(parsed.state.autoLaunchEnabled).toBe(true);
       } finally {
         vi.useRealTimers();
@@ -1069,7 +1215,7 @@ describe("helpPanelStore persistence migration", () => {
 
     it("setAutoLaunchEnabled(false) flips consent back off", async () => {
       const blob = JSON.stringify({
-        version: 5,
+        version: 6,
         state: { width: 400, preferredAgentId: "claude", autoLaunchEnabled: true },
       });
       installLocalStorage({ [STORAGE_KEY]: blob });
@@ -1088,57 +1234,57 @@ describe("helpPanelStore persistence migration", () => {
 
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
-      expect(store.getState().activeFigureNumber).toBeNull();
+      expect(store.getState().sessions[0]!.activeFigureNumber).toBeNull();
     });
 
     it("setActiveFigureNumber updates the active figure", async () => {
       installLocalStorage({});
 
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      store.getState().setActiveFigureNumber(3);
+      store.getState().setActiveFigureNumber(0, 3);
 
-      expect(store.getState().activeFigureNumber).toBe(3);
+      expect(store.getState().sessions[0]!.activeFigureNumber).toBe(3);
 
-      store.getState().setActiveFigureNumber(null);
-      expect(store.getState().activeFigureNumber).toBeNull();
+      store.getState().setActiveFigureNumber(0, null);
+      expect(store.getState().sessions[0]!.activeFigureNumber).toBeNull();
     });
 
     it("clearFigures resets the active figure alongside the figures list", async () => {
       installLocalStorage({});
 
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      store.getState().addFigure({
+      store.getState().addFigure(0, {
         imageId: "img-1",
         figureNumber: 1,
         figureLabel: "image #1",
         url: "https://daintree.org/a.png",
       });
-      store.getState().setActiveFigureNumber(1);
-      expect(store.getState().figures).toHaveLength(1);
-      expect(store.getState().activeFigureNumber).toBe(1);
+      store.getState().setActiveFigureNumber(0, 1);
+      expect(store.getState().sessions[0]!.figures).toHaveLength(1);
+      expect(store.getState().sessions[0]!.activeFigureNumber).toBe(1);
 
-      store.getState().clearFigures();
-      expect(store.getState().figures).toHaveLength(0);
-      expect(store.getState().activeFigureNumber).toBeNull();
+      store.getState().clearFigures(0);
+      expect(store.getState().sessions[0]!.figures).toHaveLength(0);
+      expect(store.getState().sessions[0]!.activeFigureNumber).toBeNull();
     });
 
     it("clearTerminal drops figures and the active figure (session-scoped reset)", async () => {
       installLocalStorage({});
 
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      store.getState().addFigure({
+      store.getState().addFigure(0, {
         imageId: "img-1",
         figureNumber: 1,
         figureLabel: "image #1",
         url: "https://daintree.org/a.png",
       });
-      store.getState().setActiveFigureNumber(1);
-      expect(store.getState().figures).toHaveLength(1);
-      expect(store.getState().activeFigureNumber).toBe(1);
+      store.getState().setActiveFigureNumber(0, 1);
+      expect(store.getState().sessions[0]!.figures).toHaveLength(1);
+      expect(store.getState().sessions[0]!.activeFigureNumber).toBe(1);
 
-      store.getState().clearTerminal();
-      expect(store.getState().figures).toHaveLength(0);
-      expect(store.getState().activeFigureNumber).toBeNull();
+      store.getState().clearTerminal(0);
+      expect(store.getState().sessions[0]!.figures).toHaveLength(0);
+      expect(store.getState().sessions[0]!.activeFigureNumber).toBeNull();
     });
 
     it("activeFigureNumber is NOT persisted", async () => {
@@ -1147,7 +1293,7 @@ describe("helpPanelStore persistence migration", () => {
         const backing = installLocalStorage({});
 
         const { useHelpPanelStore: store } = await import("../helpPanelStore");
-        store.getState().setActiveFigureNumber(2);
+        store.getState().setActiveFigureNumber(0, 2);
         vi.advanceTimersByTime(400);
 
         const written = backing.get(STORAGE_KEY);
@@ -1157,7 +1303,7 @@ describe("helpPanelStore persistence migration", () => {
           state: Record<string, unknown>;
         };
         expect(parsed.state).not.toHaveProperty("activeFigureNumber");
-        expect(store.getState().activeFigureNumber).toBe(2);
+        expect(store.getState().sessions[0]!.activeFigureNumber).toBe(2);
       } finally {
         vi.useRealTimers();
       }

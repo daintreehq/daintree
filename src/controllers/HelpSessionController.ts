@@ -7,7 +7,8 @@
 
 import { getAgentConfig } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
-import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectSlot } from "@/store/helpPanelStore";
+import { DEFAULT_ASSISTANT_SLOT, assistantSlotKey } from "@shared/config/assistantSlots";
 import { usePanelStore } from "@/store";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -330,6 +331,24 @@ const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
  *   is committed to the store.
  */
 export class HelpSessionController {
+  /**
+   * The assistant lane this controller drives (#12108). One controller per
+   * lane: each owns its own IPC subscriptions, launch state machine and
+   * hibernation timer, and reads/writes only its own slice of the store.
+   *
+   * Defaults to slot 0 so pre-lane callers and fixtures keep working.
+   */
+  readonly slot: number;
+
+  constructor(slot: number = DEFAULT_ASSISTANT_SLOT) {
+    this.slot = slot;
+  }
+
+  /** This lane's live state — never the panel's, never a sibling's. */
+  private _slotState() {
+    return selectSlot(useHelpPanelStore.getState(), this.slot);
+  }
+
   private _snapshot: HelpSessionSnapshot = INITIAL_SNAPSHOT;
   private _listeners = new Set<() => void>();
   private _started = false;
@@ -375,6 +394,10 @@ export class HelpSessionController {
   private readonly _mcpTracker = new McpActivityTracker({
     getSnapshot: () => this._snapshot,
     patch: (partial) => this._patch(partial),
+    // This lane's session, so every MCP push is matched against the
+    // conversation this controller owns rather than the focused one.
+    getSessionId: () => this._slotState().sessionId,
+    getSlot: () => this.slot,
   });
 
   private readonly _hibernationManager = new HibernationManager({
@@ -382,6 +405,8 @@ export class HelpSessionController {
     patch: (partial) => this._patch(partial),
     resetPhase: () => this._resetPhase(),
     isLaunchCurrent: (gen) => gen === this._launchGen,
+    getSlot: () => this.slot,
+    getSlotState: () => this._slotState(),
   });
 
   // Bound for stable references across StrictMode re-subscribe.
@@ -478,8 +503,7 @@ export class HelpSessionController {
     const { terminalId, terminalExists } = args;
     if (!terminalId || terminalExists) return;
     if (terminalId === this._pendingNewTerminalId) return;
-    const store = useHelpPanelStore.getState();
-    if (store.terminalId !== terminalId) return;
+    if (this._slotState().terminalId !== terminalId) return;
 
     // A controlled hibernate (`_fireHibernate`) can tear this same terminal
     // down while its `gracefulKill` is in flight — the PTY `onExit` removes the
@@ -584,8 +608,7 @@ export class HelpSessionController {
    * commits (#6951).
    */
   newSession(): void {
-    const help = useHelpPanelStore.getState();
-    const { terminalId, agentId } = help;
+    const { terminalId, agentId } = this._slotState();
     if (!terminalId || !agentId) return;
     const reservedId = `terminal-${crypto.randomUUID()}`;
     this.launch({
@@ -633,7 +656,7 @@ export class HelpSessionController {
    */
   handleAgentExited(terminalId: string): void {
     if (this._snapshot.phase === "hibernating") return;
-    if (useHelpPanelStore.getState().terminalId !== terminalId) return;
+    if (this._slotState().terminalId !== terminalId) return;
     this._stopBoundSession();
   }
 
@@ -651,9 +674,7 @@ export class HelpSessionController {
     this._isLaunching = false;
     this._clearLaunchWatchdog();
 
-    const help = useHelpPanelStore.getState();
-    const existingTerminalId = help.terminalId;
-    const previousSessionId = help.sessionId;
+    const { terminalId: existingTerminalId, sessionId: previousSessionId } = this._slotState();
     if (existingTerminalId) {
       this._teardownBoundSession(existingTerminalId, previousSessionId, {
         revokePending: true,
@@ -709,8 +730,7 @@ export class HelpSessionController {
    * `force: true` so the dispatcher bypasses the missing-CLI guard.
    */
   runAnyway(): void {
-    const help = useHelpPanelStore.getState();
-    const { terminalId, agentId } = help;
+    const { terminalId, agentId } = this._slotState();
     if (!terminalId || !agentId) return;
     const reservedId = `terminal-${crypto.randomUUID()}`;
     this.launch({
@@ -782,9 +802,7 @@ export class HelpSessionController {
     let presetEnv: Record<string, string> | undefined;
 
     if (replaceExisting) {
-      const existing = useHelpPanelStore.getState();
-      const existingTerminalId = existing.terminalId;
-      const previousSessionId = existing.sessionId;
+      const { terminalId: existingTerminalId, sessionId: previousSessionId } = this._slotState();
       if (existingTerminalId) {
         const panel = usePanelStore.getState().panelsById[existingTerminalId];
         presetEnv = asStringRecord(panel?.extensionState?.presetEnv);
@@ -798,7 +816,7 @@ export class HelpSessionController {
       // for this launch: in a scratch the project store is null by design, and
       // a live read would strand the scratch's entry (#11068).
       if (reservedId) {
-        useHelpPanelStore.getState().clearHibernateSession(launchProject.id);
+        useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
         this._patch({ showResumeBanner: false });
       }
     }
@@ -808,7 +826,7 @@ export class HelpSessionController {
       // dock filter (#6951) sees `helpPanelStore.terminalId === reservedId`
       // the instant `addPanel` commits.
       this._pendingNewTerminalId = reservedId;
-      useHelpPanelStore.getState().setTerminal(reservedId, launchAgentId, null);
+      useHelpPanelStore.getState().setTerminal(this.slot, reservedId, launchAgentId, null);
     }
 
     safeFireAndForget(this._executeLaunch(gen, options, launchProject, presetEnv, launchContext), {
@@ -907,8 +925,8 @@ export class HelpSessionController {
     revokeHelpSession(previousSessionId);
     if (options.revokePending) this._revokePendingSession();
     usePanelStore.getState().removePanel(existingTerminalId);
-    useHelpPanelStore.getState().clearTerminal();
-    useHelpPanelStore.getState().clearFigures();
+    useHelpPanelStore.getState().clearTerminal(this.slot);
+    useHelpPanelStore.getState().clearFigures(this.slot);
     this._mcpTracker.clearActivity();
     this._mcpTracker.clearGrantState();
     this._mcpTracker.clearOutcomeAlert();
@@ -1030,9 +1048,8 @@ export class HelpSessionController {
       // Another launch may have already taken over and overwritten it.
       if (this._pendingNewTerminalId === reservedId) {
         this._pendingNewTerminalId = null;
-        const help = useHelpPanelStore.getState();
-        if (help.terminalId === reservedId) {
-          help.clearTerminal();
+        if (this._slotState().terminalId === reservedId) {
+          useHelpPanelStore.getState().clearTerminal(this.slot);
         }
       }
     }
@@ -1253,7 +1270,10 @@ export class HelpSessionController {
           claimId: string;
         } | null = null;
         try {
-          earlyPending = await window.electron.help.takePendingHibernation(launchProject.id);
+          earlyPending = await window.electron.help.takePendingHibernation(
+            launchProject.id,
+            this.slot
+          );
         } catch (err) {
           logError("HelpPanel: resumeOnly early hibernation take failed", err);
         }
@@ -1276,7 +1296,7 @@ export class HelpSessionController {
           this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
           return;
         }
-        useHelpPanelStore.getState().setHibernateSession(launchProject.id, {
+        useHelpPanelStore.getState().setHibernateSession(launchProject.id, this.slot, {
           sessionId: earlyPending.agentSessionId,
           cwd: earlyPending.cwd,
           agentId: earlyPending.agentId,
@@ -1284,7 +1304,12 @@ export class HelpSessionController {
         if (unreleasedHibernation) unreleasedHibernation.mirrored = true;
       }
 
-      const outcome = await provisionHelpSession(launchProject, launchAgentId, launchContext);
+      const outcome = await provisionHelpSession(
+        launchProject,
+        launchAgentId,
+        launchContext,
+        this.slot
+      );
       if (gen !== this._launchGen) {
         if (outcome.ok) session = outcome.session;
         this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
@@ -1293,7 +1318,7 @@ export class HelpSessionController {
       if (!outcome.ok) {
         if (reservedId) {
           this._pendingNewTerminalId = null;
-          useHelpPanelStore.getState().clearTerminal();
+          useHelpPanelStore.getState().clearTerminal(this.slot);
         } else {
           this._hasAutoLaunched = false;
         }
@@ -1347,7 +1372,10 @@ export class HelpSessionController {
             return;
           }
         }
-        const hibernated = useHelpPanelStore.getState().hibernateSessions[launchProject.id];
+        const hibernated =
+          useHelpPanelStore.getState().hibernateSessions[
+            assistantSlotKey(launchProject.id, this.slot)
+          ];
         if (hibernated && hibernated.agentId === launchAgentId && folderPath) {
           const resumed = await this._spawnResumed(
             launchAgentId,
@@ -1371,10 +1399,10 @@ export class HelpSessionController {
             // both post-spawn checks and is about to go live. Every other exit
             // from here leaves the marker set so the `finally` gives it back.
             unreleasedHibernation = null;
-            useHelpPanelStore.getState().clearHibernateSession(launchProject.id);
+            useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
             useHelpPanelStore
               .getState()
-              .setTerminal(resumed.panelId, launchAgentId, session.sessionId);
+              .setTerminal(this.slot, resumed.panelId, launchAgentId, session.sessionId);
             this._pendingSessionId = null;
             window.electron.help.markTerminal(resumed.panelId).catch((err) => {
               logError("Failed to mark help terminal", err);
@@ -1391,7 +1419,7 @@ export class HelpSessionController {
             }
             return;
           }
-          useHelpPanelStore.getState().clearHibernateSession(launchProject.id);
+          useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
         }
       }
 
@@ -1475,7 +1503,7 @@ export class HelpSessionController {
       if (!result.ok || !result.result?.terminalId) {
         if (reservedId) {
           this._pendingNewTerminalId = null;
-          useHelpPanelStore.getState().clearTerminal();
+          useHelpPanelStore.getState().clearTerminal(this.slot);
           revokeHelpSession(session?.sessionId ?? null);
           logError(
             options.force
@@ -1498,7 +1526,7 @@ export class HelpSessionController {
         this._pendingNewTerminalId = null;
         useHelpPanelStore
           .getState()
-          .setTerminal(finalTerminalId, launchAgentId, session?.sessionId ?? null);
+          .setTerminal(this.slot, finalTerminalId, launchAgentId, session?.sessionId ?? null);
       } else {
         // Stale-launch guard: handleClose may have revoked the pending
         // session while dispatch was in-flight. Drop the orphan terminal
@@ -1510,7 +1538,7 @@ export class HelpSessionController {
         }
         useHelpPanelStore
           .getState()
-          .setTerminal(finalTerminalId, launchAgentId, session?.sessionId ?? null);
+          .setTerminal(this.slot, finalTerminalId, launchAgentId, session?.sessionId ?? null);
         this._pendingSessionId = null;
       }
       reached = true;

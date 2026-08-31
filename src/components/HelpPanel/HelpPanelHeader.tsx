@@ -1,4 +1,4 @@
-import { ChevronRight, CircleHelp, CircleStop, Ellipsis, Plus } from "lucide-react";
+import { ChevronRight, CircleHelp, CircleStop, Columns2, Ellipsis, Plus } from "lucide-react";
 import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import {
@@ -66,7 +66,10 @@ interface HelpPanelHeaderProps {
   agentState: AgentState | null | undefined;
   canStartNewSession: boolean;
   canEndSession: boolean;
+  /** False once every assistant lane is occupied (#12108). */
+  canOpenParallelSession: boolean;
   onNewSession: () => void;
+  onOpenParallelSession: () => void;
   onEndSession: () => void;
   onOpenDocs: () => void;
   onClose: () => void;
@@ -77,7 +80,9 @@ export function HelpPanelHeader({
   agentState,
   canStartNewSession,
   canEndSession,
+  canOpenParallelSession,
   onNewSession,
+  onOpenParallelSession,
   onEndSession,
   onOpenDocs,
   onClose,
@@ -112,6 +117,7 @@ export function HelpPanelHeader({
           onClick={onNewSession}
           className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-text-primary hover:bg-tint/8 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           aria-label="Start new session"
+          title="Start a new conversation in this session"
         >
           <Plus className="w-3.5 h-3.5" />
         </button>
@@ -132,6 +138,14 @@ export function HelpPanelHeader({
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-[160px]">
+          {/* Distinct from the header's "+" — that restarts THIS conversation,
+              this one opens a second conversation beside it. Lives in the
+              overflow to keep the header at its 3-icon budget. */}
+          <DropdownMenuItem onSelect={onOpenParallelSession} disabled={!canOpenParallelSession}>
+            <Columns2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Open parallel session
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={onOpenDocs}>
             <CircleHelp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Open docs

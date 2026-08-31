@@ -26,6 +26,12 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
+import { HelpSessionTabs, type HelpSessionTab } from "./HelpSessionTabs";
+import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
+import {
+  acquireHelpSessionController,
+  releaseHelpSessionController,
+} from "@/controllers/helpSessionControllerRegistry";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpLaunchingState } from "./HelpLaunchingState";
@@ -35,9 +41,12 @@ import { TurnOutcomePip } from "./TurnOutcomePip";
 import { FigureRail } from "./FigureRail";
 import {
   useHelpPanelStore,
+  selectSlot,
+  selectOpenSlots,
   HELP_PANEL_MIN_WIDTH,
   HELP_PANEL_MAX_WIDTH,
 } from "@/store/helpPanelStore";
+import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import {
   usePanelStore,
   getTerminalRefreshTier,
@@ -65,7 +74,6 @@ import { isPtyPanel } from "@shared/types/panel";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
-import { HelpSessionController } from "@/controllers/HelpSessionController";
 
 const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -183,12 +191,15 @@ export function HelpPanel({
   const prevPreferredAgentIdRef = useRef<string | null>(null);
   const [visibilityEpoch, setVisibilityEpoch] = useState(0);
 
-  // useState lazy initializer guarantees a single instantiation across
-  // renders and StrictMode double-mount, and unlike a ref it doesn't trip
-  // React Compiler's "no ref access during render" rule. The constructor is
-  // pure; side effects live in `start()` which fires from the lifecycle
-  // effect below.
-  const [controller] = useState(() => new HelpSessionController());
+  // The lane this panel body is showing, and its controller (#12108).
+  //
+  // The controller comes from the per-view registry rather than `useState`:
+  // switching tabs must hand this component a DIFFERENT controller while
+  // leaving the previous lane's instance running, and a lane that scrolls off
+  // screen keeps its launch phase, banners and IPC subscriptions intact. A
+  // `useState` instance would be per-component and would die on tab switch.
+  const activeSlot = useHelpPanelStore((s) => s.activeSlot);
+  const controller = acquireHelpSessionController(activeSlot);
 
   const session = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
 
@@ -215,16 +226,16 @@ export function HelpPanel({
     useShallow((s) => ({
       isOpen: s.isOpen,
       width: s.width,
-      terminalId: s.terminalId,
-      sessionId: s.sessionId,
-      agentId: s.agentId,
+      terminalId: selectSlot(s, s.activeSlot).terminalId,
+      sessionId: selectSlot(s, s.activeSlot).sessionId,
+      agentId: selectSlot(s, s.activeSlot).agentId,
       preferredAgentId: s.preferredAgentId,
       autoLaunchEnabled: s.autoLaunchEnabled,
       droppedPreferredAgentId: s.droppedPreferredAgentId,
       introDismissed: s.introDismissed,
-      conversationTouched: s.conversationTouched,
+      conversationTouched: selectSlot(s, s.activeSlot).conversationTouched,
       focusRequest: s.focusRequest,
-      figures: s.figures,
+      figures: selectSlot(s, s.activeSlot).figures,
       markConversationStarted: s.markConversationStarted,
       setWidth: s.setWidth,
       setOpen: s.setOpen,
@@ -617,8 +628,8 @@ export function HelpPanel({
   useEffect(() => {
     if (terminalId && terminalPty?.agentState !== undefined && terminalPty.agentState !== "idle") {
       const store = useHelpPanelStore.getState();
-      if (store.terminalId === terminalId) {
-        markConversationStarted();
+      if (selectSlot(store, store.activeSlot).terminalId === terminalId) {
+        markConversationStarted(store.activeSlot);
       }
     }
   }, [terminalId, terminalPty?.agentState, markConversationStarted]);
@@ -736,7 +747,7 @@ export function HelpPanel({
         // The panel can close, or rebind to a different session, between this
         // effect and the frame that runs it. A frame already dequeued when
         // cleanup ran can't be cancelled, so re-read both.
-        if (!state.isOpen || state.terminalId !== terminalId) return;
+        if (!state.isOpen || selectSlot(state, state.activeSlot).terminalId !== terminalId) return;
 
         // Ownership is re-checked here, on the final deferred frame, rather
         // than in the effect body — focus can move during the frame boundary,
@@ -1035,6 +1046,62 @@ export function HelpPanel({
       CLOSE_CONFIRM_AGENT_STATES.has(terminalPty.agentState)) ||
     conversationTouched;
 
+  // --- Parallel lanes (#12108) -------------------------------------------
+  const openSlots = useHelpPanelStore(useShallow(selectOpenSlots));
+  const canOpenParallelSession = openSlots.length < MAX_ASSISTANT_SLOTS;
+
+  const laneAgentStates = usePanelStore(
+    useShallow((s: ReturnType<typeof usePanelStore.getState>) =>
+      openSlots.map((slot) => {
+        const laneTerminalId = useHelpPanelStore.getState().sessions[slot]?.terminalId;
+        if (!laneTerminalId) return undefined;
+        const panel = s.panelsById[laneTerminalId];
+        return panel && isPtyPanel(panel) ? panel.agentState : undefined;
+      })
+    )
+  );
+
+  const sessionTabs = useMemo<HelpSessionTab[]>(
+    () =>
+      openSlots.map((slot, index) => ({
+        slot,
+        // Numbered by position rather than by slot, so closing lane 1 of three
+        // leaves "Session 1 / Session 2" rather than a gap at 2.
+        label: `Session ${index + 1}`,
+        agentState: laneAgentStates[index],
+      })),
+    [openSlots, laneAgentStates]
+  );
+
+  const handleOpenParallelSession = useCallback(() => {
+    const slot = useHelpPanelStore.getState().openSlot();
+    if (slot === null) return;
+    useHelpPanelStore.getState().setOpen(true);
+    useHelpPanelStore.getState().requestFocus();
+  }, []);
+
+  const handleSelectSlot = useCallback((slot: number) => {
+    useHelpPanelStore.getState().setActiveSlot(slot);
+    // A lane's xterm was hidden while it was in the background, so it has no
+    // trustworthy geometry until it is measured on screen. `requestFocus`
+    // drives HelpPanel's existing reveal path, which fits and repaints before
+    // handing it the caret — the same treatment a panel reveal gets.
+    useHelpPanelStore.getState().requestFocus();
+  }, []);
+
+  const handleCloseSlot = useCallback((slot: number) => {
+    const state = useHelpPanelStore.getState();
+    const lane = state.sessions[slot];
+    // Revoke and kill BEFORE dropping the lane. `stop()` only disarms
+    // listeners — it deliberately does not end the session — so releasing the
+    // controller first would strand a live agent with nothing to shut it down.
+    if (lane?.terminalId || lane?.sessionId) {
+      acquireHelpSessionController(slot).endSession();
+    }
+    releaseHelpSessionController(slot);
+    state.closeSlot(slot);
+  }, []);
+
   const handleNewSession = useCallback(() => {
     if (!terminalId || !agentId) return;
     if (shouldConfirmNewSession) {
@@ -1299,12 +1366,41 @@ export function HelpPanel({
         agentState={terminalPty?.agentState}
         canStartNewSession={Boolean(terminalId && agentId)}
         canEndSession={Boolean(terminalId && agentId)}
+        canOpenParallelSession={canOpenParallelSession}
         onNewSession={handleNewSession}
+        onOpenParallelSession={handleOpenParallelSession}
         onEndSession={handleEndSession}
         onOpenDocs={handleOpenAssistantDocs}
         onClose={handleClose}
         isFocused={isHighlighted}
       />
+
+      <HelpSessionTabs
+        tabs={sessionTabs}
+        activeSlot={activeSlot}
+        onSelect={handleSelectSlot}
+        onClose={handleCloseSlot}
+      />
+
+      {/* Background lanes: no body, but their controllers must keep running so
+          a session the user has tabbed away from still surfaces approvals and
+          still hibernates when idle. */}
+      {openSlots
+        .filter((slot) => slot !== activeSlot)
+        .map((slot) => (
+          <HelpSessionLaneRuntime
+            key={slot}
+            slot={slot}
+            isActive={false}
+            isOpen={isOpen}
+            isReadyToLaunch={isReadyToLaunch}
+            currentProject={activeWorkspace}
+            preferredAgentId={preferredAgentId}
+            supportedInstalledAgentIds={supportedInstalledAgentIds}
+            autoLaunchEnabled={autoLaunchEnabled}
+            visibilityEpoch={visibilityEpoch}
+          />
+        ))}
 
       {/* Content */}
       <div className="flex-1 flex flex-col min-h-0 relative">

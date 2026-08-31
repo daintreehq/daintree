@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
 import type { McpRuntimeSnapshot } from "../../../shared/types/ipc/mcpServer.js";
+import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots.js";
 
 const {
   mockUserDataDir,
@@ -892,6 +893,32 @@ describe("HelpSessionService", () => {
     await fs.access(fresh.sessionPath);
   });
 
+  it("gcStaleSessions preserves lane directories while still sweeping look-alikes (#12108)", async () => {
+    // The predicate GC uses to decide what to keep is the ONLY thing standing
+    // between a live lane and recursive deletion of its transcripts and its
+    // workspace-trust acceptance. A bare 16-hex check would delete `-s1`.
+    const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+    const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+    if (!laneZero || !laneOne) throw new Error("expected both provisions");
+
+    const hash = path.basename(laneZero.sessionPath);
+    const sessionsRoot = path.join(userData, "help-sessions");
+    // Not lanes: `-s0` is slot 0's second spelling, and `-s99` is out of range.
+    // Keeping either alive would strand a directory nothing collects.
+    const bogusZeroSuffix = path.join(sessionsRoot, `${hash}-s0`);
+    const outOfRange = path.join(sessionsRoot, `${hash}-s99`);
+    await fs.mkdir(bogusZeroSuffix, { recursive: true });
+    await fs.mkdir(outOfRange, { recursive: true });
+
+    await service.gcStaleSessions();
+
+    await fs.access(laneZero.sessionPath);
+    await fs.access(laneOne.sessionPath);
+    for (const dir of [bogusZeroSuffix, outOfRange]) {
+      await expect(fs.access(dir)).rejects.toThrow();
+    }
+  });
+
   it("returns null when the bundled help folder is unavailable", async () => {
     mockHelpFolderPath.mockReturnValue(null);
     const result = await service.provisionSession(provisionInput());
@@ -1185,22 +1212,28 @@ describe("HelpSessionService", () => {
   // the pinned WebContents so only the view that would do the killing is
   // protected.
   describe("getAssistantBackend (#11157)", () => {
+    // These cases predate lanes (#12108) and all describe a project running a
+    // single assistant, so they read the first (only) backend. The multi-lane
+    // behaviour has its own describe block below.
+    const firstBackend = (projectId: string) => service.getAssistantBackends(projectId)[0] ?? null;
+
     it("resolves only once a terminal is bound, and only for the owning project", async () => {
       const result = await service.provisionSession(provisionInput());
       if (!result) throw new Error("expected result");
 
       // Provisioned but not spawned: the bearer exists, the backend does not.
-      expect(service.getAssistantBackend("proj-1")).toBeNull();
+      expect(firstBackend("proj-1")).toBeNull();
 
       expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
 
       // provisionInput() pins the session to WebContents 42.
-      expect(service.getAssistantBackend("proj-1")).toEqual({
+      expect(firstBackend("proj-1")).toEqual({
         terminalId: "term-1",
         webContentsId: 42,
+        slot: 0,
       });
-      expect(service.getAssistantBackend("proj-2")).toBeNull();
-      expect(service.getAssistantBackend("")).toBeNull();
+      expect(firstBackend("proj-2")).toBeNull();
+      expect(firstBackend("")).toBeNull();
     });
 
     it("follows the binding through displacement", async () => {
@@ -1211,7 +1244,7 @@ describe("HelpSessionService", () => {
 
       // The displaced PTY is dead; protecting the view on its behalf would pin
       // a project whose assistant is gone.
-      expect(service.getAssistantBackend("proj-1")?.terminalId).toBe("term-new");
+      expect(firstBackend("proj-1")?.terminalId).toBe("term-new");
     });
 
     it("clears on unbind", async () => {
@@ -1221,7 +1254,7 @@ describe("HelpSessionService", () => {
 
       service.unbindTerminal("term-1");
 
-      expect(service.getAssistantBackend("proj-1")).toBeNull();
+      expect(firstBackend("proj-1")).toBeNull();
     });
 
     it("clears on revoke", async () => {
@@ -1231,7 +1264,7 @@ describe("HelpSessionService", () => {
 
       await service.revokeSession(result.sessionId);
 
-      expect(service.getAssistantBackend("proj-1")).toBeNull();
+      expect(firstBackend("proj-1")).toBeNull();
     });
 
     it("returns the owning project's pin when two projects share a terminal id", async () => {
@@ -1254,8 +1287,122 @@ describe("HelpSessionService", () => {
       expect(service.markTerminalForToken(one.token, "shared-term")).toBe(true);
       expect(service.markTerminalForToken(two.token, "shared-term")).toBe(true);
 
-      expect(service.getAssistantBackend("proj-1")?.webContentsId).toBe(42);
-      expect(service.getAssistantBackend("proj-2")?.webContentsId).toBe(77);
+      expect(firstBackend("proj-1")?.webContentsId).toBe(42);
+      expect(firstBackend("proj-2")?.webContentsId).toBe(77);
+    });
+  });
+
+  // #12108. The #7509 single-backend invariant above is NOT relaxed here — it
+  // is re-scoped. Every case in that describe block runs at the default lane
+  // and still passes unchanged; these add the orthogonal axis it never covered,
+  // namely that two DIFFERENT lanes of one project are independent.
+  describe("concurrent assistant lanes (#12108)", () => {
+    it("keeps both bearers valid and kills neither PTY across two lanes of one project", async () => {
+      const first = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      if (!first) throw new Error("expected first provision");
+      expect(service.markTerminalForToken(first.token, "term-slot-0")).toBe(true);
+
+      const second = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!second) throw new Error("expected second provision");
+      expect(service.markTerminalForToken(second.token, "term-slot-1")).toBe(true);
+
+      // The whole point of the feature: neither session displaced the other.
+      expect(service.validateToken(first.token)).toBe("action");
+      expect(service.validateToken(second.token)).toBe("action");
+      expect(mockPtyKill).not.toHaveBeenCalled();
+    });
+
+    it("still displaces within a lane while leaving the sibling lane untouched", async () => {
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+      expect(service.markTerminalForToken(laneZero.token, "term-slot-0")).toBe(true);
+      expect(service.markTerminalForToken(laneOne.token, "term-slot-1")).toBe(true);
+
+      // Re-provisioning lane 0 must behave exactly as the pre-lane invariant
+      // did — revoke the old bearer, kill its PTY — and touch nothing else.
+      const replacement = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      if (!replacement) throw new Error("expected replacement provision");
+
+      expect(service.validateToken(laneZero.token)).toBe(false);
+      expect(service.validateToken(replacement.token)).toBe("action");
+      expect(mockPtyKill).toHaveBeenCalledWith("term-slot-0", "help-session-displaced");
+      expect(mockPtyKill).not.toHaveBeenCalledWith("term-slot-1", "help-session-displaced");
+      // The sibling is still fully live.
+      expect(service.validateToken(laneOne.token)).toBe("action");
+    });
+
+    it("gives each lane its own session directory so one bearer can't overwrite another", async () => {
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+
+      // Same cwd would mean one `.mcp.json`, and the second provision would
+      // silently overwrite the first session's literal bearer.
+      expect(laneOne.sessionPath).not.toBe(laneZero.sessionPath);
+      // Lane 0 keeps the historical bare-hash directory, so an existing
+      // install's Claude workspace-trust acceptance survives this change.
+      expect(path.basename(laneZero.sessionPath)).toMatch(/^[0-9a-f]{16}$/);
+      expect(path.basename(laneOne.sessionPath)).toBe(
+        `${path.basename(laneZero.sessionPath)}-s1`
+      );
+    });
+
+    it("rejects an out-of-range lane instead of clamping it onto a neighbour", async () => {
+      // Clamping would displace whichever lane the clamp landed on — a session
+      // the caller never named.
+      await expect(
+        service.provisionSession({ ...provisionInput(), slot: 99 })
+      ).rejects.toThrow(/slot/);
+      await expect(
+        service.provisionSession({ ...provisionInput(), slot: -1 })
+      ).rejects.toThrow(/slot/);
+    });
+
+    it("reports every live lane so a dead one can't mask a live sibling", async () => {
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+      service.markTerminalForToken(laneZero.token, "term-slot-0");
+      service.markTerminalForToken(laneOne.token, "term-slot-1");
+
+      expect(service.getAssistantBackends("proj-1")).toEqual([
+        { terminalId: "term-slot-0", webContentsId: 42, slot: 0 },
+        { terminalId: "term-slot-1", webContentsId: 42, slot: 1 },
+      ]);
+
+      // Lane 0 exits under its own steam. Reclaiming the project on the
+      // strength of that alone would kill lane 1 — the #11807 regression.
+      service.unbindTerminal("term-slot-0");
+      expect(service.getAssistantBackends("proj-1")).toEqual([
+        { terminalId: "term-slot-1", webContentsId: 42, slot: 1 },
+      ]);
+    });
+
+    it("resolves a terminal to its lane, and a displaced backend to none", async () => {
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneOne) throw new Error("expected provision");
+      service.markTerminalForToken(laneOne.token, "term-slot-1");
+
+      expect(service.getSlotForTerminal("term-slot-1")).toBe(1);
+      expect(service.getSlotForTerminal("not-a-terminal")).toBeNull();
+
+      // After displacement the record is gone synchronously, so the corpse
+      // reports no lane — which is what stops it outranking a live sibling in
+      // the project-status ranking.
+      await service.provisionSession({ ...provisionInput(), slot: 1 });
+      expect(service.getSlotForTerminal("term-slot-1")).toBeNull();
+    });
+
+    it("revokeByProjectId still tears down every lane", async () => {
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+
+      await service.revokeByProjectId("proj-1");
+
+      expect(service.validateToken(laneZero.token)).toBe(false);
+      expect(service.validateToken(laneOne.token)).toBe(false);
     });
   });
 
@@ -1380,7 +1527,7 @@ describe("HelpSessionService", () => {
       // #9639: an empty-sentinel placeholder is written SYNCHRONOUSLY before
       // gracefulKill so a racing switch-back resumes rather than fresh-launches;
       // the real resume ID overwrites it once gracefulKill resolves.
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-evicted");
+      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === slotKey("proj-evicted", 0));
       expect(setCalls[0][1].agentSessionId).toBe("");
       expect(setCalls[setCalls.length - 1][1]).toEqual(
         expect.objectContaining({
@@ -1410,7 +1557,7 @@ describe("HelpSessionService", () => {
       // #9639: with no real resume ID, the empty-sentinel placeholder stays —
       // resume-latest on next open beats a fresh launch. Exactly one write
       // (the placeholder), never overwritten.
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-no-resume");
+      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === slotKey("proj-no-resume", 0));
       expect(setCalls).toHaveLength(1);
       expect(setCalls[0][1].agentSessionId).toBe("");
     });
@@ -1443,7 +1590,7 @@ describe("HelpSessionService", () => {
 
       expect(mockPtyGracefulKill).toHaveBeenCalledWith("term-win");
       expect(hibernationStore.set).toHaveBeenCalledWith(
-        "proj-1",
+        slotKey("proj-1", 0),
         expect.objectContaining({ agentSessionId: "win-close-resume-id" })
       );
     });
@@ -1472,7 +1619,7 @@ describe("HelpSessionService", () => {
       expect(mockPtyGracefulKill).toHaveBeenCalledWith("term-reclaimed");
       expect(mockPtyGracefulKill).not.toHaveBeenCalledWith("term-untouched");
       expect(hibernationStore.set).toHaveBeenCalledWith(
-        "proj-reclaimed",
+        slotKey("proj-reclaimed", 0),
         expect.objectContaining({ agentSessionId: "auto-close-resume-id" })
       );
       // …and the other project's session survives with a live bearer
@@ -1503,7 +1650,7 @@ describe("HelpSessionService", () => {
         capturedAt: Date.now(),
       });
 
-      const taken = await service.takePendingHibernation("proj-A");
+      const taken = await service.takePendingHibernation("proj-A", 0, 0);
 
       expect(taken).toEqual({
         agentId: "claude",
@@ -1514,7 +1661,7 @@ describe("HelpSessionService", () => {
         claimId: expect.any(String),
       });
       expect(taken!.claimId).not.toBe("");
-      expect(hibernationStore.clear).toHaveBeenCalledWith("proj-A");
+      expect(hibernationStore.clear).toHaveBeenCalledWith(slotKey("proj-A", 0));
     });
 
     it("issues a distinct claim per take, so a stale release can be told apart", async () => {
@@ -1525,8 +1672,8 @@ describe("HelpSessionService", () => {
         capturedAt: Date.now(),
       });
 
-      const first = await service.takePendingHibernation("proj-A");
-      const second = await service.takePendingHibernation("proj-A");
+      const first = await service.takePendingHibernation("proj-A", 0, 0);
+      const second = await service.takePendingHibernation("proj-A", 0, 0);
 
       expect(first!.claimId).not.toBe(second!.claimId);
     });
@@ -1534,7 +1681,7 @@ describe("HelpSessionService", () => {
     it("takePendingHibernation returns null and does not clear when no entry exists", async () => {
       hibernationStore.get.mockReturnValueOnce(null);
 
-      const taken = await service.takePendingHibernation("proj-empty");
+      const taken = await service.takePendingHibernation("proj-empty", 0, 0);
 
       expect(taken).toBeNull();
       expect(hibernationStore.clear).not.toHaveBeenCalled();
@@ -1551,11 +1698,11 @@ describe("HelpSessionService", () => {
 
       it("puts back exactly what was taken, minus panelWasOpen", async () => {
         hibernationStore.get.mockReturnValueOnce(captured);
-        const taken = await service.takePendingHibernation("proj-A");
+        const taken = await service.takePendingHibernation("proj-A", 0, 0);
         // The slot is empty again after the take — nothing newer has landed.
         hibernationStore.get.mockReturnValue(null);
 
-        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-A", 0, taken!.claimId)).resolves.toBe(
           true
         );
 
@@ -1563,7 +1710,7 @@ describe("HelpSessionService", () => {
         // refresh an entry past the store's 14-day staleness cutoff. And
         // panelWasOpen is dropped, so a put-back entry is offered for an
         // explicit resume but never auto-resumes on cold switch-back (#10815).
-        expect(hibernationStore.set).toHaveBeenCalledWith("proj-A", {
+        expect(hibernationStore.set).toHaveBeenCalledWith(slotKey("proj-A", 0), {
           agentId: "claude",
           agentSessionId: "pulled-id",
           cwd: "/help/dir",
@@ -1573,7 +1720,7 @@ describe("HelpSessionService", () => {
 
       it("refuses when a newer capture already occupies the slot", async () => {
         hibernationStore.get.mockReturnValueOnce(captured);
-        const taken = await service.takePendingHibernation("proj-A");
+        const taken = await service.takePendingHibernation("proj-A", 0, 0);
         hibernationStore.set.mockClear();
         // A fresh eviction captured a later conversation while we were aborting.
         hibernationStore.get.mockReturnValue({
@@ -1583,7 +1730,7 @@ describe("HelpSessionService", () => {
           capturedAt: Date.now(),
         });
 
-        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-A", 0, taken!.claimId)).resolves.toBe(
           false
         );
         expect(hibernationStore.set).not.toHaveBeenCalled();
@@ -1597,7 +1744,7 @@ describe("HelpSessionService", () => {
 
         // A prior taker is holding a stashed entry...
         hibernationStore.get.mockReturnValueOnce(captured);
-        const taken = await service.takePendingHibernation("proj-1");
+        const taken = await service.takePendingHibernation("proj-1", 0, 0);
 
         // ...and a capture-revoke starts and parks on gracefulKill, claiming
         // ownership of the slot via its synchronous placeholder write (#9646).
@@ -1606,7 +1753,7 @@ describe("HelpSessionService", () => {
         hibernationStore.set.mockClear();
         hibernationStore.get.mockReturnValue(null);
 
-        await expect(service.restorePendingHibernation("proj-1", taken!.claimId)).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-1", 0, taken!.claimId)).resolves.toBe(
           false
         );
         expect(hibernationStore.set).not.toHaveBeenCalled();
@@ -1614,15 +1761,15 @@ describe("HelpSessionService", () => {
 
       it("answers a take at most once, so a duplicate release cannot resurrect a consumed entry", async () => {
         hibernationStore.get.mockReturnValueOnce(captured);
-        const taken = await service.takePendingHibernation("proj-A");
+        const taken = await service.takePendingHibernation("proj-A", 0, 0);
         hibernationStore.get.mockReturnValue(null);
 
-        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-A", 0, taken!.claimId)).resolves.toBe(
           true
         );
         hibernationStore.set.mockClear();
 
-        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-A", 0, taken!.claimId)).resolves.toBe(
           false
         );
         expect(hibernationStore.set).not.toHaveBeenCalled();
@@ -1634,26 +1781,26 @@ describe("HelpSessionService", () => {
         // from A arrives. Without a per-take claim that second release restores
         // B's stash out from under B.
         hibernationStore.get.mockReturnValueOnce(captured);
-        const takenByA = await service.takePendingHibernation("proj-A", 11);
+        const takenByA = await service.takePendingHibernation("proj-A", 0, 11);
         hibernationStore.get.mockReturnValue(null);
         await expect(
-          service.restorePendingHibernation("proj-A", takenByA!.claimId, 11)
+          service.restorePendingHibernation("proj-A", 0, takenByA!.claimId, 11)
         ).resolves.toBe(true);
 
         hibernationStore.get.mockReturnValueOnce(captured);
-        const takenByB = await service.takePendingHibernation("proj-A", 22);
+        const takenByB = await service.takePendingHibernation("proj-A", 0, 22);
         expect(takenByB!.claimId).not.toBe(takenByA!.claimId);
         hibernationStore.get.mockReturnValue(null);
         hibernationStore.set.mockClear();
 
         // A's stale release is refused...
         await expect(
-          service.restorePendingHibernation("proj-A", takenByA!.claimId, 11)
+          service.restorePendingHibernation("proj-A", 0, takenByA!.claimId, 11)
         ).resolves.toBe(false);
         expect(hibernationStore.set).not.toHaveBeenCalled();
         // ...and, crucially, did not consume B's claim.
         await expect(
-          service.restorePendingHibernation("proj-A", takenByB!.claimId, 22)
+          service.restorePendingHibernation("proj-A", 0, takenByB!.claimId, 22)
         ).resolves.toBe(true);
       });
 
@@ -1661,17 +1808,17 @@ describe("HelpSessionService", () => {
         // The owner comes from the IPC context, not the renderer, so a second
         // window cannot release a claim it does not hold even by guessing.
         hibernationStore.get.mockReturnValueOnce(captured);
-        const taken = await service.takePendingHibernation("proj-A", 11);
+        const taken = await service.takePendingHibernation("proj-A", 0, 11);
         hibernationStore.get.mockReturnValue(null);
         hibernationStore.set.mockClear();
 
-        await expect(service.restorePendingHibernation("proj-A", taken!.claimId, 22)).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-A", 0, taken!.claimId, 22)).resolves.toBe(
           false
         );
         expect(hibernationStore.set).not.toHaveBeenCalled();
 
         // The rightful owner can still put it back.
-        await expect(service.restorePendingHibernation("proj-A", taken!.claimId, 11)).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-A", 0, taken!.claimId, 11)).resolves.toBe(
           true
         );
       });
@@ -1681,21 +1828,21 @@ describe("HelpSessionService", () => {
         // put-back that normalized or dropped it would silently downgrade an
         // in-flight capture's placeholder into "no resume available".
         hibernationStore.get.mockReturnValueOnce({ ...captured, agentSessionId: "" });
-        const taken = await service.takePendingHibernation("proj-A");
+        const taken = await service.takePendingHibernation("proj-A", 0, 0);
         expect(taken!.agentSessionId).toBe("");
         hibernationStore.get.mockReturnValue(null);
 
-        await expect(service.restorePendingHibernation("proj-A", taken!.claimId)).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-A", 0, taken!.claimId)).resolves.toBe(
           true
         );
         expect(hibernationStore.set).toHaveBeenCalledWith(
-          "proj-A",
+          slotKey("proj-A", 0),
           expect.objectContaining({ agentSessionId: "" })
         );
       });
 
       it("is a no-op for a project that never took anything", async () => {
-        await expect(service.restorePendingHibernation("proj-untouched", "any")).resolves.toBe(
+        await expect(service.restorePendingHibernation("proj-untouched", 0, "any")).resolves.toBe(
           false
         );
         expect(hibernationStore.set).not.toHaveBeenCalled();
@@ -1710,7 +1857,7 @@ describe("HelpSessionService", () => {
         capturedAt: Date.now(),
       });
 
-      const peeked = service.peekPendingHibernation("proj-A");
+      const peeked = service.peekPendingHibernation("proj-A", 0);
 
       expect(peeked).toEqual({
         agentId: "claude",
@@ -1728,7 +1875,7 @@ describe("HelpSessionService", () => {
     it("peekPendingHibernation returns null when no entry exists", () => {
       hibernationStore.get.mockReturnValueOnce(null);
 
-      expect(service.peekPendingHibernation("proj-empty")).toBeNull();
+      expect(service.peekPendingHibernation("proj-empty", 0)).toBeNull();
       expect(hibernationStore.clear).not.toHaveBeenCalled();
     });
 
@@ -1744,7 +1891,7 @@ describe("HelpSessionService", () => {
         panelWasOpen: true,
       });
 
-      expect(service.peekPendingHibernation("proj-A")?.panelWasOpen).toBe(true);
+      expect(service.peekPendingHibernation("proj-A", 0)?.panelWasOpen).toBe(true);
     });
 
     it("stamps panelWasOpen:true on the captured entry when the panel was reported open (#10815)", async () => {
@@ -1765,7 +1912,7 @@ describe("HelpSessionService", () => {
       await service.revokeByWebContentsId(99);
       await Promise.resolve();
 
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-open");
+      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === slotKey("proj-open", 0));
       // Both the synchronous placeholder and the real-resume-id overwrite carry
       // the open flag so a switch-back at any point auto-resumes.
       expect(setCalls[0][1].panelWasOpen).toBe(true);
@@ -1792,7 +1939,7 @@ describe("HelpSessionService", () => {
       await service.revokeByWebContentsId(98);
       await Promise.resolve();
 
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-closed");
+      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === slotKey("proj-closed", 0));
       expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
     });
 
@@ -1814,7 +1961,7 @@ describe("HelpSessionService", () => {
       await service.revokeByWebContentsId(97);
       await Promise.resolve();
 
-      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === "proj-toggle");
+      const setCalls = hibernationStore.set.mock.calls.filter((c) => c[0] === slotKey("proj-toggle", 0));
       expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
     });
 
@@ -1875,14 +2022,14 @@ describe("HelpSessionService", () => {
       const revokePromise = service.revokeByWebContentsId(60);
 
       // Renderer peeks mid-flight — pure read, no consumption.
-      const peeked = service.peekPendingHibernation("proj-peek-race");
+      const peeked = service.peekPendingHibernation("proj-peek-race", 0);
       expect(peeked).toEqual({
         agentId: "claude",
         agentSessionId: "",
         cwd: "/help/peek-race",
         panelWasOpen: false,
       });
-      expect(hibernationStore.clear).not.toHaveBeenCalledWith("proj-peek-race");
+      expect(hibernationStore.clear).not.toHaveBeenCalledWith(slotKey("proj-peek-race", 0));
 
       // gracefulKill resolves with the real resume id; because peek left the
       // capture owner intact, finalize still overwrites the placeholder.
@@ -1891,7 +2038,7 @@ describe("HelpSessionService", () => {
       await Promise.resolve();
 
       expect(hibernationStore.set).toHaveBeenCalledWith(
-        "proj-peek-race",
+        slotKey("proj-peek-race", 0),
         expect.objectContaining({ agentSessionId: "real-resume-id" })
       );
     });
@@ -1946,10 +2093,10 @@ describe("HelpSessionService", () => {
       // #9639 placeholder was written synchronously, but displacement clears it
       // and releases ownership so the post-gracefulKill overwrite is skipped.
       expect(hibernationStore.set).not.toHaveBeenCalledWith(
-        "proj-race",
+        slotKey("proj-race", 0),
         expect.objectContaining({ agentSessionId: "stale-resume-id-from-displaced-session" })
       );
-      expect(hibernationStore.clear).toHaveBeenCalledWith("proj-race");
+      expect(hibernationStore.clear).toHaveBeenCalledWith(slotKey("proj-race", 0));
     });
 
     it("a gracefulKill rejection does not abort the eviction revoke — bearer still invalidated", async () => {
@@ -2024,7 +2171,7 @@ describe("HelpSessionService", () => {
       // Before gracefulKill resolves, the renderer's takePendingHibernation
       // sees the empty-sentinel placeholder — so it resumes instead of starting
       // a fresh session (the visible "restart" #9639 fixes).
-      const early = await service.takePendingHibernation("proj-visible");
+      const early = await service.takePendingHibernation("proj-visible", 0, 0);
       expect(early).toEqual(
         expect.objectContaining({ agentId: "claude", agentSessionId: "", cwd: result.sessionPath })
       );
