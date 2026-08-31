@@ -38,7 +38,10 @@ import {
   type PluginProcessInfo,
 } from "../../shared/types/ipc/pluginProcess.js";
 import { z } from "zod";
-import { isBuiltInPluginCapability } from "../../shared/types/plugin.js";
+import {
+  isBuiltInPluginCapability,
+  UNBOUND_PLUGIN_HOST_BINDING,
+} from "../../shared/types/plugin.js";
 import type {
   PluginManifest,
   PluginIpcHandler,
@@ -62,6 +65,7 @@ import type {
   PluginPanelBadge,
   PluginProtocolAuthority,
   ViewContribution,
+  PluginHostBinding,
 } from "../../shared/types/plugin.js";
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
 import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadcaster.js";
@@ -97,6 +101,7 @@ import {
 import {
   createHost as createPluginHost,
   type PluginHostFactoryDeps,
+  type PluginWorktreeEventPayload,
 } from "./plugin/PluginHostFactory.js";
 import type {
   LoadedPlugin,
@@ -165,7 +170,7 @@ import {
   unregisterPluginRecipes,
 } from "./plugin/PluginRecipeRegistry.js";
 import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js";
-import { broadcastToRenderer } from "../ipc/utils.js";
+import { broadcastToRenderer, broadcastToProjectRenderers } from "../ipc/utils.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
@@ -562,10 +567,21 @@ export class PluginService {
    * so early-boot subscriptions attach to the real client instead of being
    * silently dropped.
    */
+  /**
+   * The {@link PluginHostBinding} each loaded plugin's host was built with.
+   *
+   * Only collaborators that outlive a single host closure need this — today
+   * just the shared {@link PluginProcessManager}'s stream sink, which is one
+   * instance for every plugin and so cannot close over one binding. Everything
+   * else reads the binding captured inside its own host object. Dropped in
+   * `unloadPlugin` so a reload of the same id can rebind.
+   */
+  private hostBindings = new Map<string, PluginHostBinding>();
+
   private pendingWorktreeSubs: Array<{
     pluginId: string;
     event: WorkspaceWorktreeEvent;
-    handler: () => void;
+    handler: (payload?: PluginWorktreeEventPayload) => void;
     activate: (client: WorkspaceClient) => void;
   }> = [];
   private initialized = false;
@@ -2451,6 +2467,8 @@ export class PluginService {
       getProcessManager: () => this.getProcessManager(),
       declaredCapabilities: (pluginId) => this.declaredCapabilities(pluginId),
       fetchAllWorktreeSnapshots: () => this.fetchAllWorktreeSnapshots(),
+      fetchWorktreeSnapshotsForProject: (projectId, projectRoot) =>
+        this.fetchWorktreeSnapshotsForProject(projectId, projectRoot),
       recordPluginLog: (boundPlugin, pluginId, level, message, fields) =>
         this.recordPluginLog(boundPlugin, pluginId, level, message, fields),
       serializePluginBadges: (pluginId) => this.serializePluginBadges(pluginId),
@@ -2479,8 +2497,20 @@ export class PluginService {
     };
   }
 
-  private createHost(pluginId: string): { host: PluginHostApi; revoke: () => void } {
-    return createPluginHost(this.hostFactoryDeps, pluginId);
+  /**
+   * Build a plugin's host object, bound to `binding`'s project.
+   *
+   * Every caller passes {@link UNBOUND_PLUGIN_HOST_BINDING} today: installed
+   * and builtin plugins stay app-global by design, and nothing yet loads a
+   * project-owned plugin. The parameter is what makes a bound host possible
+   * once the project-scoped loader lands.
+   */
+  private createHost(
+    pluginId: string,
+    binding: PluginHostBinding = UNBOUND_PLUGIN_HOST_BINDING
+  ): { host: PluginHostApi; revoke: () => void } {
+    this.hostBindings.set(pluginId, binding);
+    return createPluginHost(this.hostFactoryDeps, pluginId, binding);
   }
 
   /**
@@ -2501,10 +2531,19 @@ export class PluginService {
           // dispatcher. `panelId` is the spawn-time routing target (#11300):
           // non-null targets the panel that started the process, null keeps the
           // historical broadcast to every panel the plugin owns.
-          broadcastToRenderer(`plugin:${pluginId}:${PLUGIN_PROCESS_STREAM_CHANNEL}`, {
-            panelId,
-            payload: event,
-          });
+          //
+          // The manager is a single instance shared by every plugin, so the
+          // owning plugin's binding is looked up here rather than closed over.
+          // A bound plugin's process output reaches only its own project's
+          // views; an unbound one deliberately reaches all of them, as its
+          // panels can live in any project.
+          const channel = `plugin:${pluginId}:${PLUGIN_PROCESS_STREAM_CHANNEL}`;
+          const projectId = this.hostBindings.get(pluginId)?.projectId ?? null;
+          if (projectId === null) {
+            broadcastToRenderer(channel, { panelId, payload: event });
+            return;
+          }
+          broadcastToProjectRenderers(projectId, channel, { panelId, payload: event });
         },
         ptySpawner: (config, context) =>
           this.getPluginPtyTransport().spawn(context.id, context.generation, {
@@ -2586,8 +2625,8 @@ export class PluginService {
     this.plugins.delete(pluginId);
   }
 
-  _createHostForTests(pluginId: string): PluginHostApi {
-    return this.createHost(pluginId).host;
+  _createHostForTests(pluginId: string, binding?: PluginHostBinding): PluginHostApi {
+    return this.createHost(pluginId, binding).host;
   }
 
   /** The capabilities a loaded plugin declared, as a Set. Empty when unloaded. */
@@ -2763,6 +2802,38 @@ export class PluginService {
   }
 
   /**
+   * Worktree snapshots for one named project — the read behind every worktree
+   * surface of a project-bound host.
+   *
+   * Unlike {@link fetchAllWorktreeSnapshots} this consults no window and no
+   * focus: the binding names the project, and the workspace-host pool is keyed
+   * by project path, so the answer is the same whichever project the user is
+   * looking at. `expectedProjectId` guards the path→id race, so a folder
+   * reopened as a different project answers `[]` rather than the new project's
+   * worktrees.
+   *
+   * Once the project closes its pool entry is gone and this resolves `[]`,
+   * degrading the bound host exactly like an unloaded one (`getActiveWorktree`
+   * → `null`, `getWorktrees` → `[]`) instead of throwing into a stray timer.
+   */
+  private async fetchWorktreeSnapshotsForProject(
+    projectId: string,
+    projectRoot: string
+  ): Promise<WorktreeSnapshot[]> {
+    const client = this.workspaceClient;
+    if (!client) return [];
+    try {
+      return await client.getAllStatesForProjectAsync(projectRoot, projectId);
+    } catch (err) {
+      console.error(
+        `[PluginService] Failed to fetch worktree snapshots for project ${projectId}:`,
+        err
+      );
+      return [];
+    }
+  }
+
+  /**
    * The BrowserWindow id whose visible project the plugin is acting on, or
    * `undefined` when none resolves. Uses the dispatcher's strict scope resolver,
    * not its dispatch-targeting one — the latter scans every window in insertion
@@ -2826,7 +2897,7 @@ export class PluginService {
   private subscribeWorktreeEvent(
     pluginId: string,
     event: WorkspaceWorktreeEvent,
-    handler: () => void
+    handler: (payload?: PluginWorktreeEventPayload) => void
   ): () => void {
     let boundClient: WorkspaceClient | null = null;
     let pendingRecord: (typeof this.pendingWorktreeSubs)[number] | null = null;
@@ -3421,6 +3492,7 @@ export class PluginService {
     this.invalidatePluginAuthority(pluginId);
     this.plugins.delete(pluginId);
     this.pluginWorkerActivity.delete(pluginId);
+    this.hostBindings.delete(pluginId);
 
     // Drop any live panel badges this plugin set and tell the renderer to clear
     // them (#10585). Only broadcast when the plugin actually had badges so an
