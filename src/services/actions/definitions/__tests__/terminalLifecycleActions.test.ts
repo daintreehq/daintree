@@ -389,7 +389,7 @@ describe("terminal.kill confirm gate", () => {
     expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
   });
 
-  it("does not kill when an agent is mid-work without confirmed:true — requests confirmation instead", async () => {
+  it("does not kill when an agent is mid-work without confirmed:true — requests confirmation and fails", async () => {
     const { removePanel } = setRichPanelState({
       focusedId: "p1",
       panels: [
@@ -403,7 +403,7 @@ describe("terminal.kill confirm gate", () => {
     });
     const run = setupActions();
 
-    await run("terminal.kill", { terminalId: "p1" });
+    await expect(run("terminal.kill", { terminalId: "p1" })).rejects.toThrow(/needs confirmation/);
 
     expect(removePanel).not.toHaveBeenCalled();
     expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
@@ -463,7 +463,9 @@ describe("terminal.restart confirm gate", () => {
     });
     const run = setupActions();
 
-    await run("terminal.restart", { terminalId: "p1" });
+    await expect(run("terminal.restart", { terminalId: "p1" })).rejects.toThrow(
+      /needs confirmation/
+    );
 
     expect(restartTerminal).not.toHaveBeenCalled();
     expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
@@ -544,7 +546,7 @@ describe("terminal.killAll confirm gate", () => {
     });
     const run = setupActions();
 
-    await run("terminal.killAll");
+    await expect(run("terminal.killAll")).rejects.toThrow(/needs confirmation/);
 
     expect(removePanel).not.toHaveBeenCalled();
     expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
@@ -603,7 +605,7 @@ describe("terminal.restartAll confirm gate", () => {
     });
     const run = setupActions();
 
-    await run("terminal.restartAll");
+    await expect(run("terminal.restartAll")).rejects.toThrow(/needs confirmation/);
 
     expect(bulkRestartAll).not.toHaveBeenCalled();
     expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith({
@@ -994,7 +996,12 @@ describe("agent dispatch target binding (#11532)", () => {
     }));
     const run = setupActions();
 
-    await run("terminal.kill", { terminalId: "explicit-panel" }, { dispatchSource: "agent" });
+    // Agent source alone is NOT approval — only a host-attested `hostConfirmed`
+    // is (#12120). An agent that reached run() without one still stages, and now
+    // fails rather than reporting a kill it did not perform.
+    await expect(
+      run("terminal.kill", { terminalId: "explicit-panel" }, { dispatchSource: "agent" })
+    ).rejects.toThrow(/needs confirmation/);
 
     expect(spies.requestConfirm).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "kill", terminalId: "explicit-panel" })
@@ -1085,5 +1092,116 @@ describe("agent dispatch target binding (#11532)", () => {
         "No terminal selected"
       );
     });
+  });
+});
+
+// #12120: the MCP bridge sets the approval in the dispatch OPTIONS and leaves
+// the model's args alone, so `run()` could only see the client-settable
+// `args.confirmed` — it re-asked after the host modal was already approved,
+// staged a second dialog, and returned `ok` on a terminal that was still alive.
+// `ctx.hostConfirmed` is the attestation ActionService stamps from those options.
+describe("host-attested confirmation (#12120)", () => {
+  const WORKING_AGENT = {
+    location: "grid" as const,
+    detectedAgentId: "claude",
+    agentState: "working",
+  };
+
+  it("kills a running-agent terminal without staging a second confirmation", async () => {
+    const { removePanel } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", ...WORKING_AGENT }],
+    });
+    const run = setupActions();
+
+    await run("terminal.kill", { terminalId: "p1" }, { hostConfirmed: true });
+
+    expect(removePanel).toHaveBeenCalledWith("p1");
+    expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+  });
+
+  it("restarts a running-agent terminal without staging a second confirmation", async () => {
+    const { restartTerminal } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", ...WORKING_AGENT }],
+    });
+    const run = setupActions();
+
+    await run("terminal.restart", { terminalId: "p1" }, { hostConfirmed: true });
+
+    expect(restartTerminal).toHaveBeenCalledWith("p1");
+    expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+  });
+
+  // killAll/restartAll took no `ctx` at all before this fix, so they could not
+  // have read the attestation even if it existed.
+  it("kills all without staging a second confirmation", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "p2", ...WORKING_AGENT },
+      ],
+    });
+    const run = setupActions();
+
+    await run("terminal.killAll", undefined, { hostConfirmed: true });
+
+    expect(removePanel).toHaveBeenCalledWith("p1");
+    expect(removePanel).toHaveBeenCalledWith("p2");
+    expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+  });
+
+  it("restarts all without staging a second confirmation", async () => {
+    const { bulkRestartAll } = setRichPanelState({
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "p2", ...WORKING_AGENT },
+      ],
+    });
+    const run = setupActions();
+
+    await run("terminal.restartAll", undefined, { hostConfirmed: true });
+
+    expect(bulkRestartAll).toHaveBeenCalled();
+    expect(pendingDestructiveStoreMock.state.request).not.toHaveBeenCalled();
+  });
+
+  // Only `true` attests. A stray falsy/garbage value must fall through to the
+  // confirmation rather than be read as approval.
+  it.each([[false], [undefined], ["true"]])(
+    "does not treat hostConfirmed=%p as approval",
+    async (hostConfirmed) => {
+      const { removePanel } = setRichPanelState({
+        focusedId: "p1",
+        panels: [{ id: "p1", ...WORKING_AGENT }],
+      });
+      const run = setupActions();
+
+      await expect(run("terminal.kill", { terminalId: "p1" }, { hostConfirmed })).rejects.toThrow(
+        /needs confirmation/
+      );
+
+      expect(removePanel).not.toHaveBeenCalled();
+      expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalled();
+    }
+  );
+
+  // The user-facing dialog re-dispatches with args.confirmed; a host-attested
+  // dispatch arrives with neither that nor any pending entry of its own. Both
+  // paths must clear a parked confirmation so it can't outlive the kill.
+  it("clears a parked confirmation when the host attested instead", async () => {
+    const { removePanel } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", ...WORKING_AGENT }],
+    });
+    const run = setupActions();
+
+    await expect(run("terminal.kill", { terminalId: "p1" })).rejects.toThrow();
+    expect(pendingDestructiveStoreMock.state.pending).toMatchObject({ kind: "kill" });
+
+    await run("terminal.kill", { terminalId: "p1" }, { hostConfirmed: true });
+
+    expect(removePanel).toHaveBeenCalledWith("p1");
+    expect(pendingDestructiveStoreMock.state.clear).toHaveBeenCalled();
   });
 });

@@ -34,6 +34,7 @@ vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 import { ActionService } from "../ActionService";
 import { useUIStore } from "@/store/uiStore";
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
+import { ConfirmationStagedError } from "../actions/confirmationStaged";
 
 describe("ActionService", () => {
   let service: ActionService;
@@ -846,6 +847,86 @@ describe("ActionService", () => {
         expect(result.error.message).toBe(expected);
         expect(result.error.code).toBe("EXECUTION_ERROR");
       }
+    });
+
+    // #12120: the confirm gate above already required a host attestation for
+    // agent dispatch, but run() could not see it — it only had the client-settable
+    // `confirmed` on the action's own args, so a confirm-gated action re-asked
+    // after the host modal was approved and returned `ok` having done nothing.
+    describe("host-attested confirmation reaches run() (#12120)", () => {
+      function confirmAction(run: ReturnType<typeof vi.fn>): ActionDefinition {
+        return {
+          id: "actions.list" as ActionId,
+          title: "Test Action",
+          description: "A test action",
+          category: "test",
+          kind: "command",
+          danger: "confirm",
+          scope: "renderer",
+          run,
+        };
+      }
+
+      it("stamps ctx.hostConfirmed from the dispatch options", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, { source: "agent", confirmed: true });
+
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ hostConfirmed: true })
+        );
+      });
+
+      it("leaves ctx.hostConfirmed unset when the host attested nothing", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, { source: "user" });
+
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ hostConfirmed: undefined })
+        );
+      });
+
+      // The whole point of putting it on the context rather than in args: a
+      // caller cannot plant it. Same property that makes `dispatchSource`
+      // trustworthy — the stamp is unconditional and overwrites the override.
+      it("overwrites a contextOverride that claims an approval the host never made", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        const result = await service.dispatch("actions.list", undefined, {
+          source: "user",
+          contextOverride: { hostConfirmed: true },
+        });
+
+        expect(result.ok).toBe(true);
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ hostConfirmed: undefined })
+        );
+      });
+
+      it("maps a staged confirmation to CONFIRMATION_REQUIRED rather than resolving ok", async () => {
+        const mockRun = vi
+          .fn()
+          .mockRejectedValue(new ConfirmationStagedError("Killing it did not happen"));
+        service.register(confirmAction(mockRun));
+
+        const result = await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+        });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.code).toBe("CONFIRMATION_REQUIRED");
+          expect(result.error.message).toContain("did not happen");
+        }
+      });
     });
 
     it("returns BINDING_STALE when contextOverride projectId differs from live context (#8432)", async () => {

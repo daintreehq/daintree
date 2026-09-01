@@ -18,6 +18,7 @@ import { useUIStore } from "@/store/uiStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
 import { PartialSuccessError } from "@shared/utils/partialSuccess";
+import { ConfirmationStagedError } from "./actions/confirmationStaged";
 import {
   WORKBENCH_TIER_TOOLS,
   ACTION_TIER_ADDONS,
@@ -585,6 +586,14 @@ export class ActionService {
         // is, and a definition must not be able to read a stale one left on a
         // shared context object.
         copyTreeRunSource: options?.copyTreeRunSource,
+        // Stamped for the same reason, and this one is load-bearing: it is the
+        // ONLY way `run()` can see the attestation the gate above already
+        // required. Without it a confirm-gated action could only consult the
+        // client-settable `confirmed` on its own args, so it re-asked after the
+        // host modal was approved — staging a second dialog and changing
+        // nothing (#12120). Unconditional, so a `contextOverride` cannot claim
+        // an approval the host never made.
+        hostConfirmed: options?.confirmed,
       };
       const result = await definition.run(validatedArgs, runContext);
       // Enforce the action's own result contract. Zod objects strip unknown
@@ -664,7 +673,20 @@ export class ActionService {
         // sound here because the throw and this catch are the same realm; an
         // upstream forge/git rejection reaching this line is an ordinary
         // `EXECUTION_ERROR` however its message happens to read.
-        code: err instanceof PartialSuccessError ? "PARTIAL_SUCCESS" : "EXECUTION_ERROR",
+        // `ConfirmationStagedError` is the other class-authenticated throw: an
+        // action that parked a confirmation instead of acting. It reuses the
+        // existing `CONFIRMATION_REQUIRED` rather than widening the union
+        // (`panelLimitError`'s rule — the union is the plugin-facing contract),
+        // and that code already means what happened: the dispatch did not
+        // proceed because it needs an approval it does not have. What it must
+        // NOT be is `ok` — an agent read a staged kill as a completed one
+        // (#12120).
+        code:
+          err instanceof ConfirmationStagedError
+            ? "CONFIRMATION_REQUIRED"
+            : err instanceof PartialSuccessError
+              ? "PARTIAL_SUCCESS"
+              : "EXECUTION_ERROR",
         message,
         details: err,
       };

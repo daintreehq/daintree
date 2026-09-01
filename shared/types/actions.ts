@@ -142,6 +142,30 @@ export interface ActionContext {
    * Purely descriptive — it grants nothing and gates nothing.
    */
   copyTreeRunSource?: CopyTreeRunSource;
+  /**
+   * Whether the host already attested this dispatch as approved. Set by
+   * `ActionService.dispatch` from {@link ActionDispatchOptions.confirmed}
+   * unconditionally, so — like `dispatchSource` — a caller cannot spoof it by
+   * planting a value on `contextOverride`, and a definition cannot read a stale
+   * one left on a shared context object.
+   *
+   * This is the trusted half of a deliberate pair. An action's own `argsSchema`
+   * may also carry a `confirmed` field; that one is client-settable and only
+   * skips the action's inner gate. This one carries the approval the host
+   * actually obtained — the native ConfirmDialog the MCP bridge raised, or a
+   * host-issued grant — which is why `run()` can trust it to mean the user has
+   * already answered. Without it a `danger:"confirm"` action re-asked after the
+   * host modal was approved, staged a second dialog and changed nothing (#12120).
+   *
+   * Deliberately absent for user-source dispatch, where `options.confirmed` is
+   * unset: the in-app dialog is that surface's own confirmation, and its call
+   * sites re-dispatch with `confirmed: true` in args once the user approves.
+   *
+   * Narrow by design — it attests to THIS dispatch's approval and nothing else.
+   * It is not a capability grant: an action still decides for itself what an
+   * approval permits.
+   */
+  hostConfirmed?: boolean;
 }
 
 export type InferActionArgs<S extends z.ZodTypeAny | undefined> = [S] extends [z.ZodTypeAny]
