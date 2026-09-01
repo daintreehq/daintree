@@ -309,6 +309,24 @@ export const ALWAYS_ABSENT_AGENT_ID = "kiro";
 /** The agent given a second install, so duplicate detection has a subject. */
 export const DUPLICATE_AGENT_ID = "claude";
 
+/**
+ * The agent this fixture holds OUT of the probe cohort entirely — neither planted,
+ * nor charged a spawn, nor graded in the found set.
+ *
+ * `CliAvailabilityService` short-circuits it before the PATH probe: the engine ships
+ * with the app as an extraResource, so its availability is answered by the bundled
+ * resolver instead. Two consequences, and both of them are why it is excluded rather
+ * than merely left unplanted. It spends no subprocess, so the spawn arithmetic below
+ * would over-count it; and the resolver reads the filesystem, so its answer depends on
+ * whether this checkout has been built — grading it would make a deliberately hermetic
+ * fixture report differently on a built machine than on a clean one.
+ *
+ * Held as a literal like the ids above rather than imported from the registry: this
+ * module stubs `electron` before it loads that module, and a static import would
+ * defeat the stubbing.
+ */
+export const NOT_PATH_PROBED_AGENT_ID = "daintree-assistant";
+
 type RegistryModule = typeof import("../../../shared/config/agentRegistry");
 type ServiceModule = typeof import("../../../electron/services/CliAvailabilityService");
 
@@ -586,6 +604,12 @@ export function expectedSpawnsFor(
   let missingDeclaresNpm = false;
 
   for (const [id, config] of Object.entries(registry)) {
+    // Costs nothing: its probe returns before reaching the shell, so charging it a
+    // miss here would report a ladder that stopped running. See
+    // {@link NOT_PATH_PROBED_AGENT_ID}. Its npm package is deliberately not counted
+    // either — the trailing `npm config get prefix` is only paid by an agent that
+    // actually took the miss path.
+    if (id === NOT_PATH_PROBED_AGENT_ID) continue;
     if (planted.has(id)) {
       total += viaPrepend ? 0 : 1;
       continue;
@@ -612,7 +636,9 @@ function buildArms(modules: CliModules): Map<CliArmLabel, CliArm> {
   prepareAuthEnvironment(registry);
   const ids = modules.agentIds;
   const forced = forcedPlantIds(registry);
-  const eligible = ids.filter((id) => id !== ALWAYS_ABSENT_AGENT_ID);
+  const eligible = ids.filter(
+    (id) => id !== ALWAYS_ABSENT_AGENT_ID && id !== NOT_PATH_PROBED_AGENT_ID
+  );
   const system = systemPathDirs();
 
   const duplicateDir = join(root, "duplicate-bin");
@@ -821,6 +847,10 @@ export function gradeRefresh(
   const grade = emptyRefreshGrade();
   const planted = new Set(arm.plantedIds);
   const found = new Set(foundAgentIds(observation.availability));
+  // Graded by neither direction of the difference: it is never planted, and whether it
+  // reads ready or missing is decided by the bundled-engine resolver rather than by
+  // anything this fixture put on PATH. See {@link NOT_PATH_PROBED_AGENT_ID}.
+  found.delete(NOT_PATH_PROBED_AGENT_ID);
 
   for (const id of planted) if (!found.has(id)) grade.foundSetMisses += 1;
   for (const id of found) if (!planted.has(id)) grade.foundSetMisses += 1;
