@@ -291,3 +291,180 @@ describe("FileViewerToolbar.IconButton", () => {
     expect(button.hasAttribute("data-sidebar-toggle")).toBe(false);
   });
 });
+
+describe("FileViewerToolbar.CopyContentsButton", () => {
+  const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+  const button = () => screen.getByRole("button", { name: "Copy file contents" });
+  const copyIcon = () => document.querySelector(".lucide-copy");
+  const checkIcon = () => document.querySelector(".lucide-check");
+  /** Click, then flush the clipboard promise's continuation. */
+  const clickCopy = async () => {
+    fireEvent.click(button());
+    await act(async () => {});
+  };
+
+  beforeEach(() => {
+    // Fake timers only in this block: the Path suite above measures rather than
+    // waits, and taking its clock over would buy nothing.
+    vi.useFakeTimers();
+    writeText.mockReset();
+    writeText.mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("renders nothing when there is no text to copy", () => {
+    render(<FileViewerToolbar.CopyContentsButton contents={null} />);
+
+    // Null is every state without raw text: a read in flight, an image, an SVG,
+    // or a read that failed as binary/oversized/an LFS pointer.
+    expect(screen.queryByRole("button", { name: "Copy file contents" })).toBeNull();
+  });
+
+  it("stays available for an empty file", async () => {
+    render(<FileViewerToolbar.CopyContentsButton contents="" />);
+
+    await clickCopy();
+
+    // "" is a real file's real contents. A truthiness gate would hide the
+    // button here and read as the control being broken.
+    expect(writeText).toHaveBeenCalledWith("");
+  });
+
+  it("writes the exact text and swaps the icon for a checkmark", async () => {
+    const contents = "line one\nline two\n";
+    render(<FileViewerToolbar.CopyContentsButton contents={contents} />);
+    expect(copyIcon()).not.toBeNull();
+
+    await clickCopy();
+
+    expect(writeText).toHaveBeenCalledWith(contents);
+    expect(checkIcon()).not.toBeNull();
+    expect(copyIcon()).toBeNull();
+  });
+
+  it("keeps a stable accessible name while showing copied feedback", async () => {
+    render(<FileViewerToolbar.CopyContentsButton contents="x" />);
+
+    await clickCopy();
+
+    // Same contract the Path pill is held to: the feedback rides the icon, never
+    // the name, so the control stays findable exactly while it is confirming.
+    expect(button()).toBeTruthy();
+  });
+
+  it("clears the checkmark when the flash times out", async () => {
+    render(<FileViewerToolbar.CopyContentsButton contents="x" />);
+    await clickCopy();
+    expect(checkIcon()).not.toBeNull();
+
+    act(() => void vi.advanceTimersByTime(2000));
+
+    expect(checkIcon()).toBeNull();
+    expect(copyIcon()).not.toBeNull();
+  });
+
+  it("restarts the flash on a second copy instead of letting the first timer end it early", async () => {
+    render(<FileViewerToolbar.CopyContentsButton contents="x" />);
+    await clickCopy();
+    act(() => void vi.advanceTimersByTime(1500));
+
+    await clickCopy();
+
+    // The first click's timer would fire here; the second click must have
+    // cleared it, or the confirmation dies 500ms into its own window.
+    act(() => void vi.advanceTimersByTime(1000));
+    expect(checkIcon()).not.toBeNull();
+
+    act(() => void vi.advanceTimersByTime(1000));
+    expect(checkIcon()).toBeNull();
+  });
+
+  it("stays silent when the clipboard rejects", async () => {
+    writeText.mockRejectedValueOnce(new Error("denied"));
+    render(<FileViewerToolbar.CopyContentsButton contents="x" />);
+
+    await clickCopy();
+
+    // No toast and no checkmark: matching the path controls, a copy whose whole
+    // feedback lives on the button says nothing when it didn't happen.
+    expect(checkIcon()).toBeNull();
+    expect(copyIcon()).not.toBeNull();
+  });
+
+  it("does nothing when the clipboard API is unavailable", () => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    render(<FileViewerToolbar.CopyContentsButton contents="x" />);
+
+    fireEvent.click(button());
+
+    expect(checkIcon()).toBeNull();
+  });
+
+  it("drops the checkmark when the file's contents change", async () => {
+    const { rerender } = render(<FileViewerToolbar.CopyContentsButton contents="old" />);
+    await clickCopy();
+    expect(checkIcon()).not.toBeNull();
+
+    rerender(<FileViewerToolbar.CopyContentsButton contents="new" />);
+
+    // The confirmation was for text the button no longer offers.
+    expect(checkIcon()).toBeNull();
+  });
+
+  it("ignores a write that resolves after the contents changed underneath it", async () => {
+    let resolveWrite: (() => void) | undefined;
+    writeText.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveWrite = () => resolve();
+      })
+    );
+    const { rerender } = render(<FileViewerToolbar.CopyContentsButton contents="old" />);
+    fireEvent.click(button());
+
+    rerender(<FileViewerToolbar.CopyContentsButton contents="new" />);
+    await act(async () => {
+      resolveWrite?.();
+    });
+
+    // Confirming here would claim the clipboard holds "new" when it holds "old".
+    expect(checkIcon()).toBeNull();
+  });
+
+  it("clears the running flash timer on unmount", async () => {
+    const { unmount } = render(<FileViewerToolbar.CopyContentsButton contents="x" />);
+    await clickCopy();
+    // Prove there is something to clean up — without this the assertion below
+    // holds even with the cleanup deleted.
+    expect(vi.getTimerCount()).toBe(1);
+
+    unmount();
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("schedules nothing when a write resolves after unmount", async () => {
+    let resolveWrite: (() => void) | undefined;
+    writeText.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveWrite = () => resolve();
+      })
+    );
+    const { unmount } = render(<FileViewerToolbar.CopyContentsButton contents="x" />);
+    fireEvent.click(button());
+    // The click has to have reached the clipboard, or the timer count below is
+    // zero for the wrong reason.
+    expect(writeText).toHaveBeenCalledTimes(1);
+
+    unmount();
+    await act(async () => {
+      resolveWrite?.();
+    });
+
+    // A surviving setTimeout would fire a setState into an unmounted tree.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});

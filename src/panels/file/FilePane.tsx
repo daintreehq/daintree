@@ -1039,6 +1039,18 @@ export function FilePane({
               className={TOOLBAR_ICON_CLASS}
             />
           </FileViewerToolbar.IconButton>
+          {/* The raw file text, whichever view mode is showing: rendered
+              markdown and the diff view both copy the source, never what they
+              drew from it. `content` only ever holds a settled read, so the
+              button is absent while one is in flight and for every state that
+              has no text — image, SVG, media, PDF, and reads that failed as
+              binary, oversized or an LFS pointer. Keyed on the path so the
+              confirmation resets when a file is swapped for one whose contents
+              happen to be identical. */}
+          <FileViewerToolbar.CopyContentsButton
+            key={filePath}
+            contents={loadState === "loaded" ? content : null}
+          />
           {/* Reveal is always offered, even for a file the viewer can't render
               (oversized, unsupported video) — the OS file manager is then the
               only way forward. */}

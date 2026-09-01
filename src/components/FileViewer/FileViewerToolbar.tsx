@@ -1,6 +1,6 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
-import { Check, FileText } from "lucide-react";
+import { Check, Copy, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -247,4 +247,86 @@ function IconButton({
   );
 }
 
-export const FileViewerToolbar = { Root, Path, Actions, IconButton };
+/**
+ * How long a copy confirmation stays on screen. One value for the one shared
+ * button, rather than a prop: the two panes' own path pills already flash for
+ * different durations, and handing this control the same seam is how the next
+ * divergence would get in.
+ */
+const COPY_FEEDBACK_MS = 2000;
+
+/**
+ * Copies the file's raw text — the bytes the source view shows, whichever view
+ * mode is on screen, so rendered markdown and rendered HTML copy their source
+ * rather than the DOM they produced.
+ *
+ * Stateful where the rest of this namespace is chrome, and deliberately so:
+ * both file viewers need this action and neither should be able to grow it
+ * without the other (#12136). Owning the copied flag, the timer and the
+ * clipboard call here is what makes that structural rather than a convention
+ * two large panes have to keep. `Actions` stays a plain slot — DiffPane renders
+ * one too and holds diff hunks, not raw file text.
+ *
+ * `contents === null` renders nothing: a read still in flight, an image, an SVG
+ * (both viewers keep only sanitized markup), or a read that failed as binary,
+ * oversized or an LFS pointer. An empty file is `""` and stays copyable, so the
+ * gate is a null check and never a truthiness one.
+ */
+function CopyContentsButton({ contents }: { contents: string | null }) {
+  // The text the clipboard was last confirmed to hold, not a boolean. The
+  // checkmark then belongs to a value rather than to a moment: new contents
+  // retire it in the very commit that paints them instead of a frame later via
+  // an effect, and a write that resolves late can only ever confirm the text it
+  // actually wrote. That is one piece of state doing what a flag plus a reset
+  // effect plus a generation counter were doing before.
+  const [copiedContents, setCopiedContents] = useState<string | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Only unmount needs a ref: a resolution arriving after teardown would
+  // otherwise schedule a timer nothing is left to clear.
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  const handleClick = useCallback(() => {
+    if (contents === null) return;
+    if (!navigator.clipboard?.writeText) return;
+    void navigator.clipboard.writeText(contents).then(
+      () => {
+        if (!mountedRef.current) return;
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        setCopiedContents(contents);
+        timeoutRef.current = setTimeout(() => {
+          setCopiedContents(null);
+          timeoutRef.current = null;
+        }, COPY_FEEDBACK_MS);
+      },
+      () => {
+        // Clipboard unavailable or refused. Silent, exactly like the path pill
+        // above: the checkmark simply never appears, and a toast for a gesture
+        // whose whole feedback is on the button would be the louder tier.
+      }
+    );
+  }, [contents]);
+
+  if (contents === null) return null;
+
+  const copied = copiedContents === contents;
+
+  return (
+    <IconButton label="Copy file contents" onClick={handleClick}>
+      {copied ? (
+        <Check className={cn(TOOLBAR_ICON_CLASS, "text-status-success")} />
+      ) : (
+        <Copy className={TOOLBAR_ICON_CLASS} />
+      )}
+    </IconButton>
+  );
+}
+
+export const FileViewerToolbar = { Root, Path, Actions, IconButton, CopyContentsButton };

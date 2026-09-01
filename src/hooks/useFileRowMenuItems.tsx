@@ -13,14 +13,53 @@ import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import { useInsertFileReference } from "@/hooks/useInsertFileReference";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { isFileContentsCopyCandidate } from "@/components/FileViewer/filePreviewKinds";
 import { INSERT_FILE_REFERENCE_COMBO } from "@/panels/file-browser/fileReference";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
+import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { CopyTreeRunSource, GitStatus } from "@shared/types";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2";
+
+/**
+ * Dispatch an action for the clicked row and, if it fails, say so with a Retry
+ * that re-runs the same call.
+ *
+ * Shared rather than written per handler because the failure mode is shared:
+ * the menu has already closed by the time a dispatch settles, so anything that
+ * goes wrong here is invisible without a toast — the entry was deleted between
+ * listing and click, the file turned out to be binary. A second copy of this
+ * shape is how one of these handlers ends up silently swallowing its errors.
+ *
+ * Module scope, not a `useCallback`: it closes over nothing from the hook, so
+ * the handlers below can depend on it without a memo of its own.
+ */
+function runRowAction<Result>(
+  actionId: BuiltInRuntimeActionId,
+  args: Record<string, string>,
+  errorTitle: string,
+  onSuccess?: (result: Result) => void
+): void {
+  const run = async () => {
+    const result = await actionService.dispatch<Result>(actionId, args, {
+      source: "context-menu",
+    });
+    if (!result.ok) {
+      notify({
+        type: "error",
+        title: errorTitle,
+        message: result.error.message,
+        action: { label: "Retry", onClick: () => void run() },
+      });
+      return;
+    }
+    onSuccess?.(result.result);
+  };
+  void run();
+}
 
 /**
  * The file a row's context menu acts on. Every path is passed in rather than
@@ -175,28 +214,28 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
     void write();
   }, []);
 
+  const handleCopyFileContents = useCallback(
+    (absolutePath: string) =>
+      // `file.read`, not filesClient: the action resolves the path against the
+      // project and its worktrees and refuses anything outside them, and reports
+      // binary, oversized and LFS-pointer files as named failures rather than
+      // handing back partial text. The extension gate on the item only hides
+      // what it can recognise, so this is the check that actually holds.
+      runRowAction<{ content: string }>(
+        "file.read",
+        { path: absolutePath },
+        "Couldn't copy file contents",
+        // Written straight off the read: clipboard writes want a fresh
+        // transient activation, and parking the text in state first would put a
+        // render between the gesture and the write for no gain.
+        (result) => copyToClipboard(result.content, "Couldn't copy file contents")
+      ),
+    [copyToClipboard]
+  );
+
   const handleReveal = useCallback(
-    (absolutePath: string) => {
-      const run = async () => {
-        const result = await actionService.dispatch(
-          "file.showItemInFolder",
-          { path: absolutePath },
-          { source: "context-menu" }
-        );
-        // The menu has already closed by the time this settles, so a failure
-        // here is invisible without a toast — e.g. the entry was deleted
-        // between listing and click.
-        if (!result.ok) {
-          notify({
-            type: "error",
-            title: reveal.errorTitle,
-            message: result.error.message,
-            action: { label: "Retry", onClick: () => void run() },
-          });
-        }
-      };
-      void run();
-    },
+    (absolutePath: string) =>
+      runRowAction("file.showItemInFolder", { path: absolutePath }, reveal.errorTitle),
     [reveal]
   );
 
@@ -232,6 +271,11 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       // exactly what the user wants here and stays. Same call the file browser
       // already makes for its viewer selection (`isSelectedChangedFile`).
       const showOpenCurrent = !isDirectory && status !== "deleted";
+      // Rides the same "there is a current file on disk" gate, then drops the
+      // kinds with no text to put on a clipboard. Extension-only by necessity —
+      // nothing here has read the file — so an unfamiliar binary still shows
+      // the item and fails at the read with a reason.
+      const showCopyFileContents = showOpenCurrent && isFileContentsCopyCandidate(absolutePath);
 
       return (
         <>
@@ -305,6 +349,12 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
             <Copy className={ICON_CLASS} />
             Copy file name
           </ContextMenuItem>
+          {showCopyFileContents && (
+            <ContextMenuItem onSelect={() => handleCopyFileContents(absolutePath)}>
+              <Copy className={ICON_CLASS} />
+              Copy file contents
+            </ContextMenuItem>
+          )}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleReveal(absolutePath)}>
             <FolderOpen className={ICON_CLASS} />
@@ -335,6 +385,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       reveal,
       copyToClipboard,
       handleCopyContext,
+      handleCopyFileContents,
       handleReveal,
     ]
   );
