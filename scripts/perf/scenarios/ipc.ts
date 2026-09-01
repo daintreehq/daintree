@@ -55,8 +55,23 @@ const PTY_RUN_TIMEOUT_MS = 60_000;
  * Chunks can still be in flight when `exit` lands — the PTY's read side and the
  * process's exit are different events. Draining before reading the counters
  * keeps a trailing chunk from being reported as a dropped line.
+ *
+ * It is NOT what makes the line count complete: the payload does not exit until
+ * the reader has released it (see `ptyPayloadScript`), because no drain on this
+ * side can recover output node-pty destroyed with the socket.
  */
 const PTY_DRAIN_MS = 400;
+
+/**
+ * How long PERF-045 waits for all 2000 lines before releasing the payload
+ * anyway. Reaching it means output really is missing, which is what
+ * `lineMisses` then reports — the wait is bounded so a genuine loss stays a
+ * measurement rather than becoming a hang.
+ */
+const PTY_STREAM_TIMEOUT_MS = 8_000;
+
+/** Poll interval for that wait. Short enough not to pad the reading. */
+const PTY_STREAM_POLL_MS = 20;
 
 /** Batches of the five-request cycle below. 20 x 5 = 100 round trips. */
 const ROUND_TRIP_BATCHES = 20;
@@ -352,7 +367,7 @@ export const ipcScenarios: PerfScenario[] = [
     id: "PERF-045",
     name: "PTY Host Output Volume (messages and bytes per terminal)",
     description:
-      "One real PTY in the real pty-host, emitting 2000 indexed lines. Reports how many messages and structured-clone bytes that output costs on the main<->pty-host channel, and proves every line arrived. This is the parent-IPC fallback path: with no renderer MessagePort transferred, the host has nowhere else to send a chunk. Production's visual path is the direct renderer port, which a forked child's channel cannot carry.",
+      "One real PTY in the real pty-host, emitting 2000 indexed lines, then holding the terminal open until the reader has them all. Reports how many messages and structured-clone bytes that output costs on the main<->pty-host channel, and proves every line arrived. This is the parent-IPC fallback path: with no renderer MessagePort transferred, the host has nowhere else to send a chunk. Production's visual path is the direct renderer port, which a forked child's channel cannot carry.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 5, nightly: 8 },
@@ -396,6 +411,7 @@ export const ipcScenarios: PerfScenario[] = [
         let ptyMirrorMessages = 0;
         let ptyDataBytes = 0;
         let spawnSucceeded = false;
+        let spawnAnswered = false;
         const chunks: string[] = [];
 
         const stop = host.onMessage((message) => {
@@ -414,6 +430,7 @@ export const ipcScenarios: PerfScenario[] = [
           } else if (message.type === "spawn-result") {
             const result = message.result as { success?: boolean } | undefined;
             spawnSucceeded = result?.success === true;
+            spawnAnswered = true;
           }
         });
 
@@ -432,6 +449,21 @@ export const ipcScenarios: PerfScenario[] = [
             isEphemeral: true,
           },
         });
+
+        // The payload holds the PTY open until it is released, so the host
+        // reads at its own pace and node-pty never destroys a socket with
+        // unread bytes behind it. Wait for the output, THEN let it exit.
+        const streamDeadline = performance.now() + PTY_STREAM_TIMEOUT_MS;
+        while (
+          countDeliveredLines(chunks.join(""), PTY_LINES) < PTY_LINES &&
+          performance.now() < streamDeadline
+        ) {
+          // A spawn that failed will never produce a line; waiting out the
+          // whole window for it only delays the miss counts that say so.
+          if (spawnAnswered && !spawnSucceeded) break;
+          await sleep(PTY_STREAM_POLL_MS);
+        }
+        host.send({ type: "write", id: terminalId, data: "\n" });
 
         const exit = await host.waitFor(
           (message) => message.type === "exit" && message.id === terminalId,
