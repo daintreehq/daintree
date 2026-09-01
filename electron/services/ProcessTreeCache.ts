@@ -242,7 +242,7 @@ export class ProcessTreeCache {
       }
     }
 
-    const changed = this.hasPidSetChanged(this.cache, newCache);
+    const changed = this.hasOwnedTreeChanged(this.childrenMap, newChildrenMap);
 
     this.cache = newCache;
     this.childrenMap = newChildrenMap;
@@ -410,7 +410,7 @@ export class ProcessTreeCache {
       }
     }
 
-    const changed = this.hasPidSetChanged(this.cache, newCache);
+    const changed = this.hasOwnedTreeChanged(this.childrenMap, newChildrenMap);
 
     this.cache = newCache;
     this.childrenMap = newChildrenMap;
@@ -423,13 +423,29 @@ export class ProcessTreeCache {
     return changed;
   }
 
-  private hasPidSetChanged(
-    oldCache: Map<number, ProcessInfo>,
-    newCache: Map<number, ProcessInfo>
+  private hasOwnedTreeChanged(
+    oldChildrenMap: Map<number, number[]>,
+    newChildrenMap: Map<number, number[]>
   ): boolean {
-    if (oldCache.size !== newCache.size) return true;
-    for (const pid of newCache.keys()) {
-      if (!oldCache.has(pid)) return true;
+    const collectDescendants = (childrenMap: Map<number, number[]>): Set<number> => {
+      const descendants = new Set<number>();
+      const pending = [...(childrenMap.get(process.pid) ?? [])];
+
+      while (pending.length > 0) {
+        const pid = pending.pop()!;
+        if (descendants.has(pid)) continue;
+        descendants.add(pid);
+        pending.push(...(childrenMap.get(pid) ?? []));
+      }
+
+      return descendants;
+    };
+
+    const oldPids = collectDescendants(oldChildrenMap);
+    const newPids = collectDescendants(newChildrenMap);
+    if (oldPids.size !== newPids.size) return true;
+    for (const pid of newPids) {
+      if (!oldPids.has(pid)) return true;
     }
     return false;
   }

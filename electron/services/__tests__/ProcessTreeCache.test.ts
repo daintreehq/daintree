@@ -623,11 +623,88 @@ describe("ProcessTreeCache command/env construction", () => {
     const cache = new ProcessTreeCache(2500);
     const internals = cache as unknown as { refreshUnix: () => Promise<boolean> };
 
-    expect(await internals.refreshUnix()).toBe(true);
+    expect(await internals.refreshUnix()).toBe(false);
     expect(await internals.refreshUnix()).toBe(false);
     expect(cache.getProcess(991)).toBeUndefined();
     expect(cache.getProcess(992)).toBeUndefined();
     expect(cache.getProcess(1)?.comm).toBe("init");
+  });
+
+  it("ignores unrelated machine churn when deciding whether to reset backoff", async () => {
+    mockExecFile
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(
+            null,
+            `  PID  PPID %CPU RSS COMM COMMAND\n  100    1 0.0 1000 runner runner\n  200 ${process.pid} 0.0 1000 zsh zsh`,
+            ""
+          );
+          return { pid: 991 };
+        }
+      )
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(
+            null,
+            `  PID  PPID %CPU RSS COMM COMMAND\n  101    1 0.0 1000 runner runner\n  200 ${process.pid} 0.0 1000 zsh zsh`,
+            ""
+          );
+          return { pid: 992 };
+        }
+      );
+
+    const cache = new ProcessTreeCache(2500);
+    const internals = cache as unknown as { refreshUnix: () => Promise<boolean> };
+
+    expect(await internals.refreshUnix()).toBe(true);
+    expect(await internals.refreshUnix()).toBe(false);
+    expect(cache.getProcess(101)?.comm).toBe("runner");
+  });
+
+  it("resets backoff when the owned terminal tree changes", async () => {
+    mockExecFile
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(null, `  PID  PPID %CPU RSS COMM COMMAND\n  200 ${process.pid} 0.0 1000 zsh zsh`, "");
+          return { pid: 991 };
+        }
+      )
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(
+            null,
+            `  PID  PPID %CPU RSS COMM COMMAND\n  200 ${process.pid} 0.0 1000 zsh zsh\n  201  200 0.0 1000 node node agent.js`,
+            ""
+          );
+          return { pid: 992 };
+        }
+      );
+
+    const cache = new ProcessTreeCache(2500);
+    const internals = cache as unknown as { refreshUnix: () => Promise<boolean> };
+
+    expect(await internals.refreshUnix()).toBe(true);
+    expect(await internals.refreshUnix()).toBe(true);
   });
 
   describe("Windows refresh", () => {
