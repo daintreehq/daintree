@@ -35,6 +35,19 @@ The whole design exists so that an agent working in a fresh worktree can write a
 
 Skip [distribution.md](./distribution.md). A project plugin is distributed by being committed; there is no `.dntr` archive in this workflow.
 
+### If you have the Daintree repo checked out
+
+Prose can drift; these cannot. Read them in preference to any doc that disagrees.
+
+| File | Why it is ground truth |
+| --- | --- |
+| `electron/schemas/plugin.ts` | The zod schema that actually accepts or rejects your manifest, including the `scope` cross-checks and every refused project contribution, each with the error string you will see |
+| `plugins/fixtures/project-local/` | A known-good project plugin at the real path discovery scans, kept working by the load tests — the skeleton below, on disk |
+| `plugins/sample/rich-daintree/` | A fuller plugin exercising most contribution points |
+| `packages/plugin-sdk/` | The real `PluginHostApi` types behind the `host` object |
+
+Run the agent in **your own project**, not in the Daintree checkout, and give it the checkout as a read path. The plugin has to be written into your project, and a Claude Code session started inside the Daintree clone picks up that repo's root `CLAUDE.md` — a contributor guide about gitflow and `npm run check` that has nothing to do with authoring a plugin.
+
 ## The rules that decide whether it loads
 
 Ten things an agent gets wrong on the first attempt. Every one of them is silent — the plugin appears in the manager and does nothing.
