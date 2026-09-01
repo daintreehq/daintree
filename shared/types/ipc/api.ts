@@ -2394,7 +2394,7 @@ export interface HelpAssistantSettings {
   daintreeControl: boolean;
   /**
    * MCP capability tier the help assistant runs at — controls which Daintree
-   * actions the assistant can call without prompting. Defaults to `"action"`.
+   * actions the assistant can call. Defaults to `"action"`.
    */
   tier: HelpAssistantTier;
   /**

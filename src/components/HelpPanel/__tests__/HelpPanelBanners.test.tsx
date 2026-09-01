@@ -466,3 +466,124 @@ describe("HelpPanelBanners — grant ended notice (#10042)", () => {
     expect(onDismissGrantEnded).toHaveBeenCalledTimes(1);
   });
 });
+
+// #12119: the two affordances shipped as "Approve once" / "Always allow for
+// this project" and neither matched its mechanism — the first mints a reusable
+// per-tool grant; the second persists a project default AND lifts the running
+// help session for 30 minutes.
+// Both labels overstated the grant, which is the wrong direction to be wrong in
+// for a control that widens an agent's authority, so the copy is pinned here.
+describe("HelpPanelBanners — tier mismatch (#12119)", () => {
+  const tierMismatch = {
+    sessionId: "sess-1",
+    toolId: "terminal.new",
+    tier: "workbench",
+    targetTier: "action" as const,
+    projectId: "proj-1",
+  };
+
+  it("renders the exact action row (label + order) for an actionable denial", () => {
+    const { getByTestId } = render(
+      <HelpPanelBanners {...baseProps()} tierMismatch={tierMismatch} />
+    );
+
+    const banner = getByTestId("help-tier-mismatch-banner");
+    expect(banner.getAttribute("role")).toBe("alert");
+
+    const actionRow = banner.querySelector(".flex.items-center.gap-2.flex-wrap.pl-5");
+    expect(actionRow).not.toBeNull();
+    const labels = Array.from(actionRow!.querySelectorAll("button")).map(
+      (b) => b.textContent?.trim() ?? ""
+    );
+    expect(labels).toEqual(["Allow this tool", "Set project default", "Cancel"]);
+  });
+
+  it("never claims the grant is one call or the elevation permanent", () => {
+    const { getByTestId } = render(
+      <HelpPanelBanners {...baseProps()} tierMismatch={tierMismatch} />
+    );
+    const text = getByTestId("help-tier-mismatch-banner").textContent ?? "";
+    expect(text).not.toMatch(/\bonce\b/i);
+    expect(text).not.toMatch(/\balways\b/i);
+  });
+
+  it("discloses both bounded windows in the body", () => {
+    const { getByTestId } = render(
+      <HelpPanelBanners {...baseProps()} tierMismatch={tierMismatch} />
+    );
+    const text = getByTestId("help-tier-mismatch-banner").textContent ?? "";
+    expect(text).toContain("terminal.new needs action tier access.");
+    // The grant is reusable on a 15-minute sliding window under a 30-minute
+    // ceiling — stating only the ceiling would overstate an idle grant's life.
+    expect(text).toContain("repeat calls for 15 minutes after the last one, 30 at most");
+    // The project write feeds agents launched in the project; new *help*
+    // sessions provision from the global settings tier, so the copy must not
+    // promise them anything (HelpSessionService.doProvision).
+    expect(text).toContain(
+      "applies to Claude Code and Daintree Assistant panes launched in this project"
+    );
+    // Deliberately broad: nothing in a denied-tool banner has any business
+    // promising "new sessions" anything, and that promise was the bug.
+    expect(text).not.toContain("new sessions");
+    // The session lift is the half that lapses.
+    expect(text).toContain("raises this session for 30 minutes");
+  });
+
+  it("routes each button to its own handler", () => {
+    const onApproveOnce = vi.fn();
+    const onAlwaysAllow = vi.fn();
+    const onDismissTierMismatch = vi.fn();
+    const { getByText } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        tierMismatch={tierMismatch}
+        onApproveOnce={onApproveOnce}
+        onAlwaysAllow={onAlwaysAllow}
+        onDismissTierMismatch={onDismissTierMismatch}
+      />
+    );
+
+    fireEvent.click(getByText("Allow this tool"));
+    fireEvent.click(getByText("Set project default"));
+    fireEvent.click(getByText("Cancel"));
+
+    expect(onApproveOnce).toHaveBeenCalledTimes(1);
+    expect(onAlwaysAllow).toHaveBeenCalledTimes(1);
+    expect(onDismissTierMismatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables every action while an approval is in flight", () => {
+    const { getByTestId } = render(
+      <HelpPanelBanners {...baseProps()} tierMismatch={tierMismatch} isApprovingTier />
+    );
+    const actionRow = getByTestId("help-tier-mismatch-banner").querySelector(
+      ".flex.items-center.gap-2.flex-wrap.pl-5"
+    );
+    const buttons = Array.from(actionRow!.querySelectorAll("button"));
+    expect(buttons.length).toBe(3);
+    // Cancel is disabled too: dismissing mid-flight would strand the in-flight
+    // grant with no banner to report its outcome.
+    expect(buttons.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+  });
+
+  // `targetTier: null` means no tier permits the tool at all, so neither
+  // affordance can help — an unknown id, never an action-tier tool like
+  // `terminal.new`.
+  it("withholds the actions and the window copy when no tier would permit the tool", () => {
+    const { getByTestId, queryByText } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        tierMismatch={{ ...tierMismatch, toolId: "unknown.tool", targetTier: null }}
+      />
+    );
+    const banner = getByTestId("help-tier-mismatch-banner");
+    expect(banner.textContent).toContain("unknown.tool isn't available at any project tier.");
+    // Nothing to grant, so the details paragraph must not render at all —
+    // asserting on its semantic openings rather than one duration phrase, so a
+    // reworded body can't leak back into this branch unnoticed.
+    expect(banner.textContent).not.toContain("Allowing the tool");
+    expect(banner.textContent).not.toContain("The project default");
+    expect(queryByText("Allow this tool")).toBeNull();
+    expect(queryByText("Set project default")).toBeNull();
+  });
+});

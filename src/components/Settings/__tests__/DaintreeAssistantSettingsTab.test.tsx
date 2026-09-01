@@ -380,12 +380,12 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Bypass Claude permission prompts");
 
-    expect(container.textContent).not.toContain("only remaining safeguard");
+    expect(container.textContent).not.toContain("unless an automation grant covers them");
 
     const toggle = screen.getByLabelText("Bypass Claude permission prompts during help sessions");
     fireEvent.click(toggle);
 
-    await waitForContent(container, "only remaining safeguard");
+    await waitForContent(container, "unless an automation grant covers them");
     expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
       bypassPermissions: true,
     });
@@ -416,6 +416,9 @@ describe("DaintreeAssistantSettingsTab", () => {
     // confirmation gate, and understating that is the bug being fixed.
     await waitForContent(container, "outside its sandbox");
     expect(container.textContent).not.toContain("built-in (Bash, Write)");
+    // Scoped to Codex's OWN approvals (#12119): an unqualified "without
+    // approval" contradicts the host-confirmation exception appended below it.
+    expect(container.textContent).toContain("without its own approval prompts");
   });
 
   it("describes the Daintree Assistant's env-var bypass, not a CLI flag", async () => {
@@ -439,15 +442,20 @@ describe("DaintreeAssistantSettingsTab", () => {
     fireEvent.click(toggle);
 
     await waitForContent(container, "acts without asking");
+    // Same #12119 scoping: the sheet it skips is its own, not Daintree's host
+    // confirmation, which still fires for confirmation-required actions.
+    expect(container.textContent).toContain("it skips its own confirmation sheet for everything");
     expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
       bypassPermissions: true,
     });
   });
 
-  // #11907: with the confirmation sheet off, the tier is the entire remaining
-  // boundary, so the warning has to name it — and keep naming the right one
-  // when the selector moves (a missing memo dependency would freeze the old
-  // tier in the copy while the selector reads the new one).
+  // #11907: with the confirmation sheet off, the tier carries most of the
+  // remaining boundary, so the warning has to name it — and keep naming the
+  // right one when the selector moves (a missing memo dependency would freeze
+  // the old tier in the copy while the selector reads the new one). #12119
+  // stopped it claiming to be the *entire* boundary, so the assertions below
+  // pin both halves: the tier-named limit and the confirmation exception.
   it("names the configured tier in the auto-approve warning and follows the selector", async () => {
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex", "daintree-assistant"]);
     helpPanelState.preferredAgentId = "daintree-assistant";
@@ -472,14 +480,14 @@ describe("DaintreeAssistantSettingsTab", () => {
 
     await waitForContent(
       container,
-      "New sessions run at the Action capability tier, which is the only remaining safeguard"
+      "New sessions are limited to the Daintree actions the Action capability tier allows"
     );
 
     fireEvent.change(screen.getByLabelText("Capability tier"), { target: { value: "system" } });
 
     await waitForContent(
       container,
-      "New sessions run at the System capability tier, which is the only remaining safeguard"
+      "New sessions are limited to the Daintree actions the System capability tier allows"
     );
     expect(container.textContent).not.toContain("the Action capability tier");
   });
@@ -561,7 +569,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "Capability tier");
 
     expect(screen.queryByRole("switch", { name: /bypass|auto-approve/i })).toBeNull();
-    expect(container.textContent).not.toContain("only remaining safeguard");
+    expect(container.textContent).not.toContain("unless an automation grant covers them");
   });
 
   it("renders exactly the model catalog the resolver returns", async () => {

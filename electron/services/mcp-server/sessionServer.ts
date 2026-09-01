@@ -342,10 +342,12 @@ export interface SessionServerDeps {
     toolId: string;
     tier: McpTier;
     /**
-     * Minimum tier that permits the denied tool, or `null` if no tier permits
-     * it (unknown tool). The renderer uses this to label the elevation buttons
-     * — "Allow Action tier" / "Allow System tier" — and to drive the
-     * `setSessionTier` call.
+     * Minimum tier that permits the denied tool, or `null` if no non-external
+     * help tier permits it — an unknown id, or a deliberately non-grantable
+     * one. The renderer's "Set project default" elevates to it
+     * via `setSessionTier`; its "Allow this tool" issues a per-tool grant for
+     * the denied tool without changing the session tier at all. A `null`
+     * withholds both affordances — the denial isn't actionable.
      */
     targetTier: "workbench" | "action" | "system" | null;
   }) => void;

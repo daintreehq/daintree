@@ -488,7 +488,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // `--dangerously-skip-permissions` flag (no DEFAULT_DANGEROUS_ARGS entry).
       // For it, the user's "bypass permissions" preference maps to skipping the
       // assistant's OWN per-action confirm sheet, which the CLI reads from this
-      // env var at startup. The capability tier remains the only safeguard.
+      // env var at startup. The capability tier is then the main safeguard, but
+      // not the only one: `danger: "confirm"` actions still open the host
+      // confirmation dialog unless a native automation grant covers them
+      // (#12119).
       if (launchAgentId === "daintree-assistant" && bypassPermissions) {
         spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_ASSISTANT_AUTO_APPROVE: "1" };
       }
