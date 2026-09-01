@@ -305,7 +305,14 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // absent from the external tier, which is why the external ceiling above did
   // not move. Its 151 B description sits well under the per-tool ceiling; the
   // rest is the `withWorktreeLocation` schema every git tool already carries.
-  const MAX_COHORT_PAYLOAD_BYTES = 193_100;
+  // 193_100 → 195_000 for #12123's `terminal.killBatch`. In-app only, so the
+  // external ceiling again does not move. Most of its cost is the output schema:
+  // the tool exists to tell five per-target outcomes apart — destroyed,
+  // deselected by the approver, already gone, newly busy, teardown errored — and
+  // a caller that cannot distinguish them will retry the ones a human just
+  // refused, or the irreversible kills it was never told about. Naming them is
+  // the tool, not decoration on it.
+  const MAX_COHORT_PAYLOAD_BYTES = 195_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

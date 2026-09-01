@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle, ChevronRight, Plug, ShieldAlert, Sparkles } from "lucide-react";
 import type { McpConfirmationDecision } from "@shared/types/ipc/mcpServer";
 import { cn } from "@/lib/utils";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Spinner } from "@/components/ui/Spinner";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -9,6 +10,7 @@ import { isCautionPreviewLine, stripCautionPrefix } from "@/lib/mcpPreviewLines"
 import {
   MAIN_DISPATCH_DEADLINE_MS,
   useMcpConfirmStore,
+  type McpConfirmSelectableTarget,
   type PendingMcpConfirm,
 } from "@/store/mcpConfirmStore";
 
@@ -119,13 +121,41 @@ export function McpConfirmDialog() {
   // requestId we've already handled so a given dialog can resolve exactly once.
   const handledRequestIdRef = useRef<string | null>(null);
   const resolveOnce = useCallback(
-    (requestId: string, decision: McpConfirmationDecision) => {
+    (
+      requestId: string,
+      decision: McpConfirmationDecision,
+      selectedTargetIds?: readonly string[]
+    ) => {
       if (handledRequestIdRef.current === requestId) return;
       handledRequestIdRef.current = requestId;
-      resolveCurrent(decision);
+      resolveCurrent(decision, selectedTargetIds);
     },
     [resolveCurrent]
   );
+
+  // Which rows of a selectable confirmation are still checked (#12123). Every
+  // target starts checked: these are the exact finite ids the caller already
+  // named, so unchecking is the rejection affordance and re-selecting what you
+  // just asked for is the worse fatigue.
+  //
+  // useLayoutEffect, and keyed on the request: this dialog is a queue-driven
+  // singleton that stays mounted and open while it promotes the next item, so a
+  // reset tied to close would carry one batch's unchecked rows into another's
+  // approval. Synchronous, so there is no painted frame showing the previous
+  // item's selection against this item's list.
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const selectableTargets = current?.selectableTargets;
+  useLayoutEffect(() => {
+    setSelectedIds(new Set(selectableTargets?.map((target) => target.id) ?? []));
+  }, [resetKey, selectableTargets]);
+
+  const toggleTarget = useCallback((id: string) => {
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (current === null) return;
@@ -182,25 +212,43 @@ export function McpConfirmDialog() {
   const previewState = derivePreviewState(current);
   const hasArgs = current.argsSummary.trim().length > 0;
 
+  // The rows in display order, so an approval reports the targets in the order
+  // the approver read them rather than in checkbox-toggle order.
+  const approvedTargetIds = selectableTargets
+    ?.filter((target) => selectedIds.has(target.id))
+    .map((target) => target.id);
+  const selectedCount = approvedTargetIds?.length ?? 0;
+
   // `alertdialog` is for a brief, important message; APG reserves it for text
   // the screen reader should read out whole on open. This body carries a
-  // scrollable file list and a redacted payload, so it is a `dialog` whenever
-  // either is present — matching every sibling confirm that shows a preview.
-  const hasScrollableContent = previewState !== "none" || hasArgs;
+  // scrollable file list, a redacted payload, or an interactive target list, so
+  // it is a `dialog` whenever any is present — matching every sibling confirm
+  // that shows a preview.
+  const hasScrollableContent =
+    previewState !== "none" || hasArgs || selectableTargets !== undefined;
 
   const sharedProps = {
     isOpen: true,
     onClose: () => resolveOnce(current.requestId, "rejected"),
     title: confirmTitle(current),
     description: current.actionDescription,
-    confirmLabel: current.actionTitle,
+    confirmLabel: selectionConfirmLabel(current, selectedCount),
     cancelLabel: "Cancel",
-    onConfirm: () => resolveOnce(current.requestId, "approved"),
+    onConfirm: () => resolveOnce(current.requestId, "approved", approvedTargetIds),
     hasPreview: hasScrollableContent,
-    confirmDisabled: previewState === "pending",
+    // An empty selection is the same outcome as Cancel with an extra dispatch in
+    // between, so it is not offered as an approval.
+    confirmDisabled:
+      previewState === "pending" || (selectableTargets !== undefined && selectedCount === 0),
     confirmCooldownMs: isDestructive ? CONFIRM_COOLDOWN_MS : undefined,
     cooldownKey: current.requestId,
-    hint: <GateHint previewState={previewState} queueDepth={queueDepth} />,
+    hint: (
+      <GateHint
+        previewState={previewState}
+        queueDepth={queueDepth}
+        emptySelection={selectableTargets !== undefined && selectedCount === 0}
+      />
+    ),
   };
 
   const body = (
@@ -209,6 +257,14 @@ export function McpConfirmDialog() {
 
       {current.dangerRationale && (
         <ConsequenceNote isDestructive={isDestructive}>{current.dangerRationale}</ConsequenceNote>
+      )}
+
+      {selectableTargets !== undefined && (
+        <TargetChecklist
+          targets={selectableTargets}
+          selectedIds={selectedIds}
+          onToggle={toggleTarget}
+        />
       )}
 
       {previewState !== "none" && (
@@ -248,6 +304,21 @@ export function McpConfirmDialog() {
       )}
     </ErrorBoundary>
   );
+}
+
+/**
+ * The confirm button's label.
+ *
+ * For a selectable confirmation it names the CURRENT selection, not the request:
+ * the button is the last thing read before an irreversible act, and one that
+ * still says "Kill terminals" while two of five rows are unchecked describes a
+ * different act from the one about to happen. Everything else keeps the action's
+ * own title, which is already a verb-noun label.
+ */
+export function selectionConfirmLabel(current: PendingMcpConfirm, selectedCount: number): string {
+  const label = current.selectionConfirmLabel;
+  if (current.selectableTargets === undefined || label === undefined) return current.actionTitle;
+  return `${label.verb} ${selectedCount} ${selectedCount === 1 ? label.one : label.many}`;
 }
 
 /**
@@ -429,6 +500,112 @@ function PreviewCard({
 }
 
 /**
+ * The individually-deselectable targets a batch dispatch would destroy (#12123).
+ *
+ * Every row starts checked and the list is frozen before the dialog is
+ * interactive — nothing is ever appended to it — so the set the approver reads
+ * is the set they approve. Unchecking is how a target is refused; the count on
+ * the confirm button tracks what is left.
+ *
+ * Rows use the house checkbox rather than a `listbox` of `role="option"`s.
+ * Screen-reader support for rich per-row content inside an option is uneven,
+ * while a checkbox announces its own state on every toggle with no live region
+ * needed — and the only thing that has to be re-announced here is the button,
+ * whose accessible name already changes with the count.
+ */
+/**
+ * Where the id tails start: short enough not to crowd the row it disambiguates.
+ */
+const SHORT_TARGET_ID_CHARS = 6;
+
+/**
+ * A display id per target, shortened only as far as it can be while every row
+ * still reads differently.
+ *
+ * A fixed truncation is not enough. These rows exist so the approver can spare
+ * one panel and destroy its neighbour, and ids that happen to share a tail would
+ * put them back to identical — which is the same failure as showing no id, with
+ * the appearance of having fixed it. So the tail grows until the whole column is
+ * distinct, and falls back to full ids when nothing shorter separates them.
+ */
+export function shortTargetIds(ids: readonly string[]): Map<string, string> {
+  const longest = ids.reduce((max, id) => Math.max(max, id.length), 0);
+  for (let chars = SHORT_TARGET_ID_CHARS; chars < longest; chars += 2) {
+    const shortened = ids.map((id) => (id.length <= chars ? id : `…${id.slice(-chars)}`));
+    if (new Set(shortened).size === ids.length) {
+      return new Map(ids.map((id, index) => [id, shortened[index] ?? id]));
+    }
+  }
+  return new Map(ids.map((id) => [id, id]));
+}
+
+function TargetChecklist({
+  targets,
+  selectedIds,
+  onToggle,
+}: {
+  targets: readonly McpConfirmSelectableTarget[];
+  selectedIds: ReadonlySet<string>;
+  onToggle: (id: string) => void;
+}) {
+  const labelIdPrefix = useId();
+  const displayIds = shortTargetIds(targets.map((target) => target.id));
+
+  return (
+    <div className="rounded-[var(--radius-md)] border border-tint/[0.08] bg-tint/[0.04]">
+      <div className="flex items-baseline justify-between gap-2 border-b border-tint/[0.08] px-3 py-2">
+        <span className={MICRO_LABEL}>Targets</span>
+        <span className="shrink-0 text-2xs text-text-secondary">
+          {selectedIds.size} of {targets.length} selected
+        </span>
+      </div>
+
+      <ul className={cn("space-y-1 overflow-y-auto px-3 py-2", PREVIEW_MAX_BODY_HEIGHT)}>
+        {targets.map((target) => {
+          const labelId = `${labelIdPrefix}-${target.id}`;
+          return (
+            <li key={target.id} className="relative flex items-start gap-2 py-0.5">
+              <Checkbox
+                size="sm"
+                checked={selectedIds.has(target.id)}
+                onCheckedChange={() => onToggle(target.id)}
+                aria-labelledby={labelId}
+                // The box is a 14px target in a full-width row. `static` drops
+                // the root's own positioning so the pseudo-element resolves
+                // against the row, making the whole row the hit area without a
+                // second interactive element for a screen reader to step past.
+                className="static mt-0.5 before:absolute before:inset-0 before:content-['']"
+              />
+              <span id={labelId} className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="flex items-baseline gap-1.5">
+                  <span className="truncate text-xs text-text-primary">{target.name}</span>
+                  {target.agentRunning && (
+                    <span className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-3xs text-text-muted">
+                      Agent running
+                    </span>
+                  )}
+                </span>
+                <span className="truncate text-2xs text-text-secondary">
+                  {target.worktree ? `${target.worktree} · ` : ""}
+                  {target.kindLabel}
+                  {" · "}
+                  {/* Two panels in one worktree can carry the same title, and
+                      then nothing above tells their checkboxes apart — which is
+                      the difference between refusing the terminal you meant and
+                      destroying it. The id is also what the caller named, so it
+                      is what a human cross-referencing the tool call looks for. */}
+                  <span className="font-mono">{displayIds.get(target.id) ?? target.id}</span>
+                </span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/**
  * A preview line the formatters marked as a caution — "could not verify",
  * "this operation will be refused". It is the most safety-relevant thing the
  * preview can say and previously rendered as an inline "⚠" character at the
@@ -502,12 +679,17 @@ function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
 function GateHint({
   previewState,
   queueDepth,
+  emptySelection,
 }: {
   previewState: PreviewState;
   queueDepth: number;
+  emptySelection: boolean;
 }) {
   const parts: string[] = [];
   if (previewState === "pending") parts.push("Checking what this affects…");
+  // Says why the button is dead rather than leaving the approver to guess. Same
+  // outcome as Cancel, so it is a nudge, not an error.
+  if (emptySelection) parts.push("Nothing selected — cancel, or check something to destroy.");
   if (queueDepth > 0) {
     parts.push(`${queueDepth} more request${queueDepth === 1 ? "" : "s"} waiting`);
   }

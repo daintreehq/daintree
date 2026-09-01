@@ -33,6 +33,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "git.abortRepositoryOperation",
   "git.forcePushWithLease",
   "terminal.kill",
+  "terminal.killBatch",
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartAll",
@@ -115,6 +116,11 @@ const BYPASS_WIRED = new Set([
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located
   "terminal.arm", // agent/MCP-only confirm gate (#11346); palette-hidden, user arming goes through the fleet ribbon (not ActionService), so no user-side ConfirmDialog to co-locate
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)
+  // Agent/MCP-only batch kill (#12123); palette-hidden because it acts only on
+  // explicit caller-supplied ids. Its confirmation is the generic
+  // McpConfirmDialog's selectable checklist, mounted globally, so the action id
+  // is not co-located with a ConfirmDialog-family component.
+  "terminal.killBatch",
   "artifact.applyPatch", // ConfirmDialog in ArtifactOverlay.tsx; dispatch in useArtifacts.ts (ID not co-located)
   "agentSettings.reset", // agent/MCP-only; palette-hidden, configured from Settings via client (danger:"confirm" gates agent dispatch only)
   // Forge PR write actions are agent/MCP-only (issue #10654); danger:"confirm"

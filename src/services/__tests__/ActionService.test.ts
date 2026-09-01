@@ -913,6 +913,64 @@ describe("ActionService", () => {
         );
       });
 
+      // The per-target half of the same attestation (#12123). A selectable
+      // confirmation resolves to a SUBSET, and the action has to know which
+      // subset — so the stamp carries the rows, on the same unspoofable terms.
+      it("stamps ctx.hostApprovedTargets from the dispatch options", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          hostApprovedTargets: [{ id: "t1", observedAgentRunning: true }],
+        });
+
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({
+            hostApprovedTargets: [{ id: "t1", observedAgentRunning: true }],
+          })
+        );
+      });
+
+      // Distinct from an absent stamp, and the distinction is the whole gate: an
+      // action must be able to tell "the approver kept nothing" from "no
+      // selectable confirmation ran", because only the second is a refusal to act.
+      it("carries an empty approval through as an empty array, not as absent", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          hostApprovedTargets: [],
+        });
+
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ hostApprovedTargets: [] })
+        );
+      });
+
+      it("overwrites a contextOverride that claims per-target approvals nobody gave", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        const result = await service.dispatch("actions.list", undefined, {
+          source: "user",
+          contextOverride: {
+            hostApprovedTargets: [{ id: "t1", observedAgentRunning: false }],
+          },
+        });
+
+        expect(result.ok).toBe(true);
+        expect(mockRun).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ hostApprovedTargets: undefined })
+        );
+      });
+
       it("maps a staged confirmation to CONFIRMATION_REQUIRED rather than resolving ok", async () => {
         const mockRun = vi
           .fn()

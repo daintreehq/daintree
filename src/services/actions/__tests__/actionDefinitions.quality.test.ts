@@ -321,7 +321,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // new tool cannot land inside the old ceiling's 79 B of headroom at any
   // wording — the raise is the cost of the tool, not of its prose, and its
   // description is 151 B against the 400 B per-description ceiling.
-  const MAX_COHORT_TOTAL_BYTES = 50_600;
+  // 50_600 → 51_000 for #12123's `terminal.killBatch`, on the same terms: its
+  // description is 347 B, under the per-description ceiling, and the tool's
+  // whole point is the five per-target outcomes a caller has to be able to tell
+  // apart. The raise is 400 B for a tool that could not exist inside the old
+  // ceiling's headroom at any wording.
+  const MAX_COHORT_TOTAL_BYTES = 51_000;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -668,6 +673,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "git.abortRepositoryOperation",
   "git.forcePushWithLease",
   "terminal.kill",
+  "terminal.killBatch",
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartAll",
@@ -780,6 +786,12 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // Agent-dispatch only — no user-side ConfirmDialog. danger:"confirm" gates MCP/agent
   // dispatch only; user dispatch of recipe.run is intentionally ungated.
   "recipe.run",
+  // Agent/MCP-only batch kill (#12123). Palette-hidden because it acts only on
+  // explicit caller-supplied ids, so there is no user-facing dispatch path to
+  // co-locate a dialog with. Its confirmation is the selectable checklist inside
+  // the generic McpConfirmDialog, which is mounted globally and keyed on the
+  // pending request rather than on any one action id.
+  "terminal.killBatch",
   // Agent/MCP-only — palette-hidden and unbound, configured from Settings via the
   // client (not ActionService). danger:"confirm" gates agent dispatch (resetting
   // all agents at once is destructive-local with no undo); there is no UI
@@ -888,6 +900,9 @@ describe("destructive-action danger metadata", () => {
       issueNumber: 1,
       // terminal.kill/restart require a terminalId before their confirm gate runs.
       terminalId: "term-placeholder",
+      // terminal.killBatch takes an explicit list and has no scalar spelling, so
+      // the placeholder above does not reach its confirm gate.
+      terminalIds: ["term-placeholder"],
       // session.bookmarkAndClose/delete need label + sessionId to clear arg
       // validation and reach the confirm gate.
       label: "placeholder",

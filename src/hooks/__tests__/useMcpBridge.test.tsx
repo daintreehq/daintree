@@ -21,6 +21,9 @@ const mocks = vi.hoisted(() => ({
   // keeps answering undefined exactly as it did before this store was mocked.
   worktrees: new Map<string, unknown>(),
   viewStoreThrows: false,
+  // The renderer's panel roster, read synchronously when a batch kill's
+  // checklist is frozen (#12123). Empty by default so nothing else changes.
+  panelsById: {} as Record<string, unknown>,
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -40,6 +43,10 @@ vi.mock("@/components/Worktree/worktreeDeletePreview", async (importOriginal) =>
     await importOriginal<typeof import("@/components/Worktree/worktreeDeletePreview")>();
   return { ...actual, buildWorktreeDeletePreview: mocks.buildPreview };
 });
+
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: { getState: () => ({ panelsById: mocks.panelsById }) },
+}));
 
 vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStore: () => {
@@ -62,6 +69,7 @@ vi.mock("@/components/Git/gitRemoteOperationPreview", async (importOriginal) => 
 import {
   useMcpBridge,
   buildMcpConfirmPreview,
+  buildTerminalKillBatchTargets,
   resolveMcpConfirmPreviewTarget,
   resolveWorktreeDeleteGate,
   tagMcpSpawnSource,
@@ -71,6 +79,7 @@ import type { WorktreeDeletePreviewOutcome } from "@/components/Worktree/worktre
 import { TerminalSpawnSourceSchema } from "@/services/actions/definitions/schemas";
 import { hasCautionLine } from "@/lib/mcpPreviewLines";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
+import { MAX_KILL_BATCH_TERMINALS } from "@shared/types/terminalKillBatch";
 
 /** A completed submodule inventory that found nothing — the ordinary case. */
 function emptySubmoduleRisk(over: Partial<SubmoduleDeleteRisk> = {}): SubmoduleDeleteRisk {
@@ -141,6 +150,7 @@ describe("useMcpBridge", () => {
     mocks.buildPreview.mockResolvedValue(null);
     mocks.worktrees.clear();
     mocks.viewStoreThrows = false;
+    mocks.panelsById = {};
     mocks.getContext.mockReturnValue({});
     mocks.buildGitPreview.mockResolvedValue({
       branch: "main",
@@ -1808,6 +1818,133 @@ describe("useMcpBridge", () => {
     );
     useRecipeStore.getState().reset();
   });
+  describe("batch terminal kill dispatch (#12123)", () => {
+    function killBatchManifestEntry() {
+      return confirmManifestEntry({
+        id: "terminal.killBatch",
+        name: "terminal.killBatch",
+        title: "Kill terminals",
+        description: "Permanently destroy several named panels.",
+        category: "terminal",
+      });
+    }
+
+    it("opens the modal with an approvable checklist and no pending preview fetch", async () => {
+      mocks.get.mockReturnValue(killBatchManifestEntry());
+      mocks.panelsById = { p1: { id: "p1", title: "zsh" }, p2: { id: "p2", title: "vitest" } };
+      renderHook(() => useMcpBridge());
+
+      void dispatchHandler?.({
+        requestId: "req-batch",
+        actionId: "terminal.killBatch",
+        args: { terminalIds: ["p1", "p2"] },
+      });
+      await Promise.resolve();
+
+      const current = useMcpConfirmStore.getState().current;
+      expect(current?.selectableTargets?.map((target) => target.id)).toEqual(["p1", "p2"]);
+      expect(current?.selectionConfirmLabel).toEqual({
+        verb: "Kill",
+        one: "terminal",
+        many: "terminals",
+      });
+      // Nothing is being fetched, so approval must not be held behind a preview
+      // gate that would never clear.
+      expect(current?.previewPending).toBe(false);
+      expect(current?.previewTitle).toBeUndefined();
+    });
+
+    it("dispatches only the approved rows, each carrying the state its row showed", async () => {
+      mocks.get.mockReturnValue(killBatchManifestEntry());
+      mocks.dispatch.mockResolvedValue({ ok: true, data: {} });
+      mocks.panelsById = {
+        p1: { id: "p1", title: "claude", detectedAgentId: "claude", agentState: "working" },
+        p2: { id: "p2", title: "zsh" },
+        p3: { id: "p3", title: "vitest" },
+      };
+      renderHook(() => useMcpBridge());
+
+      const dispatched = dispatchHandler?.({
+        requestId: "req-batch",
+        actionId: "terminal.killBatch",
+        args: { terminalIds: ["p1", "p2", "p3"] },
+      });
+      await Promise.resolve();
+      useMcpConfirmStore.getState().resolveCurrent("approved", ["p1", "p3"]);
+      await dispatched;
+
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        "terminal.killBatch",
+        { terminalIds: ["p1", "p2", "p3"] },
+        expect.objectContaining({
+          confirmed: true,
+          hostApprovedTargets: [
+            { id: "p1", observedAgentRunning: true },
+            { id: "p3", observedAgentRunning: false },
+          ],
+        })
+      );
+    });
+
+    it("stamps an empty approval when every row was unchecked", async () => {
+      mocks.get.mockReturnValue(killBatchManifestEntry());
+      mocks.dispatch.mockResolvedValue({ ok: true, data: {} });
+      mocks.panelsById = { p1: { id: "p1", title: "zsh" } };
+      renderHook(() => useMcpBridge());
+
+      const dispatched = dispatchHandler?.({
+        requestId: "req-batch",
+        actionId: "terminal.killBatch",
+        args: { terminalIds: ["p1"] },
+      });
+      await Promise.resolve();
+      useMcpConfirmStore.getState().resolveCurrent("approved", []);
+      await dispatched;
+
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        "terminal.killBatch",
+        { terminalIds: ["p1"] },
+        expect.objectContaining({ hostApprovedTargets: [] })
+      );
+    });
+
+    it("dispatches nothing when the batch is rejected", async () => {
+      mocks.get.mockReturnValue(killBatchManifestEntry());
+      mocks.panelsById = { p1: { id: "p1", title: "zsh" } };
+      renderHook(() => useMcpBridge());
+
+      const dispatched = dispatchHandler?.({
+        requestId: "req-batch",
+        actionId: "terminal.killBatch",
+        args: { terminalIds: ["p1"] },
+      });
+      await Promise.resolve();
+      useMcpConfirmStore.getState().resolveCurrent("rejected");
+      await dispatched;
+
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+      expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+        expect.objectContaining({ confirmationDecision: "rejected" })
+      );
+    });
+
+    it("carries no per-target approval for a pre-granted dispatch that showed no modal", async () => {
+      mocks.get.mockReturnValue(killBatchManifestEntry());
+      mocks.dispatch.mockResolvedValue({ ok: true, data: {} });
+      mocks.panelsById = { p1: { id: "p1", title: "zsh" } };
+      renderHook(() => useMcpBridge());
+
+      await dispatchHandler?.({
+        requestId: "req-batch",
+        actionId: "terminal.killBatch",
+        args: { terminalIds: ["p1"] },
+        confirmed: true,
+      });
+
+      const options = mocks.dispatch.mock.calls[0]?.[2] as Record<string, unknown>;
+      expect(options.hostApprovedTargets).toBeUndefined();
+    });
+  });
 });
 
 describe("resolveMcpConfirmPreviewTarget (#11538)", () => {
@@ -2313,5 +2450,85 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
     mocks.buildGitPreview.mockRejectedValue(new Error("git exploded"));
     const failed = await buildMcpConfirmPreview({ kind: "gitPush", cwd: "/repo" });
     expect(failed.lines[0]).toContain("Could not verify");
+  });
+});
+
+describe("batch terminal kill targets (#12123)", () => {
+  it("resolves an explicit id list into a checklist target", () => {
+    expect(
+      resolveMcpConfirmPreviewTarget("terminal.killBatch", { terminalIds: ["a", "b"] }, undefined)
+    ).toEqual({ kind: "terminalKillBatch", terminalIds: ["a", "b"] });
+  });
+
+  it("resolves no target for a malformed id list rather than repairing it", () => {
+    for (const args of [
+      undefined,
+      {},
+      { terminalIds: [] },
+      { terminalIds: "a" },
+      { terminalIds: ["a", 3] },
+      { terminalIds: ["a", ""] },
+      // Rejected on exactly the terms the action's own schema rejects them:
+      // duplicates would give two rows one checkbox identity, and an over-cap
+      // list would raise a dialog the dispatch then refuses.
+      { terminalIds: ["a", "a"] },
+      { terminalIds: Array.from({ length: MAX_KILL_BATCH_TERMINALS + 1 }, (_, i) => `t${i}`) },
+    ]) {
+      expect(resolveMcpConfirmPreviewTarget("terminal.killBatch", args, undefined)).toBeUndefined();
+    }
+  });
+
+  it("resolves a list sitting exactly on the cap", () => {
+    const terminalIds = Array.from({ length: MAX_KILL_BATCH_TERMINALS }, (_, i) => `t${i}`);
+    expect(
+      resolveMcpConfirmPreviewTarget("terminal.killBatch", { terminalIds }, undefined)
+    ).toEqual({ kind: "terminalKillBatch", terminalIds });
+  });
+
+  it("builds a row per requested id, naming worktree, kind and running agent", () => {
+    mocks.worktrees.set("wt-1", { branch: "feature/x", name: "x" });
+    mocks.panelsById = {
+      p1: {
+        id: "p1",
+        title: "claude · api",
+        worktreeId: "wt-1",
+        detectedAgentId: "claude",
+        agentState: "working",
+      },
+      p2: { id: "p2", title: "zsh", kind: "terminal" },
+    };
+
+    expect(buildTerminalKillBatchTargets(["p1", "p2", "gone"])).toEqual([
+      {
+        id: "p1",
+        name: "claude · api",
+        worktree: "feature/x",
+        kindLabel: "Claude",
+        agentRunning: true,
+      },
+      { id: "p2", name: "zsh", kindLabel: "Terminal", agentRunning: false },
+      { id: "gone", name: "gone", kindLabel: "No longer open", agentRunning: false },
+    ]);
+  });
+
+  it("does not resolve a requested id off Object.prototype", () => {
+    mocks.panelsById = {};
+    expect(buildTerminalKillBatchTargets(["constructor"])).toEqual([
+      {
+        id: "constructor",
+        name: "constructor",
+        kindLabel: "No longer open",
+        agentRunning: false,
+      },
+    ]);
+  });
+
+  it("survives a view with no worktree store mounted", () => {
+    mocks.viewStoreThrows = true;
+    mocks.panelsById = { p1: { id: "p1", title: "zsh", worktreeId: "wt-1" } };
+
+    const [row] = buildTerminalKillBatchTargets(["p1"]);
+    expect(row?.worktree).toBeUndefined();
+    expect(row?.name).toBe("zsh");
   });
 });

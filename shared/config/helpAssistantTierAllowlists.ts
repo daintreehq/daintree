@@ -118,6 +118,7 @@ export const ACTION_TIER_ADDONS = [
   "terminal.closeOwned",
   "terminal.closeAll",
   "terminal.kill",
+  "terminal.killBatch",
   "terminal.killAll",
   "terminal.restart",
   "terminal.moveToDock",

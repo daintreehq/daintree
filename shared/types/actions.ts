@@ -166,6 +166,49 @@ export interface ActionContext {
    * approval permits.
    */
   hostConfirmed?: boolean;
+  /**
+   * The per-target approvals a selectable host confirmation came back with, for
+   * an action whose dialog let the approver deselect individual targets before
+   * approving (#12123). Set by `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.hostApprovedTargets}, so — like
+   * {@link hostConfirmed} — a caller cannot plant one on `contextOverride`, and
+   * it never appears on the MCP tool surface where a model could name its own
+   * approvals.
+   *
+   * Deliberately here and not in any action's `argsSchema`, for the same reason
+   * {@link copyTreeRunSource} is: publishing it as an argument would let an
+   * agent claim a human unchecked rows they never saw.
+   *
+   * Three states, all distinct. Absent means no selectable confirmation ran, so
+   * an action that needs one must refuse rather than assume every target was
+   * approved. A populated array names exactly the targets kept, and only those.
+   * An empty array means an approval that kept nothing — which the MCP confirm
+   * dialog deliberately does not offer, since unchecking every row is Cancel
+   * with an extra click, so it reaches an action only from a host that chose to
+   * send one. Handled rather than rejected: the honest result is that every
+   * target was excluded, and an action must not read "approved" plus an empty
+   * list as permission to act on the full request.
+   */
+  hostApprovedTargets?: readonly HostApprovedTarget[];
+}
+
+/**
+ * One target a human kept selected in a host confirmation that offered
+ * per-target deselection (#12123).
+ *
+ * Carries the state the row was SHOWING when the list froze, not the state at
+ * the moment Approve was clicked. That is the whole point: an approval covers
+ * the consequence the approver was actually shown, so the action re-reads live
+ * state immediately before it commits and skips any target that has since
+ * escalated past what the row said. Without the frozen bit the action could
+ * only skip everything currently running an agent — including the rows whose
+ * "agent running" badge the human read and approved anyway.
+ */
+export interface HostApprovedTarget {
+  /** The target's id, exactly as the confirmation listed it. */
+  id: string;
+  /** Whether the frozen confirmation row showed an agent as running. */
+  observedAgentRunning: boolean;
 }
 
 export type InferActionArgs<S extends z.ZodTypeAny | undefined> = [S] extends [z.ZodTypeAny]
@@ -464,6 +507,12 @@ export interface ActionDispatchOptions {
   contextOverride?: ActionContext;
   /** See {@link ActionContext.copyTreeRunSource}. */
   copyTreeRunSource?: CopyTreeRunSource;
+  /**
+   * Trusted per-target approvals from a selectable host confirmation — NOT a
+   * client-supplied value. See {@link ActionContext.hostApprovedTargets}. Set
+   * only by the MCP renderer bridge, from the rows the approver left checked.
+   */
+  hostApprovedTargets?: readonly HostApprovedTarget[];
 }
 
 export interface ActionDispatchPayload {

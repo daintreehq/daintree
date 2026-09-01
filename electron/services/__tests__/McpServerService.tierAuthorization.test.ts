@@ -923,6 +923,11 @@ describe("McpServerService", () => {
         description: "Permanently remove a terminal",
       }),
       createManifestEntry({
+        id: "terminal.killBatch" as ActionId,
+        title: "Kill terminals",
+        description: "Permanently remove several named terminals in one call",
+      }),
+      createManifestEntry({
         id: "terminal.killAll" as ActionId,
         title: "Kill All Terminals",
         description: "Permanently remove all terminals",
