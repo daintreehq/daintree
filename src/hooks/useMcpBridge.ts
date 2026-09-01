@@ -5,7 +5,12 @@ import {
   MAIN_DISPATCH_DEADLINE_MS,
   requestMcpConfirmation,
   useMcpConfirmStore,
+  type McpConfirmResolution,
+  type McpConfirmSelectableTarget,
 } from "@/store/mcpConfirmStore";
+import { usePanelStore } from "@/store/panelStore";
+import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { runWithMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import {
   buildWorktreeDeletePreview,
@@ -28,7 +33,12 @@ import {
   resolveWorktreeLocation,
   type WorktreeLocationArgs,
 } from "@/services/actions/definitions/locationArgs";
-import type { ActionContext, ActionDispatchResult, ActionId } from "@shared/types/actions";
+import type {
+  ActionContext,
+  ActionDispatchResult,
+  ActionId,
+  HostApprovedTarget,
+} from "@shared/types/actions";
 import type { McpConfirmationDecision, McpSessionOrigin } from "@shared/types/ipc/mcpServer";
 import type { TerminalSpawnSource } from "@shared/types/panel";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -123,7 +133,16 @@ export type McpConfirmPreviewTarget =
    * terminals — `recipe.delete` and `recipe.saveToRepo` are gated and preview
    * the same content, but describing it as "starts" would be a lie.
    */
-  | { kind: "recipe"; recipeId: string; resolvedRecipeId: string; spawns: boolean };
+  | { kind: "recipe"; recipeId: string; resolvedRecipeId: string; spawns: boolean }
+  /**
+   * A batch kill's explicit target list (#12123). Unlike every kind above, this
+   * one previews no async fetch: the rows come straight out of the renderer's
+   * own panel store, synchronously, at request time. That is the requirement,
+   * not a shortcut — the list must be complete and frozen before the dialog is
+   * interactive, and a late-arriving row is a row that appears under a cursor
+   * already moving toward the confirm button.
+   */
+  | { kind: "terminalKillBatch"; terminalIds: readonly string[] };
 
 /** Section heading rendered above each kind's preview lines. */
 const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
@@ -131,6 +150,9 @@ const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   gitPush: "Branch and local commits",
   gitPullRebase: "Branch and local commits",
   recipe: "Recipe contents",
+  // Unused: this kind renders a selectable checklist with its own heading
+  // rather than the preview card. Present so the map stays exhaustive.
+  terminalKillBatch: "Terminals",
 };
 
 export function mcpConfirmPreviewTitle(target: McpConfirmPreviewTarget): string {
@@ -202,6 +224,77 @@ function readGitLocationArg(args: unknown): GitLocationArg {
 }
 
 /**
+ * The terminal ids a `terminal.killBatch` names, or undefined when the args
+ * carry no usable list (#12123).
+ *
+ * Deliberately strict and deliberately silent on failure: a malformed list gets
+ * no checklist and falls through to `argsSchema` validation, which rejects it.
+ * Repairing it here into something dispatchable would put a target list in front
+ * of an approver that the action would never have accepted.
+ */
+function terminalIdsArg(args: unknown): readonly string[] | undefined {
+  if (args === null || typeof args !== "object" || !("terminalIds" in args)) return undefined;
+  const terminalIds = args.terminalIds;
+  if (!Array.isArray(terminalIds) || terminalIds.length === 0) return undefined;
+  if (!terminalIds.every((id): id is string => typeof id === "string" && id.length > 0)) {
+    return undefined;
+  }
+  return terminalIds;
+}
+
+/**
+ * The checklist rows for a batch kill, read synchronously from the renderer's
+ * own stores (#12123).
+ *
+ * Every requested id gets a row, including one that names no live panel: the
+ * approver decides about the list the caller actually sent, and silently
+ * dropping an unknown id would show a shorter batch than the one requested.
+ *
+ * `agentRunning` is the state this row is frozen at. `run()` re-reads it live
+ * immediately before it destroys anything and skips a target that has escalated
+ * past what the row said, so this value is what binds the approval to what was
+ * on screen.
+ *
+ * Exported for unit tests; the bridge is the only production caller.
+ */
+export function buildTerminalKillBatchTargets(
+  terminalIds: readonly string[]
+): McpConfirmSelectableTarget[] {
+  const { panelsById } = usePanelStore.getState();
+  // Fails soft: `getCurrentViewStore()` throws when no worktree view store is
+  // mounted, and a missing worktree name costs a row a subtitle, never the
+  // dialog. Same trade `resolveMcpConfirmSubject` makes.
+  let worktrees: ReadonlyMap<string, { branch?: string; name?: string }> | undefined;
+  try {
+    worktrees = getCurrentViewStore().getState().worktrees;
+  } catch {
+    worktrees = undefined;
+  }
+
+  return terminalIds.map((id) => {
+    // `Object.hasOwn`: `panelsById` is a plain object, so an id like
+    // "constructor" would otherwise resolve off the prototype and describe a
+    // function as if it were a panel.
+    const panel = Object.hasOwn(panelsById, id) ? panelsById[id] : undefined;
+    if (panel === undefined) {
+      return { id, name: id, kindLabel: "No longer open", agentRunning: false };
+    }
+    const chrome = deriveTerminalChrome(panel);
+    const worktree = panel.worktreeId === undefined ? undefined : worktrees?.get(panel.worktreeId);
+    const worktreeName = worktree?.branch || worktree?.name;
+    return {
+      id,
+      // The panel's own title, matching what the grid and sidebar show — the
+      // derived chrome label is the panel's kind, not its name.
+      name: panel.title !== undefined && panel.title.length > 0 ? panel.title : id,
+      ...(worktreeName ? { worktree: worktreeName } : {}),
+      kindLabel: chrome.label,
+      agentRunning: terminalHasRunningAgentSession(panel),
+    };
+  });
+}
+
+/**
  * Resolve what this dispatch should preview, or `undefined` when it has no
  * preview. Called ONCE per dispatch: the result drives `previewPending`, the
  * fetch, the modal heading, and — for git — the cwd the approved dispatch is
@@ -214,6 +307,10 @@ export function resolveMcpConfirmPreviewTarget(
   args: unknown,
   context: ActionContext | undefined
 ): McpConfirmPreviewTarget | undefined {
+  if (actionId === "terminal.killBatch") {
+    const terminalIds = terminalIdsArg(args);
+    return terminalIds === undefined ? undefined : { kind: "terminalKillBatch", terminalIds };
+  }
   if (actionId === "worktree.delete") {
     const worktreeId = worktreeIdArg(args);
     return worktreeId === undefined
@@ -398,6 +495,9 @@ export interface McpConfirmPreviewResult {
 export async function buildMcpConfirmPreview(
   target: McpConfirmPreviewTarget
 ): Promise<McpConfirmPreviewResult> {
+  // The checklist IS this kind's preview, and it is already on the item before
+  // the modal opens. There is nothing to fetch and nothing to patch in later.
+  if (target.kind === "terminalKillBatch") return { lines: [] };
   if (target.kind === "recipe") {
     // Renderer state, so no fetch — but re-read here rather than closing over
     // the resolve-time recipe so the lines reflect the store at modal-open.
@@ -567,6 +667,10 @@ export function worktreeDeleteGateRefusal(
  */
 function withPreviewedGitCwd(args: unknown, target: McpConfirmPreviewTarget | undefined): unknown {
   if (target === undefined || target.kind === "worktreeDelete") return args;
+  // The batch kill pins its approval through the dispatch options rather than
+  // through args, so there is nothing to rewrite here — and rewriting the id
+  // list would hide the excluded targets the action has to report on.
+  if (target.kind === "terminalKillBatch") return args;
   if (target.kind === "recipe") {
     // Same rationale as the git cwd pin: the dispatch must act on the recipe the
     // human saw. `getRecipeById` resolves a shadowed id to a different winner,
@@ -673,6 +777,12 @@ export function useMcpBridge(): void {
         // re-derived gate below, which is what binds the approval to the target
         // and the content the human saw rather than to whatever is true after.
         let approvedTypedNameTarget: string | undefined;
+        // The per-target half of the same attestation, for a confirmation that
+        // offered per-row deselection (#12123). Stays undefined for every other
+        // dispatch — including a pre-granted one, which shows no modal and so
+        // selected nothing — and an action that needs it refuses on its absence
+        // rather than reading "approved" as "approved all of these".
+        let hostApprovedTargets: HostApprovedTarget[] | undefined;
         try {
           let effectiveConfirmed = confirmed;
 
@@ -733,8 +843,14 @@ export function useMcpBridge(): void {
               // item and re-enables approval when the fetch lands (empty lines
               // when there's nothing to show); a no-op if already resolved.
               previewTarget = resolveMcpConfirmPreviewTarget(actionId, args, context);
-              const previewPending = previewTarget !== undefined;
-              if (previewTarget !== undefined) {
+              // The checklist kind resolves synchronously below and has no
+              // lines to fetch, so it must not arm the pending-preview gate —
+              // that would leave its approve button disabled with nothing in
+              // flight to ever re-enable it.
+              const hasAsyncPreview =
+                previewTarget !== undefined && previewTarget.kind !== "terminalKillBatch";
+              const previewPending = hasAsyncPreview;
+              if (hasAsyncPreview && previewTarget !== undefined) {
                 void buildMcpConfirmPreview(previewTarget)
                   .then(({ lines, typedNameTarget }) => {
                     if (disposed) return;
@@ -750,9 +866,16 @@ export function useMcpBridge(): void {
                     useMcpConfirmStore.getState().setPreview(requestId, []);
                   });
               }
-              let decision: McpConfirmationDecision;
+              // Frozen HERE, once, before the modal exists — not rebuilt on
+              // render and never appended to. The list the approver reads is
+              // the list their approval covers.
+              const selectableTargets =
+                previewTarget?.kind === "terminalKillBatch"
+                  ? buildTerminalKillBatchTargets(previewTarget.terminalIds)
+                  : undefined;
+              let resolution: McpConfirmResolution;
               try {
-                decision = await requestMcpConfirmation({
+                resolution = await requestMcpConfirmation({
                   requestId,
                   actionId,
                   actionTitle: definition.title,
@@ -783,12 +906,25 @@ export function useMcpBridge(): void {
                   // absence that has two very different causes.
                   sessionOrigin,
                   previewPending,
-                  ...(previewTarget ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) } : {}),
+                  ...(hasAsyncPreview && previewTarget
+                    ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) }
+                    : {}),
+                  ...(selectableTargets
+                    ? {
+                        selectableTargets,
+                        selectionConfirmLabel: {
+                          verb: "Kill",
+                          one: "terminal",
+                          many: "terminals",
+                        },
+                      }
+                    : {}),
                 });
               } finally {
                 inFlightConfirms.delete(requestId);
               }
               if (disposed) return;
+              const decision = resolution.decision;
               if (decision === "rejected") {
                 window.electron.mcpBridge.sendDispatchActionResponse({
                   requestId,
@@ -807,6 +943,16 @@ export function useMcpBridge(): void {
               }
               confirmationDecision = "approved";
               effectiveConfirmed = true;
+              if (selectableTargets !== undefined) {
+                // Only the rows still checked, each carrying the agent state its
+                // row was SHOWING. `run()` re-reads that state live before it
+                // destroys anything, so an approval can only ever cover the
+                // consequence the approver was actually shown (#12123).
+                const approved = new Set(resolution.selectedTargetIds ?? []);
+                hostApprovedTargets = selectableTargets
+                  .filter((target) => approved.has(target.id))
+                  .map((target) => ({ id: target.id, observedAgentRunning: target.agentRunning }));
+              }
 
               // Re-check the gate against LIVE state, immediately before the
               // dispatch runs. The modal's fetch is minutes old by human
@@ -861,6 +1007,7 @@ export function useMcpBridge(): void {
                 // unpinned external dispatch — ActionService then falls
                 // back to live renderer context, unchanged behaviour.
                 contextOverride: context,
+                ...(hostApprovedTargets ? { hostApprovedTargets } : {}),
               }),
             actionId
           );

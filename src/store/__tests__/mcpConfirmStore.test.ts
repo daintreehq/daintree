@@ -35,14 +35,14 @@ describe("mcpConfirmStore", () => {
     expect(state.queue[0]!.requestId).toBe("b");
 
     state.resolveCurrent("approved");
-    expect(await first).toBe("approved");
+    expect(await first).toEqual({ decision: "approved" });
 
     const next = useMcpConfirmStore.getState();
     expect(next.current?.requestId).toBe("b");
     expect(next.queue).toHaveLength(0);
 
     next.resolveCurrent("rejected");
-    expect(await second).toBe("rejected");
+    expect(await second).toEqual({ decision: "rejected" });
 
     expect(useMcpConfirmStore.getState().current).toBeNull();
   });
@@ -52,10 +52,10 @@ describe("mcpConfirmStore", () => {
     const second = requestMcpConfirmation(pendingFixture({ requestId: "b" }));
 
     useMcpConfirmStore.getState().resolveCurrent("approved");
-    expect(await first).toBe("approved");
+    expect(await first).toEqual({ decision: "approved" });
 
     useMcpConfirmStore.getState().resolveCurrent("timeout");
-    expect(await second).toBe("timeout");
+    expect(await second).toEqual({ decision: "timeout" });
   });
 
   it("ignores resolveCurrent when nothing is showing", () => {
@@ -94,12 +94,12 @@ describe("mcpConfirmStore", () => {
     const first = requestMcpConfirmation(pendingFixture({ requestId: "dup" }));
     const second = requestMcpConfirmation(pendingFixture({ requestId: "dup" }));
 
-    expect(await second).toBe("rejected");
+    expect(await second).toEqual({ decision: "rejected" });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("duplicate requestId"));
     expect(useMcpConfirmStore.getState().queue).toHaveLength(0);
 
     useMcpConfirmStore.getState().resolveCurrent("approved");
-    expect(await first).toBe("approved");
+    expect(await first).toEqual({ decision: "approved" });
 
     warn.mockRestore();
   });
@@ -152,6 +152,39 @@ describe("mcpConfirmStore", () => {
       useMcpConfirmStore.getState().setPreview("a", ["  M src/app.ts"], "feature/x");
       expect(useMcpConfirmStore.getState().current).toBeNull();
     });
+  });
+
+  it("carries the approver's selection back with an approval", async () => {
+    const pending = requestMcpConfirmation({
+      ...pendingFixture(),
+      selectableTargets: [
+        { id: "t1", name: "one", kindLabel: "Terminal", agentRunning: false },
+        { id: "t2", name: "two", kindLabel: "Terminal", agentRunning: true },
+      ],
+    });
+
+    useMcpConfirmStore.getState().resolveCurrent("approved", ["t1"]);
+
+    expect(await pending).toEqual({ decision: "approved", selectedTargetIds: ["t1"] });
+  });
+
+  it("carries an empty selection through as a real answer, not an absent one", async () => {
+    const pending = requestMcpConfirmation(pendingFixture());
+
+    useMcpConfirmStore.getState().resolveCurrent("approved", []);
+
+    expect(await pending).toEqual({ decision: "approved", selectedTargetIds: [] });
+  });
+
+  it("drops a selection handed to a rejection or timeout", async () => {
+    const rejected = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+    const timedOut = requestMcpConfirmation(pendingFixture({ requestId: "b" }));
+
+    useMcpConfirmStore.getState().resolveCurrent("rejected", ["t1"]);
+    useMcpConfirmStore.getState().resolveCurrent("timeout", ["t2"]);
+
+    expect(await rejected).toEqual({ decision: "rejected" });
+    expect(await timedOut).toEqual({ decision: "timeout" });
   });
 
   it("reset clears state and the resolver map without resolving outstanding promises", async () => {

@@ -85,6 +85,59 @@ const PanelCloseResultSchema = z.object({
 });
 
 /**
+ * Ceiling on one batch kill.
+ *
+ * Far below `terminal.waitUntilIdleBatch`'s 256: that one is a read-only wait
+ * nobody has to look at, while every id here becomes a row a human must read
+ * before approving. A list long enough to need real scrolling is a list that
+ * gets approved unread, which is the failure this dialog exists to prevent.
+ */
+export const MAX_KILL_BATCH_TERMINALS = 32;
+
+/**
+ * What one batch kill did, per target.
+ *
+ * Four buckets rather than a count, because the four causes need four different
+ * responses from the caller and a bare success hides all of them: an excluded id
+ * was refused by a human and must never be retried, a missing one was already
+ * gone, and a skipped one is still alive and still working. Every id the call
+ * asked for lands in exactly one bucket, in the order it was requested.
+ */
+const TerminalKillBatchArgsSchema = z.object({
+  terminalIds: z
+    .array(z.string().min(1))
+    .min(1)
+    .max(MAX_KILL_BATCH_TERMINALS)
+    .refine((ids) => new Set(ids).size === ids.length, {
+      message: "terminalIds must not repeat an id",
+    })
+    .describe(
+      `Identifies the panels to destroy (1-${MAX_KILL_BATCH_TERMINALS}), using \`id\` values from the terminal listing. Each id must appear once. An id that is unchecked, already gone, or newly busy is reported back rather than failing the batch.`
+    ),
+});
+
+const TerminalKillBatchResultSchema = z.object({
+  killedIds: z
+    .array(z.string())
+    .describe("The panels this call destroyed. Their processes and scrollback are gone."),
+  excludedIds: z
+    .array(z.string())
+    .describe(
+      "Unchecked by the approver. A human refusal of these exact targets, not a transient failure: never retry them or re-ask on their behalf."
+    ),
+  notFoundIds: z
+    .array(z.string())
+    .describe(
+      "No panel with this id existed when the kill ran. Already gone rather than spared, so nothing is left to retry."
+    ),
+  skippedIds: z
+    .array(z.string())
+    .describe(
+      "Started running an agent after the confirmation froze, so the approval described an idle panel these no longer are. Untouched and still working; check what the agent is doing before asking again."
+    ),
+});
+
+/**
  * Which of `ids` have actually left the open roster, read after the canonical
  * teardown ran. `trashPanel` keeps the record and moves it to `location:
  * "trash"`, but remove-on-exit and dialog panels bypass trash entirely and are
@@ -326,6 +379,93 @@ export function registerTerminalLifecycleActions(
       }
       clearPendingIf("kill");
       state.removePanel(targetId);
+    },
+  }));
+
+  actions.set("terminal.killBatch", () => ({
+    id: "terminal.killBatch",
+    title: "Kill terminals",
+    description:
+      "Permanently destroy several named panels and their processes at once, with no trash step and no recovery. Raises one confirmation listing every target, each separately deselectable — one prompt for the whole batch rather than one per panel. Reports each id on its own: destroyed, deselected by the approver, already gone, or skipped for starting an agent after the list froze.",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    dangerRationale:
+      "Permanently kills every named PTY process. Scrollback and session state are lost for each one.",
+    keywords: ["terminate", "stop", "remove", "delete", "batch", "bulk"],
+    // Hidden from the palette: it acts only on ids an automated caller supplies,
+    // and its confirmation is the host modal the MCP bridge raises. A user
+    // picking it here would have nothing to name; `terminal.kill` and
+    // `terminal.killAll` are the palette's versions.
+    palette: { mode: "hidden" },
+    argsSchema: TerminalKillBatchArgsSchema,
+    resultSchema: TerminalKillBatchResultSchema,
+    mcpOutputSchema: true,
+    run: async (args: unknown, ctx) => {
+      // Re-parsed rather than asserted. `ActionService` has already validated
+      // against this exact schema, so this cannot throw on the dispatch path —
+      // it just buys the narrowed type without an unchecked cast, and keeps
+      // `run()` honest if it is ever called outside the service.
+      const { terminalIds } = TerminalKillBatchArgsSchema.parse(args);
+      // The per-target attestation is what this action runs on, and it exists
+      // only when a selectable host confirmation actually resolved. Refusing on
+      // its absence is the whole gate: `hostConfirmed` alone says a human
+      // approved *something*, and reading that as "approved all of these" is
+      // exactly the sweep the deselectable dialog exists to prevent. Nothing
+      // else dispatches this action, so a missing attestation is a wiring bug,
+      // never a user in a hurry.
+      const approved = ctx?.hostApprovedTargets;
+      if (approved === undefined) {
+        throw new Error(
+          "terminal.killBatch requires a per-target approval from the host confirmation; nothing was destroyed."
+        );
+      }
+      // Only ids the call actually asked for. An attestation naming anything
+      // else is not consent about this batch.
+      const requested = new Set(terminalIds);
+      const observedAgentById = new Map(
+        approved
+          .filter((target) => requested.has(target.id))
+          .map((target) => [target.id, target.observedAgentRunning] as const)
+      );
+
+      const killedIds: string[] = [];
+      const excludedIds: string[] = [];
+      const notFoundIds: string[] = [];
+      const skippedIds: string[] = [];
+
+      for (const id of terminalIds) {
+        if (!observedAgentById.has(id)) {
+          excludedIds.push(id);
+          continue;
+        }
+        // Re-read per id rather than snapshotting once before the loop: each
+        // removal mutates the store, and an agent can start working in a
+        // later target while an earlier one is being torn down.
+        const state = usePanelStore.getState();
+        // `Object.hasOwn`, not truthiness: `panelsById` is a plain object, so
+        // an id like "constructor" would otherwise resolve off the prototype
+        // and get removed as if it were a real panel.
+        if (!Object.hasOwn(state.panelsById, id)) {
+          notFoundIds.push(id);
+          continue;
+        }
+        const terminal = state.panelsById[id];
+        // The revalidation the approval is bound to. Only escalation counts: a
+        // row the approver saw running an agent and approved anyway still dies,
+        // and one that has since gone idle is strictly less than what they
+        // approved. A row shown idle that is now mid-work is the one case the
+        // approval never covered.
+        if (observedAgentById.get(id) !== true && terminalHasRunningAgentSession(terminal)) {
+          skippedIds.push(id);
+          continue;
+        }
+        state.removePanel(id);
+        killedIds.push(id);
+      }
+
+      return { killedIds, excludedIds, notFoundIds, skippedIds };
     },
   }));
 

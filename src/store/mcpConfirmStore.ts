@@ -116,7 +116,69 @@ export interface PendingMcpConfirm {
    * to still be true when the human finally clicks.
    */
   typedNameTarget?: string;
+  /**
+   * The individually-deselectable targets this dispatch acts on (#12123), for a
+   * batch whose approval is per-target rather than all-or-nothing.
+   *
+   * Resolved once, synchronously, from the renderer's own stores at request
+   * time — never patched in later the way {@link preview} is. The list must be
+   * frozen before the dialog becomes interactive: a row appearing under a
+   * cursor that is already moving toward the confirm button is a click the
+   * approver never aimed at that target. Absent for every dispatch whose
+   * approval is a single yes/no.
+   */
+  selectableTargets?: readonly McpConfirmSelectableTarget[];
+  /**
+   * How the confirm button should name the current selection (#12123). A
+   * destructive button that says only "Kill terminals" while three of five rows
+   * are unchecked describes a different act from the one about to happen, so the
+   * count travels with the list.
+   *
+   * Three parts rather than a formatted string: the count is not known when the
+   * request is enqueued, and it changes on every toggle. Read only when
+   * {@link selectableTargets} is present.
+   */
+  selectionConfirmLabel?: { verb: string; one: string; many: string };
   enqueuedAt: number;
+}
+
+/**
+ * One row in a selectable confirmation (#12123).
+ *
+ * Everything the approver needs to tell one target from another and judge what
+ * losing it costs: what it is called, where it lives, what kind of panel it is,
+ * and whether something is running in it right now. `agentRunning` is also the
+ * state the approval gets bound to — the action re-reads it live before it
+ * commits, so a target that was idle here and is working by then is skipped
+ * rather than swept into an approval that never described it.
+ */
+export interface McpConfirmSelectableTarget {
+  id: string;
+  /** The panel's own title, as the grid and sidebar show it. */
+  name: string;
+  /** The worktree the panel belongs to, or undefined when it has none. */
+  worktree?: string;
+  /** Display label for the panel's kind — "Terminal", "Browser", the agent's name. */
+  kindLabel: string;
+  /** Whether an agent session is mid-work in this panel right now. */
+  agentRunning: boolean;
+}
+
+/**
+ * How a confirmation settled.
+ *
+ * Deliberately NOT a widening of {@link McpConfirmationDecision}: that type
+ * crosses IPC — it is zod-validated in `electron/schemas/ipc.ts` and read by
+ * the audit log and the session server — so the selection rides alongside it in
+ * a renderer-internal shape instead, and the scalar the wire already carries
+ * stays exactly what it was.
+ *
+ * `selectedTargetIds` is present only for an approved selectable confirmation,
+ * and an empty array is a real answer there: the approver unchecked everything.
+ */
+export interface McpConfirmResolution {
+  decision: McpConfirmationDecision;
+  selectedTargetIds?: readonly string[];
 }
 
 interface McpConfirmState {
@@ -127,7 +189,10 @@ interface McpConfirmState {
 interface McpConfirmActions {
   enqueue: (item: PendingMcpConfirm) => void;
   setPreview: (requestId: string, preview: string[], typedNameTarget?: string) => void;
-  resolveCurrent: (decision: McpConfirmationDecision) => void;
+  resolveCurrent: (
+    decision: McpConfirmationDecision,
+    selectedTargetIds?: readonly string[]
+  ) => void;
   drop: (requestId: string) => void;
   reset: () => void;
 }
@@ -142,7 +207,7 @@ interface McpConfirmActions {
  * Zustand state changes are async-batched; storing them in state would
  * defeat the deterministic enqueue/resolve order.
  */
-const resolvers = new Map<string, (decision: McpConfirmationDecision) => void>();
+const resolvers = new Map<string, (resolution: McpConfirmResolution) => void>();
 
 function advance(set: (partial: Partial<McpConfirmState>) => void, queue: PendingMcpConfirm[]) {
   if (queue.length === 0) {
@@ -195,12 +260,19 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
     set({ queue: next });
   },
 
-  resolveCurrent: (decision) => {
+  resolveCurrent: (decision, selectedTargetIds) => {
     const { current, queue } = get();
     if (current === null) return;
     const resolve = resolvers.get(current.requestId);
     resolvers.delete(current.requestId);
-    resolve?.(decision);
+    // Only an approval carries a selection. A rejection or timeout resolved
+    // nothing about individual targets, and handing back a stale checkbox state
+    // there would let the bridge stamp per-target approvals nobody gave.
+    resolve?.(
+      decision === "approved" && selectedTargetIds !== undefined
+        ? { decision, selectedTargetIds }
+        : { decision }
+    );
     advance(set, queue);
   },
 
@@ -225,20 +297,21 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
 
 /**
  * Push a confirmation request into the queue and return a Promise that
- * resolves with the user's decision. The returned Promise never rejects —
- * the renderer's auto-timeout (mirroring main's hard timer) resolves with
+ * resolves with the user's decision, and — for a selectable confirmation — the
+ * targets they left checked. The returned Promise never rejects — the
+ * renderer's auto-timeout (mirroring main's hard timer) resolves with
  * `"timeout"` so callers can branch on a single discriminated value.
  */
 export function requestMcpConfirmation(
   item: Omit<PendingMcpConfirm, "enqueuedAt">
-): Promise<McpConfirmationDecision> {
+): Promise<McpConfirmResolution> {
   return new Promise((resolve) => {
     if (resolvers.has(item.requestId)) {
       // Replacing a live resolver would orphan the original promise. UUID
       // collisions are vanishingly unlikely in practice, so log and refuse
       // rather than silently drop work; this also lets tests catch misuse.
       console.warn(`[McpConfirmStore] duplicate requestId rejected: ${item.requestId}`);
-      resolve("rejected");
+      resolve({ decision: "rejected" });
       return;
     }
     resolvers.set(item.requestId, resolve);

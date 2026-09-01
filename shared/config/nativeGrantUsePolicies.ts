@@ -37,16 +37,19 @@ export type NativeGrantUsePolicy = "per-dispatch" | "per-resolved-target";
  * ordinary single-target tools need no declaration, which means an omission
  * fails open.
  *
- * The batch terminal kill in #12123 is the next tool that belongs here: it
- * takes explicit ids rather than a live query, but its blast radius is still
- * per-target, so it gets one bulk human confirmation rather than a generic
- * grant's blanket pre-authorization.
+ * `terminal.killBatch` (#12123) is listed for a related but distinct reason: it
+ * takes explicit ids rather than a live query, so its count IS knowable up
+ * front, but its blast radius is still per-target and each target is separately
+ * refusable. It gets one bulk human confirmation with a deselectable row per
+ * terminal, which is precisely the consent a generic grant's blanket
+ * pre-authorization cannot stand in for.
  */
 export const NATIVE_GRANT_USE_POLICY_OVERRIDES: Readonly<
   Partial<Record<BuiltInActionId, NativeGrantUsePolicy>>
 > = {
   "terminal.closeAll": "per-resolved-target",
   "terminal.killAll": "per-resolved-target",
+  "terminal.killBatch": "per-resolved-target",
 };
 
 // Keyed lookup rather than a bare index into the literal above: `toolId` is

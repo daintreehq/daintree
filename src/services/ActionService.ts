@@ -594,6 +594,11 @@ export class ActionService {
         // nothing (#12120). Unconditional, so a `contextOverride` cannot claim
         // an approval the host never made.
         hostConfirmed: options?.confirmed,
+        // Stamped for the same reason and on the same terms: the per-target
+        // half of the same attestation. An action whose confirmation offered
+        // deselection needs to know WHICH targets survived it, and the only
+        // trustworthy source is the host that raised the dialog (#12123).
+        hostApprovedTargets: options?.hostApprovedTargets,
       };
       const result = await definition.run(validatedArgs, runContext);
       // Enforce the action's own result contract. Zod objects strip unknown
