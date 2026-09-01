@@ -1,9 +1,24 @@
-import { execFile } from "child_process";
+import { execFile, type ExecFileOptionsWithStringEncoding } from "child_process";
 import os from "node:os";
-import { promisify } from "util";
 import { logDebug } from "../utils/logger.js";
 
-const execFileAsync = promisify(execFile);
+function execProbe(
+  file: string,
+  args: string[],
+  options: ExecFileOptionsWithStringEncoding
+): Promise<{ stdout: string; pid: number | null }> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(file, args, options, (error, stdout) => {
+      // Native callbacks are asynchronous, but deferring also keeps this safe
+      // under unit-test doubles that invoke the callback synchronously before
+      // `execFile` has returned its ChildProcess.
+      queueMicrotask(() => {
+        if (error) reject(error);
+        else resolve({ stdout, pid: child?.pid ?? null });
+      });
+    });
+  });
+}
 
 const BACKOFF_MULTIPLIER = 1.5;
 const BACKOFF_CEILING_MS = 15_000;
@@ -194,11 +209,16 @@ export class ProcessTreeCache {
     // Include %cpu for activity detection. execFile avoids the shell fork that
     // exec() introduces — ps takes no shell features, so the intermediate
     // /bin/sh -c is pure overhead on every poll.
-    const { stdout } = await execFileAsync("ps", ["-eo", "pid,ppid,%cpu,rss,comm,command"], {
-      timeout: 5000,
-      maxBuffer: 10 * 1024 * 1024,
-      env: { ...process.env, LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8" },
-    });
+    const { stdout, pid: probePid } = await execProbe(
+      "ps",
+      ["-eo", "pid,ppid,%cpu,rss,comm,command"],
+      {
+        timeout: 5000,
+        maxBuffer: 10 * 1024 * 1024,
+        encoding: "utf-8",
+        env: { ...process.env, LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8" },
+      }
+    );
 
     const newCache = new Map<number, ProcessInfo>();
     const newChildrenMap = new Map<number, number[]>();
@@ -210,7 +230,10 @@ export class ProcessTreeCache {
       if (!line) continue;
 
       const parsed = this.parseUnixLine(line);
-      if (parsed) {
+      // The probe appears in the census it produces. Retaining that short-lived
+      // PID makes every otherwise-identical snapshot look changed and prevents
+      // the idle backoff from ever advancing.
+      if (parsed && parsed.pid !== probePid) {
         newCache.set(parsed.pid, parsed);
 
         const children = newChildrenMap.get(parsed.ppid) || [];
@@ -284,13 +307,14 @@ export class ProcessTreeCache {
     // (#12042). Spawning powershell directly removes the cmd hop entirely and
     // puts windowsHide on the process that actually has a console. argv form
     // also means the script no longer needs a layer of cmd-level quoting.
-    const { stdout } = await execFileAsync(
+    const { stdout, pid: probePid } = await execProbe(
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-NoLogo", "-Command", psScript],
       {
         timeout: 10000,
         maxBuffer: 10 * 1024 * 1024,
         windowsHide: true,
+        encoding: "utf-8",
       }
     );
 
@@ -325,7 +349,7 @@ export class ProcessTreeCache {
       const pid = parseInt(String(p?.ProcessId), 10);
       const ppid = parseInt(String(p?.ParentProcessId), 10);
 
-      if (!Number.isInteger(pid) || !Number.isInteger(ppid) || pid <= 0) {
+      if (!Number.isInteger(pid) || !Number.isInteger(ppid) || pid <= 0 || pid === probePid) {
         continue;
       }
 
