@@ -57,6 +57,7 @@ const optimisticPanelCloseMock = vi.hoisted(() => ({
 vi.mock("@/services/terminal/optimisticPanelClose", () => optimisticPanelCloseMock);
 
 import { registerTerminalLifecycleActions } from "../terminalLifecycleActions";
+import { MAX_KILL_BATCH_TERMINALS } from "@shared/types/terminalKillBatch";
 
 type MockPanel = {
   id: string;
@@ -436,6 +437,33 @@ describe("terminal.kill confirm gate", () => {
 });
 
 describe("terminal.killBatch", () => {
+  function killBatchArgsSchema() {
+    const actions: ActionRegistry = new Map();
+    registerTerminalLifecycleActions(actions, {} as ActionCallbacks);
+    const def = actions.get("terminal.killBatch")?.() as AnyActionDefinition;
+    return def.argsSchema;
+  }
+
+  // The action and the MCP bridge share one schema (shared/types/terminalKillBatch),
+  // so the bridge never renders a checklist the dispatch would then refuse. These
+  // assert the action's own end of that contract still carries every constraint —
+  // `.describe()` returning a schema that had dropped the refinements would let
+  // duplicate ids through, and duplicates are two rows with one checkbox identity.
+  it("rejects a repeated id", () => {
+    expect(killBatchArgsSchema()?.safeParse({ terminalIds: ["p1", "p1"] }).success).toBe(false);
+  });
+
+  it("rejects more ids than a human can be asked to read", () => {
+    const overCap = Array.from({ length: MAX_KILL_BATCH_TERMINALS + 1 }, (_, i) => `t${i}`);
+    expect(killBatchArgsSchema()?.safeParse({ terminalIds: overCap }).success).toBe(false);
+    const atCap = overCap.slice(0, MAX_KILL_BATCH_TERMINALS);
+    expect(killBatchArgsSchema()?.safeParse({ terminalIds: atCap }).success).toBe(true);
+  });
+
+  it("rejects an empty list rather than treating it as a no-op batch", () => {
+    expect(killBatchArgsSchema()?.safeParse({ terminalIds: [] }).success).toBe(false);
+  });
+
   function approve(ids: string[], observed: Record<string, boolean> = {}) {
     return {
       hostConfirmed: true,

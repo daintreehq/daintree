@@ -176,6 +176,26 @@ describe("McpConfirmDialog", () => {
       expect(screen.getByRole("checkbox", { name: /bbb222/ })).toBeTruthy();
     });
 
+    it("lengthens the shown id when two targets share a tail", () => {
+      void enqueue({
+        actionTitle: "Kill terminals",
+        selectableTargets: [
+          { id: "alpha-cafe01", name: "zsh", kindLabel: "Terminal", agentRunning: false },
+          { id: "bravo-cafe01", name: "zsh", kindLabel: "Terminal", agentRunning: false },
+        ],
+      });
+      render(<McpConfirmDialog />);
+
+      // A fixed six-character tail would render both rows as "…cafe01" — the
+      // same failure as showing no id, wearing the appearance of a fix.
+      const names = screen
+        .getAllByRole("checkbox")
+        .map((box) => box.getAttribute("aria-labelledby"))
+        .map((id) => (id === null ? "" : (document.getElementById(id)?.textContent ?? "")));
+      expect(names).toHaveLength(2);
+      expect(names[0]).not.toBe(names[1]);
+    });
+
     it("names each target by its own row so the boxes are told apart", () => {
       void enqueue({ actionTitle: "Kill terminals", selectableTargets: BATCH_TARGETS });
       render(<McpConfirmDialog />);

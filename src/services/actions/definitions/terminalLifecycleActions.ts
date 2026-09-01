@@ -379,7 +379,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.killBatch",
     title: "Kill terminals",
     description:
-      "Permanently destroy several named panels and their processes at once, with no trash step and no recovery. Raises one confirmation listing every target, each separately deselectable — one prompt for the whole batch rather than one per panel. Reports each id on its own: destroyed, deselected by the approver, already gone, or skipped for starting an agent after the list froze.",
+      "Permanently destroy several named panels and their processes at once, with no trash step and no recovery. Raises one confirmation listing every target, each separately deselectable — one prompt for the whole batch rather than one per panel. Reports each id on its own: destroyed, deselected by the approver, already gone, newly busy, or errored.",
     category: "terminal",
     kind: "command",
     danger: "confirm",

@@ -514,14 +514,29 @@ function PreviewCard({
  * whose accessible name already changes with the count.
  */
 /**
- * A tail of the target's id, long enough to separate two identically-titled
- * panels and short enough not to crowd the row it disambiguates. Ids shorter
- * than this are shown whole.
+ * Where the id tails start: short enough not to crowd the row it disambiguates.
  */
 const SHORT_TARGET_ID_CHARS = 6;
 
-function shortTargetId(id: string): string {
-  return id.length <= SHORT_TARGET_ID_CHARS ? id : `…${id.slice(-SHORT_TARGET_ID_CHARS)}`;
+/**
+ * A display id per target, shortened only as far as it can be while every row
+ * still reads differently.
+ *
+ * A fixed truncation is not enough. These rows exist so the approver can spare
+ * one panel and destroy its neighbour, and ids that happen to share a tail would
+ * put them back to identical — which is the same failure as showing no id, with
+ * the appearance of having fixed it. So the tail grows until the whole column is
+ * distinct, and falls back to full ids when nothing shorter separates them.
+ */
+export function shortTargetIds(ids: readonly string[]): Map<string, string> {
+  const longest = ids.reduce((max, id) => Math.max(max, id.length), 0);
+  for (let chars = SHORT_TARGET_ID_CHARS; chars < longest; chars += 2) {
+    const shortened = ids.map((id) => (id.length <= chars ? id : `…${id.slice(-chars)}`));
+    if (new Set(shortened).size === ids.length) {
+      return new Map(ids.map((id, index) => [id, shortened[index] ?? id]));
+    }
+  }
+  return new Map(ids.map((id) => [id, id]));
 }
 
 function TargetChecklist({
@@ -534,6 +549,7 @@ function TargetChecklist({
   onToggle: (id: string) => void;
 }) {
   const labelIdPrefix = useId();
+  const displayIds = shortTargetIds(targets.map((target) => target.id));
 
   return (
     <div className="rounded-[var(--radius-md)] border border-tint/[0.08] bg-tint/[0.04]">
@@ -578,7 +594,7 @@ function TargetChecklist({
                       the difference between refusing the terminal you meant and
                       destroying it. The id is also what the caller named, so it
                       is what a human cross-referencing the tool call looks for. */}
-                  <span className="font-mono">{shortTargetId(target.id)}</span>
+                  <span className="font-mono">{displayIds.get(target.id) ?? target.id}</span>
                 </span>
               </span>
             </li>
