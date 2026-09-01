@@ -1202,3 +1202,52 @@ describe("DiffViewer native scroll proxy CSS contract (#12103)", () => {
     expect(shell).not.toMatch(/overflow|contain|transform|filter|perspective/);
   });
 });
+
+// #12135: Select All over a diff had no owner, so the native Edit-menu
+// accelerator (webContents.selectAll(), which Chromium only scopes to editable
+// focus) selected the whole app window instead of the diff.
+describe("DiffViewer scoped Select All (#12135)", () => {
+  afterEach(() => {
+    window.getSelection()?.removeAllRanges();
+  });
+
+  it("claims Cmd+A for the diff body when focus sits on the panel root", () => {
+    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
+
+    // The shape ContentPanel produces: DOM focus on a tabIndex={-1} ancestor,
+    // so the keydown never travels down into the diff body on its own.
+    const panelRoot = document.createElement("div");
+    panelRoot.tabIndex = -1;
+    const chrome = document.createElement("nav");
+    chrome.textContent = "sidebar chrome";
+    panelRoot.appendChild(chrome);
+    container.parentNode?.insertBefore(panelRoot, container);
+    panelRoot.appendChild(container);
+
+    const event = new KeyboardEvent("keydown", {
+      key: "a",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    panelRoot.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    const selection = window.getSelection();
+    expect(selection?.getRangeAt(0).commonAncestorContainer).toBe(
+      container.querySelector(".diff-viewer")
+    );
+    expect(selection?.toString()).not.toContain("sidebar chrome");
+  });
+
+  it("still hands its root to a forwarding host", () => {
+    const hostRef = React.createRef<HTMLDivElement>();
+    const { container } = render(
+      wrap(<DiffViewer ref={hostRef} diff={SMALL_DIFF} viewType="unified" />)
+    );
+
+    // The scoped-select-all ref is merged with the forwarded one, not swapped
+    // for it — hosts scroll and measure through this.
+    expect(hostRef.current).toBe(container.querySelector(".diff-viewer"));
+  });
+});

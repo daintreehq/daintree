@@ -289,4 +289,39 @@ describe("MarkdownDocument", () => {
 
     expect(dispatchMock).not.toHaveBeenCalled();
   });
+
+  // #12135: Select All is a native Edit-menu accelerator ending in
+  // webContents.selectAll(). Chromium only scopes that to editable focus, so
+  // over the rendered document it used to select the entire app window.
+  it("claims Cmd+A for the document instead of the whole app", () => {
+    const { container } = render(<MarkdownDocument {...FIXTURE_PROPS} content="# Spec title" />);
+
+    // Focus lands on the panel root, an ancestor of the document — the shape
+    // ContentPanel produces, and the reason a container listener can't work.
+    const panelRoot = document.createElement("div");
+    panelRoot.tabIndex = -1;
+    const chrome = document.createElement("nav");
+    chrome.textContent = "sidebar chrome";
+    panelRoot.appendChild(chrome);
+    container.parentNode?.insertBefore(panelRoot, container);
+    panelRoot.appendChild(container);
+
+    const event = new KeyboardEvent("keydown", {
+      key: "a",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    panelRoot.dispatchEvent(event);
+
+    // A prevented event never reaches the native accelerator.
+    expect(event.defaultPrevented).toBe(true);
+    const selection = window.getSelection();
+    expect(selection?.getRangeAt(0).commonAncestorContainer).toBe(
+      container.querySelector(".markdown-document")
+    );
+    expect(selection?.toString()).toContain("Spec title");
+    expect(selection?.toString()).not.toContain("sidebar chrome");
+    selection?.removeAllRanges();
+  });
 });

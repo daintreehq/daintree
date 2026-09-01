@@ -48,6 +48,7 @@ import {
 } from "lucide-react";
 import { join } from "@shared/utils/path";
 import { getLanguageForFile } from "@/components/FileViewer/languageUtils";
+import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
 import { actionService } from "@/services/ActionService";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -396,6 +397,20 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
   },
   ref
 ) {
+  // Select All over a diff has no owner, so the native Edit-menu command falls
+  // back to the whole app (#12135). Claim it for the diff body. The root also
+  // carries a forwarded ref, so publish to both.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useScopedSelectAll(rootRef);
+  const setRoot = useCallback(
+    (node: HTMLDivElement | null) => {
+      rootRef.current = node;
+      if (typeof ref === "function") ref(node);
+      else if (ref) ref.current = node;
+    },
+    [ref]
+  );
+
   // Keep keystrokes responsive: highlighting re-tokenizes the whole file, so
   // the query lands as a deferred value and the table catches up after paint.
   const deferredSearchQuery = useDeferredValue(searchQuery ?? "");
@@ -556,7 +571,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
   }
 
   return (
-    <div ref={ref} className="diff-viewer" data-wrap={wrapLines ? "true" : undefined}>
+    <div ref={setRoot} className="diff-viewer" data-wrap={wrapLines ? "true" : undefined}>
       {files.map((file, index) => (
         <FileDiff
           key={file.newRevision || file.oldRevision || index}
