@@ -102,7 +102,7 @@ On `TIER_NOT_PERMITTED`, or on finding what you need in `unavailable`, don't ret
 
 ## Finding the Right Tool
 
-`ListTools` is authoritative for what you can call right now. When no worked example below names the operation you need, use `actions.search` to find candidate actions and `actions.getSchema` to inspect one's arguments before calling it. Neither unlocks anything — discovery reports your surface, it never extends it.
+`ListTools` is the advertised baseline for what you can call. It reflects your capability tier, and it is not refreshed when the user approves a single tool for you mid-session, so `actions.list` and `actions.search` are the better read on what you can call _right now_ — their `results` include anything a live approval has opened up. When no worked example below names the operation you need, use `actions.search` to find candidate actions and `actions.getSchema` to inspect one's arguments before calling it. Neither unlocks anything — discovery reports your surface, it never extends it.
 
 **Never report a capability as missing without searching for it first.** `actions.search` and `actions.list` also return an `unavailable` array, and `actions.getSchema` returns an `unavailable` object with `TIER_NOT_PERMITTED`. These name actions that exist but sit above your capability tier, each carrying `minimumTier` and `callable: false`. They are not callable and calling them is not an option — but they are proof the feature exists. Read one and tell the user the operation exists and which tier it needs; never tell them Daintree can't do it.
 

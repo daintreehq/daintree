@@ -33,10 +33,12 @@ export type McpTargetInvocationMode = "allowed" | "wrapper-required";
  * revoking it, and this record must not reintroduce the split by describing
  * what it refuses to name.
  *
- * That rule is about the CALLABLE surface, and it still holds everywhere: an
- * unlisted name stays unlisted and undispatchable, and no denial ever comes
- * back carrying a policy. It is not a rule about whether the host may admit
- * that a capability exists. A renderer-owned session — a pinned panel with a
+ * That rule is about the CALLABLE surface, and it still holds everywhere: the
+ * catalog never makes a name dispatchable, and no denial ever comes back
+ * carrying a policy. (Only a live per-tool or native grant admits a tool
+ * `tools/list` omits, and it does so at the dispatch gate, which this record
+ * reports rather than moves.) It is not a rule about whether the host may
+ * admit that a capability exists. A renderer-owned session — a pinned panel with a
  * human watching — additionally receives an `McpUnavailableActionStub`
  * naming the tier that would permit the target (#12117), because the
  * indistinguishable denial had the assistant telling users the product lacked

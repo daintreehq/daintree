@@ -1888,6 +1888,21 @@ describe("filterIntrospectionResultForSession", () => {
       expect(buildUnavailableStub(makeEntry({ id: OUT_OF_TIER }), snap)).toBeNull();
     });
 
+    // The rows above all name tiers that exist today, so they would stay green
+    // against a `tier !== "external"` check — the fail-OPEN shape. This is the
+    // one that would not: a second flat peer added to `McpTier` has no rung on
+    // the ladder and nothing honest to report, and must be refused until
+    // someone puts it on the ladder deliberately. Cast because the tier does
+    // not exist yet; that is exactly the future this guards.
+    it("stays closed to a tier that is not on the ladder at all", () => {
+      const futurePeer = firstParty({
+        tier: "partner" as unknown as TargetPolicySessionSnapshot["tier"],
+      });
+
+      expect(buildUnavailableStub(makeEntry({ id: OUT_OF_TIER }), futurePeer)).toBeNull();
+      expect(listFor([makeEntry({ id: OUT_OF_TIER })], futurePeer).unavailable).toBeUndefined();
+    });
+
     it("refuses ceilings and unplaceable ids, which no elevation would reach", () => {
       const unreachable: unknown[] = [
         makeEntry({ id: OUT_OF_TIER, mcpVisibility: "hidden" }),
