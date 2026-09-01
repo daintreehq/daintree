@@ -871,7 +871,7 @@ describe("McpServerService", () => {
         title: "Create Worktree with Recipe",
         description: "Create worktree, optionally check out a PR, optionally run a recipe",
       }),
-      // System-only tools — irreversible or externally-visible mutations.
+      // System-only tools — mutations the action tier must not reach.
       createManifestEntry({
         id: "git.commit" as ActionId,
         title: "Commit",
@@ -887,15 +887,20 @@ describe("McpServerService", () => {
         title: "Fetch",
         description: "Update remote-tracking refs from the remote",
       }),
+      // Action-tier since #12116. `danger` mirrors the real registry so the
+      // fixture doesn't quietly describe these as safe; the registry values
+      // themselves are guarded by `EXPECTED_CONFIRM_DANGER`.
       createManifestEntry({
         id: "worktree.delete" as ActionId,
         title: "Delete Worktree",
         description: "Permanently remove a worktree",
+        danger: "confirm",
       }),
       createManifestEntry({
         id: "worktree.deleteOwned" as ActionId,
         title: "Delete Owned Worktree",
         description: "Remove a worktree this MCP session created",
+        danger: "confirm",
       }),
       createManifestEntry({
         id: "terminal.sendCommand" as ActionId,
@@ -1282,7 +1287,8 @@ describe("McpServerService", () => {
         title: "Toggle Dev Dashboard",
         description: "Show or hide the portal dev dashboard",
       }),
-      // Additional entries needed for full SYSTEM_TIER_ADDONS coverage.
+      // Action-tier since #12116; the rest of this block backfills
+      // SYSTEM_TIER_ADDONS coverage.
       createManifestEntry({
         id: "worktree.resource.teardown" as ActionId,
         title: "Teardown Resource",
@@ -1552,7 +1558,7 @@ describe("McpServerService", () => {
       }
     });
 
-    it("action tier adds full in-app orchestration, but excludes filesystem-destructive, git, and externally-visible writes", async () => {
+    it("action tier adds full in-app orchestration and confirm-gated worktree cleanup, but excludes git and externally-visible writes", async () => {
       paneTokenTiers.set("token-action", "action");
       const { window } = createMockWindow({ getManifest: tierManifest });
 
@@ -1696,7 +1702,7 @@ describe("McpServerService", () => {
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    it("rejects clipboard writes, git mutations, and worktree deletes at the action tier", async () => {
+    it("rejects clipboard writes and git mutations at the action tier", async () => {
       paneTokenTiers.set("token-action", "action");
       const dispatchMock = vi.fn((): ActionDispatchResult => ({
         ok: true,
@@ -1713,11 +1719,15 @@ describe("McpServerService", () => {
       });
       transports.push(transport);
 
+      // Deliberately no `worktree.delete` here since #12116 — it is admitted at
+      // this tier now, and what bounds it is the confirm gate rather than the
+      // floor. Its action-tier admission is asserted in `tierAuth.test.ts`, and
+      // the surviving entries are the shared-state writes that genuinely still
+      // need `system`.
       const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [
         { name: "copyTree.generateAndCopyFile", arguments: {} },
         { name: "git.commit", arguments: { message: "x" } },
         { name: "git.push", arguments: {} },
-        { name: "worktree.delete", arguments: {} },
       ];
 
       for (const call of calls) {

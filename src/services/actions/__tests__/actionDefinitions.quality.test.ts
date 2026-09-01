@@ -679,6 +679,9 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.restartAll",
   "terminal.arm",
   "worktree.delete",
+  // Delegates into `worktree.delete` from the main process, so it has to carry
+  // the same danger class — the delegation is what raises the modal.
+  "worktree.deleteOwned",
   "worktree.sessions.endAll",
   "worktree.sessions.trashAll",
   "worktree.sessions.restartAll",
@@ -777,6 +780,10 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // Confirm in ProjectSwitcherPalette.tsx via removeConfirmProject state;
   // action ID not co-located with the ConfirmDialog in that file.
   "project.remove",
+  // MCP-only (#11909), and it never reaches a dialog under its own id: the main
+  // process checks session ownership and then delegates to `worktree.delete`,
+  // so the modal a user answers is wired under that id, above.
+  "worktree.deleteOwned",
   // Agent/MCP-only confirm gate (#11346): arming reroutes the user's next
   // keystrokes to every armed terminal, so an external caller must pass the
   // host confirm dialog. Palette-hidden, and user-side arming goes through the

@@ -1624,16 +1624,17 @@ describe("sessionServer tier-mismatch notifier", () => {
     );
   }
 
-  it("invokes notifyTierMismatch with targetTier when a workbench session calls a system-tier tool", async () => {
+  it("invokes notifyTierMismatch with targetTier when a workbench session calls a tool above its tier", async () => {
     const notify = vi.fn();
     const dispatchAction = vi.fn();
     const deps = fakeDeps({ notifyTierMismatch: notify, dispatchAction });
     const server = createSessionServer("session-A", deps);
     await server.connect(makeMockTransport());
 
-    // worktree.delete is in SYSTEM_TIER_ADDONS — denied at workbench tier.
+    // git.commit is in SYSTEM_TIER_ADDONS — denied at workbench tier, and the
+    // banner's recovery target is the tier that would permit it.
     const result = (await callTool(server, {
-      name: "worktree.delete",
+      name: "git.commit",
       arguments: {},
     })) as { isError?: boolean; content: Array<{ text: string }> };
 
@@ -1643,10 +1644,31 @@ describe("sessionServer tier-mismatch notifier", () => {
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledWith({
       sessionId: "session-A",
-      toolId: "worktree.delete",
+      toolId: "git.commit",
       tier: "workbench",
       targetTier: "system",
     });
+  });
+
+  it("points a workbench session at `action`, not `system`, for worktree cleanup (#12116)", async () => {
+    // The banner offers the NARROWEST tier that would permit the call, so the
+    // promotion has to reach the recovery prompt too — telling a user to select
+    // `system` for a delete that `action` now covers would over-escalate the
+    // surface they end up granting.
+    const notify = vi.fn();
+    const deps = fakeDeps({ notifyTierMismatch: notify });
+    const server = createSessionServer("session-A2", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolId: "worktree.delete",
+        tier: "workbench",
+        targetTier: "action",
+      })
+    );
   });
 
   it("does not invoke notifyTierMismatch when the call is permitted", async () => {
@@ -1825,7 +1847,8 @@ describe("CallTool live activity notifications (#9759)", () => {
     const server = createSessionServer("session-B", deps);
     await server.connect(makeMockTransport());
 
-    // worktree.delete is system-tier — denied at the default workbench tier.
+    // worktree.delete is action-tier (#12116) — still denied at the default
+    // workbench tier, which is all this test needs.
     await callTool(server, { name: "worktree.delete", arguments: {} });
 
     expect(started).not.toHaveBeenCalled();
@@ -1840,7 +1863,8 @@ describe("CallTool live activity notifications (#9759)", () => {
     await server.connect(makeMockTransport());
 
     const before = Date.now();
-    // worktree.delete is system-tier — denied at the default workbench tier.
+    // worktree.delete is action-tier (#12116) — still denied at the default
+    // workbench tier, which is all this test needs.
     await callTool(server, { name: "worktree.delete", arguments: {} });
     const after = Date.now();
 
@@ -2425,11 +2449,12 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 
   it("native grant pre-authorizes a tier-permitted confirm tool and consumes a use (#11878)", async () => {
-    // worktree.delete is `danger: "confirm"` but IS on the system-tier
-    // allowlist, so the floor admits it and the tier-denied leg never runs.
-    // Before #11878 that made the grant unreachable and the modal fired on
-    // every call despite an explicit Settings pre-authorization.
-    const sessionStore = fakeSessionStore("system");
+    // worktree.delete is `danger: "confirm"` but IS on the action-tier
+    // allowlist (#12116), so the floor admits it and the tier-denied leg never
+    // runs. Before #11878 that made the grant unreachable and the modal fired
+    // on every call despite an explicit Settings pre-authorization. Pinned at
+    // `action` rather than a wider tier so it fails if that floor moves back.
+    const sessionStore = fakeSessionStore("action");
     // Unref'd for the reason `seedLiveSession` documents: a referenced
     // 1,000,000 ms timer holds the Vitest worker open past the suite.
     const idleTimer = setTimeout(() => {}, 1_000_000);
@@ -2481,7 +2506,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     // once its single use is gone the call must still run — just with the
     // modal back. The tier-denied equivalent fails closed instead, because
     // there the grant was the authorization itself.
-    const sessionStore = fakeSessionStore("system");
+    const sessionStore = fakeSessionStore("action");
     sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
@@ -2543,9 +2568,9 @@ describe("sessionServer grant cache fallback (#8442)", () => {
 
   it("a tier-permitted call falls back to the modal when the grant dies between peek and consume (#11878)", async () => {
     // The tier still admits the call, so losing the grant costs only the
-    // bypass. Refusing here would report "not permitted for the 'system'
+    // bypass. Refusing here would report "not permitted for the 'action'
     // tier" for an action that tier plainly permits.
-    const sessionStore = fakeSessionStore("system");
+    const sessionStore = fakeSessionStore("action");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
@@ -3105,7 +3130,9 @@ describe("worktree resource lifecycle dedup (#10683)", () => {
     expect(minimumPermittingTier("worktree.resource.provision")).toBe("action");
     expect(minimumPermittingTier("worktree.resource.pause")).toBe("action");
     expect(minimumPermittingTier("worktree.resource.resume")).toBe("action");
-    expect(minimumPermittingTier("worktree.resource.teardown")).toBe("system");
+    // Teardown joined its lifecycle siblings on the default floor in #12116; it
+    // stays `danger: "confirm"`, which is what bounds it.
+    expect(minimumPermittingTier("worktree.resource.teardown")).toBe("action");
     expect(minimumPermittingTier("system.getResourceProfileSnapshot")).toBe("workbench");
     expect(minimumPermittingTier("cliAvailability.get")).toBe("workbench");
     expect(minimumPermittingTier("hibernation.getConfig")).toBe("workbench");
@@ -4050,10 +4077,13 @@ describe("sessionServer introspection tier filtering", () => {
     expect(body.totalMatches).toBe(1);
   });
 
-  // #12117. The bug this reproduces: an assistant at `action` tier asked to
-  // delete worktrees could not see `worktree.delete` at any discovery surface,
-  // so it told the user Daintree has no such feature. It now learns the name
-  // exists and needs `system` — without the name becoming callable anywhere.
+  // #12117. The bug this reproduces: an assistant at `action` tier could not
+  // see a higher-tier action at any discovery surface, so it told the user
+  // Daintree has no such feature. It now learns the name exists and needs
+  // `system` — without the name becoming callable anywhere. The exemplar is
+  // `terminal.arm`: the action the bug was filed about, `worktree.delete`, has
+  // since been promoted to the action tier (#12116) and no longer sits above
+  // this session.
   describe("first-party existence catalog (#12117)", () => {
     function firstPartyDeps(
       result: unknown,
@@ -4067,12 +4097,12 @@ describe("sessionServer introspection tier filtering", () => {
     it("reports a higher-tier action to a renderer-owned session", async () => {
       const deps = firstPartyDeps({
         totalMatches: 2,
-        results: [entry("terminal.list"), entry("worktree.delete", { category: "worktree" })],
+        results: [entry("terminal.list"), entry("terminal.arm", { category: "terminal" })],
       });
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, {
         name: "actions.search",
-        arguments: { query: "delete worktree" },
+        arguments: { query: "arm terminal" },
       });
 
       const body = payload<{
@@ -4082,7 +4112,7 @@ describe("sessionServer introspection tier filtering", () => {
       expect(body.results.map((r) => r.id)).toEqual(["terminal.list"]);
       expect(body.unavailable).toEqual([
         expect.objectContaining({
-          id: "worktree.delete",
+          id: "terminal.arm",
           minimumTier: "system",
           callable: false,
         }),
@@ -4095,7 +4125,7 @@ describe("sessionServer introspection tier filtering", () => {
     // paged path would leave search working and listing silently bare.
     it("reports them through the paged actions.list path too", async () => {
       const deps = firstPartyDeps({
-        actions: [entry("terminal.list"), entry("worktree.delete", { category: "worktree" })],
+        actions: [entry("terminal.list"), entry("terminal.arm", { category: "terminal" })],
       });
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, { name: "actions.list" });
@@ -4108,7 +4138,7 @@ describe("sessionServer introspection tier filtering", () => {
       }>(res);
       expect(body.actions.map((a) => a.id)).toEqual(["terminal.list"]);
       expect(body.total).toBe(1);
-      expect(body.unavailable.map((s) => s.id)).toEqual(["worktree.delete"]);
+      expect(body.unavailable.map((s) => s.id)).toEqual(["terminal.arm"]);
       expect(body.unavailableTotal).toBe(1);
     });
 
@@ -4116,7 +4146,7 @@ describe("sessionServer introspection tier filtering", () => {
     // moment a grant admits the id, it must leave the catalog and appear in
     // `actions`. Anything else advertises the same tool in two states at once.
     it("moves a granted id out of the catalog and into the callable list", async () => {
-      const deps = firstPartyDeps({ actions: [entry("worktree.delete")] });
+      const deps = firstPartyDeps({ actions: [entry("terminal.arm")] });
       const server = createSessionServer("s1", deps);
 
       const before = payload<{ actions: ActionManifestEntry[]; unavailableTotal: number }>(
@@ -4125,14 +4155,14 @@ describe("sessionServer introspection tier filtering", () => {
       expect(before.actions).toEqual([]);
       expect(before.unavailableTotal).toBe(1);
 
-      deps.sessionStore.grantCache.issueGrant("s1", "worktree.delete");
+      deps.sessionStore.grantCache.issueGrant("s1", "terminal.arm");
 
       const after = payload<{
         actions: ActionManifestEntry[];
         unavailable: unknown[];
         unavailableTotal: number;
       }>(await callTool(server, { name: "actions.list" }));
-      expect(after.actions.map((a) => a.id)).toEqual(["worktree.delete"]);
+      expect(after.actions.map((a) => a.id)).toEqual(["terminal.arm"]);
       expect(after.unavailable).toEqual([]);
       expect(after.unavailableTotal).toBe(0);
     });
@@ -4142,22 +4172,22 @@ describe("sessionServer introspection tier filtering", () => {
     // catalog must not appear on either side of it.
     it("leaves the name out of tools/list and refuses the call", async () => {
       const deps = firstPartyDeps(
-        { actions: [entry("worktree.delete")] },
+        { actions: [entry("terminal.arm")] },
         {
           requestManifest: vi
             .fn()
             .mockResolvedValue([
               makeManifestEntry("terminal.list"),
-              makeManifestEntry("worktree.delete"),
+              makeManifestEntry("terminal.arm"),
             ]),
         }
       );
       const server = createSessionServer("s1", deps);
 
       const listed = await listTools(server);
-      expect(listed.tools.map((t) => t.name)).not.toContain("worktree.delete");
+      expect(listed.tools.map((t) => t.name)).not.toContain("terminal.arm");
 
-      const denied = await callTool(server, { name: "worktree.delete", arguments: {} });
+      const denied = await callTool(server, { name: "terminal.arm", arguments: {} });
       expect(denied.isError).toBe(true);
       expect(toolErrorPayload(denied).code).toBe(TIER_NOT_PERMITTED_CODE);
     });
@@ -4167,13 +4197,13 @@ describe("sessionServer introspection tier filtering", () => {
       // fact the catalog gates on.
       const deps = introspectionDeps("action", {
         totalMatches: 2,
-        results: [entry("terminal.list"), entry("worktree.delete")],
+        results: [entry("terminal.list"), entry("terminal.arm")],
       });
       deps.sessionStore.sessionOriginMap.set("s1", "external");
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, {
         name: "actions.search",
-        arguments: { query: "delete worktree" },
+        arguments: { query: "arm terminal" },
       });
 
       const body = payload<Record<string, unknown>>(res);
@@ -4183,14 +4213,14 @@ describe("sessionServer introspection tier filtering", () => {
     it("names the tier on a getSchema read instead of an unknown-id denial", async () => {
       const deps = firstPartyDeps({
         ok: true,
-        entry: entry("worktree.delete", { category: "worktree" }),
+        entry: entry("terminal.arm", { category: "terminal" }),
         policy: null,
         error: null,
       });
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, {
         name: "actions.getSchema",
-        arguments: { actionId: "worktree.delete" },
+        arguments: { actionId: "terminal.arm" },
       });
 
       const body = payload<{

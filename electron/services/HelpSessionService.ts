@@ -55,12 +55,16 @@ const TEMPLATE_HASH_FILE = ".template-hash";
 
 // `action` is the deliberate default tier for assistant sessions, including the
 // headless Daintree Assistant CLI (#10640): it covers orchestration, terminal
-// driving, branch setup, recipes, and reads, while leaving irreversible
-// mutations (git.push, worktree.delete) above the floor so they require a
-// human-approved scoped grant rather than running unattended. What that tier
-// permits vs. withholds is locked by the policy guard in
-// `mcp-server/__tests__/tierAuth.test.ts`; this constant selects it as the
-// provisioning default.
+// driving, branch setup, recipes, reads, and — since #12116 — the confirm-gated
+// worktree cleanup that follows them, while leaving git and forge writes above
+// the floor. What the promotion rests on is that admission and approval are
+// separate gates: a `danger: "confirm"` tool admitted here still goes to the
+// renderer for a native ConfirmDialog, so the tier hands the agent nothing it
+// could not have asked a human for. (An explicit native automation grant does
+// pre-authorise that modal, but issuing one is itself a user decision and was
+// never tier-gated.) What the tier permits vs. withholds is locked by the
+// policy guard in `mcp-server/__tests__/tierAuth.test.ts`; this constant
+// selects it as the provisioning default.
 const DEFAULT_TIER: HelpAssistantTier = "action";
 const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
@@ -743,11 +747,11 @@ export class HelpSessionService {
     // Every help agent — the Daintree Assistant included — provisions at the
     // tier the user configured. Agent identity never widens the MCP surface,
     // which restores the #10640/#10647 safety model: `action` is the default
-    // floor, where irreversible mutations (git.push, worktree.delete) sit above
-    // the line and need a human-approved scoped grant, while `workbench` and
-    // `system` stay explicit user choices. An identity override here would make
-    // the Settings tier selector lie about the surface it hands out (#11907).
-    // What each tier permits is locked in `mcp-server/__tests__/tierAuth.test.ts`.
+    // floor, git and forge writes sit above it and need a human-approved scoped
+    // grant, and `workbench` / `system` stay explicit user choices. An identity
+    // override here would make the Settings tier selector lie about the surface
+    // it hands out (#11907). What each tier permits is locked in
+    // `mcp-server/__tests__/tierAuth.test.ts`.
     const tier: HelpAssistantTier = settings.tier;
     const slot = input.slot ?? 0;
     const sessionId = randomUUID();

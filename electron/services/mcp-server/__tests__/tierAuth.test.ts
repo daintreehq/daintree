@@ -599,8 +599,9 @@ describe("external tool surface budget (#11585)", () => {
     { id: "git.push", keptAt: "system" },
     { id: "git.commit", keptAt: "system" },
     { id: "git.getFileDiff", keptAt: "workbench" },
-    // D2 destructive, and not needed to drive work forward.
-    { id: "worktree.delete", keptAt: "system" },
+    // D2 destructive, and not needed to drive work forward — an external caller
+    // has its own shell. In-app it sits on the default floor since #12116.
+    { id: "worktree.delete", keptAt: "action" },
     // #11544's two CI-status routes. An external agent has `gh`; the in-app
     // assistant does not, so both stay at workbench.
     { id: "forge.getCIStatus", keptAt: "workbench" },
@@ -772,16 +773,18 @@ describe("buildAnnotations", () => {
 // removed the identity override that used to pin the assistant to `system`).
 // So the assertions below lock the `action` tier that governs a default
 // session, plus the system/external boundaries above it.
-// The distinction is load-bearing: `action` leaves irreversible mutations
-// (git.push, worktree.delete) TIER_NOT_PERMITTED so a default session needs a
-// human-approved scoped grant, while `system` — the tier a user has to select
-// deliberately — permits them subject only to the confirm gate. `external` used
-// to permit them too — #11585
-// removed them from that surface entirely, so `system` is now the only tier that
-// reaches them. These assertions lock those invariants against allowlist drift
-// (e.g. someone promoting git.push into the action tier). They test the runtime
-// gate `isTierPermitted`, not the raw allowlist arrays, so they fail closed if
-// the tier wiring itself regresses.
+// #12116 sharpened what the line is NOT. It is not "irreversible vs. not", and
+// not "local vs. remote" — a worktree delete runs the project's own lifecycle
+// teardown, which can reach a cloud resource. It is whether the tier is the
+// only gate: cleanup carries `danger: "confirm"` and so is normally host-
+// confirmed per call, while `git.commit` and `forge.assignIssue` are
+// `danger: "safe"` and have nothing but the tier. `git.push` sits above the
+// floor for its own reason — it publishes to a shared remote.
+// `external` is a separately curated peer (#11585) that now reaches none of
+// them, and #12116 widened the in-app floor without re-opening that surface.
+// These assertions lock the invariants against allowlist drift (e.g. someone
+// promoting git.push into the action tier). They test `isTierPermitted`, not
+// the raw arrays, so they fail closed if the tier wiring itself regresses.
 describe("help-session tier policy (#10640)", () => {
   // The conductor's working tool set — orchestration, terminal driving, branch
   // setup, recipes, and reads — all resolve under `action`.
@@ -805,14 +808,18 @@ describe("help-session tier policy (#10640)", () => {
     "copyTree.generate",
   ];
 
-  // Irreversible / shared-state mutations the conductor must NOT be able to
-  // fire unattended at its default tier — they require explicit elevation.
-  const HIGH_BLAST_RADIUS_TOOLS = [
-    "git.commit",
-    "git.push",
+  // Mutations the conductor must NOT reach at its default tier: `git.commit` and
+  // `forge.assignIssue` are `danger: "safe"`, so the tier is their only gate.
+  const HIGH_BLAST_RADIUS_TOOLS = ["git.commit", "git.push", "forge.assignIssue"];
+
+  // Confirm-classified worktree cleanup, promoted to the default floor by
+  // #12116. Reachable at `action`, still refused at `workbench` — the boundary
+  // moved down one tier, it did not disappear.
+  const CONFIRM_GATED_CLEANUP_TOOLS = [
     "worktree.delete",
-    "forge.assignIssue",
-  ];
+    "worktree.deleteOwned",
+    "worktree.resource.teardown",
+  ] as const;
 
   it.each(ASSISTANT_REQUIRED_TOOLS)(
     "permits the assistant's required tool %s at the action tier",
@@ -831,17 +838,53 @@ describe("help-session tier policy (#10640)", () => {
     }
   );
 
-  it("withholds those same mutations from the external tier too (#11585)", () => {
-    // `external` used to auto-permit these, subject only to the confirm gate,
-    // which was the security contrast that motivated pinning the assistant to
-    // `action` in the first place. #11585 closed it from the other side: an
-    // api-key caller has its own shell git and does not need ours, so the
-    // mutations now live only where a human is in the loop. `system` remains the
-    // one tier that reaches them.
-    for (const toolId of ["git.push", "git.commit", "worktree.delete"]) {
+  it.each(CONFIRM_GATED_CLEANUP_TOOLS)(
+    "permits confirm-gated cleanup tool %s at the action tier but not below it (#12116)",
+    (toolId) => {
+      // Pin to ground truth first, so a rename turns this into a red test
+      // rather than a vacuous "unknown string is absent from a set".
+      expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(toolId);
+
+      // The floor moved to `action`, so a default session reaches it without a
+      // grant. `workbench` still refuses it, which is what keeps this a
+      // boundary rather than a blanket promotion: a read-only session cannot
+      // delete a worktree by asking nicely.
+      //
+      // Discovery is asserted beside dispatch because the two gates are what an
+      // agent actually experiences, and `shouldExposeTool` has its own reasons
+      // to withhold a `danger: "confirm"` tool (see `isWithheldFromBoundSession`
+      // for the bound-external case). Neither of them fires here.
+      const entry = makeEntry({ id: toolId, danger: "confirm" });
+
+      expect(isTierPermitted("workbench", toolId)).toBe(false);
+      expect(shouldExposeTool(entry, "workbench")).toBe(false);
+
+      expect(isTierPermitted("action", toolId)).toBe(true);
+      expect(shouldExposeTool(entry, "action")).toBe(true);
+
+      expect(isTierPermitted("system", toolId)).toBe(true);
+      expect(shouldExposeTool(entry, "system")).toBe(true);
+    }
+  );
+
+  it("withholds the shared-state mutations from the external tier too (#11585)", () => {
+    // `external` used to auto-permit these — `git.commit` with no gate at all,
+    // `git.push` behind only its confirm dialog — which was the contrast that
+    // motivated pinning the assistant to `action` in the first place. #11585
+    // closed it from the other side: an api-key caller has its own shell git and
+    // does not need ours, so both now live at `system`.
+    for (const toolId of ["git.push", "git.commit"]) {
       expect(isTierPermitted("external", toolId)).toBe(false);
       expect(isTierPermitted("system", toolId)).toBe(true);
     }
+
+    // The two surfaces move independently, and #12116 is the case that proves
+    // it: promoting generic `worktree.delete` to the in-app `action` floor did
+    // not re-admit it externally. An api-key caller still gets only the
+    // ownership-scoped `worktree.deleteOwned`, which is the whole point of the
+    // #11585 cut — it has its own shell, so it does not need ours.
+    expect(isTierPermitted("external", "worktree.delete")).toBe(false);
+    expect(isTierPermitted("action", "worktree.delete")).toBe(true);
   });
 });
 
@@ -1830,16 +1873,17 @@ describe("filterIntrospectionResultForSession", () => {
 
     // `git.push` above proves nothing about the derivation: BAND_OVERRIDES pins
     // it, so a builder that passed a hard-coded `danger: "safe"` into
-    // `deriveBand` would still report it correctly. `worktree.delete` — the
-    // action #12117 was actually filed about — has no override and is
-    // `danger: "confirm"` in a non-open-world category, so its band can only be
-    // right if the entry's OWN danger reaches the derivation.
+    // `deriveBand` would still report it correctly. `terminal.arm` has no
+    // override and is `danger: "confirm"` in a non-open-world category, so its
+    // band can only be right if the entry's OWN danger reaches the derivation.
+    // (`worktree.delete`, the action #12117 was filed about, was the exemplar
+    // here until #12116 promoted it to the action tier.)
     it("derives the band from the entry's own danger, not a fixed value", () => {
       const destructive = buildUnavailableStub(
         makeEntry({
-          id: "worktree.delete",
-          title: "Delete Worktree",
-          category: "worktree",
+          id: "terminal.arm",
+          title: "Arm Terminal",
+          category: "terminal",
           danger: "confirm",
         }),
         firstParty()
@@ -1847,7 +1891,7 @@ describe("filterIntrospectionResultForSession", () => {
       expect(destructive).toMatchObject({ band: "destructive-local", minimumTier: "system" });
 
       const safe = buildUnavailableStub(
-        makeEntry({ id: "worktree.delete", category: "worktree", danger: "safe" }),
+        makeEntry({ id: "terminal.arm", category: "terminal", danger: "safe" }),
         firstParty()
       );
       expect(safe).toMatchObject({ band: "reversible" });

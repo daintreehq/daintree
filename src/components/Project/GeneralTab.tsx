@@ -42,12 +42,14 @@ const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
   {
     value: "action",
     label: "Action",
-    description: "Workbench + create worktrees, inject context, stage changes.",
+    description:
+      "Workbench + create worktrees, inject context, send terminal commands, confirm-gated worktree deletes.",
   },
   {
     value: "system",
     label: "System",
-    description: "Action + commit, push, delete, send terminal commands.",
+    description:
+      "Action + git commits and pushes, forge and file writes, terminal arming, worktree creation anywhere on disk.",
   },
 ];
 
@@ -595,9 +597,10 @@ export function GeneralTab({
             >
               <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-0.5" />
               <div className="text-xs text-text-secondary leading-relaxed select-text">
-                System tier lets agents commit, push, delete worktrees, and send terminal commands —
-                some of these are irreversible or visible to teammates. Only enable it for projects
-                where you trust the agent to take that kind of action.
+                System tier adds git commits and pushes, forge issue/PR writes, clipboard and file
+                writes, terminal arming, and worktree creation anywhere on disk — some of these are
+                irreversible or visible to teammates. Only enable it for projects where you trust
+                the agent to take that kind of action.
               </div>
             </div>
           )}
