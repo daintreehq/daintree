@@ -5,7 +5,12 @@ import { toWireSchema } from "../../../shared/utils/mcpWireSchema.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import type { HelpTokenValidator } from "./shared.js";
-import { type McpTier, TIER_ALLOWLISTS, minimumPermittingTier } from "./shared.js";
+import {
+  type McpTier,
+  TIER_ALLOWLISTS,
+  TIER_NOT_PERMITTED_CODE,
+  minimumPermittingTier,
+} from "./shared.js";
 import {
   ACTIONS_LIST_DEFAULT_LIMIT,
   ACTIONS_LIST_MAX_LIMIT,
@@ -15,6 +20,7 @@ import {
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { canonicalJson, toCompatibilityShape } from "./compatibilityHash.js";
 import type { McpTargetPolicy, McpTargetTier } from "../../../shared/types/mcpTargetPolicy.js";
+import type { McpUnavailableActionStub } from "../../../shared/types/mcpIntrospection.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -108,6 +114,12 @@ export function resolveTokenTier(
  * name is equivalent to revoking it. Tools we do not want an external caller to
  * reach are now cut from the tier allowlist itself, which revokes them honestly
  * at both gates.
+ *
+ * The first-party existence catalog (#12117) does not touch this gate. What a
+ * renderer-owned session additionally learns from `actions.list` / `actions.search`
+ * / `actions.getSchema` is that a name EXISTS above its tier and which tier
+ * would permit it — never a name it may call. This function still decides the
+ * callable set alone, and it still answers the same for every session.
  */
 export function shouldExposeTool(
   entry: ActionManifestEntry,
@@ -283,6 +295,13 @@ function readEntryId(entry: unknown): string | null {
  * dispatch. It is not a progressive-disclosure escape hatch: since #11585 the
  * tier allowlist is the whole surface, and introspection reports it rather than
  * reaching past it.
+ *
+ * An entry this rejects is not necessarily one the caller hears nothing about.
+ * A renderer-owned session gets an existence stub for it instead
+ * ({@link buildUnavailableStub}, #12117) — a name and the tier that would
+ * permit it, never a callable entry. The two are deliberately separate
+ * functions: this one decides what may be dispatched, that one decides what
+ * may be admitted to exist, and only the first ever widens.
  */
 function isIntrospectableForSession(
   entry: unknown,
@@ -521,6 +540,147 @@ export function buildTargetPolicy(
   };
 }
 
+/** The nested in-app ladder. `external` is a flat peer of it, never a rung. */
+type LadderTier = "workbench" | "action" | "system";
+
+/** Rung order, so "strictly above this session" is a comparison, not a list. */
+const LADDER_RANK: Readonly<Record<LadderTier, number>> = {
+  workbench: 0,
+  action: 1,
+  system: 2,
+};
+
+/**
+ * Whether this session may be told that actions exist above its tier (#12117).
+ *
+ * Two conditions, both necessary. The origin must be renderer-owned — `help` or
+ * `assistant-pane`, a pinned panel with a human watching and a first-party
+ * prompt that carries the rule for reading a stub. And the tier must be on the
+ * in-app ladder: `external` is a flat peer of that ladder rather than a rung on
+ * it, so there is no tier an external caller could be raised to and nothing
+ * honest to report.
+ *
+ * Asked of the ORIGIN, never of the routing. `getOrigin` fails closed to
+ * `external` for a session it does not recognise, and a workspace-bound
+ * external session can hold a renderer route without being renderer-owned — so
+ * "has a renderer" is the wrong question and would open the catalog to
+ * api-key clients (#11789).
+ *
+ * An absent snapshot is a denial. Every introspection call in `sessionServer`
+ * supplies one; its absence means a caller this module cannot classify.
+ */
+function isExistenceCatalogVisible(
+  snapshot: TargetPolicySessionSnapshot | undefined
+): snapshot is TargetPolicySessionSnapshot & { tier: LadderTier } {
+  if (snapshot === undefined) return false;
+  if (!snapshot.rendererOwnedOrigin) return false;
+  return snapshot.tier !== "external";
+}
+
+/**
+ * The existence record for one action a renderer-owned session cannot call
+ * (#12117).
+ *
+ * Answers the question the old indistinguishable `NOT_FOUND` made unanswerable:
+ * does this capability exist at all, and what would it take to reach it. An
+ * assistant that could not tell "no such action" from "not at your tier" had to
+ * report the product as lacking a feature it ships, which is what #12117 was
+ * filed about.
+ *
+ * Returns `null` — never a partial record — for everything it cannot describe
+ * truthfully, matching {@link buildTargetPolicy}'s fail-closed contract:
+ *
+ * - a session that may not see the catalog at all;
+ * - a malformed entry, or one missing the title or category the record is built
+ *   from;
+ * - `hidden` and `restricted`, which are ceilings rather than tiers — no
+ *   elevation reaches them, so naming them would describe a door with no key;
+ * - an id no in-app tier permits, for the same reason;
+ * - an id whose minimum tier is not strictly above this session's. The ladder
+ *   nests (`action` = workbench ∪ addons, `system` = all three), so a
+ *   non-permitted id always has a higher minimum and this is a backstop rather
+ *   than a live branch — but it is what makes the record impossible to read as
+ *   "raise your tier" when raising it would change nothing.
+ *
+ * Only ever called for an entry that already failed
+ * {@link isIntrospectableForSession}, so it never has to establish that the
+ * caller cannot dispatch this id — the caller established that first.
+ *
+ * The band is DERIVED here rather than read off `entry.band`. This record
+ * crosses a tier boundary, so every field on it is computed from inputs this
+ * module validated, not from whatever the renderer attached.
+ */
+export function buildUnavailableStub(
+  entry: unknown,
+  snapshot: TargetPolicySessionSnapshot | undefined
+): McpUnavailableActionStub | null {
+  if (!isExistenceCatalogVisible(snapshot)) return null;
+  const id = readEntryId(entry);
+  if (id === null) return null;
+  const record = entry as Partial<ActionManifestEntry>;
+
+  if (record.mcpVisibility === "hidden") return null;
+  const danger = record.danger;
+  if (danger !== "safe" && danger !== "confirm") return null;
+  const { title, category } = record;
+  if (typeof title !== "string" || title.length === 0) return null;
+  if (typeof category !== "string" || category.length === 0) return null;
+
+  const minimumTier = minimumPermittingTier(id);
+  if (minimumTier === null) return null;
+  if (LADDER_RANK[minimumTier] <= LADDER_RANK[snapshot.tier]) return null;
+
+  return {
+    id,
+    title,
+    band: deriveBand({ id, danger, category }),
+    minimumTier,
+    callable: false,
+  };
+}
+
+/**
+ * Split one enumerating result's entries into the callable ones and, for a
+ * session that may see the catalog, existence stubs for the rest (#12117).
+ *
+ * `unavailable` is `null` — not an empty array — for every session the catalog
+ * is closed to, and the callers key the presence of the response field on that.
+ * An external client's payload therefore keeps the exact key set it had before
+ * this existed, rather than gaining a field that is always empty and inviting
+ * a client to wonder when it might not be.
+ *
+ * Source order is preserved in both collections: the list handler sorts by id
+ * before paging and the search handler ranks by score, and a stub belongs at
+ * the same place in that order as the entry it replaced.
+ */
+function partitionEntries(
+  entries: readonly unknown[],
+  permittedActionIds: ReadonlySet<string>,
+  snapshot: TargetPolicySessionSnapshot | undefined
+): { permitted: unknown[]; unavailable: McpUnavailableActionStub[] | null } {
+  const permitted: unknown[] = [];
+  if (!isExistenceCatalogVisible(snapshot)) {
+    for (const entry of entries) {
+      if (isIntrospectableForSession(entry, permittedActionIds)) permitted.push(entry);
+    }
+    return { permitted, unavailable: null };
+  }
+
+  const unavailable: McpUnavailableActionStub[] = [];
+  for (const entry of entries) {
+    if (isIntrospectableForSession(entry, permittedActionIds)) {
+      permitted.push(entry);
+      continue;
+    }
+    // A live grant put the id in `permittedActionIds`, so it took the branch
+    // above and cannot also appear here — the two collections are disjoint by
+    // construction rather than by a second membership check.
+    const stub = buildUnavailableStub(entry, snapshot);
+    if (stub !== null) unavailable.push(stub);
+  }
+  return { permitted, unavailable };
+}
+
 /**
  * Narrow an introspection tool's result to the ids the calling session can
  * actually dispatch. Pure: takes one immutable permission snapshot, returns a
@@ -559,8 +719,10 @@ export function filterIntrospectionResultForSession(
   if (actionId === ACTIONS_LIST_TOOL_ID) {
     const payload = result.result as { actions?: unknown } | null | undefined;
     const entries = Array.isArray(payload?.actions) ? payload.actions : [];
-    const permitted = entries.filter((entry) =>
-      isIntrospectableForSession(entry, permittedActionIds)
+    const { permitted, unavailable } = partitionEntries(
+      entries,
+      permittedActionIds,
+      options.policySnapshot
     );
     // `entries` is the COMPLETE match set — the handler walked every renderer
     // page before calling this. Paging the permitted set here (rather than
@@ -580,6 +742,16 @@ export function filterIntrospectionResultForSession(
         limit,
         offset,
         hasMore: offset + limit < permitted.length,
+        // `total` and `hasMore` keep their callable-only meaning: a client that
+        // pages on them walks the surface it can dispatch, exactly as before.
+        // The catalog is paged by the same window but counted separately, so
+        // neither collection's length can move the other's cursor (#12117).
+        ...(unavailable === null
+          ? {}
+          : {
+              unavailable: unavailable.slice(offset, offset + limit),
+              unavailableTotal: unavailable.length,
+            }),
       },
     };
   }
@@ -587,8 +759,10 @@ export function filterIntrospectionResultForSession(
   if (actionId === ACTIONS_SEARCH_TOOL_ID) {
     const payload = result.result as { results?: unknown } | null | undefined;
     const entries = Array.isArray(payload?.results) ? payload.results : [];
-    const permitted = entries.filter((entry) =>
-      isIntrospectableForSession(entry, permittedActionIds)
+    const { permitted, unavailable } = partitionEntries(
+      entries,
+      permittedActionIds,
+      options.policySnapshot
     );
     // `totalMatches` counts the permitted matches main actually saw. The
     // handler over-fetches to ACTIONS_SEARCH_MAX_LIMIT so that window is the
@@ -601,6 +775,16 @@ export function filterIntrospectionResultForSession(
       result: {
         totalMatches: permitted.length,
         results: permitted.slice(0, options.callerLimit),
+        // The caller's own limit applies to each collection independently, so
+        // a page full of out-of-tier matches can never crowd out the callable
+        // ones the client actually asked for. `unavailableTotalMatches` is a
+        // lower bound on the same terms `totalMatches` is (#12117).
+        ...(unavailable === null
+          ? {}
+          : {
+              unavailable: unavailable.slice(0, options.callerLimit),
+              unavailableTotalMatches: unavailable.length,
+            }),
       },
     };
   }
@@ -631,6 +815,38 @@ export function filterIntrospectionResultForSession(
         return { ok: true, result: { ok: true, entry: payload.entry, policy, error: null } };
       }
     }
+
+    // A renderer-owned session asking about a real action above its tier is
+    // told so, and told which tier would permit it (#12117). This is the
+    // lookup the issue was filed about: the indistinguishable denial below
+    // left an assistant unable to tell "no such action" from "not at your
+    // tier", so it reported `worktree.delete` as a capability Daintree lacks.
+    //
+    // Still a DENIAL — `ok: false`, no entry, no policy, no schemas. The
+    // reasoning against a tier-specific error stands for everyone else and is
+    // unchanged for them: naming an id an external client cannot act on only
+    // tells it about a door it has no key to. A renderer-owned session does
+    // have one — the panel's tier control — which is what makes the answer
+    // worth giving here and nowhere else.
+    if (answersTheRequest) {
+      const unavailable = buildUnavailableStub(payload?.entry, options.policySnapshot);
+      if (unavailable !== null) {
+        return {
+          ok: true,
+          result: {
+            ok: false,
+            entry: null,
+            policy: null,
+            unavailable,
+            error: {
+              code: TIER_NOT_PERMITTED_CODE,
+              message: `Action "${unavailable.id}" exists but requires the ${unavailable.minimumTier} tier; this session cannot call it. Tell the user which tier it needs rather than reporting the capability as missing.`,
+            },
+          },
+        };
+      }
+    }
+
     // Collapse onto the shape the renderer already returns for an unknown,
     // hidden, or restricted id rather than minting a tier-specific error: a
     // distinct error would confirm the id exists while offering no way to
@@ -640,7 +856,9 @@ export function filterIntrospectionResultForSession(
     //
     // `entry` and `policy` are present-and-null rather than absent, matching
     // the renderer's own denial: one shape for both branches means a client
-    // reads `ok` rather than probing for which keys arrived.
+    // reads `ok` rather than probing for which keys arrived. `unavailable` is
+    // the one exception — absent rather than null, so this payload stays
+    // byte-for-byte what every caller received before #12117.
     return {
       ok: true,
       result: {

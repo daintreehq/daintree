@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { McpSurfaceTier } from "./mcpSurface.js";
+import { McpUnavailableActionStubSchema } from "./mcpIntrospection.js";
 
 /**
  * The authorization tiers a target policy can report. Same set `mcp.surface`
@@ -26,11 +27,21 @@ export type McpTargetInvocationMode = "allowed" | "wrapper-required";
  *
  * Only ever accompanies an `ok: true` lookup. An action this session cannot
  * reach — hidden, restricted, outside its tier, or withheld from a
- * workspace-bound session — collapses to the same `NOT_FOUND` an unknown id
- * returns, and carries no policy at all. That is deliberate: #11585 established
- * that a discoverable-but-uncallable state is not a state any shipped client can
- * act on, so withholding a name is equivalent to revoking it, and this record
- * must not reintroduce the split by describing what it refuses to name.
+ * workspace-bound session — carries no policy at all. That is deliberate:
+ * #11585 established that a discoverable-but-uncallable state is not a state
+ * any shipped client can act on, so withholding a name is equivalent to
+ * revoking it, and this record must not reintroduce the split by describing
+ * what it refuses to name.
+ *
+ * That rule is about the CALLABLE surface, and it still holds everywhere: an
+ * unlisted name stays unlisted and undispatchable, and no denial ever comes
+ * back carrying a policy. It is not a rule about whether the host may admit
+ * that a capability exists. A renderer-owned session — a pinned panel with a
+ * human watching — additionally receives an `McpUnavailableActionStub`
+ * naming the tier that would permit the target (#12117), because the
+ * indistinguishable denial had the assistant telling users the product lacked
+ * features it has. That stub is not a policy and never becomes one; it carries
+ * no schemas and confers nothing.
  *
  * A SNAPSHOT, not a lease. Grants expire and are revoked between a lookup and a
  * call, and `requiresConfirmation` can flip when the last use of a native grant
@@ -184,6 +195,17 @@ export const McpGetSchemaResultSchema = z.object({
  * the policy builder but forgotten here would still `safeParse` clean and the
  * drift would ship. `entry` stays an open record on purpose — it is a manifest
  * entry, whose own shape is not this contract's to pin down.
+ *
+ * The denial arm is widened rather than split in two (#12117). A renderer-owned
+ * session asking about a real action above its tier gets `TIER_NOT_PERMITTED`
+ * and an `unavailable` stub; every other caller, and every other denial reason,
+ * still gets the indistinguishable `NOT_FOUND` with no `unavailable` key at
+ * all. `unavailable` is OPTIONAL rather than present-and-null on purpose,
+ * against this contract's usual "read `ok`, never the key set" rule: an
+ * external client's payload has to stay byte-for-byte what it was, and a
+ * required-nullable key would change it for every denial. A third union arm
+ * would have done the same to consumers narrowing on the two that exist —
+ * `daintreehq/assistant#368` among them.
  */
 export const McpGetSchemaWireResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
@@ -196,6 +218,10 @@ export const McpGetSchemaWireResultSchema = z.discriminatedUnion("ok", [
     ok: z.literal(false),
     entry: z.null(),
     policy: z.null(),
-    error: z.strictObject({ code: z.literal("NOT_FOUND"), message: z.string() }),
+    unavailable: McpUnavailableActionStubSchema.optional(),
+    error: z.strictObject({
+      code: z.enum(["NOT_FOUND", "TIER_NOT_PERMITTED"]),
+      message: z.string(),
+    }),
   }),
 ]);
