@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseNumberQuery, MULTI_FETCH_CAP } from "../parseNumberQuery";
+import { parseNumberQuery, looksLikeNumberList, MULTI_FETCH_CAP } from "../parseNumberQuery";
 
 describe("parseNumberQuery", () => {
   describe("single number", () => {
@@ -59,10 +59,74 @@ describe("parseNumberQuery", () => {
 
     it("should reject double commas", () => {
       expect(parseNumberQuery("123,,124")).toBeNull();
+      expect(parseNumberQuery("123,,")).toBeNull();
+      expect(parseNumberQuery("12036,, 12037")).toBeNull();
     });
 
-    it("should reject trailing comma", () => {
-      expect(parseNumberQuery("123, 124,")).toBeNull();
+    it("should parse trailing comma", () => {
+      expect(parseNumberQuery("123, 124,")).toEqual({
+        kind: "multi",
+        numbers: [123, 124],
+      });
+      expect(parseNumberQuery("12036,12037,")).toEqual({
+        kind: "multi",
+        numbers: [12036, 12037],
+      });
+    });
+
+    it("should parse a single number with a trailing comma", () => {
+      expect(parseNumberQuery("12036,")).toEqual({ kind: "single", number: 12036 });
+      expect(parseNumberQuery("#12036 ,")).toEqual({ kind: "single", number: 12036 });
+    });
+
+    it("should parse whitespace-separated numbers", () => {
+      expect(parseNumberQuery("12036 12037 12041")).toEqual({
+        kind: "multi",
+        numbers: [12036, 12037, 12041],
+      });
+      expect(parseNumberQuery("#12036  #12037")).toEqual({
+        kind: "multi",
+        numbers: [12036, 12037],
+      });
+    });
+
+    it("should parse an \"and\"-joined list", () => {
+      expect(parseNumberQuery("12036, 12037, and 12041")).toEqual({
+        kind: "multi",
+        numbers: [12036, 12037, 12041],
+      });
+      expect(parseNumberQuery("#12036, 12037 and 12041")).toEqual({
+        kind: "multi",
+        numbers: [12036, 12037, 12041],
+      });
+      expect(parseNumberQuery("123 AND 124")).toEqual({
+        kind: "multi",
+        numbers: [123, 124],
+      });
+    });
+
+    it("should de-duplicate across mixed separators", () => {
+      expect(parseNumberQuery("123 123 and #124")).toEqual({
+        kind: "multi",
+        numbers: [123, 124],
+      });
+    });
+
+    it("should reject a dangling connector", () => {
+      expect(parseNumberQuery("123 and")).toBeNull();
+      expect(parseNumberQuery("and 123")).toBeNull();
+      expect(parseNumberQuery("123 and 124 and")).toBeNull();
+    });
+
+    it("should reject separators the parser does not speak", () => {
+      expect(parseNumberQuery("123 & 124")).toBeNull();
+      expect(parseNumberQuery("123;124")).toBeNull();
+      expect(parseNumberQuery("123 or 124")).toBeNull();
+    });
+
+    it("should keep every number in a list beyond MULTI_FETCH_CAP", () => {
+      const numbers = Array.from({ length: MULTI_FETCH_CAP + 1 }, (_, i) => i + 1);
+      expect(parseNumberQuery(numbers.join(", "))).toEqual({ kind: "multi", numbers });
     });
 
     it("should treat all-duplicate comma list as single", () => {
@@ -199,5 +263,47 @@ describe("parseNumberQuery", () => {
       expect(parseNumberQuery("123 .. 125")).toBeNull();
       expect(parseNumberQuery("123 +")).toBeNull();
     });
+  });
+});
+
+describe("looksLikeNumberList", () => {
+  it("flags number lists the parser rejected", () => {
+    expect(looksLikeNumberList("123,,124")).toBe(true);
+    expect(looksLikeNumberList("12036,, 12037")).toBe(true);
+    expect(looksLikeNumberList("123 & 124")).toBe(true);
+    expect(looksLikeNumberList("123;124")).toBe(true);
+    expect(looksLikeNumberList("12036, 12037, or 12041")).toBe(true);
+    expect(looksLikeNumberList("#123 , , #124")).toBe(true);
+  });
+
+  it("stays quiet for queries the parser accepts", () => {
+    expect(looksLikeNumberList("123")).toBe(false);
+    expect(looksLikeNumberList("123, 124,")).toBe(false);
+    expect(looksLikeNumberList("12036 12037 12041")).toBe(false);
+    expect(looksLikeNumberList("12036, 12037, and 12041")).toBe(false);
+    expect(looksLikeNumberList("1..5")).toBe(false);
+    expect(looksLikeNumberList("130+")).toBe(false);
+  });
+
+  it("stays quiet for ordinary text searches", () => {
+    expect(looksLikeNumberList("")).toBe(false);
+    expect(looksLikeNumberList("   ")).toBe(false);
+    expect(looksLikeNumberList("fix 123 crash")).toBe(false);
+    expect(looksLikeNumberList("issue 123")).toBe(false);
+    expect(looksLikeNumberList("2024 2025 roadmap")).toBe(false);
+    expect(looksLikeNumberList("12036 12037 fix")).toBe(false);
+  });
+
+  it("stays quiet for version strings and dates", () => {
+    expect(looksLikeNumberList("1.2.3")).toBe(false);
+    expect(looksLikeNumberList("2024-01-15")).toBe(false);
+    expect(looksLikeNumberList("1/2/2024")).toBe(false);
+    expect(looksLikeNumberList("123-125")).toBe(false);
+  });
+
+  it("needs two numbers before it speaks", () => {
+    expect(looksLikeNumberList("123 and")).toBe(false);
+    expect(looksLikeNumberList("123,,")).toBe(false);
+    expect(looksLikeNumberList("0")).toBe(false);
   });
 });

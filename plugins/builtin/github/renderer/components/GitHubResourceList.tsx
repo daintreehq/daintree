@@ -45,7 +45,7 @@ import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import type { Issue, PR } from "@shared/types/forge";
 import type { Worktree } from "@shared/types/worktree";
 import type { GitHubSortOrder } from "../../shared/types.js";
-import { MULTI_FETCH_CAP } from "@/lib/parseNumberQuery";
+import { looksLikeNumberList, MULTI_FETCH_CAP } from "@/lib/parseNumberQuery";
 import {
   GitHubResourceRowsSkeleton,
   MAX_SKELETON_ITEMS,
@@ -1333,12 +1333,18 @@ export function GitHubResourceList({
               label = `Showing ${resourceLabel} #${numberQuery.number}`;
             } else if (numberQuery.kind === "multi") {
               const nums = numberQuery.numbers;
-              const shown = nums
-                .slice(0, 3)
-                .map((n) => `#${n}`)
-                .join(", ");
-              label =
-                nums.length > 3 ? `Showing ${shown} + ${nums.length - 3} more` : `Showing ${shown}`;
+              if (nums.length > MULTI_FETCH_CAP) {
+                label = `Showing first ${MULTI_FETCH_CAP} of ${nums.length} numbers (capped)`;
+              } else {
+                const shown = nums
+                  .slice(0, 3)
+                  .map((n) => `#${n}`)
+                  .join(", ");
+                label =
+                  nums.length > 3
+                    ? `Showing ${shown} + ${nums.length - 3} more`
+                    : `Showing ${shown}`;
+              }
             } else if (numberQuery.kind === "range") {
               label = numberQuery.truncated
                 ? `Showing first ${MULTI_FETCH_CAP} of range #${numberQuery.from}..#${numberQuery.to} (capped)`
@@ -1352,6 +1358,18 @@ export function GitHubResourceList({
               </p>
             );
           })()}
+
+        {/* The other half of the same chip slot: when a query that was plainly
+            meant as a number lookup fails to parse, the results below are
+            GitHub's full-text matches, which include anything that merely
+            mentions those numbers. Say so rather than letting the list quietly
+            fill with rows nobody asked for. Gated hard (see
+            `looksLikeNumberList`) so ordinary text searches stay silent. */}
+        {numberQuery === null && !loading && looksLikeNumberList(debouncedSearch) && (
+          <p className="bg-overlay-soft border border-[var(--border-divider)] rounded px-2 py-1 text-xs text-text-secondary">
+            Showing text matches — separate numbers with commas or spaces
+          </p>
+        )}
       </div>
 
       {/* The combobox points `aria-controls` here, so this element exists in
