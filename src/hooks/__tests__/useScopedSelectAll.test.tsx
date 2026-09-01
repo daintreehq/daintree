@@ -257,6 +257,27 @@ describe("useScopedSelectAll", () => {
     macroRegion.remove();
   });
 
+  // A panel opened as a dialog puts Close and "Open as panel" in the dialog
+  // header — outside the panel root, inside the dialog — and AppDialog focuses
+  // one of them on open, so that is where the first Cmd+A lands.
+  it("claims the chord from the dialog header above its own pane", () => {
+    const { getByTestId } = render(
+      <div role="dialog" data-testid="dialog">
+        <header>
+          <button type="button" data-testid="dialog-close">
+            Close
+          </button>
+        </header>
+        <Harness />
+      </div>
+    );
+
+    const event = pressSelectAll(getByTestId("dialog-close"));
+
+    expect(event.defaultPrevented).toBe(true);
+    expectSelectedWholeOf(getByTestId("body"));
+  });
+
   it("attaches, detaches, and re-attaches its listener with `enabled`", () => {
     const { getByTestId, rerender } = render(<Harness enabled={false} />);
     const pane = getByTestId("pane");

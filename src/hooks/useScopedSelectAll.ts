@@ -8,6 +8,27 @@ import { useEffect, useEffectEvent, type RefObject } from "react";
 const SELECT_ALL_SCOPE = "[data-panel-id],[role='dialog'],[role='alertdialog']";
 
 /**
+ * Does `target` sit in one of the surfaces enclosing `container`?
+ *
+ * The chain is walked rather than stopped at the nearest match because the two
+ * nest: a panel opened as a dialog puts its Close and "Open as panel" controls
+ * in the dialog header, *outside* the panel root but inside the dialog — and
+ * AppDialog focuses one of them as the dialog opens, so that is where the very
+ * first Cmd+A lands.
+ */
+function isTargetInScope(container: Element, target: Element): boolean {
+  let scope = container.closest(SELECT_ALL_SCOPE);
+  // Unhosted region: fall back to the container, so focus landing inside it
+  // still counts.
+  if (!scope) return container.contains(target);
+  while (scope) {
+    if (scope.contains(target)) return true;
+    scope = scope.parentElement?.closest(SELECT_ALL_SCOPE) ?? null;
+  }
+  return false;
+}
+
+/**
  * Give a read-only rendered region an owner for Select All.
  *
  * The Edit menu's Select All is a native accelerator that ends in
@@ -43,11 +64,11 @@ const SELECT_ALL_SCOPE = "[data-panel-id],[role='dialog'],[role='alertdialog']";
  * the file tree beside the preview, and Select All should mean "the document
  * I'm looking at" in all of them.
  *
- * Bounding it at that scope rather than walking ancestors freely is what keeps
- * the rule single-valued. F6 focuses the grid's macro-region wrapper, which
- * encloses *every* open pane; an unbounded "is the target an ancestor?" test
- * would make each mounted viewer claim that keypress and let mount order pick
- * the winner. Outside its own pane, a viewer declines.
+ * Bounding it at those surfaces rather than walking ancestors freely is what
+ * keeps the rule single-valued. F6 focuses the grid's macro-region wrapper,
+ * which encloses *every* open pane; an unbounded "is the target an ancestor?"
+ * test would make each mounted viewer claim that keypress and let mount order
+ * pick the winner. Outside its own pane or dialog, a viewer declines.
  */
 export function useScopedSelectAll(
   ref: RefObject<HTMLElement | null>,
@@ -76,10 +97,7 @@ export function useScopedSelectAll(
       return;
     }
 
-    // No enclosing pane or dialog: fall back to the region itself, so an
-    // unhosted viewer still owns focus landing inside it.
-    const scope = container.closest(SELECT_ALL_SCOPE) ?? container;
-    if (!scope.contains(target)) return;
+    if (!isTargetInScope(container, target)) return;
 
     event.preventDefault();
     event.stopPropagation();
