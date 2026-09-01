@@ -3,6 +3,7 @@ import type * as ContextMenuPrimitiveType from "@radix-ui/react-context-menu";
 import { Slot } from "@radix-ui/react-slot";
 import { Check, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { OVERLAY_MOTION_CLASS } from "./overlayMotion";
 import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
@@ -227,7 +228,7 @@ const ContextMenuSubContent = React.forwardRef<
         style={{ transformOrigin: "var(--radix-context-menu-content-transform-origin)", ...style }}
         className={cn(
           "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
-          "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
+          OVERLAY_MOTION_CLASS,
           className
         )}
         {...props}
@@ -317,7 +318,7 @@ const ContextMenuContent = React.forwardRef<
           }}
           className={cn(
             "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
-            "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
+            OVERLAY_MOTION_CLASS,
             className
           )}
           {...props}
