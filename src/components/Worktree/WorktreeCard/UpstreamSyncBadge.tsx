@@ -65,6 +65,8 @@ export function UpstreamSyncBadge({
 }: UpstreamSyncBadgeProps) {
   const hasAhead = aheadCount !== undefined && aheadCount > 0;
   const hasBehind = behindCount !== undefined && behindCount > 0;
+  const hasBaseAhead = baseAheadCount != null && baseAheadCount > 0;
+  const hasBaseBehind = baseBehindCount != null && baseBehindCount > 0;
 
   // The base segment is a *relationship*, not an alarm: it renders whenever we
   // know which branch this one is measured against, and only its glyph and
@@ -92,10 +94,7 @@ export function UpstreamSyncBadge({
   const compareLabel = comparedWithLocalBase
     ? `local ${baseBranchName}`
     : baseCompareRef || baseBranchName;
-  const showBaseDivergence =
-    hasBaseName &&
-    ((baseAheadCount != null && baseAheadCount > 0) ||
-      (baseBehindCount != null && baseBehindCount > 0));
+  const showBaseDivergence = hasBaseName && (hasBaseAhead || hasBaseBehind);
   // Equality has to be measured, not assumed. `BaseDivergence` keeps the base
   // name and nulls a count it could not parse, so a missing count is "we do
   // not know", and the resting form is the one claim we cannot make on a
@@ -142,10 +141,8 @@ export function UpstreamSyncBadge({
   // does.
   const displayedAhead = showUpstreamDelta && hasAhead ? aheadCount : null;
   const displayedBehind = showUpstreamDelta && hasBehind ? behindCount : null;
-  const displayedBaseAhead =
-    showBaseDivergence && baseAheadCount != null && baseAheadCount > 0 ? baseAheadCount : null;
-  const displayedBaseBehind =
-    showBaseDivergence && baseBehindCount != null && baseBehindCount > 0 ? baseBehindCount : null;
+  const displayedBaseAhead = showBaseDivergence && hasBaseAhead ? baseAheadCount : null;
+  const displayedBaseBehind = showBaseDivergence && hasBaseBehind ? baseBehindCount : null;
 
   const prevDisplayedRef = useRef({
     displayedAhead,
@@ -321,10 +318,10 @@ export function UpstreamSyncBadge({
               >
                 {showBaseDivergence ? "Δ" : "≡"} {baseBranchName}
               </span>
-              {baseAheadCount != null && baseAheadCount > 0 && (
+              {hasBaseAhead && (
                 <span className="text-status-success shrink-0">↑{baseAheadCount}</span>
               )}
-              {baseBehindCount != null && baseBehindCount > 0 && (
+              {hasBaseBehind && (
                 <span className="text-status-warning shrink-0">↓{baseBehindCount}</span>
               )}
               {/* Same tier as the branch name it qualifies, so it inherits the
@@ -357,12 +354,13 @@ export function UpstreamSyncBadge({
         )}
         {showBaseDivergence && baseBranchName && (
           <div className="text-text-muted/70 break-words">
-            {baseAheadCount != null && baseAheadCount > 0 && (
+            {hasBaseAhead && (
               <span>
                 {baseAheadCount} ahead of {compareLabel}
               </span>
             )}
-            {baseBehindCount != null && baseBehindCount > 0 && (
+            {hasBaseAhead && hasBaseBehind && <span>, </span>}
+            {hasBaseBehind && (
               <span>
                 {baseBehindCount} behind {compareLabel}
               </span>
