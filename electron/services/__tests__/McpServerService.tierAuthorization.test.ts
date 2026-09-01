@@ -1623,11 +1623,13 @@ describe("McpServerService", () => {
 
       const byName = new Map((await client.listTools()).tools.map((tool) => [tool.name, tool]));
 
-      // Two system-tier writes publish a record nobody can retract, so they
-      // carry danger:"confirm" and an agent must clear a host confirm before
-      // either fires. This asserts the classification survives all the way to
-      // the wire — the fixture defaults an unspecified entry to "safe", so a
-      // manifest that drifted back would read as green everywhere else.
+      // Three system-tier writes an agent must clear a host confirm for:
+      // createIssue and addIssueComment publish a record nobody can retract,
+      // and reopenIssue is a publicly visible state transition whose inverse
+      // (closeIssue) has been `confirm` since #10653. This asserts the
+      // classification survives all the way to the wire — the fixture defaults
+      // an unspecified entry to "safe", so a manifest that drifted back would
+      // read as green everywhere else.
       for (const id of ["forge.createIssue", "forge.addIssueComment", "forge.reopenIssue"]) {
         expect(byName.get(id)?.annotations?.destructiveHint).toBe(true);
       }

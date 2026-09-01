@@ -402,9 +402,15 @@ function readForgeIssueCommentContent(args: unknown): ForgeContentArg<ForgeIssue
  * Shared by the git remote previews and the forge writes so the two can never
  * drift: both pin the result back into the dispatch arguments, and a preview
  * measured against one worktree while `run()` resolved another would attest to
- * a repository the approver never saw. `undefined` means "no preview" — a named
- * but unusable selector, contradictory path spellings, or no active worktree —
- * and the dispatch falls through to the validation that rejects it.
+ * a repository the approver never saw.
+ *
+ * `undefined` means the worktree could not be established — a named but
+ * unusable selector, contradictory path spellings, or no active worktree — and
+ * NEVER that the active worktree should be substituted (#7880). What the two
+ * callers do with it differs by what their preview is FOR: a git remote preview
+ * has nothing left to show without a repository, so it gives up the card
+ * entirely; a forge write's content stands on its own, so it previews that and
+ * says the target is unknown. Neither pins anything.
  */
 function resolvePreviewWorktreePath(
   args: unknown,
@@ -817,13 +823,14 @@ export function worktreeDeleteGateRefusal(
  * worktrees mid-modal could push — or, since #12118, file an issue against — a
  * different repository than the one just approved (#8725).
  *
- * A target only exists when the caller named no worktree or named a resolvable
- * one, and the path is what that action's own resolver returned — so writing it
- * back can never point the dispatch somewhere the approver did not see.
- * Where the caller named a `worktreeId`, that id still wins in `run()` and
- * resolves to this same path; where it named a path, this is that path. Malformed
- * args produce no target and pass through untouched, for validation to reject
- * rather than being repaired into a valid dispatch.
+ * The path is what that action's own resolver returned, so writing it back can
+ * never point the dispatch somewhere the approver did not see — and it is
+ * written as the ONLY selector, every other spelling stripped, because
+ * `resolveWorktreeLocation` lets `worktreeId` win outright and a pin sitting
+ * beside one would never be read. A forge target whose repository could not be
+ * resolved carries no path and pins nothing; malformed args produce no target
+ * and pass through untouched, for validation to reject rather than being
+ * repaired into a valid dispatch.
  */
 function withPreviewedWorktreeCwd(
   args: unknown,
