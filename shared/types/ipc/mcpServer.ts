@@ -116,11 +116,11 @@ export interface McpAuditRecord {
   timestamp: number;
   /**
    * Epoch ms snapshotted once at CallTool-handler entry — the same value the
-   * live {@link McpToolCallStartedPayload} carries, never a re-read. Lets a
-   * reader order dispatches by true arrival and compute real overlap
-   * (`startA < endB && startB < endA`) to tell whether an assistant backend
-   * issues MCP calls concurrently or serially, which `durationMs` alone can't
-   * answer (#12122).
+   * live {@link McpToolCallStartedPayload} carries, never a re-read. This is
+   * the authoritative arrival time: it is what lets a reader sort dispatches
+   * by the order the backend actually issued them and tell whether an
+   * assistant issues MCP calls concurrently or serially, which `durationMs`
+   * alone cannot answer (#12122).
    *
    * Present on every CallTool record including the gate outcomes
    * (unauthorized / dedup / collision) — those are real attempts the backend
@@ -128,6 +128,13 @@ export interface McpAuditRecord {
    * underlying action ran; `result` is what says that. Absent on pre-auth
    * rejections (no handler exists yet) and on records written before the
    * field existed.
+   *
+   * Ordering is sound everywhere; treating `startedAt + durationMs` as the
+   * call's end is not. The in-flight dedup row is appended when the duplicate
+   * is *detected*, before the handler awaits the call it duplicated, so its
+   * duration covers detection rather than the caller's real wait — an overlap
+   * test against that row understates it. Finding an in-flight entry is itself
+   * proof the two calls overlapped.
    */
   startedAt?: number;
   toolId: string;

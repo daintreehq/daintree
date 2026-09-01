@@ -295,7 +295,7 @@ describe("AuditService.appendRecord — resultMeta (#10014)", () => {
 });
 
 describe("AuditService.appendRecord — startedAt (#12122)", () => {
-  it("persists the caller's startedAt verbatim and round-trips it through getRecords", () => {
+  it("persists the caller's startedAt verbatim and reads it back unchanged", () => {
     const { service } = makeFixture();
     // A real epoch reading, not a small sentinel: the service must not clamp,
     // round, or re-derive it the way it normalises `durationMs`.
@@ -314,29 +314,31 @@ describe("AuditService.appendRecord — startedAt (#12122)", () => {
     expect(record!.startedAt).toBe(startedAt);
   });
 
-  it("records startedAt independently of timestamp and durationMs", () => {
-    // The whole point of the field (#12122): `timestamp` is a fresh clock read
-    // taken inside appendRecord, so `timestamp - durationMs` lands after the
-    // real start. A consumer ordering calls must be able to read the start
-    // directly rather than reconstruct it.
+  it("carries start information that timestamp and durationMs cannot express", () => {
+    // The point of the field (#12122): two calls can settle into identical
+    // `timestamp`/`durationMs` shapes and still have begun at different
+    // moments. Recording distinct starts under an identical duration is what
+    // proves the record now carries ordering information it did not before —
+    // and it fails outright if the field stops being persisted.
     const { service } = makeFixture();
-    const startedAt = 1_767_225_600_000;
-    service.appendRecord({
-      toolId: "worktree.list",
-      sessionId: "sess-1",
-      tier: "action",
-      args: {},
-      durationMs: 250,
-      startedAt,
-      outcome: successOutcome,
-      argsSummary: "{}",
-    });
-    const [record] = service.getRecords();
-    expect(record!.startedAt).toBe(startedAt);
-    // timestamp is "now", far from the fixed historical startedAt above —
-    // proving the field is stored, not derived from the other two.
-    expect(record!.timestamp).not.toBe(startedAt);
-    expect(record!.timestamp - record!.durationMs).not.toBe(startedAt);
+    const first = 1_767_225_600_000;
+    const second = 1_767_225_604_000;
+    for (const startedAt of [first, second]) {
+      service.appendRecord({
+        toolId: "worktree.list",
+        sessionId: "sess-1",
+        tier: "action",
+        args: {},
+        durationMs: 250,
+        startedAt,
+        outcome: successOutcome,
+        argsSummary: "{}",
+      });
+    }
+    const records = service.getRecords();
+    expect(records.map((r) => r.startedAt).sort((a, b) => a! - b!)).toEqual([first, second]);
+    // Same duration on both, so `durationMs` alone orders nothing.
+    expect(new Set(records.map((r) => r.durationMs)).size).toBe(1);
   });
 
   it("keeps startedAt on gate outcomes, which are real dispatch attempts", () => {

@@ -164,9 +164,11 @@ export class AuditService {
     args: unknown;
     durationMs: number;
     /**
-     * Dispatch-start snapshot from the CallTool handler. Optional here because
-     * `recordAuth401` writes pre-auth rows that never had a handler; the
-     * `SessionServerDeps` carrier makes it required for every real dispatch.
+     * Dispatch-start snapshot from the CallTool handler. Optional only so this
+     * input keeps the same shape as the persisted record, whose field is
+     * optional for rows predating it. Every real dispatch supplies it: the
+     * `SessionServerDeps.appendAuditRecord` carrier upstream makes it required,
+     * so a CallTool site cannot reach here without one.
      */
     startedAt?: number;
     outcome: AuditOutcome;
