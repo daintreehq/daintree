@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { McpConfirmDialog } from "../McpConfirmDialog";
 import {
@@ -52,6 +52,7 @@ function enqueue(
     sessionOrigin?: "help" | "assistant-pane" | "external";
     argsSummary?: string;
     subject?: string;
+    typedNameTarget?: string;
   } = {}
 ) {
   return requestMcpConfirmation({
@@ -68,6 +69,7 @@ function enqueue(
     ...(overrides.preview ? { preview: overrides.preview } : {}),
     ...(overrides.previewTitle ? { previewTitle: overrides.previewTitle } : {}),
     ...(overrides.previewPending ? { previewPending: overrides.previewPending } : {}),
+    ...(overrides.typedNameTarget ? { typedNameTarget: overrides.typedNameTarget } : {}),
   });
 }
 
@@ -99,6 +101,78 @@ describe("McpConfirmDialog", () => {
     __resetMcpConfirmStoreForTesting();
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  /**
+   * The D3 typed-name gate for an agent-dispatched force delete (#12115).
+   *
+   * The store field is set by the bridge from the renderer's own worktree
+   * record; the dialog's only job is to hand it to `ConfirmDialog` on the
+   * destructive arm, where the union admits it.
+   */
+  it("holds a force delete behind the typed-name gate until the name matches", async () => {
+    vi.useFakeTimers();
+    try {
+      void enqueue({ actionTitle: "Delete worktree", typedNameTarget: "feature/x" });
+      render(<McpConfirmDialog />);
+
+      // Past the cooldown, which independently disables the button — without
+      // this the assertion would pass with the gate removed entirely.
+      act(() => {
+        vi.advanceTimersByTime(1200);
+      });
+
+      const confirmBtn = screen.getByRole("button", {
+        name: "Delete worktree",
+      }) as HTMLButtonElement;
+      const input = screen.getByLabelText("Type feature/x to confirm") as HTMLInputElement;
+      expect(confirmBtn.getAttribute("aria-disabled")).toBe("true");
+
+      act(() => {
+        fireEvent.change(input, { target: { value: "feature/" } });
+      });
+      expect(confirmBtn.getAttribute("aria-disabled")).toBe("true");
+
+      act(() => {
+        fireEvent.change(input, { target: { value: "feature/x" } });
+      });
+      expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders no typed-name gate for a dispatch the bridge did not gate", () => {
+    vi.useFakeTimers();
+    try {
+      // An absent target must approve on zero keystrokes — and an EMPTY one
+      // must too, rather than rendering an input nobody can satisfy (#7493 is
+      // the inverse: an empty target silently disabling the gate that was
+      // supposed to be there, which is why the bridge refuses to emit one).
+      void enqueue({ actionTitle: "Delete worktree" });
+      render(<McpConfirmDialog />);
+      act(() => {
+        vi.advanceTimersByTime(1200);
+      });
+
+      expect(screen.queryByLabelText(/to confirm$/)).toBeNull();
+      const confirmBtn = screen.getByRole("button", { name: "Delete worktree" });
+      expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("never attaches the gate to a non-destructive dispatch", () => {
+    // `ConfirmDialog` coerces `typedNameTarget` away off the destructive
+    // variant, and the dialog only passes it on that arm — belt and braces,
+    // because a safe read-only dispatch demanding a typed name is nonsense.
+    void enqueue({ actionTitle: "List worktrees", danger: "safe", typedNameTarget: "feature/x" });
+    render(<McpConfirmDialog />);
+
+    expect(screen.queryByLabelText(/to confirm$/)).toBeNull();
   });
 
   it("labels the confirm button with the action title, not a generic verb", () => {

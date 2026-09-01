@@ -1417,6 +1417,31 @@ describe("WorktreeDeleteDialog — fresh status verification (#11343)", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it("raises the gate instead of deleting when the submit-time status read fails", async () => {
+    // Clean at open → no gate. The submit-time re-read then fails, and "could
+    // not read" must never be taken as "clean": the tier fails closed to D3 and
+    // the delete waits for the typed name (#12115 shares this rule with the MCP
+    // confirm path via `worktreeDeleteContentRisk`).
+    buildPreviewMock
+      .mockResolvedValueOnce(makePreview([]))
+      .mockRejectedValue(new Error("git status timed out"));
+    const onClose = vi.fn();
+    const worktree = makeWorktree(makeChanges([]), { branch: "feature/x", name: "feature/x" });
+    render(<WorktreeDeleteDialog isOpen={true} onClose={onClose} worktree={worktree} />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    await waitFor(() => {
+      expect(buildPreviewMock).toHaveBeenCalled();
+    });
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Type feature/x to confirm")).toBeTruthy();
+    });
+    expect(startDeleteMock).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("still dispatches a force-delete under StrictMode (mountedRef remount guard)", async () => {
     // StrictMode runs mount effects setup→cleanup→setup; a mounted flag that
     // only cleared would be false after remount and abort every force-delete.

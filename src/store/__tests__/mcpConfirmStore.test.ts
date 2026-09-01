@@ -104,6 +104,56 @@ describe("mcpConfirmStore", () => {
     warn.mockRestore();
   });
 
+  /**
+   * The typed-name gate rides the same patch as the preview (#12115), so the
+   * queued branch matters as much as the current one: an item that is promoted
+   * having lost its gate is approvable with no attestation, while the bridge
+   * still believes one was shown.
+   */
+  describe("setPreview and the typed-name gate (#12115)", () => {
+    it("patches a QUEUED item's gate, not only the visible one", () => {
+      void requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      void requestMcpConfirmation(pendingFixture({ requestId: "b" }));
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("a");
+
+      useMcpConfirmStore.getState().setPreview("b", ["  M src/app.ts"], "feature/x");
+
+      const queued = useMcpConfirmStore.getState().queue[0];
+      expect(queued?.requestId).toBe("b");
+      expect(queued?.typedNameTarget).toBe("feature/x");
+      expect(queued?.previewPending).toBe(false);
+
+      // And it survives promotion — the gate has to be there when the human
+      // finally sees the dialog, not merely when the fetch landed.
+      useMcpConfirmStore.getState().resolveCurrent("rejected");
+      expect(useMcpConfirmStore.getState().current?.typedNameTarget).toBe("feature/x");
+    });
+
+    it("patches the current item's gate", () => {
+      void requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      useMcpConfirmStore.getState().setPreview("a", [], "feature/x");
+      expect(useMcpConfirmStore.getState().current?.typedNameTarget).toBe("feature/x");
+    });
+
+    it("leaves an ungated item WITHOUT the property, not with an explicit undefined", () => {
+      void requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      void requestMcpConfirmation(pendingFixture({ requestId: "b" }));
+
+      useMcpConfirmStore.getState().setPreview("a", ["No uncommitted changes."]);
+      useMcpConfirmStore.getState().setPreview("b", ["No uncommitted changes."]);
+
+      expect(useMcpConfirmStore.getState().current).not.toHaveProperty("typedNameTarget");
+      expect(useMcpConfirmStore.getState().queue[0]).not.toHaveProperty("typedNameTarget");
+    });
+
+    it("does not resurrect a settled request", () => {
+      void requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      useMcpConfirmStore.getState().setPreview("a", ["  M src/app.ts"], "feature/x");
+      expect(useMcpConfirmStore.getState().current).toBeNull();
+    });
+  });
+
   it("reset clears state and the resolver map without resolving outstanding promises", async () => {
     const first = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
     void requestMcpConfirmation(pendingFixture({ requestId: "b" }));

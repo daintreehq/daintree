@@ -9,11 +9,15 @@
  * portal close actions' `run()` bodies, so those surfaces cannot disagree with
  * their dispatch path about whether a call is high-tier.
  *
- * `worktree.delete` is the exception and it is a real gap, not a design: its
- * `run()` does NOT consult this, so a `force: true` dispatch that never passes
- * through `WorktreeDeleteDialog` — an agent calling it over MCP — is gated by
- * the static `danger: "confirm"` metadata alone and never reaches the D3
- * typed-name gate the same arguments would trigger locally.
+ * `worktree.delete` consults it from its confirm surfaces rather than from
+ * `run()`, and that is now a design rather than the gap it was (#12115). Both
+ * surfaces derive the tier from a fresh fetch: `WorktreeDeleteDialog` for a
+ * local delete, and the MCP bridge for an agent's, which puts the same
+ * typed-name gate on `McpConfirmDialog` and re-derives it immediately before
+ * dispatch so an approval cannot outlive the snapshot it was given for.
+ * `run()` itself stays out of it deliberately — the typed string is a human
+ * attestation, so it can only ever come from a surface with a human in front
+ * of it, never from a dispatch argument.
  *
  * Keep this module pure — no store, React, or IPC imports — so the policy is
  * unit-testable in isolation.

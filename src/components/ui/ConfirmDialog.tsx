@@ -1,5 +1,5 @@
 import type React from "react";
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import {
   AppDialog,
   type DialogInitialFocus,
@@ -142,9 +142,16 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   const handleClose = onClose ?? (() => {});
   const [typedValue, setTypedValue] = useState("");
 
-  useEffect(() => {
-    if (!isOpen) setTypedValue("");
-  }, [isOpen]);
+  // useLayoutEffect, and keyed on the item as well as on `isOpen`: a
+  // queue-driven singleton (`McpConfirmDialog`) stays MOUNTED and OPEN while it
+  // promotes the next request, so clearing only on close would carry one item's
+  // attestation into the next. Two queued force deletes of the same worktree
+  // would then let the second be approved on the name typed for the first —
+  // the gate satisfied by a keystroke that was never about it. Synchronous so
+  // there is no painted frame in which the stale value already matches.
+  useLayoutEffect(() => {
+    setTypedValue("");
+  }, [isOpen, cooldownKey, typedNameTarget]);
 
   // Lazily seed the cooldown as active so the primary button never flashes
   // enabled for a frame before the effect runs. `confirmCooldownMs <= 0` (and

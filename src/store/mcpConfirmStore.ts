@@ -7,6 +7,20 @@ import type {
 } from "@shared/types/ipc/mcpServer";
 
 /**
+ * Main's own hard deadline, mirrored from `MCP_DISPATCH_TIMEOUT_MS` in
+ * `electron/services/mcp-server/shared.ts` (main-process only, so it cannot be
+ * imported here). Nothing on the confirm path may outlive it: past this point
+ * main has already failed the dispatch and told the agent it timed out, so an
+ * approval landing afterwards would run the action anyway — the destructive
+ * write happens while the caller was told it did not.
+ *
+ * Lives here rather than in the dialog because the bridge needs the same
+ * number: it is the dialog that must stop OFFERING approval by then, and the
+ * bridge that must stop ACTING on one.
+ */
+export const MAIN_DISPATCH_DEADLINE_MS = 30_000;
+
+/**
  * One pending confirmation surfaced for a `danger: "confirm"` MCP dispatch.
  * Stored in a FIFO queue; only the first item drives the visible modal so
  * concurrent agent calls never stack overlapping dialogs.
@@ -89,6 +103,19 @@ export interface PendingMcpConfirm {
    * destructive dispatch before seeing what it affects. Cleared by `setPreview`.
    */
   previewPending?: boolean;
+  /**
+   * The name the approver must type before this dispatch can be approved — the
+   * D3 typed-name gate (#12115). Set only for a `force` worktree delete whose
+   * effective tier came back D3, and only ever from the renderer's OWN stores:
+   * the typed string is a human attestation, so nothing an MCP caller can put
+   * in `args` may name it or clear it.
+   *
+   * Patched in by `setPreview` alongside the lines, because the tier depends on
+   * the same fresh fetch. Absent means no gate, which is why the bridge
+   * re-derives it immediately before dispatch rather than trusting this value
+   * to still be true when the human finally clicks.
+   */
+  typedNameTarget?: string;
   enqueuedAt: number;
 }
 
@@ -99,7 +126,7 @@ interface McpConfirmState {
 
 interface McpConfirmActions {
   enqueue: (item: PendingMcpConfirm) => void;
-  setPreview: (requestId: string, preview: string[]) => void;
+  setPreview: (requestId: string, preview: string[], typedNameTarget?: string) => void;
   resolveCurrent: (decision: McpConfirmationDecision) => void;
   drop: (requestId: string) => void;
   reset: () => void;
@@ -139,23 +166,32 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
     }
   },
 
-  // Attach a late-arriving preview to an already-enqueued item and clear its
-  // pending flag (#11343). The fresh changed-file fetch runs off the critical
+  // Attach a late-arriving preview — and the typed-name gate the same fetch
+  // decided (#12115) — to an already-enqueued item, clearing its pending flag
+  // (#11343). The fresh changed-file fetch runs off the critical
   // path so the modal appears immediately; when it lands we patch the matching
   // item (current or queued) in place and re-enable approval. A no-op if the
   // request already resolved/dropped — the fetch is best-effort and must never
   // resurrect a settled confirmation.
-  setPreview: (requestId, preview) => {
+  setPreview: (requestId, preview, typedNameTarget) => {
     const { current, queue } = get();
+    // Spread the optional field rather than assigning it unconditionally: a
+    // patch that carries no gate must leave the item without one, not stamp an
+    // explicit `undefined` that reads the same but serialises differently.
+    const patch = {
+      preview,
+      previewPending: false,
+      ...(typedNameTarget === undefined ? {} : { typedNameTarget }),
+    };
     if (current !== null && current.requestId === requestId) {
-      set({ current: { ...current, preview, previewPending: false } });
+      set({ current: { ...current, ...patch } });
       return;
     }
     const idx = queue.findIndex((item) => item.requestId === requestId);
     const target = queue[idx];
     if (target === undefined) return;
     const next = [...queue];
-    next[idx] = { ...target, preview, previewPending: false };
+    next[idx] = { ...target, ...patch };
     set({ queue: next });
   },
 
