@@ -49,6 +49,7 @@ import type { AuditService } from "./auditLog.js";
 import { classifyMcpDispatchResult } from "./auditLog.js";
 import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js";
 import { buildMcpClientConfig } from "../../../shared/config/mcpClientConfigs.js";
+import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
 import type { AbusePolicy } from "./abusePolicy.js";
 import {
@@ -2096,6 +2097,21 @@ export class HttpLifecycle {
     const ungrantable = allowedTools.filter((t) => minimumPermittingTier(t) === null);
     if (ungrantable.length > 0) {
       throw new Error(`Unknown or non-grantable tool(s): ${ungrantable.join(", ")}`);
+    }
+    // A grant's `maxUses` is what the Settings card shows the user, so it has
+    // to mean something. For a tool that fans out across every target it
+    // resolves at dispatch time it cannot: the count isn't known when the use
+    // is charged, so "10 uses" would authorize ten unbounded sweeps (#12121).
+    // Reject the whole request rather than quietly dropping the offender —
+    // the minted scope must be exactly the scope the user approved.
+    const fanOut = allowedTools.filter((t) => !isGenericNativeGrantEligible(t));
+    if (fanOut.length > 0) {
+      throw new Error(
+        `A native grant cannot cover ${fanOut.join(", ")}: each call acts on every target it ` +
+          `finds, so a use ceiling bounds how many calls run, never how much they affect. ` +
+          `Remove ${fanOut.length > 1 ? "them" : "it"} — those calls still run under the ` +
+          `session's normal tier and confirmation rules.`
+      );
     }
 
     const maxUses = params.maxUses ?? MCP_NATIVE_GRANT_DEFAULT_MAX_USES;

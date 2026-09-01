@@ -12,6 +12,7 @@ import {
   ACTIONS_SEARCH_DEFAULT_LIMIT,
   ACTIONS_SEARCH_MAX_LIMIT,
 } from "../../../shared/config/mcpIntrospection.js";
+import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { canonicalJson, toCompatibilityShape } from "./compatibilityHash.js";
 import type { McpTargetPolicy, McpTargetTier } from "../../../shared/types/mcpTargetPolicy.js";
 
@@ -400,7 +401,14 @@ export function buildTargetPolicy(
   // the one the dispatch gate would reach.
   const grantsReachable = snapshot.rendererOwnedOrigin;
   const perToolGranted = grantsReachable && snapshot.perToolGrantedActionIds.has(id);
-  const nativeGranted = grantsReachable && snapshot.nativeGrantedActionIds.has(id);
+  // Membership in a grant's allowlist is not the same question the gate asks:
+  // `peekNativeGrant` refuses a per-resolved-target tool outright (#12121), so
+  // reading the allowlist alone would promise a confirmation bypass the gate
+  // will not honour. Issuance already rejects such a scope, which makes this
+  // unreachable in practice — but the record has to agree with the gate by
+  // construction, not by relying on the mint path to stay closed.
+  const nativeGranted =
+    grantsReachable && snapshot.nativeGrantedActionIds.has(id) && isGenericNativeGrantEligible(id);
 
   // The caller's own ladder, never a rung it cannot climb. An external
   // allowlist is a flat peer of the in-app ladder, so `minimumPermittingTier` —

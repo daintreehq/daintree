@@ -1389,6 +1389,27 @@ describe("filterIntrospectionResultForSession", () => {
         expect(perToolGranted.requiresConfirmation).toBe(true);
       });
 
+      it("keeps requiresConfirmation set for a per-resolved-target tool (#12121)", () => {
+        // `peekNativeGrant` refuses terminal.killAll, so a grant listing it
+        // buys no bypass. Reading the allowlist alone would advertise one the
+        // dispatch gate will not honour.
+        // System tier so the floor admits the call on its own — this isolates
+        // the confirmation axis instead of collapsing the whole record.
+        const policy = policyOf(
+          lookup(makeEntry({ id: "terminal.killAll", danger: "confirm" }), {
+            permittedActionIds: new Set([...permitted, "terminal.killAll"]),
+            policySnapshot: snapshot({
+              tier: "system",
+              nativeGrantedActionIds: new Set(["terminal.killAll"]),
+            }),
+          })
+        );
+
+        expect(policy.danger).toBe("confirm");
+        expect(policy.requiresConfirmation).toBe(true);
+        expect(policy.authorizedBy).toBe("tier");
+      });
+
       it("reports the flat external tier rather than a rung the caller cannot climb", () => {
         const policy = policyOf(
           lookup(makeEntry({ id: "terminal.list" }), {
