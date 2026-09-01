@@ -25,8 +25,6 @@ const {
   mockRemovePanel: vi.fn(),
 }));
 
-import { useHelpPanelStore } from "@/store/helpPanelStore";
-
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: mockDispatch, getContext: mockGetContext },
 }));
