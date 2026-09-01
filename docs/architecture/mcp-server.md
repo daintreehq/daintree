@@ -369,7 +369,7 @@ tools/call(actionId, args)
   │      │  different question: it both widens the floor AND pre-authorizes
   │      │  the confirm modal. Nesting it under either admission source left
   │      │  it unreachable — worktree.delete is danger:"confirm" but
-  │      │  system-tier permitted, so pre-authorizing it in Settings did
+  │      │  tier-permitted (action since #12116), so pre-authorizing it did
   │      │  nothing; the same held when a per-tool grant had just admitted it.
   │      │  Skipped only for an already-admitted introspection carrier, which
   │      │  can never raise a modal, so a peek would just drain the budget.

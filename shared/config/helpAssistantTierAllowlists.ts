@@ -101,9 +101,29 @@ export const ACTION_TIER_ADDONS = [
   "worktree.createWithRecipe",
   "worktree.setActive",
   "worktree.refresh",
+  // Cleaning up a worktree the assistant just finished with is ordinary
+  // orchestration, not a privilege escalation (#12116). Admission at this tier
+  // waives no gate: the action is `danger: "confirm"`, so every unconfirmed
+  // dispatch is still routed to the native ConfirmDialog, a forced delete over
+  // a dirty tree still escalates to the typed-name gate (#12115), and a call
+  // with no renderer to ask fails with `CONFIRMATION_REQUIRED` rather than
+  // running unattended. `worktree.create` stays at `system` for a reason that
+  // does not apply here — see the note on it below.
+  "worktree.delete",
+  // The session-scoped form of `worktree.delete` (#11909), carried here for the
+  // same subset invariant as `terminal.closeOwned`. It tracks the tier of the
+  // delete it delegates to, and is the narrower of the two: ownership is
+  // verified in main, and `force`, `deleteBranch` and `closeTerminals` are
+  // absent from its schema and stripped from the delegated call.
+  "worktree.deleteOwned",
   "worktree.resource.provision",
   "worktree.resource.pause",
   "worktree.resource.resume",
+  // Sits with its lifecycle siblings rather than above them (#12116). The
+  // teardown command is project-defined and may destroy a remote resource, so
+  // it keeps `danger: "confirm"` and the modal that comes with it — the tier
+  // decides reachability, the danger class decides approval.
+  "worktree.resource.teardown",
 
   "terminal.inject",
   "terminal.new",
@@ -200,12 +220,6 @@ export const SYSTEM_TIER_ADDONS = [
   // included — reaches it only at an explicitly selected `system` tier or
   // through a scoped grant (#11880, #11907).
   "worktree.create",
-  "worktree.delete",
-  // The session-scoped form of `worktree.delete` (#11909), carried here for the
-  // same subset invariant as `terminal.closeOwned`. It sits at system rather
-  // than action because the delete it delegates to does.
-  "worktree.deleteOwned",
-  "worktree.resource.teardown",
 
   "terminal.arm",
   "terminal.disarm",
@@ -273,6 +287,12 @@ export const HELP_TIER_CUMULATIVE: Record<HelpAssistantTier, readonly string[]> 
 /**
  * Tools whose blast radius is high enough that the UI pins them at the top
  * of the system-tier preview so users don't miss them in a long list.
+ *
+ * Operational risk, not minimum tier: the preview this feeds is cumulative, so
+ * an entry here says nothing about which addon list a tool lives in.
+ * `worktree.delete` is action-tier admitted (#12116) and still belongs at the
+ * top of the widest tier's preview, because that is where a user reviewing the
+ * full surface most needs to see it.
  */
 export const SYSTEM_TIER_HIGH_BLAST_RADIUS: readonly string[] = [
   "git.push",

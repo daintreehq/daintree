@@ -90,9 +90,9 @@ const TIER_DESCRIPTIONS: Record<HelpAssistantTier, string> = {
   workbench:
     "The assistant can read project state but can't change it. Best when you're handing off observation tasks.",
   action:
-    "The assistant can spawn agents, send prompts, read terminal state, and close terminals — full in-app orchestration. Most assistance tasks need this.",
+    "The assistant can spawn agents, send prompts, read terminal state, close terminals, and clean up worktrees it is done with — full in-app orchestration. Deletes still ask you to confirm. Most assistance tasks need this.",
   system:
-    "Adds operations that touch disk or external services: delete worktrees, commit/push git, write the system clipboard, open GitHub issues/PRs. Reserve for trusted automation.",
+    "Adds operations that reach outside this project or leave the machine: create worktrees anywhere on disk, commit/push git, write the system clipboard, open GitHub issues/PRs. Reserve for trusted automation.",
 };
 
 const TIER_SHORT_LABEL: Record<HelpAssistantTier, string> = {

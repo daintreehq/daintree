@@ -1624,16 +1624,17 @@ describe("sessionServer tier-mismatch notifier", () => {
     );
   }
 
-  it("invokes notifyTierMismatch with targetTier when a workbench session calls a system-tier tool", async () => {
+  it("invokes notifyTierMismatch with targetTier when a workbench session calls a tool above its tier", async () => {
     const notify = vi.fn();
     const dispatchAction = vi.fn();
     const deps = fakeDeps({ notifyTierMismatch: notify, dispatchAction });
     const server = createSessionServer("session-A", deps);
     await server.connect(makeMockTransport());
 
-    // worktree.delete is in SYSTEM_TIER_ADDONS — denied at workbench tier.
+    // git.commit is in SYSTEM_TIER_ADDONS — denied at workbench tier, and the
+    // banner's recovery target is the tier that would permit it.
     const result = (await callTool(server, {
-      name: "worktree.delete",
+      name: "git.commit",
       arguments: {},
     })) as { isError?: boolean; content: Array<{ text: string }> };
 
@@ -1643,10 +1644,31 @@ describe("sessionServer tier-mismatch notifier", () => {
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledWith({
       sessionId: "session-A",
-      toolId: "worktree.delete",
+      toolId: "git.commit",
       tier: "workbench",
       targetTier: "system",
     });
+  });
+
+  it("points a workbench session at `action`, not `system`, for worktree cleanup (#12116)", async () => {
+    // The banner offers the NARROWEST tier that would permit the call, so the
+    // promotion has to reach the recovery prompt too — telling a user to select
+    // `system` for a delete that `action` now covers would over-escalate the
+    // surface they end up granting.
+    const notify = vi.fn();
+    const deps = fakeDeps({ notifyTierMismatch: notify });
+    const server = createSessionServer("session-A2", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolId: "worktree.delete",
+        tier: "workbench",
+        targetTier: "action",
+      })
+    );
   });
 
   it("does not invoke notifyTierMismatch when the call is permitted", async () => {
@@ -3105,7 +3127,9 @@ describe("worktree resource lifecycle dedup (#10683)", () => {
     expect(minimumPermittingTier("worktree.resource.provision")).toBe("action");
     expect(minimumPermittingTier("worktree.resource.pause")).toBe("action");
     expect(minimumPermittingTier("worktree.resource.resume")).toBe("action");
-    expect(minimumPermittingTier("worktree.resource.teardown")).toBe("system");
+    // Teardown joined its lifecycle siblings on the default floor in #12116; it
+    // stays `danger: "confirm"`, which is what bounds it.
+    expect(minimumPermittingTier("worktree.resource.teardown")).toBe("action");
     expect(minimumPermittingTier("system.getResourceProfileSnapshot")).toBe("workbench");
     expect(minimumPermittingTier("cliAvailability.get")).toBe("workbench");
     expect(minimumPermittingTier("hibernation.getConfig")).toBe("workbench");

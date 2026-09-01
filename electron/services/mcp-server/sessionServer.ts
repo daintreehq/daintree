@@ -839,8 +839,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // the call, so the peek cannot be nested under any one admission source
     // (#11878). It used to sit inside the tier-denied branch, behind the
     // per-tool check — which left the grant unreachable both for a tool the
-    // tier already permitted (`worktree.delete` is `danger: "confirm"` but
-    // system-tier permitted) and for one a per-tool grant had just admitted.
+    // tier already permitted (`worktree.delete` is `danger: "confirm"` and sits
+    // on the `action` floor since #12116) and for one a per-tool grant had just
+    // admitted.
     // Either way the modal still fired on every call despite an explicit
     // Settings pre-authorisation.
     //
@@ -1058,8 +1059,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // When the grant WAS the authorization, losing it fails closed. When the
     // floor or a per-tool grant already admitted it, the grant only bought a
     // confirmation bypass — so drop the bypass and let the normal modal
-    // decide. Refusing there would answer a `system`-tier `worktree.delete`
-    // with "not permitted for the 'system' tier", which is simply untrue.
+    // decide. Refusing there would answer an `action`-tier `worktree.delete`
+    // with "not permitted for the 'action' tier", which is simply untrue.
     //
     // Accounting note: a matching call spends a use even when the tool is not
     // confirm-gated, so the grant buys it nothing. Charging only where the

@@ -595,9 +595,9 @@ export function GeneralTab({
             >
               <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-0.5" />
               <div className="text-xs text-text-secondary leading-relaxed select-text">
-                System tier lets agents commit, push, delete worktrees, and send terminal commands —
-                some of these are irreversible or visible to teammates. Only enable it for projects
-                where you trust the agent to take that kind of action.
+                System tier lets agents commit, push, write your clipboard, and create worktrees
+                anywhere on disk — some of these are irreversible or visible to teammates. Only
+                enable it for projects where you trust the agent to take that kind of action.
               </div>
             </div>
           )}
