@@ -12,7 +12,7 @@ import {
 function createMockDeps(): PortQueueDeps {
   const mockCoordinator: Pick<PtyPauseCoordinator, "pause" | "resume" | "isPaused"> = {
     pause: vi.fn(),
-    resume: vi.fn(),
+    resume: vi.fn(() => true),
     get isPaused() {
       return false;
     },

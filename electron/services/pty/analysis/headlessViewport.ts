@@ -19,6 +19,16 @@ type RawBufferLine = {
   length: number;
 };
 
+interface CachedRawRow {
+  data: Uint32Array;
+  combined: Record<number, string | undefined>;
+  underlineStyles: Record<number, number | undefined>;
+  hasCombined: boolean;
+  hasExtendedAttrs: boolean;
+  units: VisibleContentUnit[];
+  collapsible: boolean[];
+}
+
 type CursorBuffer = {
   cursorY?: number;
   baseY: number;
@@ -171,6 +181,69 @@ function rawBufferLine(line: CursorBufferLine, cols: number): RawBufferLine | un
     : undefined;
 }
 
+function rawRowMatches(cache: CachedRawRow, raw: RawBufferLine, cols: number): boolean {
+  const cellCount = Math.min(cols, raw.length);
+  const dataLength = cellCount * CELL_SIZE;
+  if (cache.data.length !== dataLength) return false;
+  for (let index = 0; index < dataLength; index += 1) {
+    if (cache.data[index] !== raw._data[index]) return false;
+  }
+  if (!cache.hasCombined && !cache.hasExtendedAttrs) return true;
+  for (let x = 0; x < cellCount; x += 1) {
+    const content = raw._data[x * CELL_SIZE] ?? 0;
+    if (
+      cache.hasCombined &&
+      (content & CONTENT_IS_COMBINED_MASK) !== 0 &&
+      cache.combined[x] !== raw._combined[x]
+    ) {
+      return false;
+    }
+    const bg = raw._data[x * CELL_SIZE + 2] ?? 0;
+    if (
+      cache.hasExtendedAttrs &&
+      (bg & BG_HAS_EXTENDED) !== 0 &&
+      cache.underlineStyles[x] !== (raw._extendedAttrs[x]?.underlineStyle ?? 0)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function cacheRawRow(
+  raw: RawBufferLine,
+  cols: number,
+  units: VisibleContentUnit[],
+  collapsible: boolean[]
+): CachedRawRow {
+  const cellCount = Math.min(cols, raw.length);
+  const combined: Record<number, string | undefined> = {};
+  const underlineStyles: Record<number, number | undefined> = {};
+  let hasCombined = false;
+  let hasExtendedAttrs = false;
+  for (let x = 0; x < cellCount; x += 1) {
+    const content = raw._data[x * CELL_SIZE] ?? 0;
+    if ((content & CONTENT_IS_COMBINED_MASK) !== 0) {
+      hasCombined = true;
+      combined[x] = raw._combined[x];
+    }
+    const bg = raw._data[x * CELL_SIZE + 2] ?? 0;
+    if ((bg & BG_HAS_EXTENDED) !== 0) {
+      hasExtendedAttrs = true;
+      underlineStyles[x] = raw._extendedAttrs[x]?.underlineStyle ?? 0;
+    }
+  }
+  return {
+    data: raw._data.slice(0, cellCount * CELL_SIZE),
+    combined,
+    underlineStyles,
+    hasCombined,
+    hasExtendedAttrs,
+    units,
+    collapsible,
+  };
+}
+
 /**
  * Fused single-pass equivalent of the old readVisibleActivityCells →
  * normalizeCellUnits → createSnapshotFromUnits pipeline (PERF-035). Scans the
@@ -194,7 +267,8 @@ function rawBufferLine(line: CursorBufferLine, cols: number): RawBufferLine | un
  *     foregroundContentAttributes) is never read at all.
  */
 function buildViewportUnitsSnapshot(
-  terminal: HeadlessTerminal | undefined
+  terminal: HeadlessTerminal | undefined,
+  rawRowCache?: Array<CachedRawRow | undefined>
 ): VisibleContentSnapshot | undefined {
   if (!terminal) return undefined;
 
@@ -207,128 +281,154 @@ function buildViewportUnitsSnapshot(
   const end = buffer.baseY + terminal.rows;
   const cols = terminal.cols;
   const reusableCell = buffer.getNullCell();
+  if (rawRowCache && rawRowCache.length > terminal.rows) rawRowCache.length = terminal.rows;
 
   const units: VisibleContentUnit[] = [];
   let hash = FNV_SEED;
   let lastKey: VisibleContentUnit | undefined;
 
   for (let y = start; y < end; y += 1) {
+    const rowIndex = y - start;
     const line = buffer.getLine(y);
     if (!line || typeof line.getCell !== "function") {
+      if (rawRowCache) rawRowCache[rowIndex] = undefined;
       continue;
     }
 
     const raw = rawBufferLine(line, cols);
-    let cellLimit = cols;
-    if (raw) {
-      cellLimit = 0;
-      for (let x = Math.min(cols, raw.length) - 1; x >= 0; x -= 1) {
-        const content = raw._data[x * CELL_SIZE] ?? 0;
-        if ((content & CONTENT_HAS_CONTENT_MASK) !== 0) {
-          cellLimit = Math.min(cols, x + (content >>> CONTENT_WIDTH_SHIFT));
-          break;
+    const cached = raw === undefined ? undefined : rawRowCache?.[rowIndex];
+    let rowUnits: VisibleContentUnit[];
+    let rowCollapsible: boolean[];
+    if (raw !== undefined && cached !== undefined && rawRowMatches(cached, raw, cols)) {
+      rowUnits = cached.units;
+      rowCollapsible = cached.collapsible;
+    } else {
+      rowUnits = [];
+      rowCollapsible = [];
+      let rowLastKey: VisibleContentUnit | undefined;
+      let cellLimit = cols;
+      if (raw) {
+        cellLimit = 0;
+        for (let x = Math.min(cols, raw.length) - 1; x >= 0; x -= 1) {
+          const content = raw._data[x * CELL_SIZE] ?? 0;
+          if ((content & CONTENT_HAS_CONTENT_MASK) !== 0) {
+            cellLimit = Math.min(cols, x + (content >>> CONTENT_WIDTH_SHIFT));
+            break;
+          }
         }
+      }
+
+      for (let x = 0; x < cellLimit; x += 1) {
+        let chars: string | undefined;
+        let code: number;
+        let width: number;
+        let attributes: number;
+        let fgColorMode: number;
+        let fgColor: number;
+        let rawCodePoint: number | undefined;
+
+        if (raw) {
+          const offset = x * CELL_SIZE;
+          const content = raw._data[offset] ?? 0;
+          width = content >>> CONTENT_WIDTH_SHIFT;
+          if (width === 0) continue;
+
+          const codePoint = content & CONTENT_CODEPOINT_MASK;
+          if ((content & CONTENT_IS_COMBINED_MASK) !== 0) {
+            chars = raw._combined[x] ?? "";
+            if (chars.length === 0 || isBlankCellText(chars)) continue;
+            code = chars.charCodeAt(chars.length - 1);
+          } else {
+            if (codePoint === 0 || isWhitespaceCode(codePoint)) continue;
+            code = codePoint;
+            rawCodePoint = codePoint;
+          }
+
+          const fg = raw._data[offset + 1] ?? 0;
+          const bg = raw._data[offset + 2] ?? 0;
+          if (fg === 0 && bg === 0) {
+            attributes = 0;
+            fgColorMode = 0;
+            fgColor = -1;
+          } else {
+            const hasExtendedUnderline =
+              (bg & BG_HAS_EXTENDED) !== 0 && (raw._extendedAttrs[x]?.underlineStyle ?? 0) !== 0;
+            attributes =
+              ((fg & FG_BOLD) !== 0 ? 1 : 0) |
+              ((bg & BG_ITALIC) !== 0 ? 1 << 1 : 0) |
+              ((bg & BG_DIM) !== 0 ? 1 << 2 : 0) |
+              ((fg & FG_UNDERLINE) !== 0 || hasExtendedUnderline ? 1 << 3 : 0) |
+              ((fg & FG_BLINK) !== 0 ? 1 << 4 : 0) |
+              ((fg & FG_INVISIBLE) !== 0 ? 1 << 6 : 0) |
+              ((fg & FG_STRIKETHROUGH) !== 0 ? 1 << 7 : 0) |
+              ((bg & BG_OVERLINE) !== 0 ? 1 << 8 : 0);
+            fgColorMode = fg & COLOR_MODE_MASK;
+            fgColor =
+              fgColorMode === COLOR_PALETTE_16 || fgColorMode === COLOR_PALETTE_256
+                ? fg & 0xff
+                : fgColorMode === COLOR_RGB
+                  ? fg & 0xffffff
+                  : -1;
+          }
+        } else {
+          const cell = line.getCell(x, reusableCell);
+          if (!cell) continue;
+          width = cell.getWidth();
+          if (width === 0) continue;
+          chars = cell.getChars();
+          if (chars.length === 0 || isBlankCellText(chars)) continue;
+          code = cell.getCode();
+          // Attribute bit layout matches the old createVisibleContentCellFrom,
+          // minus inverse, which foregroundContentAttributes masks out.
+          attributes =
+            (cell.isBold() ? 1 : 0) |
+            (cell.isItalic() ? 1 << 1 : 0) |
+            (cell.isDim() ? 1 << 2 : 0) |
+            (cell.isUnderline() ? 1 << 3 : 0) |
+            (cell.isBlink() ? 1 << 4 : 0) |
+            (cell.isInvisible() ? 1 << 6 : 0) |
+            (cell.isStrikethrough() ? 1 << 7 : 0) |
+            (cell.isOverline() ? 1 << 8 : 0);
+          fgColorMode = cell.getFgColorMode();
+          fgColor = cell.getFgColor();
+        }
+
+        const defaultSingleWidth =
+          attributes === 0 && fgColorMode === 0 && fgColor === -1 && width === 1;
+        const defaultCodePoint =
+          defaultSingleWidth && chars !== undefined ? singleCodePoint(chars) : rawCodePoint;
+        let key: VisibleContentUnit;
+        let collapsible: boolean;
+        if (defaultSingleWidth && defaultCodePoint !== undefined) {
+          key = defaultCodePoint;
+          collapsible = isCollapsibleFillCode(defaultCodePoint);
+        } else {
+          const resolvedChars =
+            chars ??
+            (rawCodePoint! <= 0xffff
+              ? String.fromCharCode(rawCodePoint!)
+              : String.fromCodePoint(rawCodePoint!));
+          key =
+            defaultSingleWidth && resolvedChars.length <= 2
+              ? resolvedChars
+              : `${resolvedChars}|${code}|${width}|${fgColorMode}|${fgColor}|${attributes}`;
+          collapsible = isCollapsibleFillText(resolvedChars);
+        }
+
+        if (rowLastKey === key && collapsible) continue;
+        rowUnits.push(key);
+        rowCollapsible.push(collapsible);
+        rowLastKey = key;
+      }
+      if (rawRowCache) {
+        rawRowCache[rowIndex] =
+          raw === undefined ? undefined : cacheRawRow(raw, cols, rowUnits, rowCollapsible);
       }
     }
 
-    for (let x = 0; x < cellLimit; x += 1) {
-      let chars: string | undefined;
-      let code: number;
-      let width: number;
-      let attributes: number;
-      let fgColorMode: number;
-      let fgColor: number;
-      let rawCodePoint: number | undefined;
-
-      if (raw) {
-        const offset = x * CELL_SIZE;
-        const content = raw._data[offset] ?? 0;
-        width = content >>> CONTENT_WIDTH_SHIFT;
-        if (width === 0) continue;
-
-        const codePoint = content & CONTENT_CODEPOINT_MASK;
-        if ((content & CONTENT_IS_COMBINED_MASK) !== 0) {
-          chars = raw._combined[x] ?? "";
-          if (chars.length === 0 || isBlankCellText(chars)) continue;
-          code = chars.charCodeAt(chars.length - 1);
-        } else {
-          if (codePoint === 0 || isWhitespaceCode(codePoint)) continue;
-          code = codePoint;
-          rawCodePoint = codePoint;
-        }
-
-        const fg = raw._data[offset + 1] ?? 0;
-        const bg = raw._data[offset + 2] ?? 0;
-        if (fg === 0 && bg === 0) {
-          attributes = 0;
-          fgColorMode = 0;
-          fgColor = -1;
-        } else {
-          const hasExtendedUnderline =
-            (bg & BG_HAS_EXTENDED) !== 0 && (raw._extendedAttrs[x]?.underlineStyle ?? 0) !== 0;
-          attributes =
-            ((fg & FG_BOLD) !== 0 ? 1 : 0) |
-            ((bg & BG_ITALIC) !== 0 ? 1 << 1 : 0) |
-            ((bg & BG_DIM) !== 0 ? 1 << 2 : 0) |
-            ((fg & FG_UNDERLINE) !== 0 || hasExtendedUnderline ? 1 << 3 : 0) |
-            ((fg & FG_BLINK) !== 0 ? 1 << 4 : 0) |
-            ((fg & FG_INVISIBLE) !== 0 ? 1 << 6 : 0) |
-            ((fg & FG_STRIKETHROUGH) !== 0 ? 1 << 7 : 0) |
-            ((bg & BG_OVERLINE) !== 0 ? 1 << 8 : 0);
-          fgColorMode = fg & COLOR_MODE_MASK;
-          fgColor =
-            fgColorMode === COLOR_PALETTE_16 || fgColorMode === COLOR_PALETTE_256
-              ? fg & 0xff
-              : fgColorMode === COLOR_RGB
-                ? fg & 0xffffff
-                : -1;
-        }
-      } else {
-        const cell = line.getCell(x, reusableCell);
-        if (!cell) continue;
-        width = cell.getWidth();
-        if (width === 0) continue;
-        chars = cell.getChars();
-        if (chars.length === 0 || isBlankCellText(chars)) continue;
-        code = cell.getCode();
-        // Attribute bit layout matches the old createVisibleContentCellFrom,
-        // minus inverse, which foregroundContentAttributes masks out.
-        attributes =
-          (cell.isBold() ? 1 : 0) |
-          (cell.isItalic() ? 1 << 1 : 0) |
-          (cell.isDim() ? 1 << 2 : 0) |
-          (cell.isUnderline() ? 1 << 3 : 0) |
-          (cell.isBlink() ? 1 << 4 : 0) |
-          (cell.isInvisible() ? 1 << 6 : 0) |
-          (cell.isStrikethrough() ? 1 << 7 : 0) |
-          (cell.isOverline() ? 1 << 8 : 0);
-        fgColorMode = cell.getFgColorMode();
-        fgColor = cell.getFgColor();
-      }
-
-      const defaultSingleWidth =
-        attributes === 0 && fgColorMode === 0 && fgColor === -1 && width === 1;
-      const defaultCodePoint =
-        defaultSingleWidth && chars !== undefined ? singleCodePoint(chars) : rawCodePoint;
-      let key: VisibleContentUnit;
-      let collapsible: boolean;
-      if (defaultSingleWidth && defaultCodePoint !== undefined) {
-        key = defaultCodePoint;
-        collapsible = isCollapsibleFillCode(defaultCodePoint);
-      } else {
-        const resolvedChars =
-          chars ??
-          (rawCodePoint! <= 0xffff
-            ? String.fromCharCode(rawCodePoint!)
-            : String.fromCodePoint(rawCodePoint!));
-        key =
-          defaultSingleWidth && resolvedChars.length <= 2
-            ? resolvedChars
-            : `${resolvedChars}|${code}|${width}|${fgColorMode}|${fgColor}|${attributes}`;
-        collapsible = isCollapsibleFillText(resolvedChars);
-      }
-
-      if (lastKey === key && collapsible) continue;
+    for (let index = 0; index < rowUnits.length; index += 1) {
+      const key = rowUnits[index]!;
+      if (lastKey === key && rowCollapsible[index]) continue;
       units.push(key);
       if (typeof key === "number") {
         if (key <= 0xffff) {
@@ -369,12 +469,19 @@ function buildViewportUnitsSnapshot(
  * write callbacks read the snapshot in the same job must call invalidate()
  * in that callback too, because xterm fires per-write callbacks before the
  * onWriteParsed event.
+ *
+ * Invalidated snapshots still reuse normalized rows whose raw xterm cell
+ * words, combined strings, and extended underline styles are byte-for-byte
+ * unchanged. Status-line rewrites usually touch one viewport row; retaining
+ * the other rows avoids repeating their cell normalization without trusting
+ * a collision-prone content hash or narrowing the full-viewport contract.
  */
 export class ViewportSnapshotCache {
   private generation = 0;
   private snapshotGeneration = -1;
   private snapshotN = -1;
   private snapshot: VisibleContentSnapshot | undefined;
+  private rawRows: Array<CachedRawRow | undefined> = [];
   private disposables: Array<{ dispose: () => void }> = [];
 
   attach(terminal: HeadlessTerminal): void {
@@ -392,6 +499,7 @@ export class ViewportSnapshotCache {
       }
     }
     this.disposables = [];
+    this.rawRows = [];
     this.invalidate();
   }
 
@@ -408,7 +516,9 @@ export class ViewportSnapshotCache {
     ) {
       return this.snapshot;
     }
-    const snapshot = readVisibleActivitySnapshot(terminal, n);
+    const snapshot =
+      buildViewportUnitsSnapshot(terminal, this.rawRows) ??
+      createVisibleContentSnapshot(readVisibleActivityLines(terminal, n));
     if (snapshot !== undefined) {
       this.snapshot = snapshot;
       this.snapshotGeneration = this.generation;
