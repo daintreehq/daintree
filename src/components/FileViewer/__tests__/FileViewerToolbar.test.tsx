@@ -434,7 +434,19 @@ describe("FileViewerToolbar.CopyContentsButton", () => {
     expect(checkIcon()).toBeNull();
   });
 
-  it("schedules nothing after unmount", async () => {
+  it("clears the running flash timer on unmount", async () => {
+    const { unmount } = render(<FileViewerToolbar.CopyContentsButton contents="x" />);
+    await clickCopy();
+    // Prove there is something to clean up — without this the assertion below
+    // holds even with the cleanup deleted.
+    expect(vi.getTimerCount()).toBe(1);
+
+    unmount();
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("schedules nothing when a write resolves after unmount", async () => {
     let resolveWrite: (() => void) | undefined;
     writeText.mockReturnValueOnce(
       new Promise<void>((resolve) => {
@@ -443,6 +455,9 @@ describe("FileViewerToolbar.CopyContentsButton", () => {
     );
     const { unmount } = render(<FileViewerToolbar.CopyContentsButton contents="x" />);
     fireEvent.click(button());
+    // The click has to have reached the clipboard, or the timer count below is
+    // zero for the wrong reason.
+    expect(writeText).toHaveBeenCalledTimes(1);
 
     unmount();
     await act(async () => {

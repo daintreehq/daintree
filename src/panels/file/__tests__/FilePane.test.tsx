@@ -213,6 +213,7 @@ import { FilePane } from "../FilePane";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { ClientAppError } from "@/utils/clientAppError";
 
 function lastContentPanelProps(): Record<string, unknown> {
   const props = contentPanelProps.at(-1);
@@ -2918,10 +2919,37 @@ describe("FilePane copy file contents (#12136)", () => {
   it("copies markdown source while the rendered view is showing", async () => {
     readMock.mockResolvedValue({ content: "# title\n\nbody\n" });
     await renderPane("/repo/docs/spec.md", "rendered");
+    // Anchor the claim: a fall back to source would copy the same string and
+    // leave this green without ever exercising the rendered branch.
+    expect(await screen.findByTestId("markdown-viewer-mock")).toBeTruthy();
 
     await copy();
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("# title\n\nbody\n"));
+  });
+
+  it("copies HTML source while the sandboxed preview is showing", async () => {
+    readMock.mockResolvedValue({
+      content: "<h1>hi</h1>\n",
+      htmlPreviewUrl: "daintree-html://tok/report.html",
+    });
+    await renderPane("/repo/dist/report.html", "rendered");
+    expect(await screen.findByTestId("html-viewer-mock")).toBeTruthy();
+
+    await copy();
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("<h1>hi</h1>\n"));
+  });
+
+  it("offers the control for an empty file and copies the empty string", async () => {
+    readMock.mockResolvedValue({ content: "" });
+    await renderPane("/repo/src/empty.ts");
+
+    await copy();
+
+    // A `content || null` gate would hide the button here while the toolbar's
+    // own unit test stayed green.
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(""));
   });
 
   it("copies the file, not the diff, while the diff view is showing", async () => {
@@ -2939,6 +2967,7 @@ describe("FilePane copy file contents (#12136)", () => {
       worktreeChanges: { changes: [{ path: "/repo/src/index.ts", status: "modified" }] },
     });
     await renderPane("/repo/src/index.ts", "diff", "wt-1");
+    expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
 
     await copy();
 
@@ -2952,23 +2981,89 @@ describe("FilePane copy file contents (#12136)", () => {
     expect(copyButton()).toBeNull();
   });
 
-  it("withholds the control when the read failed as binary", async () => {
-    readMock.mockRejectedValue(Object.assign(new Error("binary"), { code: "BINARY_FILE" }));
-    await renderPane("/repo/src/blob.bin");
+  it.each(["BINARY_FILE", "FILE_TOO_LARGE", "LFS_POINTER"] as const)(
+    "withholds the control when the read failed with %s",
+    async (code) => {
+      // A real ClientAppError, not `Object.assign(new Error(), { code })`:
+      // `isClientAppError` keys off `name === "AppError"`, so the plain Error
+      // lands in the INVALID_PATH branch and never exercises this code at all.
+      readMock.mockRejectedValue(new ClientAppError(code, code));
+      await renderPane("/repo/src/blob.bin");
 
-    // The extension says nothing here; the read is what knows, and its failure
-    // is what has to keep the button away.
+      // Prove the pane actually settled into the matching error, or the absence
+      // below could just be a frame that never rendered.
+      expect(await screen.findByText(FILE_READ_ERROR_MESSAGES[code])).toBeTruthy();
+      // The extension says nothing here; the read is what knows, and its failure
+      // is what has to keep the button away.
+      expect(copyButton()).toBeNull();
+    }
+  );
+
+  it.each([
+    ["an image", "/repo/logo.png", "img"],
+    ["a video", "/repo/media/demo.webm", "video"],
+    ["audio", "/repo/media/track.mp3", "audio"],
+    ["a PDF", "/repo/docs/spec.pdf", "iframe"],
+  ])("withholds the control for %s", async (_case, filePath, selector) => {
+    // Video and audio fetch their bytes into a blob URL; without the stub the
+    // element never mounts and the absence assertion would pass for the wrong
+    // reason. Mirrors this file's own media describes.
+    const realCreateObjectURL = URL.createObjectURL;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        blob: () => Promise.resolve(new Blob(["x"])),
+      })
+    );
+    URL.createObjectURL = vi.fn(() => "blob:app://daintree/media-preview");
+    try {
+      const { container } = await renderPane(filePath);
+
+      // Anchored to the preview element: asserting absence on a pane that never
+      // reached its terminal state would pass for the wrong reason.
+      await waitFor(() => expect(container.querySelector(selector)).not.toBeNull());
+      expect(copyButton()).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      URL.createObjectURL = realCreateObjectURL;
+    }
+  });
+
+  it("withholds the control for an SVG, whose raw source the pane discards", async () => {
+    // Valid SVG on purpose: the shared default read is not, so the sanitizer
+    // would reject it and this would assert absence from the error state
+    // instead of from the svg state it is meant to cover.
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+    });
+    const { container } = await renderPane("/repo/icon.svg");
+
+    await waitFor(() => expect(container.querySelector("svg")).not.toBeNull());
     expect(copyButton()).toBeNull();
   });
 
-  it.each([
-    ["an image", "/repo/logo.png"],
-    ["an SVG", "/repo/icon.svg"],
-    ["a video", "/repo/media/demo.webm"],
-    ["audio", "/repo/media/track.mp3"],
-    ["a PDF", "/repo/docs/spec.pdf"],
-  ])("withholds the control for %s", async (_case, filePath) => {
-    await renderPane(filePath);
+  it("retires the control when the file it was offered for turns into media", async () => {
+    readMock.mockResolvedValue({ content: "x" });
+    const { rerender } = await renderPane("/repo/src/index.ts");
+    await screen.findByRole("button", { name: "Copy file contents" });
+
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/logo.png" };
+    rerender(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title="logo.png"
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+    await act(async () => {});
 
     expect(copyButton()).toBeNull();
   });
@@ -2981,9 +3076,10 @@ describe("FilePane copy file contents (#12136)", () => {
     const buttons = Array.from(screen.getByRole("toolbar").querySelectorAll("button")).map((b) =>
       b.getAttribute("aria-label")
     );
-    // The reveal label is platform-worded, so pin the shape rather than the
-    // word: Copy contents, then reveal, then open. FileBrowserViewer's suite
-    // asserts the identical suffix — that parity is what #12136 asked for.
-    expect(buttons.indexOf("Open in editor") - buttons.indexOf("Copy file contents")).toBe(2);
+    // The exact tail, not index arithmetic: a difference of 2 also holds with an
+    // unrelated control wedged between them. The reveal label is platform-worded,
+    // so take it from the same helper the component uses. FileBrowserViewer's
+    // suite asserts the identical suffix — that parity is what #12136 asked for.
+    expect(buttons.slice(-3)).toEqual(["Copy file contents", revealCopy().label, "Open in editor"]);
   });
 });

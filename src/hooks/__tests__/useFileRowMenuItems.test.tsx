@@ -408,6 +408,21 @@ describe("useFileRowMenuItems — Copy file contents", () => {
     expect(labels(menu)).not.toContain("Copy file contents");
   });
 
+  it("copies an empty file as the empty string", async () => {
+    dispatchMock.mockImplementation((id) =>
+      id === "file.read"
+        ? Promise.resolve({ ok: true, result: { content: "" } })
+        : Promise.resolve({ ok: true, result: undefined })
+    );
+    const menu = await openMenu();
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy file contents" }));
+
+    // A truthiness gate on the read result would silently write nothing here.
+    await waitFor(() => expect(writeTextMock).toHaveBeenCalledWith(""));
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
   it("keeps the item for an extension it doesn't recognise", async () => {
     // Optimistic by design: the read is the real gate, and hiding everything
     // unfamiliar would drop the item for perfectly ordinary text files.

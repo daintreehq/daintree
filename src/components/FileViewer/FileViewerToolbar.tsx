@@ -273,26 +273,22 @@ const COPY_FEEDBACK_MS = 2000;
  * gate is a null check and never a truthiness one.
  */
 function CopyContentsButton({ contents }: { contents: string | null }) {
-  const [copied, setCopied] = useState(false);
+  // The text the clipboard was last confirmed to hold, not a boolean. The
+  // checkmark then belongs to a value rather than to a moment: new contents
+  // retire it in the very commit that paints them instead of a frame later via
+  // an effect, and a write that resolves late can only ever confirm the text it
+  // actually wrote. That is one piece of state doing what a flag plus a reset
+  // effect plus a generation counter were doing before.
+  const [copiedContents, setCopiedContents] = useState<string | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Invalidates a write still in flight when the contents change underneath it
-  // or the button unmounts, so a late resolution can't flash a checkmark for
-  // text that is no longer what a click would copy. Same guard as
-  // DiagnosticCopyButton, which faces the same race.
-  const generationRef = useRef(0);
+  // Only unmount needs a ref: a resolution arriving after teardown would
+  // otherwise schedule a timer nothing is left to clear.
+  const mountedRef = useRef(true);
 
   useEffect(() => {
-    generationRef.current += 1;
-    setCopied(false);
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
-  }, [contents]);
-
-  useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      generationRef.current += 1;
+      mountedRef.current = false;
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
   }, []);
@@ -300,14 +296,13 @@ function CopyContentsButton({ contents }: { contents: string | null }) {
   const handleClick = useCallback(() => {
     if (contents === null) return;
     if (!navigator.clipboard?.writeText) return;
-    const generation = generationRef.current;
     void navigator.clipboard.writeText(contents).then(
       () => {
-        if (generation !== generationRef.current) return;
+        if (!mountedRef.current) return;
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        setCopied(true);
+        setCopiedContents(contents);
         timeoutRef.current = setTimeout(() => {
-          setCopied(false);
+          setCopiedContents(null);
           timeoutRef.current = null;
         }, COPY_FEEDBACK_MS);
       },
@@ -320,6 +315,8 @@ function CopyContentsButton({ contents }: { contents: string | null }) {
   }, [contents]);
 
   if (contents === null) return null;
+
+  const copied = copiedContents === contents;
 
   return (
     <IconButton label="Copy file contents" onClick={handleClick}>

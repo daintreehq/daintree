@@ -156,6 +156,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { GitStatus } from "@shared/types/git";
 import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { NO_HIDDEN_ROWS } from "../fileBrowserTree";
+import { ClientAppError } from "@/utils/clientAppError";
+import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
+import { revealCopy } from "@/components/FileViewer/revealCopy";
 import type {
   FileBrowserSortOrder,
   FileEntryLike,
@@ -977,26 +980,72 @@ describe("FileBrowserViewer copy file contents (#12136)", () => {
     expect(copyButton()).toBeNull();
   });
 
+  it("offers the control for an empty file and copies the empty string", async () => {
+    readMock.mockResolvedValue({ content: "" });
+    renderViewer("/repo/src/empty.ts");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Copy file contents" }));
+
+    // A `content || null` gate would hide the button here while the toolbar's
+    // own unit test stayed green.
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(""));
+  });
+
   it.each([
-    ["an image", "/repo/logo.png"],
-    ["an SVG", "/repo/icon.svg"],
-    ["a PDF", "/repo/docs/spec.pdf"],
-  ])("withholds the control for %s", async (_case, filePath) => {
-    renderViewer(filePath);
-    await act(async () => {});
+    ["an image", "/repo/logo.png", "img"],
+    ["a video", "/repo/media/demo.webm", "video"],
+    ["audio", "/repo/media/track.mp3", "audio"],
+    ["a PDF", "/repo/docs/spec.pdf", "iframe"],
+  ])("withholds the control for %s", async (_case, filePath, selector) => {
+    // The media previews fetch their bytes into a blob URL; without the stub the
+    // element never mounts and the absence assertion below would pass for the
+    // wrong reason. Mirrors this file's own video/audio describes.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        blob: () => Promise.resolve(new Blob(["x"])),
+      })
+    );
+    URL.createObjectURL = vi.fn(() => "blob:app://daintree/preview");
+    URL.revokeObjectURL = vi.fn();
+    const { container } = renderViewer(filePath);
 
-    // SVG is read as text but only its sanitized markup is kept, so there is no
-    // raw source left to hand back — same answer as the binary previews.
+    await waitFor(() => expect(container.querySelector(selector)).not.toBeNull());
+    expect(copyButton()).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("withholds the control for an SVG, whose raw source the viewer discards", async () => {
+    // Valid SVG on purpose: this suite's shared default read is `# hello`, which
+    // the sanitizer rejects — so without real markup this would assert absence
+    // from the error state rather than the svg state it means to cover.
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+    });
+    const { container } = renderViewer("/repo/icon.svg");
+
+    await waitFor(() => expect(container.querySelector("svg")).not.toBeNull());
+    // Read as text, but only the sanitized markup is kept — there is no raw
+    // source left to hand back.
     expect(copyButton()).toBeNull();
   });
 
-  it("withholds the control when the read failed", async () => {
-    readMock.mockRejectedValue(Object.assign(new Error("binary"), { code: "BINARY_FILE" }));
-    renderViewer("/repo/src/blob.bin");
-    await act(async () => {});
+  it.each(["BINARY_FILE", "FILE_TOO_LARGE", "LFS_POINTER"] as const)(
+    "withholds the control when the read failed with %s",
+    async (code) => {
+      // A real ClientAppError, not `Object.assign(new Error(), { code })`:
+      // `isClientAppError` keys off `name === "AppError"`, so a plain Error
+      // falls into the generic branch and never exercises this mapping.
+      readMock.mockRejectedValue(new ClientAppError(code, code));
+      renderViewer("/repo/src/blob.bin");
 
-    expect(copyButton()).toBeNull();
-  });
+      expect(await screen.findByText(FILE_READ_ERROR_MESSAGES[code])).toBeTruthy();
+      expect(copyButton()).toBeNull();
+    }
+  );
 
   it("sits ahead of Reveal and Open in editor, the same suffix FilePane renders", async () => {
     readMock.mockResolvedValue({ content: "x" });
@@ -1006,8 +1055,9 @@ describe("FileBrowserViewer copy file contents (#12136)", () => {
     const buttons = Array.from(screen.getByRole("toolbar").querySelectorAll("button")).map((b) =>
       b.getAttribute("aria-label")
     );
-    // The reveal label is platform-worded, so pin the shape rather than the
-    // word: Copy contents, then reveal, then open.
-    expect(buttons.indexOf("Open in editor") - buttons.indexOf("Copy file contents")).toBe(2);
+    // The exact tail, not index arithmetic: a difference of 2 also holds with an
+    // unrelated control wedged between them. FilePane's suite asserts the
+    // identical suffix — that parity is what #12136 asked for.
+    expect(buttons.slice(-3)).toEqual(["Copy file contents", revealCopy().label, "Open in editor"]);
   });
 });
