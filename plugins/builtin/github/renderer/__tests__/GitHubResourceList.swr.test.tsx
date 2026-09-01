@@ -3617,6 +3617,30 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
       expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
     });
     expect(mockSelectAll).not.toHaveBeenCalled();
+    // The trigger went `disabled` in the same commit that closed the menu, so
+    // Radix's restoring `.focus()` on it is a no-op and focus would land on
+    // `document.body` — every grid key dead until the user clicks back in.
+    expect(document.activeElement).toBe(screen.getByPlaceholderText(/search issues/i));
+  });
+
+  it("hands focus back to the search input when the menu closes", async () => {
+    // The grid keeps DOM focus in the search input so `aria-activedescendant`
+    // is legal; left on the trigger, the arrow keys, Shift+Space and Enter are
+    // all inert until the user tabs back.
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await openMenu();
+    const dialog = screen.getByRole("dialog", { name: "Selection actions" });
+    act(() => {
+      fireEvent.keyDown(dialog, { key: "Escape" });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+    });
+    expect(document.activeElement).toBe(screen.getByPlaceholderText(/search issues/i));
   });
 
   it("does not carry an open menu across a project switch", async () => {

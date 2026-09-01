@@ -1281,6 +1281,17 @@ export function GitHubResourceList({
                   setSelectionMenuOpen(false);
                 }
               }}
+              // Radix hands focus back to the trigger, which leaves the grid
+              // inert either way: focus off the search input kills the arrow
+              // keys, Shift+Space and Enter (see the invariant above), and on
+              // the emptied-list close the trigger has gone `disabled` in the
+              // same commit, so its `.focus()` is a no-op and focus falls all
+              // the way to `document.body`. Take the restoration over — same
+              // hand-back the row menus do via `onMenuClose`.
+              onCloseAutoFocus={(event: Event) => {
+                event.preventDefault();
+                focusSearchInput();
+              }}
               // Radix gives the content `role="dialog"`, and a dialog that
               // announces itself as nothing is a dialog a screen-reader user
               // has to explore to identify.
