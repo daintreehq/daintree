@@ -482,7 +482,7 @@ The tables below are the authoritative `forge.*` surface, derived from three sou
 
 Two axes are independent — do not infer one from another:
 
-- **`danger`** gates the user-facing confirm. `danger:"confirm"` dispatches the call unconfirmed so the human approves it host-side in the native `McpConfirmDialog` before the mutation fires (see [Risk bands and `danger`](#risk-bands-and-danger)); `danger:"safe"` does not. It says nothing about rate limit. `forge.createIssue` is `safe` while `forge.closeIssue` is `confirm`; `forge.approvePR` is `confirm` yet on the `standard` bucket while `forge.createPR` is `confirm` on `mutation`.
+- **`danger`** gates the user-facing confirm. `danger:"confirm"` dispatches the call unconfirmed so the human approves it host-side in the native `McpConfirmDialog` before the mutation fires (see [Risk bands and `danger`](#risk-bands-and-danger)); `danger:"safe"` does not. It says nothing about rate limit. `forge.addIssueLabel` is `safe` while `forge.closeIssue` is `confirm`; `forge.approvePR` is `confirm` yet on the `standard` bucket while `forge.createPR` is `confirm` on `mutation`.
 - **Rate limit** is the token bucket (`standard` 30/min, `mutation` 10/min). It is set per-id in `RATE_LIMIT_TOOL_MAP`, not derived from `danger` or write-intent — the browser-open commands `forge.openIssue`/`forge.openPR` are `safe` but `mutation`-bucketed because an LLM retry would pop a duplicate browser tab. There used to be a third, **External**, marking whether an action was in `MCP_TOOL_ALLOWLIST`. It is gone because the answer is now uniformly no: #11585 removed every `forge.*` id from the external surface, so reads and writes alike are reachable only through an in-app session at their stated tier, never by an API key. There is no setting that changes this — see [Tier model](#tier-model-sharedts).
 
 ### Forge reads (`workbench` tier)
@@ -536,11 +536,11 @@ Every action below is in `SYSTEM_TIER_ADDONS` and requires the `system` tier (or
 | `forge.markPRReadyForReview` | confirm | mutation | no | `prNumber`, `cwd?` |
 | `forge.commentOnPR` | confirm | mutation | yes | `prNumber`, `body`, `cwd?` |
 | `forge.editPR` | confirm | mutation | no | `prNumber`, `title?`, `body?` (at least one), `cwd?` |
-| `forge.createIssue` | safe | standard | yes | `title`, `body?`, `labels?`, `cwd?` |
+| `forge.createIssue` | confirm | standard | yes | `title`, `body?`, `labels?`, `cwd?` |
 | `forge.closeIssue` | confirm | standard | no | `issueNumber`, `stateReason?`, `cwd?` |
-| `forge.reopenIssue` | safe | standard | no | `issueNumber`, `cwd?` |
+| `forge.reopenIssue` | confirm | standard | no | `issueNumber`, `cwd?` |
 | `forge.editIssue` | confirm | standard | no | `issueNumber`, `title?`, `body?` (at least one), `cwd?` |
-| `forge.addIssueComment` | safe | standard | yes | `issueNumber`, `body`, `cwd?` |
+| `forge.addIssueComment` | confirm | standard | yes | `issueNumber`, `body`, `cwd?` |
 | `forge.addIssueLabel` | safe | standard | no | `issueNumber`, `label`, `cwd?` |
 | `forge.removeIssueLabel` | safe | standard | no | `issueNumber`, `label`, `cwd?` |
 | `forge.validateToken` | safe | standard | no | `providerId`, `token` |

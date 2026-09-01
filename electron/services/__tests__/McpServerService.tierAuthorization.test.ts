@@ -1349,6 +1349,7 @@ describe("McpServerService", () => {
         id: "forge.createIssue" as ActionId,
         title: "Create Issue (Forge)",
         description: "Create an issue via the forge provider",
+        danger: "confirm",
       }),
       createManifestEntry({
         id: "forge.closeIssue" as ActionId,
@@ -1359,6 +1360,7 @@ describe("McpServerService", () => {
         id: "forge.reopenIssue" as ActionId,
         title: "Reopen Issue (Forge)",
         description: "Reopen an issue via the forge provider",
+        danger: "confirm",
       }),
       createManifestEntry({
         id: "forge.editIssue" as ActionId,
@@ -1369,6 +1371,7 @@ describe("McpServerService", () => {
         id: "forge.addIssueComment" as ActionId,
         title: "Add Issue Comment (Forge)",
         description: "Add a comment to an issue via the forge provider",
+        danger: "confirm",
       }),
       createManifestEntry({
         id: "forge.addIssueLabel" as ActionId,
@@ -1605,6 +1608,47 @@ describe("McpServerService", () => {
       }
       for (const id of NEVER_EXPOSED_VIA_MCP) {
         expect(ids).not.toContain(id);
+      }
+    });
+
+    it("system tier advertises the retractable-write split on the wire (#12118)", async () => {
+      paneTokenTiers.set("token-sys-hints", "system");
+      const { window } = createMockWindow({ getManifest: tierManifest });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-sys-hints",
+      });
+      transports.push(transport);
+
+      const byName = new Map((await client.listTools()).tools.map((tool) => [tool.name, tool]));
+
+      // Three system-tier writes an agent must clear a host confirm for:
+      // createIssue and addIssueComment publish a record nobody can retract,
+      // and reopenIssue is a publicly visible state transition whose inverse
+      // (closeIssue) has been `confirm` since #10653. This asserts the
+      // classification survives all the way to the wire — the fixture defaults
+      // an unspecified entry to "safe", so a manifest that drifted back would
+      // read as green everywhere else.
+      for (const id of ["forge.createIssue", "forge.addIssueComment", "forge.reopenIssue"]) {
+        expect(byName.get(id)?.annotations?.destructiveHint).toBe(true);
+      }
+
+      // The rest of the cohort #12118 classified stays deliberately unattended:
+      // each is an idempotent state-set with an exact inverse, or a local index
+      // /commit write that only `git.push` can publish.
+      for (const id of [
+        "forge.assignIssue",
+        "forge.unassignIssue",
+        "forge.addIssueLabel",
+        "forge.removeIssueLabel",
+        "git.commit",
+        "git.stageFile",
+        "git.unstageFile",
+        "git.stageAll",
+        "git.unstageAll",
+      ]) {
+        expect(byName.get(id)?.annotations?.destructiveHint).toBe(false);
       }
     });
 

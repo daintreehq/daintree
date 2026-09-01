@@ -712,6 +712,9 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "forge.editPR",
   "forge.closeIssue",
   "forge.editIssue",
+  "forge.createIssue",
+  "forge.addIssueComment",
+  "forge.reopenIssue",
   "session.bookmarkAndClose",
   "session.bookmark.delete",
 ];
@@ -825,6 +828,22 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // dispatch happens through the forge UI, not these actions.
   "forge.closeIssue",
   "forge.editIssue",
+  // Forge issue writes that publish a record nobody can retract (#12118):
+  // `forge.createIssue` files a public issue and notifies watchers,
+  // `forge.addIssueComment` posts a comment this capability cannot edit or
+  // delete. Both are agent/MCP-only, so the confirm they gate on is
+  // `McpConfirmDialog` — which, since #12118, previews the actual title, body,
+  // labels and target worktree rather than the redacted argument summary. There
+  // is no user-side dispatch path to co-locate a ConfirmDialog with.
+  "forge.createIssue",
+  "forge.addIssueComment",
+  // `forge.reopenIssue` joins them for symmetry with its own inverse
+  // `forge.closeIssue`, which has been `confirm` since #10653: both are
+  // publicly visible issue-state transitions that notify watchers, and
+  // re-closing does not restore the `stateReason` the issue was closed for. It
+  // needs no content preview — it authors nothing, and its only argument is an
+  // issue number the argument disclosure shows verbatim.
+  "forge.reopenIssue",
   "session.bookmarkAndClose",
   "session.bookmark.delete",
 ];

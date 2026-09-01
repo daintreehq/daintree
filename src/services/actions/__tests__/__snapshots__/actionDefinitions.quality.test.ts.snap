@@ -1734,8 +1734,8 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "forge",
-    "danger": "safe",
-    "dangerRationale": undefined,
+    "danger": "confirm",
+    "dangerRationale": "Posts a public comment that participants are notified about. This capability cannot edit or withdraw it afterwards, so posting is final.",
     "description": "Post a comment on an issue, visible to everyone watching it and delivered as a notification. Comments cannot be edited or withdrawn through this capability, so treat posting as final.",
     "examples": undefined,
     "id": "forge.addIssueComment",
@@ -1830,8 +1830,8 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "forge",
-    "danger": "safe",
-    "dangerRationale": undefined,
+    "danger": "confirm",
+    "dangerRationale": "Files a publicly visible issue and notifies every watcher of the repository. Closing it afterwards removes neither the record nor the notifications it already sent.",
     "description": "File a new issue on the active forge. This is publicly visible and notifies watchers. Labels must already exist on the repository — the forge rejects the request rather than creating them, so confirm the names first.",
     "examples": [
       {
@@ -2133,8 +2133,8 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "forge",
-    "danger": "safe",
-    "dangerRationale": undefined,
+    "danger": "confirm",
+    "dangerRationale": "Reopens an issue on the shared forge and notifies its watchers. Closing it again does not restore the reason it was closed for, and the notification cannot be withdrawn.",
     "description": "Reopen a closed issue, putting it back in the active queue and notifying watchers. This is publicly visible and reversible by closing it again.",
     "examples": undefined,
     "id": "forge.reopenIssue",
