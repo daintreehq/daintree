@@ -42,6 +42,7 @@ const SPAWN_GRACE_PERIOD_MS = 5_000;
 const BOOT_GRACE_PERIOD_MS = 8_000;
 
 type TerminalSnapshot = StoreSchema["appState"]["terminals"];
+type TerminalSnapshotEntry = TerminalSnapshot[number];
 
 interface PendingNotification {
   title: string;
@@ -87,8 +88,10 @@ class AgentNotificationService {
    * a minutes-later escalation fires, the live index no longer knows the owner.
    */
   private lastOwnerByPanel = new Map<string, NotificationOwnerId>();
+  private terminalIndexById = new Map<string, number>();
   private hasEverGoneWorking = false;
   private peakConcurrentWorking = 0;
+  private activeTerminalIds = new Set<string>();
   private allClearTimer: NodeJS.Timeout | null = null;
 
   private waitingBurstBuffer: BurstWaitingEntry[] = [];
@@ -224,6 +227,15 @@ class AgentNotificationService {
     if (this.unsubscribers.length > 0) return;
 
     this.initializedAt = Date.now();
+    const initialTerminals = store.get("appState")?.terminals ?? [];
+    this.rebuildTerminalIndex(initialTerminals);
+    this.activeTerminalIds = new Set(
+      initialTerminals
+        .filter((terminal) =>
+          terminal.agentState ? ACTIVE_AGENT_STATES.has(terminal.agentState) : false
+        )
+        .map((terminal) => terminal.id)
+    );
 
     const unsubStateChanged = events.on("agent:state-changed", (payload) => {
       this.handleStateChanged(payload);
@@ -264,6 +276,8 @@ class AgentNotificationService {
     const unsubExited = events.on("agent:exited", (payload) => {
       if (payload.terminalId) {
         this.agentSpawnTimestamps.delete(payload.terminalId);
+        this.activeTerminalIds.delete(payload.terminalId);
+        this.terminalIndexById.delete(payload.terminalId);
         // Bound the routing hint's lifetime to the agent's. A re-watch of the
         // same panel repopulates it; notifications already in flight captured
         // their owner when the event fired.
@@ -277,6 +291,8 @@ class AgentNotificationService {
     const unsubKilled = events.on("agent:killed", (payload) => {
       if (payload.terminalId) {
         this.agentSpawnTimestamps.delete(payload.terminalId);
+        this.activeTerminalIds.delete(payload.terminalId);
+        this.terminalIndexById.delete(payload.terminalId);
         this.forgetPanelOwnership(payload.terminalId);
       }
     });
@@ -319,13 +335,22 @@ class AgentNotificationService {
    * gesture; that is acceptable because the fallback (undefined) simply means
    * notifications aren't suppressed, not that they fire wrongly.
    */
-  private resolveWorktreeIdForTerminal(
-    terminals: TerminalSnapshot,
-    terminalId?: string
-  ): string | undefined {
+  private rebuildTerminalIndex(terminals: TerminalSnapshot): void {
+    this.terminalIndexById.clear();
+    terminals.forEach((terminal, index) => this.terminalIndexById.set(terminal.id, index));
+  }
+
+  private getTerminalSnapshot(terminalId?: string): TerminalSnapshotEntry | undefined {
     if (!terminalId) return undefined;
-    const entry = terminals.find((t) => t.id === terminalId);
-    return entry?.worktreeId;
+    const terminals = store.get("appState").terminals;
+    const index = this.terminalIndexById.get(terminalId);
+    if (index !== undefined) {
+      const terminal = terminals[index];
+      if (terminal?.id === terminalId) return terminal;
+    }
+
+    this.rebuildTerminalIndex(terminals);
+    return terminals.find((terminal) => terminal.id === terminalId);
   }
 
   private handleStateChanged(payload: {
@@ -338,15 +363,17 @@ class AgentNotificationService {
     waitingReason?: string;
   }): void {
     const { state, previousState, terminalId, agentId } = payload;
-    // Snapshot store-backed state once — each store.get() re-reads the full
-    // store file from disk, so the helpers below take these as parameters.
-    const terminals = store.get("appState").terminals;
+    this.checkAllClear(state, previousState, terminalId);
+    if (state === previousState) return;
+
+    // Idle is never a notification, escalation, or working-pulse destination,
+    // so no branch below consumes terminal metadata for it.
+    const terminal = state === "idle" ? undefined : this.getTerminalSnapshot(terminalId);
     const settings = projectStore.getEffectiveNotificationSettings();
     // Backend no longer emits worktreeId on agent events (#5139). Resolve it
     // from persisted renderer state so focus suppression, dedup keying, and
     // notification context still work correctly.
-    const worktreeId =
-      payload.worktreeId ?? this.resolveWorktreeIdForTerminal(terminals, terminalId);
+    const worktreeId = payload.worktreeId ?? terminal?.worktreeId;
 
     // Clear spawn grace tracking once the agent starts doing real work
     // (waiting→working means the user gave input, so future waiting sounds are legitimate)
@@ -354,11 +381,6 @@ class AgentNotificationService {
       const graceKey = terminalId ?? agentId;
       if (graceKey) this.agentSpawnTimestamps.delete(graceKey);
     }
-
-    // All-clear tracking runs regardless of notification settings
-    this.checkAllClear(state, previousState, terminals);
-
-    if (state === previousState) return;
 
     // Prefer terminalId so per-terminal dedup timers don't collide when two
     // runtime-detected terminals share the same agentId value (e.g. both
@@ -427,7 +449,7 @@ class AgentNotificationService {
       this.scheduleWaitingEscalation(
         terminalId,
         settings,
-        terminals,
+        terminal,
         worktreeId,
         agentId,
         coerceWaitingReason(payload.waitingReason)
@@ -436,7 +458,7 @@ class AgentNotificationService {
 
     // Schedule working pulse for watched/docked agents entering working state
     if (state === "working" && previousState !== "working" && terminalId) {
-      this.scheduleWorkingPulse(terminalId, settings, terminals);
+      this.scheduleWorkingPulse(terminalId, settings, terminal);
     }
 
     // Skip if all OS notification types are disabled (off by default).
@@ -482,14 +504,33 @@ class AgentNotificationService {
     return terminals.filter((t) => t.agentState && ACTIVE_AGENT_STATES.has(t.agentState)).length;
   }
 
-  private checkAllClear(state: string, previousState: string, terminals: TerminalSnapshot): void {
+  private checkAllClear(state: string, previousState: string, terminalId?: string): void {
     const wasActive = ACTIVE_AGENT_STATES.has(previousState);
     const isActive = ACTIVE_AGENT_STATES.has(state);
 
+    if (terminalId) {
+      if (isActive) this.activeTerminalIds.add(terminalId);
+      else this.activeTerminalIds.delete(terminalId);
+    }
+
+    let activeCount = terminalId
+      ? this.activeTerminalIds.size
+      : this.countActiveAgents(store.get("appState").terminals);
+
     // Track when agents start working
     if (!wasActive && isActive) {
+      // Preserve the persisted-snapshot contract on the first active transition
+      // of a session. Renderer state can already contain active siblings whose
+      // transitions preceded initialization (or were not observed here). The
+      // peak only has a two-agent floor, so later transitions can stay on the
+      // event-maintained set without rescanning the fleet.
+      if (!this.hasEverGoneWorking) {
+        activeCount = Math.max(
+          activeCount,
+          this.countActiveAgents(store.get("appState").terminals)
+        );
+      }
       this.hasEverGoneWorking = true;
-      const activeCount = this.countActiveAgents(terminals);
       this.peakConcurrentWorking = Math.max(this.peakConcurrentWorking, activeCount);
 
       // Cancel any pending all-clear — a new agent just started
@@ -502,8 +543,6 @@ class AgentNotificationService {
 
     // Only consider transitions OUT of active states
     if (!wasActive || isActive) return;
-
-    const activeCount = this.countActiveAgents(terminals);
 
     // All conditions must hold to schedule the all-clear
     if (!this.hasEverGoneWorking || this.peakConcurrentWorking < 2 || activeCount > 0) return;
@@ -653,7 +692,7 @@ class AgentNotificationService {
   private scheduleWaitingEscalation(
     terminalId: string,
     settings: NotificationSettings,
-    terminals: TerminalSnapshot,
+    terminal: TerminalSnapshotEntry | undefined,
     worktreeId?: string,
     agentId?: string,
     waitingReason?: WaitingReason
@@ -665,7 +704,6 @@ class AgentNotificationService {
     if (!settings.waitingEscalationEnabled || !settings.waitingEnabled) return;
 
     // Only escalate for docked terminals
-    const terminal = terminals.find((t) => t.id === terminalId);
     if (!terminal || terminal.location !== "dock") return;
 
     const timer = setTimeout(() => {
@@ -675,14 +713,13 @@ class AgentNotificationService {
       if (!currentSettings.waitingEscalationEnabled || !currentSettings.waitingEnabled) return;
 
       // Re-read terminal state — skip if moved out of dock or removed
-      const currentTerminals = store.get("appState").terminals;
-      const currentTerminal = currentTerminals.find((t) => t.id === terminalId);
+      const currentTerminal = this.getTerminalSnapshot(terminalId);
       if (!currentTerminal || currentTerminal.location !== "dock") return;
 
       // Count all dock terminals currently waiting (for grouped escalation)
-      const waitingDockTerminalIds = currentTerminals
-        .filter((t) => t.location === "dock" && this.waitingTerminalIds.has(t.id))
-        .map((t) => t.id);
+      const waitingDockTerminalIds = [...this.waitingTerminalIds].filter(
+        (id) => this.getTerminalSnapshot(id)?.location === "dock"
+      );
 
       this.playNotificationSound(currentSettings.soundEnabled, currentSettings.escalationSoundFile);
 
@@ -752,7 +789,7 @@ class AgentNotificationService {
   private scheduleWorkingPulse(
     terminalId: string,
     settings: NotificationSettings,
-    terminals: TerminalSnapshot
+    terminal: TerminalSnapshotEntry | undefined
   ): void {
     this.clearWorkingPulse(terminalId);
 
@@ -761,7 +798,6 @@ class AgentNotificationService {
     // Eligibility: watched OR (docked + escalation enabled)
     const isWatched = this.isWatched(terminalId);
     if (!isWatched) {
-      const terminal = terminals.find((t) => t.id === terminalId);
       if (!terminal || terminal.location !== "dock" || !settings.waitingEscalationEnabled) return;
     }
 
@@ -974,9 +1010,11 @@ class AgentNotificationService {
     this.watchedPanelsByOwner.clear();
     this.ownersByPanel.clear();
     this.lastOwnerByPanel.clear();
+    this.terminalIndexById.clear();
     this.notificationQueue = [];
     this.hasEverGoneWorking = false;
     this.peakConcurrentWorking = 0;
+    this.activeTerminalIds.clear();
     this.sessionMuteUntil = 0;
 
     soundService.cancel();
