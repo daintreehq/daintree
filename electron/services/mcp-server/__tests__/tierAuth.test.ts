@@ -351,6 +351,27 @@ describe("wire/validation schema split", () => {
     expect(findWireStrippedKeywords(wire)).toEqual([]);
   });
 
+  it("omits the redundant top-level schema dialect", () => {
+    const wire = buildToolInputSchema(
+      makeEntry({
+        inputSchema: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          properties: {},
+        },
+      })
+    );
+
+    expect(wire["$schema"]).toBeUndefined();
+  });
+
+  it("omits an empty properties map when the tool declares no arguments", () => {
+    expect(buildToolInputSchema(makeEntry({ inputSchema: undefined }))).toEqual({
+      type: "object",
+      additionalProperties: false,
+    });
+  });
+
   it("keeps every argument the schema declares, including keyword-named ones", () => {
     const wire = buildToolInputSchema(
       makeEntry({ inputSchema: structuredClone(CONSTRAINED_SCHEMA) as Record<string, unknown> })

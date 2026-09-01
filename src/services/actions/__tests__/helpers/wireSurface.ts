@@ -164,7 +164,7 @@ export async function measureWireSurface(): Promise<WireTool[]> {
       continue;
     }
 
-    const EMPTY_INPUT_SCHEMA = { type: "object", properties: {}, additionalProperties: false };
+    const EMPTY_INPUT_SCHEMA = { type: "object", additionalProperties: false };
     let inputSchema: unknown = EMPTY_INPUT_SCHEMA;
     if (def.argsSchema) {
       const emitted = emitSchema(def.argsSchema, "input");
@@ -176,12 +176,16 @@ export async function measureWireSurface(): Promise<WireTool[]> {
       // `advertisesObjectRootedInput` in the quality suite is what keeps that
       // substitution from firing unnoticed; this keeps the bytes honest if it
       // ever does.
-      inputSchema = isObjectRooted(emitted)
-        ? {
-            ...(toWireSchema(emitted) as Record<string, unknown>),
-            additionalProperties: false,
-          }
-        : EMPTY_INPUT_SCHEMA;
+      if (isObjectRooted(emitted)) {
+        const { ["$schema"]: _dialect, ...projected } = toWireSchema(emitted) as Record<
+          string,
+          unknown
+        >;
+        projected["additionalProperties"] = false;
+        inputSchema = projected;
+      } else {
+        inputSchema = EMPTY_INPUT_SCHEMA;
+      }
     } else if (def.rawInputSchema) {
       inputSchema = isObjectRooted(def.rawInputSchema)
         ? toWireSchema(def.rawInputSchema)
