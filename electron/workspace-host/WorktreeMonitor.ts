@@ -12,6 +12,7 @@ import type {
 import type { CIStatusState } from "../../shared/types/forge.js";
 import type { WorktreeSnapshot, WorkspaceFetchResult } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
+import { clearGitDirCache } from "../utils/gitUtils.js";
 import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
 import { deriveIssueTitleFromBranch } from "../services/issueExtractor.js";
 import { FetchScheduler, type FetchSchedulerHost } from "./FetchScheduler.js";
@@ -1530,6 +1531,10 @@ export class WorktreeMonitor {
     if (this.isElevated && this.gitWatchEnabled) {
       const budgetReset = this.watcherController.resetRetryBudget();
       if (budgetReset) {
+        // A manual refresh is the recovery escape hatch for a dark watcher.
+        // Drop a transient negative resolution before re-arming, otherwise the
+        // retry simply replays the cached failure against a repo that has healed.
+        clearGitDirCache(this.path);
         this.watcherController.update();
       }
     }

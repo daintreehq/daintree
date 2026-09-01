@@ -152,7 +152,7 @@ vi.mock("../../services/worktree/index.js", () => ({
 
 import { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { WorktreeMonitorConfig, WorktreeMonitorCallbacks } from "../WorktreeMonitor.js";
-import { getGitDir } from "../../utils/gitUtils.js";
+import { clearGitDirCache, getGitDir } from "../../utils/gitUtils.js";
 
 const TEST_WORKTREE: Worktree = {
   id: "/test/worktree",
@@ -728,6 +728,7 @@ describe("WorktreeMonitor", () => {
       // stop(false) + start("recursive") [fails] + start("git-only") [succeeds].
       await monitor.refresh();
       expect(watcherStartCallCount).toBe(startsAtExhaustion + 2);
+      expect(clearGitDirCache).toHaveBeenCalledWith(ACTIVE_WORKTREE.path);
 
       // Recursive still fails — should schedule a retry with fresh budget.
       await vi.advanceTimersByTimeAsync(30_000);
@@ -757,6 +758,7 @@ describe("WorktreeMonitor", () => {
       // refresh() when budget is zero no-ops — no extra watcher churn.
       await monitor.refresh();
       expect(watcherStartCallCount).toBe(startsBeforeRefresh);
+      expect(clearGitDirCache).not.toHaveBeenCalled();
 
       monitor.stop();
     });

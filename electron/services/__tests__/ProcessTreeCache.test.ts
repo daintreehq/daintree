@@ -564,12 +564,10 @@ describe("ProcessTreeCache command/env construction", () => {
         _file: string,
         _args: unknown,
         _opts: unknown,
-        cb: (err: null, result: { stdout: string; stderr: string }) => void
+        cb: (err: null, stdout: string, stderr: string) => void
       ) => {
-        cb(null, {
-          stdout: "  PID  PPID %CPU   RSS COMM COMMAND\n    1    0  0.0  1000 init  init",
-          stderr: "",
-        });
+        cb(null, "  PID  PPID %CPU   RSS COMM COMMAND\n    1    0  0.0  1000 init  init", "");
+        return { pid: 999 };
       }
     );
 
@@ -589,16 +587,137 @@ describe("ProcessTreeCache command/env construction", () => {
     expect(callOpts.env!.LANG).toBe(process.env.LANG);
   });
 
+  it("omits the ps probe from the snapshot it produced", async () => {
+    mockExecFile
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(
+            null,
+            `  PID  PPID %CPU RSS COMM COMMAND\n    1    0 0.0 1000 init init\n  991 ${process.pid} 0.0 1000 ps ps -eo pid,ppid,%cpu,rss,comm,command`,
+            ""
+          );
+          return { pid: 991 };
+        }
+      )
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(
+            null,
+            `  PID  PPID %CPU RSS COMM COMMAND\n    1    0 0.0 1000 init init\n  992 ${process.pid} 0.0 1000 ps ps -eo pid,ppid,%cpu,rss,comm,command`,
+            ""
+          );
+          return { pid: 992 };
+        }
+      );
+
+    const cache = new ProcessTreeCache(2500);
+    const internals = cache as unknown as { refreshUnix: () => Promise<boolean> };
+
+    expect(await internals.refreshUnix()).toBe(false);
+    expect(await internals.refreshUnix()).toBe(false);
+    expect(cache.getProcess(991)).toBeUndefined();
+    expect(cache.getProcess(992)).toBeUndefined();
+    expect(cache.getProcess(1)?.comm).toBe("init");
+  });
+
+  it("ignores unrelated machine churn when deciding whether to reset backoff", async () => {
+    mockExecFile
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(
+            null,
+            `  PID  PPID %CPU RSS COMM COMMAND\n  100    1 0.0 1000 runner runner\n  200 ${process.pid} 0.0 1000 zsh zsh`,
+            ""
+          );
+          return { pid: 991 };
+        }
+      )
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(
+            null,
+            `  PID  PPID %CPU RSS COMM COMMAND\n  101    1 0.0 1000 runner runner\n  200 ${process.pid} 0.0 1000 zsh zsh`,
+            ""
+          );
+          return { pid: 992 };
+        }
+      );
+
+    const cache = new ProcessTreeCache(2500);
+    const internals = cache as unknown as { refreshUnix: () => Promise<boolean> };
+
+    expect(await internals.refreshUnix()).toBe(true);
+    expect(await internals.refreshUnix()).toBe(false);
+    expect(cache.getProcess(101)?.comm).toBe("runner");
+  });
+
+  it("resets backoff when the owned terminal tree changes", async () => {
+    mockExecFile
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(null, `  PID  PPID %CPU RSS COMM COMMAND\n  200 ${process.pid} 0.0 1000 zsh zsh`, "");
+          return { pid: 991 };
+        }
+      )
+      .mockImplementationOnce(
+        (
+          _file: string,
+          _args: unknown,
+          _opts: unknown,
+          cb: (err: null, stdout: string, stderr: string) => void
+        ) => {
+          cb(
+            null,
+            `  PID  PPID %CPU RSS COMM COMMAND\n  200 ${process.pid} 0.0 1000 zsh zsh\n  201  200 0.0 1000 node node agent.js`,
+            ""
+          );
+          return { pid: 992 };
+        }
+      );
+
+    const cache = new ProcessTreeCache(2500);
+    const internals = cache as unknown as { refreshUnix: () => Promise<boolean> };
+
+    expect(await internals.refreshUnix()).toBe(true);
+    expect(await internals.refreshUnix()).toBe(true);
+  });
+
   describe("Windows refresh", () => {
-    function mockPowerShellOutput(stdout: string): void {
+    function mockPowerShellOutput(stdout: string, pid: number = 999): void {
       mockExecFile.mockImplementation(
         (
           _file: string,
           _args: string[],
           _opts: unknown,
-          cb: (err: null, result: { stdout: string; stderr: string }) => void
+          cb: (err: null, stdout: string, stderr: string) => void
         ) => {
-          cb(null, { stdout, stderr: "" });
+          cb(null, stdout, "");
+          return { pid };
         }
       );
     }
@@ -687,6 +806,39 @@ describe("ProcessTreeCache command/env construction", () => {
 
       expect(cache.getChildPids(100)).toEqual([200]);
       expect(cache.getProcess(200)?.command).toContain("git status");
+    });
+
+    it("omits the PowerShell probe from the snapshot it produced", async () => {
+      mockPowerShellOutput(
+        JSON.stringify([
+          {
+            ProcessId: 999,
+            ParentProcessId: process.pid,
+            Name: "powershell.exe",
+            CommandLine: "powershell.exe -NoProfile -Command Get-CimInstance Win32_Process",
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "1048576",
+            CreationDate: null,
+          },
+          {
+            ProcessId: 100,
+            ParentProcessId: 1,
+            Name: "node.exe",
+            CommandLine: "node server.js",
+            KernelModeTime: "0",
+            UserModeTime: "0",
+            WorkingSetSize: "1048576",
+            CreationDate: null,
+          },
+        ]),
+        999
+      );
+
+      const cache = await runWindowsRefresh();
+
+      expect(cache.getProcess(999)).toBeUndefined();
+      expect(cache.getProcess(100)?.comm).toBe("node");
     });
   });
 });
