@@ -1,12 +1,67 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
+import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
-import { WorktreeSummarySchema } from "./schemas";
+import { WorktreeSummarySchema, WorktreeSetupStateSchema } from "./schemas";
 import { paginate } from "@shared/utils/boundedOutput";
 import { GIT_PAGE_LIMIT_DEFAULT, GIT_PAGE_LIMIT_MAX } from "@shared/config/gitReadLimits";
-import { withWorktreeLocation, requireWorktreePath } from "./locationArgs";
+import { withWorktreeLocation, requireWorktreePath, requireWorktreeId } from "./locationArgs";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { worktreeClient } from "@/clients";
+import type { WorktreeSnapshot } from "@shared/types/workspace-host";
+
+/**
+ * The wire spelling of a worktree's post-create initialization state.
+ *
+ * An absent `setupStatus` is reported as `unknown`, never as `ready`: the host
+ * holds it in memory, so a worktree created before this host process started —
+ * or by another one — genuinely has no record, and saying "ready" there would
+ * be an interpretation rather than an observation.
+ */
+function readSetupState(worktree: Pick<WorktreeSnapshot, "setupStatus">): string {
+  return worktree.setupStatus?.state ?? "unknown";
+}
+
+/**
+ * Read one worktree's setup status FROM THE HOST, which is the only authority
+ * on it.
+ *
+ * Deliberately not a renderer-store read. The store is fed by worktree-update
+ * events on the project's own port, while a create result answers on the
+ * parent-process transport — there is no ordering between the two, so a wait
+ * issued immediately after a create can find no row at all and would report
+ * `unknown` for a worktree the host had already stamped `pending`. That is the
+ * one answer this capability must never give, because `unknown` reads as
+ * "nothing will ever arrive" and settles the wait.
+ */
+async function fetchSetupStatus(
+  worktreeId: string
+): Promise<WorktreeSnapshot["setupStatus"] | undefined | null> {
+  const { worktrees } = await worktreeClient.getAllWithStatus();
+  const match = worktrees.find((w) => w.id === worktreeId);
+  // `null` distinguishes "the host does not have this worktree" from "the host
+  // has it and recorded nothing", which are different answers to the caller.
+  return match ? match.setupStatus : null;
+}
+
+/**
+ * The longest a wait may block. The renderer dispatch path times out at 30s, so
+ * a longer wait would be killed mid-flight and reported as a transport failure
+ * rather than as "still running" — which is the one answer this capability
+ * exists to give honestly. Setup scripts routinely outlast this; the contract is
+ * therefore "call again", not "wait longer".
+ */
+const MAX_WAIT_UNTIL_READY_TIMEOUT_MS = 25_000;
+
+/**
+ * How often the wait re-reads the host. Setup stages are seconds apart, and
+ * each read is a host round trip rather than a local lookup, so this is
+ * deliberately slower than a store poll would need to be.
+ */
+const WAIT_UNTIL_READY_POLL_INTERVAL_MS = 500;
+
+/** States a wait stops on — every state that is not still in progress. */
+const SETTLED_SETUP_STATES = new Set(["ready", "failed", "timed-out", "unknown"]);
 
 export function registerWorktreeQueryActions(
   actions: ActionRegistry,
@@ -41,6 +96,7 @@ export function registerWorktreeQueryActions(
         prUrl: w.linked?.pr?.url ?? null,
         status: w.mood ?? null,
         lastCommit: w.summary ?? null,
+        setupState: readSetupState(w),
       }));
 
       return { worktrees: result };
@@ -82,6 +138,7 @@ export function registerWorktreeQueryActions(
         prUrl: worktree.linked?.pr?.url ?? null,
         status: worktree.mood ?? null,
         lastCommit: worktree.summary ?? null,
+        setupState: readSetupState(worktree),
       };
 
       return { worktree: result };
@@ -175,7 +232,7 @@ export function registerWorktreeQueryActions(
       id: "worktree.getDefaultPath",
       title: "Get Default Worktree Path",
       description:
-        "Work out where a new worktree for a given branch should live, honouring the project's configured path pattern. Use this before creating a worktree so the path matches project convention rather than being invented. The repository must be named explicitly — there is deliberately no active-worktree fallback, because anchoring on a linked worktree silently produces a path nested inside it.",
+        "Work out where a worktree for a given branch would live under the project's configured path pattern. A planning helper and an input to the low-level creator: the managed creator resolves its own path, so calling this first is redundant, and it reserves nothing either way. Name the repository explicitly — there is no active-worktree fallback, which would nest the path inside a linked worktree.",
       category: "worktree",
       kind: "query",
       danger: "safe",
@@ -206,7 +263,7 @@ export function registerWorktreeQueryActions(
       id: "worktree.getAvailableBranch",
       title: "Get Available Branch Name",
       description:
-        "Turn a desired branch name into one that is actually free, appending a numeric suffix when the name is taken. Use this before creating a branch or worktree so creation does not fail on a collision. It reserves nothing — the name can still be taken between this call and the one that uses it.",
+        "Turn a desired branch name into one that is currently free, appending a numeric suffix when the name is taken. Planning and display only: it reserves nothing, so the name can be claimed between this call and the one that uses it. Do not call it before the managed worktree creator, which resolves collisions atomically under its own `collisionPolicy` and reports the branch it actually used.",
       category: "worktree",
       kind: "query",
       danger: "safe",
@@ -228,6 +285,98 @@ export function registerWorktreeQueryActions(
           branchName
         );
         return { branch: result };
+      },
+    })
+  );
+
+  actions.set("worktree.waitUntilReady", () =>
+    defineAction({
+      id: "worktree.waitUntilReady",
+      title: "Wait Until Worktree Ready",
+      description:
+        "Wait for a worktree's post-create setup — config copy, submodules, then the setup script and any resource provisioning — to finish, and report where it got to. Setup can outlive the call that created the worktree, so work started before it completes may run against an unpopulated tree. Pass a zero timeout to read the state without blocking. Running out of time is not a failure: call again.",
+      category: "worktree",
+      kind: "query",
+      danger: "safe",
+      scope: "renderer",
+      // The shared location shape rather than a hand-rolled `worktreeId`, so
+      // this tool takes the same selectors as every other worktree-scoped one
+      // and a caller that has a path does not have to go find an id first.
+      argsSchema: withWorktreeLocation({
+        timeoutMs: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_WAIT_UNTIL_READY_TIMEOUT_MS)
+          .optional()
+          .describe(
+            `Milliseconds to wait; 0 reads the state now. Default and maximum ${MAX_WAIT_UNTIL_READY_TIMEOUT_MS}. Setup often runs longer, so call again rather than expect one call to cover it.`
+          ),
+      }).optional(),
+      resultSchema: z.object({
+        worktreeId: z.string(),
+        setupState: WorktreeSetupStateSchema,
+        stage: z
+          .enum(["copy-config", "submodules", "setup-script"])
+          .nullable()
+          .describe(
+            "Which stage is running, or which one failed. Null before setup starts, and once it is ready or unknown."
+          ),
+        error: z
+          .string()
+          .nullable()
+          .describe("One-line failure summary when the state is failed or timed-out."),
+        timedOut: z
+          .boolean()
+          .describe(
+            "True when the wait ended because it ran out of time rather than because setup settled. The reported state is still live — call again to keep waiting."
+          ),
+      }),
+      mcpOutputSchema: true,
+      mcpAnnotations: {
+        readOnlyHint: true,
+        // A wait's answer depends on when it is asked, so a replay is not
+        // guaranteed to match — the same reason `terminal.waitUntilIdle`
+        // declares this.
+        idempotentHint: false,
+        destructiveHint: false,
+      },
+      run: async (args, ctx: ActionContext) => {
+        const { timeoutMs, ...location } = args ?? {};
+        const worktreeId = requireWorktreeId(location, ctx);
+        const budgetMs = Math.min(
+          timeoutMs ?? MAX_WAIT_UNTIL_READY_TIMEOUT_MS,
+          MAX_WAIT_UNTIL_READY_TIMEOUT_MS
+        );
+        const deadline = Date.now() + budgetMs;
+
+        for (;;) {
+          const status = await fetchSetupStatus(worktreeId);
+          if (status === null) {
+            // Static, per the repo-wide rule: an error message must never carry
+            // the rejected input back out. The id is the caller's own argument,
+            // so naming it adds nothing it does not already have.
+            throw new Error("Unknown worktree — the workspace host has no worktree with that id.");
+          }
+          const state = status?.state ?? "unknown";
+          const settled = SETTLED_SETUP_STATES.has(state);
+          const remaining = deadline - Date.now();
+          if (settled || remaining <= 0) {
+            return {
+              worktreeId,
+              setupState: state,
+              stage: status?.stage ?? null,
+              error: status?.error ?? null,
+              // Only a genuinely unsettled state counts as a timeout. Running
+              // out of budget on the same tick a worktree became ready is a
+              // completed wait, not an expired one.
+              timedOut: !settled,
+            };
+          }
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.min(WAIT_UNTIL_READY_POLL_INTERVAL_MS, remaining))
+          );
+        }
       },
     })
   );

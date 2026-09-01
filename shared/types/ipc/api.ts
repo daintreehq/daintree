@@ -26,6 +26,7 @@ import type {
   PushErrorClassification,
   Issue,
   PR,
+  PRLookupResult,
   Page,
   RepoMetadata,
   ListOptions,
@@ -235,7 +236,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     refreshPullRequests(): Promise<void>;
     getPRStatus(): Promise<import("../workspace-host.js").PRServiceStatus | null>;
     setActive(worktreeId: string): Promise<void>;
-    create(options: CreateWorktreeOptions, rootPath: string): Promise<string>;
+    /**
+     * Create a worktree, reporting the branch the host actually landed on and
+     * its initial setup state alongside the id.
+     *
+     * The branch is not always the one requested: the host resolves collisions
+     * atomically against the failing `git worktree add`, so it can suffix the
+     * name or switch to reusing an existing local branch. Both extra fields
+     * travel with the result because worktree rows reach the renderer over a
+     * different port, so reading them back afterwards races this response.
+     */
+    create(
+      options: CreateWorktreeOptions,
+      rootPath: string
+    ): Promise<import("../worktree.js").WorktreeCreateResult>;
     listBranches(rootPath: string): Promise<BranchInfo[]>;
     fetchPRBranch(rootPath: string, prNumber: number, headRefName: string): Promise<void>;
     getRecentBranches(rootPath: string): Promise<string[]>;
@@ -1757,8 +1771,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * don't resolve are omitted. `[]` when the capability is absent.
      */
     getIssuesByNumbers(payload: { cwd: string; numbers: number[] }): Promise<Issue[]>;
-    /** Batch-fetch PRs by number. See {@link getIssuesByNumbers}. */
-    getPRsByNumbers(payload: { cwd: string; numbers: number[] }): Promise<PR[]>;
+    /**
+     * Batch-fetch PRs by number, one entry per requested number in the
+     * requested order, each carrying its own outcome.
+     *
+     * Unlike {@link getIssuesByNumbers} above, this does NOT silently omit
+     * numbers that failed to resolve: `not_found` (the forge answered "no such
+     * PR") and `unresolved` (nothing was learned — failed chunk, rate limit,
+     * or an unsupported provider) are distinct, and a caller acting on the
+     * second as though it were the first closes work that exists. Duplicates
+     * collapse to their first occurrence.
+     */
+    getPRsByNumbers(payload: { cwd: string; numbers: number[] }): Promise<PRLookupResult[]>;
     /**
      * Opaque review threads for a PR via the provider's `reviews`
      * capability. `[]` when the capability is absent. Note this is the

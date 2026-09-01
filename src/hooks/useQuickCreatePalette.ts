@@ -146,7 +146,7 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
           const result = await actionService.dispatch(
             "worktree.createWithRecipe",
             {
-              branchName,
+              source: { kind: "newBranch" as const, branchName },
               recipeId: recipe.id,
               issueNumber,
               assignToSelf: shouldAssign,

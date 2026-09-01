@@ -690,10 +690,39 @@ describe("forge tool exposure is help-assistant-only (#11585)", () => {
     const systemForgeTools = [...TIER_ALLOWLISTS.system].filter((id) => id.startsWith("forge."));
 
     expect(allForgeActions.length).toBeGreaterThan(0);
-    // No exemptions: every forge action in the registry is an MCP tool at the
-    // system tier. Carrying a placeholder exclusion here would blind the check
-    // the day an id matching it actually appears.
-    expect(new Set(systemForgeTools)).toEqual(new Set(allForgeActions));
+    // The one exemption is enumerated rather than pattern-matched, and the test
+    // below holds it to a stricter standard than membership — a placeholder
+    // exclusion would blind this check the day an id matching it appeared,
+    // which is why the original had none.
+    const reachable = allForgeActions.filter((id) => !FORGE_ACTIONS_OFF_EVERY_TIER.has(id));
+    expect(new Set(systemForgeTools)).toEqual(new Set(reachable));
+  });
+
+  /**
+   * Forge actions deliberately absent from EVERY tier, not merely from one.
+   *
+   * `forge.validateToken` takes a raw forge access token as an argument. A tool
+   * argument is model context by construction: whatever redaction the audit log
+   * and dispatch summaries apply afterwards, admitting the tool means the
+   * credential has to be composed in the model channel to be sent at all. Token
+   * entry stays a UI-owned flow — the provider settings tab dispatches it as
+   * `source: "user"`, which no tier gates.
+   */
+  const FORGE_ACTIONS_OFF_EVERY_TIER = new Set(["forge.validateToken"]);
+
+  it("keeps the exempted forge actions off every tier and out of every listing", () => {
+    // Membership alone would be a weak exemption: a tool can be off a tier and
+    // still be advertised, or hidden and still dispatchable. Both gates are
+    // asserted so the exemption above cannot decay into "we forgot to add it".
+    for (const id of FORGE_ACTIONS_OFF_EVERY_TIER) {
+      expect(BUILT_IN_ACTION_IDS).toContain(id);
+      for (const tier of ["workbench", "action", "system", "external"] as const) {
+        expect(isTierPermitted(tier, id)).toBe(false);
+        expect(shouldExposeTool(makeEntry({ id, kind: "query", danger: "safe" }), tier)).toBe(
+          false
+        );
+      }
+    }
   });
 
   // Sentinel for the read added in #11545: an agent that can post a comment must

@@ -62,7 +62,7 @@ export function registerWorktreeCreateActions(
       id: "worktree.create",
       title: "Create Worktree",
       description:
-        "Create a git worktree with its branch, without launching terminals. Prefer the recipe-backed path when it should also track a pull request or start a recipe's terminals. It writes to disk, may branch from a remote base or reuse a branch, and can provision a configured resource. Creation anchors on the repository root, not the active worktree; setup can still fail after the worktree exists.",
+        "Low-level worktree creator, taking an explicit repository root and filesystem path. Reach for the managed creator instead for ordinary creation in the active project — it resolves the path and branch collisions itself. Use this one only when the root, the path, an environment mode or resource provisioning must be stated explicitly. Setup can still fail after the worktree exists.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -92,13 +92,24 @@ export function registerWorktreeCreateActions(
         },
         { legacy: ["rootPath"], requireSelector: true }
       ),
-      resultSchema: z.string(),
+      // Object-rooted so the result can carry the effective branch alongside
+      // the id — and so it can advertise an MCP output schema at all, which a
+      // bare string never could.
+      resultSchema: z.object({
+        worktreeId: z.string(),
+        branch: z
+          .string()
+          .describe(
+            "The branch the worktree is actually on. Differs from the requested name when the host resolved a collision."
+          ),
+      }),
+      mcpOutputSchema: true,
       run: async ({ options, ...location }, ctx) => {
-        const worktreeId = await worktreeClient.create(options, requireWorktreePath(location, ctx));
-        if (!worktreeId) {
+        const created = await worktreeClient.create(options, requireWorktreePath(location, ctx));
+        if (!created?.worktreeId) {
           throw new Error("Failed to create worktree: no worktreeId returned from backend");
         }
-        return worktreeId;
+        return created;
       },
     })
   );

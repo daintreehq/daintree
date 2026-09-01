@@ -120,6 +120,22 @@ function collectDescriptions(node: unknown, path: string, out: WirePropertyDescr
   }
 }
 
+/**
+ * Whether a generated JSON Schema is one production will actually advertise.
+ *
+ * Both `buildToolInputSchema` and `buildToolOutputSchema` forward a schema only
+ * when its root is `type: "object"`, and silently substitute (input) or drop
+ * (output) anything else.
+ */
+function isObjectRooted(schema: unknown): boolean {
+  return (
+    schema !== null &&
+    typeof schema === "object" &&
+    !Array.isArray(schema) &&
+    (schema as Record<string, unknown>)["type"] === "object"
+  );
+}
+
 const bytes = (value: unknown): number =>
   value === undefined ? 0 : Buffer.byteLength(JSON.stringify(value), "utf8");
 
@@ -148,14 +164,28 @@ export async function measureWireSurface(): Promise<WireTool[]> {
       continue;
     }
 
-    let inputSchema: unknown = { type: "object", properties: {}, additionalProperties: false };
+    const EMPTY_INPUT_SCHEMA = { type: "object", properties: {}, additionalProperties: false };
+    let inputSchema: unknown = EMPTY_INPUT_SCHEMA;
     if (def.argsSchema) {
-      inputSchema = {
-        ...(toWireSchema(emitSchema(def.argsSchema, "input")) as Record<string, unknown>),
-        additionalProperties: false,
-      };
+      const emitted = emitSchema(def.argsSchema, "input");
+      // Gated on a top-level object exactly as `buildToolInputSchema` is.
+      // Without this the harness measured — and vouched for — a schema
+      // production would have thrown away and replaced with the empty one: a
+      // root union emits `anyOf` and no `type`, so the tool ships with no
+      // parameters at all while the budget here reports it as fully described.
+      // `advertisesObjectRootedInput` in the quality suite is what keeps that
+      // substitution from firing unnoticed; this keeps the bytes honest if it
+      // ever does.
+      inputSchema = isObjectRooted(emitted)
+        ? {
+            ...(toWireSchema(emitted) as Record<string, unknown>),
+            additionalProperties: false,
+          }
+        : EMPTY_INPUT_SCHEMA;
     } else if (def.rawInputSchema) {
-      inputSchema = toWireSchema(def.rawInputSchema);
+      inputSchema = isObjectRooted(def.rawInputSchema)
+        ? toWireSchema(def.rawInputSchema)
+        : EMPTY_INPUT_SCHEMA;
     }
 
     // NOT projected, mirroring `buildToolOutputSchema`: an advertised output

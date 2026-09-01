@@ -2010,6 +2010,7 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     resourceStatusEqual(a.resourceStatus, b.resourceStatus) &&
     worktreeChangesEqual(a.worktreeChanges, b.worktreeChanges) &&
     lifecycleStatusEqual(a.lifecycleStatus, b.lifecycleStatus) &&
+    setupStatusEqual(a.setupStatus, b.setupStatus) &&
     lifecyclePhaseResultsEqual(a.lifecyclePhaseResults, b.lifecyclePhaseResults) &&
     linkedEqual(a.linked ?? null, b.linked ?? null)
   );
@@ -2073,6 +2074,27 @@ function lifecycleStatusEqual(
     a.currentCommand === b.currentCommand &&
     a.commandIndex === b.commandIndex &&
     a.totalCommands === b.totalCommands &&
+    a.startedAt === b.startedAt &&
+    a.completedAt === b.completedAt &&
+    a.error === b.error
+  );
+}
+
+/**
+ * Compared in `snapshotsEqual` because a setup transition is the only change
+ * some snapshots carry — a worktree whose config copy finished is otherwise
+ * byte-identical to the pending one, and folding it out would leave
+ * `worktree.waitUntilReady` waiting on a row that never updates.
+ */
+function setupStatusEqual(
+  a: WorktreeSnapshot["setupStatus"],
+  b: WorktreeSnapshot["setupStatus"]
+): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  return (
+    a.state === b.state &&
+    a.stage === b.stage &&
     a.startedAt === b.startedAt &&
     a.completedAt === b.completedAt &&
     a.error === b.error

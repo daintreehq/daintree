@@ -22,6 +22,7 @@ import type {
   ListOptions,
   Page,
   PR,
+  PRLookupResult,
   PRTooltipData,
   RateLimitDetails,
   ReviewThread,
@@ -633,28 +634,81 @@ async function handleForgeGetIssuesByNumbers(payload: {
   return result;
 }
 
+/**
+ * Batch PR lookup, one entry per requested number, in the requested order.
+ *
+ * The distinction this preserves is the whole point. The provider contract
+ * (`batchLookups.findPRsByNumbers`) already draws it — an explicit `null` value
+ * means "asked, no such PR", while a key absent from the map means the chunk
+ * carrying that number never produced an answer — and the previous shape here
+ * threw it away, returning `PR[]` built from a truthiness test that dropped
+ * both cases identically. A caller then could not tell a closed-and-deleted PR
+ * from a rate-limited one, and `[]` was also what an unsupported provider
+ * returned.
+ *
+ * Duplicate numbers collapse to their first occurrence, matching the provider's
+ * own de-duplication, so the result is never longer than the distinct input.
+ */
 async function handleForgeGetPRsByNumbers(payload: {
   cwd: string;
   numbers: number[];
-}): Promise<PR[]> {
+}): Promise<PRLookupResult[]> {
   checkRateLimit(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, 20, 10_000);
   if (!payload || typeof payload !== "object") return [];
   if (typeof payload.cwd !== "string" || !payload.cwd.trim()) return [];
   if (!Array.isArray(payload.numbers)) return [];
-  const numbers = payload.numbers.filter(
-    (n): n is number => typeof n === "number" && Number.isInteger(n) && n > 0
-  );
+  const seen = new Set<number>();
+  const numbers: number[] = [];
+  for (const n of payload.numbers) {
+    if (typeof n !== "number" || !Number.isInteger(n) || n <= 0) continue;
+    if (seen.has(n)) continue;
+    seen.add(n);
+    numbers.push(n);
+  }
   if (numbers.length === 0) return [];
   const { impl, repoRef } = await resolveForCwd(payload.cwd);
   const batch = impl.batchLookups;
-  if (!batch?.findPRsByNumbers) return [];
-  const found = await batch.findPRsByNumbers(repoRef, numbers);
-  const result: PR[] = [];
-  for (const n of numbers) {
-    const pr = found.get(n);
-    if (pr) result.push(pr);
+
+  if (!batch?.findPRsByNumbers) {
+    // A provider without the batch capability still owes an answer per number.
+    // Falling back to the singular read costs one round trip each, which is
+    // exactly what the caller would have spent anyway — and unlike the old `[]`
+    // it does not misreport a missing capability as "none of these exist".
+    const results: PRLookupResult[] = [];
+    for (const n of numbers) {
+      try {
+        const pr = await impl.getPR(repoRef, n);
+        results.push(pr ? { number: n, status: "found", pr } : { number: n, status: "not_found" });
+      } catch {
+        results.push({ number: n, status: "unresolved", reason: "provider_error" });
+      }
+    }
+    return results;
   }
-  return result;
+
+  let found: Map<number, PR | null>;
+  try {
+    found = await batch.findPRsByNumbers(repoRef, numbers);
+  } catch {
+    // A whole-batch failure resolves nothing; it says nothing about any number.
+    return numbers.map((n) => ({
+      number: n,
+      status: "unresolved" as const,
+      reason: "provider_error" as const,
+    }));
+  }
+
+  return numbers.map((n) => {
+    // `has` rather than a truthiness test: `null` is the provider's explicit
+    // "no such PR", and only a missing key means the lookup never landed.
+    if (!found.has(n)) {
+      return { number: n, status: "unresolved" as const, reason: "provider_error" as const };
+    }
+    const pr = found.get(n);
+    return pr
+      ? { number: n, status: "found" as const, pr }
+      : { number: n, status: "not_found" as const };
+  });
 }
 
 /**

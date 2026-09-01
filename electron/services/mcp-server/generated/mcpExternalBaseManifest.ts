@@ -1912,54 +1912,119 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "worktree",
     danger: "safe",
     description:
-      "Create a git worktree with its branch, optionally tracking a pull request, and optionally launch a recipe's terminals in it. This is the heavy composite path: it writes to disk, may check out a remote branch, and may start several processes. Create the worktree alone when neither is wanted. Partial failure is possible: the worktree can exist while its recipe did not fully start.",
+      "Create a managed git worktree — Daintree's own creator, which also copies project config, initializes submodules and runs setup. Name the creation mode: a new branch, an existing branch checked out exactly as asked, or a pull request. A recipe is OPTIONAL; pass one only to also launch terminals. Project setup runs in the background and can still fail after this returns.",
     enabled: true,
     id: "worktree.createWithRecipe",
     inputSchema: {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
       properties: {
-        branchName: {
-          description:
-            "Name for the new branch (will be sanitized for git compatibility). Required unless pullRequestNumber is provided — the PR's head branch is used in that case.",
-          type: "string",
-          minLength: 1,
-        },
-        baseBranch: {
-          description: "Branch to base the worktree on (defaults to main worktree's branch)",
-          type: "string",
-          minLength: 1,
+        source: {
+          oneOf: [
+            {
+              type: "object",
+              properties: {
+                kind: {
+                  type: "string",
+                  const: "newBranch",
+                  description:
+                    "Branch off a base branch. If the name is already taken, `collisionPolicy` decides what happens.",
+                },
+                branchName: {
+                  type: "string",
+                  minLength: 1,
+                  description:
+                    "Name for the new branch. Rejected outright if it is not a valid git ref — nothing rewrites it for you.",
+                },
+                baseBranch: {
+                  description:
+                    "Branch to base the new branch on (defaults to the main worktree's branch).",
+                  type: "string",
+                  minLength: 1,
+                },
+                fromRemote: {
+                  description: "Set true if baseBranch names a remote branch, e.g. origin/develop.",
+                  type: "boolean",
+                },
+                collisionPolicy: {
+                  description:
+                    "If the name is taken: 'suffix' (default) lets the host reuse that branch when nothing has it checked out, else create name-2, and reports which; 'error' fails instead.",
+                  type: "string",
+                  enum: ["suffix", "error"],
+                },
+                issueNumber: {
+                  description:
+                    "Issue this worktree is for. Given to the recipe and used by assignToSelf; it does not itself attach the issue.",
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                },
+                assignToSelf: {
+                  description:
+                    "Assign the linked issue to the current user. Omit to use the persisted 'Assign issue to me' preference.",
+                  type: "boolean",
+                },
+              },
+              required: ["kind", "branchName"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: {
+                  type: "string",
+                  const: "existingBranch",
+                  description: "Check out a local branch that already exists, exactly as named.",
+                },
+                branchName: {
+                  type: "string",
+                  minLength: 1,
+                  description:
+                    "The existing local branch to check out. Used verbatim — never suffixed, and never replaced by a new branch if it is missing.",
+                },
+                issueNumber: {
+                  description:
+                    "Issue this worktree is for. Given to the recipe and used by assignToSelf; it does not itself attach the issue.",
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                },
+                assignToSelf: {
+                  description:
+                    "Assign the linked issue to the current user. Omit to use the persisted 'Assign issue to me' preference.",
+                  type: "boolean",
+                },
+              },
+              required: ["kind", "branchName"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: {
+                  type: "string",
+                  const: "pullRequest",
+                  description:
+                    "Check out a pull request's head branch. State is not checked, so a closed or merged PR is accepted as long as its head ref still exists.",
+                },
+                pullRequestNumber: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                  description:
+                    "Pull request to check out. Its head branch is fetched and resolved for you; do not also pass a branch name.",
+                },
+              },
+              required: ["kind", "pullRequestNumber"],
+              additionalProperties: false,
+            },
+          ],
+          description: "Where the worktree's branch comes from. Required — pick exactly one mode.",
         },
         recipeId: {
-          description: "Recipe ID to run after creation",
+          description:
+            "Recipe to launch in the new worktree. Omit for a worktree with no terminals — project setup is started either way, and terminals do not wait for it.",
           type: "string",
-        },
-        fromRemote: {
-          description: "Set true if baseBranch is a remote branch",
-          type: "boolean",
-        },
-        useExistingBranch: {
-          description: "Use an existing branch instead of creating a new one",
-          type: "boolean",
-        },
-        issueNumber: {
-          description:
-            "Issue number to link with the worktree. Mutually exclusive with pullRequestNumber.",
-          type: "integer",
-          exclusiveMinimum: 0,
-          maximum: 9007199254740991,
-        },
-        pullRequestNumber: {
-          description:
-            "Pull request number to check out. Resolves the PR's head branch automatically and creates the worktree on it. Mutually exclusive with issueNumber.",
-          type: "integer",
-          exclusiveMinimum: 0,
-          maximum: 9007199254740991,
-        },
-        assignToSelf: {
-          description:
-            "Assign the linked issue to the current user. Omit to use the user's persisted 'Assign issue to me' preference (mirrors the new-worktree dialog checkbox).",
-          type: "boolean",
         },
         spawnedBy: {
           type: "string",
@@ -1974,11 +2039,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             'Whether the new panel takes keyboard focus: "auto" (default) takes it unless the assistant owns input, "preserve" never takes it, "take" always does. Prefer preserve for background spawns so the user is not interrupted.',
         },
       },
+      required: ["source"],
     },
     kind: "command",
     name: "worktree.createWithRecipe",
-    requiresArgs: false,
-    title: "Create Worktree with Recipe",
+    requiresArgs: true,
+    title: "Create Managed Worktree",
   },
   {
     band: "destructive-local",

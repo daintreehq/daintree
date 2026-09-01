@@ -602,6 +602,42 @@ export interface ReviewerRequest {
   teams?: string[];
 }
 
+/**
+ * One number's outcome in a batch pull-request lookup.
+ *
+ * The three statuses are deliberately distinct, and collapsing any two of them
+ * is the defect this type exists to prevent. `not_found` is an answer — the
+ * forge was asked and said no such PR. `unresolved` is the absence of an
+ * answer: the chunk carrying that number failed, the provider was rate-limited,
+ * or the capability is missing. An agent may act on `not_found`; acting on
+ * `unresolved` as though it were `not_found` closes work that exists.
+ */
+export type PRLookupResult =
+  | { number: number; status: "found"; pr: PR }
+  | { number: number; status: "not_found" }
+  | {
+      number: number;
+      status: "unresolved";
+      /** Why the lookup produced nothing. */
+      reason: PRLookupUnresolvedReason;
+    };
+
+/**
+ * Discriminated rather than one shape with optional `pr`/`reason`, so the
+ * impossible combinations cannot be constructed: a `found` with no PR, or a
+ * `not_found` carrying one. The advertised MCP output schema mirrors this, and
+ * an advertised output schema is enforced client-side.
+ */
+export type PRLookupStatus = PRLookupResult["status"];
+
+/**
+ * `provider_unsupported` — the forge provider implements no batch lookup and no
+ * singular fallback succeeded. `provider_error` — the lookup was attempted and
+ * failed or was omitted from the provider's response (a failed chunk, a rate
+ * limit block). Both are retriable; neither is evidence about the PR.
+ */
+export type PRLookupUnresolvedReason = "provider_unsupported" | "provider_error";
+
 export interface ReviewCapability {
   getReviewThreads(repo: RepoRef, prNumber: number): Promise<ReviewThread[]>;
   /**

@@ -111,6 +111,7 @@ import type {
   ErrorRecord,
   ElectronAPI,
   CreateWorktreeOptions,
+  WorktreeCreateResult,
   IpcInvokeMap,
   IpcEventMap,
   IpcEventBusMap,
@@ -1134,7 +1135,7 @@ function buildElectronApi(): ElectronAPI {
       setActive: (worktreeId: string) =>
         _unwrappingInvoke(CHANNELS.WORKTREE_SET_ACTIVE, { worktreeId }),
 
-      create: (options: CreateWorktreeOptions, rootPath: string): Promise<string> =>
+      create: (options: CreateWorktreeOptions, rootPath: string): Promise<WorktreeCreateResult> =>
         _unwrappingInvoke(CHANNELS.WORKTREE_CREATE, { rootPath, options }),
 
       listBranches: (rootPath: string) =>

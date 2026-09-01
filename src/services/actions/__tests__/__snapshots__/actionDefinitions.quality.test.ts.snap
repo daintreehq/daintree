@@ -1964,13 +1964,36 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Fetch one pull request by number from the active forge provider, including its body, draft state and branches. This is the direct lookup: reach for it instead of paging the PR listing for a number you already have, and read it before editing or merging so the current state is known. A pull request that does not exist comes back empty rather than failing, so treat empty as absence, not an error.",
+    "description": "Fetch ONE known pull request number from the active forge provider, with its body, draft state and branches. For two or more known numbers use the plural lookup instead of calling this repeatedly; to discover numbers you do not have, page the PR listing. Read it before editing or merging so the current state is known. A pull request that does not exist comes back as \`pr: null\` rather than failing.",
     "examples": undefined,
     "id": "forge.getPR",
     "keywords": undefined,
     "kind": "query",
     "requiresArgs": true,
     "title": "Get Pull Request",
+  },
+  {
+    "category": "forge",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Fetch 2-20 KNOWN pull request numbers in one call — reach for this instead of calling the single-PR lookup once per number. Results come back in the order asked, each with its own status: found, not_found, or unresolved. Treat unresolved as "could not find out", never as "does not exist". Use the PR listing instead when the numbers are not already known.",
+    "examples": [
+      {
+        "args": {
+          "prNumbers": [
+            12142,
+            12137,
+            12147,
+          ],
+        },
+        "description": "Fetch three known PRs from the active worktree's repo in one call",
+      },
+    ],
+    "id": "forge.getPRs",
+    "keywords": undefined,
+    "kind": "query",
+    "requiresArgs": true,
+    "title": "Get Pull Requests",
   },
   {
     "category": "forge",
@@ -2027,7 +2050,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List repository pull requests from the active forge provider, a page at a time. Use this to discover or filter PRs; use the issue listing for issues, and the single-PR lookup for a known number. Search takes a provider-native query fragment, not plain text, and routes through the provider's search API rather than the list cache pagination uses. Bypassing the cache spends a live round trip.",
+    "description": "List repository pull requests from the active forge provider, a page at a time. Use this to DISCOVER or filter PRs; for numbers you already have, use the singular or plural PR lookup instead of paging to find them. Search takes a provider-native query fragment, not plain text, and routes through the search API rather than the list cache. Bypassing that cache spends a live round trip.",
     "examples": undefined,
     "id": "forge.listPRs",
     "keywords": undefined,
@@ -2195,7 +2218,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Check whether a forge access token is accepted by the provider, without storing it anywhere. Use this to verify credentials before saving them. It performs a live authentication round trip, so a rejection may mean an expired or insufficiently scoped token rather than a malformed one.",
+    "description": "Ask the selected provider to validate a forge access token without saving it to Daintree. Use this to verify credentials before storing them. Providers validate however they choose — a live authentication round trip for most, locally for offline ones — so a rejection may mean an expired or insufficiently scoped token rather than a malformed one.",
     "examples": undefined,
     "id": "forge.validateToken",
     "keywords": undefined,
@@ -2229,7 +2252,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
       "changes",
     ],
     "kind": "command",
-    "requiresArgs": false,
+    "requiresArgs": true,
     "title": "Commit",
   },
   {
@@ -5833,7 +5856,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Create a git worktree with its branch, without launching terminals. Prefer the recipe-backed path when it should also track a pull request or start a recipe's terminals. It writes to disk, may branch from a remote base or reuse a branch, and can provision a configured resource. Creation anchors on the repository root, not the active worktree; setup can still fail after the worktree exists.",
+    "description": "Low-level worktree creator, taking an explicit repository root and filesystem path. Reach for the managed creator instead for ordinary creation in the active project — it resolves the path and branch collisions itself. Use this one only when the root, the path, an environment mode or resource provisioning must be stated explicitly. Setup can still fail after the worktree exists.",
     "examples": undefined,
     "id": "worktree.create",
     "keywords": undefined,
@@ -5862,13 +5885,13 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Create a git worktree with its branch, optionally tracking a pull request, and optionally launch a recipe's terminals in it. This is the heavy composite path: it writes to disk, may check out a remote branch, and may start several processes. Create the worktree alone when neither is wanted. Partial failure is possible: the worktree can exist while its recipe did not fully start.",
+    "description": "Create a managed git worktree — Daintree's own creator, which also copies project config, initializes submodules and runs setup. Name the creation mode: a new branch, an existing branch checked out exactly as asked, or a pull request. A recipe is OPTIONAL; pass one only to also launch terminals. Project setup runs in the background and can still fail after this returns.",
     "examples": undefined,
     "id": "worktree.createWithRecipe",
     "keywords": undefined,
     "kind": "command",
-    "requiresArgs": false,
-    "title": "Create Worktree with Recipe",
+    "requiresArgs": true,
+    "title": "Create Managed Worktree",
   },
   {
     "category": "worktree",
@@ -5934,7 +5957,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Turn a desired branch name into one that is actually free, appending a numeric suffix when the name is taken. Use this before creating a branch or worktree so creation does not fail on a collision. It reserves nothing — the name can still be taken between this call and the one that uses it.",
+    "description": "Turn a desired branch name into one that is currently free, appending a numeric suffix when the name is taken. Planning and display only: it reserves nothing, so the name can be claimed between this call and the one that uses it. Do not call it before the managed worktree creator, which resolves collisions atomically under its own \`collisionPolicy\` and reports the branch it actually used.",
     "examples": [
       {
         "args": {
@@ -5966,7 +5989,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Work out where a new worktree for a given branch should live, honouring the project's configured path pattern. Use this before creating a worktree so the path matches project convention rather than being invented. The repository must be named explicitly — there is deliberately no active-worktree fallback, because anchoring on a linked worktree silently produces a path nested inside it.",
+    "description": "Work out where a worktree for a given branch would live under the project's configured path pattern. A planning helper and an input to the low-level creator: the managed creator resolves its own path, so calling this first is redundant, and it reserves nothing either way. Name the repository explicitly — there is no active-worktree fallback, which would nest the path inside a linked worktree.",
     "examples": [
       {
         "args": {
@@ -6770,6 +6793,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "kind": "command",
     "requiresArgs": false,
     "title": "Worktree Up (Vim)",
+  },
+  {
+    "category": "worktree",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Wait for a worktree's post-create setup — config copy, submodules, then the setup script and any resource provisioning — to finish, and report where it got to. Setup can outlive the call that created the worktree, so work started before it completes may run against an unpopulated tree. Pass a zero timeout to read the state without blocking. Running out of time is not a failure: call again.",
+    "examples": undefined,
+    "id": "worktree.waitUntilReady",
+    "keywords": undefined,
+    "kind": "query",
+    "requiresArgs": false,
+    "title": "Wait Until Worktree Ready",
   },
   {
     "category": "settings",

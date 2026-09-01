@@ -22,6 +22,17 @@ vi.stubGlobal(
 );
 
 const mockWorktreeCreate = vi.fn();
+
+/**
+ * The shape `worktreeClient.create` resolves to. The branch travels WITH the
+ * result because the host owns collision handling and may land on a different
+ * one than was asked for; the renderer has no race-free way to read it back.
+ */
+const createdWorktree = (worktreeId: string, branch = "feature/x") => ({
+  worktreeId,
+  branch,
+  setupState: "pending" as const,
+});
 const mockGetAvailableBranch = vi.fn();
 const mockGetDefaultPath = vi.fn();
 const mockListBranches = vi.fn();
@@ -324,7 +335,7 @@ function setupWorktreeCreateMocks() {
   );
   mockWorktreeCreate.mockImplementation(() => {
     callIndex++;
-    return Promise.resolve(`wt-${callIndex}`);
+    return Promise.resolve(createdWorktree(`wt-${callIndex}`));
   });
   mockListBranches.mockResolvedValue([
     { name: "main", current: true, remote: false },
@@ -404,10 +415,10 @@ describe("BulkCreateWorktreeDialog", () => {
   });
 
   it("creates worktrees using direct client calls", async () => {
-    const resolvers: Array<(value: string) => void> = [];
+    const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
           resolvers.push(resolve);
         })
     );
@@ -424,9 +435,9 @@ describe("BulkCreateWorktreeDialog", () => {
 
     // Resolve all
     await act(async () => {
-      resolvers[0]?.("wt-1");
-      resolvers[1]?.("wt-2");
-      resolvers[2]?.("wt-3");
+      resolvers[0]?.(createdWorktree("wt-1"));
+      resolvers[1]?.(createdWorktree("wt-2"));
+      resolvers[2]?.(createdWorktree("wt-3"));
       await vi.advanceTimersByTimeAsync(0);
     });
 
@@ -437,10 +448,10 @@ describe("BulkCreateWorktreeDialog", () => {
   });
 
   it("shows per-item sub-step status during execution", async () => {
-    const resolvers: Array<(value: string) => void> = [];
+    const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
           resolvers.push(resolve);
         })
     );
@@ -457,12 +468,12 @@ describe("BulkCreateWorktreeDialog", () => {
 
     // Resolve all
     await act(async () => {
-      resolvers[0]?.("wt-1");
+      resolvers[0]?.(createdWorktree("wt-1"));
       await vi.advanceTimersByTimeAsync(0);
     });
     await act(async () => {
-      resolvers[1]?.("wt-2");
-      resolvers[2]?.("wt-3");
+      resolvers[1]?.(createdWorktree("wt-2"));
+      resolvers[2]?.(createdWorktree("wt-3"));
       await vi.advanceTimersByTimeAsync(0);
     });
     await advanceTimersGradually(1000);
@@ -476,7 +487,7 @@ describe("BulkCreateWorktreeDialog", () => {
     mockWorktreeCreate.mockImplementation(() => {
       callCount++;
       if (callCount === 2) return Promise.reject(new Error("Branch already exists"));
-      return Promise.resolve(`wt-${callCount}`);
+      return Promise.resolve(createdWorktree(`wt-${callCount}`));
     });
 
     render(<BulkCreateWorktreeDialog {...defaultProps} />);
@@ -498,7 +509,7 @@ describe("BulkCreateWorktreeDialog", () => {
     mockWorktreeCreate.mockImplementation(() => {
       callCount++;
       if (callCount === 2) return Promise.reject(new Error("Some error"));
-      return Promise.resolve(`wt-${callCount}`);
+      return Promise.resolve(createdWorktree(`wt-${callCount}`));
     });
 
     render(<BulkCreateWorktreeDialog {...defaultProps} />);
@@ -531,7 +542,7 @@ describe("BulkCreateWorktreeDialog", () => {
     mockWorktreeCreate.mockImplementation(() => {
       callCount++;
       if (callCount === 2) return Promise.reject(new Error("Some error"));
-      return Promise.resolve(`wt-${callCount}`);
+      return Promise.resolve(createdWorktree(`wt-${callCount}`));
     });
 
     render(<BulkCreateWorktreeDialog {...defaultProps} />);
@@ -577,7 +588,7 @@ describe("BulkCreateWorktreeDialog", () => {
       if (callCount <= 2) {
         return Promise.reject(new Error("index.lock: File exists"));
       }
-      return Promise.resolve("wt-1");
+      return Promise.resolve(createdWorktree("wt-1"));
     });
 
     const props = {
@@ -609,7 +620,7 @@ describe("BulkCreateWorktreeDialog", () => {
       if (callCount <= 5) {
         return Promise.reject(new Error("index.lock: File exists"));
       }
-      return Promise.resolve("wt-1");
+      return Promise.resolve(createdWorktree("wt-1"));
     });
 
     const props = {
@@ -639,7 +650,7 @@ describe("BulkCreateWorktreeDialog", () => {
       if (callCount === 1) {
         return Promise.reject(new Error("Rate limit exceeded"));
       }
-      return Promise.resolve("wt-1");
+      return Promise.resolve(createdWorktree("wt-1"));
     });
 
     const props = {
@@ -744,10 +755,10 @@ describe("BulkCreateWorktreeDialog", () => {
   });
 
   it("allows create after cancel while in-flight tasks are pending", async () => {
-    const resolvers: Array<(value: string) => void> = [];
+    const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
           resolvers.push(resolve);
         })
     );
@@ -847,7 +858,7 @@ describe("BulkCreateWorktreeDialog", () => {
     mockWorktreeCreate.mockImplementation(() => {
       callCount++;
       if (callCount === 2) return Promise.reject(new Error("Some error"));
-      return Promise.resolve(`wt-${callCount}`);
+      return Promise.resolve(createdWorktree(`wt-${callCount}`));
     });
     mockRunRecipeWithResults.mockResolvedValue({
       spawned: [{ terminalId: `t-${Date.now()}` }],
@@ -890,14 +901,16 @@ describe("BulkCreateWorktreeDialog", () => {
   it("crashed terminal during retry does not demote prior successes", async () => {
     mockSelectedRecipeId = "test-recipe";
     let wtIndex = 0;
-    mockWorktreeCreate.mockImplementation(() => Promise.resolve(`wt-${++wtIndex}`));
+    mockWorktreeCreate.mockImplementation(() =>
+      Promise.resolve(createdWorktree(`wt-${++wtIndex}`))
+    );
 
     // Issue 1 succeeds, issue 2 fails at worktree creation
     let callCount = 0;
     mockWorktreeCreate.mockImplementation(() => {
       callCount++;
       if (callCount === 2) return Promise.reject(new Error("Lock error"));
-      return Promise.resolve(`wt-${callCount}`);
+      return Promise.resolve(createdWorktree(`wt-${callCount}`));
     });
     mockRunRecipeWithResults.mockResolvedValue({
       spawned: [{ terminalId: "t-ok" }],
@@ -1137,10 +1150,10 @@ describe("BulkCreateWorktreeDialog", () => {
   });
 
   it("stops processing items when dialog is closed during execution", async () => {
-    const resolvers: Array<(value: string) => void> = [];
+    const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
           resolvers.push(resolve);
         })
     );
@@ -1176,9 +1189,9 @@ describe("BulkCreateWorktreeDialog", () => {
     // Resolving the in-flight items after cancel must not trigger item 4 —
     // runIdRef has been bumped so the stale handlers exit early.
     await act(async () => {
-      resolvers[0]?.("wt-1");
-      resolvers[1]?.("wt-2");
-      resolvers[2]?.("wt-3");
+      resolvers[0]?.(createdWorktree("wt-1"));
+      resolvers[1]?.(createdWorktree("wt-2"));
+      resolvers[2]?.(createdWorktree("wt-3"));
       await vi.advanceTimersByTimeAsync(1000);
     });
 
@@ -1192,10 +1205,10 @@ describe("BulkCreateWorktreeDialog", () => {
       spawned: [{ terminalId: "t-1" }],
       failed: [],
     });
-    const resolvers: Array<(value: string) => void> = [];
+    const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
           resolvers.push(resolve);
         })
     );
@@ -1225,7 +1238,7 @@ describe("BulkCreateWorktreeDialog", () => {
 
     // The creates were already past the point of no return — let them land.
     await act(async () => {
-      resolvers.forEach((resolve, i) => resolve(`wt-${i + 1}`));
+      resolvers.forEach((resolve, i) => resolve(createdWorktree(`wt-${i + 1}`)));
       await vi.advanceTimersByTimeAsync(5000);
     });
 
@@ -1239,10 +1252,10 @@ describe("BulkCreateWorktreeDialog", () => {
 
   it("reports the worktrees a cancel left behind", async () => {
     const { notify: mockNotify } = await import("@/lib/notify");
-    const resolvers: Array<(value: string) => void> = [];
+    const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
           resolvers.push(resolve);
         })
     );
@@ -1259,7 +1272,7 @@ describe("BulkCreateWorktreeDialog", () => {
 
     // Land one worktree so the snapshot has both a created and an in-flight count.
     await act(async () => {
-      resolvers[0]?.("wt-1");
+      resolvers[0]?.(createdWorktree("wt-1"));
       await vi.advanceTimersByTimeAsync(0);
     });
 
@@ -1288,7 +1301,7 @@ describe("BulkCreateWorktreeDialog", () => {
     );
 
     await act(async () => {
-      resolvers.slice(1).forEach((resolve, i) => resolve(`wt-${i + 2}`));
+      resolvers.slice(1).forEach((resolve, i) => resolve(createdWorktree(`wt-${i + 2}`)));
       await vi.advanceTimersByTimeAsync(1000);
     });
   });
@@ -1342,10 +1355,10 @@ describe("BulkCreateWorktreeDialog", () => {
   it("stops the batch when the dialog unmounts without going through Cancel", async () => {
     mockSelectedRecipeId = "test-recipe";
     mockRunRecipeWithResults.mockResolvedValue({ spawned: [{ terminalId: "t-1" }], failed: [] });
-    const resolvers: Array<(value: string) => void> = [];
+    const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
           resolvers.push(resolve);
         })
     );
@@ -1374,7 +1387,7 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     await act(async () => {
-      resolvers.forEach((resolve, i) => resolve(`wt-${i + 1}`));
+      resolvers.forEach((resolve, i) => resolve(createdWorktree(`wt-${i + 1}`)));
       await vi.advanceTimersByTimeAsync(5000);
     });
 
@@ -1508,10 +1521,10 @@ describe("BulkCreateWorktreeDialog", () => {
   });
 
   it("keeps the primary action in place while executing", async () => {
-    const resolvers: Array<(value: string) => void> = [];
+    const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
           resolvers.push(resolve);
         })
     );
@@ -1545,16 +1558,16 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      resolvers[0]?.("wt-1");
+      resolvers[0]?.(createdWorktree("wt-1"));
       await vi.advanceTimersByTimeAsync(1000);
     });
   });
 
   it("blocks Escape and backdrop dismissal while executing", async () => {
-    const resolvers: Array<(value: string) => void> = [];
+    const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
           resolvers.push(resolve);
         })
     );
@@ -1589,16 +1602,16 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(onClose).toHaveBeenCalled();
 
     await act(async () => {
-      resolvers[0]?.("wt-1");
+      resolvers[0]?.(createdWorktree("wt-1"));
       await vi.advanceTimersByTimeAsync(1000);
     });
   });
 
   it("keeps completed items visible after worktreeMap updates during execution", async () => {
-    const resolvers: Array<(value: string) => void> = [];
+    const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
           resolvers.push(resolve);
         })
     );
@@ -1614,7 +1627,7 @@ describe("BulkCreateWorktreeDialog", () => {
 
     // Resolve the first item
     await act(async () => {
-      resolvers[0]?.("wt-1");
+      resolvers[0]?.(createdWorktree("wt-1"));
       await vi.advanceTimersByTimeAsync(0);
     });
 
@@ -1642,8 +1655,8 @@ describe("BulkCreateWorktreeDialog", () => {
     // Resolve remaining items and verify final state
     await advanceTimersGradually(400);
     await act(async () => {
-      resolvers[1]?.("wt-2");
-      resolvers[2]?.("wt-3");
+      resolvers[1]?.(createdWorktree("wt-2"));
+      resolvers[2]?.(createdWorktree("wt-3"));
       await vi.advanceTimersByTimeAsync(0);
     });
     await advanceTimersGradually(1000);
@@ -1661,10 +1674,10 @@ describe("BulkCreateWorktreeDialog", () => {
   });
 
   it("runs pre-queries once per batch before any worktree creates", async () => {
-    const createResolvers: Array<(value: string) => void> = [];
+    const createResolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
           createResolvers.push(resolve);
         })
     );
@@ -1687,9 +1700,9 @@ describe("BulkCreateWorktreeDialog", () => {
 
     // Resolve all creates and advance
     await act(async () => {
-      createResolvers[0]?.("wt-1");
-      createResolvers[1]?.("wt-2");
-      createResolvers[2]?.("wt-3");
+      createResolvers[0]?.(createdWorktree("wt-1"));
+      createResolvers[1]?.(createdWorktree("wt-2"));
+      createResolvers[2]?.(createdWorktree("wt-3"));
       await vi.advanceTimersByTimeAsync(0);
     });
     await advanceTimersGradually(1000);

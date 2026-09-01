@@ -2,6 +2,7 @@ import type {
   Worktree,
   WorktreeMood,
   WorktreeLifecycleStatus,
+  WorktreeSetupStatus,
   WorktreeLifecyclePhaseResult,
   WorktreeResourceStatus,
   WslGitEligibility,
@@ -40,6 +41,7 @@ export interface SnapshotBuilderHost {
   readonly issueLastUpdatedAt: number | undefined;
   readonly worktreeChanges: WorktreeChanges | null;
   readonly lifecycleStatus: WorktreeLifecycleStatus | undefined;
+  readonly setupStatus: WorktreeSetupStatus | undefined;
   readonly lifecyclePhaseResults: readonly WorktreeLifecyclePhaseResult[];
   readonly resourceStatus: WorktreeResourceStatus | undefined;
   readonly resourceConnectCommand: string | undefined;
@@ -146,6 +148,7 @@ export class SnapshotBuilder {
       worktreeId: this.host.id,
       timestamp: Date.now(),
       lifecycleStatus: this.host.lifecycleStatus,
+      setupStatus: this.host.setupStatus,
       lifecyclePhaseResults:
         this.host.lifecyclePhaseResults.length > 0
           ? [...this.host.lifecyclePhaseResults]

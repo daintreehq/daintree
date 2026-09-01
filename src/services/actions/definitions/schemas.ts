@@ -406,6 +406,18 @@ export const AgentSettingsEntrySchema = z
   })
   .catchall(z.unknown());
 
+/**
+ * `WorktreeSetupState` plus the `unknown` the wire needs. The host records no
+ * status for a worktree it did not create, and an absent field would leave a
+ * reader to guess between "nothing to run" and "not started" — the exact
+ * ambiguity `setupStatus` exists to remove.
+ */
+export const WorktreeSetupStateSchema = z
+  .enum(["pending", "running", "ready", "failed", "timed-out", "unknown"])
+  .describe(
+    "Post-create initialization state: pending (worktree exists, setup not started), running (config copy, submodules, or the setup script and any configured resource provisioning are in flight), ready, failed, timed-out, or unknown (this host session has no record — it did not create the worktree, or it restarted since)."
+  );
+
 export const WorktreeSummarySchema = z.object({
   id: z.string(),
   path: z.string(),
@@ -419,6 +431,17 @@ export const WorktreeSummarySchema = z.object({
   prUrl: z.string().nullable(),
   status: z.string().nullable(),
   lastCommit: z.string().nullable(),
+  /**
+   * How far post-create initialization got. The state alone, not the whole
+   * `WorktreeSetupStatus`: this rides every row of every listing, and the stage
+   * and failure text only matter once a caller has picked a worktree to ask
+   * about — which is what `worktree.waitUntilReady` is for.
+   *
+   * `unknown` is the honest answer whenever THIS host session has no record —
+   * a worktree it did not create, or one it did but has since restarted past.
+   * It is deliberately not collapsed into `ready`.
+   */
+  setupState: WorktreeSetupStateSchema,
 });
 
 export const TerminalSummarySchema = z.object({

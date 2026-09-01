@@ -561,7 +561,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:get-prs-by-numbers": {
     args: [payload: { cwd: string; numbers: number[] }];
-    result: import("../forge.js").PR[];
+    result: import("../forge.js").PRLookupResult[];
   };
   "forge:get-rate-limit-details": {
     args: [payload: { cwd: string }];
@@ -1897,10 +1897,12 @@ export interface GeneratedIpcInvokeMap {
           sourcePrUrl?: string | undefined;
           sourcePrState?: "merged" | "open" | "closed" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
+          submoduleInit?: "inherit" | "all" | "none" | undefined;
+          collisionPolicy?: "error" | "suffix" | undefined;
         };
       },
     ];
-    result: string;
+    result: import("../worktree.js").WorktreeCreateResult;
   };
   "worktree:delete": {
     args: [payload: import("./worktree.js").WorktreeDeletePayload];

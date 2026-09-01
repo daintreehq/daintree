@@ -295,7 +295,22 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // defending — those composites previously reported only a count, so the
   // panels they created were unidentifiable, and no wording change buys that
   // back.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 45_500;
+  // 45_500 → 45_800 for the `worktree.createWithRecipe` source union. The flat
+  // predecessor advertised five independently optional fields whose legal
+  // combinations existed only inside `run()`, so the generated schema accepted
+  // `{}` — an empty call was advertised as valid and only a dispatch could
+  // teach otherwise. The union costs a repeated `branchName` across two arms
+  // and buys a schema that names the three creation modes and their required
+  // fields. Those bytes are the contract; the old ones were a claim that was
+  // not true.
+  // 45_800 → 46_200: each arm of the `worktree.createWithRecipe` source union
+  // is `.strict()`, so the generated schema closes them individually. Production
+  // only adds `additionalProperties: false` to the ROOT object, so without this
+  // the advertised arms accepted fields borrowed from a sibling mode —
+  // `baseBranch` on an existing-branch reuse, a `branchName` beside a pull
+  // request — which runtime zod then silently stripped. The bytes buy a schema
+  // that refuses the combination instead of quietly ignoring half of it.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 46_200;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -312,7 +327,34 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // a caller that cannot distinguish them will retry the ones a human just
   // refused, or the irreversible kills it was never told about. Naming them is
   // the tool, not decoration on it.
-  const MAX_COHORT_PAYLOAD_BYTES = 195_000;
+  // 195_000 → 202_700 for the forge read contracts and worktree readiness. Three
+  // spends, all output schemas:
+  //   - `forge.getPRs`, the plural lookup that removes the observed one-call-per-
+  //     number fan-out. Its cost is per-number `status`, which is the whole
+  //     point: `not_found` and `unresolved` are different answers, and a caller
+  //     that conflates them closes work that exists.
+  //   - `forge.getPR`, which now wraps its result as `{ pr }` so it can advertise
+  //     an output schema at all — a top-level nullable emitted `anyOf`, which
+  //     `buildToolOutputSchema` drops, so the tool advertised nothing.
+  //   - `worktree.waitUntilReady` plus the `setupState` every worktree row now
+  //     carries. Creation returns when git does, and nothing on this surface
+  //     could previously say whether setup had finished.
+  // In-app only — none of the three is on the external tier, which is why the
+  // external ceiling above moves for a different reason and by a different
+  // amount.
+  // 202_700 → 203_000 for `worktree.create`'s output schema. Its result was a
+  // bare `z.string()` worktree id, which `buildToolOutputSchema` drops for not
+  // being object-rooted — so the tool advertised nothing at all. It is now
+  // `{ worktreeId, branch }`, which is also what lets a caller learn the branch
+  // the host actually landed on after collision recovery instead of assuming
+  // the one it asked for.
+  // 203_000 → 204_400 for the same closed union arms, plus the `forge.getPRs`
+  // output schema becoming a discriminated union. That one repeats `number` and
+  // `status` across three branches, and the repetition is the contract: with
+  // `pr` and `reason` as independent optionals the advertised schema accepted
+  // `{status:"found"}` with no PR and `{status:"not_found"}` carrying one —
+  // contradictions a strict client would have validated as fine.
+  const MAX_COHORT_PAYLOAD_BYTES = 204_400;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

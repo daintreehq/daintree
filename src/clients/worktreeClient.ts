@@ -6,6 +6,7 @@ import type {
   AttachIssuePayload,
   IssueAssociation,
 } from "@shared/types";
+import type { WorktreeCreateResult } from "@shared/types/worktree";
 import type { PRServiceStatus } from "@shared/types/workspace-host";
 import type { WorktreeChanges } from "@shared/types/git";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
@@ -67,7 +68,17 @@ export const worktreeClient = {
     return window.electron.worktree.setActive(worktreeId);
   },
 
-  create: (options: CreateWorktreeOptions, rootPath: string): Promise<string> => {
+  /**
+   * Create a worktree, reporting the branch the host actually landed on
+   * alongside the id.
+   *
+   * `branch` is not always the one requested: the host resolves collisions
+   * atomically against the failing `git worktree add`, so it can suffix the
+   * name or switch to reusing an existing local branch. Read it from here
+   * rather than from the worktree store — store rows arrive over a different
+   * port than this response, so there is no ordering between them.
+   */
+  create: (options: CreateWorktreeOptions, rootPath: string): Promise<WorktreeCreateResult> => {
     return window.electron.worktree.create(options, rootPath);
   },
 

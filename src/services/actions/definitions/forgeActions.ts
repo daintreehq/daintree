@@ -214,6 +214,78 @@ const ForgePRResultSchema = z.object({
   mergedAt: z.number().nullable().optional(),
 });
 
+// Object-rooted wrapper for the singular lookup, so it can advertise an MCP
+// output schema. `pr: null` is the not-found answer and is part of the
+// contract — absence, never an error.
+const ForgePRActionResultSchema = z.object({
+  pr: ForgePRResultSchema.nullable(),
+});
+
+/**
+ * Smallest and largest batch `forge.getPRs` accepts.
+ *
+ * The floor is 2 because one number is the singular lookup's job and a plural
+ * call for it only adds a shape to unwrap. The ceiling is 20 because that is
+ * the GitHub provider's GraphQL chunk size, so a batch at or under it is one
+ * request there — but that is a property of the provider, NOT a promise of the
+ * tool: a provider without `batchLookups` falls back to a singular read per
+ * number. That fallback is the other reason the ceiling is not larger — twenty
+ * sequential provider round trips already sit uncomfortably inside the 30s
+ * dispatch budget.
+ *
+ * Both bounds are repeated in the field description on purpose: `toWireSchema`
+ * strips `minItems`/`maxItems` from the advertised schema, so prose is the only
+ * place a model ever sees them.
+ */
+const FORGE_GET_PRS_MIN = 2;
+const FORGE_GET_PRS_MAX = 20;
+
+/**
+ * One requested number's outcome, discriminated by `status`.
+ *
+ * A union rather than one object with three independently optional fields,
+ * because an advertised output schema is enforced: the SDK compiles it and
+ * validates `structuredContent` against it with AJV. Flat optionals advertised
+ * `{status:"found"}` with no `pr`, and `{status:"not_found", pr}`, as valid —
+ * contradictions a strict client would have accepted and a model could have
+ * expected. Discriminating makes `pr` required exactly where it exists and
+ * `reason` required exactly where it means something.
+ */
+const ForgePRLookupResultSchema = z.discriminatedUnion("status", [
+  z.object({
+    number: z.number().int().positive(),
+    status: z.literal("found").describe("The forge returned this pull request."),
+    pr: ForgePRResultSchema,
+  }),
+  z.object({
+    number: z.number().int().positive(),
+    status: z
+      .literal("not_found")
+      .describe("The forge was asked and has no such pull request. This is an answer."),
+  }),
+  z.object({
+    number: z.number().int().positive(),
+    status: z
+      .literal("unresolved")
+      .describe(
+        "Nothing was learned about this number — the request failed or was rate-limited. Retriable, and NOT evidence the pull request is missing."
+      ),
+    reason: z
+      .enum(["provider_unsupported", "provider_error"])
+      .describe(
+        "Why nothing was learned. `provider_error` is a failed or rate-limited request; `provider_unsupported` means even the per-number fallback could not be attempted. Both are retriable."
+      ),
+  }),
+]);
+
+const ForgePRsActionResultSchema = z.object({
+  results: z
+    .array(ForgePRLookupResultSchema)
+    .describe(
+      "One entry per requested number, in the order requested. Duplicate numbers collapse to their first occurrence, so this can be shorter than the input."
+    ),
+});
+
 // Roll-up CI state vocabulary, mirroring `CIStatusState`. `neutral` means the
 // PR has no required checks configured; `unknown` means the provider reported
 // checks whose state doesn't map onto the other four.
@@ -678,10 +750,17 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.validateToken",
       title: "Validate Forge Token",
       description:
-        "Check whether a forge access token is accepted by the provider, without storing it anywhere. Use this to verify credentials before saving them. It performs a live authentication round trip, so a rejection may mean an expired or insufficiently scoped token rather than a malformed one.",
+        "Ask the selected provider to validate a forge access token without saving it to Daintree. Use this to verify credentials before storing them. Providers validate however they choose — a live authentication round trip for most, locally for offline ones — so a rejection may mean an expired or insufficiently scoped token rather than a malformed one.",
       category: "forge",
       kind: "query",
       danger: "safe",
+      // Never advertised to a model, and on no tier allowlist. The argument IS
+      // the credential, so admitting this tool would require a token to be
+      // composed in the model/tool-call channel before any redaction downstream
+      // could apply. Renderer dispatch from the provider settings tab is the
+      // only intended caller and is unaffected — tiers gate MCP, not
+      // `source: "user"`. See the note in `helpAssistantTierAllowlists.ts`.
+      mcpVisibility: "hidden",
       scope: "renderer",
       argsSchema: z.object({
         // `providerId` carries the canonical `{pluginId}.{contributionId}`
@@ -773,7 +852,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listPRs",
       title: "List Pull Requests",
       description:
-        "List repository pull requests from the active forge provider, a page at a time. Use this to discover or filter PRs; use the issue listing for issues, and the single-PR lookup for a known number. Search takes a provider-native query fragment, not plain text, and routes through the provider's search API rather than the list cache pagination uses. Bypassing the cache spends a live round trip.",
+        "List repository pull requests from the active forge provider, a page at a time. Use this to DISCOVER or filter PRs; for numbers you already have, use the singular or plural PR lookup instead of paging to find them. Search takes a provider-native query fragment, not plain text, and routes through the search API rather than the list cache. Bypassing that cache spends a live round trip.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -883,7 +962,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getPR",
       title: "Get Pull Request",
       description:
-        "Fetch one pull request by number from the active forge provider, including its body, draft state and branches. This is the direct lookup: reach for it instead of paging the PR listing for a number you already have, and read it before editing or merging so the current state is known. A pull request that does not exist comes back empty rather than failing, so treat empty as absence, not an error.",
+        "Fetch ONE known pull request number from the active forge provider, with its body, draft state and branches. For two or more known numbers use the plural lookup instead of calling this repeatedly; to discover numbers you do not have, page the PR listing. Read it before editing or merging so the current state is known. A pull request that does not exist comes back as `pr: null` rather than failing.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -892,10 +971,51 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         ...worktreeLocationShape({ legacy: ["cwd"] }),
         prNumber: z.number().int().positive().describe("Pull request number to fetch"),
       }),
-      resultSchema: ForgePRResultSchema.nullable(),
+      // Wrapped rather than a bare `.nullable()` for the reason spelled out on
+      // `ForgeCIStatusActionResultSchema`: `buildToolOutputSchema` forwards only
+      // object-typed schemas, and Zod emits `anyOf` for a nullable object, so a
+      // top-level nullable advertises nothing at all. Safe to advertise because
+      // dispatch parses results (#11539) — `rawData` is stripped before the
+      // payload leaves, so the delivered object is exactly this schema.
+      resultSchema: ForgePRActionResultSchema,
+      mcpOutputSchema: true,
       run: async ({ prNumber, ...location }, ctx: ActionContext) => {
         const resolvedCwd = requireWorktreePath(location, ctx);
-        return await forgeClient.getPR(resolvedCwd, prNumber);
+        return { pr: await forgeClient.getPR(resolvedCwd, prNumber) };
+      },
+    })
+  );
+
+  actions.set("forge.getPRs", () =>
+    defineAction({
+      id: "forge.getPRs",
+      title: "Get Pull Requests",
+      description: `Fetch ${FORGE_GET_PRS_MIN}-${FORGE_GET_PRS_MAX} KNOWN pull request numbers in one call — reach for this instead of calling the single-PR lookup once per number. Results come back in the order asked, each with its own status: found, not_found, or unresolved. Treat unresolved as "could not find out", never as "does not exist". Use the PR listing instead when the numbers are not already known.`,
+      category: "forge",
+      kind: "query",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
+        prNumbers: z
+          .array(z.number().int().positive())
+          .min(FORGE_GET_PRS_MIN)
+          .max(FORGE_GET_PRS_MAX)
+          .describe(
+            `The pull request numbers to fetch: at least ${FORGE_GET_PRS_MIN}, at most ${FORGE_GET_PRS_MAX}. Duplicates collapse. Use the singular lookup for one number.`
+          ),
+      }),
+      examples: [
+        {
+          args: { prNumbers: [12142, 12137, 12147] },
+          description: "Fetch three known PRs from the active worktree's repo in one call",
+        },
+      ],
+      resultSchema: ForgePRsActionResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ prNumbers, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return { results: await forgeClient.getPRsByNumbersDetailed(resolvedCwd, prNumbers) };
       },
     })
   );

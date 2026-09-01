@@ -17,8 +17,14 @@ vi.mock("../../../KeybindingService", () => ({
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 // forgeActions reaches the renderer-only client/store layer at module load.
-vi.mock("@/clients", () => ({ forgeClient: {} }));
+// A real object rather than `{}`, so the dispatch tests below can point
+// individual methods at fixtures.
+const forgeClientStub = vi.hoisted(() => ({}) as Record<string, ReturnType<typeof vi.fn>>);
+vi.mock("@/clients", () => ({ forgeClient: forgeClientStub }));
 vi.mock("@/store/projectStore", () => ({ useProjectStore: { getState: vi.fn() } }));
+// The forge actions resolve their target through the location helper, which
+// reads the active worktree from context; these tests pass `cwd` explicitly.
+vi.mock("@/lib/forgeResourceCache", () => ({ patchIssueAssigneeCache: vi.fn() }));
 
 import { ActionService } from "../../../ActionService";
 import { registerForgeActions } from "../forgeActions";
@@ -143,13 +149,161 @@ describe("forge.getCIStatus advertises a usable MCP outputSchema (#11544)", () =
     expect(ciStatusObjectBranch(registerAll()).additionalProperties).toBe(false);
   });
 
-  // Watchout: adding the flag here must not imply the neighbouring forge reads
-  // gained one. They return provider payloads (with rawData) and deliberately
-  // stay schema-less until that is projected.
-  it("does not emit an outputSchema for forge.getPR or forge.listPRs", () => {
+  // Watchout: the two singular/plural PR reads now advertise schemas and the
+  // list reads still do not, and the difference is not an oversight either way.
+  // The PR reads return one normalized shape that `dispatch` parses — so what
+  // arrives IS the schema, `rawData` included in what gets stripped. The list
+  // reads build their rows in `run()` under a `view` argument, so their payload
+  // shape is chosen per call and no single schema is true of it.
+  it("emits an outputSchema for the singular and plural PR reads", () => {
     const service = registerAll();
-    expect(outputSchema(service, "forge.getPR")).toBeUndefined();
-    expect(outputSchema(service, "forge.listPRs")).toBeUndefined();
+    expect(outputSchema(service, "forge.getPR")).toBeDefined();
+    expect(outputSchema(service, "forge.getPRs")).toBeDefined();
+  });
+
+  it("does not emit an outputSchema for forge.listPRs", () => {
+    expect(outputSchema(registerAll(), "forge.listPRs")).toBeUndefined();
+  });
+
+  it("roots the PR reads at an object so the schema is advertised at all", () => {
+    // `buildToolOutputSchema` forwards only object-typed schemas, and Zod emits
+    // `anyOf` for a nullable object — so a bare `PR | null` result would have
+    // silently advertised nothing. The `{ pr }` / `{ results }` wrappers are
+    // what make these contracts exist.
+    const service = registerAll();
+    expect(outputSchema(service, "forge.getPR")?.type).toBe("object");
+    expect(outputSchema(service, "forge.getPRs")?.type).toBe("object");
+  });
+});
+
+/** A normalized PR exactly as `ForgePRResultSchema` describes it. */
+const PR = {
+  number: 12142,
+  title: "Improve the MCP surface",
+  body: "…",
+  state: "open",
+  isDraft: false,
+  merged: false,
+  url: "https://example.test/pull/12142",
+  baseRef: "develop",
+  headRef: "feature/mcp",
+};
+
+// Same reasoning as the CI-status validators below: bind the advertised schema
+// to payloads a strict client would actually be sent, so a projection that
+// drifts fails here rather than in a client.
+describe("forge PR read results validate against the advertised schema", () => {
+  function validator(id: string): (payload: unknown) => boolean {
+    const schema = outputSchema(registerAll(), id);
+    if (!schema) throw new Error(`${id} has no outputSchema`);
+    return new Ajv2020({ strict: false }).compile(schema);
+  }
+
+  it("accepts a not-found singular lookup as pr: null", () => {
+    expect(validator("forge.getPR")({ pr: null })).toBe(true);
+  });
+
+  it("accepts a found singular lookup", () => {
+    expect(validator("forge.getPR")({ pr: PR })).toBe(true);
+  });
+
+  it("rejects a singular payload carrying the provider's rawData", () => {
+    // The regression that matters: `dispatch` strips unknown keys against
+    // `resultSchema`, and this is what proves a strict client would reject the
+    // payload if it ever stopped.
+    expect(validator("forge.getPR")({ pr: { ...PR, rawData: { node_id: "x" } } })).toBe(false);
+  });
+
+  it("accepts all three per-number statuses in one batch", () => {
+    expect(
+      validator("forge.getPRs")({
+        results: [
+          { number: 12142, status: "found", pr: PR },
+          { number: 99999, status: "not_found" },
+          { number: 12147, status: "unresolved", reason: "provider_error" },
+        ],
+      })
+    ).toBe(true);
+  });
+
+  it("rejects a status outside the three the contract names", () => {
+    // `unresolved` must not degrade into an invented fourth spelling: a caller
+    // branches on this field to decide whether absence is an answer.
+    expect(validator("forge.getPRs")({ results: [{ number: 1, status: "missing" }] })).toBe(false);
+  });
+
+  it("rejects every combination the three statuses make impossible", () => {
+    // An advertised output schema is ENFORCED — the SDK compiles it and
+    // validates `structuredContent` with AJV — so a schema that permits a
+    // contradiction is a contradiction a strict client will accept. With `pr`
+    // and `reason` as independent optionals, all four of these validated.
+    const validate = validator("forge.getPRs");
+    // `found` with no PR: the status says one was returned.
+    expect(validate({ results: [{ number: 1, status: "found" }] })).toBe(false);
+    // `not_found` carrying a PR: the status says there is none.
+    expect(validate({ results: [{ number: 1, status: "not_found", pr: PR }] })).toBe(false);
+    // `unresolved` with no reason: the reason is what makes it actionable.
+    expect(validate({ results: [{ number: 1, status: "unresolved" }] })).toBe(false);
+    // `found` carrying an unresolved reason.
+    expect(
+      validate({ results: [{ number: 1, status: "found", pr: PR, reason: "provider_error" }] })
+    ).toBe(false);
+  });
+
+  it("rejects the provider's rawData inside a batch entry too", () => {
+    // The singular read is not the only place stripping is load-bearing: the
+    // batch entries carry the same normalized PR.
+    expect(
+      validator("forge.getPRs")({
+        results: [{ number: 1, status: "found", pr: { ...PR, rawData: { node_id: "x" } } }],
+      })
+    ).toBe(false);
+  });
+});
+
+// The validators above check hand-authored fixtures against the advertised
+// schema. These go one step further and push a payload through `dispatch`,
+// which is where `resultSchema` is actually enforced — so a projection that
+// drifts from the schema fails here rather than in a client.
+describe("dispatch delivers exactly what the PR reads advertise", () => {
+  it("strips the provider's rawData from the singular read", async () => {
+    const service = registerAll();
+    const raw = { ...PR, rawData: { node_id: "MDEx" }, extraProviderField: 1 };
+    forgeClientStub.getPR = vi.fn().mockResolvedValue(raw);
+
+    const result = await service.dispatch(
+      "forge.getPR" as ActionId,
+      { prNumber: 12142, cwd: "/repo" },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const { pr } = result.result as { pr: Record<string, unknown> };
+      expect(pr).toBeTruthy();
+      expect(pr.rawData).toBeUndefined();
+      expect(pr.extraProviderField).toBeUndefined();
+      expect(pr.number).toBe(12142);
+    }
+  });
+
+  it("rejects a batch entry whose status and payload disagree", async () => {
+    // The result gate is fail-closed: an action that returned a contradiction
+    // gets RESULT_VALIDATION_ERROR rather than shipping it to a client that
+    // would then reject it against the same schema.
+    const service = registerAll();
+    forgeClientStub.getPRsByNumbersDetailed = vi
+      .fn()
+      .mockResolvedValue([{ number: 1, status: "found" }]);
+
+    const result = await service.dispatch(
+      "forge.getPRs" as ActionId,
+      { prNumbers: [1, 2], cwd: "/repo" },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("RESULT_VALIDATION_ERROR");
   });
 });
 

@@ -16,6 +16,8 @@ import type {
   Worktree,
   WorktreeMood,
   WorktreeLifecycleStatus,
+  WorktreeSetupStatus,
+  WorktreeSetupState,
   WorktreeLifecyclePhaseResult,
   WorktreeResourceStatus,
   WslGitEligibility,
@@ -149,6 +151,13 @@ export interface WorktreeSnapshot {
   timestamp?: number;
   /** Current or last completed lifecycle script status */
   lifecycleStatus?: WorktreeLifecycleStatus;
+
+  /**
+   * How far post-create initialization has got. Absent for a worktree this host
+   * process did not create, which readers must treat as unknown rather than
+   * ready. See {@link WorktreeSetupStatus}.
+   */
+  setupStatus?: WorktreeSetupStatus;
 
   /**
    * Per-phase teardown results, accumulated across a multi-phase teardown run
@@ -713,6 +722,22 @@ export type WorkspaceHostEvent =
       requestId: string;
       success: boolean;
       worktreeId?: string;
+      /**
+       * The branch the host actually landed on, which is not necessarily the
+       * one it was asked for — collision recovery can suffix it or switch to
+       * reusing a stale local branch. Reported here because the renderer's
+       * worktree rows arrive over a different port than this result, so reading
+       * the branch back from the store races it.
+       */
+      branch?: string;
+      /**
+       * The worktree's setup state at the moment the create returned — always
+       * `pending` or `running`, since the tail outlives creation. Carried here
+       * for the same reason as `branch`: reading it back from a store row that
+       * arrives on a different port races this result, and `unknown` there
+       * would be indistinguishable from "this app did not create it".
+       */
+      setupState?: WorktreeSetupState;
       error?: string;
     }
   | { type: "delete-worktree-result"; requestId: string; success: boolean; error?: string }

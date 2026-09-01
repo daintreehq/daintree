@@ -31,6 +31,7 @@ function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilder
     issueLastUpdatedAt: undefined,
     worktreeChanges: null,
     lifecycleStatus: undefined,
+    setupStatus: undefined,
     lifecyclePhaseResults: [],
     resourceStatus: undefined,
     resourceConnectCommand: undefined,

@@ -705,10 +705,21 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     // must never derive a message — redirect to the Review Hub, which shows the
     // staged files and requires the user to type the message before committing.
     palette: { mode: "redirect", to: "worktree.openReviewHub" },
+    // `message` is REQUIRED in the schema because run() requires it. Declaring
+    // it optional advertised `{}` as a valid call to every model reading the
+    // manifest, and the only way to learn otherwise was to dispatch and be
+    // thrown at. The wrapper stays non-optional for the same reason — an
+    // omitted argument object can never satisfy the handler.
     argsSchema: withWorktreeLocation(
-      { message: z.string().min(1).optional() },
+      {
+        message: z
+          .string()
+          .trim()
+          .min(1)
+          .describe("Commit message. Required — nothing derives one for you."),
+      },
       { legacy: ["cwd"] }
-    ).optional(),
+    ),
     run: async (args: unknown, ctx: ActionContext) => {
       const { message, ...location } = (args ?? {}) as WorktreeLocationArgs & { message?: string };
       const resolvedCwd = requireWorktreePath(location, ctx);

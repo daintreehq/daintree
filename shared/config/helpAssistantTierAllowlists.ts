@@ -25,6 +25,9 @@ export const WORKBENCH_TIER_TOOLS = [
   "worktree.listBranches",
   "worktree.getDefaultPath",
   "worktree.getAvailableBranch",
+  // Read-only, and the counterpart to the setup state every worktree listing
+  // now carries: a caller that can see `running` must be able to wait for it.
+  "worktree.waitUntilReady",
   "worktree.resource.status",
   "worktree.compareDiff",
   "worktree.reviewReadiness",
@@ -79,6 +82,10 @@ export const WORKBENCH_TIER_TOOLS = [
   "forge.listIssueComments",
   "forge.getChecks",
   "forge.getPR",
+  // The plural counterpart, at the same tier as the singular read it replaces
+  // for a known set. Admitting one without the other is what produced the
+  // N-call fan-out this exists to remove.
+  "forge.getPRs",
   "forge.getCIStatus",
 
   "workflow.prepBranchForReview",
@@ -265,7 +272,15 @@ export const SYSTEM_TIER_ADDONS = [
   "forge.addIssueComment",
   "forge.addIssueLabel",
   "forge.removeIssueLabel",
-  "forge.validateToken",
+  // `forge.validateToken` is deliberately absent from every tier. It takes a
+  // raw forge access token as an argument, and a tool argument IS model
+  // context: even though ActionService redacts it from audit summaries and
+  // logs, admitting the tool means the credential has to be composed in the
+  // model channel to be sent. Token entry stays a UI-owned flow — the Test
+  // button in the provider settings tab dispatches it directly as
+  // `source: "user"`, which no tier gates. The action is also
+  // `mcpVisibility: "hidden"` so a future allowlist edit cannot re-advertise it
+  // by accident.
 ] as const satisfies readonly BuiltInActionId[];
 
 /**

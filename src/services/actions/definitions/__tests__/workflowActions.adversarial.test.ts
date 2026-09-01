@@ -1,5 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-type-assertion */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import Ajv2020 from "ajv/dist/2020.js";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const worktreeClientMock = vi.hoisted(() => ({
@@ -229,7 +231,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   worktreeClientMock.getAvailableBranch.mockResolvedValue("feature/issue-6609-add-tools");
   worktreeClientMock.getDefaultPath.mockResolvedValue("/repo/feature/issue-6609-add-tools");
-  worktreeClientMock.create.mockResolvedValue("wt-new");
+  // The host reports the branch it landed on with the create result — the
+  // renderer has no race-free way to read it back, so it travels here.
+  worktreeClientMock.create.mockImplementation(async (options: { newBranch: string }) => ({
+    worktreeId: "wt-new",
+    branch: options.newBranch,
+    setupState: "pending" as const,
+  }));
   worktreeClientMock.fetchPRBranch.mockResolvedValue(undefined);
   forgeClientMock.assignIssue.mockResolvedValue(undefined);
   copyTreeClientMock.injectToTerminal.mockResolvedValue(undefined);
@@ -249,10 +257,31 @@ beforeEach(() => {
   });
 });
 
+/**
+ * The creation-mode arms of `worktree.createWithRecipe`'s `source` union, as
+ * helpers rather than inline literals: the union is the contract these tests
+ * exist to hold, and spelling one arm wrong in one test would otherwise pass by
+ * exercising a different mode than the test name claims.
+ */
+const newBranch = (branchName: string, rest: Record<string, unknown> = {}) => ({
+  kind: "newBranch" as const,
+  branchName,
+  ...rest,
+});
+const existingBranch = (branchName: string, rest: Record<string, unknown> = {}) => ({
+  kind: "existingBranch" as const,
+  branchName,
+  ...rest,
+});
+const pullRequest = (pullRequestNumber: number) => ({
+  kind: "pullRequest" as const,
+  pullRequestNumber,
+});
+
 describe("worktree.createWithRecipe", () => {
   it("happy path: resolves available branch, creates worktree, returns identifiers", async () => {
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
-    const result = (await def.run({ branchName: "feature/foo" }, {} as never)) as Record<
+    const result = (await def.run({ source: newBranch("feature/foo") }, {} as never)) as Record<
       string,
       unknown
     >;
@@ -285,7 +314,7 @@ describe("worktree.createWithRecipe", () => {
     worktreeClientMock.getDefaultPath.mockResolvedValue("/repo/contrib/feature-x");
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
 
-    const result = (await def.run({ pullRequestNumber: 42 }, {} as never)) as Record<
+    const result = (await def.run({ source: pullRequest(42) }, {} as never)) as Record<
       string,
       unknown
     >;
@@ -312,7 +341,7 @@ describe("worktree.createWithRecipe", () => {
   it("PR path throws when the PR is not found", async () => {
     forgeClientMock.getPR.mockResolvedValue(null);
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
-    await expect(def.run({ pullRequestNumber: 999 }, {} as never)).rejects.toThrow(
+    await expect(def.run({ source: pullRequest(999) }, {} as never)).rejects.toThrow(
       /Pull request #999 not found/
     );
     expect(worktreeClientMock.fetchPRBranch).not.toHaveBeenCalled();
@@ -326,7 +355,9 @@ describe("worktree.createWithRecipe", () => {
       url: "u",
     });
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
-    await expect(def.run({ pullRequestNumber: 42 }, {} as never)).rejects.toThrow(/no head branch/);
+    await expect(def.run({ source: pullRequest(42) }, {} as never)).rejects.toThrow(
+      /no head branch/
+    );
     expect(worktreeClientMock.fetchPRBranch).not.toHaveBeenCalled();
     expect(worktreeClientMock.create).not.toHaveBeenCalled();
   });
@@ -340,22 +371,193 @@ describe("worktree.createWithRecipe", () => {
     });
     worktreeClientMock.fetchPRBranch.mockRejectedValue(new Error("git fetch failed"));
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
-    await expect(def.run({ pullRequestNumber: 42 }, {} as never)).rejects.toThrow(
+    await expect(def.run({ source: pullRequest(42) }, {} as never)).rejects.toThrow(
       /git fetch failed/
     );
     expect(worktreeClientMock.create).not.toHaveBeenCalled();
   });
 
-  it("rejects calls that supply both issueNumber and pullRequestNumber", async () => {
+  // This used to be a runtime throw inside run(), which meant the advertised
+  // schema said the call was valid and only a dispatch could teach otherwise.
+  // It is a schema rejection now, so assert it where it actually lives.
+  it("rejects an empty call, which the flat schema used to advertise as valid", async () => {
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
-    await expect(
-      def.run({ branchName: "feature/foo", issueNumber: 1, pullRequestNumber: 2 }, {} as never)
-    ).rejects.toThrow(/mutually exclusive/);
+    expect(def.argsSchema!.safeParse({}).success).toBe(false);
+    // A source with no mode is equally meaningless — the discriminator is what
+    // makes the rest of the arm required.
+    expect(def.argsSchema!.safeParse({ source: {} }).success).toBe(false);
+    expect(def.argsSchema!.safeParse({ source: { kind: "newBranch" } }).success).toBe(false);
   });
 
-  it("non-PR path requires branchName at runtime", async () => {
+  // Runtime zod and the ADVERTISED schema are not the same contract, and only
+  // the second one reaches a model. `z.toJSONSchema` drops refinements, so a
+  // constraint that exists only as a `.refine()` is invisible on the wire —
+  // the exact failure the flat argument shape had. These validate the generated
+  // JSON Schema the way a strict MCP client would.
+  describe("the advertised input schema, not just the runtime one", () => {
+    const emitted = () => {
+      const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+      return z.toJSONSchema(def.argsSchema!, {
+        io: "input",
+        unrepresentable: "any",
+        reused: "inline",
+        cycles: "ref",
+        target: "draft-2020-12",
+      });
+    };
+    const validator = () =>
+      new Ajv2020({ strict: false }).compile({
+        ...emitted(),
+        // `buildToolInputSchema` stamps this on before advertising, so a
+        // validator without it is checking a schema no client is ever sent.
+        additionalProperties: false,
+      });
+
+    it("is rooted at an object, or production advertises nothing at all", () => {
+      // `buildToolInputSchema` forwards a generated schema only when its root is
+      // `type: "object"`, and silently substitutes an EMPTY object otherwise. A
+      // root-level union emits `anyOf` with no `type`, so nesting the union
+      // under `source` is what keeps the parameters advertised at all.
+      const schema = emitted() as { type?: string; required?: string[] };
+      expect(schema.type).toBe("object");
+      expect(schema.required).toContain("source");
+    });
+
+    it("accepts each of the three creation modes", () => {
+      const validate = validator();
+      expect(validate({ source: { kind: "newBranch", branchName: "feature/x" } })).toBe(true);
+      expect(validate({ source: { kind: "existingBranch", branchName: "feature/x" } })).toBe(true);
+      expect(validate({ source: { kind: "pullRequest", pullRequestNumber: 42 } })).toBe(true);
+    });
+
+    it("rejects an empty call and a mode missing its own required field", () => {
+      const validate = validator();
+      expect(validate({})).toBe(false);
+      expect(validate({ source: {} })).toBe(false);
+      expect(validate({ source: { kind: "newBranch" } })).toBe(false);
+      expect(validate({ source: { kind: "existingBranch" } })).toBe(false);
+      expect(validate({ source: { kind: "pullRequest" } })).toBe(false);
+      expect(validate({ source: { kind: "rebase", branchName: "x" } })).toBe(false);
+    });
+
+    it("makes the issue/pull-request conflict structural, not a refinement", () => {
+      // This used to be a `.refine()`, which `z.toJSONSchema` drops — so the
+      // advertised schema said `issueNumber` beside a pull-request source was
+      // valid and only a dispatch could teach otherwise. It now lives on the
+      // arms that can carry an issue, and the pull-request arm is closed.
+      const validate = validator();
+      expect(
+        validate({
+          source: { kind: "newBranch", branchName: "x", issueNumber: 7, assignToSelf: true },
+        })
+      ).toBe(true);
+      expect(
+        validate({
+          source: { kind: "existingBranch", branchName: "x", issueNumber: 7, assignToSelf: true },
+        })
+      ).toBe(true);
+      expect(
+        validate({ source: { kind: "pullRequest", pullRequestNumber: 1, issueNumber: 7 } })
+      ).toBe(false);
+      // `assignToSelf` moved with `issueNumber` and is refused on the PR arm for
+      // the same reason — there is no linked issue there to assign.
+      expect(
+        validate({ source: { kind: "pullRequest", pullRequestNumber: 1, assignToSelf: true } })
+      ).toBe(false);
+      // Top level too — the fields moved, they were not duplicated.
+      expect(validate({ source: { kind: "newBranch", branchName: "x" }, issueNumber: 7 })).toBe(
+        false
+      );
+      expect(validate({ source: { kind: "newBranch", branchName: "x" }, assignToSelf: true })).toBe(
+        false
+      );
+    });
+
+    it("rejects fields borrowed from another mode's arm", () => {
+      // The union's whole point: `baseBranch` and `collisionPolicy` mean nothing
+      // when reusing an existing branch, and the flat predecessor advertised
+      // them as valid there.
+      const validate = validator();
+      expect(
+        validate({ source: { kind: "existingBranch", branchName: "x", baseBranch: "main" } })
+      ).toBe(false);
+      expect(
+        validate({ source: { kind: "pullRequest", pullRequestNumber: 1, branchName: "x" } })
+      ).toBe(false);
+      // The new-branch arm is closed too, not just the other two.
+      expect(
+        validate({ source: { kind: "newBranch", branchName: "x", pullRequestNumber: 1 } })
+      ).toBe(false);
+    });
+  });
+
+  it("existing-branch mode reuses the exact branch and never resolves an available name", async () => {
+    // The bug this mode exists to fix: the flat schema resolved an AVAILABLE
+    // branch name before it read `useExistingBranch`, so asking to reuse an
+    // existing `feature/foo` produced `newBranch: "feature/foo-2"` — a branch
+    // that by construction does not exist, since the lookup's whole job was to
+    // find a free name. The host then ran `git worktree add <path> <branch>`
+    // against it and failed.
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
-    await expect(def.run({}, {} as never)).rejects.toThrow(/branchName is required/);
+    worktreeClientMock.getDefaultPath.mockResolvedValue("/repo/feature/foo");
+
+    const result = (await def.run(
+      { source: existingBranch("feature/foo") },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(worktreeClientMock.getAvailableBranch).not.toHaveBeenCalled();
+    expect(worktreeClientMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        newBranch: "feature/foo",
+        useExistingBranch: true,
+        fromRemote: false,
+      }),
+      "/repo"
+    );
+    expect(result.requestedBranch).toBe("feature/foo");
+    expect(result.effectiveBranch).toBe("feature/foo");
+  });
+
+  it("collisionPolicy 'error' hands the exact name to the host instead of pre-suffixing it", async () => {
+    // The renderer lookup reserves nothing, so it cannot implement either
+    // policy — the host resolves collisions atomically against the failing
+    // `git worktree add`. Under `error` the renderer must therefore stay out of
+    // the way entirely, or the host would never see the name that collided.
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    worktreeClientMock.getDefaultPath.mockResolvedValue("/repo/feature/foo");
+
+    await def.run({ source: newBranch("feature/foo", { collisionPolicy: "error" }) }, {} as never);
+
+    expect(worktreeClientMock.getAvailableBranch).not.toHaveBeenCalled();
+    expect(worktreeClientMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ newBranch: "feature/foo", collisionPolicy: "error" }),
+      "/repo"
+    );
+  });
+
+  it("reports the branch the host landed on, not the name the renderer proposed", async () => {
+    // The available-name lookup is a naming hint for the worktree directory, not
+    // the collision gate. The host re-resolves atomically and may suffix
+    // further or reuse a stale branch, so the answer has to come back WITH the
+    // create result — reading it out of the worktree store instead is a race,
+    // because store rows travel over a different port than that response.
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    worktreeClientMock.create.mockResolvedValue({
+      worktreeId: "wt-new",
+      branch: "feature/foo-7",
+      setupState: "running",
+    });
+
+    const result = (await def.run({ source: newBranch("feature/foo") }, {} as never)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(result.requestedBranch).toBe("feature/foo");
+    expect(result.effectiveBranch).toBe("feature/foo-7");
+    expect(result.branch).toBe("feature/foo-7");
+    expect(result.setupState).toBe("running");
   });
 
   it("recipe context carries prNumber (not issueNumber) when pullRequestNumber is provided", async () => {
@@ -369,7 +571,7 @@ describe("worktree.createWithRecipe", () => {
     const runRecipeWithResults = setRecipe("recipe-1");
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
-      { pullRequestNumber: 42, recipeId: "recipe-1" },
+      { source: pullRequest(42), recipeId: "recipe-1" },
       {} as never
     )) as Record<string, unknown>;
     expect(runRecipeWithResults).toHaveBeenCalledWith(
@@ -392,7 +594,7 @@ describe("worktree.createWithRecipe", () => {
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
 
     await def.run(
-      { branchName: "feature/foo", recipeId: "recipe-1", spawnedBy: "mcp" },
+      { source: newBranch("feature/foo"), recipeId: "recipe-1", spawnedBy: "mcp" },
       {} as never
     );
 
@@ -412,7 +614,7 @@ describe("worktree.createWithRecipe", () => {
     const runRecipeWithResults = setRecipe("recipe-1");
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
 
-    await def.run({ branchName: "feature/foo", recipeId: "recipe-1" }, {
+    await def.run({ source: newBranch("feature/foo"), recipeId: "recipe-1" }, {
       dispatchSource: "agent",
     } as never);
 
@@ -431,7 +633,7 @@ describe("worktree.createWithRecipe", () => {
     });
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     try {
-      await def.run({ branchName: "feature/foo", recipeId: "recipe-1" }, {} as never);
+      await def.run({ source: newBranch("feature/foo"), recipeId: "recipe-1" }, {} as never);
       throw new Error("expected throw");
     } catch (err) {
       const message = (err as Error).message;
@@ -456,7 +658,7 @@ describe("worktree.createWithRecipe", () => {
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
 
     const result = (await def.run(
-      { branchName: "feature/foo", recipeId: "recipe-1" },
+      { source: newBranch("feature/foo"), recipeId: "recipe-1" },
       {} as never
     )) as Record<string, unknown>;
 
@@ -477,7 +679,7 @@ describe("worktree.createWithRecipe", () => {
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
 
     const result = (await def.run(
-      { branchName: "feature/foo", recipeId: "recipe-1" },
+      { source: newBranch("feature/foo"), recipeId: "recipe-1" },
       {} as never
     )) as Record<string, unknown>;
 
@@ -494,7 +696,7 @@ describe("worktree.createWithRecipe", () => {
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
 
     const result = (await def.run(
-      { branchName: "feature/foo", recipeId: "recipe-1" },
+      { source: newBranch("feature/foo"), recipeId: "recipe-1" },
       {} as never
     )) as Record<string, unknown>;
 
@@ -519,7 +721,7 @@ describe("worktree.createWithRecipe", () => {
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
 
     await expect(
-      def.run({ branchName: "feature/foo", recipeId: "recipe-1" }, {} as never)
+      def.run({ source: newBranch("feature/foo"), recipeId: "recipe-1" }, {} as never)
     ).rejects.toThrow(/PARTIAL_SUCCESS:/);
     expect(notifySpawnFailuresMock).not.toHaveBeenCalled();
   });
@@ -532,7 +734,9 @@ describe("worktree.createWithRecipe", () => {
       url: "u",
     });
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
-    await expect(def.run({ pullRequestNumber: 42 }, {} as never)).rejects.toThrow(/no head branch/);
+    await expect(def.run({ source: pullRequest(42) }, {} as never)).rejects.toThrow(
+      /no head branch/
+    );
     expect(worktreeClientMock.fetchPRBranch).not.toHaveBeenCalled();
   });
 
@@ -544,7 +748,9 @@ describe("worktree.createWithRecipe", () => {
       url: "u",
     });
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
-    await expect(def.run({ pullRequestNumber: 42 }, {} as never)).rejects.toThrow(/no head branch/);
+    await expect(def.run({ source: pullRequest(42) }, {} as never)).rejects.toThrow(
+      /no head branch/
+    );
     expect(worktreeClientMock.fetchPRBranch).not.toHaveBeenCalled();
   });
 });
@@ -559,7 +765,7 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
 
     await expect(
-      def.run({ branchName: "feature/foo", recipeId: "recipe-1" }, {
+      def.run({ source: newBranch("feature/foo"), recipeId: "recipe-1" }, {
         dispatchSource: "plugin",
       } as never)
     ).rejects.toThrow(/Plugins cannot spawn recipe terminals/);
@@ -571,7 +777,7 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
   it("worktree.createWithRecipe: plugin without recipeId is unaffected", async () => {
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
 
-    const result = (await def.run({ branchName: "feature/foo" }, {
+    const result = (await def.run({ source: newBranch("feature/foo") }, {
       dispatchSource: "plugin",
     } as never)) as Record<string, unknown>;
 
@@ -589,7 +795,7 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
 
     const blocked = await service.dispatch(
       "worktree.createWithRecipe" as ActionId,
-      { branchName: "feature/foo", recipeId: "recipe-1" },
+      { source: newBranch("feature/foo"), recipeId: "recipe-1" },
       { source: "agent" }
     );
     expect(blocked.ok).toBe(false);
@@ -601,7 +807,7 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
 
     const approved = await service.dispatch(
       "worktree.createWithRecipe" as ActionId,
-      { branchName: "feature/foo", recipeId: "recipe-1" },
+      { source: newBranch("feature/foo"), recipeId: "recipe-1" },
       { source: "agent", confirmed: true }
     );
     expect(approved.ok).toBe(true);
@@ -613,7 +819,7 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
     const service = registerThroughActionService(makeCallbacks());
     const result = await service.dispatch(
       "worktree.createWithRecipe" as ActionId,
-      { branchName: "feature/foo" },
+      { source: newBranch("feature/foo") },
       { source: "agent" }
     );
     expect(result.ok).toBe(true);
@@ -1246,7 +1452,7 @@ describe("workflow.startWorkOnIssue", () => {
 describe("worktree.createWithRecipe — issue assignment", () => {
   it("happy path returns assignmentError: null when nothing is requested", async () => {
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
-    const result = (await def.run({ branchName: "feature/foo" }, {} as never)) as Record<
+    const result = (await def.run({ source: newBranch("feature/foo") }, {} as never)) as Record<
       string,
       unknown
     >;
@@ -1259,7 +1465,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     setGithubUser("ada");
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
-      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      { source: newBranch("feature/foo", { issueNumber: 6625, assignToSelf: true }) },
       {} as never
     )) as Record<string, unknown>;
     expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6625, "ada");
@@ -1272,7 +1478,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     setGithubUser("ada");
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
-      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: false },
+      { source: newBranch("feature/foo", { issueNumber: 6625, assignToSelf: false }) },
       {} as never
     )) as Record<string, unknown>;
     expect(result.assignedToSelf).toBe(false);
@@ -1284,7 +1490,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     forgeClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
-      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      { source: newBranch("feature/foo", { issueNumber: 6625, assignToSelf: true }) },
       {} as never
     )) as Record<string, unknown>;
     expect(result.assignedToSelf).toBe(false);
@@ -1297,7 +1503,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     setAssignPreference(true);
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
-      { branchName: "feature/foo", issueNumber: 6625 },
+      { source: newBranch("feature/foo", { issueNumber: 6625 }) },
       {} as never
     )) as Record<string, unknown>;
     expect(forgeClientMock.assignIssue).toHaveBeenCalledWith("/repo", 6625, "ada");
@@ -1310,7 +1516,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     setAssignPreference(false);
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
-      { branchName: "feature/foo", issueNumber: 6625 },
+      { source: newBranch("feature/foo", { issueNumber: 6625 }) },
       {} as never
     )) as Record<string, unknown>;
     expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
@@ -1323,7 +1529,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     setAssignPreference(true);
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
-      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: false },
+      { source: newBranch("feature/foo", { issueNumber: 6625, assignToSelf: false }) },
       {} as never
     )) as Record<string, unknown>;
     expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
@@ -1336,7 +1542,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     forgeClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
-      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      { source: newBranch("feature/foo", { issueNumber: 6625, assignToSelf: true }) },
       {} as never
     )) as Record<string, unknown>;
     expect(result.worktreeId).toBe("wt-new");
@@ -1348,7 +1554,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     setGithubUser(null);
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
-      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      { source: newBranch("feature/foo", { issueNumber: 6625, assignToSelf: true }) },
       {} as never
     )) as Record<string, unknown>;
     expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
@@ -1360,7 +1566,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     setGithubUser("ada");
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
-      { branchName: "feature/foo", assignToSelf: true },
+      { source: newBranch("feature/foo", { assignToSelf: true }) },
       {} as never
     )) as Record<string, unknown>;
     expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
@@ -1372,7 +1578,7 @@ describe("worktree.createWithRecipe — issue assignment", () => {
     forgeClientMock.getCurrentUser.mockRejectedValue(new Error("IPC unavailable"));
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
-      { branchName: "feature/foo", issueNumber: 6609, assignToSelf: true },
+      { source: newBranch("feature/foo", { issueNumber: 6609, assignToSelf: true }) },
       {} as never
     )) as Record<string, unknown>;
     expect(forgeClientMock.assignIssue).not.toHaveBeenCalled();
@@ -1406,7 +1612,7 @@ describe("self-assign patches the issues dropdown cache (#11087)", () => {
 
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     await def.run(
-      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      { source: newBranch("feature/foo", { issueNumber: 6625, assignToSelf: true }) },
       {} as never
     );
 
@@ -1433,7 +1639,7 @@ describe("self-assign patches the issues dropdown cache (#11087)", () => {
 
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     await def.run(
-      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      { source: newBranch("feature/foo", { issueNumber: 6625, assignToSelf: true }) },
       {} as never
     );
 
@@ -1453,7 +1659,7 @@ describe("self-assign patches the issues dropdown cache (#11087)", () => {
 
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     await def.run(
-      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      { source: newBranch("feature/foo", { issueNumber: 6625, assignToSelf: true }) },
       {} as never
     );
 
@@ -1467,7 +1673,7 @@ describe("self-assign patches the issues dropdown cache (#11087)", () => {
 
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
-      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      { source: newBranch("feature/foo", { issueNumber: 6625, assignToSelf: true }) },
       {} as never
     )) as Record<string, unknown>;
 
@@ -1482,7 +1688,7 @@ describe("self-assign patches the issues dropdown cache (#11087)", () => {
 
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     await def.run(
-      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      { source: newBranch("feature/foo", { issueNumber: 6625, assignToSelf: true }) },
       {} as never
     );
 
@@ -1506,7 +1712,7 @@ describe("self-assign patches the issues dropdown cache (#11087)", () => {
 
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
     const result = (await def.run(
-      { branchName: "feature/foo", issueNumber: 6625, assignToSelf: true },
+      { source: newBranch("feature/foo", { issueNumber: 6625, assignToSelf: true }) },
       {} as never
     )) as Record<string, unknown>;
 

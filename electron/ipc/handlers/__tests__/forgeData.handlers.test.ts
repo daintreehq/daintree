@@ -4,6 +4,7 @@ import type {
   Issue,
   ListOptions,
   PR,
+  PRLookupResult,
   Page,
   RepoMetadata,
   RepoRef,
@@ -18,14 +19,28 @@ vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
 
 // A fake forge provider — deliberately NOT GitHub. Proves the data handlers
 // delegate through the normalized contract with no GitHub coupling.
-const fakeImpl = vi.hoisted(() => ({
-  listIssues: vi.fn(),
-  listPRs: vi.fn(),
-  getIssue: vi.fn(),
-  getPR: vi.fn(),
-  getCIStatus: vi.fn(),
-  getRepoMetadata: vi.fn(),
-}));
+const fakeImpl = vi.hoisted(
+  () =>
+    ({
+      listIssues: vi.fn(),
+      listPRs: vi.fn(),
+      getIssue: vi.fn(),
+      getPR: vi.fn(),
+      getCIStatus: vi.fn(),
+      getRepoMetadata: vi.fn(),
+      // Optional on the provider contract, and the batch tests below toggle it
+      // between present and absent to exercise both routes.
+      batchLookups: undefined as { findPRsByNumbers?: ReturnType<typeof vi.fn> } | undefined,
+    }) as {
+      listIssues: ReturnType<typeof vi.fn>;
+      listPRs: ReturnType<typeof vi.fn>;
+      getIssue: ReturnType<typeof vi.fn>;
+      getPR: ReturnType<typeof vi.fn>;
+      getCIStatus: ReturnType<typeof vi.fn>;
+      getRepoMetadata: ReturnType<typeof vi.fn>;
+      batchLookups?: { findPRsByNumbers?: ReturnType<typeof vi.fn> };
+    }
+);
 
 const repoRef: RepoRef = { host: "fake.test", owner: "acme", repo: "widgets", rawData: null };
 
@@ -1107,6 +1122,117 @@ describe("registerForgeDataHandlers", () => {
 
       const summary = (appendSpy.mock.calls[0]![0] as { argsSummary?: string }).argsSummary ?? "";
       expect(summary).not.toContain("secret-user");
+    });
+  });
+
+  // The distinction these hold is the whole reason the handler exists: an
+  // explicit `null` from the provider means "asked, no such PR", while a key
+  // absent from the map means the request carrying that number never landed.
+  // The previous shape returned `PR[]` built from a truthiness test and erased
+  // both into the same silence, so a rate-limited lookup was indistinguishable
+  // from a deleted PR — and a caller acting on it closes work that exists.
+  describe("forge:get-prs-by-numbers", () => {
+    const handler =
+      () =>
+      (...args: unknown[]): Promise<PRLookupResult[]> => {
+        registerForgeDataHandlers();
+        return findHandler("forge:get-prs-by-numbers")(...args) as Promise<PRLookupResult[]>;
+      };
+
+    it("returns one entry per requested number, in the requested order", async () => {
+      fakeImpl.batchLookups = {
+        findPRsByNumbers: vi.fn(
+          async () =>
+            new Map([
+              [7, makePR(7)],
+              [3, makePR(3)],
+            ])
+        ),
+      };
+      const result = await handler()({}, { cwd: "/repo", numbers: [7, 3] });
+      expect(result.map((r) => r.number)).toEqual([7, 3]);
+      expect(result.every((r) => r.status === "found")).toBe(true);
+    });
+
+    it("reports an explicit null as not_found and an omitted key as unresolved", async () => {
+      fakeImpl.batchLookups = {
+        findPRsByNumbers: vi.fn(
+          async () =>
+            new Map<number, PR | null>([
+              [1, makePR(1)],
+              // Asked, and the forge says there is no such PR.
+              [2, null],
+              // 3 is deliberately absent: its chunk never produced an answer.
+            ])
+        ),
+      };
+      const result = await handler()({}, { cwd: "/repo", numbers: [1, 2, 3] });
+      expect(result).toEqual([
+        { number: 1, status: "found", pr: makePR(1) },
+        { number: 2, status: "not_found" },
+        { number: 3, status: "unresolved", reason: "provider_error" },
+      ]);
+    });
+
+    it("falls back to the singular read when the provider has no batch capability", async () => {
+      // The old handler returned `[]` here, which reads as "none of these
+      // exist" — a claim it had no basis for, about a provider it never asked.
+      delete fakeImpl.batchLookups;
+      fakeImpl.getPR.mockImplementation(async (_repo: RepoRef, n: number) =>
+        n === 2 ? null : makePR(n)
+      );
+      const result = await handler()({}, { cwd: "/repo", numbers: [1, 2] });
+      expect(result).toEqual([
+        { number: 1, status: "found", pr: makePR(1) },
+        { number: 2, status: "not_found" },
+      ]);
+    });
+
+    it("keeps going past a failing number in the singular fallback", async () => {
+      // The failure is in the MIDDLE and the whole array is asserted: a handler
+      // that aborted the loop would truncate every number after it, and a test
+      // that only checked the failing index would not notice.
+      delete fakeImpl.batchLookups;
+      fakeImpl.getPR.mockImplementation(async (_repo: RepoRef, n: number) => {
+        if (n === 2) throw new Error("rate limited");
+        return makePR(n);
+      });
+      const result = await handler()({}, { cwd: "/repo", numbers: [1, 2, 3] });
+      expect(result).toEqual([
+        { number: 1, status: "found", pr: makePR(1) },
+        { number: 2, status: "unresolved", reason: "provider_error" },
+        { number: 3, status: "found", pr: makePR(3) },
+      ]);
+    });
+
+    it("resolves nothing — and says so — when the whole batch throws", async () => {
+      fakeImpl.batchLookups = {
+        findPRsByNumbers: vi.fn(async () => {
+          throw new Error("provider exploded");
+        }),
+      };
+      const result = await handler()({}, { cwd: "/repo", numbers: [4, 5] });
+      expect(result).toEqual([
+        { number: 4, status: "unresolved", reason: "provider_error" },
+        { number: 5, status: "unresolved", reason: "provider_error" },
+      ]);
+    });
+
+    it("collapses duplicates to their first occurrence", async () => {
+      const findPRsByNumbers = vi.fn(async () => new Map([[9, makePR(9)]]));
+      fakeImpl.batchLookups = { findPRsByNumbers };
+      const result = await handler()({}, { cwd: "/repo", numbers: [9, 9, 9] });
+      expect(result).toEqual([{ number: 9, status: "found", pr: makePR(9) }]);
+      // The provider is asked once, not three times.
+      expect(findPRsByNumbers).toHaveBeenCalledWith(repoRef, [9]);
+    });
+
+    it("drops non-positive and non-integer numbers before asking the provider", async () => {
+      const findPRsByNumbers = vi.fn(async () => new Map([[2, makePR(2)]]));
+      fakeImpl.batchLookups = { findPRsByNumbers };
+      const result = await handler()({}, { cwd: "/repo", numbers: [0, -1, 1.5, 2] });
+      expect(result).toEqual([{ number: 2, status: "found", pr: makePR(2) }]);
+      expect(findPRsByNumbers).toHaveBeenCalledWith(repoRef, [2]);
     });
   });
 });

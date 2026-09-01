@@ -808,6 +808,16 @@ export const WorktreeCreatePayloadSchema = z.object({
     sourcePrUrl: z.string().optional(),
     sourcePrState: z.enum(["open", "closed", "merged"]).optional(),
     sourcePrLinkedIssueNumber: z.number().optional(),
+    // Omitted until #12138 follow-up: the comment above promised every field of
+    // CreateWorktreeOptions was declared, but this one was not — so a caller
+    // asking for `all` or `none` had it silently stripped here and the host
+    // fell back to `inherit`. A worktree of a submodule repo is born
+    // unbuildable when that request is dropped.
+    submoduleInit: z.enum(["inherit", "all", "none"]).optional(),
+    // How a branch-name collision is resolved. Declared here so the policy
+    // reaches WorkspaceService, which owns collision handling atomically — a
+    // renderer-side check cannot, because it reserves nothing.
+    collisionPolicy: z.enum(["suffix", "error"]).optional(),
   }),
 });
 
