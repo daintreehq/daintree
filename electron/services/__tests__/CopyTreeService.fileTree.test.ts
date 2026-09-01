@@ -72,7 +72,7 @@ describe("CopyTreeService.getFileTree", () => {
     vi.clearAllMocks();
     _resetConfigCacheForTests();
     _resetBaseRealpathCacheForTests();
-    configCreateMock.mockResolvedValue({ isDefaultsLoaded: true });
+    configCreateMock.mockResolvedValue({ isDefaultsLoaded: true, set: vi.fn() });
     copyMock.mockResolvedValue(dryRunResult([]));
   });
 
@@ -423,9 +423,15 @@ describe("CopyTreeService.getFileTree", () => {
   it("shares one config load across concurrent operations without cross-cancelling them", async () => {
     // The cache is a shared promise, so a cancel landing while another caller
     // awaits it must not take that caller down with it.
-    let releaseConfig!: (value: { isDefaultsLoaded: boolean }) => void;
+    let releaseConfig!: (value: {
+      isDefaultsLoaded: boolean;
+      set: (path: string, value: unknown) => void;
+    }) => void;
     configCreateMock.mockReturnValue(
-      new Promise<{ isDefaultsLoaded: boolean }>((resolve) => {
+      new Promise<{
+        isDefaultsLoaded: boolean;
+        set: (path: string, value: unknown) => void;
+      }>((resolve) => {
         releaseConfig = resolve;
       })
     );
@@ -440,7 +446,7 @@ describe("CopyTreeService.getFileTree", () => {
     await vi.waitFor(() => expect(configCreateMock).toHaveBeenCalledTimes(1));
 
     copyTreeService.cancel("op-listing");
-    releaseConfig({ isDefaultsLoaded: true });
+    releaseConfig({ isDefaultsLoaded: true, set: vi.fn() });
 
     await expect(listing).rejects.toThrow("Context generation cancelled");
     // The survivor is unaffected: it got the shared config and ran to completion.
@@ -520,7 +526,7 @@ describe("CopyTreeService.getFileTree", () => {
       "Context configuration couldn't be loaded"
     );
 
-    configCreateMock.mockResolvedValue({ isDefaultsLoaded: true });
+    configCreateMock.mockResolvedValue({ isDefaultsLoaded: true, set: vi.fn() });
     await expect(copyTreeService.getFileTree(tempDir)).resolves.toEqual([]);
     expect(configCreateMock).toHaveBeenCalledTimes(2);
   });

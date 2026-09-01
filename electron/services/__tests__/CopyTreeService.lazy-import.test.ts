@@ -9,7 +9,9 @@ function mockCopytreeModule() {
       output: "<context />",
       stats: { totalFiles: 1, totalSize: 10, duration: 5 },
     }),
-    ConfigManager: { create: vi.fn().mockResolvedValue({ isDefaultsLoaded: true }) },
+    ConfigManager: {
+      create: vi.fn().mockResolvedValue({ isDefaultsLoaded: true, set: vi.fn() }),
+    },
   };
 }
 
@@ -102,7 +104,9 @@ describe("CopyTreeService lazy copytree import", () => {
       await gate;
       return {
         copy: copyMock,
-        ConfigManager: { create: vi.fn().mockResolvedValue({ isDefaultsLoaded: true }) },
+        ConfigManager: {
+          create: vi.fn().mockResolvedValue({ isDefaultsLoaded: true, set: vi.fn() }),
+        },
       };
     });
 
