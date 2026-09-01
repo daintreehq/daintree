@@ -1873,16 +1873,17 @@ describe("filterIntrospectionResultForSession", () => {
 
     // `git.push` above proves nothing about the derivation: BAND_OVERRIDES pins
     // it, so a builder that passed a hard-coded `danger: "safe"` into
-    // `deriveBand` would still report it correctly. `worktree.delete` — the
-    // action #12117 was actually filed about — has no override and is
-    // `danger: "confirm"` in a non-open-world category, so its band can only be
-    // right if the entry's OWN danger reaches the derivation.
+    // `deriveBand` would still report it correctly. `terminal.arm` has no
+    // override and is `danger: "confirm"` in a non-open-world category, so its
+    // band can only be right if the entry's OWN danger reaches the derivation.
+    // (`worktree.delete`, the action #12117 was filed about, was the exemplar
+    // here until #12116 promoted it to the action tier.)
     it("derives the band from the entry's own danger, not a fixed value", () => {
       const destructive = buildUnavailableStub(
         makeEntry({
-          id: "worktree.delete",
-          title: "Delete Worktree",
-          category: "worktree",
+          id: "terminal.arm",
+          title: "Arm Terminal",
+          category: "terminal",
           danger: "confirm",
         }),
         firstParty()
@@ -1890,7 +1891,7 @@ describe("filterIntrospectionResultForSession", () => {
       expect(destructive).toMatchObject({ band: "destructive-local", minimumTier: "system" });
 
       const safe = buildUnavailableStub(
-        makeEntry({ id: "worktree.delete", category: "worktree", danger: "safe" }),
+        makeEntry({ id: "terminal.arm", category: "terminal", danger: "safe" }),
         firstParty()
       );
       expect(safe).toMatchObject({ band: "reversible" });

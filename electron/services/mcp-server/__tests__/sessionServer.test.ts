@@ -4077,10 +4077,13 @@ describe("sessionServer introspection tier filtering", () => {
     expect(body.totalMatches).toBe(1);
   });
 
-  // #12117. The bug this reproduces: an assistant at `action` tier asked to
-  // delete worktrees could not see `worktree.delete` at any discovery surface,
-  // so it told the user Daintree has no such feature. It now learns the name
-  // exists and needs `system` — without the name becoming callable anywhere.
+  // #12117. The bug this reproduces: an assistant at `action` tier could not
+  // see a higher-tier action at any discovery surface, so it told the user
+  // Daintree has no such feature. It now learns the name exists and needs
+  // `system` — without the name becoming callable anywhere. The exemplar is
+  // `terminal.arm`: the action the bug was filed about, `worktree.delete`, has
+  // since been promoted to the action tier (#12116) and no longer sits above
+  // this session.
   describe("first-party existence catalog (#12117)", () => {
     function firstPartyDeps(
       result: unknown,
@@ -4094,12 +4097,12 @@ describe("sessionServer introspection tier filtering", () => {
     it("reports a higher-tier action to a renderer-owned session", async () => {
       const deps = firstPartyDeps({
         totalMatches: 2,
-        results: [entry("terminal.list"), entry("worktree.delete", { category: "worktree" })],
+        results: [entry("terminal.list"), entry("terminal.arm", { category: "terminal" })],
       });
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, {
         name: "actions.search",
-        arguments: { query: "delete worktree" },
+        arguments: { query: "arm terminal" },
       });
 
       const body = payload<{
@@ -4109,7 +4112,7 @@ describe("sessionServer introspection tier filtering", () => {
       expect(body.results.map((r) => r.id)).toEqual(["terminal.list"]);
       expect(body.unavailable).toEqual([
         expect.objectContaining({
-          id: "worktree.delete",
+          id: "terminal.arm",
           minimumTier: "system",
           callable: false,
         }),
@@ -4122,7 +4125,7 @@ describe("sessionServer introspection tier filtering", () => {
     // paged path would leave search working and listing silently bare.
     it("reports them through the paged actions.list path too", async () => {
       const deps = firstPartyDeps({
-        actions: [entry("terminal.list"), entry("worktree.delete", { category: "worktree" })],
+        actions: [entry("terminal.list"), entry("terminal.arm", { category: "terminal" })],
       });
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, { name: "actions.list" });
@@ -4135,7 +4138,7 @@ describe("sessionServer introspection tier filtering", () => {
       }>(res);
       expect(body.actions.map((a) => a.id)).toEqual(["terminal.list"]);
       expect(body.total).toBe(1);
-      expect(body.unavailable.map((s) => s.id)).toEqual(["worktree.delete"]);
+      expect(body.unavailable.map((s) => s.id)).toEqual(["terminal.arm"]);
       expect(body.unavailableTotal).toBe(1);
     });
 
@@ -4143,7 +4146,7 @@ describe("sessionServer introspection tier filtering", () => {
     // moment a grant admits the id, it must leave the catalog and appear in
     // `actions`. Anything else advertises the same tool in two states at once.
     it("moves a granted id out of the catalog and into the callable list", async () => {
-      const deps = firstPartyDeps({ actions: [entry("worktree.delete")] });
+      const deps = firstPartyDeps({ actions: [entry("terminal.arm")] });
       const server = createSessionServer("s1", deps);
 
       const before = payload<{ actions: ActionManifestEntry[]; unavailableTotal: number }>(
@@ -4152,14 +4155,14 @@ describe("sessionServer introspection tier filtering", () => {
       expect(before.actions).toEqual([]);
       expect(before.unavailableTotal).toBe(1);
 
-      deps.sessionStore.grantCache.issueGrant("s1", "worktree.delete");
+      deps.sessionStore.grantCache.issueGrant("s1", "terminal.arm");
 
       const after = payload<{
         actions: ActionManifestEntry[];
         unavailable: unknown[];
         unavailableTotal: number;
       }>(await callTool(server, { name: "actions.list" }));
-      expect(after.actions.map((a) => a.id)).toEqual(["worktree.delete"]);
+      expect(after.actions.map((a) => a.id)).toEqual(["terminal.arm"]);
       expect(after.unavailable).toEqual([]);
       expect(after.unavailableTotal).toBe(0);
     });
@@ -4169,22 +4172,22 @@ describe("sessionServer introspection tier filtering", () => {
     // catalog must not appear on either side of it.
     it("leaves the name out of tools/list and refuses the call", async () => {
       const deps = firstPartyDeps(
-        { actions: [entry("worktree.delete")] },
+        { actions: [entry("terminal.arm")] },
         {
           requestManifest: vi
             .fn()
             .mockResolvedValue([
               makeManifestEntry("terminal.list"),
-              makeManifestEntry("worktree.delete"),
+              makeManifestEntry("terminal.arm"),
             ]),
         }
       );
       const server = createSessionServer("s1", deps);
 
       const listed = await listTools(server);
-      expect(listed.tools.map((t) => t.name)).not.toContain("worktree.delete");
+      expect(listed.tools.map((t) => t.name)).not.toContain("terminal.arm");
 
-      const denied = await callTool(server, { name: "worktree.delete", arguments: {} });
+      const denied = await callTool(server, { name: "terminal.arm", arguments: {} });
       expect(denied.isError).toBe(true);
       expect(toolErrorPayload(denied).code).toBe(TIER_NOT_PERMITTED_CODE);
     });
@@ -4194,13 +4197,13 @@ describe("sessionServer introspection tier filtering", () => {
       // fact the catalog gates on.
       const deps = introspectionDeps("action", {
         totalMatches: 2,
-        results: [entry("terminal.list"), entry("worktree.delete")],
+        results: [entry("terminal.list"), entry("terminal.arm")],
       });
       deps.sessionStore.sessionOriginMap.set("s1", "external");
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, {
         name: "actions.search",
-        arguments: { query: "delete worktree" },
+        arguments: { query: "arm terminal" },
       });
 
       const body = payload<Record<string, unknown>>(res);
@@ -4210,14 +4213,14 @@ describe("sessionServer introspection tier filtering", () => {
     it("names the tier on a getSchema read instead of an unknown-id denial", async () => {
       const deps = firstPartyDeps({
         ok: true,
-        entry: entry("worktree.delete", { category: "worktree" }),
+        entry: entry("terminal.arm", { category: "terminal" }),
         policy: null,
         error: null,
       });
       const server = createSessionServer("s1", deps);
       const res = await callTool(server, {
         name: "actions.getSchema",
-        arguments: { actionId: "worktree.delete" },
+        arguments: { actionId: "terminal.arm" },
       });
 
       const body = payload<{
