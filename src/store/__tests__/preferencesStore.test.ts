@@ -726,6 +726,10 @@ describe("preferencesStore migration", () => {
 
       expect(migrated.markdownFontSize).toBe("sm");
       expect(migrated.dockDensity).toBe("compact");
+      // Pin the bump too: `migrate` only runs for a blob below the configured
+      // version, so leaving it at 17 would skip the branch above entirely and
+      // hydration's sanitizer would quietly supply the same default.
+      expect(store.persist.getOptions().version).toBe(18);
     });
 
     it("leaves an already-valid rung alone when migrating", async () => {

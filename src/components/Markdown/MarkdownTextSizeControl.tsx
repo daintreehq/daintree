@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { ALargeSmall, Minus, Plus } from "lucide-react";
 import { TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -26,8 +27,25 @@ const STEP_LABEL: Record<MarkdownFontSize, string> = {
   "3xl": "30",
 };
 
-const stepAt = (value: MarkdownFontSize, delta: number): MarkdownFontSize | undefined =>
-  MARKDOWN_FONT_SIZE_STEPS[MARKDOWN_FONT_SIZE_STEPS.indexOf(value) + delta];
+const stepAt = (value: MarkdownFontSize, delta: number): MarkdownFontSize | undefined => {
+  const index = MARKDOWN_FONT_SIZE_STEPS.indexOf(value);
+  // A value off the ladder can only arrive from a corrupt store, but -1 + 1
+  // would land on the smallest rung and read as a deliberate step.
+  if (index < 0) return undefined;
+  return MARKDOWN_FONT_SIZE_STEPS[index + delta];
+};
+
+/**
+ * Ends of the ladder are announced, not removed. The native `disabled`
+ * attribute drops focus the moment the attribute lands, so stepping up to the
+ * last rung would blur the very button that was just activated — and a focusout
+ * inside a Radix popover is exactly what dismisses it. `aria-disabled` says the
+ * same thing to a screen reader while the button stays where the user left it.
+ */
+const inertProps = (inert: boolean) => ({
+  "aria-disabled": inert || undefined,
+  className: inert ? "opacity-50" : undefined,
+});
 
 export interface MarkdownTextSizeControlProps {
   value: MarkdownFontSize;
@@ -115,7 +133,7 @@ export function MarkdownTextSizeControl({
             variant="ghost"
             size="icon-xs"
             aria-label="Decrease text size"
-            disabled={smaller === undefined}
+            {...inertProps(smaller === undefined)}
             onClick={() => smaller && onValueChange(smaller)}
             data-testid="markdown-text-size-decrease"
           >
@@ -136,7 +154,7 @@ export function MarkdownTextSizeControl({
             variant="ghost"
             size="icon-xs"
             aria-label="Increase text size"
-            disabled={larger === undefined}
+            {...inertProps(larger === undefined)}
             onClick={() => larger && onValueChange(larger)}
             data-testid="markdown-text-size-increase"
           >
@@ -146,9 +164,16 @@ export function MarkdownTextSizeControl({
         <Button
           variant="ghost"
           size="xs"
-          className="mt-1 w-full justify-center"
-          disabled={value === DEFAULT_MARKDOWN_FONT_SIZE}
-          onClick={() => onValueChange(DEFAULT_MARKDOWN_FONT_SIZE)}
+          className={cn(
+            "mt-1 w-full justify-center",
+            value === DEFAULT_MARKDOWN_FONT_SIZE && "opacity-50"
+          )}
+          // Same reason as the steppers: Reset disables itself by succeeding,
+          // so a native `disabled` would blur the button under the pointer.
+          aria-disabled={value === DEFAULT_MARKDOWN_FONT_SIZE || undefined}
+          onClick={() =>
+            value !== DEFAULT_MARKDOWN_FONT_SIZE && onValueChange(DEFAULT_MARKDOWN_FONT_SIZE)
+          }
           data-testid="markdown-text-size-reset"
         >
           Reset

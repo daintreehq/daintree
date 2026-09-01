@@ -63,26 +63,61 @@ describe("MarkdownTextSizeControl (#12134)", () => {
     expect(readout().textContent).toBe("20 px");
   });
 
+  it("walks every rung of the ladder, and each one reads out its own size", () => {
+    render(<Harness initial="2xs" />);
+    // The whole ladder, so a rung added without a label — or a label left
+    // empty — cannot pass by being the one nobody asserts.
+    const climb = ["11 px", "12 px", "14 px", "16 px", "18 px", "20 px", "24 px", "30 px"];
+    expect(readout().textContent).toBe(climb[0]);
+    for (const expected of climb.slice(1)) {
+      fireEvent.click(increase());
+      expect(readout().textContent).toBe(expected);
+    }
+  });
+
   it("stops at each end of the ladder rather than wrapping", () => {
     render(<Harness initial="2xs" />);
+    expect(decrease().getAttribute("aria-disabled")).toBe("true");
+    expect(increase().getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(decrease());
     expect(readout().textContent).toBe("11 px");
-    expect((decrease() as HTMLButtonElement).disabled).toBe(true);
-    expect((increase() as HTMLButtonElement).disabled).toBe(false);
 
     cleanup();
     render(<Harness initial="3xl" />);
+    expect(increase().getAttribute("aria-disabled")).toBe("true");
+    expect(decrease().getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(increase());
     expect(readout().textContent).toBe("30 px");
-    expect((increase() as HTMLButtonElement).disabled).toBe(true);
-    expect((decrease() as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("returns to the default and cannot promise a no-op while already there", () => {
+  // The ends are announced, never removed: a native `disabled` lands while the
+  // button still holds focus, and a focusout inside a Radix popover is what
+  // dismisses it — so stepping to the last rung would close the panel.
+  it("keeps the button that just reached an end focusable and focused", () => {
     render(<Harness initial="2xl" />);
-    expect((reset() as HTMLButtonElement).disabled).toBe(false);
+    increase().focus();
+    expect(document.activeElement).toBe(increase());
 
+    fireEvent.click(increase());
+    expect(readout().textContent).toBe("30 px");
+    expect(increase().getAttribute("aria-disabled")).toBe("true");
+    expect((increase() as HTMLButtonElement).disabled).toBe(false);
+    expect(document.activeElement).toBe(increase());
+  });
+
+  it("returns to the default and refuses to act once already there", () => {
+    render(<Harness initial="2xl" />);
+    expect(reset().getAttribute("aria-disabled")).toBeNull();
+
+    reset().focus();
     fireEvent.click(reset());
     expect(readout().textContent).toBe("14 px");
-    expect((reset() as HTMLButtonElement).disabled).toBe(true);
+    expect(reset().getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(reset());
+
+    // Activating it again must not step anything — it says it is inert.
+    fireEvent.click(reset());
+    expect(readout().textContent).toBe("14 px");
   });
 
   // The popover is the only interface: every discoverable zoom combo is already

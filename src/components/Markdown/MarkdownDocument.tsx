@@ -19,12 +19,13 @@ import type { MarkdownFontSize } from "@/store/preferencesStore";
 import "./MarkdownDocument.css";
 
 /**
- * Each reading rung resolved to the shared type scale, spelled out rather than
- * interpolated so a rung without a matching token is a type error instead of an
- * unresolved `var()`. Same shape as `DIFF_FONT_SIZE` — the preference names a
+ * Each reading rung resolved to the shared type scale. Spelled out rather than
+ * interpolated so the map is greppable, but typed against the rung name so a
+ * mismatched pair is a compile error rather than an unresolved `var()` that
+ * silently falls back. Same shape as `DIFF_FONT_SIZE` — the preference names a
  * step of the app's scale, so it keeps tracking the scale when the scale moves.
  */
-const MARKDOWN_FONT_SIZE_TOKEN: Record<MarkdownFontSize, string> = {
+const MARKDOWN_FONT_SIZE_TOKEN: { [K in MarkdownFontSize]: `var(--text-${K})` } = {
   "2xs": "var(--text-2xs)",
   xs: "var(--text-xs)",
   sm: "var(--text-sm)",

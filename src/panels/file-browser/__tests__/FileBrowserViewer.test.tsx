@@ -38,15 +38,26 @@ vi.mock("@/components/Markdown/MarkdownViewer", () => ({
 }));
 // The reading size is one app-level preference shared with the file panel; this
 // suite owns the toolbar gate and the forwarding, not the store's persistence.
+const { setMarkdownFontSizeMock } = vi.hoisted(() => ({
+  setMarkdownFontSizeMock: vi.fn(),
+}));
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (state: unknown) => unknown) =>
-    selector({ markdownFontSize: "xl", setMarkdownFontSize: vi.fn() }),
+    selector({ markdownFontSize: "xl", setMarkdownFontSize: setMarkdownFontSizeMock }),
 }));
 // A Popover, whose open/close choreography jsdom does not drive. Its own
 // behaviour is covered in MarkdownTextSizeControl.test.tsx.
 vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
-  MarkdownTextSizeControl: (props: { value: string }) => (
-    <div data-testid="markdown-text-size-mock" data-value={props.value} />
+  MarkdownTextSizeControl: (props: {
+    value: string;
+    onValueChange: (next: string) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="markdown-text-size-mock"
+      data-value={props.value}
+      onClick={() => props.onValueChange("2xl")}
+    />
   ),
 }));
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
@@ -294,6 +305,7 @@ function currentFontSize(): string | null {
 beforeEach(() => {
   readMock.mockReset();
   readMock.mockResolvedValue({ content: "# hello" });
+  setMarkdownFontSizeMock.mockReset();
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ ok: true, result: undefined });
   // SegmentedToggle's motion hook (and InlineStatusBanner) read matchMedia at
@@ -375,6 +387,12 @@ describe("FileBrowserViewer rendered-markdown text size (#12134)", () => {
     // reader last chose, whichever surface they opened it in.
     expect(control.getAttribute("data-value")).toBe("xl");
     expect(currentFontSize()).toBe("xl");
+
+    // And the choice reaches the shared preference, not a local no-op.
+    await act(async () => {
+      control.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(setMarkdownFontSizeMock).toHaveBeenCalledWith("2xl");
   });
 
   it("withdraws it in Source, where the scale reaches nothing", async () => {

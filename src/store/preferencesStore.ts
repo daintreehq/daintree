@@ -23,21 +23,16 @@ export type DiffViewType = "split" | "unified";
 export type DiffFontSize = "s" | "m" | "l";
 
 /**
- * Reading scale for rendered markdown, named by the rung of the shared type
- * scale it selects rather than by a pixel value. Same reasoning as
- * `DIFF_FONT_SIZE`'s S/M/L: a preference that stores its own number stops
- * tracking the scale the moment the scale moves, and a stored index changes
- * meaning the moment a rung is inserted. A rung name survives both.
+ * Reading scale for rendered markdown, in reading order. The stepper walks this
+ * and the persistence guard checks against it, and the type below is DERIVED
+ * from it so the ladder is the single place a rung is declared — a rung added
+ * to the type alone would be inert, accepted by nothing and reachable by no
+ * step.
+ *
+ * Denser near the 14px base where a reader adjusts by feel, wider at the top
+ * where a step has to be worth taking: 11 · 12 · 14 · 16 · 18 · 20 · 24 · 30.
  */
-export type MarkdownFontSize = "2xs" | "xs" | "sm" | "base" | "lg" | "xl" | "2xl" | "3xl";
-
-/**
- * The rungs in reading order — the stepper walks this, and it is also the
- * closed set the persistence guard checks against. Denser near the 14px base
- * where a reader adjusts by feel, wider at the top where each step has to be
- * worth taking: 11 · 12 · 14 · 16 · 18 · 20 · 24 · 30.
- */
-export const MARKDOWN_FONT_SIZE_STEPS: readonly MarkdownFontSize[] = [
+export const MARKDOWN_FONT_SIZE_STEPS = [
   "2xs",
   "xs",
   "sm",
@@ -46,7 +41,15 @@ export const MARKDOWN_FONT_SIZE_STEPS: readonly MarkdownFontSize[] = [
   "xl",
   "2xl",
   "3xl",
-];
+] as const;
+
+/**
+ * A rung of the shared type scale, named rather than measured. Same reasoning
+ * as `DIFF_FONT_SIZE`'s S/M/L: a preference that stores its own number stops
+ * tracking the scale the moment the scale moves, and a stored index changes
+ * meaning the moment a rung is inserted. A rung name survives both.
+ */
+export type MarkdownFontSize = (typeof MARKDOWN_FONT_SIZE_STEPS)[number];
 
 /** Today's rendered-markdown scale, so an upgrade changes nothing until asked. */
 export const DEFAULT_MARKDOWN_FONT_SIZE: MarkdownFontSize = "sm";

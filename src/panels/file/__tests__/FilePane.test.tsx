@@ -82,13 +82,16 @@ vi.mock("@/lib/viewCacheState", () => ({
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (state: unknown) => unknown) => selector({ currentProject: null }),
 }));
+const { setMarkdownFontSizeMock } = vi.hoisted(() => ({
+  setMarkdownFontSizeMock: vi.fn(),
+}));
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (state: unknown) => unknown) =>
     selector({
       markdownWrapLines: false,
       setMarkdownWrapLines: vi.fn(),
       markdownFontSize: "lg",
-      setMarkdownFontSize: vi.fn(),
+      setMarkdownFontSize: setMarkdownFontSizeMock,
       diffViewType: "unified",
       diffWrapLines: false,
       diffIgnoreWhitespace: false,
@@ -176,8 +179,16 @@ vi.mock("@/components/Markdown/MarkdownViewer", () => ({
 // drive; what this suite owns is which modes it appears in and the value it is
 // handed. Its own behaviour is covered in MarkdownTextSizeControl.test.tsx.
 vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
-  MarkdownTextSizeControl: (props: { value: string }) => (
-    <div data-testid="markdown-text-size-mock" data-value={props.value} />
+  MarkdownTextSizeControl: (props: {
+    value: string;
+    onValueChange: (next: string) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="markdown-text-size-mock"
+      data-value={props.value}
+      onClick={() => props.onValueChange("2xl")}
+    />
   ),
 }));
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
@@ -1006,6 +1017,13 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
 
     await waitFor(() => expect(markdownViewerProps.current?.fontSize).toBe("lg"));
+
+    // And the control's choice reaches the preference rather than a local
+    // no-op: without this the host could hand it any type-correct callback.
+    await act(async () => {
+      control.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(setMarkdownFontSizeMock).toHaveBeenCalledWith("2xl");
   });
 
   it("hides it in Markdown Source, where the scale reaches nothing", async () => {

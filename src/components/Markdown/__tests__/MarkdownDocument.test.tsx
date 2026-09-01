@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
@@ -324,5 +327,39 @@ describe("MarkdownDocument", () => {
     expect(window.getSelection()?.toString()).toBe(document_.textContent);
     expect(window.getSelection()?.toString()).not.toContain("sidebar chrome");
     window.getSelection()?.removeAllRanges();
+  });
+});
+
+/**
+ * The stylesheet is the half of the size control that no render test can see:
+ * jsdom applies no author styles, so the whole feature — store, stepper,
+ * forwarding, the inline custom property — stays green while the declaration
+ * that consumes it is reverted and the type never moves (#12134). Read the
+ * source instead, which is what actually ships in the lazy markdown chunk.
+ */
+describe("MarkdownDocument.css document scale (#12134)", () => {
+  const css = fs.readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../MarkdownDocument.css"),
+    "utf8"
+  );
+
+  it("sizes the document from --markdown-font-size, falling back to the type scale", () => {
+    const declarations = [...css.matchAll(/(?:^|[^-\w])font-size\s*:\s*([^;}\n]+)/g)].map(
+      (match) => match[1]?.trim()
+    );
+
+    // The root rule's own declaration, not one of the descendant overrides.
+    expect(declarations).toContain("var(--markdown-font-size, var(--text-sm))");
+    // The fallback is load-bearing: a document mounted without the prop, and
+    // every surface that predates the control, still renders at 14px.
+    expect(declarations).not.toContain("var(--markdown-font-size)");
+  });
+
+  it("keeps the scale unlayered, where it still outranks the typography plugin", () => {
+    // Wrapping this file in @layer hands the prose rules back to the plugin's
+    // light-theme defaults — the regression the file header records. Comments
+    // go first: the header explains the rule by naming the at-rule it forbids.
+    const rules = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(rules).not.toMatch(/@layer/);
   });
 });
