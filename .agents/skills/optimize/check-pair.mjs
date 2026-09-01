@@ -18,6 +18,7 @@
  *     --scenario PERF-105 \
  *     --target metricStats.idleGitSpawns.max \
  *     --predicate detectionMisses [--predicate refreshMisses] \
+ *     [--precommit .tmp/opt/<target>/precommit.json] \
  *     [--expect-before-sha <sha>] [--expect-after-sha <sha>] \
  *     before.json after.json
  *
@@ -30,6 +31,9 @@
  *     --target metricStats.idleGitSpawns.max \
  *     --predicate detectionMisses \
  *     --threshold 5 [--higher-is-better] \
+ *     [--precommit .tmp/opt/<target>/precommit.json] \
+ *     [--max-drift <pct>] [--max-cv <pct>] [--cross-machine] \
+ *     [--allow-guard-regression <guard name>] \
  *     --expect-champ-sha <sha> --expect-cand-sha <sha> \
  *     --champ champ1.json --champ champ2.json --champ champ3.json \
  *     --cand cand1.json --cand cand2.json --cand cand3.json
@@ -57,20 +61,40 @@
  *   3  everything else passed, but `sourceSha` is missing, so the files cannot be
  *      tied to a checkpoint. Only proceed when every arm was measured in this
  *      session, interleaved, and say so in the report.
- *   4  AB only: measured cleanly, but at least one of the three conditions failed.
+ *   4  AB only: measured cleanly, but at least one of the four conditions failed
+ *      — the hypothesis lost, or it won the target and broke a guard.
  *      NO CLAIM. Distinct from 1 so an unattended caller cannot read a sound
  *      measurement that disproved the hypothesis as a broken one worth retrying.
+ *   5  AB only: the machine drifted more than `--max-drift` between champion
+ *      arms, so it could not resolve a difference of the size being claimed.
+ *      NOT a disproof — the hypothesis was never tested. Cool the machine,
+ *      close what else is running, and measure the pair again. Distinct from 4
+ *      because recording an unusable measurement as a disproof throws away a
+ *      hypothesis that may well be right.
  *
- * Precedence when several apply: 1 beats 4 beats 3.
+ * Precedence when several apply: 1 beats 5 beats 4 beats 3.
+ *
+ * `--precommit` is the anti-hindsight gate. A freeform run derives its own
+ * target, predicate, threshold and protocol; passing the record written by
+ * `precommit.mjs` before the baseline proves those were the terms chosen BEFORE
+ * any number existed, and that the measurement apparatus has not been edited
+ * since. Without it the flags on this command line are simply whatever the
+ * caller believes today.
  */
 
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 
+import { harnessDigest } from "./harness-digest.mjs";
+import { classifyTarget, isMachineIndependent } from "./metric-class.mjs";
+
 const USAGE =
-  "usage: check-pair.mjs --scenario ID --target PATH --predicate NAME [...] A.json B.json\n" +
+  "usage: check-pair.mjs --scenario ID --target PATH --predicate NAME [...] " +
+  "[--precommit REC] A.json B.json\n" +
   "       check-pair.mjs ab --scenario ID --target PATH --predicate NAME --threshold PCT " +
+  "[--precommit REC] [--max-drift PCT] [--max-cv PCT] [--cross-machine] " +
+  "[--allow-guard-regression NAME] " +
   "--expect-champ-sha SHA --expect-cand-sha SHA --champ F [...] --cand F [...]";
 
 function usageError(message) {
@@ -86,19 +110,40 @@ const SINGLE = {
   "--expect-champ-sha": "expectChampSha",
   "--expect-cand-sha": "expectCandSha",
   "--threshold": "threshold",
+  "--precommit": "precommit",
+  "--expect-baseline-sha": "expectBaselineSha",
+  "--max-drift": "maxDrift",
+  "--max-cv": "maxCv",
 };
 const REPEATED = {
   "--predicate": "predicates",
   "--champ": "champs",
   "--cand": "cands",
+  "--allow-guard-regression": "allowedGuardRegressions",
 };
 
 function parseArgs(argv) {
-  const out = { predicates: [], champs: [], cands: [], files: [], higherIsBetter: false };
+  const out = {
+    predicates: [],
+    champs: [],
+    cands: [],
+    files: [],
+    allowedGuardRegressions: [],
+    higherIsBetter: false,
+    crossMachine: false,
+    headline: false,
+    allowForcedPrecommit: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--higher-is-better") {
       out.higherIsBetter = true;
+    } else if (arg === "--cross-machine") {
+      out.crossMachine = true;
+    } else if (arg === "--headline") {
+      out.headline = true;
+    } else if (arg === "--allow-forced-precommit") {
+      out.allowForcedPrecommit = true;
     } else if (REPEATED[arg]) {
       const value = argv[(i += 1)];
       if (value === undefined) usageError(`${arg} expects a value`);
@@ -196,6 +241,215 @@ function comparabilityChecks(arms) {
   sameAcross("electron version", arms, (s) => s.environment?.electronVersion ?? null);
 }
 
+/**
+ * The terms of the claim against the record written before the baseline.
+ *
+ * Every field here is one an unattended run could otherwise revise after seeing
+ * a number: the metric it judges, the miss counts it calls health, the size of
+ * difference it calls real, and the sampling that produced it. A protocol
+ * change alone can manufacture an improvement — fewer warmups leaves cold-start
+ * cost in the champion arm — so the iteration and warmup counts are part of the
+ * lock rather than context beside it.
+ *
+ * `harnessDigest` closes the last door. A benchmark edited to measure less
+ * produces a smaller number with every other check still passing, because the
+ * files agree with each other; only a hash taken before the edit disagrees.
+ */
+function precommitChecks(args, arms) {
+  if (!args.precommit) return null;
+  let record;
+  try {
+    record = JSON.parse(readFileSync(args.precommit, "utf8"));
+  } catch (error) {
+    console.error(`cannot read precommit record ${args.precommit}: ${String(error)}`);
+    process.exit(2);
+  }
+
+  const same = (label, expected, actual) =>
+    check(
+      expected === actual,
+      `precommit: ${label}`,
+      expected === actual
+        ? String(actual)
+        : `precommitted ${String(expected)}, claimed ${String(actual)}`
+    );
+
+  same("scenario", record.scenario, args.scenario);
+  same("target", record.target, args.target);
+  same("direction", Boolean(record.higherIsBetter), args.higherIsBetter);
+
+  const locked = [...(record.predicates ?? [])].sort().join(",");
+  const claimed = [...args.predicates].sort().join(",");
+  check(
+    locked === claimed,
+    "precommit: predicate set",
+    locked === claimed ? claimed : `precommitted ${locked}, claimed ${claimed}`
+  );
+
+  if (args.threshold !== undefined) {
+    const lockedPct = Number(record.thresholdPct);
+    const claimedPct = Number(args.threshold);
+    check(
+      lockedPct === claimedPct,
+      "precommit: threshold",
+      lockedPct === claimedPct
+        ? `${claimedPct}%`
+        : `precommitted ${lockedPct}%, claimed ${claimedPct}% — a threshold re-chosen after the numbers is not a threshold`
+    );
+  }
+
+  // The protocol as the runner recorded it, not as the caller remembers it.
+  for (const arm of arms) {
+    const iterations = arm.summary.protocol?.iterations ?? null;
+    const warmups = arm.summary.protocol?.warmups ?? null;
+    check(
+      iterations === record.iterations,
+      `precommit: ${arm.label} --iterations`,
+      iterations === record.iterations
+        ? String(iterations)
+        : `precommitted ${record.iterations}, measured ${String(iterations)}`
+    );
+    check(
+      warmups === record.warmups,
+      `precommit: ${arm.label} --warmups`,
+      warmups === record.warmups
+        ? String(warmups)
+        : `precommitted ${record.warmups}, measured ${String(warmups)}`
+    );
+    check(
+      arm.summary.mode === record.mode,
+      `precommit: ${arm.label} mode`,
+      arm.summary.mode === record.mode
+        ? String(record.mode)
+        : `precommitted ${record.mode}, measured ${String(arm.summary.mode)}`
+    );
+  }
+
+  // A record written with --force is a decision that replaced an earlier one.
+  // That may be legitimate — a typo caught before any arm ran — but it is
+  // exactly the shape of a threshold rewritten to fit a result, so it has to be
+  // acknowledged on the command line rather than hidden in the JSON.
+  if (record.forced) {
+    check(
+      args.allowForcedPrecommit,
+      "precommit: record was not forced over an earlier one",
+      args.allowForcedPrecommit
+        ? "forced, and acknowledged with --allow-forced-precommit"
+        : "this record overwrote an earlier decision (`forced: true`). Pass --allow-forced-precommit and say why in the report, or measure against the original."
+    );
+  }
+
+  // The decision has to predate the numbers that judge it. Without this the
+  // lock is a formality: measure first, then create a fresh directory, write a
+  // record that matches what you already saw, and every other check passes.
+  const created = Date.parse(record.createdAt ?? "");
+  if (Number.isFinite(created)) {
+    const early = arms
+      .map((arm) => ({ label: arm.label, at: Date.parse(arm.summary.generatedAt ?? "") }))
+      .filter((entry) => Number.isFinite(entry.at) && entry.at < created);
+    check(
+      early.length === 0,
+      "precommit: the decision predates every arm",
+      early.length === 0
+        ? `locked ${record.createdAt}`
+        : `${early.map((e) => e.label).join(", ")} measured before the record was written — the terms were chosen with those numbers already on screen`
+    );
+  } else {
+    check(false, "precommit: record carries a readable createdAt", String(record.createdAt));
+  }
+
+  // The headline A/B is the one comparison that must be against the branch
+  // point. Mid-run the champion moves with every kept hypothesis, so this is
+  // opt-in rather than always-on.
+  if (args.headline) {
+    const champ = args.expectChampSha ?? args.expectBeforeSha ?? null;
+    const baseline = record.baselineSha ?? null;
+    const matches =
+      champ !== null &&
+      baseline !== null &&
+      (champ.startsWith(baseline) || baseline.startsWith(champ));
+    check(
+      matches,
+      "precommit: headline champion is the branch point",
+      matches
+        ? String(champ)
+        : `champion ${String(champ)} is not the precommitted baseline ${String(baseline)} — a headline measured against a mid-run tree is not a claim about this branch`
+    );
+  }
+
+  // Every allowance name, not only the ones that end up breaching. A flag
+  // naming a guard that is not in the record — or not a guard at all — is
+  // either a typo or an exception someone expected to be granted, and silence
+  // on it is how the next run inherits a trade nobody agreed to.
+  //
+  // This lives INSIDE precommitChecks deliberately. Both modes call it before
+  // the sweep that acts on failed checks; registering it out at call-site level
+  // put it after that sweep, where a FAIL row prints and the run still exits 0.
+  // That mistake has now been made three times in this file.
+  const declaredTrades = new Set(record.allowedGuardRegressions ?? []);
+  const guardNames = new Set((record.guards ?? []).map((guard) => guard.name));
+  for (const name of args.allowedGuardRegressions) {
+    check(
+      guardNames.has(name),
+      `--allow-guard-regression ${name} names a precommitted guard`,
+      guardNames.has(name) ? "yes" : "that metric is not one of the record's guards"
+    );
+    check(
+      declaredTrades.has(name),
+      `--allow-guard-regression ${name} was declared in the record`,
+      declaredTrades.has(name)
+        ? "declared before the baseline"
+        : "not declared — a trade named only on this command line was chosen after the numbers"
+    );
+  }
+
+  const { digest, fileCount } = harnessDigest();
+  check(
+    digest === record.harnessDigest,
+    "precommit: measurement apparatus unchanged",
+    digest === record.harnessDigest
+      ? `${digest.slice(0, 16)}… over ${fileCount} files`
+      : `precommitted ${String(record.harnessDigest).slice(0, 16)}…, now ${digest.slice(0, 16)}… — scripts/perf or a gate script was edited during the run, so these numbers measure a different apparatus`
+  );
+
+  return record;
+}
+
+/**
+ * Coefficient of variation of the scenario's own duration, per arm.
+ *
+ * Not the target — a stability reading for the machine while that arm ran. An
+ * arm whose iterations disagree with each other by more than the difference
+ * being claimed cannot support the claim, whatever the medians say, and a
+ * spread that appears in one arm only is the shape of something else starting
+ * on the box mid-measurement.
+ */
+function coefficientOfVariation(arm, scenario) {
+  const aggregate = (arm.summary.aggregates ?? []).find((entry) => entry.id === scenario);
+  if (!aggregate) return null;
+  const { meanMs, stdDevMs } = aggregate;
+  if (typeof meanMs !== "number" || typeof stdDevMs !== "number" || meanMs <= 0) return null;
+  return (stdDevMs / meanMs) * 100;
+}
+
+/**
+ * A guard metric's value on one arm.
+ *
+ * Guards are cost metrics by convention — every one this harness emits gets
+ * worse as it gets larger, whether it is a duration, a tally or a byte count —
+ * so "moved the wrong way" means "went up". A guard that genuinely improves
+ * upward does not belong in the guard list; it belongs in the report as a
+ * second result.
+ */
+function guardValue(arm, scenario, name) {
+  const aggregate = (arm.summary.aggregates ?? []).find((entry) => entry.id === scenario);
+  if (!aggregate) return null;
+  const stat = aggregate.metricStats?.[name];
+  if (stat && typeof stat.mean === "number" && Number.isFinite(stat.mean)) return stat.mean;
+  const average = aggregate.metricAverages?.[name];
+  return typeof average === "number" && Number.isFinite(average) ? average : null;
+}
+
 /** Returns the arm's target value, or null when the arm is unusable. */
 function healthChecks(arm, args) {
   const aggregate = (arm.summary.aggregates ?? []).find((entry) => entry.id === args.scenario);
@@ -203,6 +457,20 @@ function healthChecks(arm, args) {
     check(false, `${arm.label}: ${args.scenario} present`, `not in ${arm.path}`);
     return null;
   }
+
+  // `diagnostic` means the runner knows something in the path is emulated or
+  // blind on this platform, so the figure is a signal and not a measurement.
+  // `run.ts` records it and nothing downstream refused it, which is how a
+  // Windows leg whose spawn observer cannot see Windows spawns produced a green
+  // claim about spawn counts.
+  const applicability = aggregate.applicability ?? "supported";
+  check(
+    applicability === "supported",
+    `${arm.label}: scenario is authoritative on this platform`,
+    applicability === "supported"
+      ? "supported"
+      : `applicability=${applicability} — the runner marked this reading non-authoritative here`
+  );
 
   const issues = aggregate.measurementIssues ?? [];
   check(
@@ -308,12 +576,19 @@ if (mode === "pair") {
         "pair mode uses --expect-before-sha/--expect-after-sha"
     );
   }
+  if (args.allowedGuardRegressions.length > 0) {
+    usageError(
+      "--allow-guard-regression belongs to the `ab` subcommand — a guard trade is accepted " +
+        "against the interleaved arms that measured it, not against a stored pair"
+    );
+  }
   const arms = [
     { label: "before", path: args.files[0], summary: load(args.files[0]).summary },
     { label: "after", path: args.files[1], summary: load(args.files[1]).summary },
   ];
 
   comparabilityChecks(arms);
+  precommitChecks(args, arms);
 
   const [beforeSha, afterSha] = arms.map(shaOf);
   // Checked whether or not an expectation was passed. Exact equality against an
@@ -367,6 +642,42 @@ if (args.expectBeforeSha || args.expectAfterSha) {
   );
 }
 if (args.files.length > 0) usageError("`ab` takes arms via --champ/--cand, not positionally");
+
+if (args.allowedGuardRegressions.length > 0 && !args.precommit) {
+  usageError(
+    "--allow-guard-regression needs --precommit: the trade is only meaningful against the record " +
+      "that declared it, and accepted without one it is an exception granted after the numbers"
+  );
+}
+
+// Default 2x the threshold. A machine whose champion arms disagree by twice the
+// difference being claimed is not a quiet machine, and condition 3 would reject
+// the pair anyway — but as a NO CLAIM, which records a hypothesis as disproved
+// when it was never actually tested. Named on the command line so the number
+// appears in the verdict rather than living only here.
+const maxDrift = args.maxDrift === undefined ? threshold * 2 : Number(args.maxDrift);
+if (!Number.isFinite(maxDrift) || maxDrift <= 0) {
+  usageError("--max-drift must be a positive number of percent");
+}
+const maxCv = args.maxCv === undefined ? null : Number(args.maxCv);
+if (maxCv !== null && (!Number.isFinite(maxCv) || maxCv <= 0)) {
+  usageError("--max-cv must be a positive number of percent");
+}
+
+// The cross-machine leg claims one number for every operating system it ran on,
+// which only holds for the deterministic classes. A duration compared across two
+// machines is mostly the two machines; `scripts/perf/lib/comparability.ts` is the
+// authority and `metric-class.mjs` mirrors it.
+if (args.crossMachine) {
+  const cls = classifyTarget(args.target);
+  if (!isMachineIndependent(cls)) {
+    usageError(
+      `--cross-machine refuses ${args.target}: it classifies as \`${cls}\`, which is meaningful ` +
+        "only against another run on the SAME machine. Counts, sizes and structural ratios travel; " +
+        "durations, memory and derived ratios do not, and no amount of averaging makes them."
+    );
+  }
+}
 if (args.champs.length !== args.cands.length) {
   usageError("`ab` needs the same number of --champ and --cand arms — they are paired by index");
 }
@@ -422,6 +733,23 @@ const candArms = args.cands.map((path, i) => abArm("cand", i, path));
 const allArms = [...champArms, ...candArms];
 
 comparabilityChecks(allArms);
+const precommit = precommitChecks(args, allArms);
+if (precommit && precommit.baselineSha && args.expectChampSha) {
+  // Only informational: the champion is the branch point on round one and moves
+  // with every kept hypothesis afterwards, so a mismatch is expected mid-run and
+  // is a FAIL only for the headline A/B, where the caller passes the branch point
+  // back in deliberately.
+  const atBaseline =
+    precommit.baselineSha.startsWith(args.expectChampSha) ||
+    args.expectChampSha.startsWith(precommit.baselineSha);
+  check(
+    true,
+    "precommit: champion is the baseline tree",
+    atBaseline
+      ? `yes — ${args.expectChampSha} (headline A/B shape)`
+      : `no — champion ${args.expectChampSha}, baseline ${precommit.baselineSha} (mid-run shape)`
+  );
+}
 
 /**
  * A copy under a second name is not a second run. Paths are already deduped, so
@@ -535,12 +863,51 @@ for (const arm of allArms) {
 
 const champValues = champArms.map((arm) => healthChecks(arm, args));
 const candValues = candArms.map((arm) => healthChecks(arm, args));
-for (const [i, value] of champValues.entries()) {
-  // Every percentage below divides by a champion reading.
+for (const [i, value] of candValues.entries()) {
+  // A candidate may legitimately reach zero — that is what "sixteen spawns
+  // became none" looks like — but never go below it.
   check(
-    value !== 0,
-    `champ${i + 1}: target is not degenerate`,
+    typeof value === "number" && value >= 0,
+    `cand${i + 1}: target is not negative`,
     `${args.target} = ${String(value)}`
+  );
+}
+for (const [i, value] of champValues.entries()) {
+  // Every percentage below divides by a champion reading, so a champion of zero
+  // makes them infinite and a NEGATIVE champion inverts them: with lower-is-
+  // better, -10 -> -5 is a regression that the arithmetic reports as a 50%
+  // improvement. A cost metric below zero is not a measurement of a cost.
+  check(
+    typeof value === "number" && value > 0,
+    `champ${i + 1}: target is a usable positive reading`,
+    `${args.target} = ${String(value)}`
+  );
+}
+
+const cvs = allArms.map((arm) => ({
+  label: arm.label,
+  cv: coefficientOfVariation(arm, args.scenario),
+}));
+const worstCv = cvs.reduce(
+  (worst, entry) =>
+    entry.cv !== null && entry.cv > worst.cv ? { label: entry.label, cv: entry.cv } : worst,
+  { label: "", cv: 0 }
+);
+if (maxCv !== null) {
+  const unmeasured = cvs.filter((entry) => entry.cv === null).map((entry) => entry.label);
+  check(
+    unmeasured.length === 0,
+    "within-arm spread is computable on every arm",
+    unmeasured.length === 0
+      ? `${cvs.length} arms`
+      : `${unmeasured.join(", ")} reported no usable meanMs/stdDevMs, so --max-cv passed them without measuring anything`
+  );
+  check(
+    worstCv.cv <= maxCv,
+    "within-arm spread under --max-cv",
+    worstCv.cv <= maxCv
+      ? `worst ${worstCv.cv.toFixed(1)}% (${worstCv.label}) <= ${maxCv}%`
+      : `${worstCv.label} varied ${worstCv.cv.toFixed(1)}% across its own iterations, over the ${maxCv}% allowed — that arm measured the machine, not the code`
   );
 }
 
@@ -575,6 +942,94 @@ const candMedian = middle(candValues);
 const medianImprovement = improvement(champMedian, candMedian);
 const combinations = (champValues.length * (champValues.length - 1)) / 2;
 
+/**
+ * The guards the precommit record named, judged the same way as the target.
+ *
+ * Without this the guard list was prose: a run could buy a 40% win on the
+ * target with a 300% regression on the metric beside it and every gate would
+ * still print CLAIM. Machine-dependent guards are judged against the same drift
+ * D as the target — a guard that moved less than D has not been SHOWN to move,
+ * and reading a guard as noise on grounds you would not accept for the target
+ * is how a win gets bought with an unreported regression.
+ *
+ * `--allow-guard-regression <name>` is the deliberate trade. It has to be named
+ * on the command line that produces the verdict, for the same reason the
+ * threshold does: an exception accepted after the numbers were on screen would
+ * only move the self-deception one step later.
+ */
+const guardRows = [];
+for (const guard of precommit?.guards ?? []) {
+  const champSide = champArms.map((arm) => guardValue(arm, args.scenario, guard.name));
+  const candSide = candArms.map((arm) => guardValue(arm, args.scenario, guard.name));
+  if (champSide.some((v) => v === null) || candSide.some((v) => v === null)) {
+    guardRows.push({
+      name: guard.name,
+      status: "ABSENT",
+      detail:
+        "not emitted on every arm — a guard that stopped being reported is not a guard that passed",
+      breach: true,
+    });
+    continue;
+  }
+  const champG = middle(champSide);
+  const candG = middle(candSide);
+
+  // Declared in the record AND named on the command line. The flag alone would
+  // reproduce the problem the lock exists to prevent: measure, see the breach,
+  // add the flag, re-run the same arms, call it a CLAIM. A trade discovered
+  // mid-run is a NO CLAIM — precommit it in a fresh directory and record why
+  // the first decision was abandoned.
+  //
+  // Both are computed BEFORE the zero-baseline branch below. An earlier version
+  // computed them after it, so a guard whose champion read zero — every count
+  // guard on a healthy run — took the flag on its own and skipped the lock
+  // entirely, which is the same hindsight hole one metric class along.
+  const flagged = args.allowedGuardRegressions.includes(guard.name);
+  const declared = precommit
+    ? (precommit.allowedGuardRegressions ?? []).includes(guard.name)
+    : true;
+  const allowed = flagged && declared;
+  const label = (worse) =>
+    !worse ? "OK" : allowed ? "ALLOWED" : flagged ? "UNDECLARED" : "BREACH";
+
+  // A cost metric below zero is not a cost, and the percentage below divides by
+  // the champion: -10 → -5 is an increase, and therefore worse, but reads as
+  // -50% and passes. Same trap the target readings already refuse.
+  if (champG < 0 || candG < 0) {
+    guardRows.push({
+      name: guard.name,
+      status: "INVALID",
+      detail: `${num(champG)} → ${num(candG)} — a guard below zero is not a cost reading, so no direction can be inferred`,
+      breach: true,
+    });
+    continue;
+  }
+
+  if (champG === 0) {
+    const worse = candG > 0;
+    guardRows.push({
+      name: guard.name,
+      status: label(worse),
+      detail: `${num(champG)} → ${num(candG)} (champion is zero, so no percentage)`,
+      breach: worse && !allowed,
+    });
+    continue;
+  }
+
+  // Cost metrics: up is worse.
+  const move = ((candG - champG) / champG) * 100;
+  const machineDependent = !isMachineIndependent(guard.class ?? classifyTarget(guard.name));
+  const withinNoise = machineDependent && Math.abs(move) <= drift;
+  const over = move > guard.tolerancePct && !withinNoise;
+  guardRows.push({
+    name: guard.name,
+    status: over ? label(true) : withinNoise ? "NOISE" : "OK",
+    detail: `${num(champG)} → ${num(candG)}  ${move >= 0 ? "+" : ""}${move.toFixed(1)}% ${move > 0 ? "worse" : "better"}  tolerance ${guard.tolerancePct}%${machineDependent ? " (machine-dependent)" : ""}`,
+    breach: over && !allowed,
+  });
+}
+const guardBreaches = guardRows.filter((row) => row.breach).map((row) => row.name);
+
 const conditions = [
   {
     ok: wins === pairImprovements.length,
@@ -588,12 +1043,21 @@ const conditions = [
     ok: medianImprovement > drift,
     text: `improvement ${pct(medianImprovement)} > champion drift D ${pct(drift)}`,
   },
+  {
+    ok: guardBreaches.length === 0,
+    text:
+      guardBreaches.length === 0
+        ? `no guard outside its precommitted tolerance — ${guardRows.length} checked`
+        : `guards outside tolerance: ${guardBreaches.join(", ")} — this change has a cost nobody authorised`,
+  },
 ];
 
 const lines = [
   "",
   `Target: ${args.target} on ${args.scenario} · ${args.higherIsBetter ? "higher" : "lower"} is better`,
   `Champion drift D: ${pct(drift)} (worst of ${combinations}, ${driftPair}) — same code on both sides, so this is the machine`,
+  `Drift ceiling (--max-drift): ${pct(maxDrift)}${args.maxDrift === undefined ? " (default, 2x threshold)" : ""}`,
+  `Worst within-arm spread: ${worstCv.cv === 0 ? "(not computable)" : `${worstCv.cv.toFixed(1)}% on ${worstCv.label}`}${maxCv === null ? "" : ` · ceiling ${maxCv}%`}`,
   "",
 ];
 for (const [i, value] of pairImprovements.entries()) {
@@ -607,21 +1071,45 @@ lines.push(
   `  precommitted threshold (--threshold): ${pct(threshold)}`,
   ""
 );
+if (guardRows.length > 0) {
+  lines.push("  guards (cost metrics — up is worse):");
+  for (const row of guardRows) lines.push(`    ${row.status.padEnd(7)} ${row.name}  ${row.detail}`);
+  lines.push("");
+} else if (precommit) {
+  lines.push("  guards: none precommitted — nothing was watched for a hidden cost", "");
+}
 for (const [i, condition] of conditions.entries()) {
   lines.push(`  condition ${i + 1}  ${condition.ok ? "PASS" : "FAIL"}  ${condition.text}`);
 }
 
+const tooNoisy = drift > maxDrift;
 const claim = conditions.every((condition) => condition.ok);
-lines.push("", `VERDICT: ${claim ? "CLAIM" : "NO CLAIM"}`);
+lines.push("", `VERDICT: ${tooNoisy ? "NO MEASUREMENT" : claim ? "CLAIM" : "NO CLAIM"}`);
+
+if (tooNoisy) {
+  report(
+    lines,
+    5,
+    `\nNO MEASUREMENT — the champion arms disagree by ${pct(drift)} against a ${pct(maxDrift)} ceiling, ` +
+      "so this machine could not resolve a difference of the size being claimed. The hypothesis was " +
+      "NOT tested and this is not a disproof: do not revert on it and do not record it as one. Close " +
+      "what else is running, let the machine cool, and measure the same pair again. If it will not " +
+      "settle, the target needs more iterations per arm or a quieter machine — decide which, record " +
+      "the decision, and say so in the report."
+  );
+}
 
 if (!claim) {
   report(
     lines,
     4,
-    "\nNO CLAIM — the arms are sound and they do not support the hypothesis. This is a " +
-      "complete result, not a run to retry with more pairs: extending after seeing an " +
-      "unfavourable number is the same fallacy as re-choosing the threshold."
+    "\nNO CLAIM — the arms are sound and they do not support an unqualified improvement. " +
+      "This is a complete result, not a run to retry with more pairs: extending after seeing " +
+      "an unfavourable number is the same fallacy as re-choosing the threshold. If the failing " +
+      "condition is the guard one, the change won its target and bought it with a cost " +
+      "somewhere else — revert it, or name that trade with --allow-guard-regression and " +
+      "justify it in the report."
   );
 }
 if (provenanceMissing) report(lines, 3, PROVENANCE_NOTE);
-report(lines, 0, "\nCLAIM — all three conditions hold.");
+report(lines, 0, "\nCLAIM — all four conditions hold.");
