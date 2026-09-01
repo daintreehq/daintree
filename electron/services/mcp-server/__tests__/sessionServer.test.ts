@@ -4050,6 +4050,162 @@ describe("sessionServer introspection tier filtering", () => {
     expect(body.totalMatches).toBe(1);
   });
 
+  // #12117. The bug this reproduces: an assistant at `action` tier asked to
+  // delete worktrees could not see `worktree.delete` at any discovery surface,
+  // so it told the user Daintree has no such feature. It now learns the name
+  // exists and needs `system` — without the name becoming callable anywhere.
+  describe("first-party existence catalog (#12117)", () => {
+    function firstPartyDeps(
+      result: unknown,
+      overrides?: Partial<SessionServerDeps>
+    ): SessionServerDeps {
+      const deps = introspectionDeps("action", result, overrides);
+      deps.sessionStore.sessionOriginMap.set("s1", "help");
+      return deps;
+    }
+
+    it("reports a higher-tier action to a renderer-owned session", async () => {
+      const deps = firstPartyDeps({
+        totalMatches: 2,
+        results: [entry("terminal.list"), entry("worktree.delete", { category: "worktree" })],
+      });
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, {
+        name: "actions.search",
+        arguments: { query: "delete worktree" },
+      });
+
+      const body = payload<{
+        results: ActionManifestEntry[];
+        unavailable: Array<{ id: string; minimumTier: string; callable: boolean }>;
+      }>(res);
+      expect(body.results.map((r) => r.id)).toEqual(["terminal.list"]);
+      expect(body.unavailable).toEqual([
+        expect.objectContaining({
+          id: "worktree.delete",
+          minimumTier: "system",
+          callable: false,
+        }),
+      ]);
+    });
+
+    // `actions.list` reaches the filter through its own paged-collection path
+    // (`collectListPages`), not the plain dispatch `actions.search` takes, so
+    // the catalog has to be proven on both. A snapshot dropped from only the
+    // paged path would leave search working and listing silently bare.
+    it("reports them through the paged actions.list path too", async () => {
+      const deps = firstPartyDeps({
+        actions: [entry("terminal.list"), entry("worktree.delete", { category: "worktree" })],
+      });
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, { name: "actions.list" });
+
+      const body = payload<{
+        actions: ActionManifestEntry[];
+        total: number;
+        unavailable: Array<{ id: string; minimumTier: string }>;
+        unavailableTotal: number;
+      }>(res);
+      expect(body.actions.map((a) => a.id)).toEqual(["terminal.list"]);
+      expect(body.total).toBe(1);
+      expect(body.unavailable.map((s) => s.id)).toEqual(["worktree.delete"]);
+      expect(body.unavailableTotal).toBe(1);
+    });
+
+    // The catalog and the callable surface are one boundary read twice: the
+    // moment a grant admits the id, it must leave the catalog and appear in
+    // `actions`. Anything else advertises the same tool in two states at once.
+    it("moves a granted id out of the catalog and into the callable list", async () => {
+      const deps = firstPartyDeps({ actions: [entry("worktree.delete")] });
+      const server = createSessionServer("s1", deps);
+
+      const before = payload<{ actions: ActionManifestEntry[]; unavailableTotal: number }>(
+        await callTool(server, { name: "actions.list" })
+      );
+      expect(before.actions).toEqual([]);
+      expect(before.unavailableTotal).toBe(1);
+
+      deps.sessionStore.grantCache.issueGrant("s1", "worktree.delete");
+
+      const after = payload<{
+        actions: ActionManifestEntry[];
+        unavailable: unknown[];
+        unavailableTotal: number;
+      }>(await callTool(server, { name: "actions.list" }));
+      expect(after.actions.map((a) => a.id)).toEqual(["worktree.delete"]);
+      expect(after.unavailable).toEqual([]);
+      expect(after.unavailableTotal).toBe(0);
+    });
+
+    // Existence is not dispatchability. The whole #11585 invariant rests on
+    // `tools/list` and the callable set being one boundary, and a name in the
+    // catalog must not appear on either side of it.
+    it("leaves the name out of tools/list and refuses the call", async () => {
+      const deps = firstPartyDeps(
+        { actions: [entry("worktree.delete")] },
+        {
+          requestManifest: vi
+            .fn()
+            .mockResolvedValue([
+              makeManifestEntry("terminal.list"),
+              makeManifestEntry("worktree.delete"),
+            ]),
+        }
+      );
+      const server = createSessionServer("s1", deps);
+
+      const listed = await listTools(server);
+      expect(listed.tools.map((t) => t.name)).not.toContain("worktree.delete");
+
+      const denied = await callTool(server, { name: "worktree.delete", arguments: {} });
+      expect(denied.isError).toBe(true);
+      expect(toolErrorPayload(denied).code).toBe(TIER_NOT_PERMITTED_CODE);
+    });
+
+    it("gives an external-origin session the payload it got before", async () => {
+      // Same tier, same manifest — only the origin differs, which is the one
+      // fact the catalog gates on.
+      const deps = introspectionDeps("action", {
+        totalMatches: 2,
+        results: [entry("terminal.list"), entry("worktree.delete")],
+      });
+      deps.sessionStore.sessionOriginMap.set("s1", "external");
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, {
+        name: "actions.search",
+        arguments: { query: "delete worktree" },
+      });
+
+      const body = payload<Record<string, unknown>>(res);
+      expect(Object.keys(body).sort()).toEqual(["results", "totalMatches"]);
+    });
+
+    it("names the tier on a getSchema read instead of an unknown-id denial", async () => {
+      const deps = firstPartyDeps({
+        ok: true,
+        entry: entry("worktree.delete", { category: "worktree" }),
+        policy: null,
+        error: null,
+      });
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, {
+        name: "actions.getSchema",
+        arguments: { actionId: "worktree.delete" },
+      });
+
+      const body = payload<{
+        ok: boolean;
+        entry: unknown;
+        unavailable: { minimumTier: string } | undefined;
+        error: { code: string } | null;
+      }>(res);
+      expect(body.ok).toBe(false);
+      expect(body.entry).toBeNull();
+      expect(body.error?.code).toBe(TIER_NOT_PERMITTED_CODE);
+      expect(body.unavailable?.minimumTier).toBe("system");
+    });
+  });
+
   describe("actions.getSchema policy record (#11910)", () => {
     interface GetSchemaBody {
       ok: boolean;
