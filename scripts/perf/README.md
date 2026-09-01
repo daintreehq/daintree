@@ -228,6 +228,24 @@ This is the missing input to any threshold. The gate that used to exist ran red 
 
 It is also the answer to "is this predicate flaky, or did the subject break". A correctness term is a structural fact, so a term that reads nonzero on an untouched tree is measuring the machine. It found one within minutes of existing: PERF-036's `settleShortfallMisses` fired in one round out of five, because at a 1ms debounce the two `Date.now()` reads inside `waitForOutputSettle` can straddle a millisecond tick and a submit whose output is still flowing returns as settled. The held arm now uses a debounce above the clock's resolution and reads 0 across eight rounds.
 
+### Explaining a number, without disturbing it
+
+```bash
+npm run perf diagnose -- --scenario PERF-163
+```
+
+A measurement run answers "did this move" and cannot answer "why", because the instrumentation that could would change the thing being measured. So they are two runs. `diagnose` re-runs one scenario under V8's CPU and heap profilers and assembles an artifact bundle: the profiles, the raw per-iteration samples, the summary with its full provenance, and a manifest tying them to a commit, a harness hash, a machine and the run's integrity verdict.
+
+**Its durations are inflated and comparable to nothing.** The manifest says so in `durationsComparable: false` before anything else, the summary carries the same field, and the report opens with a banner, because a consumer reading a results file directly never sees the manifest. Take the number from an unprofiled run; take the profile from here.
+
+A profiled number cannot reach the machine's trend record, and that is structural rather than a flag someone has to remember: `run.ts` writes history only for a run whose `--purpose` is `benchmark`, and `diagnose` runs as `diagnostic`. `--no-history` rides along as the explicit belt.
+
+The bundle is assembled under a temporary name and renamed into place, so a bundle that exists is one that finished.
+
+Every artifact is recorded with its byte size and SHA-256, since a filename cannot show that a bundle read a month later still holds what its manifest describes.
+
+What is absent is split by why. `notApplicable` is the renderer's: Chromium traces, renderer profiles and screenshots do not exist for a plain-Node scenario and belong to a journey benchmark. `notImplemented` is ours: process-tree timelines and application logs are reachable in principle and are not built. The manifest also states its own scope, because §11.9 of the guide describes a journey rerun and this is the mechanism subset of it.
+
 ### Comparing two runs
 
 ```bash

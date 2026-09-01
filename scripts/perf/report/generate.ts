@@ -274,6 +274,18 @@ export function buildMarkdownReport(summary: PerfRunSummary): string {
     0
   );
 
+  // A consumer reading the report never sees the bundle manifest, so the
+  // refusal has to be here too, above everything, in a form nobody scrolls past.
+  const diagnosticBanner =
+    summary.protocol.durationsComparable === false
+      ? [
+          "> **These durations are not comparable to anything.**",
+          "> This run was taken under instrumentation, which inflates every timing.",
+          "> Read the profile, take the number from an unprofiled run.",
+          "",
+        ]
+      : [];
+
   const header = [
     "# Performance Benchmark Report",
     "",
@@ -292,6 +304,7 @@ export function buildMarkdownReport(summary: PerfRunSummary): string {
   ];
 
   return [
+    ...diagnosticBanner,
     ...header,
     ...claimSection(summary.aggregates),
     ...readingGuide(summary.environment),

@@ -21,6 +21,8 @@ Baselines are therefore local and machine-specific. The old rule against committ
 
 A `durationMs: 0` in a scenario is a hardcoded sentinel, not a real measurement. A `>= 0` filter treats it as real and zeroes the p95.
 
+**A regression is explained with `npm run perf diagnose -- --scenario <id>`, never by profiling the run you are measuring.** It writes a bundle with CPU and heap profiles, raw samples and a manifest; its durations are inflated and it passes `--no-history` so they stay out of the trend.
+
 **Before proposing any threshold, run `npm run perf calibrate -- --scenario <id>`.** It runs the scenario repeatedly on an unchanged tree and prints the spread, which is the only way to know whether a number can carry a claim on this machine. It is also how to tell a flaky predicate from a broken subject: a correctness term that reads nonzero on an untouched tree is measuring the machine.
 
 `--enforce-integrity` is the one flag that moves the exit code on something other than a throw, and it moves it on **evidence**, never on drift: a missing, partial or absent correctness declaration, a predicate reporting misses, a configured metric that stopped being emitted or is emitted on only some iterations, a non-finite measurement, or a run that measured nothing at all. Numeric regression stays advisory under it. Use it wherever a run's result is consumed by something other than a person reading the output.

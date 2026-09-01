@@ -29,6 +29,7 @@ import type {
   BaselineSummary,
   IntegrityResult,
   PerfMode,
+  RunPurpose,
   PerfRunSummary,
   PerfScenario,
   PlatformApplicability,
@@ -73,6 +74,21 @@ export interface CliOptions {
    * so a run whose oracle had died looked exactly like a clean one.
    */
   enforceIntegrity: boolean;
+  /**
+   * Keep this run out of the machine's trend history.
+   *
+   * For a run whose numbers are real but not representative — the profiled
+   * rerun `diagnose.ts` drives is the case that prompted it. Its durations are
+   * inflated by the instrumentation, and history has no column to say so, so a
+   * profiled entry would sit in the trend looking exactly like a regression.
+   */
+  noHistory: boolean;
+  /**
+   * What this run is for. `diagnostic` marks numbers that are real but not
+   * representative, and is what keeps a profiled rerun structurally out of the
+   * trend history rather than relying on the caller to remember a flag.
+   */
+  purpose: RunPurpose;
 }
 
 interface RawSample {
@@ -105,9 +121,10 @@ const VALUE_FLAGS = [
   "out-dir",
   "baseline",
   "budgets",
+  "purpose",
 ] as const;
 
-const BOOLEAN_FLAGS = ["update-baseline", "enforce-integrity"] as const;
+const BOOLEAN_FLAGS = ["update-baseline", "enforce-integrity", "no-history"] as const;
 
 const perfDir = path.dirname(fileURLToPath(import.meta.url));
 const HISTORY_DIR = path.join(perfDir, "history");
@@ -154,6 +171,12 @@ function defaultBaselinePath(mode: PerfMode): string {
 
 function defaultBudgetsPath(): string {
   return path.resolve(process.cwd(), "scripts/perf/config/budgets.json");
+}
+
+function parsePurpose(raw: string | undefined): RunPurpose {
+  if (raw === undefined) return "benchmark";
+  if (raw === "benchmark" || raw === "diagnostic") return raw;
+  throw new UsageError(`--purpose expects "benchmark" or "diagnostic", got "${raw}"`);
 }
 
 function parsePositiveInt(flag: string, raw: string, min: number): number {
@@ -255,6 +278,8 @@ export function parseArgs(argv: string[]): CliOptions {
     label: values.get("label"),
     machineLabel: values.get("machine"),
     enforceIntegrity: flags.has("enforce-integrity"),
+    noHistory: flags.has("no-history"),
+    purpose: parsePurpose(values.get("purpose")),
   };
 }
 
@@ -636,6 +661,8 @@ function buildRerunCommand(cli: CliOptions): string {
   }
   if (cli.updateBaseline) parts.push("--update-baseline");
   if (cli.enforceIntegrity) parts.push("--enforce-integrity");
+  if (cli.noHistory) parts.push("--no-history");
+  if (cli.purpose !== "benchmark") parts.push("--purpose", cli.purpose);
 
   // Nothing but the mode survived, so `--` would dangle.
   if (parts.length === optionCount) parts.pop();
@@ -1116,6 +1143,11 @@ async function run(): Promise<number> {
         undefined,
         cli.budgetsPath === defaultBudgetsPath() ? [] : [cli.budgetsPath]
       ),
+      purpose: cli.purpose,
+      // A diagnostic run's instrumentation inflates every timing, and the
+      // summary has to carry that where a consumer reading it directly will
+      // see it rather than only in a bundle manifest they may never open.
+      durationsComparable: cli.purpose === "benchmark",
       enforceIntegrity: cli.enforceIntegrity,
     },
     scenarioCount: aggregates.length,
@@ -1203,8 +1235,18 @@ async function run(): Promise<number> {
   // The scenario filter is no longer part of this test: every run is filtered.
   // What still disqualifies a run from the trend record is a sampling override,
   // because a 3-iteration spot check is not comparable with the 8 the mode
-  // normally takes.
-  const isCanonicalRun = cli.iterations === undefined && cli.warmups === undefined;
+  // normally takes — or `--no-history`, which is how a profiled rerun keeps its
+  // inflated durations out of a trend that has no column to explain them.
+  // `purpose` is the STRUCTURAL half and leads deliberately: a diagnostic run
+  // cannot enter the trend even if a caller forgets `--no-history`, because the
+  // history file has no column to say a duration was instrumented and an entry
+  // there reads exactly like a regression. The sampling-override test and the
+  // explicit flag are the other two, both of which a caller has to opt into.
+  const isCanonicalRun =
+    cli.purpose === "benchmark" &&
+    cli.iterations === undefined &&
+    cli.warmups === undefined &&
+    !cli.noHistory;
   const historyPath = isCanonicalRun ? writeHistory(summary) : null;
 
   // The step summary is a convenience, not a result. A run whose numbers are

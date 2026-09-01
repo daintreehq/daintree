@@ -204,6 +204,11 @@ export const REGISTRY: Record<string, Command> = {
     kind: "diagnostic",
     runner: tsxScript("calibrate.ts"),
   },
+  diagnose: {
+    summary: "Re-run one scenario under the CPU and heap profilers into an artifact bundle",
+    kind: "diagnostic",
+    runner: tsxScript("diagnose.ts"),
+  },
   "verify-baselines": {
     summary:
       "Assert the committed baseline files are usable — shape, provenance, no degenerate references",

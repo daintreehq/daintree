@@ -231,6 +231,17 @@ export interface RunEnvironment {
  * measured iteration count alone does not reveal it, which is why this is
  * recorded rather than inferred.
  */
+/**
+ * What a run is FOR, which decides what its numbers may be used as.
+ *
+ * `benchmark` is an ordinary measurement. `diagnostic` is a run whose numbers
+ * are real but not representative — the profiled rerun `diagnose.ts` drives is
+ * the case that prompted this. The distinction is structural rather than a flag
+ * a caller has to remember: the trend history accepts only `benchmark` runs, so
+ * a profiled duration cannot land in a record that has no column to explain it.
+ */
+export type RunPurpose = "benchmark" | "diagnostic";
+
 export interface RunProtocol {
   /** `--iterations` override, or null when each scenario used its own default. */
   iterations: number | null;
@@ -257,6 +268,18 @@ export interface RunProtocol {
    * reading. Every run written from now on states it.
    */
   enforceIntegrity?: boolean;
+  /**
+   * What the run is for. Absent on summaries written before it existed, which
+   * every reader treats as `benchmark` — the state they were all in.
+   */
+  purpose?: RunPurpose;
+  /**
+   * False when the run's own instrumentation makes its timings incomparable.
+   *
+   * Carried on the summary as well as on a bundle manifest, because a consumer
+   * reading a results file directly never sees the manifest.
+   */
+  durationsComparable?: boolean;
 }
 
 /**
