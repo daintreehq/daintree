@@ -90,7 +90,7 @@ describe("parseNumberQuery", () => {
       });
     });
 
-    it("should parse an \"and\"-joined list", () => {
+    it('should parse an "and"-joined list', () => {
       expect(parseNumberQuery("12036, 12037, and 12041")).toEqual({
         kind: "multi",
         numbers: [12036, 12037, 12041],

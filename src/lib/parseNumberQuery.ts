@@ -13,7 +13,11 @@ const RANGE_RE = /^#?(\d+)\.\.(\d+)$/;
 // list leaves behind, and bare whitespace because that is what falls out of a
 // terminal. Anchored end to end: one stray word or symbol and the whole thing
 // stays a text search.
-const NUMBER_LIST_RE = /^#?\d+(?:(?:\s*,\s*|\s+)(?:and\s+)?#?\d+)+\s*,?$/i;
+//
+// Case-sensitive on purpose. GitHub search reads uppercase `AND`/`OR` as
+// boolean operators, so "123 AND 456" is a real full-text query and must not
+// be hijacked into a lookup.
+const NUMBER_LIST_RE = /^#?\d+(?:(?:\s*,\s*|\s+)(?:and\s+)?#?\d+)+\s*,?$/;
 const SINGLE_RE = /^#?(\d+)\s*,?$/;
 
 export function parseNumberQuery(query: string): NumberQuery | null {
@@ -24,7 +28,7 @@ export function parseNumberQuery(query: string): NumberQuery | null {
   const openMatch = trimmed.match(OPEN_ENDED_RE);
   if (openMatch) {
     const from = parseInt(openMatch[1]!, 10);
-    if (from <= 0 || !Number.isFinite(from)) return null;
+    if (from <= 0 || !Number.isSafeInteger(from)) return null;
     return { kind: "open-ended", from };
   }
 
@@ -33,7 +37,8 @@ export function parseNumberQuery(query: string): NumberQuery | null {
   if (rangeMatch) {
     const from = parseInt(rangeMatch[1]!, 10);
     const to = parseInt(rangeMatch[2]!, 10);
-    if (from <= 0 || to <= 0 || !Number.isFinite(from) || !Number.isFinite(to)) return null;
+    if (from <= 0 || to <= 0 || !Number.isSafeInteger(from) || !Number.isSafeInteger(to))
+      return null;
     if (from > to) return null;
     const count = to - from + 1;
     const truncated = count > MULTI_FETCH_CAP;
@@ -53,7 +58,7 @@ export function parseNumberQuery(query: string): NumberQuery | null {
     // requested numbers — separators and "and" contribute none.
     for (const token of trimmed.match(/\d+/g) ?? []) {
       const num = parseInt(token, 10);
-      if (num <= 0 || !Number.isFinite(num)) return null;
+      if (num <= 0 || !Number.isSafeInteger(num)) return null;
       if (!seen.has(num)) {
         seen.add(num);
         numbers.push(num);
@@ -67,7 +72,7 @@ export function parseNumberQuery(query: string): NumberQuery | null {
   const singleMatch = trimmed.match(SINGLE_RE);
   if (singleMatch) {
     const num = parseInt(singleMatch[1]!, 10);
-    if (num <= 0 || !Number.isFinite(num)) return null;
+    if (num <= 0 || !Number.isSafeInteger(num)) return null;
     return { kind: "single", number: num };
   }
 
@@ -90,7 +95,9 @@ export function looksLikeNumberList(query: string): boolean {
   if (!trimmed) return false;
   if (parseNumberQuery(trimmed) !== null) return false;
   // Connectors are the only words allowed through; anything else is prose.
-  const withoutConnectors = trimmed.replace(/\b(?:and|or)\b/gi, " ");
+  // Lowercase only, for the same reason the grammar is: uppercase `AND`/`OR`
+  // is GitHub boolean search syntax and belongs to full-text search.
+  const withoutConnectors = trimmed.replace(/\b(?:and|or)\b/g, " ");
   if (/[^\d#,;&\s]/.test(withoutConnectors)) return false;
   return (trimmed.match(/\d+/g) ?? []).length >= 2;
 }

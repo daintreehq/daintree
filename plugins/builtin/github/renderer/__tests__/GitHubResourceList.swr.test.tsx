@@ -2554,9 +2554,7 @@ describe("GitHubResourceList number-query chip (#6867)", () => {
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     await waitFor(() => {
-      expect(mockListIssues).toHaveBeenCalledWith(
-        expect.objectContaining({ search: "123,,124" })
-      );
+      expect(mockListIssues).toHaveBeenCalledWith(expect.objectContaining({ search: "123,,124" }));
     });
     await waitFor(() => {
       expect(screen.getByText(FALLBACK_COPY)).toBeTruthy();

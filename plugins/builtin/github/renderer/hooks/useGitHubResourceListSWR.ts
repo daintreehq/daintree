@@ -502,6 +502,14 @@ export function useGitHubResourceListSWR({
       return;
     }
 
+    // Every path below that hydrates or clears state clears this too, but the
+    // one that doesn't is the one that matters: a filter/search change while
+    // mounted with a search active leaves `targetCached` undefined and falls
+    // straight through to `fetchData`. Coming off a missed `#999` lookup that
+    // left the empty state claiming "No issue #999 in this view" over the
+    // text-search rows that replaced it. Clear it on entry instead.
+    setExactNumberNotFound(null);
+
     const abortController = new AbortController();
     loadMoreAbortRef.current?.abort();
     const gen = nextGeneration(cacheKey);
