@@ -991,46 +991,67 @@ describe("FileBrowserViewer copy file contents (#12136)", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(""));
   });
 
-  it.each([
-    ["an image", "/repo/logo.png", "img"],
-    ["a video", "/repo/media/demo.webm", "video"],
-    ["audio", "/repo/media/track.mp3", "audio"],
-    ["a PDF", "/repo/docs/spec.pdf", "iframe"],
-  ])("withholds the control for %s", async (_case, filePath, selector) => {
-    // The media previews fetch their bytes into a blob URL; without the stub the
-    // element never mounts and the absence assertion below would pass for the
-    // wrong reason. Mirrors this file's own video/audio describes.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        blob: () => Promise.resolve(new Blob(["x"])),
-      })
-    );
-    URL.createObjectURL = vi.fn(() => "blob:app://daintree/preview");
-    URL.revokeObjectURL = vi.fn();
-    const { container } = renderViewer(filePath);
+  // Video and audio fetch their bytes into a blob URL; without the stub the
+  // element never mounts and the absence assertions below would pass for the
+  // wrong reason. Restored one global at a time rather than through
+  // `vi.unstubAllGlobals()`: vitest.setup.ts installs ResizeObserver and rAF
+  // once at module load, so a blanket unstub here would strip them from every
+  // test that runs after this block.
+  describe("non-text previews", () => {
+    const realFetch = globalThis.fetch;
+    const realCreateObjectURL = URL.createObjectURL;
+    const realRevokeObjectURL = URL.revokeObjectURL;
 
-    await waitFor(() => expect(container.querySelector(selector)).not.toBeNull());
-    expect(copyButton()).toBeNull();
-    vi.unstubAllGlobals();
-  });
-
-  it("withholds the control for an SVG, whose raw source the viewer discards", async () => {
-    // Valid SVG on purpose: this suite's shared default read is `# hello`, which
-    // the sanitizer rejects — so without real markup this would assert absence
-    // from the error state rather than the svg state it means to cover.
-    readMock.mockResolvedValue({
-      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          blob: () => Promise.resolve(new Blob(["x"])),
+        })
+      );
+      URL.createObjectURL = vi.fn(() => "blob:app://daintree/media-preview");
+      URL.revokeObjectURL = vi.fn();
     });
-    const { container } = renderViewer("/repo/icon.svg");
 
-    await waitFor(() => expect(container.querySelector("svg")).not.toBeNull());
-    // Read as text, but only the sanitized markup is kept — there is no raw
-    // source left to hand back.
-    expect(copyButton()).toBeNull();
+    afterEach(() => {
+      vi.stubGlobal("fetch", realFetch);
+      URL.createObjectURL = realCreateObjectURL;
+      URL.revokeObjectURL = realRevokeObjectURL;
+    });
+
+    it.each([
+      ["an image", "/repo/logo.png", "img"],
+      ["a video", "/repo/media/demo.webm", "video"],
+      ["audio", "/repo/media/track.mp3", "audio"],
+      ["a PDF", "/repo/docs/spec.pdf", "iframe"],
+    ])("withholds the control for %s", async (_case, filePath, selector) => {
+      const { container } = renderViewer(filePath);
+
+      await waitFor(() => expect(container.querySelector(selector)).not.toBeNull());
+      expect(copyButton()).toBeNull();
+    });
+
+    it("withholds the control for an SVG, whose raw source the viewer discards", async () => {
+      // Valid SVG on purpose: this suite's shared default read is `# hello`,
+      // which the sanitizer rejects — so without real markup this would assert
+      // absence from the error state rather than the svg state it means to cover.
+      readMock.mockResolvedValue({
+        content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+      });
+      const { container } = renderViewer("/repo/icon.svg");
+
+      // `[role="img"]` and not `"svg"`: every lucide icon in the toolbar is an
+      // <svg>, so the loose selector would match one of those and pass without
+      // the SVG branch ever rendering. FileImagePreview paints that role only
+      // when it has sanitized markup, which is exactly the state under test.
+      await waitFor(() => expect(container.querySelector('[role="img"]')).not.toBeNull());
+      // Read as text, but only the sanitized markup is kept — there is no raw
+      // source left to hand back.
+      expect(copyButton()).toBeNull();
+    });
   });
 
   it.each(["BINARY_FILE", "FILE_TOO_LARGE", "LFS_POINTER"] as const)(

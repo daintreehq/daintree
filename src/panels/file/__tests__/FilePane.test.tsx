@@ -2999,50 +2999,67 @@ describe("FilePane copy file contents (#12136)", () => {
     }
   );
 
-  it.each([
-    ["an image", "/repo/logo.png", "img"],
-    ["a video", "/repo/media/demo.webm", "video"],
-    ["audio", "/repo/media/track.mp3", "audio"],
-    ["a PDF", "/repo/docs/spec.pdf", "iframe"],
-  ])("withholds the control for %s", async (_case, filePath, selector) => {
-    // Video and audio fetch their bytes into a blob URL; without the stub the
-    // element never mounts and the absence assertion would pass for the wrong
-    // reason. Mirrors this file's own media describes.
+  // Video and audio fetch their bytes into a blob URL; without the stub the
+  // element never mounts and the absence assertions below would pass for the
+  // wrong reason. Restored one global at a time rather than through
+  // `vi.unstubAllGlobals()`: vitest.setup.ts installs ResizeObserver and rAF
+  // once at module load, so a blanket unstub here would strip them from every
+  // test that runs after this block.
+  describe("non-text previews", () => {
+    const realFetch = globalThis.fetch;
     const realCreateObjectURL = URL.createObjectURL;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        headers: new Headers(),
-        blob: () => Promise.resolve(new Blob(["x"])),
-      })
-    );
-    URL.createObjectURL = vi.fn(() => "blob:app://daintree/media-preview");
-    try {
+    const realRevokeObjectURL = URL.revokeObjectURL;
+
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          blob: () => Promise.resolve(new Blob(["x"])),
+        })
+      );
+      URL.createObjectURL = vi.fn(() => "blob:app://daintree/media-preview");
+      URL.revokeObjectURL = vi.fn();
+    });
+
+    afterEach(() => {
+      vi.stubGlobal("fetch", realFetch);
+      URL.createObjectURL = realCreateObjectURL;
+      URL.revokeObjectURL = realRevokeObjectURL;
+    });
+
+    it.each([
+      ["an image", "/repo/logo.png", "img"],
+      ["a video", "/repo/media/demo.webm", "video"],
+      ["audio", "/repo/media/track.mp3", "audio"],
+      ["a PDF", "/repo/docs/spec.pdf", "iframe"],
+    ])("withholds the control for %s", async (_case, filePath, selector) => {
       const { container } = await renderPane(filePath);
 
       // Anchored to the preview element: asserting absence on a pane that never
       // reached its terminal state would pass for the wrong reason.
       await waitFor(() => expect(container.querySelector(selector)).not.toBeNull());
       expect(copyButton()).toBeNull();
-    } finally {
-      vi.unstubAllGlobals();
-      URL.createObjectURL = realCreateObjectURL;
-    }
-  });
-
-  it("withholds the control for an SVG, whose raw source the pane discards", async () => {
-    // Valid SVG on purpose: the shared default read is not, so the sanitizer
-    // would reject it and this would assert absence from the error state
-    // instead of from the svg state it is meant to cover.
-    readMock.mockResolvedValue({
-      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
     });
-    const { container } = await renderPane("/repo/icon.svg");
 
-    await waitFor(() => expect(container.querySelector("svg")).not.toBeNull());
-    expect(copyButton()).toBeNull();
+    it("withholds the control for an SVG, whose raw source the pane discards", async () => {
+      // Valid SVG on purpose: the shared default read is not, so the sanitizer
+      // would reject it and this would assert absence from the error state
+      // instead of from the svg state it is meant to cover.
+      readMock.mockResolvedValue({
+        content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+      });
+      const { container } = await renderPane("/repo/icon.svg");
+
+      // `[role="img"]` and not `"svg"`: every lucide icon in the toolbar is an
+      // <svg>, so the loose selector would match one of those and pass without
+      // the SVG branch ever rendering. FileImagePreview paints that role only
+      // when it has sanitized markup, which is exactly the state under test.
+      await waitFor(() => expect(container.querySelector('[role="img"]')).not.toBeNull());
+      expect(copyButton()).toBeNull();
+    });
   });
 
   it("retires the control when the file it was offered for turns into media", async () => {
