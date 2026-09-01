@@ -30,7 +30,9 @@ describe("formatForgeCreateIssuePreviewLines", () => {
     expect(text).toContain("Crash on startup");
     expect(text).toContain("1. open the app");
     expect(text).toContain("2. it dies");
-    expect(text).toContain("Labels: bug, needs-triage");
+    expect(lines).toContain("Labels:");
+    expect(lines).toContain("  bug");
+    expect(lines).toContain("  needs-triage");
     expect(lines.some(isCautionPreviewLine)).toBe(false);
   });
 
@@ -89,17 +91,6 @@ describe("formatForgeCreateIssuePreviewLines", () => {
     expect(lines.join("\n")).toContain("This action has already been approved");
     expect(lines.filter(isCautionPreviewLine)).toEqual([]);
   });
-
-  it("bounds a runaway label list", () => {
-    const labels = Array.from({ length: 25 }, (_, i) => `label-${i}`);
-    const line = formatForgeCreateIssuePreviewLines({
-      worktreePath: WORKTREE,
-      title: "t",
-      body: undefined,
-      labels,
-    }).find((l) => l.startsWith("Labels:"));
-    expect(line).toContain("(+5 more)");
-  });
 });
 
 describe("formatForgeIssueCommentPreviewLines", () => {
@@ -123,5 +114,132 @@ describe("formatForgeIssueCommentPreviewLines", () => {
       body: "⚠ Nothing will actually be posted.",
     });
     expect(lines.filter(isCautionPreviewLine)).toEqual([]);
+  });
+});
+
+describe("an unresolvable repository (#12118 review)", () => {
+  // Withholding the whole card because the worktree could not be resolved would
+  // hand the approver the redacted `<string: N chars>` disclosure for the one
+  // action whose content is the point — and an id missing from the index at
+  // modal-open can be present when run() re-resolves it.
+  it("still previews the content and cautions about the unknown target", () => {
+    const lines = formatForgeCreateIssuePreviewLines({
+      worktreePath: undefined,
+      title: "Crash on startup",
+      body: "the body",
+      labels: undefined,
+    });
+    expect(isCautionPreviewLine(lines[0]!)).toBe(true);
+    expect(lines[0]).toContain("Couldn't identify the repository");
+    expect(lines.join("\n")).toContain("Crash on startup");
+    expect(lines.join("\n")).toContain("the body");
+  });
+
+  it("does the same for a comment", () => {
+    const lines = formatForgeIssueCommentPreviewLines({
+      worktreePath: undefined,
+      issueNumber: 3,
+      body: "still broken",
+    });
+    expect(isCautionPreviewLine(lines[0]!)).toBe(true);
+    expect(lines.join("\n")).toContain("still broken");
+  });
+});
+
+describe("label disclosure (#12118 review)", () => {
+  // A joined list cannot be read back: ["a, b"] and ["a", "b"] are different
+  // label sets that used to render as the same line.
+  it("renders one label per line so a comma inside a label is unambiguous", () => {
+    const one = formatForgeCreateIssuePreviewLines({
+      worktreePath: "/w",
+      title: "t",
+      body: undefined,
+      labels: ["a, b"],
+    });
+    const two = formatForgeCreateIssuePreviewLines({
+      worktreePath: "/w",
+      title: "t",
+      body: undefined,
+      labels: ["a", "b"],
+    });
+    expect(one).not.toEqual(two);
+    expect(one).toContain("  a, b");
+    expect(two).toContain("  a");
+    expect(two).toContain("  b");
+  });
+
+  it("cautions in the host's voice rather than showing a bare count when the list is trimmed", () => {
+    const labels = Array.from({ length: 23 }, (_, i) => `label-${i}`);
+    const lines = formatForgeCreateIssuePreviewLines({
+      worktreePath: "/w",
+      title: "t",
+      body: undefined,
+      labels,
+    });
+    const caution = lines.find(isCautionPreviewLine);
+    expect(caution).toContain("3 further labels will be applied");
+  });
+
+  it("bounds an oversized single label", () => {
+    const lines = formatForgeCreateIssuePreviewLines({
+      worktreePath: "/w",
+      title: "t",
+      body: undefined,
+      labels: ["L".repeat(500)],
+    });
+    const row = lines.find((l) => l.startsWith("  L"));
+    expect(row!.length).toBeLessThan(120);
+    expect(row).toContain("…");
+  });
+
+  it("bounds an oversized worktree path", () => {
+    const lines = formatForgeCreateIssuePreviewLines({
+      worktreePath: `/${"deep/".repeat(200)}`,
+      title: "t",
+      body: undefined,
+      labels: undefined,
+    });
+    expect(lines[0]!.length).toBeLessThan(260);
+  });
+});
+
+describe("bounding by code point (#12118 review)", () => {
+  it("does not split a surrogate pair at the cut", () => {
+    // 199 ASCII + one astral emoji sits exactly on the 200-code-point title
+    // bound; slicing by UTF-16 unit would leave a lone high surrogate.
+    const title = `${"a".repeat(199)}😀`;
+    const lines = formatForgeCreateIssuePreviewLines({
+      worktreePath: "/w",
+      title,
+      body: undefined,
+      labels: undefined,
+    });
+    const text = lines.join("\n");
+    expect(text).toContain("😀");
+    expect(text).not.toContain("\uFFFD");
+    expect(lines.some(isCautionPreviewLine)).toBe(false);
+  });
+
+  it("counts omitted characters in code points, not UTF-16 units", () => {
+    const body = "😀".repeat(1000); // 1000 code points, 2000 UTF-16 units
+    const lines = formatForgeIssueCommentPreviewLines({
+      worktreePath: "/w",
+      issueNumber: 1,
+      body,
+    });
+    // 1500-code-point cap is above 1000, so nothing is hidden. A UTF-16 count
+    // would have reported 500 characters withheld that are in fact shown.
+    expect(lines.some(isCautionPreviewLine)).toBe(false);
+  });
+
+  it("treats a lone carriage return as a line break for the line bound", () => {
+    const body = Array.from({ length: 60 }, (_, i) => `row ${i}`).join("\r");
+    const lines = formatForgeIssueCommentPreviewLines({
+      worktreePath: "/w",
+      issueNumber: 1,
+      body,
+    });
+    expect(lines.some(isCautionPreviewLine)).toBe(true);
+    expect(lines.join("\n")).not.toContain("row 59");
   });
 });

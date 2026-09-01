@@ -653,7 +653,10 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     category: "git",
     kind: "command",
     // Deliberately unattended at system tier (#12118) despite the wider reach:
-    // the working tree is untouched and `git.unstageAll` reverses it whole.
+    // no working-tree content can be lost, and the staging can be redone. Note
+    // the inverse is not exact — `git.unstageAll` resets the index to HEAD, so
+    // a partial selection staged earlier (`git add -p` in a terminal) is not
+    // restored by it. What that costs is the selection, never the edits.
     danger: "safe",
     scope: "renderer",
     argsSchema: withWorktreeLocation({}, { legacy: ["cwd"] }).optional(),

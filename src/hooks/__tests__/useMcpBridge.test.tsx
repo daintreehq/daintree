@@ -1695,6 +1695,83 @@ describe("useMcpBridge", () => {
     );
   });
 
+  // The pin used to KEEP every selector the caller sent and merely add `cwd`.
+  // That was both weaker and more brittle than it looked: `worktreeId` wins
+  // outright in `resolveWorktreeLocation`, so the pinned cwd was never
+  // consulted for an id-named dispatch; and an id alongside a DIFFERENT path
+  // (which used to dispatch fine, the id winning) tripped the resolver's
+  // contradictory-spellings guard once a third spelling was added, failing a
+  // dispatch the human had already approved.
+  it("replaces every selector spelling with the one canonical previewed cwd", async () => {
+    setWorktreePathIndexAccessor(() => new Map([["wt-1", "/repo/one"]]));
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/active" });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-canonical-pin",
+      actionId: "git.push",
+      args: { worktreeId: "wt-1", worktreePath: "/somewhere-else", setUpstream: true },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { setUpstream: true, cwd: "/repo/one" },
+      expect.objectContaining({ source: "agent", confirmed: true })
+    );
+  });
+
+  it("pins nothing when the forge target could not resolve a repository", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({
+        id: "forge.addIssueComment",
+        name: "forge.addIssueComment",
+        title: "Add Issue Comment",
+        category: "forge",
+      })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+    mocks.getContext.mockReturnValue({});
+
+    renderHook(() => useMcpBridge());
+
+    const args = { issueNumber: 4, body: "still broken" };
+    const dispatched = dispatchHandler?.({
+      requestId: "req-no-pin-forge",
+      actionId: "forge.addIssueComment",
+      args,
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    // The content still reached the approver, with the unknown target flagged.
+    const preview = (useMcpConfirmStore.getState().current?.preview ?? []).join("\n");
+    expect(preview).toContain("still broken");
+    expect(preview).toContain("Couldn't identify the repository");
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    // No `cwd: undefined` smuggled in — that would replace a selector the
+    // caller might have supplied with a field that fails `.min(1)`.
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "forge.addIssueComment",
+      args,
+      expect.objectContaining({ source: "agent", confirmed: true })
+    );
+  });
+
   it("leaves non-git dispatch args untouched by cwd pinning", async () => {
     mocks.get.mockReturnValue(confirmManifestEntry());
     mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
@@ -2663,17 +2740,34 @@ describe("forge write previews (#12118)", () => {
     ).toBeUndefined();
   });
 
-  it("refuses to preview when the named worktree is unusable, rather than substituting the active one", () => {
+  // An unresolvable repository leaves `worktreePath` undefined rather than
+  // killing the preview. Dropping the card would hand the approver the redacted
+  // argument summary for the one action whose content is the point, and an id
+  // missing from the index at modal-open can be present when `run()`
+  // re-resolves it — publishing on an approval that never saw the text. The
+  // formatter states the unknown target as a caution instead, and nothing is
+  // pinned. Critically it is still never SUBSTITUTED with the active worktree.
+  it("previews the content but no worktree when the named selector is unusable", () => {
     expect(
       resolveMcpConfirmPreviewTarget("forge.createIssue", { cwd: "", title: "t" }, undefined)
-    ).toBeUndefined();
+    ).toEqual({
+      kind: "forgeCreateIssue",
+      worktreePath: undefined,
+      title: "t",
+      body: undefined,
+      labels: undefined,
+    });
   });
 
-  it("refuses to preview when no worktree resolves at all", () => {
+  it("previews the content but no worktree when none resolves at all", () => {
     mocks.getContext.mockReturnValue({});
-    expect(
-      resolveMcpConfirmPreviewTarget("forge.createIssue", { title: "t" }, undefined)
-    ).toBeUndefined();
+    expect(resolveMcpConfirmPreviewTarget("forge.createIssue", { title: "t" }, undefined)).toEqual({
+      kind: "forgeCreateIssue",
+      worktreePath: undefined,
+      title: "t",
+      body: undefined,
+      labels: undefined,
+    });
   });
 
   it("builds the issue preview synchronously, with no fetch", async () => {

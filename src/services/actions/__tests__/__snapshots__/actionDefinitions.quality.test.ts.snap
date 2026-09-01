@@ -2133,8 +2133,8 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "forge",
-    "danger": "safe",
-    "dangerRationale": undefined,
+    "danger": "confirm",
+    "dangerRationale": "Reopens an issue on the shared forge and notifies its watchers. Closing it again does not restore the reason it was closed for, and the notification cannot be withdrawn.",
     "description": "Reopen a closed issue, putting it back in the active queue and notifying watchers. This is publicly visible and reversible by closing it again.",
     "examples": undefined,
     "id": "forge.reopenIssue",

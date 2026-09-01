@@ -71,6 +71,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "forge.editIssue",
   "forge.createIssue",
   "forge.addIssueComment",
+  "forge.reopenIssue",
   "session.bookmarkAndClose",
   "session.bookmark.delete",
 ]);
@@ -146,6 +147,13 @@ const BYPASS_WIRED = new Set([
   // is no user-side dispatch path to co-locate a ConfirmDialog with.
   "forge.createIssue",
   "forge.addIssueComment",
+  // `forge.reopenIssue` joins them for symmetry with its own inverse
+  // `forge.closeIssue`, which has been `confirm` since #10653: both are
+  // publicly visible issue-state transitions that notify watchers, and
+  // re-closing does not restore the `stateReason` the issue was closed for. It
+  // needs no content preview — it authors nothing, and its only argument is an
+  // issue number the argument disclosure shows verbatim.
+  "forge.reopenIssue",
   // Session bookmarks (#11288): Phase 1 is programmatic/MCP-only and palette-hidden;
   // confirmation is the explicit `confirmed: true` arg. The Phase-2 pane dialog
   // will add a co-located ConfirmDialog; until then there is none to scan.

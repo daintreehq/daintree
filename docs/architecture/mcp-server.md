@@ -538,7 +538,7 @@ Every action below is in `SYSTEM_TIER_ADDONS` and requires the `system` tier (or
 | `forge.editPR` | confirm | mutation | no | `prNumber`, `title?`, `body?` (at least one), `cwd?` |
 | `forge.createIssue` | confirm | standard | yes | `title`, `body?`, `labels?`, `cwd?` |
 | `forge.closeIssue` | confirm | standard | no | `issueNumber`, `stateReason?`, `cwd?` |
-| `forge.reopenIssue` | safe | standard | no | `issueNumber`, `cwd?` |
+| `forge.reopenIssue` | confirm | standard | no | `issueNumber`, `cwd?` |
 | `forge.editIssue` | confirm | standard | no | `issueNumber`, `title?`, `body?` (at least one), `cwd?` |
 | `forge.addIssueComment` | confirm | standard | yes | `issueNumber`, `body`, `cwd?` |
 | `forge.addIssueLabel` | safe | standard | no | `issueNumber`, `label`, `cwd?` |

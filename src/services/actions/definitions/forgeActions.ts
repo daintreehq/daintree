@@ -1203,10 +1203,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Reopen a closed issue, putting it back in the active queue and notifying watchers. This is publicly visible and reversible by closing it again.",
       category: "forge",
       kind: "command",
-      // Deliberately unattended at system tier (#12118). `forge.closeIssue` is
-      // `confirm` because closing HIDES work; reopening hides nothing, authors
-      // nothing, creates no new record, and closing again is its exact inverse.
-      danger: "safe",
+      danger: "confirm",
+      dangerRationale:
+        "Reopens an issue on the shared forge and notifies its watchers. Closing it again does not restore the reason it was closed for, and the notification cannot be withdrawn.",
       scope: "renderer",
       argsSchema: z.object({
         ...worktreeLocationShape({ legacy: ["cwd"] }),

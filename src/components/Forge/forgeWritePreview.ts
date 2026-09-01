@@ -1,6 +1,6 @@
 /**
- * Content previews for the two forge writes that publish something a person
- * cannot retract (#12118).
+ * Content previews for the forge writes that publish something a person cannot
+ * retract (#12118).
  *
  * `forge.createIssue` and `forge.addIssueComment` are `danger:"confirm"`, and
  * for an agent dispatch the only surface a human sees is `McpConfirmDialog`.
@@ -31,6 +31,9 @@ const MAX_BODY_CHARS = 1500;
 const MAX_BODY_LINES = 30;
 /** Forges cap titles well below this; the bound is for a caller that ignores that. */
 const MAX_TITLE_CHARS = 200;
+/** Long enough for any real label or path, short enough that neither can flood the card. */
+const MAX_LABEL_CHARS = 80;
+const MAX_PATH_CHARS = 200;
 const MAX_LABELS = 20;
 
 /**
@@ -46,17 +49,51 @@ const MAX_LABELS = 20;
  */
 const CONTENT_INDENT = "  ";
 
-function indent(text: string): string[] {
-  return text.split("\n").map((line) => `${CONTENT_INDENT}${line}`);
+/** A caution line, in the host's own voice. */
+function caution(text: string): string {
+  return `${MCP_PREVIEW_CAUTION_PREFIX}${text}`;
 }
 
-/** The text as it will be shown, plus how many characters that leaves out. */
-function boundText(text: string, maxChars: number, maxLines: number) {
-  let shown = text;
-  if (shown.length > maxChars) shown = shown.slice(0, maxChars);
-  const lines = shown.split("\n");
+/**
+ * Split on every line terminator a caller can send, not just `\n`.
+ *
+ * A body using lone `\r` breaks would otherwise count as one line and slip the
+ * whole of itself past the line bound while still rendering as many rows.
+ */
+function splitLines(text: string): string[] {
+  return text.split(/\r\n|\r|\n/);
+}
+
+function indent(text: string): string[] {
+  return splitLines(text).map((line) => `${CONTENT_INDENT}${line}`);
+}
+
+/**
+ * Bound `text`, counting and cutting by CODE POINT rather than UTF-16 unit.
+ *
+ * `slice()` on a unit index bisects a surrogate pair, so an emoji on the
+ * boundary renders as a replacement glyph and the "N more characters" count
+ * describes units nobody typed. Neither is a safety hole on its own, but a
+ * preview whose whole job is to show exactly what gets published should not
+ * mangle it, and the count an approver reads should be in the units they think
+ * in.
+ */
+function boundText(
+  text: string,
+  maxChars: number,
+  maxLines: number
+): { shown: string; omitted: number } {
+  const points = Array.from(text);
+  let shown = points.length > maxChars ? points.slice(0, maxChars).join("") : text;
+  const lines = splitLines(shown);
   if (lines.length > maxLines) shown = lines.slice(0, maxLines).join("\n");
-  return { shown, omitted: text.length - shown.length };
+  return { shown, omitted: points.length - Array.from(shown).length };
+}
+
+/** One bounded value on a single line, for a label or a path. */
+function boundValue(text: string, maxChars: number): string {
+  const points = Array.from(text);
+  return points.length > maxChars ? `${points.slice(0, maxChars - 1).join("")}…` : text;
 }
 
 /**
@@ -67,29 +104,42 @@ function boundText(text: string, maxChars: number, maxLines: number) {
  * part of a body and take their approval for the whole of it — the same defect
  * as previewing a count instead of content, one level down.
  */
-function contentSection(heading: string, text: string, maxChars: number, maxLines: number) {
+function contentSection(
+  heading: string,
+  text: string,
+  maxChars: number,
+  maxLines: number
+): string[] {
   const { shown, omitted } = boundText(text, maxChars, maxLines);
   const lines = [`${heading}:`, ...indent(shown)];
   if (omitted > 0) {
     lines.push(
-      `${MCP_PREVIEW_CAUTION_PREFIX}Shown in part — ${omitted} more character${
-        omitted === 1 ? "" : "s"
-      } will be published than appear above.`
+      caution(
+        `Shown in part — ${omitted} more character${omitted === 1 ? "" : "s"} will be published than appear above.`
+      )
     );
   }
   return lines;
 }
 
 export interface ForgeCreateIssuePreview {
-  /** The worktree whose forge remote the issue is filed against. */
-  worktreePath: string;
+  /**
+   * The worktree whose forge remote the issue is filed against, or `undefined`
+   * when the dispatch named one this view cannot resolve.
+   *
+   * Optional on purpose. Withholding the whole preview because the repository
+   * could not be identified would hand the approver the redacted argument
+   * summary for the one action whose content is the point — so the content is
+   * always shown and the unresolved target is stated as a caution instead.
+   */
+  worktreePath: string | undefined;
   title: string;
   body: string | undefined;
   labels: readonly string[] | undefined;
 }
 
 export interface ForgeIssueCommentPreview {
-  worktreePath: string;
+  worktreePath: string | undefined;
   issueNumber: number;
   body: string;
 }
@@ -102,8 +152,37 @@ export interface ForgeIssueCommentPreview {
  * the failure this action's own guidance warns about, and until #12118 nothing
  * put it in front of a human.
  */
-function worktreeLine(worktreePath: string): string {
-  return `Worktree: ${worktreePath}`;
+function worktreeLine(worktreePath: string | undefined): string {
+  return worktreePath === undefined
+    ? caution(
+        "Couldn't identify the repository this would be published to. Approve only if you already know which one the dispatch targets."
+      )
+    : `Worktree: ${boundValue(worktreePath, MAX_PATH_CHARS)}`;
+}
+
+/**
+ * Labels one per line rather than joined.
+ *
+ * A comma-joined list cannot be read back unambiguously — `["a, b"]` and
+ * `["a", "b"]` render identically — and a bare `(+N more)` tail is the count
+ * the D2 rule calls insufficient. Every label that will be applied is either
+ * shown on its own line or accounted for by a caution in the host's voice.
+ */
+function labelSection(labels: readonly string[] | undefined): string[] {
+  const list = labels ?? [];
+  if (list.length === 0) return ["Labels: (none)"];
+  const shown = list.slice(0, MAX_LABELS);
+  const lines = [
+    "Labels:",
+    ...shown.map((l) => `${CONTENT_INDENT}${boundValue(l, MAX_LABEL_CHARS)}`),
+  ];
+  const rest = list.length - shown.length;
+  if (rest > 0) {
+    lines.push(
+      caution(`${rest} further label${rest === 1 ? "" : "s"} will be applied but are not listed.`)
+    );
+  }
+  return lines;
 }
 
 export function formatForgeCreateIssuePreviewLines(preview: ForgeCreateIssuePreview): string[] {
@@ -114,15 +193,7 @@ export function formatForgeCreateIssuePreviewLines(preview: ForgeCreateIssuePrev
       ? ["Body:", `${CONTENT_INDENT}(none)`]
       : contentSection("Body", preview.body, MAX_BODY_CHARS, MAX_BODY_LINES))
   );
-
-  const labels = preview.labels ?? [];
-  if (labels.length === 0) {
-    lines.push("Labels: (none)");
-  } else {
-    const shown = labels.slice(0, MAX_LABELS);
-    const rest = labels.length - shown.length;
-    lines.push(`Labels: ${shown.join(", ")}${rest > 0 ? ` (+${rest} more)` : ""}`);
-  }
+  lines.push(...labelSection(preview.labels));
   return lines;
 }
 

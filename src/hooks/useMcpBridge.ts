@@ -232,6 +232,13 @@ type GitLocationArg =
 
 const GIT_LOCATION_KEYS = ["worktreeId", "worktreePath", "cwd"] as const;
 
+/**
+ * Every spelling that identifies a worktree, including the two legacy aliases
+ * `readGitLocationArg` does not read. The pin strips all of them so the
+ * approved dispatch carries exactly the one selector that was previewed.
+ */
+const WORKTREE_SELECTOR_KEYS = new Set(["worktreeId", "worktreePath", "cwd", "rootPath", "path"]);
+
 function readGitLocationArg(args: unknown): GitLocationArg {
   if (args === null || typeof args !== "object" || Array.isArray(args)) return { state: "omitted" };
   const record = args as Record<string, unknown>;
@@ -343,8 +350,10 @@ type ForgeIssueCommentContent = Omit<ForgeIssueCommentPreview, "worktreePath">;
  * Mirrors `argsSchema` rather than approximating it — non-empty title, optional
  * string body, optional array of string labels — so a preview can only ever
  * describe a dispatch that would also pass validation. Strings are carried
- * verbatim: trimming or collapsing them here would show an approver something
- * other than the bytes that get posted.
+ * through untouched: normalizing them here would show an approver something
+ * other than what the dispatch carries. (The forge provider trims the title of
+ * its own accord, so the published title can be this one minus surrounding
+ * whitespace; nothing else is rewritten downstream.)
  */
 function readForgeCreateIssueContent(args: unknown): ForgeContentArg<ForgeCreateIssueContent> {
   if (args === null || typeof args !== "object" || Array.isArray(args)) return { state: "omitted" };
@@ -377,7 +386,10 @@ function readForgeIssueCommentContent(args: unknown): ForgeContentArg<ForgeIssue
   const issueNumber = "issueNumber" in args ? args.issueNumber : undefined;
   const body = "body" in args ? args.body : undefined;
   if (issueNumber === undefined && body === undefined) return { state: "omitted" };
-  if (typeof issueNumber !== "number" || !Number.isInteger(issueNumber) || issueNumber <= 0) {
+  // `Number.isSafeInteger`, not `isInteger`: zod's `.int()` accepts only safe
+  // integers, so `isInteger` would render a preview for an issue number
+  // `argsSchema` then rejects.
+  if (typeof issueNumber !== "number" || !Number.isSafeInteger(issueNumber) || issueNumber <= 0) {
     return { state: "invalid" };
   }
   if (typeof body !== "string" || body.length === 0) return { state: "invalid" };
@@ -453,23 +465,34 @@ export function resolveMcpConfirmPreviewTarget(
   }
   // The forge writes resolve their worktree the same way — neither takes a
   // repository argument, so the worktree IS the repository selection — and then
-  // read the authored content straight out of the arguments. Both halves must
-  // land or there is no preview: a card naming a repository with no content, or
-  // content with no repository, is half of what the approver is consenting to.
+  // read the authored content straight out of the arguments.
+  //
+  // The CONTENT decides whether there is a preview at all; an unresolvable
+  // worktree does not suppress it. Withholding the card because the repository
+  // could not be identified would drop the approver back to the redacted
+  // argument summary for the one action whose content is the whole point, and
+  // an id absent from the index at modal-open can be present by the time
+  // `run()` re-resolves it — publishing on an approval that was never shown the
+  // text. The unresolved target is stated as a caution in the card instead, and
+  // nothing gets pinned, so `run()` resolves it live exactly as it would have.
   if (actionId === "forge.createIssue") {
-    const worktreePath = resolvePreviewWorktreePath(args, context);
-    if (worktreePath === undefined) return undefined;
     const content = readForgeCreateIssueContent(args);
     return content.state === "supplied"
-      ? { kind: "forgeCreateIssue", worktreePath, ...content.value }
+      ? {
+          kind: "forgeCreateIssue",
+          worktreePath: resolvePreviewWorktreePath(args, context),
+          ...content.value,
+        }
       : undefined;
   }
   if (actionId === "forge.addIssueComment") {
-    const worktreePath = resolvePreviewWorktreePath(args, context);
-    if (worktreePath === undefined) return undefined;
     const content = readForgeIssueCommentContent(args);
     return content.state === "supplied"
-      ? { kind: "forgeAddIssueComment", worktreePath, ...content.value }
+      ? {
+          kind: "forgeAddIssueComment",
+          worktreePath: resolvePreviewWorktreePath(args, context),
+          ...content.value,
+        }
       : undefined;
   }
   // Any dispatch carrying a recipe id — `recipe.run` and the two composites that
@@ -825,9 +848,29 @@ function withPreviewedWorktreeCwd(
     target.kind === "forgeCreateIssue" || target.kind === "forgeAddIssueComment"
       ? target.worktreePath
       : target.cwd;
+  // A forge target can carry no path (the repository was unresolvable). There
+  // is nothing to pin then, and writing `cwd: undefined` would replace a
+  // selector the caller did supply with a field that fails `.min(1)`.
+  if (cwd === undefined) return args;
   if (args === undefined) return { cwd };
   if (args === null || typeof args !== "object" || Array.isArray(args)) return args;
-  return { ...args, cwd };
+  // Drop every other spelling and leave exactly one canonical selector.
+  //
+  // Keeping them alongside the pin was both weaker and more brittle than it
+  // looked. Weaker: `resolveWorktreeLocation` lets `worktreeId` win outright,
+  // so a pinned `cwd` was never consulted for an id-named dispatch and the
+  // "acts on the previewed worktree" guarantee did not hold if that id's path
+  // changed behind the modal. More brittle: a caller naming `worktreeId` plus a
+  // DIFFERENT `worktreePath` used to dispatch fine (the id won, the path was
+  // ignored), but with a third spelling added it trips the resolver's
+  // contradictory-spellings guard — turning an approved dispatch into a failure
+  // it would not have had. One selector, the one that was previewed, is both
+  // the honest attestation and the only shape neither hazard applies to.
+  const pinned: Record<string, unknown> = { cwd };
+  for (const [key, value] of Object.entries(args)) {
+    if (!WORKTREE_SELECTOR_KEYS.has(key)) pinned[key] = value;
+  }
+  return pinned;
 }
 
 /**

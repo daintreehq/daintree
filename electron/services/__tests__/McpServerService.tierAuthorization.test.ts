@@ -1360,6 +1360,7 @@ describe("McpServerService", () => {
         id: "forge.reopenIssue" as ActionId,
         title: "Reopen Issue (Forge)",
         description: "Reopen an issue via the forge provider",
+        danger: "confirm",
       }),
       createManifestEntry({
         id: "forge.editIssue" as ActionId,
@@ -1627,7 +1628,7 @@ describe("McpServerService", () => {
       // either fires. This asserts the classification survives all the way to
       // the wire — the fixture defaults an unspecified entry to "safe", so a
       // manifest that drifted back would read as green everywhere else.
-      for (const id of ["forge.createIssue", "forge.addIssueComment"]) {
+      for (const id of ["forge.createIssue", "forge.addIssueComment", "forge.reopenIssue"]) {
         expect(byName.get(id)?.annotations?.destructiveHint).toBe(true);
       }
 
@@ -1639,7 +1640,6 @@ describe("McpServerService", () => {
         "forge.unassignIssue",
         "forge.addIssueLabel",
         "forge.removeIssueLabel",
-        "forge.reopenIssue",
         "git.commit",
         "git.stageFile",
         "git.unstageFile",
