@@ -1782,4 +1782,28 @@ describe("computeChipCounts — dev-server counts", () => {
     expect(counts.devServer.running).toBe(0);
     expect(counts.devServer.hasDevServer).toBe(0);
   });
+
+  it("excludes only the counted facet when type and dev-server filters intersect", () => {
+    const worktrees = [
+      createMockWorktree({ id: "w1", branch: "feature/a" }),
+      createMockWorktree({ id: "w2", branch: "bugfix/b" }),
+      createMockWorktree({ id: "w3", branch: "feature/c" }),
+    ];
+    const sessions: Record<string, DevPreviewSessionState> = {
+      w1: makeDevSession("running", { worktreeId: "w1" }),
+      w2: makeDevSession("error", { worktreeId: "w2" }),
+      w3: makeDevSession("stopped", { worktreeId: "w3" }),
+    };
+    const filters = createEmptyFilters();
+    filters.typeFilters.add("feature");
+    filters.devServerFilters.add("error");
+
+    const counts = computeChipCounts(worktrees, new Map(), null, filters, sessions);
+
+    expect(counts.branchType.bugfix).toBe(1);
+    expect(counts.branchType.feature).toBe(0);
+    expect(counts.devServer.running).toBe(1);
+    expect(counts.devServer.hasDevServer).toBe(1);
+    expect(counts.devServer.error).toBe(0);
+  });
 });
