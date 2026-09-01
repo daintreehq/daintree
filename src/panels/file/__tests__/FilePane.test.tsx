@@ -2869,3 +2869,121 @@ describe("FilePane re-reads when the project view is revealed (#11588)", () => {
     });
   });
 });
+
+// #12136: one shared toolbar control puts the file's raw text on the clipboard.
+// What this suite owns is the data FilePane selects for it and where it sits;
+// the flash timing and cleanup belong to FileViewerToolbar's own suite.
+describe("FilePane copy file contents (#12136)", () => {
+  const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+  const copyButton = () => screen.queryByRole("button", { name: "Copy file contents" });
+
+  beforeEach(() => {
+    writeText.mockReset();
+    writeText.mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  });
+
+  async function renderPane(filePath: string, fileViewMode?: string, worktreeId?: string) {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath, fileViewMode, worktreeId };
+    const view = render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title={filePath.split("/").pop() ?? filePath}
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+    // Can't wait on readMock — the media branches short-circuit before it.
+    await act(async () => {});
+    return view;
+  }
+
+  async function copy() {
+    fireEvent.click(await screen.findByRole("button", { name: "Copy file contents" }));
+  }
+
+  it("copies the text of a loaded file", async () => {
+    readMock.mockResolvedValue({ content: "const a = 1;\n" });
+    await renderPane("/repo/src/index.ts");
+
+    await copy();
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("const a = 1;\n"));
+  });
+
+  it("copies markdown source while the rendered view is showing", async () => {
+    readMock.mockResolvedValue({ content: "# title\n\nbody\n" });
+    await renderPane("/repo/docs/spec.md", "rendered");
+
+    await copy();
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("# title\n\nbody\n"));
+  });
+
+  it("copies the file, not the diff, while the diff view is showing", async () => {
+    // Deliberately different strings: the pane holds both at once, and a gate on
+    // the wrong one would still look right in every other mode.
+    readMock.mockResolvedValue({ content: "the whole file\n" });
+    useDiffContentMock.mockReturnValue({
+      content: "@@ -1 +1 @@\n-old\n+new\n",
+      stale: false,
+      retry: vi.fn(),
+    });
+    worktreeState.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo",
+      worktreeChanges: { changes: [{ path: "/repo/src/index.ts", status: "modified" }] },
+    });
+    await renderPane("/repo/src/index.ts", "diff", "wt-1");
+
+    await copy();
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("the whole file\n"));
+  });
+
+  it("withholds the control until the read settles", async () => {
+    readMock.mockReturnValue(new Promise(() => {}));
+    await renderPane("/repo/src/index.ts");
+
+    expect(copyButton()).toBeNull();
+  });
+
+  it("withholds the control when the read failed as binary", async () => {
+    readMock.mockRejectedValue(Object.assign(new Error("binary"), { code: "BINARY_FILE" }));
+    await renderPane("/repo/src/blob.bin");
+
+    // The extension says nothing here; the read is what knows, and its failure
+    // is what has to keep the button away.
+    expect(copyButton()).toBeNull();
+  });
+
+  it.each([
+    ["an image", "/repo/logo.png"],
+    ["an SVG", "/repo/icon.svg"],
+    ["a video", "/repo/media/demo.webm"],
+    ["audio", "/repo/media/track.mp3"],
+    ["a PDF", "/repo/docs/spec.pdf"],
+  ])("withholds the control for %s", async (_case, filePath) => {
+    await renderPane(filePath);
+
+    expect(copyButton()).toBeNull();
+  });
+
+  it("sits ahead of Reveal and Open in editor", async () => {
+    readMock.mockResolvedValue({ content: "x" });
+    await renderPane("/repo/src/index.ts");
+    await screen.findByRole("button", { name: "Copy file contents" });
+
+    const buttons = Array.from(screen.getByRole("toolbar").querySelectorAll("button")).map((b) =>
+      b.getAttribute("aria-label")
+    );
+    // The reveal label is platform-worded, so pin the shape rather than the
+    // word: Copy contents, then reveal, then open. FileBrowserViewer's suite
+    // asserts the identical suffix — that parity is what #12136 asked for.
+    expect(buttons.indexOf("Open in editor") - buttons.indexOf("Copy file contents")).toBe(2);
+  });
+});

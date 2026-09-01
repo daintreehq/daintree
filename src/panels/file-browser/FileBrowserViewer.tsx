@@ -509,6 +509,14 @@ export function FileBrowserViewer({
           )}
           {filePath && (
             <>
+              {/* Same control, same order as FilePane's action group. Raw text
+                  only: `svg` keeps sanitized markup rather than the source it
+                  was built from, and every media/error state carries none at
+                  all, so both fall through to `null` and render nothing. */}
+              <FileViewerToolbar.CopyContentsButton
+                key={filePath}
+                contents={state.status === "text" || state.status === "html" ? state.content : null}
+              />
               <FileViewerToolbar.IconButton
                 label={reveal.label}
                 onClick={() => void handleExternalAction("reveal")}

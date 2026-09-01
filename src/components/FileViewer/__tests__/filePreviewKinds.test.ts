@@ -3,6 +3,7 @@ import {
   buildDaintreeFileUrl,
   buildDaintreePdfUrl,
   isAudioFilePath,
+  isFileContentsCopyCandidate,
   isImageFilePath,
   isPdfFilePath,
   isSvgFilePath,
@@ -217,6 +218,57 @@ describe("filePreviewKinds", () => {
     it("encodes path and root as query params", () => {
       const url = buildDaintreeFileUrl("/a dir/clip.mp4", "/a dir");
       expect(url).toBe("daintree-file://load?path=%2Fa%20dir%2Fclip.mp4&root=%2Fa%20dir");
+    });
+  });
+
+  describe("isFileContentsCopyCandidate", () => {
+    it.each([
+      "/repo/logo.png",
+      "/repo/photo.JPEG",
+      "/repo/icon.svg",
+      "/repo/clip.mp4",
+      "/repo/clip.mov",
+      "/repo/track.mp3",
+      "/repo/track.wma",
+      "/repo/spec.pdf",
+    ])("refuses %s", (filePath) => {
+      expect(isFileContentsCopyCandidate(filePath)).toBe(false);
+    });
+
+    it.each([
+      "/repo/index.ts",
+      "/repo/README.md",
+      "/repo/page.html",
+      "/repo/Makefile",
+      "/repo/.env",
+    ])("offers %s", (filePath) => {
+      expect(isFileContentsCopyCandidate(filePath)).toBe(true);
+    });
+
+    it("is optimistic for formats it doesn't recognise", () => {
+      // The predicate runs before anything has read the file, so a positive is
+      // only "nothing here rules it out". `files:read` is what actually rejects
+      // a binary, and pinning that here stops a later change from quietly
+      // promoting this to a completeness claim it can't make.
+      expect(isFileContentsCopyCandidate("/repo/archive.zip")).toBe(true);
+    });
+
+    it("refuses every kind the two viewers classify as non-text", () => {
+      // The gate must stay the exact complement of the preview classifiers: a
+      // new media kind added there without being composed in here would offer
+      // "copy contents" for a file the viewer never shows as text.
+      const nonText = ["/a.png", "/a.svg", "/a.webm", "/a.mkv", "/a.flac", "/a.aiff", "/a.pdf"];
+      for (const filePath of nonText) {
+        const classified =
+          isImageFilePath(filePath) ||
+          isVideoFilePath(filePath) ||
+          isUnsupportedVideoFilePath(filePath) ||
+          isAudioFilePath(filePath) ||
+          isUnsupportedAudioFilePath(filePath) ||
+          isPdfFilePath(filePath);
+        expect(classified).toBe(true);
+        expect(isFileContentsCopyCandidate(filePath)).toBe(false);
+      }
     });
   });
 

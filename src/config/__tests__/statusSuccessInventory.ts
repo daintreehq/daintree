@@ -258,8 +258,16 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "transient",
       signature: "text-status-success",
+      anchor: 'aria-label="Copy file path"',
       expectedOccurrences: 1,
       rationale: "Copy-path confirmation; resets when the copy flash times out",
+    },
+    {
+      category: "transient",
+      signature: "text-status-success",
+      anchor: 'label="Copy file contents"',
+      expectedOccurrences: 1,
+      rationale: "Copy-file-contents confirmation; resets when the copy flash times out",
     },
   ],
   "src/components/FileViewer/diffChangeSet.ts": [
@@ -1041,5 +1049,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 125;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 146;
+export const EXPECTED_STATUS_SUCCESS_SITES = 126;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 147;

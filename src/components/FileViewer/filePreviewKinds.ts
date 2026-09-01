@@ -100,6 +100,30 @@ export const UNSUPPORTED_AUDIO_MESSAGE =
   "Can't play this audio format — only MP3, WAV, FLAC, Ogg, Opus, M4A, and AAC are supported";
 
 /**
+ * Whether a path is worth offering "copy contents" for, judged on extension
+ * alone — the answer a surface needs *before* reading anything.
+ *
+ * "Candidate" rather than "isText": the negative is authoritative (a `.png` has
+ * no text to copy and never will), while the positive only says nothing here
+ * rules it out. An extensionless binary still reads as a candidate and is
+ * caught at read time, where `files:read` already reports BINARY_FILE.
+ *
+ * Surfaces that have already loaded the file must gate on their own load state
+ * instead: that knows about binary detection, the 512KiB cap and LFS pointers,
+ * none of which an extension can see.
+ */
+export function isFileContentsCopyCandidate(filePath: string): boolean {
+  return !(
+    isImageFilePath(filePath) ||
+    isVideoFilePath(filePath) ||
+    isUnsupportedVideoFilePath(filePath) ||
+    isAudioFilePath(filePath) ||
+    isUnsupportedAudioFilePath(filePath) ||
+    isPdfFilePath(filePath)
+  );
+}
+
+/**
  * URL for the custom `daintree-file://` protocol, which serves a file from
  * inside a known root. Used as an `<img>` src so raster images never round-trip
  * through a base64 IPC read.

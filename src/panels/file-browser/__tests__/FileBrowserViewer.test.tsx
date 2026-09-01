@@ -923,3 +923,91 @@ describe("view options ownership (#11620, consolidated)", () => {
     expect(screen.getByTestId("file-browser-view-options")).toBeTruthy();
   });
 });
+
+describe("FileBrowserViewer copy file contents (#12136)", () => {
+  const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+  const copyButton = () => screen.queryByRole("button", { name: "Copy file contents" });
+
+  beforeEach(() => {
+    writeText.mockReset();
+    writeText.mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  });
+
+  it("copies the raw source of a text file", async () => {
+    readMock.mockResolvedValue({ content: "const a = 1;\n" });
+    renderViewer("/repo/src/notes.txt");
+
+    const button = await screen.findByRole("button", { name: "Copy file contents" });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("const a = 1;\n"));
+  });
+
+  it("copies markdown source while the rendered view is showing", async () => {
+    readMock.mockResolvedValue({ content: "# hello\n\nbody\n" });
+    renderViewer("/repo/docs/spec.md");
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Copy file contents" }));
+
+    // The raw markdown, not the HTML the renderer produced from it — the whole
+    // point of the control is that the view mode doesn't change what it yields.
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("# hello\n\nbody\n"));
+  });
+
+  it("copies HTML source rather than the sandboxed preview", async () => {
+    readMock.mockResolvedValue({
+      content: "<h1>hi</h1>\n",
+      htmlPreviewUrl: "daintree-html://preview/1",
+    });
+    renderViewer("/repo/page.html");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Copy file contents" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("<h1>hi</h1>\n"));
+  });
+
+  it("withholds the control until the read settles", async () => {
+    readMock.mockReturnValue(new Promise(() => {}));
+    renderViewer("/repo/src/notes.txt");
+    await act(async () => {});
+
+    // `loading` carries no content; offering the button here would copy nothing.
+    expect(copyButton()).toBeNull();
+  });
+
+  it.each([
+    ["an image", "/repo/logo.png"],
+    ["an SVG", "/repo/icon.svg"],
+    ["a PDF", "/repo/docs/spec.pdf"],
+  ])("withholds the control for %s", async (_case, filePath) => {
+    renderViewer(filePath);
+    await act(async () => {});
+
+    // SVG is read as text but only its sanitized markup is kept, so there is no
+    // raw source left to hand back — same answer as the binary previews.
+    expect(copyButton()).toBeNull();
+  });
+
+  it("withholds the control when the read failed", async () => {
+    readMock.mockRejectedValue(Object.assign(new Error("binary"), { code: "BINARY_FILE" }));
+    renderViewer("/repo/src/blob.bin");
+    await act(async () => {});
+
+    expect(copyButton()).toBeNull();
+  });
+
+  it("sits ahead of Reveal and Open in editor, the same suffix FilePane renders", async () => {
+    readMock.mockResolvedValue({ content: "x" });
+    renderViewer("/repo/src/notes.txt");
+    await screen.findByRole("button", { name: "Copy file contents" });
+
+    const buttons = Array.from(screen.getByRole("toolbar").querySelectorAll("button")).map((b) =>
+      b.getAttribute("aria-label")
+    );
+    // The reveal label is platform-worded, so pin the shape rather than the
+    // word: Copy contents, then reveal, then open.
+    expect(buttons.indexOf("Open in editor") - buttons.indexOf("Copy file contents")).toBe(2);
+  });
+});

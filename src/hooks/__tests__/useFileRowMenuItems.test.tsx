@@ -81,6 +81,11 @@ import {
 
 const WORKTREE = "/repo";
 
+// Typed at the declaration rather than cast at each use: `navigator.clipboard`
+// is `Clipboard`, so reading `.mock` off it needs an assertion that the ratchet
+// counts. One typed double serves every assertion here.
+const writeTextMock = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+
 function target(overrides: Partial<FileRowMenuTarget> = {}): FileRowMenuTarget {
   return {
     absolutePath: "/repo/src/index.ts",
@@ -145,9 +150,9 @@ beforeEach(() => {
   copyContextMock.mockClear();
   itemsRef.current = [];
   insertRef.current = { canInsert: true, insert: vi.fn(() => true) };
-  Object.assign(navigator, {
-    clipboard: { writeText: vi.fn(() => Promise.resolve()) },
-  });
+  writeTextMock.mockReset();
+  writeTextMock.mockResolvedValue(undefined);
+  Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
 });
 
 afterEach(() => cleanup());
@@ -165,6 +170,7 @@ describe("useFileRowMenuItems — canonical order", () => {
       "Copy path",
       "Copy relative path",
       "Copy file name",
+      "Copy file contents",
       "Reveal in Finder",
     ]);
   });
@@ -312,6 +318,101 @@ describe("useFileRowMenuItems — path semantics", () => {
     writeText.mockClear();
     payload.action!.onClick();
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("/repo/src/index.ts"));
+  });
+});
+
+describe("useFileRowMenuItems — Copy file contents", () => {
+  it("reads through the contained file.read action and writes exactly what came back", async () => {
+    dispatchMock.mockImplementation((id) =>
+      id === "file.read"
+        ? Promise.resolve({ ok: true, result: { content: "raw\nsource\n" } })
+        : Promise.resolve({ ok: true, result: undefined })
+    );
+    const menu = await openMenu();
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy file contents" }));
+
+    await waitFor(() => {
+      const call = dispatchMock.mock.calls.find(([id]) => id === "file.read");
+      expect(call).toBeDefined();
+      // filesClient.read would skip the action's containment check, which is
+      // what keeps this off arbitrary paths outside the project.
+      expect(call![1]).toEqual({ path: "/repo/src/index.ts" });
+      expect(call![2]).toEqual({ source: "context-menu" });
+    });
+    await waitFor(() => expect(writeTextMock).toHaveBeenCalledWith("raw\nsource\n"));
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("raises a retryable toast when the read fails, and writes nothing", async () => {
+    dispatchMock.mockImplementation((id) =>
+      id === "file.read"
+        ? Promise.resolve({ ok: false, error: { message: "Binary file — cannot display" } })
+        : Promise.resolve({ ok: true, result: undefined })
+    );
+    const menu = await openMenu();
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy file contents" }));
+
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    const [payload] = notifyMock.mock.calls[0]!;
+    expect(payload.type).toBe("error");
+    expect(payload.title).toBe("Couldn't copy file contents");
+    // The reason has to survive: extension gating can't see a binary with a
+    // text-like name, so this toast is where the user learns why.
+    expect(payload.message).toBe("Binary file — cannot display");
+    // Clobbering the clipboard with nothing would lose whatever was in it.
+    expect(writeTextMock).not.toHaveBeenCalled();
+
+    payload.action!.onClick();
+    await waitFor(() =>
+      expect(dispatchMock.mock.calls.filter(([id]) => id === "file.read").length).toBe(2)
+    );
+  });
+
+  it("retries the clipboard write without re-reading the file", async () => {
+    writeTextMock.mockRejectedValueOnce(new Error("nope"));
+    dispatchMock.mockImplementation((id) =>
+      id === "file.read"
+        ? Promise.resolve({ ok: true, result: { content: "raw" } })
+        : Promise.resolve({ ok: true, result: undefined })
+    );
+    const menu = await openMenu();
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy file contents" }));
+
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    const [payload] = notifyMock.mock.calls[0]!;
+    expect(payload.title).toBe("Couldn't copy file contents");
+
+    writeTextMock.mockClear();
+    payload.action!.onClick();
+
+    await waitFor(() => expect(writeTextMock).toHaveBeenCalledWith("raw"));
+    // The bytes are already in hand; a second read would be a wasted IPC round
+    // trip against a file that may have changed underneath the first one.
+    expect(dispatchMock.mock.calls.filter(([id]) => id === "file.read").length).toBe(1);
+  });
+
+  it.each([
+    ["a directory", { isDirectory: true, name: "src", relativePath: "src", status: null }],
+    ["a deleted file", { status: "deleted" as const }],
+    ["an image", { absolutePath: "/repo/logo.png", name: "logo.png" }],
+    ["an SVG", { absolutePath: "/repo/icon.svg", name: "icon.svg" }],
+    ["a video", { absolutePath: "/repo/clip.mp4", name: "clip.mp4" }],
+    ["an unplayable video", { absolutePath: "/repo/clip.mov", name: "clip.mov" }],
+    ["audio", { absolutePath: "/repo/track.mp3", name: "track.mp3" }],
+    ["a PDF", { absolutePath: "/repo/spec.pdf", name: "spec.pdf" }],
+  ])("hides the item for %s", async (_case, row) => {
+    const menu = await openMenu({ row });
+    expect(labels(menu)).not.toContain("Copy file contents");
+  });
+
+  it("keeps the item for an extension it doesn't recognise", async () => {
+    // Optimistic by design: the read is the real gate, and hiding everything
+    // unfamiliar would drop the item for perfectly ordinary text files.
+    const menu = await openMenu({ row: { absolutePath: "/repo/Makefile", name: "Makefile" } });
+    expect(labels(menu)).toContain("Copy file contents");
   });
 });
 
