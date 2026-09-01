@@ -416,6 +416,9 @@ describe("DaintreeAssistantSettingsTab", () => {
     // confirmation gate, and understating that is the bug being fixed.
     await waitForContent(container, "outside its sandbox");
     expect(container.textContent).not.toContain("built-in (Bash, Write)");
+    // Scoped to Codex's OWN approvals (#12119): an unqualified "without
+    // approval" contradicts the host-confirmation exception appended below it.
+    expect(container.textContent).toContain("without its own approval prompts");
   });
 
   it("describes the Daintree Assistant's env-var bypass, not a CLI flag", async () => {
@@ -439,6 +442,9 @@ describe("DaintreeAssistantSettingsTab", () => {
     fireEvent.click(toggle);
 
     await waitForContent(container, "acts without asking");
+    // Same #12119 scoping: the sheet it skips is its own, not Daintree's host
+    // confirmation, which still fires for confirmation-required actions.
+    expect(container.textContent).toContain("it skips its own confirmation sheet for everything");
     expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
       bypassPermissions: true,
     });

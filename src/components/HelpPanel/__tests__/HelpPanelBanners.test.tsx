@@ -519,7 +519,11 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
     // The project write feeds agents launched in the project; new *help*
     // sessions provision from the global settings tier, so the copy must not
     // promise them anything (HelpSessionService.doProvision).
-    expect(text).toContain("applies to agents launched in this project");
+    expect(text).toContain(
+      "applies to Claude Code and Daintree Assistant panes launched in this project"
+    );
+    // Deliberately broad: nothing in a denied-tool banner has any business
+    // promising "new sessions" anything, and that promise was the bug.
     expect(text).not.toContain("new sessions");
     // The session lift is the half that lapses.
     expect(text).toContain("raises this session for 30 minutes");

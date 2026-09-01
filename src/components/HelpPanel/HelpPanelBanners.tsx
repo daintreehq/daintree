@@ -299,8 +299,8 @@ export function HelpPanelBanners({
               {tierMismatch.targetTier && (
                 <p className="mt-1 text-text-secondary">
                   Allowing the tool covers repeat calls for 15 minutes after the last one, 30 at
-                  most. The project default applies to agents launched in this project, and raises
-                  this session for 30 minutes.
+                  most. The project default applies to Claude Code and Daintree Assistant panes
+                  launched in this project, and raises this session for 30 minutes.
                 </p>
               )}
             </div>
@@ -319,8 +319,9 @@ export function HelpPanelBanners({
             // #12119 and both overstated their mechanism. `onApproveOnce` mints
             // a *reusable* per-tool grant (15min sliding, 30min ceiling), so it
             // was never once. `onAlwaysAllow` does persist a project default for
-            // new sessions, but lifts *this* session for only 30min of awake
-            // time, so it was never always. Handler names and the main-process
+            // the project's own agent panes — never for new help sessions, which
+            // provision from the global settings tier — but lifts *this* session
+            // for only 30min of awake time, so it was never always. Handler names and the main-process
             // comments keep the original spelling as the flow names (#8442,
             // #10042); this is the anchor that maps them to the shipped labels.
             <div className="flex items-center gap-2 flex-wrap pl-5">

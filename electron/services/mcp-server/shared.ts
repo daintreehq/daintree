@@ -705,8 +705,8 @@ export const MCP_DEDUP_MAX_ENTRIES_PER_SESSION = 256;
  * TIER_NOT_PERMITTED denial. Both banner affordances target this tier rather
  * than blanket-elevating to `system`: "Set project default" elevates to it,
  * and "Allow this tool" mints a grant for the one tool that needed it without
- * elevating the tier at all. Returns `null` if the tool isn't permitted at any
- * tier (unknown tool).
+ * elevating the tier at all. Returns `null` when no non-external tier permits
+ * the tool — an unknown id, or a deliberately non-grantable one.
  *
  * The `external` tier is intentionally excluded because it's a peer of the
  * help-session tiers (api-key sessions only) and is never the right target
