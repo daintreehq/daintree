@@ -3,6 +3,7 @@ import type { FileRenderMode } from "@shared/types/panel";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
+import type { MarkdownFontSize } from "@/store/preferencesStore";
 
 // The rendered document pulls react-markdown + remark-gfm; keep that weight
 // out of the first-paint chunk (FilePane is a firstRenderRestore seed).
@@ -33,6 +34,12 @@ export interface MarkdownViewerProps {
    * image to bust — hosts only pass this where they render the document.
    */
   cacheBust?: string;
+  /**
+   * Rendered-mode only: the reading scale, as a rung of the shared type scale.
+   * Source mode is CodeMirror, which has its own sizing and no prose hierarchy
+   * to tune, so this deliberately never reaches it (#12134).
+   */
+  fontSize?: MarkdownFontSize;
   className?: string;
   /**
    * Rendered-mode only: fired once the rendered document has committed. Hosts
@@ -57,6 +64,7 @@ export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerPro
       initialLine,
       wrapLines,
       cacheBust,
+      fontSize,
       className,
       onRendered,
     },
@@ -100,6 +108,7 @@ export const MarkdownViewer = forwardRef<MarkdownViewerHandle, MarkdownViewerPro
           filePath={filePath}
           rootPath={rootPath}
           cacheBust={cacheBust}
+          fontSize={fontSize}
           className={cn("px-6 py-5", className)}
           onRendered={onRendered}
         />

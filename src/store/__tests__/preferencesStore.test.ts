@@ -710,6 +710,61 @@ describe("preferencesStore migration", () => {
     });
   });
 
+  describe("markdownFontSize (#12134)", () => {
+    it("defaults to the rung rendered markdown has always used", async () => {
+      const store = await loadStore();
+      expect(store.getState().markdownFontSize).toBe("sm");
+    });
+
+    it("migrates pre-v18 state to the default rather than leaving it undefined", async () => {
+      // Drive `migrate` directly: hydration's sanitizer would supply the same
+      // default, so a store-level assertion passes with the v18 branch deleted.
+      const store = await loadStore();
+      const migrated = store.persist.getOptions().migrate?.({ dockDensity: "compact" }, 17);
+
+      expect(migrated).toMatchObject({ markdownFontSize: "sm", dockDensity: "compact" });
+      // Pin the bump too: `migrate` only runs for a blob below the configured
+      // version, so leaving it at 17 would skip the branch above entirely and
+      // hydration's sanitizer would quietly supply the same default.
+      expect(store.persist.getOptions().version).toBe(18);
+    });
+
+    it("leaves an already-valid rung alone when migrating", async () => {
+      const store = await loadStore();
+      const migrated = store.persist.getOptions().migrate?.({ markdownFontSize: "2xl" }, 17);
+
+      expect(migrated).toMatchObject({ markdownFontSize: "2xl" });
+    });
+
+    it("replaces a value that is not a rung, including a plausible pixel number", async () => {
+      // The persisted value names a step of the type scale, never a size. A
+      // blob carrying 18 came from somewhere else and must not reach the
+      // token lookup, which would resolve to `var(--text-18)`.
+      for (const corrupt of [18, "18px", "huge", null]) {
+        vi.resetModules();
+        _resetPersistedStoreRegistryForTests();
+        setStoredState({ diffViewType: "split", markdownFontSize: corrupt }, 18);
+        const store = await loadStore();
+        expect(store.getState().markdownFontSize).toBe("sm");
+      }
+    });
+
+    it("keeps an explicit rung across a reload and persists it", async () => {
+      let store = await loadStore();
+      store.getState().setMarkdownFontSize("lg");
+      await vi.waitFor(() => {
+        const persisted = storageMock.getItem(STORAGE_KEY);
+        expect(persisted).not.toBeNull();
+        expect(JSON.parse(persisted!).state.markdownFontSize).toBe("lg");
+      });
+
+      vi.resetModules();
+      _resetPersistedStoreRegistryForTests();
+      store = await loadStore();
+      expect(store.getState().markdownFontSize).toBe("lg");
+    });
+  });
+
   describe("fileBrowserAlwaysHiddenPatterns", () => {
     it("is a non-empty curated default list on a fresh install", async () => {
       const store = await loadStore();

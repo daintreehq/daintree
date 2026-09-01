@@ -32,6 +32,7 @@ import {
 } from "@/components/FileViewer/filePreviewKinds";
 import { MarkdownViewer } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
+import { MarkdownTextSizeControl } from "@/components/Markdown/MarkdownTextSizeControl";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import {
@@ -42,6 +43,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import { FolderListingView } from "./FolderListingView";
 import { FileBrowserViewOptions } from "./FileBrowserViewOptions";
 import { FileBrowserHiddenStrip } from "./FileBrowserHiddenStrip";
@@ -231,6 +233,10 @@ export function FileBrowserViewer({
   // per-panel mode also survives a file swap). Non-markdown files simply hide
   // the toggle, so a stale "source" never applies where it can't be honoured.
   const [markdownMode, setMarkdownMode] = useState<FileRenderMode>("rendered");
+  // The same app-level reading size the file panel shows, so a document is the
+  // size the reader last chose in whichever surface they opened it (#12134).
+  const markdownFontSize = usePreferencesStore((state) => state.markdownFontSize);
+  const setMarkdownFontSize = usePreferencesStore((state) => state.setMarkdownFontSize);
   // Bumped on every load so `HtmlViewer` re-navigates its sandboxed frame when
   // an agent rewrites the file underneath it.
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -505,6 +511,17 @@ export function FileBrowserViewer({
               onCollapseAll={onCollapseAll}
               canCollapseAll={canCollapseAll}
               data-testid="file-browser-view-options"
+            />
+          )}
+          {/* Rendered markdown only: source is CodeMirror, which this scale
+              does not reach, and every other preview kind has no prose to
+              tune. Sits ahead of the file actions so the controls that change
+              what you are looking at stay left of the ones that leave. */}
+          {filePath !== null && isMarkdownFilePath(filePath) && markdownMode === "rendered" && (
+            <MarkdownTextSizeControl
+              value={markdownFontSize}
+              onValueChange={setMarkdownFontSize}
+              data-testid="file-browser-text-size"
             />
           )}
           {filePath && (
@@ -888,6 +905,7 @@ export function FileBrowserViewer({
               filePath={filePath}
               rootPath={rootPath}
               viewMode={markdownMode}
+              fontSize={markdownFontSize}
               cacheBust={revision}
               className="min-h-full"
             />

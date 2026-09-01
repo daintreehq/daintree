@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
@@ -15,7 +15,34 @@ import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
+import type { MarkdownFontSize } from "@/store/preferencesStore";
 import "./MarkdownDocument.css";
+
+/**
+ * Each reading rung resolved to the shared type scale — the same stock Tailwind
+ * steps the diff text-size preference names, so the reading size keeps tracking
+ * the scale when the scale moves. Same shape as `DIFF_FONT_SIZE`.
+ *
+ * Spelled out rather than interpolated, and beware of writing one of these
+ * references into prose: `builtInThemes.test.ts` scans every non-test renderer
+ * file — comments included — for CSS variable references, and reads an
+ * interpolated one as a variable named after the part before the placeholder.
+ * `satisfies` keeps the set exhaustive; that each rung names its own step is
+ * pinned in MarkdownDocument.test.ts, which that scan skips.
+ */
+export const MARKDOWN_FONT_SIZE_TOKEN = {
+  "2xs": "var(--text-2xs)",
+  xs: "var(--text-xs)",
+  sm: "var(--text-sm)",
+  base: "var(--text-base)",
+  lg: "var(--text-lg)",
+  xl: "var(--text-xl)",
+  "2xl": "var(--text-2xl)",
+  "3xl": "var(--text-3xl)",
+} satisfies Record<MarkdownFontSize, string>;
+
+/** `MarkdownDocument.css` reads this; declaring it here is what applies the rung. */
+type MarkdownFontStyle = CSSProperties & Record<"--markdown-font-size", string>;
 
 export interface MarkdownDocumentProps {
   /** Markdown source text */
@@ -33,6 +60,12 @@ export interface MarkdownDocumentProps {
    */
   cacheBust?: string;
   className?: string;
+  /**
+   * Reading scale for this document, as a rung of the shared type scale. Absent
+   * leaves the CSS fallback in charge, which is the size every surface rendered
+   * at before the control existed (#12134).
+   */
+  fontSize?: MarkdownFontSize;
   /**
    * Fired once the document has committed. Hosts that pinned their height
    * across the swap into rendered mode use this to release the pin (#11255).
@@ -123,6 +156,7 @@ export function MarkdownDocument({
   rootPath,
   cacheBust,
   className,
+  fontSize,
   onRendered,
 }: MarkdownDocumentProps) {
   // Runs after the first commit, which is the point the host's height pin can
@@ -220,8 +254,13 @@ export function MarkdownDocument({
     [handleLinkActivate]
   );
 
+  const fontStyle: MarkdownFontStyle | undefined =
+    fontSize === undefined
+      ? undefined
+      : { "--markdown-font-size": MARKDOWN_FONT_SIZE_TOKEN[fontSize] };
+
   return (
-    <div ref={rootRef} className={cn("markdown-document prose", className)}>
+    <div ref={rootRef} className={cn("markdown-document prose", className)} style={fontStyle}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         urlTransform={urlTransform}

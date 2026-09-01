@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
@@ -7,7 +10,8 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
 
-import { MarkdownDocument } from "../MarkdownDocument";
+import { MarkdownDocument, MARKDOWN_FONT_SIZE_TOKEN } from "../MarkdownDocument";
+import { MARKDOWN_FONT_SIZE_STEPS } from "@/store/preferencesStore";
 
 const FIXTURE_PROPS = {
   filePath: "/repo/docs/spec.md",
@@ -324,5 +328,62 @@ describe("MarkdownDocument", () => {
     expect(window.getSelection()?.toString()).toBe(document_.textContent);
     expect(window.getSelection()?.toString()).not.toContain("sidebar chrome");
     window.getSelection()?.removeAllRanges();
+  });
+});
+
+/**
+ * The stylesheet is the half of the size control that no render test can see:
+ * jsdom applies no author styles, so the whole feature — store, stepper,
+ * forwarding, the inline custom property — stays green while the declaration
+ * that consumes it is reverted and the type never moves (#12134). Read the
+ * source instead, which is what actually ships in the lazy markdown chunk.
+ */
+describe("MarkdownDocument.css document scale (#12134)", () => {
+  // Comments go first throughout: the file's header explains both rules below
+  // by quoting the very things they forbid, so a raw scan reads its own prose.
+  const rules = fs
+    .readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "../MarkdownDocument.css"),
+      "utf8"
+    )
+    .replace(/\/\*[\s\S]*?\*\//g, "");
+
+  /** The `.markdown-document` rule's own body, not a descendant's. */
+  const rootBlock = /(?:^|\n)\.markdown-document\s*\{([^}]*)\}/.exec(rules)?.[1] ?? "";
+
+  it("sizes the document from --markdown-font-size, falling back to the type scale", () => {
+    expect(rootBlock).not.toBe("");
+    const declarations = [...rootBlock.matchAll(/(?:^|[^-\w])font-size\s*:\s*([^;}\n]+)/g)].map(
+      (match) => match[1]?.trim()
+    );
+
+    // The fallback is load-bearing: a document mounted without the prop, and
+    // every surface that predates the control, still renders at 14px.
+    expect(declarations).toEqual(["var(--markdown-font-size, var(--text-sm))"]);
+  });
+
+  it("keeps the scale unlayered, where it still outranks the typography plugin", () => {
+    // Wrapping this file in @layer hands the prose rules back to the plugin's
+    // light-theme defaults — the regression the file header records.
+    expect(rules).not.toMatch(/@layer/);
+  });
+});
+
+/**
+ * The type can only hold the map exhaustive, not correct: `satisfies
+ * Record<MarkdownFontSize, string>` accepts a rung mapped to the wrong step, or
+ * to a variable that does not exist. Expressing the correlation as a template
+ * literal type instead would put `var(--text-` in a type position, where
+ * `builtInThemes.test.ts`'s renderer scan reads it as a consumer named `text-`
+ * — so the correlation is pinned here, in a file that scan skips.
+ */
+describe("MARKDOWN_FONT_SIZE_TOKEN (#12134)", () => {
+  it("resolves every rung to its own step of the shared type scale", () => {
+    expect(Object.keys(MARKDOWN_FONT_SIZE_TOKEN).sort()).toEqual(
+      [...MARKDOWN_FONT_SIZE_STEPS].sort()
+    );
+    for (const step of MARKDOWN_FONT_SIZE_STEPS) {
+      expect(MARKDOWN_FONT_SIZE_TOKEN[step]).toBe(`var(--text-${step})`);
+    }
   });
 });
