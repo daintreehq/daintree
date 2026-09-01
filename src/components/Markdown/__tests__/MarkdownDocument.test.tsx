@@ -10,7 +10,8 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
 
-import { MarkdownDocument } from "../MarkdownDocument";
+import { MarkdownDocument, MARKDOWN_FONT_SIZE_TOKEN } from "../MarkdownDocument";
+import { MARKDOWN_FONT_SIZE_STEPS } from "@/store/preferencesStore";
 
 const FIXTURE_PROPS = {
   filePath: "/repo/docs/spec.md",
@@ -365,5 +366,24 @@ describe("MarkdownDocument.css document scale (#12134)", () => {
     // Wrapping this file in @layer hands the prose rules back to the plugin's
     // light-theme defaults — the regression the file header records.
     expect(rules).not.toMatch(/@layer/);
+  });
+});
+
+/**
+ * The type can only hold the map exhaustive, not correct: `satisfies
+ * Record<MarkdownFontSize, string>` accepts a rung mapped to the wrong step, or
+ * to a variable that does not exist. Expressing the correlation as a template
+ * literal type instead would put `var(--text-` in a type position, where
+ * `builtInThemes.test.ts`'s renderer scan reads it as a consumer named `text-`
+ * — so the correlation is pinned here, in a file that scan skips.
+ */
+describe("MARKDOWN_FONT_SIZE_TOKEN (#12134)", () => {
+  it("resolves every rung to its own step of the shared type scale", () => {
+    expect(Object.keys(MARKDOWN_FONT_SIZE_TOKEN).sort()).toEqual(
+      [...MARKDOWN_FONT_SIZE_STEPS].sort()
+    );
+    for (const step of MARKDOWN_FONT_SIZE_STEPS) {
+      expect(MARKDOWN_FONT_SIZE_TOKEN[step]).toBe(`var(--text-${step})`);
+    }
   });
 });

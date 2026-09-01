@@ -19,13 +19,18 @@ import type { MarkdownFontSize } from "@/store/preferencesStore";
 import "./MarkdownDocument.css";
 
 /**
- * Each reading rung resolved to the shared type scale. Spelled out rather than
- * interpolated so the map is greppable, but typed against the rung name so a
- * mismatched pair is a compile error rather than an unresolved `var()` that
- * silently falls back. Same shape as `DIFF_FONT_SIZE` — the preference names a
- * step of the app's scale, so it keeps tracking the scale when the scale moves.
+ * Each reading rung resolved to the shared type scale — the same stock Tailwind
+ * steps the diff text-size preference names, so the reading size keeps tracking
+ * the scale when the scale moves. Same shape as `DIFF_FONT_SIZE`.
+ *
+ * Spelled out rather than interpolated, and beware of writing one of these
+ * references into prose: `builtInThemes.test.ts` scans every non-test renderer
+ * file — comments included — for CSS variable references, and reads an
+ * interpolated one as a variable named after the part before the placeholder.
+ * `satisfies` keeps the set exhaustive; that each rung names its own step is
+ * pinned in MarkdownDocument.test.ts, which that scan skips.
  */
-const MARKDOWN_FONT_SIZE_TOKEN: { [K in MarkdownFontSize]: `var(--text-${K})` } = {
+export const MARKDOWN_FONT_SIZE_TOKEN = {
   "2xs": "var(--text-2xs)",
   xs: "var(--text-xs)",
   sm: "var(--text-sm)",
@@ -34,7 +39,7 @@ const MARKDOWN_FONT_SIZE_TOKEN: { [K in MarkdownFontSize]: `var(--text-${K})` } 
   xl: "var(--text-xl)",
   "2xl": "var(--text-2xl)",
   "3xl": "var(--text-3xl)",
-};
+} satisfies Record<MarkdownFontSize, string>;
 
 /** `MarkdownDocument.css` reads this; declaring it here is what applies the rung. */
 type MarkdownFontStyle = CSSProperties & Record<"--markdown-font-size", string>;
