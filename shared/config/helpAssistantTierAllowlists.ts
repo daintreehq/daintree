@@ -126,8 +126,7 @@ export const ACTION_TIER_ADDONS = [
   // teardown command is project-defined and may destroy a remote resource, so
   // it keeps `danger: "confirm"` — the tier decides reachability, the danger
   // class decides approval. Worth knowing when reading the deletes above: they
-  // run this same lifecycle teardown implicitly before removing the tree, so
-  // none of the three is purely local in effect.
+  // run this same teardown implicitly, before removing the tree.
   "worktree.resource.teardown",
 
   "terminal.inject",
@@ -303,9 +302,9 @@ export const HELP_TIER_CUMULATIVE: Record<HelpAssistantTier, readonly string[]> 
 export const HIGH_BLAST_RADIUS_TOOLS: readonly string[] = [
   "git.push",
   "git.commit",
-  // All three run project-defined lifecycle teardown — arbitrary commands from
+  // All three run project-defined teardown — arbitrary commands from
   // `.daintree/config.json`, and resource teardown that can destroy a remote
-  // devbox — before the tree itself goes.
+  // devbox. The two delete variants then remove the tree as well.
   "worktree.delete",
   "worktree.deleteOwned",
   "worktree.resource.teardown",

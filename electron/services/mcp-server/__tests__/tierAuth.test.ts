@@ -773,24 +773,18 @@ describe("buildAnnotations", () => {
 // removed the identity override that used to pin the assistant to `system`).
 // So the assertions below lock the `action` tier that governs a default
 // session, plus the system/external boundaries above it.
-// The distinction is load-bearing, and #12116 sharpened what it is NOT. It is
-// not "irreversible vs. not", and it is not "local vs. remote" — a worktree
-// delete runs the project's own lifecycle teardown, which can reach a cloud
-// resource. It is what a per-call gate can still take back. Worktree cleanup is
-// `danger: "confirm"`, so a human stands at a modal before it runs and the tier
-// is the wrong place to bound it twice. The cohort below cannot be bounded that
-// way: `git.commit` and `forge.assignIssue` are `danger: "safe"`, so the tier is
-// the ONLY gate they have, and `git.push` is confirm-gated but publishes to a
-// shared remote, where approving once is not something a later refusal undoes.
-// All three stay TIER_NOT_PERMITTED at `action` — a default session needs a
-// human-approved scoped grant or the deliberately selected `system` tier.
-// `external` is a separately curated peer (#11585): it used to permit the git
-// writes subject only to the confirm gate, and now reaches none of them — the
-// promotion in #12116 widens the in-app floor without re-opening that surface.
-// These assertions lock those invariants against allowlist drift (e.g. someone
-// promoting git.push into the action tier). They test the runtime gate
-// `isTierPermitted`, not the raw allowlist arrays, so they fail closed if the
-// tier wiring itself regresses.
+// #12116 sharpened what the line is NOT. It is not "irreversible vs. not", and
+// not "local vs. remote" — a worktree delete runs the project's own lifecycle
+// teardown, which can reach a cloud resource. It is whether the tier is the
+// only gate: cleanup carries `danger: "confirm"` and so is normally host-
+// confirmed per call, while `git.commit` and `forge.assignIssue` are
+// `danger: "safe"` and have nothing but the tier. `git.push` sits above the
+// floor for its own reason — it publishes to a shared remote.
+// `external` is a separately curated peer (#11585) that now reaches none of
+// them, and #12116 widened the in-app floor without re-opening that surface.
+// These assertions lock the invariants against allowlist drift (e.g. someone
+// promoting git.push into the action tier). They test `isTierPermitted`, not
+// the raw arrays, so they fail closed if the tier wiring itself regresses.
 describe("help-session tier policy (#10640)", () => {
   // The conductor's working tool set — orchestration, terminal driving, branch
   // setup, recipes, and reads — all resolve under `action`.
@@ -814,15 +808,13 @@ describe("help-session tier policy (#10640)", () => {
     "copyTree.generate",
   ];
 
-  // Mutations the conductor must NOT be able to fire at its default tier: two
-  // are `danger: "safe"` and so have no gate but this one, and `git.push`
-  // reaches a shared remote, where a confirm dialog approves something no later
-  // refusal takes back.
+  // Mutations the conductor must NOT reach at its default tier: `git.commit` and
+  // `forge.assignIssue` are `danger: "safe"`, so the tier is their only gate.
   const HIGH_BLAST_RADIUS_TOOLS = ["git.commit", "git.push", "forge.assignIssue"];
 
-  // Machine-local worktree cleanup, promoted to the default floor by #12116.
-  // Reachable at `action`, still refused at `workbench` — the boundary moved
-  // down one tier, it did not disappear.
+  // Confirm-classified worktree cleanup, promoted to the default floor by
+  // #12116. Reachable at `action`, still refused at `workbench` — the boundary
+  // moved down one tier, it did not disappear.
   const CONFIRM_GATED_CLEANUP_TOOLS = [
     "worktree.delete",
     "worktree.deleteOwned",
@@ -876,11 +868,11 @@ describe("help-session tier policy (#10640)", () => {
   );
 
   it("withholds the shared-state mutations from the external tier too (#11585)", () => {
-    // `external` used to auto-permit these, subject only to the confirm gate,
-    // which was the security contrast that motivated pinning the assistant to
-    // `action` in the first place. #11585 closed it from the other side: an
-    // api-key caller has its own shell git and does not need ours, so the git
-    // writes now live only where a human is in the loop, at `system`.
+    // `external` used to auto-permit these — `git.commit` with no gate at all,
+    // `git.push` behind only its confirm dialog — which was the contrast that
+    // motivated pinning the assistant to `action` in the first place. #11585
+    // closed it from the other side: an api-key caller has its own shell git and
+    // does not need ours, so both now live at `system`.
     for (const toolId of ["git.push", "git.commit"]) {
       expect(isTierPermitted("external", toolId)).toBe(false);
       expect(isTierPermitted("system", toolId)).toBe(true);

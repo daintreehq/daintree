@@ -780,12 +780,9 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // Confirm in ProjectSwitcherPalette.tsx via removeConfirmProject state;
   // action ID not co-located with the ConfirmDialog in that file.
   "project.remove",
-  // MCP-only (#11909), and it never reaches a dialog under its own id: the
-  // main process checks session ownership and then delegates to
-  // `worktree.delete`, so the modal the user answers is that action's, wired
-  // above. It carries `danger: "confirm"` so the delegation cannot be entered
-  // pre-approved — which is exactly why it belongs in the cohort rather than
-  // being left out of it.
+  // MCP-only (#11909), and it never reaches a dialog under its own id: the main
+  // process checks session ownership and then delegates to `worktree.delete`,
+  // so the modal a user answers is wired under that id, above.
   "worktree.deleteOwned",
   // Agent/MCP-only confirm gate (#11346): arming reroutes the user's next
   // keystrokes to every armed terminal, so an external caller must pass the

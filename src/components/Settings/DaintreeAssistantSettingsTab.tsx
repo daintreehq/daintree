@@ -90,9 +90,9 @@ const TIER_DESCRIPTIONS: Record<HelpAssistantTier, string> = {
   workbench:
     "The assistant can read project state but can't change it. Best when you're handing off observation tasks.",
   action:
-    "The assistant can spawn agents, send prompts, read terminal state, close terminals, and delete worktrees in this project or tear down their resources — full in-app orchestration. Deletions ask you to confirm, and run any teardown commands the project configures. Most assistance tasks need this.",
+    "The assistant can spawn agents, send prompts, read terminal state, close terminals, and delete worktrees in this project or tear down their resources — full in-app orchestration. Deletions normally ask you to confirm each time, unless you have granted the assistant automation for them, and they run whatever teardown commands the project configures. Most assistance tasks need this.",
   system:
-    "Adds git staging, commits and pushes, forge issue/PR writes, worktree creation at any path on disk, OS clipboard writes, and arming terminals for automation. Reserve for trusted automation.",
+    "Adds git staging, commits, fetches and pushes; forge issue/PR reads and writes; worktree creation at any path on disk; clipboard and CopyTree-to-disk writes; and arming terminals for automation. Reserve for trusted automation.",
 };
 
 const TIER_SHORT_LABEL: Record<HelpAssistantTier, string> = {

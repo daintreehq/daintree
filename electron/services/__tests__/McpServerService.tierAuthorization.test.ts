@@ -887,10 +887,9 @@ describe("McpServerService", () => {
         title: "Fetch",
         description: "Update remote-tracking refs from the remote",
       }),
-      // Action-tier since #12116. `danger` mirrors the real registry here
-      // because the exposure tests below assert these reach the action surface
-      // AS confirm-gated tools — a fixture defaulting to "safe" would let a
-      // regression that drops the confirm gate pass unnoticed.
+      // Action-tier since #12116. `danger` mirrors the real registry so the
+      // fixture doesn't quietly describe these as safe; the registry values
+      // themselves are guarded by `EXPECTED_CONFIRM_DANGER`.
       createManifestEntry({
         id: "worktree.delete" as ActionId,
         title: "Delete Worktree",
