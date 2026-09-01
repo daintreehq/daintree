@@ -1027,6 +1027,10 @@ export const diffTokenizeScenarios: PerfScenario[] = [
       "tokenStringMisses",
       "probeMisses",
     ],
+    // The changeset is the workload. Four files instead of five, or a
+    // generator that shrank its hunks, would report a shorter block and a
+    // cleaner loop with every predicate at zero.
+    workloadFloors: { fileCount: 5, filesTokenized: 5, changedLines: 1_500 },
     async run() {
       const prepared = REVIEW_CHANGESET.map((file) => ({
         ...hunksFor(file.spec),

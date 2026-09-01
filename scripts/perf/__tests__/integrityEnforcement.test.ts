@@ -243,6 +243,26 @@ describe("--enforce-integrity", () => {
     ]);
   });
 
+  it("counts a workload shortfall as broken evidence", () => {
+    // The distinct failure: a scenario that built less than it claims reports a
+    // BETTER number with every correctness predicate at zero, because the part
+    // that ran behaved perfectly. It reaches the integrity verdict through
+    // `measurementIssues` like any other broken measurement.
+    const issues = collectIntegrityIssues(
+      [
+        {
+          id: "PERF-034",
+          measurementIssues: ['workload shortfall: "floodBytes" fell to 61000 against a floor'],
+          runs: 2,
+        },
+      ],
+      0,
+      "darwin"
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("PERF-034: workload shortfall");
+  });
+
   it("still promotes a sound measurement", { timeout: 180_000 }, async () => {
     const outDir = tempDir();
     const baselinePath = path.join(tempDir(), "baseline.smoke.json");

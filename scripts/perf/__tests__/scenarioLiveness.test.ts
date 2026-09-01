@@ -303,6 +303,10 @@ function explain(result: DriverResult): string {
 /** The driver's JSON line. Everything it reports is judged below, not there. */
 interface DriverReport {
   missingCorrectness?: string[];
+  /** Declared workload floors naming a metric the scenario never emitted. */
+  missingWorkload?: string[];
+  /** Floors the sample fell short of, as `metric=value < floor`. */
+  workloadShortfalls?: string[];
   /** Value of every declared correctness metric the sample actually emitted. */
   correctness?: Record<string, number>;
   /** What the scenario says it measured. Non-positive is the sentinel. */
@@ -359,6 +363,25 @@ function verdicts(id: string, report: DriverReport): string[] {
   if (nonZero.length > 0) {
     const detail = nonZero.map(([key, value]) => `${key}=${value}`).join(", ");
     problems.push(`${id} reported misses: ${detail} — a healthy run reads 0 on every one`);
+  }
+
+  // A floor naming a metric the scenario never emits is a broken declaration,
+  // and it fails on any machine — the same class as a missing predicate. A
+  // shortfall is judged too: the floors are set well under what the fixtures
+  // build, so falling below one means the fixture scaled itself down.
+  const missingWorkload = report.missingWorkload ?? [];
+  if (missingWorkload.length > 0) {
+    problems.push(
+      `${id} declares workload floor(s) for ${missingWorkload.join(", ")} that the sample ` +
+        `never emitted — the reading that would prove it built its workload is missing`
+    );
+  }
+  const shortfalls = report.workloadShortfalls ?? [];
+  if (shortfalls.length > 0) {
+    problems.push(
+      `${id} built less than it claims: ${shortfalls.join(", ")} — the numbers describe a ` +
+        `smaller workload than the scenario says it measures`
+    );
   }
 
   const durationMs = report.durationMs;

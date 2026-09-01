@@ -192,6 +192,76 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
   return { outsideReference, measurementIssues, reasons };
 }
 
+export interface WorkloadParams {
+  /** Declared minimums, keyed by metric name. */
+  floors: Readonly<Record<string, number>> | undefined;
+  metricStats: Record<string, MetricStat>;
+  /** Measured iterations — a floor has to hold on every one. */
+  runs: number;
+}
+
+/**
+ * Did the fixture actually build the workload the scenario claims to measure?
+ *
+ * The distinct failure this catches: a scenario that asked for twelve
+ * background terminals and started nine is measuring a lighter workload than it
+ * says, and reports a BETTER number for it. Every correctness predicate stays
+ * at zero, because the nine that started behaved perfectly. Nothing else in the
+ * harness can see it, which is why the floor is declared separately from the
+ * predicates and checked separately from them.
+ *
+ * Read against `min`, not `mean`: one starved iteration among fifteen healthy
+ * ones averages away, and that iteration is in the aggregate the run reports.
+ */
+export function evaluateWorkload(params: WorkloadParams): string[] {
+  const { floors, metricStats, runs } = params;
+  if (!floors) return [];
+
+  const issues: string[] = [];
+  for (const [metricName, floor] of Object.entries(floors)) {
+    // A NaN floor makes every comparison below false, so the declaration reads
+    // as satisfied while checking nothing — the same shape as a predicate that
+    // stopped being emitted, and just as quiet.
+    if (!Number.isFinite(floor)) {
+      issues.push(
+        `workload floor for "${metricName}" is not a finite number (${floor}), so it compares ` +
+          `against nothing`
+      );
+      continue;
+    }
+    const stat = metricStats[metricName];
+    if (stat === undefined) {
+      issues.push(
+        `declared workload floor "${metricName}" >= ${floor} was never emitted — the reading ` +
+          `that would prove this scenario built the workload it measures is the one missing`
+      );
+      continue;
+    }
+    if (!Number.isFinite(stat.min)) {
+      issues.push(`workload metric "${metricName}" produced a non-finite value (${stat.min})`);
+      continue;
+    }
+    // `MetricStat.count` tallies the SAMPLES that carried the key, and a sample
+    // is one iteration's metric object, so a key cannot be counted twice for
+    // one iteration. `count === runs` therefore does mean one emission each.
+    if (stat.count !== runs) {
+      issues.push(
+        `workload metric "${metricName}" was emitted on ${stat.count} of ${runs} iteration(s), ` +
+          `so the iterations that did not report it are unaccounted for`
+      );
+      continue;
+    }
+    if (stat.min < floor) {
+      issues.push(
+        `workload shortfall: "${metricName}" fell to ${round(stat.min)} against a declared ` +
+          `floor of ${floor} (max ${round(stat.max)} over ${stat.count}) — this run measured ` +
+          `less work than the scenario claims, so its numbers describe a smaller workload`
+      );
+    }
+  }
+  return issues;
+}
+
 export interface CorrectnessParams {
   /** Metric keys the scenario declares as miss counts, or undefined if none. */
   correctness: readonly string[] | undefined;

@@ -13,7 +13,7 @@ import {
   readBaselineEntries,
 } from "./lib/baselineCoverage";
 import { classifyBenchmark } from "./config/benchmarkClasses";
-import { evaluateCorrectness, evaluateScenarioBudget } from "./lib/gate";
+import { evaluateCorrectness, evaluateScenarioBudget, evaluateWorkload } from "./lib/gate";
 import { hashHarnessSources } from "./lib/harnessHash";
 import { appendJsonLine, appendText, readJson, writeJson, writeText, ensureDir } from "./lib/io";
 import { aggregateMetrics, averageMetrics, mean, percentile, round, stdDev } from "./lib/stats";
@@ -859,6 +859,7 @@ async function run(): Promise<number> {
       description: string;
       tier: ScenarioTier;
       correctness: readonly string[] | undefined;
+      workloadFloors: Readonly<Record<string, number>> | undefined;
       durations: number[];
       metrics: Array<Record<string, number>>;
       notes: string[];
@@ -928,6 +929,7 @@ async function run(): Promise<number> {
         description: scenario.description,
         tier: scenario.tier,
         correctness: scenario.correctness,
+        workloadFloors: scenario.workloadFloors,
         durations: [],
         metrics: [],
         notes: [],
@@ -1006,6 +1008,16 @@ async function run(): Promise<number> {
       exempt: CORRECTNESS_EXEMPT_SCENARIO_IDS.has(scenarioId),
     });
 
+    // Separate from the predicates on purpose: a predicate says the subject did
+    // its work, and this says the subject was GIVEN the work. A scenario that
+    // built nine of the twelve terminals it claims reports a better number with
+    // every predicate at zero, and nothing else here can see it.
+    const workloadIssues = evaluateWorkload({
+      floors: aggregate.workloadFloors,
+      metricStats,
+      runs,
+    });
+
     // A diagnostic number is not authoritative here, so it earns no verdict
     // against a reference value — the reasons are kept, but presenting one as
     // "outside reference" would dress a signal up as a measurement. Its own
@@ -1061,7 +1073,7 @@ async function run(): Promise<number> {
       ),
       outsideReference: reportedOutsideReference,
       referenceNotes: referenceReasons.length > 0 ? referenceReasons.join("; ") : undefined,
-      measurementIssues: [...measurementIssues, ...correctnessIssues],
+      measurementIssues: [...measurementIssues, ...correctnessIssues, ...workloadIssues],
       // The diagnostic marker leads, ahead of the scenario's own notes and
       // outside the slice that trims them, so a platform caveat can never be
       // pushed out of the row by three ordinary notes.

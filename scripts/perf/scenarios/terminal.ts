@@ -424,6 +424,10 @@ export const terminalScenarios: PerfScenario[] = [
     iterations: { smoke: 5, ci: 8, nightly: 12 },
     warmups: 1,
     correctness: ["floodParseMisses"],
+    // The flood IS the measurement. Twelve terminals that produced a tenth of
+    // the bytes would leave the focused echo looking excellent and every
+    // predicate at zero. 500 KB is the floor the matrix test already asserts.
+    workloadFloors: { floodBytes: 500_000, floodTerminals: 12 },
     async run() {
       const BACKGROUND_TERMINALS = 12;
       const ROUNDS = 30;
@@ -510,6 +514,11 @@ export const terminalScenarios: PerfScenario[] = [
               floodEchoP99Ms: floodP99,
               echoDegradationX: soloP99 > 0 ? floodP99 / soloP99 : 0,
               floodBytes,
+              // The worker-ingest arm reports the same cardinality as the
+              // in-thread one. Without it this mode declares a floor it never
+              // emits, which the liveness guard treats as a broken declaration
+              // — correctly, since the floor would then check nothing here.
+              floodTerminals: mirrors.length,
               floodParseMisses: unparsedCount(mirrors),
             },
           };
@@ -572,6 +581,13 @@ export const terminalScenarios: PerfScenario[] = [
             floodEchoP99Ms: floodP99,
             echoDegradationX: soloP99 > 0 ? floodP99 / soloP99 : 0,
             floodBytes,
+            // CARDINALITY, beside the intensity. Bytes are a proxy: a flood
+            // from nine terminals instead of twelve can still clear a byte
+            // floor if each one writes harder, and the whole point of this
+            // scenario is what twelve concurrent parsers do to a focused echo.
+            // Read from the array that was actually built, not from the count
+            // it was asked for.
+            floodTerminals: background.length,
             floodParseMisses: unparsedCount(background),
           },
         };
@@ -609,6 +625,10 @@ export const terminalScenarios: PerfScenario[] = [
     iterations: { smoke: 6, ci: 12, nightly: 18 },
     warmups: 1,
     correctness: [...SUBMIT_LANE_CORRECTNESS, "heldLaneStatusMisses"],
+    // A lane is only under pressure if the submits were actually queued. Both
+    // arms run SUBMIT_BURST, and the contended arm must hold a quarter of them
+    // open; fewer of either measures an easier problem.
+    workloadFloors: { submitsCompleted: SUBMIT_BURST * 2, slowSubmits: SUBMIT_BURST / 4 },
     async run(context) {
       // Two shapes on one pass. The fast lane is every submit settling on its
       // debounce (the ordinary case, where the queue's own overhead is the whole

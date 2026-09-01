@@ -94,6 +94,26 @@ export interface PerfScenario {
    */
   correctness?: readonly string[];
   /**
+   * Floors the fixture's ACHIEVED scale must meet, keyed by metric name.
+   *
+   * A correctness predicate proves the subject did its work. This proves the
+   * subject was given the work to do — a different failure, and the one that
+   * produces the most flattering wrong number in the suite. A scenario that
+   * asked for twelve background terminals and started nine measures a lighter
+   * workload than it claims and reports a better latency for it, with every
+   * predicate at zero because the nine it did start behaved perfectly.
+   *
+   * Each entry is a MINIMUM, checked against the metric's `min` across
+   * iterations rather than its mean, because one starved iteration among
+   * fifteen healthy ones is exactly the case an average hides. Falling short is
+   * a measurement issue, so it is reported loudly and fails under
+   * `--enforce-integrity` — never a numeric gate.
+   *
+   * The floor belongs to the SCENARIO, not the fixture, so a fixture that
+   * quietly scaled itself down cannot also lower the bar it is judged against.
+   */
+  workloadFloors?: Readonly<Record<string, number>>;
+  /**
    * Per-platform applicability. Omit when the scenario is authoritative
    * everywhere it runs.
    */

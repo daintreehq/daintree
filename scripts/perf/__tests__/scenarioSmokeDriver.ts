@@ -76,6 +76,22 @@ async function main(): Promise<void> {
     if (typeof value === "number") correctness[key] = value;
   }
 
+  // Workload floors are an APPARATUS fact, not a verdict: a floor naming a
+  // metric the scenario never emits is a broken declaration on any machine,
+  // and one that is met is met. Reported alongside the predicates so the
+  // liveness guard can assert both without re-deriving either.
+  const floors = scenario.workloadFloors ?? {};
+  const missingWorkload = Object.keys(floors).filter(
+    (key) => !Object.prototype.hasOwnProperty.call(metrics, key)
+  );
+  const workloadShortfalls: string[] = [];
+  for (const [key, floor] of Object.entries(floors)) {
+    const value = metrics[key];
+    if (typeof value === "number" && value < floor) {
+      workloadShortfalls.push(`${key}=${value} < ${floor}`);
+    }
+  }
+
   process.stdout.write(
     `${JSON.stringify({
       ok: true,
@@ -90,6 +106,8 @@ async function main(): Promise<void> {
       metricCount: Object.keys(metrics).length,
       missingCorrectness,
       correctness,
+      missingWorkload,
+      workloadShortfalls,
     })}\n`
   );
 }

@@ -470,6 +470,13 @@ export const copyTreeScenarios: PerfScenario[] = [
       "workerRoutingMisses",
       "probeMisses",
     ],
+    // Both arms must generate the same bundle. A tree that shrank would shorten
+    // the in-thread block and flatter the offload for a reason that has nothing
+    // to do with the worker.
+    // AB_SCALE is "medium", 700 planted files. A tree that shrank would
+    // shorten the in-thread block and flatter the offload for a reason that has
+    // nothing to do with the worker.
+    workloadFloors: { plantedFiles: 700 },
     async run(): Promise<ScenarioSample> {
       const modules = await loadCopyTreeModules();
       const tree = getTree(AB_SCALE);
@@ -573,6 +580,13 @@ export const copyTreeScenarios: PerfScenario[] = [
             inThreadReading.longestStallMs - workerReading.longestStallMs
           ),
           blockedReductionMs: Math.max(0, inThreadReading.blockedMs - workerReading.blockedMs),
+          // REALIZED, not requested. `tree.plantedFiles` is the scale the
+          // fixture was asked for; `sentinelTokens` gains one entry per file it
+          // actually wrote, so a tree that failed to build reports the smaller
+          // number here rather than the number it intended. Floored, because
+          // both arms being smaller is the one change that makes the offload
+          // look good for free.
+          plantedFiles: tree.sentinelTokens.size,
           workerCreations: probe.creations(),
           workerRoutingMisses,
           probeMisses: inThreadReading.probeMisses + workerReading.probeMisses,
