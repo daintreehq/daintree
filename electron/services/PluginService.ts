@@ -2924,22 +2924,33 @@ export class PluginService {
     );
   }
 
-  /**
-   * The plugin's declared `scopes.fs.allowedPaths`.
-   *
-   * A project plugin that declares none defaults to its own project root
-   * (spec §7.2): it lives inside that tree, so the tree is the only sensible
-   * default, and without it `host.fs` and `host.git` would have no root at all
-   * and the plugin could reach nothing but its own data dir. An installed or
-   * builtin plugin has no project of its own and keeps the empty default —
-   * widening those to a whole tree would grant reach nobody asked for.
-   */
+  /** The plugin's declared `scopes.fs.allowedPaths` (empty when none / unloaded). */
   private declaredAllowedPaths(pluginId: string): readonly string[] {
+    return this.plugins.get(pluginId)?.manifest.scopes?.fs?.allowedPaths ?? [];
+  }
+
+  /**
+   * The implicit project root a project plugin gets when it declares no
+   * `scopes.fs.allowedPaths` (spec §7.2).
+   *
+   * It lives inside that tree, so the tree is the only sensible default, and
+   * without it `host.fs` and `host.git` would have no root at all and the
+   * plugin could reach nothing but its own data dir. Returned as an explicitly
+   * `"project"`-classified entry rather than as a literal path: literal
+   * classification calls anything under the user's home directory `"user-data"`,
+   * and most projects live under `~/`, which would deny `fs:project-read` the
+   * project root while granting it to `fs:user-data-read`.
+   *
+   * Only a project-origin plugin gets it. An installed or builtin plugin has no
+   * project of its own, and `origin` is checked as well as the root so a
+   * malformed binding cannot widen one.
+   */
+  private implicitProjectRoot(pluginId: string): ExpandedFsPath | null {
     const plugin = this.plugins.get(pluginId);
-    const declared = plugin?.manifest.scopes?.fs?.allowedPaths;
-    if (declared && declared.length > 0) return declared;
-    const projectRoot = plugin?.binding?.projectRoot;
-    return projectRoot ? [projectRoot] : [];
+    if (!plugin || plugin.origin !== "project") return null;
+    const projectRoot = plugin.binding?.projectRoot;
+    if (!projectRoot) return null;
+    return { path: projectRoot, rootClass: "project" };
   }
 
   /** The implicit per-plugin data dir, always an allowed `user-data` root. */
@@ -3021,6 +3032,11 @@ export class PluginService {
     const entries: ExpandedFsPath[] = [];
     if (opts.includeDataDir) {
       entries.push({ path: this.pluginDataDir(pluginId), rootClass: "user-data" });
+    }
+    // A declared list replaces this default rather than extending it.
+    if (declared.length === 0) {
+      const implicit = this.implicitProjectRoot(pluginId);
+      if (implicit) entries.push(implicit);
     }
     for (const raw of declared) {
       try {

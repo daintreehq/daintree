@@ -99,7 +99,9 @@ function makeManifest(capabilities: string[], allowedPaths: string[]): PluginMan
     name: "acme.fsgit",
     version: "1.0.0",
     capabilities,
-    scopes: { fs: { allowedPaths } },
+    // `PluginFsScopeSchema` requires `.min(1)`, so a validated manifest never
+    // carries an empty `allowedPaths` — an undeclared scope omits the key.
+    ...(allowedPaths.length > 0 ? { scopes: { fs: { allowedPaths } } } : {}),
     contributes: { fileDecorationProviders: [], forgeProviders: [] },
   } as unknown as PluginManifest;
 }
@@ -575,6 +577,7 @@ describe("a bound plugin's ${project}/${worktree} allowlist roots", () => {
 
   interface BoundFakePlugin extends FakeLoadedPlugin {
     binding: { projectId: string | null; projectRoot: string | null };
+    origin?: "builtin" | "user" | "project";
   }
 
   /**
@@ -635,7 +638,13 @@ describe("a bound plugin's ${project}/${worktree} allowlist roots", () => {
     // Spec §7.2: a project plugin lives inside the tree, so the tree is the
     // only sensible default. Without it host.fs and host.git reach nothing but
     // the plugin's own data dir.
-    const mine = join(baseDir, "defaulted");
+    //
+    // The root sits UNDER the faked home deliberately. Literal allowlist paths
+    // are classified `user-data` when they are under the home dir, and most
+    // real projects are — so a default routed through literal classification
+    // would deny `fs:project-read` the project root. A root outside the home
+    // dir passes either way and proves nothing.
+    const mine = join(homeDir, "Projects", "defaulted");
     await fs.mkdir(mine, { recursive: true });
     await fs.writeFile(join(mine, "a.txt"), "mine", "utf8");
 
@@ -651,6 +660,7 @@ describe("a bound plugin's ${project}/${worktree} allowlist roots", () => {
       dir: baseDir,
       loadedAt: 0,
       isBuiltin: false,
+      origin: "project",
       binding,
     });
     const host = seam._createHostForTests("acme.fsgit", binding);
@@ -675,6 +685,7 @@ describe("a bound plugin's ${project}/${worktree} allowlist roots", () => {
       dir: baseDir,
       loadedAt: 0,
       isBuiltin: false,
+      origin: "user",
       binding,
     });
     const host = seam._createHostForTests("acme.fsgit", binding);

@@ -44,6 +44,7 @@ import {
 } from "../../../shared/config/toolbarButtonRegistry.js";
 import {
   getPluginPanelKinds,
+  isProjectQualifiedPanelKindId,
   projectIdFromRuntimePanelKindId,
   type PanelKindConfig,
 } from "../../../shared/config/panelKindRegistry.js";
@@ -88,6 +89,7 @@ import type { IpcContext } from "../types.js";
 import {
   isSafePluginInstanceId,
   projectIdFromPluginInstanceKey,
+  PROJECT_PLUGIN_INSTANCE_PREFIX,
 } from "../../services/plugin/projectPluginIdentity.js";
 import type {
   ProjectPluginInfo,
@@ -686,6 +688,14 @@ async function handleActionsGet(ctx: IpcContext): Promise<PluginActionDescriptor
  */
 function assertSenderOwnsPluginInstance(ctx: IpcContext, pluginId: string): void {
   const boundProjectId = projectIdFromPluginInstanceKey(pluginId);
+  // A `null` here means "not a project instance key" — which covers both a bare
+  // app-global id and a malformed one like `project____acme.dashboard`, whose
+  // separator sits at offset zero. Only the first is legitimately unconstrained,
+  // so reject anything that merely looks project-scoped rather than letting the
+  // guard skip and lean on an exact-match lookup further down.
+  if (boundProjectId === null && pluginId.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX)) {
+    throw new Error("plugin action rejected: malformed project plugin id");
+  }
   if (boundProjectId !== null && boundProjectId !== ctx.projectId) {
     throw new Error("plugin action rejected: plugin belongs to a different project");
   }
@@ -760,6 +770,15 @@ async function handleActivateForView(
   // instance for a matching kind, so without this a renderer could activate —
   // and thereby start the worker for — another project's plugin.
   const owningProjectId = projectIdFromRuntimePanelKindId(panelKindId);
+  // Same reasoning as the action guard: a project-prefixed id that does not
+  // parse is malformed, not global, and must not skip the check.
+  if (owningProjectId === null && isProjectQualifiedPanelKindId(panelKindId)) {
+    throw new AppError({
+      code: "PLUGIN_ACTIVATION_FAILED",
+      message: `Plugin activation rejected for view "${panelKindId}": malformed project panel kind id`,
+      userMessage: "That panel could not be identified.",
+    });
+  }
   if (owningProjectId !== null && owningProjectId !== ctx.projectId) {
     throw new AppError({
       code: "PLUGIN_ACTIVATION_FAILED",

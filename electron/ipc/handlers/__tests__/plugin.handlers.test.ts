@@ -2893,6 +2893,28 @@ describe("cross-project plugin control", () => {
     expect(mockRegisterPluginAction).not.toHaveBeenCalled();
   });
 
+  it.each([
+    // The separator sits at offset zero, so the key parses to null — "not a
+    // project instance key" — which without the malformed check would read as
+    // "app-global" and skip the guard entirely.
+    "project____acme.dashboard",
+    "project__",
+  ])("rejects the malformed project plugin id %j rather than skipping the check", async (bad) => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:actions-unregister")({ sender: { id: 1 } }, bad, "refresh")
+    ).rejects.toThrow(/malformed project plugin id/);
+    expect(mockUnregisterPluginAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed project panel kind id rather than skipping the check", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT_B);
+    await expect(
+      getHandler("plugin:activate-for-view")({ sender: { id: 1 } }, "project:only-one-slash")
+    ).rejects.toThrow(/malformed project panel kind id/);
+    expect(mockActivatePluginForView).not.toHaveBeenCalled();
+  });
+
   it("allows a plugin's own project to register and unregister", async () => {
     mockGetProjectForWebContents.mockReturnValue(PROJECT_A);
     await getHandler("plugin:actions-unregister")({ sender: { id: 1 } }, INSTANCE_A, "refresh");
