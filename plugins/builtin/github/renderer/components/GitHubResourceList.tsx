@@ -598,6 +598,23 @@ export function GitHubResourceList({
     setOpenRowMenuNumber(null);
   }, [isDropdownOpen]);
 
+  // The selection menu only ever describes the rows on screen right now, for
+  // the project open right now. It has to close when either goes away. A
+  // background revalidation keeps the list visible and the trigger live, so a
+  // page that comes back empty can otherwise leave the menu standing over
+  // nothing — and a preset there would replace the selection with an empty
+  // one. The panel also survives a project switch without remounting, which
+  // would rebind the presets to the new project while still listing the old
+  // one's rows.
+  useEffect(() => {
+    if (data.length > 0) return;
+    setSelectionMenuOpen(false);
+  }, [data.length]);
+
+  useEffect(() => {
+    setSelectionMenuOpen(false);
+  }, [type, projectPath]);
+
   useEffect(() => {
     const wasOpen = wasDropdownOpenRef.current;
     wasDropdownOpenRef.current = isDropdownOpen;
@@ -1264,9 +1281,13 @@ export function GitHubResourceList({
                   setSelectionMenuOpen(false);
                 }
               }}
+              // Radix gives the content `role="dialog"`, and a dialog that
+              // announces itself as nothing is a dialog a screen-reader user
+              // has to explore to identify.
+              aria-label="Selection actions"
             >
               <div className="text-xs font-medium text-text-secondary mb-2">Select</div>
-              <div className="flex flex-col gap-1" role="group" aria-label="Selection actions">
+              <div className="flex flex-col gap-1">
                 {(() => {
                   const allSelected =
                     data.length > 0 && data.every((item) => selection.selectedIds.has(item.number));
@@ -1303,7 +1324,7 @@ export function GitHubResourceList({
                       : {
                           key: "select-all",
                           label: `Select all (${data.length})`,
-                          disabled: false,
+                          disabled: data.length === 0,
                           onSelect: () => selection.selectAll(data),
                         },
                   ];
