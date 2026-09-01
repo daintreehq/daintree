@@ -163,11 +163,13 @@ Plugins with only static contributions (a theme pack, a standalone MCP server co
 
 ### `engines.daintree`
 
-Semver range expressing which Daintree versions the plugin supports. Examples track the latest pre-1.0 minor; the scaffolder (`npx daintree-plugin new`) generates `"^0.11.0"`:
+Semver range expressing which Daintree versions the plugin supports. The scaffolder (`npx daintree-plugin new`) generates `">=0.11.0"` — an open-ended lower bound, deliberately not a caret:
 
-- `"^0.11.0"` — compatible with 0.11 (scaffolder default)
+- `">=0.11.0"` — 0.11 and every later release (scaffolder default)
 - `">=0.11.0 <0.13.0"` — explicit range
 - `"0.11.x"` — any 0.11 release
+
+**Never use a caret on a 0.x range.** `"^0.11.0"` resolves to `>=0.11.0 <0.12.0` under semver's 0.x rule, so it stops matching at the very next minor and the plugin is rejected on every release after the one you wrote it against.
 
 If the running Daintree version doesn't satisfy the range, the plugin is rejected at load with a user-visible warning toast. If `engines.daintree` is omitted entirely, Daintree warns in the console but loads the plugin anyway.
 

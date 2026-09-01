@@ -2,6 +2,8 @@
 
 Scaffold your first plugin, package it, and install it in Daintree.
 
+> **This is the path for a plugin that belongs to you** — installed to `~/.daintree/plugins/` and present in every project. If you are writing a plugin that belongs to a **project**, committed to its repository at `<projectRoot>/.daintree/plugins/`, stop here and read the [agent brief](./agent-brief.md) instead. The two differ in ways that matter on the first line of the manifest, and the command-handler convention below is one project plugins reject.
+
 ## Prerequisites
 
 - Node.js 22 or newer

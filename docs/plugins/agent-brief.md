@@ -18,7 +18,7 @@ If the agent has no access to the Daintree repository — the normal case, since
 
 ## What you are building
 
-A directory in your repository holding a `plugin.json` and a committed `dist/`. Daintree scans `<projectRoot>/.daintree/plugins/` when the project opens, asks you once whether to run the project's plugins, and from then on loads them silently — through branch switches, pulls, rebases, and every rebuild an agent commits.
+A directory in your repository holding a `plugin.json` and a committed `dist/`. Daintree scans `<projectRoot>/.daintree/plugins/` when the project opens and asks once whether to run the project's plugins. Answer **Always enable** and the decision persists: from then on the ids it already knows reload silently through branch switches, pulls, rebases, and every rebuild an agent commits. (**Enable for this session** is memory-only and asks again next launch; **Keep disabled** is remembered and runs nothing; dismissing records nothing and may prompt again.)
 
 The whole design exists so that an agent working in a fresh worktree can write a plugin, commit it, and have it load on the next open with no install step and no build step. That is why `dist/` is committed and why the host never compiles anything.
 
@@ -42,7 +42,7 @@ Prose can drift; these cannot. Read them in preference to any doc that disagrees
 | File | Why it is ground truth |
 | --- | --- |
 | `electron/schemas/plugin.ts` | The zod schema that actually accepts or rejects your manifest, including the `scope` cross-checks and every refused project contribution, each with the error string you will see |
-| `plugins/fixtures/project-local/` | A known-good project plugin at the real path discovery scans, kept working by the load tests — the skeleton below, on disk |
+| `plugins/fixtures/project-local/` | A minimal project plugin at the real path discovery scans. It is a discovery/schema/watcher fixture, not this skeleton: it registers no action and its view returns a plain object rather than rendering React, so do not copy it as a UI starting point |
 | `plugins/sample/rich-daintree/` | A fuller plugin exercising most contribution points |
 | `packages/plugin-sdk/` | The real `PluginHostApi` types behind the `host` object |
 
@@ -50,22 +50,36 @@ Run the agent in **your own project**, not in the Daintree checkout, and give it
 
 ## The rules that decide whether it loads
 
-Ten things an agent gets wrong on the first attempt. Every one of them is silent — the plugin appears in the manager and does nothing.
+Twelve things an agent gets wrong on the first attempt, grouped by how the failure shows up. The middle group is the dangerous one: the plugin loads, looks healthy in the manager, and does nothing.
+
+**Refused at validation — the manager shows `Unreadable` with the first schema issue, prefixed by its field path.**
 
 1. **`"scope": "project"` is required.** A manifest without it, found under `.daintree/plugins/`, is rejected as `project_scope_required`. The same manifest _with_ it, installed into `~/.daintree/plugins/`, is rejected the other way.
-2. **`dist/` must be committed.** Most repositories ignore `dist/` at the root, and that pattern covers this directory too. The plugin's own `.gitignore` needs both `!dist/` and `!dist/**` — the first so git descends into the directory, the second so the files inside survive a parent rule matching contents.
-3. **Rebuild and commit `dist/` in the same commit as the source change.** A branch with stale `dist/` is stale for everyone who checks it out. A branch with no `dist/` still shows the panels and commands, because the manifest parses — they just do nothing.
-4. **The host never reads `src/`, never runs `package.json`, never compiles.** `plugin.json` and `dist/` are the entire load contract.
-5. **Commands are registered from `activate()` with `host.registerAction`.** The filesystem-convention handler (`src/<commandId>.js`) that installed plugins may use does not exist here — it would run repository source in the main process, outside the worker every other plugin gets its crash isolation from.
-6. **Eight contribution types are refused under `scope: "project"`**: `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `processTools`, `mcpServers`, `forgeProviders`. Each is rejected at manifest validation with an error naming the structural reason. See the table in [project-local.md](./project-local.md#what-a-project-plugin-may-contribute).
-7. **The directory name should equal the manifest `name`.** The host identifies the plugin by the manifest and does not compare the two, but every tool and every doc assumes they match.
-8. **Only `plugin.json` and `dist/` are watched.** Editing `src/` reloads nothing. Keep a build watcher running, or hand-write `dist/` (see below).
-9. **A new plugin id in an already-trusted project is staged, not run.** It is announced once and listed in the plugin manager with a one-click **Activate**. This is the expected state for a plugin an agent just created — it is not a failure.
-10. **`engines.daintree` must match the running app.** A range that doesn't is rejected at load with a user-visible warning.
+2. **Every panel needs `color` as well as `iconId`.** Both are required, and a missing `color` is the single most common reason a hand-written manifest is refused. Any CSS colour works; `var(--theme-category-orange)` is the convention for plugin panels.
+3. **A view's `id` must equal a panel's `id`.** The loader attaches a view to a panel kind by matching ids, and a view matching no panel is rejected outright rather than ignored. `surfaces.*.viewId` must likewise name a declared view, and that view's panel must not be `hasPty: true`.
+4. **`engines.daintree` must be an open-ended lower bound — never a caret.** `^0.11.0` means `>=0.11.0 <0.12.0` under semver's 0.x rule, so a caret is refused on every release after the one you wrote it against. Write `>=0.11.0`.
+5. **Eight contribution types are refused under `scope: "project"`**: `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `processTools`, `mcpServers`, `forgeProviders`. Each error names the structural reason. See the table in [project-local.md](./project-local.md#what-a-project-plugin-may-contribute).
+
+**Loads, and stays inert.**
+
+6. **Activation is lazy.** `activationEvents` defaults to `[]`, so `activate()` does not run at project open — it runs the first time a contribution is _used_. Anything registered imperatively therefore does not exist yet. This is why a command must **also** be declared in `contributes.commands`: the manifest entry is what puts it in the palette and what triggers activation, and the `host.registerAction` call in `activate()` is what gives it a handler with host access. Declare both, with the same id. Use `"activationEvents": ["onStartupFinished"]` only for genuine background work.
+7. **The filesystem-convention handler does not exist here.** An installed plugin may drop a handler at `src/<commandId>.js` for the host to import; a project plugin may not, because that would run repository source in the main process, outside the worker every other plugin gets its crash isolation from. Register from `activate()` instead.
+8. **Nothing reaches a view on its own.** `window.electron.plugin.on(pluginId, channel, …)` only receives what the worker sends with `host.postToPanel` or `host.broadcastToRenderer`. There is no ambient `"worktree"` channel. Pushes are not buffered either, so a push during `activate()` is gone before the view mounts — have the view pull on mount, then push updates.
+9. **`host.registerAction` and `host.registerHandler` return promises.** Await them inside `activate`, or activation can resolve before the registration lands.
+
+**Works for you, broken for everyone who clones.**
+
+10. **`dist/` must be committed, and rebuilt in the same commit as the source change.** This is invisible on the machine that built it. A branch with stale `dist/` is stale for everyone; a branch missing it entirely still shows the panels and commands, because the manifest parses — using them then produces an activation, missing-handler, or view-import error.
+11. **The plugin's `.gitignore` needs both `!dist/` and `!dist/**`** — the first so git descends into the directory, the second so the files inside survive a parent rule matching contents. Neither helps if an ancestor rule ignores `.daintree/` or the plugin directory itself: git never reaches a nested `.gitignore` inside an excluded directory, so that rule has to be relaxed at the level that sets it.
+12. **Only the registered project root is scanned — never a worktree.** Worktrees are views of the project, not separate scan roots. An agent that writes the plugin inside its own worktree will not see it load until that commit reaches the root checkout Daintree has open. Expect to merge before you can test.
+
+Two more things that are not failures, and get misread as one. A new manifest id in an already-trusted project is **staged**: parsed, announced once, and listed with a one-click **Activate** — it does not run until you click, and that is by design. And the directory name is not compared to the manifest `name`; matching them is convention that every tool assumes, not a load rule.
 
 ## The zero-build skeleton
 
-The `daintree-plugin` CLI is not on npm yet, so `npx daintree-plugin new --project` returns E404 outside this repository. That is fine: because the host loads `dist/` verbatim as browser ESM, a plugin can be hand-written with no build step, no `npm install`, and no toolchain. Bare `react` resolves through the host's import map, and `createElement` avoids needing a JSX transform.
+The `daintree-plugin` CLI is not on npm yet, so `npx daintree-plugin new --project` returns E404 outside this repository. That is survivable, because neither half of a plugin has to be compiled: the **view** is imported by the renderer as browser ESM, where a bare `react` specifier resolves through the host's import map, and the **worker entry** is imported by Node in a utility process. Hand-write both and you need no toolchain at all.
+
+Treat this as a load probe — the smallest thing that provably activates and renders. Grow it once it works.
 
 Four files. Replace `acme.dashboard` throughout with your own `<publisher>.<name>`.
 
@@ -74,11 +88,11 @@ Four files. Replace `acme.dashboard` throughout with your own `<publisher>.<name
 ├── plugin.json
 ├── .gitignore
 └── dist/
-    ├── index.js
+    ├── index.mjs
     └── panel.js
 ```
 
-**`plugin.json`**
+**`plugin.json`** — the command is declared here _and_ registered in `activate()`; see rule 6.
 
 ```json
 {
@@ -87,17 +101,34 @@ Four files. Replace `acme.dashboard` throughout with your own `<publisher>.<name
   "scope": "project",
   "displayName": "Dashboard",
   "description": "A panel for this project.",
-  "main": "dist/index.js",
-  "engines": { "daintree": ">=0.34.0" },
+  "main": "dist/index.mjs",
+  "engines": { "daintree": ">=0.11.0" },
   "capabilities": [],
   "contributes": {
-    "panels": [{ "id": "main", "name": "Dashboard", "iconId": "gauge" }],
+    "commands": [
+      {
+        "id": "say-hello",
+        "title": "Say Hello",
+        "description": "Show a greeting toast.",
+        "category": "Dashboard",
+        "kind": "command",
+        "danger": "safe"
+      }
+    ],
+    "panels": [
+      {
+        "id": "main",
+        "name": "Dashboard",
+        "iconId": "gauge",
+        "color": "var(--theme-category-orange)"
+      }
+    ],
     "views": [{ "id": "main", "componentPath": "dist/panel.js", "location": "panel" }]
   }
 }
 ```
 
-**`.gitignore`** — both negations, always:
+**`.gitignore`** — both negations, and check no ancestor ignores `.daintree/`:
 
 ```gitignore
 node_modules/
@@ -110,11 +141,11 @@ node_modules/
 !dist/**
 ```
 
-**`dist/index.js`** — the worker entry. Runs once on load; the returned disposer runs on unload.
+**`dist/index.mjs`** — the worker entry, run by Node. The `.mjs` extension is not cosmetic: with no `package.json` of its own the file inherits the module type of the nearest enclosing one, and in a repository that is CommonJS (or declares no `type` at all) `export` fails to parse. `.mjs` is ESM regardless of what your project declares.
 
 ```js
 export async function activate(host) {
-  host.registerAction(
+  await host.registerAction(
     {
       id: "say-hello",
       title: "Say Hello",
@@ -128,25 +159,37 @@ export async function activate(host) {
     }
   );
 
+  // The view pulls through this on mount. Nothing reaches a panel unless the
+  // worker sends it, and a push made here would land before any view exists.
+  await host.registerHandler("worktree", async () => await host.getActiveWorktree());
+
   return () => {};
 }
 ```
 
-**`dist/panel.js`** — the view. Default-exports a React component; receives `PanelViewProps`.
+**`dist/panel.js`** — the view, imported by the renderer. Default-exports a React component and receives `PanelViewProps`.
 
 ```js
 import { createElement, useEffect, useState } from "react";
 
 export default function Panel({ panelId, pluginId }) {
   const [worktree, setWorktree] = useState(null);
-  useEffect(() => window.electron.plugin.on(pluginId, "worktree", setWorktree), [pluginId]);
+  useEffect(() => {
+    let live = true;
+    void window.electron.plugin.invoke(pluginId, "worktree").then((wt) => {
+      if (live) setWorktree(wt);
+    });
+    return () => {
+      live = false;
+    };
+  }, [pluginId]);
   return createElement("div", { "data-panel-id": panelId }, worktree?.name ?? "No worktree");
 }
 ```
 
-`plugins/fixtures/project-local/` in the Daintree repository is this same skeleton, kept working by the load tests.
+Use the `pluginId` prop rather than hardcoding your manifest name — for a project plugin the runtime id is an instance key, not the manifest id.
 
-Two constraints the zero-build path buys you at a price: the React hooks in `@daintreehq/plugin-sdk/react` (`usePluginEvent`, `usePluginPanelEvent`, `useHostChannel`) resolve only in a bundle built with `@daintreehq/plugin-vite`, so a raw module subscribes through `window.electron.plugin.on(...)` directly as above; and you write ESM by hand rather than TypeScript with JSX. Both stop mattering the moment you add a real build — see [dev-loop.md](./dev-loop.md).
+What the no-build path costs: the React hooks in `@daintreehq/plugin-sdk/react` resolve only in a bundle built with `@daintreehq/plugin-vite`, so a raw view uses the `window.electron.plugin` bridge directly as above; and the view can import `react` plus its own relative modules, but not arbitrary bare npm specifiers, TypeScript, JSX, or CSS. If you need those, build inside a Daintree checkout where the workspace packages resolve — outside one there is no published toolchain yet. [dev-loop.md](./dev-loop.md) covers the watcher.
 
 ## Owning the project's main surface
 
@@ -156,17 +199,22 @@ If the point is for the project to present as a purpose-built application rather
 "surfaces": { "emptyCanvas": { "viewId": "main" } }
 ```
 
-One slot exists today, it is project-scope only, and the frame keeps a control that swaps back to the stock launcher in both directions. See [Surfaces](./project-local.md#surfaces).
+`viewId` must name a declared `contributes.views` entry — a dangling id is a validation error — and that view's panel must not be `hasPty: true`. One slot exists today, it is project-scope only, and the frame keeps a control that swaps back to the stock launcher in both directions. See [Surfaces](./project-local.md#surfaces).
 
 ## Verify it loaded
 
 1. Open the project in Daintree. First time, a dialog names the plugins and asks once — **Always enable** persists the decision for this project, in Daintree's own store, never in the repository.
 2. Open the plugin manager. The plugin appears under the project section, badged `Project`, with its source path and manifest id.
 3. If it says **Staged**, click **Activate plugin** — a manifest id the project has never had does not run until you do.
-4. If it says **Unreadable**, the detail pane carries the validation error verbatim. That is the diagnostic; read it rather than guessing.
-5. Run the command from the palette, or open the panel.
+4. If it says **Unreadable**, the detail pane carries the first schema issue prefixed by its field path — or, for a manifest that never parsed, the JSON/read error. That is the diagnostic; read it rather than guessing.
+5. Run **Dashboard: Say Hello** from the palette, or open the panel. Either one activates the plugin — the manifest's `contributes.commands` entry is what makes the command reachable before `activate()` has ever run.
 
-Then check the trap that produces the most convincing false success: `git check-ignore -v .daintree/plugins/acme.dashboard/dist/index.js`. It works on the machine that built it whether or not `dist/` is tracked.
+Then check the trap that produces the most convincing false success — it works on the machine that built it whether or not `dist/` is tracked. Prove both halves, because neither implies the other:
+
+```bash
+git check-ignore -v --no-index .daintree/plugins/acme.dashboard/dist/index.mjs   # expect: no match
+git ls-files --error-unmatch .daintree/plugins/acme.dashboard/dist/index.mjs     # expect: the path
+```
 
 Edits to `plugin.json` or `dist/` reload the plugin live, per plugin directory, about 200 ms after writes stop. Settings and `host.storage` survive a reload; module-scope state in the worker and React state in the views do not. No restart is ever required — anything that genuinely needed one is not offered to project plugins.
 
