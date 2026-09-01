@@ -68,9 +68,9 @@ npm run perf list
 
 **`--scenario` is required and takes exactly one id. There is no whole-matrix run, and nothing schedules a run at all.** Both are deliberate.
 
-The harness exists for targeted optimisation work, driven a benchmark at a time by `.agents/skills/optimize`. A sweep of 112 scenarios produces a wall of figures nobody reads, while taking the machine away from the one measurement somebody actually wanted — and since nothing gates on these numbers, a sweep has no audience. There is no perf workflow: `performance.yml` is gone, and no cron, no pull request and no branch push runs a benchmark.
+The harness exists for targeted optimisation work, driven a benchmark at a time by `.agents/skills/optimize`. A sweep of all 156 scenarios produces a wall of figures nobody reads, while taking the machine away from the one measurement somebody actually wanted — and since nothing gates on these numbers, a sweep has no audience. Nothing schedules a benchmark: `performance.yml` is gone, and no cron, no pull request and no branch push runs one. The single workflow that remains, `perf-ab.yml`, is dispatch-only, measures one scenario, and exists for one job — verifying an improvement already claimed on a real machine against Linux and Windows. It refuses any target that is not a `count`, a `size` or a structural `ratio`, because a hosted runner's clock cannot support a duration claim.
 
-Requiring the filter is also what makes results comparable. A scenario measured alone and the same scenario measured beside 111 others ran under different heap, JIT and thermal conditions; `perf compare` refuses a pair whose selections differ, so a matrix run's numbers could never be compared against a targeted one. With the filter mandatory, every result this harness produces is comparable with every other result for that scenario.
+Requiring the filter is also what makes results comparable. A scenario measured alone and the same scenario measured beside 155 others ran under different heap, JIT and thermal conditions; `perf compare` refuses a pair whose selections differ, so a matrix run's numbers could never be compared against a targeted one. With the filter mandatory, every result this harness produces is comparable with every other result for that scenario.
 
 ```bash
 npm run perf smoke -- --scenario PERF-105

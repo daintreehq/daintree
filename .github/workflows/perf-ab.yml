@@ -1,0 +1,260 @@
+name: Perf A/B
+
+# Cross-OS verification for ONE optimize target, dispatch only.
+#
+# This is not the deleted `performance.yml`. That workflow ran the matrix on a
+# schedule, produced a wall of numbers nobody read, and gated nothing; it was
+# removed in 07598f6eb and should stay removed. This runs when a human or the
+# optimize skill asks it to, measures exactly one scenario, and answers exactly
+# one question: does the improvement already claimed on the local machine also
+# hold on Linux and Windows?
+#
+# DETERMINISTIC METRICS ONLY. Hosted runners vary 5-25% run to run, and every
+# project that benchmarks seriously — rustc-perf, V8, Node core, bencher.dev —
+# refuses shared cloud CI for wall-clock work; CodSpeed replaces the clock with
+# instruction counting rather than trusting it. Both arms here run in ONE job on
+# ONE runner, which is what makes the counts sound: same VM, same filesystem,
+# same git. The clock is still not sound, so `check-pair.mjs --cross-machine`
+# refuses any target that is not a count, a size or a structural ratio, and this
+# workflow cannot be talked into claiming a duration.
+#
+# Read the output as a per-platform delta, never as a cross-platform absolute.
+# Windows wraps shell execution in cmd.exe so spawn counts are inflated against
+# POSIX, and file watching is inotify / FSEvents / ReadDirectoryChangesW, so
+# event counts for the same mutation differ by design. "macOS 16 -> 2, Windows
+# 34 -> 20" is the claim. "Windows is 34 and macOS is 16" is an issue, not this.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: "Champion tree — the optimize run's branch point"
+        required: true
+        type: string
+      cand_sha:
+        description: "Candidate tree — the final sha of the optimize branch"
+        required: true
+        type: string
+      scenario:
+        description: "Scenario id, e.g. PERF-101"
+        required: true
+        type: string
+      target:
+        description: "Metric path, e.g. metricStats.spawnsPerWorktreeN50.max (count/size/ratio only)"
+        required: true
+        type: string
+      predicates:
+        description: "Comma-separated correctness metrics from the scenario's own `correctness` array"
+        required: true
+        type: string
+      mode:
+        description: "Perf mode"
+        required: true
+        default: smoke
+        type: choice
+        options: [smoke, ci, nightly, soak]
+      iterations:
+        description: "Iterations per arm — must match the local run's protocol"
+        required: true
+        default: "5"
+        type: string
+      warmups:
+        description: "Warmups per arm — must match the local run's protocol"
+        required: true
+        default: "3"
+        type: string
+      threshold:
+        description: "Precommitted threshold, percent"
+        required: true
+        default: "1"
+        type: string
+      higher_is_better:
+        description: "Target improves upward"
+        required: false
+        default: false
+        type: boolean
+      os:
+        description: "Which legs to run"
+        required: true
+        default: all
+        type: choice
+        options: [all, linux, windows, macos, linux-windows]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One leg at a time per candidate tree. Two jobs on one runner pool measuring
+  # at once is the contamination the interleave exists to avoid, and a queued
+  # run is cheaper than a wrong number.
+  group: perf-ab-${{ inputs.cand_sha }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+  ONNXRUNTIME_NODE_INSTALL: "skip"
+
+jobs:
+  matrix-setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        run: |
+          case "${{ inputs.os }}" in
+            linux)         echo 'matrix={"include":[{"os":"ubuntu-latest","name":"Linux"}]}' >> "$GITHUB_OUTPUT" ;;
+            windows)       echo 'matrix={"include":[{"os":"windows-latest","name":"Windows"}]}' >> "$GITHUB_OUTPUT" ;;
+            macos)         echo 'matrix={"include":[{"os":"macos-latest","name":"macOS"}]}' >> "$GITHUB_OUTPUT" ;;
+            linux-windows) echo 'matrix={"include":[{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"}]}' >> "$GITHUB_OUTPUT" ;;
+            *)             echo 'matrix={"include":[{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"},{"os":"macos-latest","name":"macOS"}]}' >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  ab:
+    needs: [matrix-setup]
+    runs-on: ${{ matrix.os }}
+    name: A/B (${{ matrix.name }})
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix-setup.outputs.matrix) }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          # Both arms are checked out from this one clone, so it needs the full
+          # history: a shallow clone cannot reach the branch point.
+          fetch-depth: 0
+          ref: ${{ inputs.cand_sha }}
+
+      - name: Normalise line endings
+        # CRLF conversion changes file bytes, which moves any size-class metric
+        # and would read as a code difference between two platforms.
+        run: git config core.autocrlf false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Refuse a target this runner cannot claim
+        # Fail before spending an hour measuring something the gate will reject.
+        shell: bash
+        run: |
+          node --input-type=module -e '
+            import { classifyTarget, isMachineIndependent } from "./.agents/skills/optimize/metric-class.mjs";
+            const target = process.env.TARGET;
+            const cls = classifyTarget(target);
+            if (!isMachineIndependent(cls)) {
+              console.error(target + " classifies as `" + cls + "`. A hosted runner varies 5-25% run to run, so this workflow measures counts, sizes and structural ratios only. Measure a duration on a machine you own.");
+              process.exit(1);
+            }
+            console.log(target + " is `" + cls + "` - comparable across machines.");
+          '
+        env:
+          TARGET: ${{ inputs.target }}
+
+      - name: Measure — interleaved, both trees, one runner
+        shell: bash
+        # champ, cand, cand, champ, champ, cand. The middle pair reverses
+        # because the first arm of a session is the coldest and a fixed order
+        # would hand that handicap to the same side three times. `npm ci` ran
+        # once, against the candidate tree: node_modules is deliberately NOT
+        # reinstalled between arms, because a dependency difference between the
+        # two trees would then be measured as a code difference. If the arms
+        # need different dependencies they are not an A/B.
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/opt/ab
+          arm() {
+            git checkout --quiet --detach "$1"
+            npm run perf ${{ inputs.mode }} -- \
+              --scenario '${{ inputs.scenario }}' \
+              --iterations '${{ inputs.iterations }}' \
+              --warmups '${{ inputs.warmups }}' \
+              --label "$2" \
+              --json ".tmp/opt/ab/$2.json"
+          }
+          arm '${{ inputs.base_sha }}' champ1
+          arm '${{ inputs.cand_sha }}' cand1
+          arm '${{ inputs.cand_sha }}' cand2
+          arm '${{ inputs.base_sha }}' champ2
+          arm '${{ inputs.base_sha }}' champ3
+          arm '${{ inputs.cand_sha }}' cand3
+          git checkout --quiet --detach '${{ inputs.cand_sha }}'
+
+      - name: Gate the arms and rule on the claim
+        shell: bash
+        run: |
+          set -euo pipefail
+          PRED_ARGS=""
+          IFS=',' read -ra PREDS <<< '${{ inputs.predicates }}'
+          for p in "${PREDS[@]}"; do
+            trimmed="$(echo "$p" | tr -d '[:space:]')"
+            [ -n "$trimmed" ] && PRED_ARGS="$PRED_ARGS --predicate $trimmed"
+          done
+          HIGHER=""
+          [ '${{ inputs.higher_is_better }}' = 'true' ] && HIGHER="--higher-is-better"
+
+          node .agents/skills/optimize/check-pair.mjs ab \
+            --scenario '${{ inputs.scenario }}' \
+            --target '${{ inputs.target }}' \
+            $PRED_ARGS $HIGHER \
+            --cross-machine \
+            --threshold '${{ inputs.threshold }}' \
+            --expect-champ-sha '${{ inputs.base_sha }}' \
+            --expect-cand-sha '${{ inputs.cand_sha }}' \
+            --champ .tmp/opt/ab/champ1.json \
+            --champ .tmp/opt/ab/champ2.json \
+            --champ .tmp/opt/ab/champ3.json \
+            --cand .tmp/opt/ab/cand1.json \
+            --cand .tmp/opt/ab/cand2.json \
+            --cand .tmp/opt/ab/cand3.json \
+            | tee .tmp/opt/ab/verdict.txt
+          # `tee` would otherwise mask the exit code this whole workflow exists
+          # to read.
+          code=${PIPESTATUS[0]}
+          echo "check-pair exit $code"
+          echo "$code" > .tmp/opt/ab/exit-code.txt
+          case "$code" in
+            0) echo "CLAIM — the improvement holds on ${{ matrix.name }}." ;;
+            # A sound measurement that did not support the hypothesis on this
+            # platform, or a runner too noisy to resolve it. Both are results
+            # worth reading rather than broken jobs: an improvement on one OS
+            # and not another is a finding, and NO MEASUREMENT says to run the
+            # leg again rather than that the change is bad.
+            4) echo "NO CLAIM — sound arms, the hypothesis did not hold here." ;;
+            5) echo "NO MEASUREMENT — this runner was too noisy. Re-dispatch this leg." ;;
+            *) echo "::error::check-pair exit $code — these arms are not a result."; exit "$code" ;;
+          esac
+
+      - name: Summarise
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## ${{ matrix.name }} — ${{ inputs.scenario }} \`${{ inputs.target }}\`"
+            echo
+            echo '```'
+            cat .tmp/opt/ab/verdict.txt 2>/dev/null || echo "no verdict produced"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload arms
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-ab-${{ matrix.name }}-${{ inputs.scenario }}
+          path: .tmp/opt/ab/
+          retention-days: 14

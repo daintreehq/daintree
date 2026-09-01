@@ -18,6 +18,7 @@
  *     --scenario PERF-105 \
  *     --target metricStats.idleGitSpawns.max \
  *     --predicate detectionMisses [--predicate refreshMisses] \
+ *     [--precommit .tmp/opt/<target>/precommit.json] \
  *     [--expect-before-sha <sha>] [--expect-after-sha <sha>] \
  *     before.json after.json
  *
@@ -30,6 +31,8 @@
  *     --target metricStats.idleGitSpawns.max \
  *     --predicate detectionMisses \
  *     --threshold 5 [--higher-is-better] \
+ *     [--precommit .tmp/opt/<target>/precommit.json] \
+ *     [--max-drift <pct>] [--max-cv <pct>] [--cross-machine] \
  *     --expect-champ-sha <sha> --expect-cand-sha <sha> \
  *     --champ champ1.json --champ champ2.json --champ champ3.json \
  *     --cand cand1.json --cand cand2.json --cand cand3.json
@@ -60,17 +63,35 @@
  *   4  AB only: measured cleanly, but at least one of the three conditions failed.
  *      NO CLAIM. Distinct from 1 so an unattended caller cannot read a sound
  *      measurement that disproved the hypothesis as a broken one worth retrying.
+ *   5  AB only: the machine drifted more than `--max-drift` between champion
+ *      arms, so it could not resolve a difference of the size being claimed.
+ *      NOT a disproof — the hypothesis was never tested. Cool the machine,
+ *      close what else is running, and measure the pair again. Distinct from 4
+ *      because recording an unusable measurement as a disproof throws away a
+ *      hypothesis that may well be right.
  *
- * Precedence when several apply: 1 beats 4 beats 3.
+ * Precedence when several apply: 1 beats 5 beats 4 beats 3.
+ *
+ * `--precommit` is the anti-hindsight gate. A freeform run derives its own
+ * target, predicate, threshold and protocol; passing the record written by
+ * `precommit.mjs` before the baseline proves those were the terms chosen BEFORE
+ * any number existed, and that the measurement apparatus has not been edited
+ * since. Without it the flags on this command line are simply whatever the
+ * caller believes today.
  */
 
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 
+import { harnessDigest } from "./harness-digest.mjs";
+import { classifyTarget, isMachineIndependent } from "./metric-class.mjs";
+
 const USAGE =
-  "usage: check-pair.mjs --scenario ID --target PATH --predicate NAME [...] A.json B.json\n" +
+  "usage: check-pair.mjs --scenario ID --target PATH --predicate NAME [...] " +
+  "[--precommit REC] A.json B.json\n" +
   "       check-pair.mjs ab --scenario ID --target PATH --predicate NAME --threshold PCT " +
+  "[--precommit REC] [--max-drift PCT] [--max-cv PCT] [--cross-machine] " +
   "--expect-champ-sha SHA --expect-cand-sha SHA --champ F [...] --cand F [...]";
 
 function usageError(message) {
@@ -86,6 +107,9 @@ const SINGLE = {
   "--expect-champ-sha": "expectChampSha",
   "--expect-cand-sha": "expectCandSha",
   "--threshold": "threshold",
+  "--precommit": "precommit",
+  "--max-drift": "maxDrift",
+  "--max-cv": "maxCv",
 };
 const REPEATED = {
   "--predicate": "predicates",
@@ -94,11 +118,20 @@ const REPEATED = {
 };
 
 function parseArgs(argv) {
-  const out = { predicates: [], champs: [], cands: [], files: [], higherIsBetter: false };
+  const out = {
+    predicates: [],
+    champs: [],
+    cands: [],
+    files: [],
+    higherIsBetter: false,
+    crossMachine: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--higher-is-better") {
       out.higherIsBetter = true;
+    } else if (arg === "--cross-machine") {
+      out.crossMachine = true;
     } else if (REPEATED[arg]) {
       const value = argv[(i += 1)];
       if (value === undefined) usageError(`${arg} expects a value`);
@@ -194,6 +227,119 @@ function comparabilityChecks(arms) {
   sameAcross("node version", arms, (s) => s.environment?.nodeVersion);
   sameAcross("git version", arms, (s) => s.environment?.gitVersion ?? null);
   sameAcross("electron version", arms, (s) => s.environment?.electronVersion ?? null);
+}
+
+/**
+ * The terms of the claim against the record written before the baseline.
+ *
+ * Every field here is one an unattended run could otherwise revise after seeing
+ * a number: the metric it judges, the miss counts it calls health, the size of
+ * difference it calls real, and the sampling that produced it. A protocol
+ * change alone can manufacture an improvement — fewer warmups leaves cold-start
+ * cost in the champion arm — so the iteration and warmup counts are part of the
+ * lock rather than context beside it.
+ *
+ * `harnessDigest` closes the last door. A benchmark edited to measure less
+ * produces a smaller number with every other check still passing, because the
+ * files agree with each other; only a hash taken before the edit disagrees.
+ */
+function precommitChecks(args, arms) {
+  if (!args.precommit) return null;
+  let record;
+  try {
+    record = JSON.parse(readFileSync(args.precommit, "utf8"));
+  } catch (error) {
+    console.error(`cannot read precommit record ${args.precommit}: ${String(error)}`);
+    process.exit(2);
+  }
+
+  const same = (label, expected, actual) =>
+    check(
+      expected === actual,
+      `precommit: ${label}`,
+      expected === actual
+        ? String(actual)
+        : `precommitted ${String(expected)}, claimed ${String(actual)}`
+    );
+
+  same("scenario", record.scenario, args.scenario);
+  same("target", record.target, args.target);
+  same("direction", Boolean(record.higherIsBetter), args.higherIsBetter);
+
+  const locked = [...(record.predicates ?? [])].sort().join(",");
+  const claimed = [...args.predicates].sort().join(",");
+  check(
+    locked === claimed,
+    "precommit: predicate set",
+    locked === claimed ? claimed : `precommitted ${locked}, claimed ${claimed}`
+  );
+
+  if (args.threshold !== undefined) {
+    const lockedPct = Number(record.thresholdPct);
+    const claimedPct = Number(args.threshold);
+    check(
+      lockedPct === claimedPct,
+      "precommit: threshold",
+      lockedPct === claimedPct
+        ? `${claimedPct}%`
+        : `precommitted ${lockedPct}%, claimed ${claimedPct}% — a threshold re-chosen after the numbers is not a threshold`
+    );
+  }
+
+  // The protocol as the runner recorded it, not as the caller remembers it.
+  for (const arm of arms) {
+    const iterations = arm.summary.protocol?.iterations ?? null;
+    const warmups = arm.summary.protocol?.warmups ?? null;
+    check(
+      iterations === record.iterations,
+      `precommit: ${arm.label} --iterations`,
+      iterations === record.iterations
+        ? String(iterations)
+        : `precommitted ${record.iterations}, measured ${String(iterations)}`
+    );
+    check(
+      warmups === record.warmups,
+      `precommit: ${arm.label} --warmups`,
+      warmups === record.warmups
+        ? String(warmups)
+        : `precommitted ${record.warmups}, measured ${String(warmups)}`
+    );
+    check(
+      arm.summary.mode === record.mode,
+      `precommit: ${arm.label} mode`,
+      arm.summary.mode === record.mode
+        ? String(record.mode)
+        : `precommitted ${record.mode}, measured ${String(arm.summary.mode)}`
+    );
+  }
+
+  const { digest, fileCount } = harnessDigest();
+  check(
+    digest === record.harnessDigest,
+    "precommit: measurement apparatus unchanged",
+    digest === record.harnessDigest
+      ? `${digest.slice(0, 16)}… over ${fileCount} files`
+      : `precommitted ${String(record.harnessDigest).slice(0, 16)}…, now ${digest.slice(0, 16)}… — scripts/perf or a gate script was edited during the run, so these numbers measure a different apparatus`
+  );
+
+  return record;
+}
+
+/**
+ * Coefficient of variation of the scenario's own duration, per arm.
+ *
+ * Not the target — a stability reading for the machine while that arm ran. An
+ * arm whose iterations disagree with each other by more than the difference
+ * being claimed cannot support the claim, whatever the medians say, and a
+ * spread that appears in one arm only is the shape of something else starting
+ * on the box mid-measurement.
+ */
+function coefficientOfVariation(arm, scenario) {
+  const aggregate = (arm.summary.aggregates ?? []).find((entry) => entry.id === scenario);
+  if (!aggregate) return null;
+  const { meanMs, stdDevMs } = aggregate;
+  if (typeof meanMs !== "number" || typeof stdDevMs !== "number" || meanMs <= 0) return null;
+  return (stdDevMs / meanMs) * 100;
 }
 
 /** Returns the arm's target value, or null when the arm is unusable. */
@@ -314,6 +460,7 @@ if (mode === "pair") {
   ];
 
   comparabilityChecks(arms);
+  precommitChecks(args, arms);
 
   const [beforeSha, afterSha] = arms.map(shaOf);
   // Checked whether or not an expectation was passed. Exact equality against an
@@ -367,6 +514,35 @@ if (args.expectBeforeSha || args.expectAfterSha) {
   );
 }
 if (args.files.length > 0) usageError("`ab` takes arms via --champ/--cand, not positionally");
+
+// Default 2x the threshold. A machine whose champion arms disagree by twice the
+// difference being claimed is not a quiet machine, and condition 3 would reject
+// the pair anyway — but as a NO CLAIM, which records a hypothesis as disproved
+// when it was never actually tested. Named on the command line so the number
+// appears in the verdict rather than living only here.
+const maxDrift = args.maxDrift === undefined ? threshold * 2 : Number(args.maxDrift);
+if (!Number.isFinite(maxDrift) || maxDrift <= 0) {
+  usageError("--max-drift must be a positive number of percent");
+}
+const maxCv = args.maxCv === undefined ? null : Number(args.maxCv);
+if (maxCv !== null && (!Number.isFinite(maxCv) || maxCv <= 0)) {
+  usageError("--max-cv must be a positive number of percent");
+}
+
+// The cross-machine leg claims one number for every operating system it ran on,
+// which only holds for the deterministic classes. A duration compared across two
+// machines is mostly the two machines; `scripts/perf/lib/comparability.ts` is the
+// authority and `metric-class.mjs` mirrors it.
+if (args.crossMachine) {
+  const cls = classifyTarget(args.target);
+  if (!isMachineIndependent(cls)) {
+    usageError(
+      `--cross-machine refuses ${args.target}: it classifies as \`${cls}\`, which is meaningful ` +
+        "only against another run on the SAME machine. Counts, sizes and structural ratios travel; " +
+        "durations, memory and derived ratios do not, and no amount of averaging makes them."
+    );
+  }
+}
 if (args.champs.length !== args.cands.length) {
   usageError("`ab` needs the same number of --champ and --cand arms — they are paired by index");
 }
@@ -422,6 +598,23 @@ const candArms = args.cands.map((path, i) => abArm("cand", i, path));
 const allArms = [...champArms, ...candArms];
 
 comparabilityChecks(allArms);
+const precommit = precommitChecks(args, allArms);
+if (precommit && precommit.baselineSha && args.expectChampSha) {
+  // Only informational: the champion is the branch point on round one and moves
+  // with every kept hypothesis afterwards, so a mismatch is expected mid-run and
+  // is a FAIL only for the headline A/B, where the caller passes the branch point
+  // back in deliberately.
+  const atBaseline =
+    precommit.baselineSha.startsWith(args.expectChampSha) ||
+    args.expectChampSha.startsWith(precommit.baselineSha);
+  check(
+    true,
+    "precommit: champion is the baseline tree",
+    atBaseline
+      ? `yes — ${args.expectChampSha} (headline A/B shape)`
+      : `no — champion ${args.expectChampSha}, baseline ${precommit.baselineSha} (mid-run shape)`
+  );
+}
 
 /**
  * A copy under a second name is not a second run. Paths are already deduped, so
@@ -555,6 +748,25 @@ const num = (value) => String(Math.round(value * 1000) / 1000);
 const improvement = (base, other) =>
   ((args.higherIsBetter ? other - base : base - other) / base) * 100;
 
+const cvs = allArms.map((arm) => ({
+  label: arm.label,
+  cv: coefficientOfVariation(arm, args.scenario),
+}));
+const worstCv = cvs.reduce(
+  (worst, entry) =>
+    entry.cv !== null && entry.cv > worst.cv ? { label: entry.label, cv: entry.cv } : worst,
+  { label: "", cv: 0 }
+);
+if (maxCv !== null) {
+  check(
+    worstCv.cv <= maxCv,
+    "within-arm spread under --max-cv",
+    worstCv.cv <= maxCv
+      ? `worst ${worstCv.cv.toFixed(1)}% (${worstCv.label}) <= ${maxCv}%`
+      : `${worstCv.label} varied ${worstCv.cv.toFixed(1)}% across its own iterations, over the ${maxCv}% allowed — that arm measured the machine, not the code`
+  );
+}
+
 let drift = 0;
 let driftPair = "";
 for (let i = 0; i < champValues.length; i += 1) {
@@ -594,6 +806,8 @@ const lines = [
   "",
   `Target: ${args.target} on ${args.scenario} · ${args.higherIsBetter ? "higher" : "lower"} is better`,
   `Champion drift D: ${pct(drift)} (worst of ${combinations}, ${driftPair}) — same code on both sides, so this is the machine`,
+  `Drift ceiling (--max-drift): ${pct(maxDrift)}${args.maxDrift === undefined ? " (default, 2x threshold)" : ""}`,
+  `Worst within-arm spread: ${worstCv.cv === 0 ? "(not computable)" : `${worstCv.cv.toFixed(1)}% on ${worstCv.label}`}${maxCv === null ? "" : ` · ceiling ${maxCv}%`}`,
   "",
 ];
 for (const [i, value] of pairImprovements.entries()) {
@@ -611,8 +825,22 @@ for (const [i, condition] of conditions.entries()) {
   lines.push(`  condition ${i + 1}  ${condition.ok ? "PASS" : "FAIL"}  ${condition.text}`);
 }
 
+const tooNoisy = drift > maxDrift;
 const claim = conditions.every((condition) => condition.ok);
-lines.push("", `VERDICT: ${claim ? "CLAIM" : "NO CLAIM"}`);
+lines.push("", `VERDICT: ${tooNoisy ? "NO MEASUREMENT" : claim ? "CLAIM" : "NO CLAIM"}`);
+
+if (tooNoisy) {
+  report(
+    lines,
+    5,
+    `\nNO MEASUREMENT — the champion arms disagree by ${pct(drift)} against a ${pct(maxDrift)} ceiling, ` +
+      "so this machine could not resolve a difference of the size being claimed. The hypothesis was " +
+      "NOT tested and this is not a disproof: do not revert on it and do not record it as one. Close " +
+      "what else is running, let the machine cool, and measure the same pair again. If it will not " +
+      "settle, the target needs more iterations per arm or a quieter machine — decide which, record " +
+      "the decision, and say so in the report."
+  );
+}
 
 if (!claim) {
   report(
