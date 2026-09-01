@@ -11,6 +11,7 @@ import {
   getForgeProviderImpl,
   getRegisteredForgeProviders,
   listMatchingProviders,
+  onForgeProviderMatchersChanged,
   registerForgeProviderImpl,
   registerForgeProviders,
   unregisterForgeProviderImpl,
@@ -341,6 +342,25 @@ describe("forgeProviderRegistry — getActiveProvider", () => {
 });
 
 describe("forgeProviderRegistry — implementation registry", () => {
+  it("does not report impl-only changes as matcher-table changes", () => {
+    let matcherChanges = 0;
+    const unsubscribe = onForgeProviderMatchersChanged(() => {
+      matcherChanges += 1;
+    });
+
+    try {
+      registerForgeProviderImpl("acme", "github", makeImpl("x"));
+      unregisterForgeProviderImpl("acme", "github");
+      expect(matcherChanges).toBe(0);
+
+      registerForgeProviders("acme", [makeContribution("github", ["github.com"])]);
+      unregisterForgeProviders("acme");
+      expect(matcherChanges).toBe(2);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("stores and retrieves an impl by namespaced id", () => {
     const impl = makeImpl("primary");
     registerForgeProviderImpl("acme", "github", impl);
