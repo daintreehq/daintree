@@ -33,6 +33,10 @@ const RESTART_FLOOR_MS = 100;
 const RESTART_CAP_BASE_MS = 1_000;
 const RESTART_CAP_MAX_MS = 10_000;
 
+// Monitor-config pushes are fire-and-forget, so no broker entry ever owns the
+// response. Keep the required protocol field compact instead of minting an ID.
+const UNTRACKED_MONITOR_CONFIG_REQUEST_ID = "";
+
 // Time-windowed crash-loop guard. Mirrors the constants in PtyHostLifecycle
 // and CrashLoopGuardService so the three guards follow the same policy: three
 // crashes within the window trip the cap, and crashes spread further apart
@@ -320,7 +324,7 @@ export class WorkspaceHostProcess extends EventEmitter {
     if (this.isInitialized && this.child) {
       this.send({
         type: "update-monitor-config",
-        requestId: this.generateRequestId(),
+        requestId: UNTRACKED_MONITOR_CONFIG_REQUEST_ID,
         config,
       });
     }
@@ -956,7 +960,7 @@ export class WorkspaceHostProcess extends EventEmitter {
         if (this.monitorConfigCache !== null) {
           this.send({
             type: "update-monitor-config",
-            requestId: this.generateRequestId(),
+            requestId: UNTRACKED_MONITOR_CONFIG_REQUEST_ID,
             config: this.monitorConfigCache,
           });
         }
