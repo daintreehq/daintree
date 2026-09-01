@@ -2599,7 +2599,7 @@ describe("GitHubResourceList number-query chip (#6867)", () => {
       expect(screen.getByText(FALLBACK_COPY)).toBeTruthy();
     });
     // The chip has to sit over the text-search rows it describes, not over a
-    // skeleton or an empty list.
+    // skeleton.
     expect(screen.getByTestId("item-500")).toBeTruthy();
     expect(mockGetIssuesByNumbers).not.toHaveBeenCalled();
   });
@@ -2630,7 +2630,10 @@ describe("GitHubResourceList number-query chip (#6867)", () => {
 
   it("drops a stale exact-number miss when the query falls back to text search", async () => {
     mockGetIssueByNumber.mockResolvedValue(null);
-    mockListIssues.mockResolvedValue(makeResponse([makeIssue(500)]));
+    // Empty on purpose: a returned row would hide the empty state whether or
+    // not the stale miss was cleared, which is exactly how this test can pass
+    // without testing anything.
+    mockListIssues.mockResolvedValue(makeResponse([]));
     useGitHubFilterStore.getState().setIssueSearchQuery("#999");
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
@@ -2645,9 +2648,25 @@ describe("GitHubResourceList number-query chip (#6867)", () => {
       useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
     });
 
+    // The empty state must stop naming #999 and start naming the query that
+    // actually ran.
     await waitFor(() => {
-      expect(screen.queryByText(/No issue #999 in this view/)).toBeNull();
+      expect(screen.getByText('No matches for "123,,124"')).toBeTruthy();
     });
+    expect(screen.queryByText(/No issue #999 in this view/)).toBeNull();
+  });
+
+  it("yields the chip slot to a rate-limit pause", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([]));
+    setRateLimit(true, "primary", Date.now() + 60_000);
+    useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/paused/i)).toBeTruthy();
+    });
+    expect(screen.queryByText(FALLBACK_COPY)).toBeNull();
   });
 
   it("stays quiet for an ordinary text search that contains numbers", async () => {

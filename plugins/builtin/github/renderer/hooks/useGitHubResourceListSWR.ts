@@ -502,12 +502,13 @@ export function useGitHubResourceListSWR({
       return;
     }
 
-    // Every path below that hydrates or clears state clears this too, but the
-    // one that doesn't is the one that matters: a filter/search change while
-    // mounted with a search active leaves `targetCached` undefined and falls
-    // straight through to `fetchData`. Coming off a missed `#999` lookup that
-    // left the empty state claiming "No issue #999 in this view" over the
-    // text-search rows that replaced it. Clear it on entry instead.
+    // The clear further down lives inside `if (!isFirstMount)`, and a numeric
+    // query on mount never reaches it: this effect returns above before
+    // setting `mountedRef`, so when the query later becomes text the effect
+    // still counts as a first mount and skips that block on a cold cache. A
+    // missed `#999` then leaves the empty state claiming "No issue #999 in
+    // this view" over the text-search results that replaced it. Clear on entry
+    // instead — it is idempotent, and every other path already agrees.
     setExactNumberNotFound(null);
 
     const abortController = new AbortController();
