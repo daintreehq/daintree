@@ -48,6 +48,14 @@ export default defineConfig({
       "**/*.integration.test.{js,ts}",
     ],
     testTimeout: 15000,
+    // Paired with testTimeout the way vitest.integration.config.ts pairs its
+    // own. Left unset, hooks keep vitest's 10s default, so a `beforeAll` that
+    // does strictly more work than any single test in its file gets less time
+    // than one: the action suites reset the module graph and re-import every
+    // definition cold, which is the heaviest thing in those files. That fits
+    // easily in 10s on a warm machine and only misses it under CI contention,
+    // which makes it a shard-ordering lottery rather than a real signal.
+    hookTimeout: 15000,
     env: {
       NODE_ENV: "development",
     },
