@@ -405,6 +405,77 @@ describe("ConfirmDialog — typed-name gate", () => {
     expect(button.hasAttribute("aria-disabled")).toBe(false);
   });
 
+  /**
+   * A queue-driven singleton (`McpConfirmDialog`) stays mounted and OPEN while
+   * it promotes the next request, so a typed value that survived the swap would
+   * satisfy the next item's gate with a keystroke that was never about it
+   * (#12115).
+   */
+  it("clears the typed value when a queue-driven singleton promotes a new item", () => {
+    const { rerender } = render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete worktree?"
+        confirmLabel="Delete it"
+        onConfirm={() => {}}
+        variant="destructive"
+        typedNameTarget="feature/x"
+        cooldownKey="req-a"
+      />
+    );
+
+    fireEvent.change(findTypedInput(), { target: { value: "feature/x" } });
+    expect(findConfirmButton().hasAttribute("aria-disabled")).toBe(false);
+
+    // Same dialog, same target, next queued request — the input must start over.
+    rerender(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete worktree?"
+        confirmLabel="Delete it"
+        onConfirm={() => {}}
+        variant="destructive"
+        typedNameTarget="feature/x"
+        cooldownKey="req-b"
+      />
+    );
+
+    expect((findTypedInput() as HTMLInputElement).value).toBe("");
+    expect(findConfirmButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("clears the typed value when the target itself changes under an open dialog", () => {
+    const { rerender } = render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete worktree?"
+        confirmLabel="Delete it"
+        onConfirm={() => {}}
+        variant="destructive"
+        typedNameTarget="feature/x"
+      />
+    );
+
+    fireEvent.change(findTypedInput(), { target: { value: "feature/x" } });
+    rerender(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete worktree?"
+        confirmLabel="Delete it"
+        onConfirm={() => {}}
+        variant="destructive"
+        typedNameTarget="feature/y"
+      />
+    );
+
+    expect((findTypedInput() as HTMLInputElement).value).toBe("");
+    expect(findConfirmButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
   it("does not call onConfirm when primary action is invoked while unmatched", () => {
     const onConfirm = vi.fn();
     render(

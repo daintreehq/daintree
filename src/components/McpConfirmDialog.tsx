@@ -6,7 +6,11 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Spinner } from "@/components/ui/Spinner";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { isCautionPreviewLine, stripCautionPrefix } from "@/lib/mcpPreviewLines";
-import { useMcpConfirmStore, type PendingMcpConfirm } from "@/store/mcpConfirmStore";
+import {
+  MAIN_DISPATCH_DEADLINE_MS,
+  useMcpConfirmStore,
+  type PendingMcpConfirm,
+} from "@/store/mcpConfirmStore";
 
 /**
  * Renderer-side timer that beats main's 30s `pendingDispatches` deadline by
@@ -16,16 +20,6 @@ import { useMcpConfirmStore, type PendingMcpConfirm } from "@/store/mcpConfirmSt
  * either way; the earlier window just produces nicer audit semantics.
  */
 const CONFIRMATION_TIMEOUT_MS = 28_000;
-
-/**
- * Main's own hard deadline, mirrored from `MCP_DISPATCH_TIMEOUT_MS` in
- * `electron/services/mcp-server/shared.ts` (main-process only, so it cannot be
- * imported here). Nothing this modal does may outlive it: past this point main
- * has already failed the dispatch and told the agent it timed out, so an
- * approval landing afterwards would run the action anyway — the destructive
- * write happens while the caller was told it did not.
- */
-const MAIN_DISPATCH_DEADLINE_MS = 30_000;
 
 /**
  * Lower-bound read-time gate for destructive dispatches. `resolveOnce` guards

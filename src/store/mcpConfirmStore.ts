@@ -7,6 +7,20 @@ import type {
 } from "@shared/types/ipc/mcpServer";
 
 /**
+ * Main's own hard deadline, mirrored from `MCP_DISPATCH_TIMEOUT_MS` in
+ * `electron/services/mcp-server/shared.ts` (main-process only, so it cannot be
+ * imported here). Nothing on the confirm path may outlive it: past this point
+ * main has already failed the dispatch and told the agent it timed out, so an
+ * approval landing afterwards would run the action anyway — the destructive
+ * write happens while the caller was told it did not.
+ *
+ * Lives here rather than in the dialog because the bridge needs the same
+ * number: it is the dialog that must stop OFFERING approval by then, and the
+ * bridge that must stop ACTING on one.
+ */
+export const MAIN_DISPATCH_DEADLINE_MS = 30_000;
+
+/**
  * One pending confirmation surfaced for a `danger: "confirm"` MCP dispatch.
  * Stored in a FIFO queue; only the first item drives the visible modal so
  * concurrent agent calls never stack overlapping dialogs.

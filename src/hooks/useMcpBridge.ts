@@ -1,7 +1,11 @@
 import { useEffect } from "react";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
-import { requestMcpConfirmation, useMcpConfirmStore } from "@/store/mcpConfirmStore";
+import {
+  MAIN_DISPATCH_DEADLINE_MS,
+  requestMcpConfirmation,
+  useMcpConfirmStore,
+} from "@/store/mcpConfirmStore";
 import { runWithMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import {
   buildWorktreeDeletePreview,
@@ -36,6 +40,25 @@ const REJECTION_RESULT: ActionDispatchResult = {
   error: {
     code: "USER_REJECTED",
     message: "User rejected the confirmation request.",
+  },
+};
+
+/**
+ * The approval arrived, but main had already given up on the request.
+ *
+ * Distinct from {@link TIMEOUT_RESULT}, which means nobody answered: here a
+ * human DID approve, and the point is that we must not act on it. Main dropped
+ * the pending dispatch at its deadline and told the agent the call timed out,
+ * so starting an irreversible delete now would destroy a worktree on the
+ * strength of a result the caller was told never happened. The response itself
+ * is very likely discarded; refusing is about not doing the work.
+ */
+const EXPIRED_APPROVAL_RESULT: ActionDispatchResult = {
+  ok: false,
+  error: {
+    code: "CONFIRMATION_TIMEOUT",
+    message:
+      "Force delete refused: the request passed its dispatch deadline before the approval could be re-checked, so nothing was deleted.",
   },
 };
 
@@ -423,6 +446,39 @@ export async function buildMcpConfirmPreview(
 }
 
 /**
+ * How long the pre-dispatch re-check may spend re-reading the worktree.
+ *
+ * Deliberately far below main's 30s dispatch deadline. The re-check runs AFTER
+ * the human has clicked, so every millisecond it takes is spent against a
+ * budget the approval already consumed most of — and the port client's own
+ * deadline is generous enough that an unbounded wait could return after main
+ * had already failed the call, starting a delete on the strength of an
+ * approval the caller was told never landed. An expired re-check is treated as
+ * an unread status, which fails closed exactly like a fetch that errored.
+ */
+const GATE_RECHECK_BUDGET_MS = 5_000;
+
+/**
+ * The pre-dispatch re-check, bounded. Resolves to an unverified outcome rather
+ * than rejecting or hanging, so the gate below fails closed on a slow read the
+ * same way it does on a failed one.
+ *
+ * Exported for unit tests; the bridge is the only production caller.
+ */
+export function recheckWorktreeDeleteOutcome(
+  worktreeId: string,
+  budgetMs: number = GATE_RECHECK_BUDGET_MS
+): Promise<WorktreeDeletePreviewOutcome> {
+  const expired = new Promise<WorktreeDeletePreviewOutcome>((resolve) => {
+    setTimeout(() => resolve({ state: "failed", submodules: null }), budgetMs);
+  });
+  return Promise.race([
+    settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(worktreeId)),
+    expired,
+  ]);
+}
+
+/**
  * Re-derive the gate immediately before an approved force delete executes, and
  * refuse the dispatch when the approval no longer covers it (#12115).
  *
@@ -455,7 +511,7 @@ export function worktreeDeleteGateRefusal(
       error: {
         code: "CONFIRMATION_REQUIRED",
         message:
-          "Force delete refused: this window can no longer resolve the worktree, so the confirmation could not be re-checked before running. Re-issue the call to confirm again.",
+          "Force delete refused: this window can no longer resolve the worktree, so the approval could not be re-checked before running. Nothing was deleted. The worktree's state has changed since this call was approved, so a fresh call is a changed-context retry rather than a repeat of this one.",
       },
     };
   }
@@ -465,7 +521,7 @@ export function worktreeDeleteGateRefusal(
     ok: false,
     error: {
       code: "CONFIRMATION_REQUIRED",
-      message: `Force delete refused: the worktree changed while the request was awaiting approval and now requires typing '${gate.typedNameTarget}' to confirm. Re-issue the call to confirm again.`,
+      message: `Force delete refused: the worktree changed while the request was awaiting approval, and deleting it now requires the approver to type '${gate.typedNameTarget}'. Nothing was deleted. The change of state is itself the changed context a fresh call would be retried against, and that call raises the confirmation with the gate.`,
     },
   };
 }
@@ -578,6 +634,10 @@ export function useMcpBridge(): void {
 
     const cleanupDispatch = window.electron.mcpBridge.onDispatchActionRequest(
       async ({ requestId, actionId, args, confirmed, context, callerInfo, sessionOrigin }) => {
+        // Main started its 30s clock when it sent this; ours starts a beat
+        // later, which is the safe direction to be wrong in only for reporting
+        // — for the destructive re-check below we compare against it directly.
+        const receivedAt = Date.now();
         let confirmationDecision: McpConfirmationDecision | undefined;
         // Declared outside the confirm block so the approved dispatch can pin
         // itself to the previewed cwd. Stays undefined for pre-granted
@@ -592,6 +652,42 @@ export function useMcpBridge(): void {
         let approvedTypedNameTarget: string | undefined;
         try {
           let effectiveConfirmed = confirmed;
+
+          // A native automation grant pre-authorises the `danger: "confirm"`
+          // modal — which is the D2 gate, and only that. It cannot stand in for
+          // a D3 one: the grant names a TOOL, issued in Settings ahead of time,
+          // with no target, no arguments and no preview in front of the person
+          // who issued it. The typed-name gate exists precisely because that
+          // class of consent is not enough to discard tracked work or delete a
+          // protected worktree irreversibly. So a granted force delete whose
+          // LIVE tier comes back D3 gives up its pre-authorisation and asks for
+          // the attestation on its own account (#12115).
+          if (effectiveConfirmed === true && actionId === "worktree.delete" && forceArg(args)) {
+            const grantedTarget = resolveMcpConfirmPreviewTarget(actionId, args, context);
+            if (grantedTarget?.kind === "worktreeDelete") {
+              const gate = resolveWorktreeDeleteGate(
+                grantedTarget,
+                await recheckWorktreeDeleteOutcome(grantedTarget.worktreeId)
+              );
+              if (disposed) return;
+              if (gate.state === "required") {
+                // Fall through to the modal, which re-derives the same gate
+                // from its own fresh fetch and raises the typed-name input.
+                effectiveConfirmed = false;
+              } else if (gate.state === "unresolvable") {
+                // Demoting would only strand the approver: the modal would
+                // reach the same unresolvable answer and refuse after the
+                // click. Refuse now, while nothing has been asked of anyone.
+                const refusal = worktreeDeleteGateRefusal(gate, undefined);
+                window.electron.mcpBridge.sendDispatchActionResponse({
+                  requestId,
+                  result: refusal ?? REJECTION_RESULT,
+                  confirmationDecision,
+                });
+                return;
+              }
+            }
+          }
 
           if (effectiveConfirmed !== true) {
             // Args-aware: a statically-safe composite carrying a recipeId has
@@ -699,14 +795,20 @@ export function useMcpBridge(): void {
               // re-fetch into its resolution would make the decision depend on
               // the order two async paths happen to land in.
               if (previewTarget?.kind === "worktreeDelete" && previewTarget.force) {
-                const outcome = await settleWorktreeDeleteOutcome(
-                  buildWorktreeDeletePreview(previewTarget.worktreeId)
-                );
+                const outcome = await recheckWorktreeDeleteOutcome(previewTarget.worktreeId);
                 if (disposed) return;
-                const refusal = worktreeDeleteGateRefusal(
-                  resolveWorktreeDeleteGate(previewTarget, outcome),
-                  approvedTypedNameTarget
-                );
+                // Approval near the modal's 28s timeout plus a slow re-read can
+                // land after main's 30s deadline, where the agent has already
+                // been told the call timed out. Deleting the worktree at that
+                // point destroys it behind a reported failure, so the deadline
+                // wins over the approval.
+                const refusal =
+                  Date.now() - receivedAt >= MAIN_DISPATCH_DEADLINE_MS
+                    ? EXPIRED_APPROVAL_RESULT
+                    : worktreeDeleteGateRefusal(
+                        resolveWorktreeDeleteGate(previewTarget, outcome),
+                        approvedTypedNameTarget
+                      );
                 if (refusal !== undefined) {
                   window.electron.mcpBridge.sendDispatchActionResponse({
                     requestId,

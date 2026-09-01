@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   // gate's identity half (#12115). Empty by default so `resolveMcpConfirmSubject`
   // keeps answering undefined exactly as it did before this store was mocked.
   worktrees: new Map<string, unknown>(),
+  viewStoreThrows: false,
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -41,7 +42,13 @@ vi.mock("@/components/Worktree/worktreeDeletePreview", async (importOriginal) =>
 });
 
 vi.mock("@/store/createWorktreeStore", () => ({
-  getCurrentViewStore: () => ({ getState: () => ({ worktrees: mocks.worktrees }) }),
+  getCurrentViewStore: () => {
+    // The real one THROWS when no worktree view store is mounted, and both
+    // `resolveMcpConfirmSubject` and the typed-name gate depend on failing
+    // sanely there — so the mock has to be able to throw too.
+    if (mocks.viewStoreThrows) throw new Error("no worktree view store mounted");
+    return { getState: () => ({ worktrees: mocks.worktrees }) };
+  },
 }));
 
 // Same split for the git preview: mock only the fresh fetch, keep the real
@@ -133,6 +140,7 @@ describe("useMcpBridge", () => {
     // the confirmation-flow tests are unaffected by the #11343 preview change.
     mocks.buildPreview.mockResolvedValue(null);
     mocks.worktrees.clear();
+    mocks.viewStoreThrows = false;
     mocks.getContext.mockReturnValue({});
     mocks.buildGitPreview.mockResolvedValue({
       branch: "main",
@@ -1063,6 +1071,319 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledTimes(1);
   });
 
+  it("re-reads the worktree identity at dispatch time, not the one it previewed (#12115)", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    mocks.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo/wt-1",
+      name: "wt-1",
+      branch: "renderer/alpha",
+      isCurrent: false,
+      isMainWorktree: false,
+    });
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 1,
+      untrackedFileCount: 0,
+      hasTrackedChanges: true,
+      hasUntrackedFiles: false,
+      changes: [],
+      rootPath: "/repo/wt-1",
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
+    });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-rename",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1", force: true },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.typedNameTarget).toBe("renderer/alpha");
+    });
+
+    // The branch is renamed while the human is still reading the modal. Typing
+    // the old name attested to a worktree that no longer answers to it.
+    mocks.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo/wt-1",
+      name: "wt-1",
+      branch: "renderer/beta",
+      isCurrent: false,
+      isMainWorktree: false,
+    });
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-rename",
+      result: {
+        ok: false,
+        error: {
+          code: "CONFIRMATION_REQUIRED",
+          message: expect.stringContaining("renderer/beta"),
+        },
+      },
+      confirmationDecision: "approved",
+    });
+  });
+
+  it("refuses an approved force delete this view can no longer resolve (#12115)", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    // No worktree record at all: the protected-branch and main-worktree inputs
+    // live on it, so the tier is unknowable and a D2 approval cannot cover it.
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      rootPath: "/repo/wt-1",
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
+    });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-unresolvable",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1", force: true },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-unresolvable",
+      result: {
+        ok: false,
+        error: { code: "CONFIRMATION_REQUIRED", message: expect.stringContaining("resolve") },
+      },
+      confirmationDecision: "approved",
+    });
+  });
+
+  it("refuses a native grant's force delete that turns out to be D3 (#12115)", async () => {
+    // A grant pre-authorises the D2 modal, not the typed-name attestation: it
+    // names a tool, ahead of time, with no target or preview in front of the
+    // person who issued it. So the granted call gives up `confirmed: true` and
+    // raises the confirmation on its own account.
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    mocks.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo/wt-1",
+      name: "wt-1",
+      branch: "main",
+      isCurrent: false,
+      isMainWorktree: false,
+    });
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      rootPath: "/repo/wt-1",
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
+    });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-grant",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1", force: true },
+      confirmed: true,
+    });
+
+    // The grant did not skip the gate: a modal is raised, carrying it.
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.typedNameTarget).toBe("main");
+    });
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+    expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("still honours a native grant for a force delete that is only D2 (#12115)", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    mocks.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo/wt-1",
+      name: "wt-1",
+      branch: "feature/x",
+      isCurrent: false,
+      isMainWorktree: false,
+    });
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      rootPath: "/repo/wt-1",
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
+    });
+
+    renderHook(() => useMcpBridge());
+
+    await dispatchHandler?.({
+      requestId: "req-grant-d2",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1", force: true },
+      confirmed: true,
+    });
+
+    expect(useMcpConfirmStore.getState().current).toBeNull();
+    expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("never acts on an approval that outlived main's dispatch deadline (#12115)", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    mocks.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo/wt-1",
+      name: "wt-1",
+      branch: "feature/x",
+      isCurrent: false,
+      isMainWorktree: false,
+    });
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      rootPath: "/repo/wt-1",
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
+    });
+    // Main dropped this dispatch and told the agent it timed out; a delete
+    // starting now destroys a worktree behind a reported failure.
+    const realNow = Date.now;
+    const start = realNow();
+    let elapsed = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => start + elapsed);
+
+    try {
+      renderHook(() => useMcpBridge());
+      const dispatched = dispatchHandler?.({
+        requestId: "req-late",
+        actionId: "worktree.delete",
+        args: { worktreeId: "wt-1", force: true },
+      });
+
+      await vi.waitFor(() => {
+        expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+      });
+      elapsed = 31_000;
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      await dispatched;
+
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+      expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+        requestId: "req-late",
+        result: {
+          ok: false,
+          error: {
+            code: "CONFIRMATION_TIMEOUT",
+            message: expect.stringContaining("dispatch deadline"),
+          },
+        },
+        confirmationDecision: "approved",
+      });
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
+  });
+
+  it("drops a teardown-racing force delete without dispatching or answering (#12115)", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    mocks.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo/wt-1",
+      name: "wt-1",
+      branch: "feature/x",
+      isCurrent: false,
+      isMainWorktree: false,
+    });
+    const clean = {
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      rootPath: "/repo/wt-1",
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
+    };
+    let releaseRecheck: (() => void) | undefined;
+    mocks.buildPreview.mockResolvedValueOnce(clean).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseRecheck = () => resolve(clean);
+        })
+    );
+
+    const { unmount } = renderHook(() => useMcpBridge());
+    const dispatched = dispatchHandler?.({
+      requestId: "req-teardown",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1", force: true },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await vi.waitFor(() => expect(releaseRecheck).toBeTypeOf("function"));
+
+    unmount();
+    releaseRecheck?.();
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).not.toHaveBeenCalled();
+  });
+
+  it("keeps a generic confirmation when no worktree view store is mounted at all", async () => {
+    // `getCurrentViewStore` throws there. Letting it escape would turn a
+    // destructive confirmation into an EXECUTION_ERROR — the dispatch would
+    // fail instead of asking the user.
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    mocks.viewStoreThrows = true;
+
+    renderHook(() => useMcpBridge());
+    const dispatched = dispatchHandler?.({
+      requestId: "req-noview",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1" },
+    });
+
+    await Promise.resolve();
+    const pending = useMcpConfirmStore.getState().current;
+    expect(pending?.requestId).toBe("req-noview");
+    expect(pending).not.toHaveProperty("subject");
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+    expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+  });
+
   it("previews the branch and local commits for an MCP git.push (#11538)", async () => {
     mocks.get.mockReturnValue(
       confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
@@ -1502,6 +1823,30 @@ describe("resolveMcpConfirmPreviewTarget (#11538)", () => {
     expect(
       resolveMcpConfirmPreviewTarget("worktree.delete", { force: true }, undefined)
     ).toBeUndefined();
+  });
+
+  it.each([
+    ["a string 'false'", "false"],
+    ["a truthy number", 1],
+    ["a zero", 0],
+    ["null", null],
+    ["an absent flag", undefined],
+  ])("treats %s as a non-force delete — only a literal true forces (#12115)", (_label, force) => {
+    // Coercion here would let a caller reach the destructive path through a
+    // value `argsSchema` would have rejected, and the gate keys off this flag.
+    expect(
+      resolveMcpConfirmPreviewTarget("worktree.delete", { worktreeId: "wt-1", force }, undefined)
+    ).toEqual({ kind: "worktreeDelete", worktreeId: "wt-1", force: false });
+  });
+
+  it("carries a literal force: true through to the target", () => {
+    expect(
+      resolveMcpConfirmPreviewTarget(
+        "worktree.delete",
+        { worktreeId: "wt-1", force: true },
+        undefined
+      )
+    ).toEqual({ kind: "worktreeDelete", worktreeId: "wt-1", force: true });
   });
 
   it("resolves a worktree.delete target from its worktreeId", () => {
