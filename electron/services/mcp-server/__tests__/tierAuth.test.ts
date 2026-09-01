@@ -773,13 +773,16 @@ describe("buildAnnotations", () => {
 // removed the identity override that used to pin the assistant to `system`).
 // So the assertions below lock the `action` tier that governs a default
 // session, plus the system/external boundaries above it.
-// The distinction is load-bearing, and #12116 sharpened where it falls. It is
-// not "irreversible vs. not" — it is who the blast radius reaches. Local
-// worktree cleanup is confined to the machine and gated by a native
-// ConfirmDialog on every dispatch, so `action` reaches it and the tier buys the
-// caller nothing it could not have asked a human for. Shared-state writes
-// (git.push, git.commit, forge.assignIssue) land somewhere a teammate sees and
-// stay TIER_NOT_PERMITTED at `action`, so a default session needs a
+// The distinction is load-bearing, and #12116 sharpened what it is NOT. It is
+// not "irreversible vs. not", and it is not "local vs. remote" — a worktree
+// delete runs the project's own lifecycle teardown, which can reach a cloud
+// resource. It is what a per-call gate can still take back. Worktree cleanup is
+// `danger: "confirm"`, so a human stands at a modal before it runs and the tier
+// is the wrong place to bound it twice. The cohort below cannot be bounded that
+// way: `git.commit` and `forge.assignIssue` are `danger: "safe"`, so the tier is
+// the ONLY gate they have, and `git.push` is confirm-gated but publishes to a
+// shared remote, where approving once is not something a later refusal undoes.
+// All three stay TIER_NOT_PERMITTED at `action` — a default session needs a
 // human-approved scoped grant or the deliberately selected `system` tier.
 // `external` is a separately curated peer (#11585): it used to permit the git
 // writes subject only to the confirm gate, and now reaches none of them — the
@@ -811,9 +814,10 @@ describe("help-session tier policy (#10640)", () => {
     "copyTree.generate",
   ];
 
-  // Shared-state mutations the conductor must NOT be able to fire unattended at
-  // its default tier — they leave the machine, so they require explicit
-  // elevation rather than a confirm dialog the agent can prompt for.
+  // Mutations the conductor must NOT be able to fire at its default tier: two
+  // are `danger: "safe"` and so have no gate but this one, and `git.push`
+  // reaches a shared remote, where a confirm dialog approves something no later
+  // refusal takes back.
   const HIGH_BLAST_RADIUS_TOOLS = ["git.commit", "git.push", "forge.assignIssue"];
 
   // Machine-local worktree cleanup, promoted to the default floor by #12116.

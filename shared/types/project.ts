@@ -736,7 +736,7 @@ export interface ProjectSettings {
    * - `off` (default): no MCP server injected
    * - `workbench`: read-only introspection (worktree/files/terminal output, project state, history)
    * - `action`: workbench + in-app orchestration (create worktrees from recipes, inject context, send terminal commands, confirm-gated worktree cleanup)
-   * - `system`: action + operations that reach outside the project or leave the machine (create worktrees at an explicit root, commit/push, write the clipboard, forge writes)
+   * - `system`: action + worktree creation at an explicit root, terminal arm/disarm, git stage/fetch/commit/push, clipboard and CopyTree-to-disk writes, forge reads and writes
    */
   daintreeMcpTier?: DaintreeMcpTier;
   /**

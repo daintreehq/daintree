@@ -1847,7 +1847,8 @@ describe("CallTool live activity notifications (#9759)", () => {
     const server = createSessionServer("session-B", deps);
     await server.connect(makeMockTransport());
 
-    // worktree.delete is system-tier — denied at the default workbench tier.
+    // worktree.delete is action-tier (#12116) — still denied at the default
+    // workbench tier, which is all this test needs.
     await callTool(server, { name: "worktree.delete", arguments: {} });
 
     expect(started).not.toHaveBeenCalled();
@@ -1862,7 +1863,8 @@ describe("CallTool live activity notifications (#9759)", () => {
     await server.connect(makeMockTransport());
 
     const before = Date.now();
-    // worktree.delete is system-tier — denied at the default workbench tier.
+    // worktree.delete is action-tier (#12116) — still denied at the default
+    // workbench tier, which is all this test needs.
     await callTool(server, { name: "worktree.delete", arguments: {} });
     const after = Date.now();
 
@@ -2447,11 +2449,12 @@ describe("sessionServer grant cache fallback (#8442)", () => {
   });
 
   it("native grant pre-authorizes a tier-permitted confirm tool and consumes a use (#11878)", async () => {
-    // worktree.delete is `danger: "confirm"` but IS on the system-tier
-    // allowlist, so the floor admits it and the tier-denied leg never runs.
-    // Before #11878 that made the grant unreachable and the modal fired on
-    // every call despite an explicit Settings pre-authorization.
-    const sessionStore = fakeSessionStore("system");
+    // worktree.delete is `danger: "confirm"` but IS on the action-tier
+    // allowlist (#12116), so the floor admits it and the tier-denied leg never
+    // runs. Before #11878 that made the grant unreachable and the modal fired
+    // on every call despite an explicit Settings pre-authorization. Pinned at
+    // `action` rather than a wider tier so it fails if that floor moves back.
+    const sessionStore = fakeSessionStore("action");
     // Unref'd for the reason `seedLiveSession` documents: a referenced
     // 1,000,000 ms timer holds the Vitest worker open past the suite.
     const idleTimer = setTimeout(() => {}, 1_000_000);
@@ -2503,7 +2506,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     // once its single use is gone the call must still run — just with the
     // modal back. The tier-denied equivalent fails closed instead, because
     // there the grant was the authorization itself.
-    const sessionStore = fakeSessionStore("system");
+    const sessionStore = fakeSessionStore("action");
     sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",
@@ -2565,9 +2568,9 @@ describe("sessionServer grant cache fallback (#8442)", () => {
 
   it("a tier-permitted call falls back to the modal when the grant dies between peek and consume (#11878)", async () => {
     // The tier still admits the call, so losing the grant costs only the
-    // bypass. Refusing here would report "not permitted for the 'system'
+    // bypass. Refusing here would report "not permitted for the 'action'
     // tier" for an action that tier plainly permits.
-    const sessionStore = fakeSessionStore("system");
+    const sessionStore = fakeSessionStore("action");
     const grant = sessionStore.grantCache.issueNativeGrant({
       sessionId: "s",
       actorId: "help-1",

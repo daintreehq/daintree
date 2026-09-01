@@ -102,13 +102,16 @@ export const ACTION_TIER_ADDONS = [
   "worktree.setActive",
   "worktree.refresh",
   // Cleaning up a worktree the assistant just finished with is ordinary
-  // orchestration, not a privilege escalation (#12116). Admission at this tier
-  // waives no gate: the action is `danger: "confirm"`, so every unconfirmed
-  // dispatch is still routed to the native ConfirmDialog, a forced delete over
-  // a dirty tree still escalates to the typed-name gate (#12115), and a call
-  // with no renderer to ask fails with `CONFIRMATION_REQUIRED` rather than
-  // running unattended. `worktree.create` stays at `system` for a reason that
-  // does not apply here — see the note on it below.
+  // orchestration, not a privilege escalation (#12116). Admission is all this
+  // tier grants: the action is `danger: "confirm"`, so an unconfirmed dispatch
+  // is still sent to the renderer for a native ConfirmDialog, and a force whose
+  // live target resolves to D3 still escalates to the typed-name gate (#12115)
+  // even under a grant. The one thing that skips the per-call modal is an
+  // explicit native automation grant, which is a user pre-authorisation and was
+  // never gated on tier. Note this is the UNSCOPED delete: it reaches any
+  // eligible worktree in the project, not only ones the session made.
+  // `worktree.create` stays at `system` for a reason that does not apply here —
+  // see the note on it below.
   "worktree.delete",
   // The session-scoped form of `worktree.delete` (#11909), carried here for the
   // same subset invariant as `terminal.closeOwned`. It tracks the tier of the
@@ -121,8 +124,10 @@ export const ACTION_TIER_ADDONS = [
   "worktree.resource.resume",
   // Sits with its lifecycle siblings rather than above them (#12116). The
   // teardown command is project-defined and may destroy a remote resource, so
-  // it keeps `danger: "confirm"` and the modal that comes with it — the tier
-  // decides reachability, the danger class decides approval.
+  // it keeps `danger: "confirm"` — the tier decides reachability, the danger
+  // class decides approval. Worth knowing when reading the deletes above: they
+  // run this same lifecycle teardown implicitly before removing the tree, so
+  // none of the three is purely local in effect.
   "worktree.resource.teardown",
 
   "terminal.inject",
@@ -285,17 +290,23 @@ export const HELP_TIER_CUMULATIVE: Record<HelpAssistantTier, readonly string[]> 
 };
 
 /**
- * Tools whose blast radius is high enough that the UI pins them at the top
- * of the system-tier preview so users don't miss them in a long list.
+ * Tools whose blast radius is high enough that the UI pins them at the top of a
+ * tier's preview so users don't miss them in a long list.
  *
- * Operational risk, not minimum tier: the preview this feeds is cumulative, so
- * an entry here says nothing about which addon list a tool lives in.
- * `worktree.delete` is action-tier admitted (#12116) and still belongs at the
- * top of the widest tier's preview, because that is where a user reviewing the
- * full surface most needs to see it.
+ * Operational risk, not minimum tier. The preview intersects this list with the
+ * tier being previewed, so the same tool is called out wherever it first
+ * becomes reachable — which is why #12116 could not leave this keyed to
+ * `system`: promoting the worktree deletes would otherwise have made them
+ * invisible at the tier that newly grants them, which is the one tier where a
+ * user is deciding whether to grant them at all.
  */
-export const SYSTEM_TIER_HIGH_BLAST_RADIUS: readonly string[] = [
+export const HIGH_BLAST_RADIUS_TOOLS: readonly string[] = [
   "git.push",
   "git.commit",
+  // All three run project-defined lifecycle teardown — arbitrary commands from
+  // `.daintree/config.json`, and resource teardown that can destroy a remote
+  // devbox — before the tree itself goes.
   "worktree.delete",
+  "worktree.deleteOwned",
+  "worktree.resource.teardown",
 ];

@@ -58,7 +58,7 @@ import { isAuditRecord } from "@shared/types";
 import {
   HELP_TIER_CUMULATIVE,
   HELP_TIER_INCREMENTAL,
-  SYSTEM_TIER_HIGH_BLAST_RADIUS,
+  HIGH_BLAST_RADIUS_TOOLS,
 } from "@shared/config/helpAssistantTierAllowlists";
 
 const COPY_RESET_DELAY_MS = 2000;
@@ -90,9 +90,9 @@ const TIER_DESCRIPTIONS: Record<HelpAssistantTier, string> = {
   workbench:
     "The assistant can read project state but can't change it. Best when you're handing off observation tasks.",
   action:
-    "The assistant can spawn agents, send prompts, read terminal state, close terminals, and clean up worktrees it is done with — full in-app orchestration. Deletes still ask you to confirm. Most assistance tasks need this.",
+    "The assistant can spawn agents, send prompts, read terminal state, close terminals, and delete worktrees in this project or tear down their resources — full in-app orchestration. Deletions ask you to confirm, and run any teardown commands the project configures. Most assistance tasks need this.",
   system:
-    "Adds operations that reach outside this project or leave the machine: create worktrees anywhere on disk, commit/push git, write the system clipboard, open GitHub issues/PRs. Reserve for trusted automation.",
+    "Adds git staging, commits and pushes, forge issue/PR writes, worktree creation at any path on disk, OS clipboard writes, and arming terminals for automation. Reserve for trusted automation.",
 };
 
 const TIER_SHORT_LABEL: Record<HelpAssistantTier, string> = {
@@ -1300,12 +1300,15 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
   const newAtTier = HELP_TIER_INCREMENTAL[tier].length;
   const groups = useMemo(() => {
     const cumulative = HELP_TIER_CUMULATIVE[tier];
-    if (tier !== "system") return groupToolsByNamespace(cumulative);
-    // Pin the load-bearing dangerous actions at the top of the system tier
-    // so users don't miss them when scanning a long alphabetical list.
-    const pinned = new Set(SYSTEM_TIER_HIGH_BLAST_RADIUS);
+    // Pin the load-bearing dangerous actions at the top of whichever tier is
+    // being previewed, so they can't be missed in a long alphabetical list.
+    // Intersected with this tier rather than pinned only on `system` (#12116):
+    // the preview's job is to show what selecting THIS tier grants, so a tool
+    // has to be called out at the tier that first reaches it.
+    const pinnedList = HIGH_BLAST_RADIUS_TOOLS.filter((tool) => cumulative.includes(tool));
+    if (pinnedList.length === 0) return groupToolsByNamespace(cumulative);
+    const pinned = new Set(pinnedList);
     const rest = cumulative.filter((tool) => !pinned.has(tool));
-    const pinnedList = SYSTEM_TIER_HIGH_BLAST_RADIUS.filter((tool) => cumulative.includes(tool));
     return [
       ["⚠ high blast radius", pinnedList] as [string, string[]],
       ...groupToolsByNamespace(rest),
