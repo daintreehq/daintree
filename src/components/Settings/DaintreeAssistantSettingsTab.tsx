@@ -163,12 +163,18 @@ interface BypassCopy {
 }
 
 // Names the tier rather than pointing at "the selector above" (#11907): with
-// the gate off, the tier is the entire remaining boundary, so the warning has
-// to say which one. Scoped to new sessions because both the tier and the
-// bypass preference are provision-time snapshots — a session already running
-// keeps the tier it was minted with, which the live-status card reports.
-const tierIsLastSafeguard = (tier: HelpAssistantTier): string =>
-  `New sessions run at the ${TIER_SHORT_LABEL[tier]} capability tier, which is the only remaining safeguard for Daintree actions.`;
+// the gate off, the tier carries most of the remaining boundary, so the
+// warning has to say which one. It isn't the *entire* boundary though, and
+// claiming so was the #12119 overclaim: a `danger: "confirm"` action still
+// opens the host confirmation dialog no matter the tier or the bypass flag
+// (`tierAuth.ts` — `requiresConfirmation: danger === "confirm" &&
+// !nativeGranted`), and only a native automation grant pre-authorizes it. So
+// the second sentence names that exception instead of dropping the warning.
+// Scoped to new sessions because both the tier and the bypass preference are
+// provision-time snapshots — a session already running keeps the tier it was
+// minted with, which the live-status card reports.
+const tierIsMainSafeguard = (tier: HelpAssistantTier): string =>
+  `New sessions run at the ${TIER_SHORT_LABEL[tier]} capability tier, which is the main remaining safeguard for Daintree actions. The ones that need confirmation still raise Daintree's own prompt unless an automation grant covers them.`;
 
 /**
  * Per-agent wording for the one stored `bypassPermissions` preference. The
@@ -178,7 +184,7 @@ const tierIsLastSafeguard = (tier: HelpAssistantTier): string =>
  * same failure as labelling every agent with Claude's flag.
  */
 // `warning` carries the agent-specific half only; `getBypassCopy` appends the
-// tier-naming safeguard sentence so every branch names the same effective tier.
+// tier-naming safeguard sentences so every branch names the same effective tier.
 const BYPASS_COPY: Record<string, Omit<BypassCopy, "subtitle"> & { effect: string }> = {
   claude: {
     title: "Bypass Claude permission prompts",
@@ -207,7 +213,7 @@ const BYPASS_COPY: Record<string, Omit<BypassCopy, "subtitle"> & { effect: strin
 function getBypassCopy(agentId: string | null, tier: HelpAssistantTier): BypassCopy | null {
   if (!agentId) return null;
 
-  const safeguard = tierIsLastSafeguard(tier);
+  const safeguard = tierIsMainSafeguard(tier);
 
   // The assistant has no CLI flag: bypass skips its own confirm sheet via
   // DAINTREE_ASSISTANT_AUTO_APPROVE, which is why it carries no

@@ -176,7 +176,7 @@ export class McpActivityTracker {
   }
 
   /**
-   * End the live "Approve once" grant early (#10042). Revokes every grant on
+   * End the live per-tool grant early (#10042). Revokes every grant on
    * the session — the help session only ever holds one per-tool grant at a
    * time, so this maps to the single banner the user sees. Normally the
    * `grant.revoked` lifecycle event (reason `user`) clears the banner first;
@@ -226,10 +226,10 @@ export class McpActivityTracker {
     this.host.patch({ isApprovingTier: true });
     safeFireAndForget(
       window.electron.mcpServer
-        // "Approve once" mints a per-tool, time-bounded grant for this
-        // session — it does NOT elevate the session tier. The "Always
-        // allow" path is the only remaining caller of `setSessionTier`
-        // (#8442).
+        // The banner's "Allow this tool" mints a per-tool, time-bounded
+        // grant for this session — it does NOT elevate the session tier. The
+        // "Set project default" path is the only remaining caller of
+        // `setSessionTier` (#8442).
         .issueGrant({ sessionId, toolId })
         .then(() => {
           this._clearTierMismatchIfStillCurrent(sessionId, toolId);

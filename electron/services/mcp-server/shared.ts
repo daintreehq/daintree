@@ -104,10 +104,12 @@ export const MAX_PORT_RETRIES = 10;
 export const MCP_SSE_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
- * Lifetime of a renderer-approved session-tier elevation ("Always allow"
- * via {@link minimumPermittingTier}). After this window the session silently
- * decays back to the `workbench` baseline so a stale "Always allow" can't
- * outlive the user's intent across hibernate/wake and project switches
+ * Lifetime of a renderer-approved session-tier elevation (the tier-mismatch
+ * banner's "Set project default", via {@link minimumPermittingTier}). After
+ * this window the session silently decays back to its pre-elevation baseline
+ * — the tier it held when the elevation was accepted, not the newly-saved
+ * project default — so a stale elevation can't outlive the user's intent
+ * across hibernate/wake and project switches
  * (#8462). The next out-of-baseline tool call re-triggers the tier-mismatch
  * banner — there is no separate decay notification. The window is awake-time
  * corrected via {@link SystemSleepService.getAwakeTimeSince} so suspend time
@@ -118,7 +120,8 @@ export const MCP_SSE_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 export const MCP_TIER_ELEVATION_TTL_MS = 30 * 60 * 1000;
 
 /**
- * Sliding-TTL window for per-tool grants minted via "Approve once". A grant
+ * Sliding-TTL window for per-tool grants minted via the tier-mismatch
+ * banner's "Allow this tool". A grant
  * issued for `(sessionId, toolId)` permits that exact tool for this session
  * for the duration, and any successful dispatch through the grant refreshes
  * the window. Sized comfortably below `MCP_SSE_IDLE_TIMEOUT_MS` so the
@@ -699,9 +702,11 @@ export const MCP_DEDUP_MAX_ENTRIES_PER_SESSION = 256;
 /**
  * Compute the minimum non-external tier that permits the given tool. Used to
  * tell the renderer how to elevate the session in response to a
- * TIER_NOT_PERMITTED denial: "Approve once" / "Always allow" both target this
- * tier rather than blanket-elevating to `system`. Returns `null` if the tool
- * isn't permitted at any tier (unknown tool).
+ * TIER_NOT_PERMITTED denial. Both banner affordances target this tier rather
+ * than blanket-elevating to `system`: "Set project default" elevates to it,
+ * and "Allow this tool" mints a grant for the one tool that needed it without
+ * elevating the tier at all. Returns `null` if the tool isn't permitted at any
+ * tier (unknown tool).
  *
  * The `external` tier is intentionally excluded because it's a peer of the
  * help-session tiers (api-key sessions only) and is never the right target

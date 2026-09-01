@@ -35,8 +35,9 @@ function computeRemainingSeconds(expiresAt: number): number {
 }
 
 /**
- * Ambient countdown for a live "Approve once" grant (#10042). Tier 1 — a
- * non-blocking pane-chrome state, not a toast. The countdown derives from the
+ * Ambient countdown for a live per-tool grant (#10042), minted by the
+ * tier-mismatch banner's "Allow this tool". Tier 1 — a non-blocking
+ * pane-chrome state, not a toast. The countdown derives from the
  * grant's `expiresAt` with a component-local 1s tick; the timestamp is the
  * source of truth, so a missed tick can't drift the displayed value (and the
  * interval is keyed on `expiresAt`, restarting cleanly under StrictMode's
@@ -295,6 +296,12 @@ export function HelpPanelBanners({
                   ? `${tierMismatch.toolId} needs ${tierMismatch.targetTier} tier access.`
                   : `${tierMismatch.toolId} isn't available at any project tier.`}
               </p>
+              {tierMismatch.targetTier && (
+                <p className="mt-1 text-text-secondary">
+                  Allowing the tool covers repeat calls for up to 30 minutes. The project default
+                  applies to new sessions and raises this session for 30 minutes.
+                </p>
+              )}
             </div>
             <button
               type="button"
@@ -306,6 +313,15 @@ export function HelpPanelBanners({
             </button>
           </div>
           {tierMismatch.targetTier && (
+            // Labels name the scope; the body above carries the windows. These
+            // read "Approve once" and "Always allow for this project" before
+            // #12119 and both overstated their mechanism. `onApproveOnce` mints
+            // a *reusable* per-tool grant (15min sliding, 30min ceiling), so it
+            // was never once. `onAlwaysAllow` does persist a project default for
+            // new sessions, but lifts *this* session for only 30min of awake
+            // time, so it was never always. Handler names and the main-process
+            // comments keep the original spelling as the flow names (#8442,
+            // #10042); this is the anchor that maps them to the shipped labels.
             <div className="flex items-center gap-2 flex-wrap pl-5">
               <button
                 type="button"
@@ -318,7 +334,7 @@ export function HelpPanelBanners({
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
               >
-                Approve once
+                Allow this tool
               </button>
               <button
                 type="button"
@@ -331,7 +347,7 @@ export function HelpPanelBanners({
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
               >
-                Always allow for this project
+                Set project default
               </button>
               <button
                 type="button"

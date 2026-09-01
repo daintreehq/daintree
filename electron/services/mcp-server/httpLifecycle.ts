@@ -1892,7 +1892,9 @@ export class HttpLifecycle {
   }
 
   /**
-   * Promote a help-session's tier in-memory (Approve once). Refuses downgrades
+   * Promote a help-session's tier in-memory — the tier-mismatch banner's "Set
+   * project default", never its per-tool "Allow this tool" grant. Refuses
+   * downgrades
    * — a malicious renderer cannot drop its own privileges. When `callerWcId`
    * is supplied, also requires the caller to be the WebContents the session
    * was pinned to at handshake (cross-window forgery defence). Returns the
@@ -1948,7 +1950,8 @@ export class HttpLifecycle {
     // Bound the renderer-approved elevation: after MCP_TIER_ELEVATION_TTL_MS
     // of awake time the session silently decays back to its token-resolved
     // baseline (`current`, the pre-elevation tier) so a stale "Always allow"
-    // can't outlive the user's intent (#8462). Each accepted approval
+    // can't outlive the user's intent (#8462) — which is why the banner no
+    // longer labels this "always". Each accepted approval
     // refreshes the window from now; a chained re-elevation preserves the
     // original baseline.
     this.deps.sessionStore.armTierElevationTimer(sessionId, tier, current);
