@@ -10,7 +10,13 @@ import {
   useRef,
   useState,
 } from "react";
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactElement } from "react";
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  ReactElement,
+  Ref,
+  RefCallback,
+} from "react";
 import {
   parseDiff,
   Diff,
@@ -398,17 +404,36 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
   ref
 ) {
   // Select All over a diff has no owner, so the native Edit-menu command falls
-  // back to the whole app (#12135). Claim it for the diff body. The root also
-  // carries a forwarded ref, so publish to both.
+  // back to the whole app (#12135). Claim it for whichever body is on screen —
+  // the sentinel branches below take `rootRef` directly, since an error or
+  // "no changes" pane is just as exposed to the fallback as a rendered diff.
   const rootRef = useRef<HTMLDivElement | null>(null);
   useScopedSelectAll(rootRef);
-  const setRoot = useCallback(
-    (node: HTMLDivElement | null) => {
+  // Compose, never replace, and mirror ContentPanel's React 19 handling: a
+  // callback ref may return a cleanup, and React then skips the usual `null`
+  // call — so that cleanup has to be propagated or the caller's teardown never
+  // runs. Only the rendered-diff root publishes outward; the sentinels have no
+  // `.diff-viewer` to hand a host.
+  const externalRef: Ref<HTMLDivElement> = ref;
+  const setRoot = useCallback<RefCallback<HTMLDivElement>>(
+    (node) => {
       rootRef.current = node;
-      if (typeof ref === "function") ref(node);
-      else if (ref) ref.current = node;
+      if (typeof externalRef === "function") {
+        const cleanup = externalRef(node);
+        if (typeof cleanup === "function") {
+          return () => {
+            rootRef.current = null;
+            cleanup();
+          };
+        }
+        return undefined;
+      }
+      if (externalRef) {
+        externalRef.current = node;
+      }
+      return undefined;
     },
-    [ref]
+    [externalRef]
   );
 
   // Keep keystrokes responsive: highlighting re-tokenizes the whole file, so
@@ -489,7 +514,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
 
   if (!diff || diff === "NO_CHANGES") {
     return (
-      <div className="p-8">
+      <div ref={rootRef} className="p-8">
         <EmptyState
           variant="zero-data"
           scale="canvas"
@@ -503,7 +528,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
 
   if (diff === "BINARY_FILE") {
     return (
-      <div className="p-8">
+      <div ref={rootRef} className="p-8">
         <EmptyState
           variant="zero-data"
           scale="canvas"
@@ -518,7 +543,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
 
   if (diff === "FILE_TOO_LARGE") {
     return (
-      <div className="p-8">
+      <div ref={rootRef} className="p-8">
         <EmptyState
           variant="zero-data"
           scale="canvas"
@@ -533,7 +558,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
 
   if (diff === "ERROR") {
     return (
-      <div className="p-8">
+      <div ref={rootRef} className="p-8">
         <EmptyState
           variant="zero-data"
           scale="canvas"
@@ -558,7 +583,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
 
   if (files.length === 0) {
     return (
-      <div className="p-8">
+      <div ref={rootRef} className="p-8">
         <EmptyState
           variant="zero-data"
           scale="canvas"

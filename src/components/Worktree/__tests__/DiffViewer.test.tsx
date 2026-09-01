@@ -1211,43 +1211,107 @@ describe("DiffViewer scoped Select All (#12135)", () => {
     window.getSelection()?.removeAllRanges();
   });
 
-  it("claims Cmd+A for the diff body when focus sits on the panel root", () => {
-    const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="unified" />));
-
-    // The shape ContentPanel produces: DOM focus on a tabIndex={-1} ancestor,
-    // so the keydown never travels down into the diff body on its own.
-    const panelRoot = document.createElement("div");
-    panelRoot.tabIndex = -1;
-    const chrome = document.createElement("nav");
-    chrome.textContent = "sidebar chrome";
-    panelRoot.appendChild(chrome);
-    container.parentNode?.insertBefore(panelRoot, container);
-    panelRoot.appendChild(container);
-
+  function pressSelectAll(target: Element): KeyboardEvent {
     const event = new KeyboardEvent("keydown", {
       key: "a",
       metaKey: true,
       bubbles: true,
       cancelable: true,
     });
-    panelRoot.dispatchEvent(event);
+    target.dispatchEvent(event);
+    return event;
+  }
+
+  // A React-owned pane wrapper, not a re-parented container: RTL only cleans up
+  // a container whose parent is document.body, so moving one leaks it into the
+  // tests that follow.
+  function renderInPane(ui: React.ReactElement) {
+    return render(
+      wrap(
+        <div data-testid="pane" data-panel-id="diff-1" tabIndex={-1}>
+          <nav>sidebar chrome</nav>
+          <button type="button" data-testid="pane-toolbar-button">
+            Refresh
+          </button>
+          {ui}
+        </div>
+      )
+    );
+  }
+
+  it("selects the whole diff body when focus sits on the pane root", () => {
+    const { getByTestId } = renderInPane(<DiffViewer diff={SMALL_DIFF} viewType="unified" />);
+
+    const event = pressSelectAll(getByTestId("pane"));
 
     expect(event.defaultPrevented).toBe(true);
-    const selection = window.getSelection();
-    expect(selection?.getRangeAt(0).commonAncestorContainer).toBe(
-      container.querySelector(".diff-viewer")
-    );
-    expect(selection?.toString()).not.toContain("sidebar chrome");
+    const body = getByTestId("pane").querySelector(".diff-viewer")!;
+    const range = window.getSelection()?.getRangeAt(0);
+    expect(range?.commonAncestorContainer).toBe(body);
+    expect(range?.startOffset).toBe(0);
+    expect(range?.endOffset).toBe(body.childNodes.length);
+    expect(window.getSelection()?.toString()).not.toContain("sidebar chrome");
   });
 
-  it("still hands its root to a forwarding host", () => {
+  // DiffPane's file sidebar and toolbar keep focus beside the diff, not above
+  // or inside it — an ancestor-only ownership rule would miss this.
+  it("claims the chord from a sibling control in the same pane", () => {
+    const { getByTestId } = renderInPane(<DiffViewer diff={SMALL_DIFF} viewType="unified" />);
+
+    const event = pressSelectAll(getByTestId("pane-toolbar-button"));
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(window.getSelection()?.getRangeAt(0).commonAncestorContainer).toBe(
+      getByTestId("pane").querySelector(".diff-viewer")
+    );
+  });
+
+  // "Couldn't load diff" / "File too large" render a sentinel instead of a
+  // diff, and are just as exposed to the whole-document fallback.
+  it("owns the chord in the sentinel branches too", () => {
+    const { getByTestId } = renderInPane(<DiffViewer diff="" viewType="unified" />);
+
+    const event = pressSelectAll(getByTestId("pane"));
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(window.getSelection()?.toString()).not.toContain("sidebar chrome");
+  });
+
+  it("still publishes its root to a forwarding host while scoping selection", () => {
     const hostRef = React.createRef<HTMLDivElement>();
-    const { container } = render(
-      wrap(<DiffViewer ref={hostRef} diff={SMALL_DIFF} viewType="unified" />)
+    const { getByTestId } = renderInPane(
+      <DiffViewer ref={hostRef} diff={SMALL_DIFF} viewType="unified" />
     );
 
-    // The scoped-select-all ref is merged with the forwarded one, not swapped
-    // for it — hosts scroll and measure through this.
-    expect(hostRef.current).toBe(container.querySelector(".diff-viewer"));
+    const body = getByTestId("pane").querySelector(".diff-viewer");
+    // Composed, not swapped: hosts scroll and measure through the forwarded ref
+    // while the internal one drives selection — so exercise both in one render.
+    expect(hostRef.current).toBe(body);
+    expect(pressSelectAll(getByTestId("pane")).defaultPrevented).toBe(true);
+    expect(window.getSelection()?.getRangeAt(0).commonAncestorContainer).toBe(body);
+  });
+
+  it("propagates a callback ref's React 19 cleanup instead of swallowing it", () => {
+    const cleanup = vi.fn();
+    const attached: (HTMLDivElement | null)[] = [];
+    const { unmount } = renderInPane(
+      <DiffViewer
+        ref={(node) => {
+          attached.push(node);
+          return cleanup;
+        }}
+        diff={SMALL_DIFF}
+        viewType="unified"
+      />
+    );
+
+    expect(attached[0]).not.toBeNull();
+    expect(cleanup).not.toHaveBeenCalled();
+
+    unmount();
+
+    // React skips the usual `null` call when a callback ref returns a cleanup,
+    // so a composed ref that drops the cleanup never tears the caller down.
+    expect(cleanup).toHaveBeenCalledTimes(1);
   });
 });

@@ -294,17 +294,16 @@ describe("MarkdownDocument", () => {
   // webContents.selectAll(). Chromium only scopes that to editable focus, so
   // over the rendered document it used to select the entire app window.
   it("claims Cmd+A for the document instead of the whole app", () => {
-    const { container } = render(<MarkdownDocument {...FIXTURE_PROPS} content="# Spec title" />);
-
-    // Focus lands on the panel root, an ancestor of the document — the shape
-    // ContentPanel produces, and the reason a container listener can't work.
-    const panelRoot = document.createElement("div");
-    panelRoot.tabIndex = -1;
-    const chrome = document.createElement("nav");
-    chrome.textContent = "sidebar chrome";
-    panelRoot.appendChild(chrome);
-    container.parentNode?.insertBefore(panelRoot, container);
-    panelRoot.appendChild(container);
+    // A React-owned pane wrapper, not a re-parented container: RTL only cleans
+    // up a container whose parent is document.body, so moving one leaks it into
+    // the tests that follow. This is the shape ContentPanel renders — focus on
+    // the `data-panel-id` root, an ancestor of the document.
+    const { getByTestId } = render(
+      <div data-testid="pane" data-panel-id="file-1" tabIndex={-1}>
+        <nav>sidebar chrome</nav>
+        <MarkdownDocument {...FIXTURE_PROPS} content={"# Spec title\n\nBody line."} />
+      </div>
+    );
 
     const event = new KeyboardEvent("keydown", {
       key: "a",
@@ -312,16 +311,18 @@ describe("MarkdownDocument", () => {
       bubbles: true,
       cancelable: true,
     });
-    panelRoot.dispatchEvent(event);
+    getByTestId("pane").dispatchEvent(event);
 
     // A prevented event never reaches the native accelerator.
     expect(event.defaultPrevented).toBe(true);
-    const selection = window.getSelection();
-    expect(selection?.getRangeAt(0).commonAncestorContainer).toBe(
-      container.querySelector(".markdown-document")
-    );
-    expect(selection?.toString()).toContain("Spec title");
-    expect(selection?.toString()).not.toContain("sidebar chrome");
-    selection?.removeAllRanges();
+    const document_ = getByTestId("pane").querySelector(".markdown-document")!;
+    const range = window.getSelection()?.getRangeAt(0);
+    // The whole document, not a collapsed range that merely shares its ancestor.
+    expect(range?.commonAncestorContainer).toBe(document_);
+    expect(range?.startOffset).toBe(0);
+    expect(range?.endOffset).toBe(document_.childNodes.length);
+    expect(window.getSelection()?.toString()).toBe(document_.textContent);
+    expect(window.getSelection()?.toString()).not.toContain("sidebar chrome");
+    window.getSelection()?.removeAllRanges();
   });
 });

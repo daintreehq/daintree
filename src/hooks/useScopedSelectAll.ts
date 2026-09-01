@@ -1,6 +1,13 @@
 import { useEffect, useEffectEvent, type RefObject } from "react";
 
 /**
+ * The surfaces that bound a Select All. A viewer body owns the chord for the
+ * pane or dialog it lives in — `ContentPanel`'s root carries `data-panel-id`,
+ * `AppDialog`'s content carries the dialog role — and for nothing outside it.
+ */
+const SELECT_ALL_SCOPE = "[data-panel-id],[role='dialog'],[role='alertdialog']";
+
+/**
  * Give a read-only rendered region an owner for Select All.
  *
  * The Edit menu's Select All is a native accelerator that ends in
@@ -21,20 +28,26 @@ import { useEffect, useEffectEvent, type RefObject } from "react";
  * ## Why the listener is on `document`
  *
  * A listener on `ref.current` would never fire. Keydown bubbles up from the
- * focused element, and for a focused pane that element is `ContentPanel`'s
- * `tabIndex={-1}` root — an *ancestor* of the viewer body, not a descendant.
- * Hence a document-level listener plus an explicit ownership test.
+ * focused element, and that element is rarely inside the viewer body: a focused
+ * pane puts it on `ContentPanel`'s `tabIndex={-1}` root, an *ancestor*, and the
+ * file browser leaves it on the tree root, a *sibling*. Hence a document-level
+ * listener plus an explicit ownership test.
  *
  * ## Ownership
  *
  * The keydown target is the focused element, and exactly one element is focused
  * per document, so the target alone decides which mounted region owns the
- * chord — no `isFocused` prop, and stacked dialogs sort themselves out. Focus
- * either sits inside the region (a Markdown link, a diff's focusable rows) or on
- * an ancestor that wraps it (the panel root, a dialog's focus sink), so both
- * containment directions count. `body`/`documentElement` are excluded: they are
- * the target when *nothing* holds focus, and they contain every mounted region,
- * so treating them as ownership would let every instance claim the key at once.
+ * chord — no `isFocused` prop, and stacked panes and dialogs sort themselves
+ * out. Ownership is the region's *enclosing pane or dialog*, not the region
+ * itself: focus legitimately rests on the pane root, on a toolbar button, or on
+ * the file tree beside the preview, and Select All should mean "the document
+ * I'm looking at" in all of them.
+ *
+ * Bounding it at that scope rather than walking ancestors freely is what keeps
+ * the rule single-valued. F6 focuses the grid's macro-region wrapper, which
+ * encloses *every* open pane; an unbounded "is the target an ancestor?" test
+ * would make each mounted viewer claim that keypress and let mount order pick
+ * the winner. Outside its own pane, a viewer declines.
  */
 export function useScopedSelectAll(
   ref: RefObject<HTMLElement | null>,
@@ -43,6 +56,8 @@ export function useScopedSelectAll(
   const handleKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
     if (event.key !== "a" && event.key !== "A") return;
+    // Mid-composition the keystroke belongs to the IME, not to us.
+    if (event.isComposing) return;
     // A higher-priority owner already claimed the chord — an explicit user
     // keybinding, or an editor that handled it on the way up. Never override.
     if (event.defaultPrevented) return;
@@ -61,13 +76,14 @@ export function useScopedSelectAll(
       return;
     }
 
-    const doc = container.ownerDocument;
-    if (target === doc.body || target === doc.documentElement) return;
-    if (!container.contains(target) && !target.contains(container)) return;
+    // No enclosing pane or dialog: fall back to the region itself, so an
+    // unhosted viewer still owns focus landing inside it.
+    const scope = container.closest(SELECT_ALL_SCOPE) ?? container;
+    if (!scope.contains(target)) return;
 
     event.preventDefault();
     event.stopPropagation();
-    doc.defaultView?.getSelection()?.selectAllChildren(container);
+    container.ownerDocument.defaultView?.getSelection()?.selectAllChildren(container);
   });
 
   useEffect(() => {

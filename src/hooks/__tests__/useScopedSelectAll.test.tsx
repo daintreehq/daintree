@@ -5,22 +5,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useScopedSelectAll } from "../useScopedSelectAll";
 
 /**
- * Mirrors the real shape the hook has to cope with: DOM focus sits on the
- * panel root (`ContentPanel`'s `tabIndex={-1}` div), which is an *ancestor* of
- * the viewer body — so the interception can never be a listener on the body
- * itself. `#chrome` stands in for the sidebar/toolbar the native command
- * wrongly swept into the selection (#12135).
+ * Mirrors the focus topology the hook has to cope with. DOM focus lands on the
+ * pane root (`ContentPanel`'s `tabIndex={-1}` div, keyed by `data-panel-id`),
+ * which is an *ancestor* of the viewer body; or on the tree beside it, which is
+ * a *sibling*; or inside the body itself. `#outside` stands in for the sidebar
+ * the native command wrongly swept into the selection (#12135).
  */
 function Harness({ enabled = true, bodyText = "document text" }) {
   const ref = useRef<HTMLDivElement>(null);
   useScopedSelectAll(ref, enabled);
   return (
-    <div data-testid="panel-root" tabIndex={-1}>
+    <div data-testid="pane" data-panel-id="pane-1" tabIndex={-1}>
       <div data-testid="toolbar">
         <input data-testid="search" />
+        <textarea data-testid="notes" />
         <button type="button" data-testid="toolbar-button">
           Refresh
         </button>
+      </div>
+      <div data-testid="tree" tabIndex={-1}>
+        tree row
       </div>
       <div data-testid="body" ref={ref}>
         <p>{bodyText}</p>
@@ -48,115 +52,178 @@ function selectedText(): string {
   return window.getSelection()?.toString() ?? "";
 }
 
-beforeEach(() => {
+function clearSelection(): void {
   window.getSelection()?.removeAllRanges();
-});
+}
 
+/**
+ * jsdom performs no native Select All, so "nothing was selected" is true of a
+ * hook that never ran at all. Every declining case therefore has to prove the
+ * listener was live and *chose* to decline — otherwise deleting the hook
+ * outright would leave the test green.
+ */
+function expectStillLive(body: Element, pane: Element): void {
+  clearSelection();
+  const control = pressSelectAll(pane);
+  expect(control.defaultPrevented).toBe(true);
+  expect(window.getSelection()?.getRangeAt(0).commonAncestorContainer).toBe(body);
+  clearSelection();
+}
+
+/** The whole region, not a collapsed range that merely shares its ancestor. */
+function expectSelectedWholeOf(container: HTMLElement): void {
+  const range = window.getSelection()?.getRangeAt(0);
+  expect(range?.commonAncestorContainer).toBe(container);
+  expect(range?.startOffset).toBe(0);
+  expect(range?.endOffset).toBe(container.childNodes.length);
+  expect(selectedText()).toBe(container.textContent);
+}
+
+beforeEach(clearSelection);
 afterEach(() => {
   vi.restoreAllMocks();
-  window.getSelection()?.removeAllRanges();
+  clearSelection();
 });
 
 describe("useScopedSelectAll", () => {
-  it("scopes Cmd+A to the region when focus sits on an ancestor panel root", () => {
+  it("selects the whole region when focus sits on the ancestor pane root", () => {
     const { getByTestId } = render(<Harness />);
 
-    const event = pressSelectAll(getByTestId("panel-root"));
+    const event = pressSelectAll(getByTestId("pane"));
 
     // preventDefault is the half that suppresses Electron's native accelerator:
     // AppKit never sees a key the page already handled.
     expect(event.defaultPrevented).toBe(true);
-    const range = window.getSelection()?.getRangeAt(0);
-    expect(range?.commonAncestorContainer).toBe(getByTestId("body"));
+    expectSelectedWholeOf(getByTestId("body"));
     expect(selectedText()).toContain("document text");
     expect(selectedText()).not.toContain("Refresh");
   });
 
-  it("also claims the chord when focus is inside the region", () => {
+  it("claims the chord when focus is inside the region", () => {
     const { getByTestId } = render(<Harness />);
 
     const event = pressSelectAll(getByTestId("doc-link"));
 
     expect(event.defaultPrevented).toBe(true);
-    expect(window.getSelection()?.getRangeAt(0).commonAncestorContainer).toBe(getByTestId("body"));
+    expectSelectedWholeOf(getByTestId("body"));
+  });
+
+  // The file browser focuses its tree root on a row click and leaves it there,
+  // so the preview beside it is a sibling of the focused element — the most
+  // common path into the reported bug, and one an ancestor-only rule misses.
+  it("claims the chord when focus is on a sibling inside the same pane", () => {
+    const { getByTestId } = render(<Harness />);
+
+    const fromTree = pressSelectAll(getByTestId("tree"));
+    expect(fromTree.defaultPrevented).toBe(true);
+    expectSelectedWholeOf(getByTestId("body"));
+
+    clearSelection();
+    const fromToolbar = pressSelectAll(getByTestId("toolbar-button"));
+    expect(fromToolbar.defaultPrevented).toBe(true);
+    expectSelectedWholeOf(getByTestId("body"));
   });
 
   it("treats Ctrl+A the same way, for Windows and Linux", () => {
     const { getByTestId } = render(<Harness />);
 
-    const event = pressSelectAll(getByTestId("panel-root"), { metaKey: false, ctrlKey: true });
+    const event = pressSelectAll(getByTestId("pane"), { metaKey: false, ctrlKey: true });
 
     expect(event.defaultPrevented).toBe(true);
-    expect(selectedText()).toContain("document text");
+    expectSelectedWholeOf(getByTestId("body"));
   });
 
-  it("leaves Cmd+A in a text field alone", () => {
+  // Caps Lock produces "A" with shiftKey false; Shift+Cmd+A is a different
+  // chord and must stay excluded.
+  it("accepts a capitalised key but not the Shift chord", () => {
     const { getByTestId } = render(<Harness />);
 
-    const event = pressSelectAll(getByTestId("search"));
+    expect(pressSelectAll(getByTestId("pane"), { key: "A" }).defaultPrevented).toBe(true);
+    expectSelectedWholeOf(getByTestId("body"));
+
+    clearSelection();
+    expect(pressSelectAll(getByTestId("pane"), { key: "A", shiftKey: true }).defaultPrevented).toBe(
+      false
+    );
+    expect(window.getSelection()?.rangeCount ?? 0).toBe(0);
+  });
+
+  it("leaves Cmd+A in a text field to the field", () => {
+    const { getByTestId } = render(<Harness />);
+
+    for (const id of ["search", "notes"]) {
+      const event = pressSelectAll(getByTestId(id));
+      expect(event.defaultPrevented).toBe(false);
+      expect(window.getSelection()?.rangeCount ?? 0).toBe(0);
+    }
+
+    const editable = document.createElement("div");
+    // jsdom does not derive isContentEditable from the attribute.
+    Object.defineProperty(editable, "isContentEditable", { value: true });
+    getByTestId("toolbar").appendChild(editable);
+    expect(pressSelectAll(editable).defaultPrevented).toBe(false);
+    expect(window.getSelection()?.rangeCount ?? 0).toBe(0);
+
+    expectStillLive(getByTestId("body"), getByTestId("pane"));
+  });
+
+  it("yields to a higher-priority owner that already claimed the chord", () => {
+    const { getByTestId } = render(<Harness />);
+    const pane = getByTestId("pane");
+    // An explicit user keybinding, or an inner editor, handled it first.
+    pane.addEventListener("keydown", (e) => e.preventDefault(), { once: true });
+
+    pressSelectAll(pane);
+
+    expect(window.getSelection()?.rangeCount ?? 0).toBe(0);
+    expectStillLive(getByTestId("body"), pane);
+  });
+
+  it("ignores a keystroke the IME is still composing", () => {
+    const { getByTestId } = render(<Harness />);
+
+    const event = pressSelectAll(getByTestId("pane"), { isComposing: true });
 
     expect(event.defaultPrevented).toBe(false);
     expect(window.getSelection()?.rangeCount ?? 0).toBe(0);
-  });
-
-  it("leaves an event a higher-priority owner already claimed alone", () => {
-    const { getByTestId } = render(<Harness />);
-    const root = getByTestId("panel-root");
-    // An explicit keybinding or an inner editor handled the chord first.
-    root.addEventListener("keydown", (e) => e.preventDefault(), { once: true });
-
-    pressSelectAll(root);
-
-    expect(window.getSelection()?.rangeCount ?? 0).toBe(0);
-  });
-
-  it("ignores the chord when nothing holds focus", () => {
-    render(<Harness />);
-
-    // body is the keydown target when no element is focused, and it contains
-    // every mounted region — treating it as ownership would let them all fire.
-    const event = pressSelectAll(document.body);
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(window.getSelection()?.rangeCount ?? 0).toBe(0);
+    expectStillLive(getByTestId("body"), getByTestId("pane"));
   });
 
   it("ignores modified variants that are not Select All", () => {
     const { getByTestId } = render(<Harness />);
-    const root = getByTestId("panel-root");
+    const pane = getByTestId("pane");
 
-    expect(pressSelectAll(root, { shiftKey: true }).defaultPrevented).toBe(false);
-    expect(pressSelectAll(root, { altKey: true }).defaultPrevented).toBe(false);
-    expect(pressSelectAll(root, { metaKey: false }).defaultPrevented).toBe(false);
-    expect(pressSelectAll(root, { key: "b" }).defaultPrevented).toBe(false);
+    expect(pressSelectAll(pane, { altKey: true }).defaultPrevented).toBe(false);
+    expect(pressSelectAll(pane, { metaKey: false }).defaultPrevented).toBe(false);
+    expect(pressSelectAll(pane, { key: "b" }).defaultPrevented).toBe(false);
     expect(window.getSelection()?.rangeCount ?? 0).toBe(0);
+
+    expectStillLive(getByTestId("body"), pane);
   });
 
-  it("does nothing while disabled, and detaches on unmount", () => {
-    const { getByTestId, rerender, unmount } = render(<Harness enabled={false} />);
-    const root = getByTestId("panel-root");
+  it("declines a target outside its own pane", () => {
+    const { getByTestId } = render(<Harness />);
+    const outsider = document.createElement("div");
+    outsider.textContent = "sidebar";
+    document.body.appendChild(outsider);
 
-    expect(pressSelectAll(root).defaultPrevented).toBe(false);
+    const event = pressSelectAll(outsider);
 
-    rerender(<Harness enabled={true} />);
-    expect(pressSelectAll(root).defaultPrevented).toBe(true);
-
-    const detached = getByTestId("panel-root");
-    unmount();
-    expect(pressSelectAll(detached).defaultPrevented).toBe(false);
+    expect(event.defaultPrevented).toBe(false);
+    expect(window.getSelection()?.rangeCount ?? 0).toBe(0);
+    expectStillLive(getByTestId("body"), getByTestId("pane"));
+    outsider.remove();
   });
 
-  it("lets only the region owning the keydown target act, with two mounted", () => {
+  it("lets only the pane owning the keydown target act, with two mounted", () => {
     const first = render(<Harness bodyText="first document" />);
     const second = render(<Harness bodyText="second document" />);
     // RTL binds queries to document.body, which now holds both harnesses —
     // reach through each render's own container instead.
-    const secondRoot = second.container.querySelector('[data-testid="panel-root"]');
+    const secondPane = second.container.querySelector<HTMLElement>('[data-testid="pane"]')!;
 
-    pressSelectAll(secondRoot!);
+    pressSelectAll(secondPane);
 
-    // The gate is the event target, not a store flag, so the unfocused pane
-    // stays inert even though its listener is live on the same document.
     expect(selectedText()).toContain("second document");
     expect(selectedText()).not.toContain("first document");
 
@@ -164,15 +231,73 @@ describe("useScopedSelectAll", () => {
     second.unmount();
   });
 
-  it("stays inert when focus is in an unrelated region", () => {
-    render(<Harness />);
-    const outsider = document.createElement("div");
-    document.body.appendChild(outsider);
+  // F6 focuses the grid's macro-region wrapper, which encloses every open pane.
+  // An unbounded "is the target an ancestor?" rule would let each mounted
+  // viewer claim that keypress and leave mount order to pick the winner.
+  it("declines when focus is on an ancestor enclosing several panes", () => {
+    const macroRegion = document.createElement("div");
+    macroRegion.tabIndex = -1;
+    document.body.appendChild(macroRegion);
+    const first = render(<Harness bodyText="first document" />, { container: macroRegion });
+    const second = render(<Harness bodyText="second document" />, {
+      container: macroRegion.appendChild(document.createElement("div")),
+    });
 
-    const event = pressSelectAll(outsider);
+    const event = pressSelectAll(macroRegion);
 
     expect(event.defaultPrevented).toBe(false);
     expect(window.getSelection()?.rangeCount ?? 0).toBe(0);
-    outsider.remove();
+
+    // Both listeners were live and both declined — neither pane won a lottery.
+    const firstPane = first.container.querySelector<HTMLElement>('[data-testid="pane"]')!;
+    expectStillLive(firstPane.querySelector<HTMLElement>('[data-testid="body"]')!, firstPane);
+
+    first.unmount();
+    second.unmount();
+    macroRegion.remove();
+  });
+
+  it("attaches, detaches, and re-attaches its listener with `enabled`", () => {
+    const { getByTestId, rerender } = render(<Harness enabled={false} />);
+    const pane = getByTestId("pane");
+
+    expect(pressSelectAll(pane).defaultPrevented).toBe(false);
+
+    rerender(<Harness enabled={true} />);
+    expect(pressSelectAll(pane).defaultPrevented).toBe(true);
+    clearSelection();
+
+    rerender(<Harness enabled={false} />);
+    expect(pressSelectAll(pane).defaultPrevented).toBe(false);
+    expect(window.getSelection()?.rangeCount ?? 0).toBe(0);
+
+    rerender(<Harness enabled={true} />);
+    expect(pressSelectAll(pane).defaultPrevented).toBe(true);
+  });
+
+  it("removes the exact listener it added on unmount", () => {
+    // Unmount also detaches the tree, so a keydown after it can't reach
+    // `document` either way — the only honest proof is handler identity.
+    const added = new Set<EventListenerOrEventListenerObject>();
+    const addSpy = vi
+      .spyOn(document, "addEventListener")
+      .mockImplementation((type, handler, opts) => {
+        if (type === "keydown") added.add(handler);
+        return HTMLDocument.prototype.addEventListener.call(document, type, handler, opts);
+      });
+
+    const { unmount } = render(<Harness />);
+    addSpy.mockRestore();
+    expect(added.size).toBe(1);
+
+    const removed = new Set<EventListenerOrEventListenerObject>();
+    vi.spyOn(document, "removeEventListener").mockImplementation((type, handler, opts) => {
+      if (type === "keydown") removed.add(handler);
+      return HTMLDocument.prototype.removeEventListener.call(document, type, handler, opts);
+    });
+
+    unmount();
+
+    expect([...added].every((handler) => removed.has(handler))).toBe(true);
   });
 });
