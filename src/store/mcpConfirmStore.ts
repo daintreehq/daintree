@@ -173,8 +173,11 @@ export interface McpConfirmSelectableTarget {
  * a renderer-internal shape instead, and the scalar the wire already carries
  * stays exactly what it was.
  *
- * `selectedTargetIds` is present only for an approved selectable confirmation,
- * and an empty array is a real answer there: the approver unchecked everything.
+ * `selectedTargetIds` is present only for an approved selectable confirmation.
+ * The dialog keeps approval disabled while nothing is checked — unchecking
+ * every row is Cancel with an extra click — so an empty array here means a
+ * caller resolved one directly, and it is carried through as "kept nothing"
+ * rather than collapsed into an absent selection.
  */
 export interface McpConfirmResolution {
   decision: McpConfirmationDecision;

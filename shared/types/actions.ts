@@ -181,9 +181,13 @@ export interface ActionContext {
    *
    * Three states, all distinct. Absent means no selectable confirmation ran, so
    * an action that needs one must refuse rather than assume every target was
-   * approved. An empty array means the approver unchecked everything — a real
-   * answer, and the action does nothing. A populated array names exactly the
-   * targets kept, and only those.
+   * approved. A populated array names exactly the targets kept, and only those.
+   * An empty array means an approval that kept nothing — which the MCP confirm
+   * dialog deliberately does not offer, since unchecking every row is Cancel
+   * with an extra click, so it reaches an action only from a host that chose to
+   * send one. Handled rather than rejected: the honest result is that every
+   * target was excluded, and an action must not read "approved" plus an empty
+   * list as permission to act on the full request.
    */
   hostApprovedTargets?: readonly HostApprovedTarget[];
 }

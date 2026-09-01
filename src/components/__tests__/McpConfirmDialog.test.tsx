@@ -148,6 +148,34 @@ describe("McpConfirmDialog", () => {
       }
     });
 
+    it("tells two identically-titled targets apart by id", () => {
+      void enqueue({
+        actionTitle: "Kill terminals",
+        selectableTargets: [
+          {
+            id: "panel-aaa111",
+            name: "zsh",
+            worktree: "feature/x",
+            kindLabel: "Terminal",
+            agentRunning: false,
+          },
+          {
+            id: "panel-bbb222",
+            name: "zsh",
+            worktree: "feature/x",
+            kindLabel: "Terminal",
+            agentRunning: false,
+          },
+        ],
+      });
+      render(<McpConfirmDialog />);
+
+      // Same title, same worktree, same kind — without the id the two rows are
+      // one checkbox as far as anyone reading them is concerned.
+      expect(screen.getByRole("checkbox", { name: /aaa111/ })).toBeTruthy();
+      expect(screen.getByRole("checkbox", { name: /bbb222/ })).toBeTruthy();
+    });
+
     it("names each target by its own row so the boxes are told apart", () => {
       void enqueue({ actionTitle: "Kill terminals", selectableTargets: BATCH_TARGETS });
       render(<McpConfirmDialog />);

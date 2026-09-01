@@ -23,6 +23,11 @@ import {
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { isForegroundDispatch } from "./dispatchSource";
+import { logWarn } from "@/utils/logger";
+import {
+  MAX_KILL_BATCH_TERMINALS,
+  TerminalKillBatchIdsSchema,
+} from "@shared/types/terminalKillBatch";
 
 function parseConfirmed(args: unknown): boolean {
   if (!args || typeof args !== "object") return false;
@@ -85,35 +90,18 @@ const PanelCloseResultSchema = z.object({
 });
 
 /**
- * Ceiling on one batch kill.
- *
- * Far below `terminal.waitUntilIdleBatch`'s 256: that one is a read-only wait
- * nobody has to look at, while every id here becomes a row a human must read
- * before approving. A list long enough to need real scrolling is a list that
- * gets approved unread, which is the failure this dialog exists to prevent.
- */
-export const MAX_KILL_BATCH_TERMINALS = 32;
-
-/**
  * What one batch kill did, per target.
  *
- * Four buckets rather than a count, because the four causes need four different
- * responses from the caller and a bare success hides all of them: an excluded id
- * was refused by a human and must never be retried, a missing one was already
- * gone, and a skipped one is still alive and still working. Every id the call
- * asked for lands in exactly one bucket, in the order it was requested.
+ * Buckets rather than a count, because the causes need different responses from
+ * the caller and a bare success hides all of them: an excluded id was refused by
+ * a human and must never be retried, a missing one was already gone, and a
+ * skipped one is still alive and still working. Every id the call asked for
+ * lands in exactly one bucket, in the order it was requested.
  */
 const TerminalKillBatchArgsSchema = z.object({
-  terminalIds: z
-    .array(z.string().min(1))
-    .min(1)
-    .max(MAX_KILL_BATCH_TERMINALS)
-    .refine((ids) => new Set(ids).size === ids.length, {
-      message: "terminalIds must not repeat an id",
-    })
-    .describe(
-      `Identifies the panels to destroy (1-${MAX_KILL_BATCH_TERMINALS}), using \`id\` values from the terminal listing. Each id must appear once. An id that is unchecked, already gone, or newly busy is reported back rather than failing the batch.`
-    ),
+  terminalIds: TerminalKillBatchIdsSchema.describe(
+    `Identifies the panels to destroy (1-${MAX_KILL_BATCH_TERMINALS}), using \`id\` values from the terminal listing. Each id must appear once. An id that is unchecked, already gone, or newly busy is reported back rather than failing the batch.`
+  ),
 });
 
 const TerminalKillBatchResultSchema = z.object({
@@ -128,12 +116,17 @@ const TerminalKillBatchResultSchema = z.object({
   notFoundIds: z
     .array(z.string())
     .describe(
-      "No panel with this id existed when the kill ran. Already gone rather than spared, so nothing is left to retry."
+      "No panel with this id existed when the kill ran. Already gone rather than spared; nothing to retry."
     ),
   skippedIds: z
     .array(z.string())
     .describe(
       "Started running an agent after the confirmation froze, so the approval described an idle panel these no longer are. Untouched and still working; check what the agent is doing before asking again."
+    ),
+  failedIds: z
+    .array(z.string())
+    .describe(
+      "The teardown errored, so whether the panel survived is unknown. Check the listing; the rest of the batch still ran."
     ),
 });
 
@@ -434,6 +427,7 @@ export function registerTerminalLifecycleActions(
       const excludedIds: string[] = [];
       const notFoundIds: string[] = [];
       const skippedIds: string[] = [];
+      const failedIds: string[] = [];
 
       for (const id of terminalIds) {
         if (!observedAgentById.has(id)) {
@@ -461,11 +455,21 @@ export function registerTerminalLifecycleActions(
           skippedIds.push(id);
           continue;
         }
-        state.removePanel(id);
-        killedIds.push(id);
+        // Contained per target, and that containment is the point. Letting a
+        // teardown throw escape would abandon the rest of the approved batch
+        // AND discard the record of the kills that already happened — for an
+        // irreversible action, a caller told only "execution error" cannot
+        // know what it lost, and its natural next move is to retry.
+        try {
+          state.removePanel(id);
+          killedIds.push(id);
+        } catch (err) {
+          logWarn("terminal.killBatch: removePanel threw", { terminalId: id, error: err });
+          failedIds.push(id);
+        }
       }
 
-      return { killedIds, excludedIds, notFoundIds, skippedIds };
+      return { killedIds, excludedIds, notFoundIds, skippedIds, failedIds };
     },
   }));
 

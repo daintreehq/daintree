@@ -322,7 +322,7 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // wording — the raise is the cost of the tool, not of its prose, and its
   // description is 151 B against the 400 B per-description ceiling.
   // 50_600 → 51_000 for #12123's `terminal.killBatch`, on the same terms: its
-  // description is 392 B, under the per-description ceiling, and the tool's
+  // description is 378 B, under the per-description ceiling, and the tool's
   // whole point is the four per-target outcomes a caller has to be able to tell
   // apart. The raise is 400 B for a tool that could not exist inside the old
   // ceiling's headroom at any wording.

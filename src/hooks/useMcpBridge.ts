@@ -41,6 +41,7 @@ import type {
 } from "@shared/types/actions";
 import type { McpConfirmationDecision, McpSessionOrigin } from "@shared/types/ipc/mcpServer";
 import type { TerminalSpawnSource } from "@shared/types/panel";
+import { TerminalKillBatchIdsSchema } from "@shared/types/terminalKillBatch";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
@@ -227,19 +228,21 @@ function readGitLocationArg(args: unknown): GitLocationArg {
  * The terminal ids a `terminal.killBatch` names, or undefined when the args
  * carry no usable list (#12123).
  *
- * Deliberately strict and deliberately silent on failure: a malformed list gets
- * no checklist and falls through to `argsSchema` validation, which rejects it.
- * Repairing it here into something dispatchable would put a target list in front
- * of an approver that the action would never have accepted.
+ * Validated against the SAME schema the action's `argsSchema` uses, not a
+ * looser hand-rolled shape. A list this accepted but the action would not is a
+ * dialog raised for a dispatch that then fails validation — and for duplicate
+ * ids specifically, two rows sharing a key and a checkbox identity, where
+ * unchecking one silently unchecks its twin.
+ *
+ * Deliberately silent on failure: a malformed list gets no checklist and falls
+ * through to `argsSchema` validation, which rejects it. Repairing it here into
+ * something dispatchable would put a target list in front of an approver that
+ * the action would never have accepted.
  */
 function terminalIdsArg(args: unknown): readonly string[] | undefined {
   if (args === null || typeof args !== "object" || !("terminalIds" in args)) return undefined;
-  const terminalIds = args.terminalIds;
-  if (!Array.isArray(terminalIds) || terminalIds.length === 0) return undefined;
-  if (!terminalIds.every((id): id is string => typeof id === "string" && id.length > 0)) {
-    return undefined;
-  }
-  return terminalIds;
+  const parsed = TerminalKillBatchIdsSchema.safeParse(args.terminalIds);
+  return parsed.success ? parsed.data : undefined;
 }
 
 /**

@@ -79,6 +79,7 @@ import type { WorktreeDeletePreviewOutcome } from "@/components/Worktree/worktre
 import { TerminalSpawnSourceSchema } from "@/services/actions/definitions/schemas";
 import { hasCautionLine } from "@/lib/mcpPreviewLines";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
+import { MAX_KILL_BATCH_TERMINALS } from "@shared/types/terminalKillBatch";
 
 /** A completed submodule inventory that found nothing — the ordinary case. */
 function emptySubmoduleRisk(over: Partial<SubmoduleDeleteRisk> = {}): SubmoduleDeleteRisk {
@@ -2467,9 +2468,21 @@ describe("batch terminal kill targets (#12123)", () => {
       { terminalIds: "a" },
       { terminalIds: ["a", 3] },
       { terminalIds: ["a", ""] },
+      // Rejected on exactly the terms the action's own schema rejects them:
+      // duplicates would give two rows one checkbox identity, and an over-cap
+      // list would raise a dialog the dispatch then refuses.
+      { terminalIds: ["a", "a"] },
+      { terminalIds: Array.from({ length: MAX_KILL_BATCH_TERMINALS + 1 }, (_, i) => `t${i}`) },
     ]) {
       expect(resolveMcpConfirmPreviewTarget("terminal.killBatch", args, undefined)).toBeUndefined();
     }
+  });
+
+  it("resolves a list sitting exactly on the cap", () => {
+    const terminalIds = Array.from({ length: MAX_KILL_BATCH_TERMINALS }, (_, i) => `t${i}`);
+    expect(
+      resolveMcpConfirmPreviewTarget("terminal.killBatch", { terminalIds }, undefined)
+    ).toEqual({ kind: "terminalKillBatch", terminalIds });
   });
 
   it("builds a row per requested id, naming worktree, kind and running agent", () => {
@@ -2490,10 +2503,10 @@ describe("batch terminal kill targets (#12123)", () => {
         id: "p1",
         name: "claude · api",
         worktree: "feature/x",
-        kindLabel: expect.any(String),
+        kindLabel: "Claude",
         agentRunning: true,
       },
-      { id: "p2", name: "zsh", kindLabel: expect.any(String), agentRunning: false },
+      { id: "p2", name: "zsh", kindLabel: "Terminal", agentRunning: false },
       { id: "gone", name: "gone", kindLabel: "No longer open", agentRunning: false },
     ]);
   });

@@ -479,6 +479,7 @@ describe("terminal.killBatch", () => {
       excludedIds: [],
       notFoundIds: [],
       skippedIds: [],
+      failedIds: [],
     });
     expect(removePanel).toHaveBeenCalledWith("p1");
     expect(removePanel).toHaveBeenCalledWith("p2");
@@ -500,6 +501,7 @@ describe("terminal.killBatch", () => {
       excludedIds: ["p2"],
       notFoundIds: [],
       skippedIds: [],
+      failedIds: [],
     });
     expect(removePanel).not.toHaveBeenCalledWith("p2");
   });
@@ -521,6 +523,7 @@ describe("terminal.killBatch", () => {
       excludedIds: [],
       notFoundIds: ["gone"],
       skippedIds: [],
+      failedIds: [],
     });
     expect(removePanel).toHaveBeenCalledTimes(1);
   });
@@ -540,6 +543,7 @@ describe("terminal.killBatch", () => {
       excludedIds: [],
       notFoundIds: ["constructor"],
       skippedIds: [],
+      failedIds: [],
     });
     expect(removePanel).not.toHaveBeenCalled();
   });
@@ -565,6 +569,7 @@ describe("terminal.killBatch", () => {
       excludedIds: [],
       notFoundIds: [],
       skippedIds: ["p2"],
+      failedIds: [],
     });
     expect(removePanel).not.toHaveBeenCalledWith("p2");
   });
@@ -586,6 +591,7 @@ describe("terminal.killBatch", () => {
       excludedIds: [],
       notFoundIds: [],
       skippedIds: [],
+      failedIds: [],
     });
     expect(removePanel).toHaveBeenCalledWith("p1");
   });
@@ -622,6 +628,7 @@ describe("terminal.killBatch", () => {
       excludedIds: [],
       notFoundIds: [],
       skippedIds: ["p2"],
+      failedIds: [],
     });
   });
 
@@ -645,8 +652,73 @@ describe("terminal.killBatch", () => {
       excludedIds: [],
       notFoundIds: [],
       skippedIds: [],
+      failedIds: [],
     });
     expect(removePanel).not.toHaveBeenCalledWith("other");
+  });
+
+  it("puts every requested id in exactly one bucket, in request order", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [
+        { id: "keep", location: "grid" },
+        { id: "refused", location: "grid" },
+        { id: "busy", location: "grid", detectedAgentId: "claude", agentState: "working" },
+      ],
+    });
+    const run = setupActions();
+
+    const requested = ["keep", "refused", "vanished", "busy"];
+    const result = (await run(
+      "terminal.killBatch",
+      { terminalIds: requested },
+      approve(["keep", "vanished", "busy"])
+    )) as Record<string, string[]>;
+
+    expect(result).toEqual({
+      killedIds: ["keep"],
+      excludedIds: ["refused"],
+      notFoundIds: ["vanished"],
+      skippedIds: ["busy"],
+      failedIds: [],
+    });
+    // Total and disjoint: the caller can account for every id it sent exactly
+    // once, which is what makes the four outcomes actionable rather than a hint.
+    const all = Object.values(result).flat();
+    expect([...all].sort()).toEqual([...requested].sort());
+    expect(new Set(all).size).toBe(requested.length);
+    expect(removePanel).toHaveBeenCalledTimes(1);
+    expect(removePanel).toHaveBeenCalledWith("keep");
+  });
+
+  it("keeps the rest of the batch and the record when one teardown throws", async () => {
+    const { removePanel } = setRichPanelState({
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "p2", location: "grid" },
+        { id: "p3", location: "grid" },
+      ],
+    });
+    removePanel.mockImplementation((id: string) => {
+      if (id === "p2") throw new Error("teardown exploded");
+    });
+    const run = setupActions();
+
+    const result = await run(
+      "terminal.killBatch",
+      { terminalIds: ["p1", "p2", "p3"] },
+      approve(["p1", "p2", "p3"])
+    );
+
+    // p1's kill already happened and is irreversible — a thrown batch would
+    // have reported only an execution error and invited a retry.
+    expect(result).toEqual({
+      killedIds: ["p1", "p3"],
+      excludedIds: [],
+      notFoundIds: [],
+      skippedIds: [],
+      failedIds: ["p2"],
+    });
+    expect(removePanel).toHaveBeenCalledWith("p3");
   });
 
   it("destroys nothing when the approver unchecked every row", async () => {
@@ -662,6 +734,7 @@ describe("terminal.killBatch", () => {
       excludedIds: ["p1"],
       notFoundIds: [],
       skippedIds: [],
+      failedIds: [],
     });
     expect(removePanel).not.toHaveBeenCalled();
   });

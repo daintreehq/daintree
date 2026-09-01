@@ -513,6 +513,17 @@ function PreviewCard({
  * needed — and the only thing that has to be re-announced here is the button,
  * whose accessible name already changes with the count.
  */
+/**
+ * A tail of the target's id, long enough to separate two identically-titled
+ * panels and short enough not to crowd the row it disambiguates. Ids shorter
+ * than this are shown whole.
+ */
+const SHORT_TARGET_ID_CHARS = 6;
+
+function shortTargetId(id: string): string {
+  return id.length <= SHORT_TARGET_ID_CHARS ? id : `…${id.slice(-SHORT_TARGET_ID_CHARS)}`;
+}
+
 function TargetChecklist({
   targets,
   selectedIds,
@@ -561,6 +572,13 @@ function TargetChecklist({
                 <span className="truncate text-2xs text-text-secondary">
                   {target.worktree ? `${target.worktree} · ` : ""}
                   {target.kindLabel}
+                  {" · "}
+                  {/* Two panels in one worktree can carry the same title, and
+                      then nothing above tells their checkboxes apart — which is
+                      the difference between refusing the terminal you meant and
+                      destroying it. The id is also what the caller named, so it
+                      is what a human cross-referencing the tool call looks for. */}
+                  <span className="font-mono">{shortTargetId(target.id)}</span>
                 </span>
               </span>
             </li>
