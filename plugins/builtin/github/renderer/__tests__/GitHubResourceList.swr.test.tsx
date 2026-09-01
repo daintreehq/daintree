@@ -6,6 +6,7 @@ import { render, screen, cleanup, waitFor, act, fireEvent } from "@testing-libra
 import React, { Activity, type ReactNode } from "react";
 import type { Issue, ListOptions, Page } from "@shared/types/forge";
 import { setCache, getCache, buildCacheKey, _resetForTests } from "@/lib/forgeResourceCache";
+import { MULTI_FETCH_CAP } from "@/lib/parseNumberQuery";
 import { useGitHubFilterStore } from "../stores/githubFilterStore";
 import { useIssueSelectionStore } from "@/store/issueSelectionStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
@@ -28,6 +29,8 @@ const mockListIssues = vi.fn();
 const mockListPRs = vi.fn();
 const mockGetIssueByNumber = vi.fn();
 const mockGetPRByNumber = vi.fn();
+const mockGetIssuesByNumbers = vi.fn();
+const mockGetPRsByNumbers = vi.fn();
 
 // The shim merges `cwd` into the options object so assertions can keep
 // matching a single flat shape.
@@ -38,8 +41,8 @@ vi.mock("@/clients/forgeClient", () => ({
     getIssue: (cwd: string, issueNumber: number) => mockGetIssueByNumber(cwd, issueNumber),
     getPR: (cwd: string, prNumber: number) => mockGetPRByNumber(cwd, prNumber),
     getIssueUrl: vi.fn().mockResolvedValue("https://github.com/acme/repo/issues/1"),
-    getIssuesByNumbers: vi.fn().mockResolvedValue([]),
-    getPRsByNumbers: vi.fn().mockResolvedValue([]),
+    getIssuesByNumbers: (cwd: string, numbers: number[]) => mockGetIssuesByNumbers(cwd, numbers),
+    getPRsByNumbers: (cwd: string, numbers: number[]) => mockGetPRsByNumbers(cwd, numbers),
   },
 }));
 
@@ -261,6 +264,10 @@ beforeEach(() => {
   mockListPRs.mockReset();
   mockGetIssueByNumber.mockReset();
   mockGetPRByNumber.mockReset();
+  // Reset drops the default, and the hook calls `.filter` straight on the
+  // result — leave every batch lookup resolving to an empty array.
+  mockGetIssuesByNumbers.mockReset().mockResolvedValue([]);
+  mockGetPRsByNumbers.mockReset().mockResolvedValue([]);
   LiveTimeAgoMock.mockClear();
   dispatchMock.mockReset();
   notifyMock.mockReset();
@@ -2491,6 +2498,192 @@ describe("GitHubResourceList number-query chip (#6867)", () => {
       expect(screen.getByTestId("skeleton")).toBeTruthy();
     });
     expect(screen.queryByText("Showing issue #42")).toBeNull();
+  });
+
+  const FALLBACK_COPY = "Showing text matches — separate numbers with commas or spaces";
+
+  it("routes a trailing-comma list to the batch lookup, not full-text search", async () => {
+    mockGetIssuesByNumbers.mockResolvedValue([makeIssue(123), makeIssue(124)]);
+    useGitHubFilterStore.getState().setIssueSearchQuery("123, 124,");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing #123, #124")).toBeTruthy();
+    });
+    expect(mockGetIssuesByNumbers).toHaveBeenCalledWith("/test/proj", [123, 124]);
+    expect(mockListIssues).not.toHaveBeenCalled();
+    expect(screen.queryByText(FALLBACK_COPY)).toBeNull();
+  });
+
+  it("routes a whitespace-separated list to the batch lookup", async () => {
+    mockGetIssuesByNumbers.mockResolvedValue([makeIssue(12036), makeIssue(12037)]);
+    useGitHubFilterStore.getState().setIssueSearchQuery("12036 12037");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing #12036, #12037")).toBeTruthy();
+    });
+    expect(mockGetIssuesByNumbers).toHaveBeenCalledWith("/test/proj", [12036, 12037]);
+    expect(mockListIssues).not.toHaveBeenCalled();
+  });
+
+  it("caps an explicit list at the multi-fetch cap and says so", async () => {
+    const asked = Array.from({ length: MULTI_FETCH_CAP + 1 }, (_, i) => i + 1);
+    mockGetIssuesByNumbers.mockResolvedValue(asked.slice(0, MULTI_FETCH_CAP).map(makeIssue));
+    useGitHubFilterStore.getState().setIssueSearchQuery(asked.join(", "));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(`Showing first ${MULTI_FETCH_CAP} of ${asked.length} numbers (capped)`)
+      ).toBeTruthy();
+    });
+    expect(mockGetIssuesByNumbers).toHaveBeenCalledWith(
+      "/test/proj",
+      asked.slice(0, MULTI_FETCH_CAP)
+    );
+    // The point of the cap is one batch, not a sequential fan-out over the rest.
+    expect(mockGetIssuesByNumbers).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a list of exactly the cap uncapped", async () => {
+    const asked = Array.from({ length: MULTI_FETCH_CAP }, (_, i) => i + 1);
+    mockGetIssuesByNumbers.mockResolvedValue(asked.map(makeIssue));
+    useGitHubFilterStore.getState().setIssueSearchQuery(asked.join(", "));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing #1, #2, #3 + 17 more")).toBeTruthy();
+    });
+    expect(mockGetIssuesByNumbers).toHaveBeenCalledWith("/test/proj", asked);
+    expect(screen.queryByText(/\(capped\)/)).toBeNull();
+  });
+
+  it("caps the PR variant through its own batch lookup", async () => {
+    const asked = Array.from({ length: MULTI_FETCH_CAP + 5 }, (_, i) => i + 1);
+    mockGetPRsByNumbers.mockResolvedValue(
+      asked.slice(0, MULTI_FETCH_CAP).map((n) => ({
+        ...makeIssue(n),
+        isDraft: false,
+        ciStatus: "SUCCESS" as const,
+      }))
+    );
+    useGitHubFilterStore.getState().setPrSearchQuery(asked.join(" "));
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(`Showing first ${MULTI_FETCH_CAP} of ${asked.length} numbers (capped)`)
+      ).toBeTruthy();
+    });
+    expect(mockGetPRsByNumbers).toHaveBeenCalledWith("/test/proj", asked.slice(0, MULTI_FETCH_CAP));
+    expect(mockGetPRsByNumbers).toHaveBeenCalledTimes(1);
+    expect(mockListPRs).not.toHaveBeenCalled();
+  });
+
+  it("says the results are text matches when a number list fails to parse", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(500)]));
+    useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledWith(expect.objectContaining({ search: "123,,124" }));
+    });
+    await waitFor(() => {
+      expect(screen.getByText(FALLBACK_COPY)).toBeTruthy();
+    });
+    // The chip has to sit over the text-search rows it describes, not over a
+    // skeleton.
+    expect(screen.getByTestId("item-500")).toBeTruthy();
+    expect(mockGetIssuesByNumbers).not.toHaveBeenCalled();
+  });
+
+  it("holds the text-match chip back until the search settles", async () => {
+    mockListIssues.mockImplementation(() => new Promise(() => {}));
+    useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("skeleton")).toBeTruthy();
+    });
+    expect(screen.queryByText(FALLBACK_COPY)).toBeNull();
+  });
+
+  it("yields the chip slot to an error rather than claiming text matches", async () => {
+    mockListIssues.mockRejectedValue(new Error("Couldn't reach GitHub."));
+    useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Couldn't reach GitHub/)).toBeTruthy();
+    });
+    expect(screen.queryByText(FALLBACK_COPY)).toBeNull();
+  });
+
+  it("drops a stale exact-number miss when the query falls back to text search", async () => {
+    mockGetIssueByNumber.mockResolvedValue(null);
+    // Empty on purpose: a returned row would hide the empty state whether or
+    // not the stale miss was cleared, which is exactly how this test can pass
+    // without testing anything.
+    mockListIssues.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setIssueSearchQuery("#999");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/No issue #999 in this view/)).toBeTruthy();
+    });
+
+    // Falling through to text search must not leave the miss behind, or the
+    // empty state goes on naming #999 over rows that have nothing to do with it.
+    act(() => {
+      useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
+    });
+
+    // The empty state must stop naming #999 and start naming the query that
+    // actually ran.
+    await waitFor(() => {
+      expect(screen.getByText('No matches for "123,,124"')).toBeTruthy();
+    });
+    expect(screen.queryByText(/No issue #999 in this view/)).toBeNull();
+  });
+
+  it("yields the chip slot to a rate-limit pause", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([]));
+    setRateLimit(true, "primary", Date.now() + 60_000);
+    useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/paused/i)).toBeTruthy();
+    });
+    expect(screen.queryByText(FALLBACK_COPY)).toBeNull();
+  });
+
+  it("stays quiet for an ordinary text search that contains numbers", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(500)]));
+    useGitHubFilterStore.getState().setIssueSearchQuery("fix 123 crash");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(mockListIssues).toHaveBeenCalledWith(
+        expect.objectContaining({ search: "fix 123 crash" })
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Issue #500")).toBeTruthy();
+    });
+    expect(screen.queryByText(FALLBACK_COPY)).toBeNull();
   });
 });
 

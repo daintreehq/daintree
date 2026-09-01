@@ -8,8 +8,17 @@ export type NumberQuery =
 
 const OPEN_ENDED_RE = /^#?(\d+)\+$/;
 const RANGE_RE = /^#?(\d+)\.\.(\d+)$/;
-const COMMA_RE = /^#?\d+(\s*,\s*#?\d+)+$/;
-const SINGLE_RE = /^#?(\d+)$/;
+// Two or more numbers joined by a comma, whitespace, or an "and" that may
+// follow either. A trailing comma is tolerated because that is what pasting a
+// list leaves behind, and bare whitespace because that is what falls out of a
+// terminal. Anchored end to end: one stray word or symbol and the whole thing
+// stays a text search.
+//
+// Case-sensitive on purpose. GitHub search reads uppercase `AND`/`OR` as
+// boolean operators, so "123 AND 456" is a real full-text query and must not
+// be hijacked into a lookup.
+const NUMBER_LIST_RE = /^#?\d+(?:(?:\s*,\s*|\s+)(?:and\s+)?#?\d+)+\s*,?$/;
+const SINGLE_RE = /^#?(\d+)\s*,?$/;
 
 export function parseNumberQuery(query: string): NumberQuery | null {
   const trimmed = query.trim();
@@ -19,7 +28,7 @@ export function parseNumberQuery(query: string): NumberQuery | null {
   const openMatch = trimmed.match(OPEN_ENDED_RE);
   if (openMatch) {
     const from = parseInt(openMatch[1]!, 10);
-    if (from <= 0 || !Number.isFinite(from)) return null;
+    if (from <= 0 || !Number.isSafeInteger(from)) return null;
     return { kind: "open-ended", from };
   }
 
@@ -28,7 +37,8 @@ export function parseNumberQuery(query: string): NumberQuery | null {
   if (rangeMatch) {
     const from = parseInt(rangeMatch[1]!, 10);
     const to = parseInt(rangeMatch[2]!, 10);
-    if (from <= 0 || to <= 0 || !Number.isFinite(from) || !Number.isFinite(to)) return null;
+    if (from <= 0 || to <= 0 || !Number.isSafeInteger(from) || !Number.isSafeInteger(to))
+      return null;
     if (from > to) return null;
     const count = to - from + 1;
     const truncated = count > MULTI_FETCH_CAP;
@@ -40,14 +50,15 @@ export function parseNumberQuery(query: string): NumberQuery | null {
     };
   }
 
-  // Comma list: 123, 124 or #123, #124
-  if (COMMA_RE.test(trimmed)) {
-    const parts = trimmed.split(/\s*,\s*/);
+  // Number list: 123, 124 / 123 124 / #123, 124, and 125
+  if (NUMBER_LIST_RE.test(trimmed)) {
     const seen = new Set<number>();
     const numbers: number[] = [];
-    for (const part of parts) {
-      const num = parseInt(part.replace(/^#/, ""), 10);
-      if (num <= 0 || !Number.isFinite(num)) return null;
+    // The shape is already validated, so every run of digits is one of the
+    // requested numbers — separators and "and" contribute none.
+    for (const token of trimmed.match(/\d+/g) ?? []) {
+      const num = parseInt(token, 10);
+      if (num <= 0 || !Number.isSafeInteger(num)) return null;
       if (!seen.has(num)) {
         seen.add(num);
         numbers.push(num);
@@ -61,9 +72,32 @@ export function parseNumberQuery(query: string): NumberQuery | null {
   const singleMatch = trimmed.match(SINGLE_RE);
   if (singleMatch) {
     const num = parseInt(singleMatch[1]!, 10);
-    if (num <= 0 || !Number.isFinite(num)) return null;
+    if (num <= 0 || !Number.isSafeInteger(num)) return null;
     return { kind: "single", number: num };
   }
 
   return null;
+}
+
+/**
+ * True when a query {@link parseNumberQuery} rejected still reads as an
+ * attempt at a number list: two or more numbers with nothing between them but
+ * separators and the words "and"/"or".
+ *
+ * Deliberately narrow. A text search that merely contains digits — "2024
+ * roadmap", "fix 123 crash", a version like "1.2.3", a date like "2024-01-15"
+ * — is working exactly as intended, and telling someone their working search
+ * is a search is noise. Only inputs that were plainly meant as a lookup earn
+ * the hint.
+ */
+export function looksLikeNumberList(query: string): boolean {
+  const trimmed = query.trim();
+  if (!trimmed) return false;
+  if (parseNumberQuery(trimmed) !== null) return false;
+  // Connectors are the only words allowed through; anything else is prose.
+  // Lowercase only, for the same reason the grammar is: uppercase `AND`/`OR`
+  // is GitHub boolean search syntax and belongs to full-text search.
+  const withoutConnectors = trimmed.replace(/\b(?:and|or)\b/g, " ");
+  if (/[^\d#,;&\s]/.test(withoutConnectors)) return false;
+  return (trimmed.match(/\d+/g) ?? []).length >= 2;
 }
