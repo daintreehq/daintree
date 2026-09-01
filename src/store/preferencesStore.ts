@@ -22,6 +22,35 @@ export type DiffViewType = "split" | "unified";
 
 export type DiffFontSize = "s" | "m" | "l";
 
+/**
+ * Reading scale for rendered markdown, named by the rung of the shared type
+ * scale it selects rather than by a pixel value. Same reasoning as
+ * `DIFF_FONT_SIZE`'s S/M/L: a preference that stores its own number stops
+ * tracking the scale the moment the scale moves, and a stored index changes
+ * meaning the moment a rung is inserted. A rung name survives both.
+ */
+export type MarkdownFontSize = "2xs" | "xs" | "sm" | "base" | "lg" | "xl" | "2xl" | "3xl";
+
+/**
+ * The rungs in reading order — the stepper walks this, and it is also the
+ * closed set the persistence guard checks against. Denser near the 14px base
+ * where a reader adjusts by feel, wider at the top where each step has to be
+ * worth taking: 11 · 12 · 14 · 16 · 18 · 20 · 24 · 30.
+ */
+export const MARKDOWN_FONT_SIZE_STEPS: readonly MarkdownFontSize[] = [
+  "2xs",
+  "xs",
+  "sm",
+  "base",
+  "lg",
+  "xl",
+  "2xl",
+  "3xl",
+];
+
+/** Today's rendered-markdown scale, so an upgrade changes nothing until asked. */
+export const DEFAULT_MARKDOWN_FONT_SIZE: MarkdownFontSize = "sm";
+
 /** Seconds before a deleted worktree's surviving terminals auto-close (0 = never). */
 export type DeletedWorktreeCleanupSeconds = 0 | 30 | 60 | 300;
 
@@ -110,6 +139,13 @@ interface PreferencesState {
   /** Soft-wrap long lines in markdown Source view (panel + file viewer). */
   markdownWrapLines: boolean;
   setMarkdownWrapLines: (value: boolean) => void;
+  /**
+   * Reading scale for RENDERED markdown, shared by every surface that shows a
+   * document (file panel, file browser). One app-level value on purpose: a
+   * per-file or per-panel size makes paging through documents feel unstable.
+   */
+  markdownFontSize: MarkdownFontSize;
+  setMarkdownFontSize: (value: MarkdownFontSize) => void;
   lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>;
   setLastSelectedWorktreeRecipeIdByProject: (
     projectId: string,
@@ -212,6 +248,10 @@ function isDiffFontSize(value: unknown): value is DiffFontSize {
   return value === "s" || value === "m" || value === "l";
 }
 
+function isMarkdownFontSize(value: unknown): value is MarkdownFontSize {
+  return MARKDOWN_FONT_SIZE_STEPS.includes(value as MarkdownFontSize);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
@@ -244,6 +284,9 @@ function sanitizePersistedPreferences(
   if (typeof sanitized.diffFullFile !== "boolean") sanitized.diffFullFile = false;
   if (!isDiffFontSize(sanitized.diffFontSize)) sanitized.diffFontSize = "m";
   if (typeof sanitized.markdownWrapLines !== "boolean") sanitized.markdownWrapLines = true;
+  if (!isMarkdownFontSize(sanitized.markdownFontSize)) {
+    sanitized.markdownFontSize = DEFAULT_MARKDOWN_FONT_SIZE;
+  }
   if (typeof sanitized.showAgentTaskTitles !== "boolean") sanitized.showAgentTaskTitles = true;
   if (!isDeletedWorktreeCleanupSeconds(sanitized.deletedWorktreeCleanupSeconds)) {
     sanitized.deletedWorktreeCleanupSeconds = DELETED_WORKTREE_CLEANUP_DEFAULT;
@@ -300,6 +343,7 @@ type PreferencesPersistedState = Pick<
   | "diffFullFile"
   | "diffFontSize"
   | "markdownWrapLines"
+  | "markdownFontSize"
   | "deletedWorktreeCleanupSeconds"
   | "projectSwitcherOtherSortMode"
   | "projectSwitcherCollapsedBands"
@@ -326,6 +370,7 @@ const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
   diffFullFile: false,
   diffFontSize: "m",
   markdownWrapLines: true,
+  markdownFontSize: DEFAULT_MARKDOWN_FONT_SIZE,
   deletedWorktreeCleanupSeconds: DELETED_WORKTREE_CLEANUP_DEFAULT,
   projectSwitcherOtherSortMode: DEFAULT_OTHER_PROJECTS_SORT_MODE,
   projectSwitcherCollapsedBands: {},
@@ -453,6 +498,9 @@ function toPreferencesPersisted(
     diffFullFile: coerceBool(raw.diffFullFile, d.diffFullFile),
     diffFontSize: isDiffFontSize(raw.diffFontSize) ? raw.diffFontSize : d.diffFontSize,
     markdownWrapLines: coerceBool(raw.markdownWrapLines, d.markdownWrapLines),
+    markdownFontSize: isMarkdownFontSize(raw.markdownFontSize)
+      ? raw.markdownFontSize
+      : d.markdownFontSize,
     deletedWorktreeCleanupSeconds: isDeletedWorktreeCleanupSeconds(
       raw.deletedWorktreeCleanupSeconds
     )
@@ -563,6 +611,11 @@ function mergePreferencesPersistedWrite({
         inc.markdownWrapLines,
         disk.markdownWrapLines
       ),
+      markdownFontSize: pickFieldByWriterDelta(
+        base.markdownFontSize,
+        inc.markdownFontSize,
+        disk.markdownFontSize
+      ),
       deletedWorktreeCleanupSeconds: pickFieldByWriterDelta(
         base.deletedWorktreeCleanupSeconds,
         inc.deletedWorktreeCleanupSeconds,
@@ -648,6 +701,8 @@ export const usePreferencesStore = create<PreferencesState>()(
       setDiffFontSize: (value) => set({ diffFontSize: value }),
       markdownWrapLines: true,
       setMarkdownWrapLines: (value) => set({ markdownWrapLines: value }),
+      markdownFontSize: DEFAULT_MARKDOWN_FONT_SIZE,
+      setMarkdownFontSize: (value) => set({ markdownFontSize: value }),
       lastSelectedWorktreeRecipeIdByProject: {},
       setLastSelectedWorktreeRecipeIdByProject: (projectId, id) =>
         set((state) => ({
@@ -737,7 +792,7 @@ export const usePreferencesStore = create<PreferencesState>()(
       storage: createSafeJSONStorage<PreferencesPersistedState>({
         mergeOnWrite: mergePreferencesPersistedWrite,
       }),
-      version: 17,
+      version: 18,
       // Explicit persisted subset — matches the pre-existing default (setters are
       // dropped by JSON serialization); named so the write merge (#11351) has a
       // typed persisted shape to reconcile.
@@ -757,6 +812,7 @@ export const usePreferencesStore = create<PreferencesState>()(
         diffFullFile: state.diffFullFile,
         diffFontSize: state.diffFontSize,
         markdownWrapLines: state.markdownWrapLines,
+        markdownFontSize: state.markdownFontSize,
         deletedWorktreeCleanupSeconds: state.deletedWorktreeCleanupSeconds,
         projectSwitcherOtherSortMode: state.projectSwitcherOtherSortMode,
         projectSwitcherCollapsedBands: state.projectSwitcherCollapsedBands,
@@ -901,6 +957,13 @@ export const usePreferencesStore = create<PreferencesState>()(
             persisted.projectSwitcherCollapsedBands = {};
           }
         }
+        if (version < 18 && isRecord(persisted)) {
+          // Rendered markdown had no reading control before this shipped, so
+          // everyone starts on the rung it has always rendered at (#12134).
+          if (!isMarkdownFontSize(persisted.markdownFontSize)) {
+            persisted.markdownFontSize = DEFAULT_MARKDOWN_FONT_SIZE;
+          }
+        }
         return persisted as PreferencesState;
       },
     }
@@ -911,5 +974,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean; keyboardLayoutConfirmationsByBinding: Record<string, number> }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; markdownFontSize: MarkdownFontSize; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean; keyboardLayoutConfirmationsByBinding: Record<string, number> }",
 });

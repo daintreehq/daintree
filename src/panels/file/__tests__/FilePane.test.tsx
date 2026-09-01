@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
-import { render, act, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, act, cleanup, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitStatus } from "@shared/types/git";
 // Type-only: erased before the vi.mock factory runs, so it cannot pull the real
@@ -87,6 +87,8 @@ vi.mock("@/store/preferencesStore", () => ({
     selector({
       markdownWrapLines: false,
       setMarkdownWrapLines: vi.fn(),
+      markdownFontSize: "lg",
+      setMarkdownFontSize: vi.fn(),
       diffViewType: "unified",
       diffWrapLines: false,
       diffIgnoreWhitespace: false,
@@ -158,15 +160,25 @@ vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 // a byte-identical daintree-file:// src and never refetches. Picked off the real
 // prop type rather than hand-written, so renaming either prop fails here instead
 // of silently capturing undefined forever.
-type CapturedMarkdownProps = Pick<MarkdownViewerProps, "onRendered" | "cacheBust">;
+type CapturedMarkdownProps = Pick<MarkdownViewerProps, "onRendered" | "cacheBust" | "fontSize">;
 const markdownViewerProps = vi.hoisted(() => ({
-  current: null as { onRendered?: () => void; cacheBust?: string } | null,
+  current: null as
+    | { onRendered?: () => void; cacheBust?: string; fontSize?: string }
+    | null,
 }));
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
   MarkdownViewer: (props: CapturedMarkdownProps) => {
     markdownViewerProps.current = props;
     return <div data-testid="markdown-viewer-mock" />;
   },
+}));
+// The real control is a Popover, whose open/close choreography jsdom does not
+// drive; what this suite owns is which modes it appears in and the value it is
+// handed. Its own behaviour is covered in MarkdownTextSizeControl.test.tsx.
+vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
+  MarkdownTextSizeControl: (props: { value: string }) => (
+    <div data-testid="markdown-text-size-mock" data-value={props.value} />
+  ),
 }));
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
   // Surfaces `content` so a re-read's result is observable — the only way to
@@ -983,6 +995,38 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     renderPane("/repo/docs/spec.md", "rendered");
     expect(await screen.findByTestId("markdown-viewer-mock")).toBeTruthy();
     expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
+  });
+
+  // #12134: the reading control is the mirror of Wrap — each owns the toolbar
+  // slot in the mode it applies to, so neither surfaces where it does nothing.
+  it("offers the text-size control for rendered Markdown only, carrying the global size", async () => {
+    renderPane("/repo/docs/spec.md", "rendered");
+    const control = await screen.findByTestId("markdown-text-size-mock");
+    expect(control.getAttribute("data-value")).toBe("lg");
+    expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
+
+    await waitFor(() => expect(markdownViewerProps.current?.fontSize).toBe("lg"));
+  });
+
+  it("hides it in Markdown Source, where the scale reaches nothing", async () => {
+    renderPane("/repo/docs/spec.md", "source");
+    await screen.findByTestId("markdown-viewer-mock");
+
+    expect(screen.queryByTestId("markdown-text-size-mock")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Wrap long lines" })).not.toBeNull();
+    // The rung must not reach CodeMirror through the shared viewer either.
+    expect(markdownViewerProps.current?.fontSize).toBeUndefined();
+  });
+
+  it("hides it for rendered HTML and for a plain file, which have no prose to tune", async () => {
+    renderPane("/repo/docs/page.html", "rendered");
+    await screen.findByTestId("html-viewer-mock");
+    expect(screen.queryByTestId("markdown-text-size-mock")).toBeNull();
+
+    cleanup();
+    renderPane("/repo/src/index.css", "source");
+    await screen.findByTestId("code-viewer-mock");
+    expect(screen.queryByTestId("markdown-text-size-mock")).toBeNull();
   });
 
   // #11587: images embedded in the document resolve to daintree-file:// URLs

@@ -322,6 +322,42 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
   // is not pushed across views — an already-hydrated view can still show the
   // hint once before it reloads. What must not happen is that view's write
   // erasing the record, sending the hint back to every view on next launch.
+  // The reading size is one global value shared by every project view, so a
+  // stale view writing any other preference must not hand it back (#12134).
+  it("keeps a sibling's reading size through an unrelated preference write", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setDockDensity("compact");
+
+    const disk = readBlob(backing);
+    disk.state.markdownFontSize = "2xl";
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setShowProjectPulse(false);
+
+    const written = readBlob(backing);
+    expect(written.state.markdownFontSize).toBe("2xl");
+    expect(written.state.showProjectPulse).toBe(false);
+  });
+
+  it("carries this view's reading size while keeping a sibling's unrelated scalar", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setDockDensity("compact");
+
+    const disk = readBlob(backing);
+    disk.state.reduceAnimations = true;
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setMarkdownFontSize("lg");
+
+    const written = readBlob(backing);
+    expect(written.state.markdownFontSize).toBe("lg");
+    expect(written.state.reduceAnimations).toBe(true);
+  });
+
   it("keeps a sibling's spent prefix hint on disk through an unrelated write", async () => {
     const backing = installLocalStorage({});
     const { usePreferencesStore: store } = await import("../preferencesStore");

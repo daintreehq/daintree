@@ -27,12 +27,26 @@ vi.mock("@/services/ActionService", () => ({
 // observable — without it the mode plumbing could be deleted and stay green.
 // cacheBust rides along for the same reason (#11587).
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
-  MarkdownViewer: (props: Pick<MarkdownViewerProps, "viewMode" | "cacheBust">) => (
+  MarkdownViewer: (props: Pick<MarkdownViewerProps, "viewMode" | "cacheBust" | "fontSize">) => (
     <div
       data-testid="markdown-viewer-mock"
       data-view-mode={props.viewMode}
       data-cache-bust={props.cacheBust ?? ""}
+      data-font-size={props.fontSize ?? ""}
     />
+  ),
+}));
+// The reading size is one app-level preference shared with the file panel; this
+// suite owns the toolbar gate and the forwarding, not the store's persistence.
+vi.mock("@/store/preferencesStore", () => ({
+  usePreferencesStore: (selector: (state: unknown) => unknown) =>
+    selector({ markdownFontSize: "xl", setMarkdownFontSize: vi.fn() }),
+}));
+// A Popover, whose open/close choreography jsdom does not drive. Its own
+// behaviour is covered in MarkdownTextSizeControl.test.tsx.
+vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
+  MarkdownTextSizeControl: (props: { value: string }) => (
+    <div data-testid="markdown-text-size-mock" data-value={props.value} />
   ),
 }));
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
@@ -273,6 +287,10 @@ function currentCacheBust(): string | null {
   return screen.getByTestId("markdown-viewer-mock").getAttribute("data-cache-bust");
 }
 
+function currentFontSize(): string | null {
+  return screen.getByTestId("markdown-viewer-mock").getAttribute("data-font-size");
+}
+
 beforeEach(() => {
   readMock.mockReset();
   readMock.mockResolvedValue({ content: "# hello" });
@@ -344,6 +362,39 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
     expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
     expect(screen.queryByTestId("markdown-viewer-mock")).toBeNull();
+  });
+});
+
+describe("FileBrowserViewer rendered-markdown text size (#12134)", () => {
+  it("offers the control and carries the shared size into the rendered document", async () => {
+    renderViewer("/repo/docs/spec.md");
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+
+    const control = await screen.findByTestId("markdown-text-size-mock");
+    // The same global value the file panel reads — a document is the size the
+    // reader last chose, whichever surface they opened it in.
+    expect(control.getAttribute("data-value")).toBe("xl");
+    expect(currentFontSize()).toBe("xl");
+  });
+
+  it("withdraws it in Source, where the scale reaches nothing", async () => {
+    renderViewer("/repo/docs/spec.md");
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+
+    await clickMode("Source");
+    await waitFor(() => expect(currentViewMode()).toBe("source"));
+    expect(screen.queryByTestId("markdown-text-size-mock")).toBeNull();
+    // The rung must not follow the mode switch into CodeMirror.
+    expect(currentFontSize()).toBe("");
+  });
+
+  it("withdraws it for a non-markdown file, which has no prose to tune", async () => {
+    const { rerender } = renderViewer("/repo/docs/spec.md");
+    await screen.findByTestId("markdown-text-size-mock");
+
+    rerender(viewerJsx("/repo/src/notes.txt"));
+    await screen.findByTestId("code-viewer-mock");
+    expect(screen.queryByTestId("markdown-text-size-mock")).toBeNull();
   });
 });
 

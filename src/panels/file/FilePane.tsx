@@ -21,6 +21,7 @@ import { FolderOpen, FolderTree } from "@/components/icons";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
+import { MarkdownTextSizeControl } from "@/components/Markdown/MarkdownTextSizeControl";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
@@ -266,6 +267,10 @@ export function FilePane({
   const setFilePanelPath = usePanelStore((state) => state.setFilePanelPath);
   const markdownWrapLines = usePreferencesStore((state) => state.markdownWrapLines);
   const setMarkdownWrapLines = usePreferencesStore((state) => state.setMarkdownWrapLines);
+  // Global, like wrap: a reading size that reset per panel or per file would
+  // make paging through documents feel unstable (#12134).
+  const markdownFontSize = usePreferencesStore((state) => state.markdownFontSize);
+  const setMarkdownFontSize = usePreferencesStore((state) => state.setMarkdownFontSize);
   // Shared with the diff panel so a user's split/unified and wrap choices carry
   // across every surface that shows a diff.
   const diffViewType = usePreferencesStore((state) => state.diffViewType);
@@ -1021,6 +1026,16 @@ export function FilePane({
         )}
         <FileViewerToolbar.Path path={displayPath} copied={pathCopied} onCopy={handleCopyPath} />
         <FileViewerToolbar.Actions>
+          {/* The mirror of Wrap below it: each owns the slot in the mode it
+              applies to, so rendered and source both carry exactly one
+              markdown-specific control rather than a row that grows. */}
+          {isMarkdown && viewMode === "rendered" && (
+            <MarkdownTextSizeControl
+              value={markdownFontSize}
+              onValueChange={setMarkdownFontSize}
+              data-testid="file-pane-text-size"
+            />
+          )}
           {isMarkdown && viewMode === "source" && (
             <FileViewerToolbar.IconButton
               label="Wrap long lines"
@@ -1320,6 +1335,7 @@ export function FilePane({
               rootPath={effectiveRootPath}
               viewMode="rendered"
               wrapLines={markdownWrapLines}
+              fontSize={markdownFontSize}
               cacheBust={String(reloadNonce)}
               onRendered={heightHold.handleRendered}
             />
