@@ -854,7 +854,10 @@ describe("ActionService", () => {
     // `confirmed` on the action's own args, so a confirm-gated action re-asked
     // after the host modal was approved and returned `ok` having done nothing.
     describe("host-attested confirmation reaches run() (#12120)", () => {
-      function confirmAction(run: ReturnType<typeof vi.fn>): ActionDefinition {
+      // Typed as the definition's own `run`, not `ReturnType<typeof vi.fn>` —
+      // that resolves to `Mock<Procedure | Constructable>`, whose Constructable
+      // arm carries no call signature and so satisfies no function type.
+      function confirmAction(run: ActionDefinition["run"]): ActionDefinition {
         return {
           id: "actions.list" as ActionId,
           title: "Test Action",
