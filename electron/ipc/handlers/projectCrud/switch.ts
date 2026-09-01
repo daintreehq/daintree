@@ -27,7 +27,11 @@ import {
   TERMINAL_FIELD_LEVEL_MERGE,
 } from "../terminalLayout.js";
 import { sanitizeTabGroups } from "../../../schemas/index.js";
-import { mergeIdArray, mergeRecord } from "../../../../shared/utils/layoutMerge.js";
+import {
+  decodeIdArrayDelta,
+  mergeIdArray,
+  mergeRecord,
+} from "../../../../shared/utils/layoutMerge.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { Project } from "../../../types/index.js";
 import type { ProjectSwitchOutgoingState } from "../../../../shared/types/ipc/project.js";
@@ -362,6 +366,14 @@ async function persistOutgoingProjectState(
   await projectStore.enqueueProjectStateUpdate(previousProjectId, (existing) => {
     const terminalDelta = outgoingState.terminalDelta;
     const tabGroupDelta = outgoingState.tabGroupDelta;
+    const decodedTerminalDelta =
+      terminalDelta && outgoingState.terminals
+        ? decodeIdArrayDelta(terminalDelta, outgoingState.terminals)
+        : undefined;
+    const decodedTabGroupDelta =
+      tabGroupDelta && outgoingState.tabGroups
+        ? decodeIdArrayDelta(tabGroupDelta, outgoingState.tabGroups)
+        : undefined;
     // With a delta, merge by id so a stale outgoing snapshot only affects the
     // entries this window actually changed, preserving a sibling window's
     // concurrent additions/moves/deletions (#11350). Without one, fall back to
@@ -369,30 +381,30 @@ async function persistOutgoingProjectState(
     const mergedTerminals =
       validTerminals === undefined
         ? undefined
-        : terminalDelta
+        : decodedTerminalDelta
           ? mergeIdArray(
               existing?.terminals ?? [],
               validTerminals,
-              terminalDelta.changedIds,
-              terminalDelta.removedIds,
+              decodedTerminalDelta.changedIds,
+              decodedTerminalDelta.removedIds,
               {
                 // Same out-of-band-field policy as the setTerminals handler: a
                 // stale outgoing snapshot must not erase a session id Main
                 // captured on shutdown (#11461).
                 fieldLevelMerge: TERMINAL_FIELD_LEVEL_MERGE,
-                fieldEdits: sanitizeFieldEdits(terminalDelta.fieldEdits),
+                fieldEdits: sanitizeFieldEdits(decodedTerminalDelta.fieldEdits),
               }
             )
           : validTerminals;
     const mergedTabGroups =
       validTabGroups === undefined
         ? undefined
-        : tabGroupDelta
+        : decodedTabGroupDelta
           ? mergeIdArray(
               existing?.tabGroups ?? [],
               validTabGroups,
-              tabGroupDelta.changedIds,
-              tabGroupDelta.removedIds
+              decodedTabGroupDelta.changedIds,
+              decodedTabGroupDelta.removedIds
             )
           : validTabGroups;
     // Sizes carry no delta metadata, so a full replace would drop the entries a

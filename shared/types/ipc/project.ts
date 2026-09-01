@@ -1,7 +1,7 @@
 import type { Project, TerminalSnapshot } from "../project.js";
 import type { TabGroup } from "../panel.js";
 import type { AgentState, WaitingReason } from "../agent.js";
-import type { IdArrayDelta } from "../../utils/layoutMerge.js";
+import type { IdArrayDelta, IdArrayDeltaWire } from "../../utils/layoutMerge.js";
 import type { HydrateResult } from "./app.js";
 
 /**
@@ -64,8 +64,8 @@ export interface ProjectSwitchOutgoingState {
    * doesn't clobber that window's concurrent layout changes (#11350). Absent =
    * legacy full replace.
    */
-  terminalDelta?: IdArrayDelta;
-  tabGroupDelta?: IdArrayDelta;
+  terminalDelta?: IdArrayDeltaWire;
+  tabGroupDelta?: IdArrayDeltaWire;
   /**
    * What this window changed in `draftInputs` relative to its last-persisted
    * baseline (`changedIds`/`removedIds` are terminal ids). When present, Main
