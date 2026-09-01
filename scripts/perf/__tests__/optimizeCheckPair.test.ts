@@ -41,12 +41,14 @@ function scratch(): string {
 }
 
 /**
- * Arms are stamped relative to now, one minute in the future by default, so
- * they land AFTER any precommit record a test writes. The gate requires the
- * decision to predate the numbers, and a fixed calendar date would make that
- * assertion pass or fail depending on the wall clock the suite runs at.
+ * Arms are stamped an hour into the future, so they land AFTER any precommit
+ * record a test writes. The gate requires the decision to predate the numbers,
+ * and a fixed calendar date would make that assertion pass or fail depending on
+ * the wall clock the suite runs at. An hour rather than a minute because this
+ * file spawns a subprocess per case: a one-minute lead would turn a slow run
+ * into a spurious chronology failure.
  */
-const ARM_EPOCH = Date.now() + 60_000;
+const ARM_EPOCH = Date.now() + 3_600_000;
 
 type ArmSpec = {
   label: string;
@@ -393,8 +395,46 @@ describe("check-pair against a precommit record", () => {
       "--allow-guard-regression",
       "residentBytes",
     ]);
-    expect(out).toContain("UNDECLARED residentBytes");
+    expect(out).toContain(
+      "FAIL  --allow-guard-regression residentBytes was declared in the record"
+    );
+    expect(status).toBe(1);
+  });
+
+  // Regression test: an earlier version computed the declaration lock AFTER the
+  // zero-baseline branch, so every count guard reading zero on a healthy run --
+  // which is most of them -- took the command-line flag on its own.
+  it("holds the declaration lock for a guard whose champion reads zero", () => {
+    const dir = scratch();
+    expect(precommit(dir, ["--guard", "residentBytes:5"]).status).toBe(0);
+    const paths = writeInterleavedArms(dir, [50, 50.4, 50.2], [44, 43.6, 44.2], {
+      guardChamp: 0,
+      guardCand: 12,
+    });
+    const { status, out } = ab(paths, ["--precommit", join(dir, "precommit.json")]);
+    expect(out).toContain("BREACH  residentBytes");
+    expect(out).toContain("champion is zero");
     expect(status).toBe(4);
+  });
+
+  it("refuses a guard reading below zero rather than inverting its direction", () => {
+    const dir = scratch();
+    expect(precommit(dir, ["--guard", "residentBytes:5"]).status).toBe(0);
+    const paths = writeInterleavedArms(dir, [50, 50.4, 50.2], [44, 43.6, 44.2], {
+      guardChamp: -10,
+      guardCand: -5,
+    });
+    const { status, out } = ab(paths, ["--precommit", join(dir, "precommit.json")]);
+    expect(out).toContain("INVALID residentBytes");
+    expect(status).toBe(4);
+  });
+
+  it("refuses an allowance flag with no record to declare it", () => {
+    const dir = scratch();
+    const paths = writeInterleavedArms(dir, [50, 50.4, 50.2], [44, 43.6, 44.2]);
+    const { status, out } = ab(paths, ["--allow-guard-regression", "residentBytes"]);
+    expect(out).toContain("--allow-guard-regression needs --precommit");
+    expect(status).toBe(2);
   });
 
   it("refuses a declared trade for a guard that is not being watched", () => {

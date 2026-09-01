@@ -377,6 +377,32 @@ function precommitChecks(args, arms) {
     );
   }
 
+  // Every allowance name, not only the ones that end up breaching. A flag
+  // naming a guard that is not in the record — or not a guard at all — is
+  // either a typo or an exception someone expected to be granted, and silence
+  // on it is how the next run inherits a trade nobody agreed to.
+  //
+  // This lives INSIDE precommitChecks deliberately. Both modes call it before
+  // the sweep that acts on failed checks; registering it out at call-site level
+  // put it after that sweep, where a FAIL row prints and the run still exits 0.
+  // That mistake has now been made three times in this file.
+  const declaredTrades = new Set(record.allowedGuardRegressions ?? []);
+  const guardNames = new Set((record.guards ?? []).map((guard) => guard.name));
+  for (const name of args.allowedGuardRegressions) {
+    check(
+      guardNames.has(name),
+      `--allow-guard-regression ${name} names a precommitted guard`,
+      guardNames.has(name) ? "yes" : "that metric is not one of the record's guards"
+    );
+    check(
+      declaredTrades.has(name),
+      `--allow-guard-regression ${name} was declared in the record`,
+      declaredTrades.has(name)
+        ? "declared before the baseline"
+        : "not declared — a trade named only on this command line was chosen after the numbers"
+    );
+  }
+
   const { digest, fileCount } = harnessDigest();
   check(
     digest === record.harnessDigest,
@@ -616,6 +642,13 @@ if (args.expectBeforeSha || args.expectAfterSha) {
   );
 }
 if (args.files.length > 0) usageError("`ab` takes arms via --champ/--cand, not positionally");
+
+if (args.allowedGuardRegressions.length > 0 && !args.precommit) {
+  usageError(
+    "--allow-guard-regression needs --precommit: the trade is only meaningful against the record " +
+      "that declared it, and accepted without one it is an exception granted after the numbers"
+  );
+}
 
 // Default 2x the threshold. A machine whose champion arms disagree by twice the
 // difference being claimed is not a quiet machine, and condition 3 would reject
@@ -940,42 +973,59 @@ for (const guard of precommit?.guards ?? []) {
   }
   const champG = middle(champSide);
   const candG = middle(candSide);
-  if (champG === 0) {
-    guardRows.push({
-      name: guard.name,
-      status: candG === 0 ? "OK" : "WORSE",
-      detail: `${num(champG)} → ${num(candG)} (champion is zero, so no percentage)`,
-      breach: candG !== 0 && !args.allowedGuardRegressions.includes(guard.name),
-    });
-    continue;
-  }
-  // Cost metrics: up is worse.
-  const move = ((candG - champG) / champG) * 100;
-  const machineDependent = !isMachineIndependent(guard.class ?? classifyTarget(guard.name));
-  const withinNoise = machineDependent && Math.abs(move) <= drift;
+
   // Declared in the record AND named on the command line. The flag alone would
   // reproduce the problem the lock exists to prevent: measure, see the breach,
   // add the flag, re-run the same arms, call it a CLAIM. A trade discovered
   // mid-run is a NO CLAIM — precommit it in a fresh directory and record why
   // the first decision was abandoned.
+  //
+  // Both are computed BEFORE the zero-baseline branch below. An earlier version
+  // computed them after it, so a guard whose champion read zero — every count
+  // guard on a healthy run — took the flag on its own and skipped the lock
+  // entirely, which is the same hindsight hole one metric class along.
+  const flagged = args.allowedGuardRegressions.includes(guard.name);
   const declared = precommit
     ? (precommit.allowedGuardRegressions ?? []).includes(guard.name)
     : true;
-  const allowed = args.allowedGuardRegressions.includes(guard.name) && declared;
-  const breach = move > guard.tolerancePct && !withinNoise && !allowed;
+  const allowed = flagged && declared;
+  const label = (worse) =>
+    !worse ? "OK" : allowed ? "ALLOWED" : flagged ? "UNDECLARED" : "BREACH";
+
+  // A cost metric below zero is not a cost, and the percentage below divides by
+  // the champion: -10 → -5 is an increase, and therefore worse, but reads as
+  // -50% and passes. Same trap the target readings already refuse.
+  if (champG < 0 || candG < 0) {
+    guardRows.push({
+      name: guard.name,
+      status: "INVALID",
+      detail: `${num(champG)} → ${num(candG)} — a guard below zero is not a cost reading, so no direction can be inferred`,
+      breach: true,
+    });
+    continue;
+  }
+
+  if (champG === 0) {
+    const worse = candG > 0;
+    guardRows.push({
+      name: guard.name,
+      status: label(worse),
+      detail: `${num(champG)} → ${num(candG)} (champion is zero, so no percentage)`,
+      breach: worse && !allowed,
+    });
+    continue;
+  }
+
+  // Cost metrics: up is worse.
+  const move = ((candG - champG) / champG) * 100;
+  const machineDependent = !isMachineIndependent(guard.class ?? classifyTarget(guard.name));
+  const withinNoise = machineDependent && Math.abs(move) <= drift;
+  const over = move > guard.tolerancePct && !withinNoise;
   guardRows.push({
     name: guard.name,
-    status: breach
-      ? args.allowedGuardRegressions.includes(guard.name) && !declared
-        ? "UNDECLARED"
-        : "BREACH"
-      : allowed && move > guard.tolerancePct
-        ? "ALLOWED"
-        : withinNoise
-          ? "NOISE"
-          : "OK",
+    status: over ? label(true) : withinNoise ? "NOISE" : "OK",
     detail: `${num(champG)} → ${num(candG)}  ${move >= 0 ? "+" : ""}${move.toFixed(1)}% ${move > 0 ? "worse" : "better"}  tolerance ${guard.tolerancePct}%${machineDependent ? " (machine-dependent)" : ""}`,
-    breach,
+    breach: over && !allowed,
   });
 }
 const guardBreaches = guardRows.filter((row) => row.breach).map((row) => row.name);

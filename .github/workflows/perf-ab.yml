@@ -149,8 +149,11 @@ jobs:
         # Before `npm ci`, not after: one install serves both arms, so if the
         # manifests diverge the base arm would run against the candidate's
         # node_modules and the comparison would be measuring the install.
-        # Workspace manifests count — `packages/*` and `plugins/*` are in the
-        # install graph, so a change to any of them moves what gets installed.
+        # Everything in the install graph, not just the root: `packages/*` are
+        # npm workspaces and the root takes two `file:` dependencies on
+        # `electron/native/*`, so a manifest change there moves what gets
+        # installed too. Git pathspec `*` crosses `/`, so one level of glob
+        # already reaches nested paths and no `:(glob)` magic is needed.
         shell: bash
         env:
           BASE_SHA: ${{ inputs.base_sha }}
@@ -159,7 +162,7 @@ jobs:
           set -euo pipefail
           changed=$(git diff --name-only "$BASE_SHA" "$CAND_SHA" -- \
             package.json package-lock.json \
-            "packages/*/package.json" "plugins/*/package.json" "plugins/*/*/package.json")
+            "packages/*/package.json" "electron/native/*/package.json")
           if [ -n "$changed" ]; then
             echo "::error::These trees want different dependencies, so one npm ci cannot serve both arms:"
             echo "$changed"
@@ -195,7 +198,8 @@ jobs:
         # once, against the candidate tree: node_modules is deliberately NOT
         # reinstalled between arms, because a dependency difference between the
         # two trees would then be measured as a code difference. The manifest
-        # check below is what makes that sound rather than merely convenient.
+        # guard that runs before `npm ci` is what makes that sound rather than
+        # merely convenient.
         #
         # Every dispatch input arrives as an environment variable and is quoted
         # at the point of use. Interpolating `${{ inputs.x }}` into the script
@@ -242,7 +246,12 @@ jobs:
             git checkout "$BASE_SHA" -- .agents/skills/optimize/
             echo "Gate scripts restored from the champion tree $BASE_SHA."
           else
-            echo "::warning::The champion tree has no gate scripts, so the candidate's own copy is judging it. Read this leg's verdict knowing that."
+            # Fail closed. Warning and carrying on would let a candidate supply
+            # the judge that clears it, which is the one thing this step exists
+            # to prevent. The only tree without these scripts is the commit that
+            # introduced them; every real branch point off develop carries them.
+            echo "::error::The champion tree $BASE_SHA has no gate scripts, so only the candidate's own copy could judge it. Refusing rather than trusting the tree under review. Dispatch against a branch point that carries .agents/skills/optimize/."
+            exit 1
           fi
 
       - name: Gate the arms and rule on the claim

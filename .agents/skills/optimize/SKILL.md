@@ -206,7 +206,7 @@ The old form of this skill made a human name the metric, the predicate, the guar
 
 1. **The target metric.** One scalar that can go down (or up, with `--higher-is-better`). Prefer, in order: a `count`, a `size`, or a structural `ratio` from the scenario's own metrics; then `p50Ms`; then a per-operation duration the scenario reports. **Never a `p95Ms`, `p99Ms` or `maxMs`** — `precommit.mjs` refuses those below 59 iterations because covering the 95th percentile with 95% confidence needs `ln(.05)/ln(.95) ≈ 59` samples and a p99 needs ~299. Below that a p95 is the second-largest reading with a percentage printed next to it. Prefer a deterministic class when the scenario offers one: it needs no interleaved A/B, no threshold you have to defend, and it is the only class the cross-OS legs can claim.
 2. **The predicate set.** The scenario's entire `correctness` array. Not a subset.
-3. **The guards.** Every other metric the scenario emits, passed as `--guard <name>:<tolerance>`. Tolerance by class: **10%** for `duration`, `memory`, `derived-ratio`; **5%** for `count`, `size`, `ratio`. These are enforced, not advisory — `check-pair.mjs` makes a breach its fourth condition. A guard you do not precommit is a cost nobody is watching for, and the verdict says so explicitly when the list is empty.
+3. **The guards.** Every other metric the scenario emits, passed as `--guard <name>:<tolerance>`. If you already know one will be traded away, declare it now with `--allow-guard-regression <name>` — afterwards is too late. Tolerance by class: **10%** for `duration`, `memory`, `derived-ratio`; **5%** for `count`, `size`, `ratio`. These are enforced, not advisory — `check-pair.mjs` makes a breach its fourth condition. A guard you do not precommit is a cost nobody is watching for, and the verdict says so explicitly when the list is empty.
 4. **The threshold.** The minimum improvement you will call real. For a deterministic target, 1%. For a machine-dependent target, `max(5%, 2 × the drift you saw in the probe)`. Precommit it; do not revisit it.
 5. **The protocol.** Mode from the scenario's own `modes` (prefer `smoke` while iterating). Iterations: 5 for a deterministic target, 20 for anything else. Warmups: the scenario's own default unless it has none, then 3.
 
@@ -292,11 +292,14 @@ npm run perf compare .tmp/opt/<dir>/best.json .tmp/opt/<dir>/h<k>.json
    - **5** (`ab` only) → champion drift exceeded the ceiling: the machine could not resolve a difference this size. **Not a disproof.** Do not revert on it. Cool the machine, close whatever is running, measure the same pair again. If it will not settle, raise the iterations or record that this target cannot be measured here.
    - `REFUSED` in `perf compare` → the comparison did not happen for a reason `check-pair.mjs` did not predict. Stop and find out what.
 5. **Check the predicate** on the round's own JSON. Unhealthy → revert, record, next hypothesis.
-6. **The guards are checked for you.** `check-pair.mjs` reads them out of the precommit record and rules on them as its fourth condition, so a change that wins its target and doubles the metric beside it is a `NO CLAIM` (exit 4) rather than a green table. Guards are cost metrics — up is worse — and machine-dependent ones are judged against the same drift **D** as the target, because a guard that moved less than D has not been _shown_ to move. To keep a deliberate trade, name it: `--allow-guard-regression <name>` on the command line that produces the verdict, and justify it in the report. Accepting it any other way is accepting it after seeing the number.
-7. **Decide:**
-   - Improvement over **best**, predicate healthy, guards inside tolerance → confirm it reproduces. For a `count`, `size` or `ratio` one clean re-measurement is enough. For anything else run the paired A/B in §Claim. Then KEEP: the `h<k>` commit becomes the new champion and `best.json` its measurement.
-   - No movement, or inside the noise → REVERT with `git reset --hard <champion sha>`. Record the disproof; it has value.
-   - Regression → REVERT.
+6. **The guards are checked for you.** `check-pair.mjs` reads them out of the precommit record and rules on them as its fourth condition, so a change that wins its target and doubles the metric beside it is a `NO CLAIM` (exit 4) rather than a green table. Guards are cost metrics — up is worse — and machine-dependent ones are judged against the same drift **D** as the target, because a guard that moved less than D has not been _shown_ to move. To keep a deliberate trade it must be **declared in the precommit record before the baseline** (`precommit.mjs --allow-guard-regression <name>`) _and_ named on the command line that produces the verdict. Either alone is refused: the flag on its own is an exception granted after the numbers, which is the whole thing the lock exists to stop. A trade you only discover mid-run is a `NO CLAIM` — precommit it in a fresh directory and record why the first decision was abandoned.
+
+The verdict labels every guard: `OK`; `NOISE` (moved less than drift D, so not shown to move); `ALLOWED` (declared and flagged); `UNDECLARED` (flagged but not in the record — still a breach); `BREACH`; `ABSENT` (stopped being emitted, and a guard that vanished is not a guard that passed); `INVALID` (a reading below zero, where no direction can be inferred). 7. **Decide:**
+
+- Improvement over **best**, predicate healthy, guards inside tolerance → confirm it reproduces. For a `count`, `size` or `ratio` one clean re-measurement is enough. For anything else run the paired A/B in §Claim. Then KEEP: the `h<k>` commit becomes the new champion and `best.json` its measurement.
+- No movement, or inside the noise → REVERT with `git reset --hard <champion sha>`. Record the disproof; it has value.
+- Regression → REVERT.
+
 8. **Run the tests covering every file you touched** before the next round, via §Checks. A round that breaks a test and moves on compounds, and phase 8 will make you find it later at much greater cost.
 9. Update the ledger. Go again.
 
@@ -367,18 +370,29 @@ An improvement measured on one machine is a claim about one machine. Local first
 **GitHub legs — counts, sizes and ratios only.** `.github/workflows/perf-ab.yml` measures both trees in one job on one runner and gates the result with `check-pair.mjs ab --cross-machine`, which refuses any target that is not machine-independent.
 
 ```bash
-gh workflow run perf-ab.yml --ref "$(git branch --show-current)" \
+# Stamp the window BEFORE dispatching: GitHub can set createdAt before
+# `gh workflow run` returns, and a SINCE captured afterwards excludes the run
+# you just started.
+SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ); BRANCH=$(git branch --show-current)
+
+gh workflow run perf-ab.yml --ref "$BRANCH" \
   -f base_sha=<branch point> -f cand_sha=<final sha> \
   -f scenario=<ID> -f target=<metric path> -f predicates=<comma separated> \
   -f mode=<mode> -f iterations=<N> -f warmups=<W> -f threshold=<pct> \
   -f higher_is_better=<true|false> -f os=all
 
-# Dispatch returns nothing useful, so correlate the run yourself and WAIT.
-# Filter by branch: several workers dispatch this workflow at once, and a bare
-# `--limit 1` cheerfully returns whichever of them started most recently.
-BRANCH=$(git branch --show-current); SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-RUN=$(gh run list --workflow=perf-ab.yml --branch "$BRANCH" --event workflow_dispatch \
-  --created ">=$SINCE" --limit 1 --json databaseId --jq '.[0].databaseId')
+# Dispatch returns no run id, and the run list is eventually consistent, so
+# poll for it. Filter by branch AND commit: several workers dispatch this
+# workflow at once, and a bare `--limit 1` cheerfully returns whichever of them
+# started most recently.
+for _ in $(seq 1 30); do
+  RUN=$(gh run list --workflow=perf-ab.yml --branch "$BRANCH" --event workflow_dispatch \
+    --commit "<final sha>" --created ">=$SINCE" --limit 1 --json databaseId --jq '.[0].databaseId')
+  [ -n "$RUN" ] && break
+  sleep 5
+done
+[ -z "$RUN" ] && echo "dispatch produced no run — record it as not measured"
+
 gh run watch "$RUN" --exit-status || true
 gh run view "$RUN" --log | grep -E "VERDICT:|check-pair exit|::error"
 ```
@@ -526,11 +540,11 @@ OPTIMIZE_COMPLETE
 
 ## §Distribution
 
-`AREAS.md` partitions the whole matrix into five areas, each listing its clusters, its recorded evidence, and its owned source paths.
+`AREAS.md` partitions the whole matrix into five areas, each listing its families, their recorded evidence, and its owned source paths. A family is everything measuring one subject; a cluster is the at-most-four of them one run takes.
 
 To run a fleet: give each worker **one area**, on its own machine, in its own worktree. The worker picks the strongest cluster in that area, runs this skill end to end, and opens one pull request. Areas are partitioned by owned source path, so two workers on two areas do not edit the same files and their pull requests do not conflict; a worker that widens outside its area breaks that guarantee, which is why §Autonomy forbids it.
 
-Workers never coordinate. Each one's output stands alone: a branch, a pull request, and a report whose numbers were measured on that worker's own machine and named with that machine's label. A second run against the same area later picks the next cluster, which the previous report named.
+Workers never coordinate. Each one's output stands alone: a branch, a pull request, and a report whose numbers were measured on that worker's own machine and named with that machine's label. A second run against the same area later picks the next cluster, which the previous report named — either the siblings left behind in the same family, or a different family altogether.
 
 ## Related
 

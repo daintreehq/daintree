@@ -82,7 +82,7 @@ Nothing here is individually slow. All of it is paid on every invoke, every keys
 
 40 scenarios: `PERF-001..004`, `010..013`, `042..044`, `046`, `053..058`, `060..062`, `070..077`, `080`, `220..224`, `260..264`.
 
-The "why did switching projects just stall" cluster, and the subsystems underneath it.
+The "why did switching projects just stall" area, and the subsystems underneath it.
 
 **Owned paths:** `electron/window/`, `electron/services/persistence/`, `electron/services/migrations/`, `electron/store.ts`, `electron/workspace-host/`, `electron/services/plugin/`, `electron/services/CrashRecoveryService.ts`, `src/store/project*`.
 
