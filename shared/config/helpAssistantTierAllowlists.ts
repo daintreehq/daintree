@@ -260,8 +260,8 @@ export const HELP_TIER_INCREMENTAL: Record<HelpAssistantTier, readonly string[]>
 };
 
 /**
- * Cumulative allow-list per tier — every tool the assistant can call
- * without prompting at that tier.
+ * Cumulative allow-list per tier — every tool the assistant can call at that
+ * tier.
  */
 export const HELP_TIER_CUMULATIVE: Record<HelpAssistantTier, readonly string[]> = {
   workbench: WORKBENCH_TIER_TOOLS,

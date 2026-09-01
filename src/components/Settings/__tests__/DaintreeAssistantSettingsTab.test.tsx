@@ -449,7 +449,7 @@ describe("DaintreeAssistantSettingsTab", () => {
   // right one when the selector moves (a missing memo dependency would freeze
   // the old tier in the copy while the selector reads the new one). #12119
   // stopped it claiming to be the *entire* boundary, so the assertions below
-  // pin the corrected "main remaining safeguard" wording.
+  // pin both halves: the tier-named limit and the confirmation exception.
   it("names the configured tier in the auto-approve warning and follows the selector", async () => {
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex", "daintree-assistant"]);
     helpPanelState.preferredAgentId = "daintree-assistant";
@@ -474,14 +474,14 @@ describe("DaintreeAssistantSettingsTab", () => {
 
     await waitForContent(
       container,
-      "New sessions run at the Action capability tier, which is the main remaining safeguard"
+      "New sessions are limited to the Daintree actions the Action capability tier allows"
     );
 
     fireEvent.change(screen.getByLabelText("Capability tier"), { target: { value: "system" } });
 
     await waitForContent(
       container,
-      "New sessions run at the System capability tier, which is the main remaining safeguard"
+      "New sessions are limited to the Daintree actions the System capability tier allows"
     );
     expect(container.textContent).not.toContain("the Action capability tier");
   });

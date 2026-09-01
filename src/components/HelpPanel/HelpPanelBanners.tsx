@@ -298,8 +298,9 @@ export function HelpPanelBanners({
               </p>
               {tierMismatch.targetTier && (
                 <p className="mt-1 text-text-secondary">
-                  Allowing the tool covers repeat calls for up to 30 minutes. The project default
-                  applies to new sessions and raises this session for 30 minutes.
+                  Allowing the tool covers repeat calls for 15 minutes after the last one, 30 at
+                  most. The project default applies to agents launched in this project, and raises
+                  this session for 30 minutes.
                 </p>
               )}
             </div>
