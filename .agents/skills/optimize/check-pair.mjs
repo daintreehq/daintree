@@ -111,6 +111,7 @@ const SINGLE = {
   "--expect-cand-sha": "expectCandSha",
   "--threshold": "threshold",
   "--precommit": "precommit",
+  "--expect-baseline-sha": "expectBaselineSha",
   "--max-drift": "maxDrift",
   "--max-cv": "maxCv",
 };
@@ -130,6 +131,8 @@ function parseArgs(argv) {
     allowedGuardRegressions: [],
     higherIsBetter: false,
     crossMachine: false,
+    headline: false,
+    allowForcedPrecommit: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -137,6 +140,10 @@ function parseArgs(argv) {
       out.higherIsBetter = true;
     } else if (arg === "--cross-machine") {
       out.crossMachine = true;
+    } else if (arg === "--headline") {
+      out.headline = true;
+    } else if (arg === "--allow-forced-precommit") {
+      out.allowForcedPrecommit = true;
     } else if (REPEATED[arg]) {
       const value = argv[(i += 1)];
       if (value === undefined) usageError(`${arg} expects a value`);
@@ -318,6 +325,58 @@ function precommitChecks(args, arms) {
     );
   }
 
+  // A record written with --force is a decision that replaced an earlier one.
+  // That may be legitimate — a typo caught before any arm ran — but it is
+  // exactly the shape of a threshold rewritten to fit a result, so it has to be
+  // acknowledged on the command line rather than hidden in the JSON.
+  if (record.forced) {
+    check(
+      args.allowForcedPrecommit,
+      "precommit: record was not forced over an earlier one",
+      args.allowForcedPrecommit
+        ? "forced, and acknowledged with --allow-forced-precommit"
+        : "this record overwrote an earlier decision (`forced: true`). Pass --allow-forced-precommit and say why in the report, or measure against the original."
+    );
+  }
+
+  // The decision has to predate the numbers that judge it. Without this the
+  // lock is a formality: measure first, then create a fresh directory, write a
+  // record that matches what you already saw, and every other check passes.
+  const created = Date.parse(record.createdAt ?? "");
+  if (Number.isFinite(created)) {
+    const early = arms
+      .map((arm) => ({ label: arm.label, at: Date.parse(arm.summary.generatedAt ?? "") }))
+      .filter((entry) => Number.isFinite(entry.at) && entry.at < created);
+    check(
+      early.length === 0,
+      "precommit: the decision predates every arm",
+      early.length === 0
+        ? `locked ${record.createdAt}`
+        : `${early.map((e) => e.label).join(", ")} measured before the record was written — the terms were chosen with those numbers already on screen`
+    );
+  } else {
+    check(false, "precommit: record carries a readable createdAt", String(record.createdAt));
+  }
+
+  // The headline A/B is the one comparison that must be against the branch
+  // point. Mid-run the champion moves with every kept hypothesis, so this is
+  // opt-in rather than always-on.
+  if (args.headline) {
+    const champ = args.expectChampSha ?? args.expectBeforeSha ?? null;
+    const baseline = record.baselineSha ?? null;
+    const matches =
+      champ !== null &&
+      baseline !== null &&
+      (champ.startsWith(baseline) || baseline.startsWith(champ));
+    check(
+      matches,
+      "precommit: headline champion is the branch point",
+      matches
+        ? String(champ)
+        : `champion ${String(champ)} is not the precommitted baseline ${String(baseline)} — a headline measured against a mid-run tree is not a claim about this branch`
+    );
+  }
+
   const { digest, fileCount } = harnessDigest();
   check(
     digest === record.harnessDigest,
@@ -372,6 +431,20 @@ function healthChecks(arm, args) {
     check(false, `${arm.label}: ${args.scenario} present`, `not in ${arm.path}`);
     return null;
   }
+
+  // `diagnostic` means the runner knows something in the path is emulated or
+  // blind on this platform, so the figure is a signal and not a measurement.
+  // `run.ts` records it and nothing downstream refused it, which is how a
+  // Windows leg whose spawn observer cannot see Windows spawns produced a green
+  // claim about spawn counts.
+  const applicability = aggregate.applicability ?? "supported";
+  check(
+    applicability === "supported",
+    `${arm.label}: scenario is authoritative on this platform`,
+    applicability === "supported"
+      ? "supported"
+      : `applicability=${applicability} — the runner marked this reading non-authoritative here`
+  );
 
   const issues = aggregate.measurementIssues ?? [];
   check(
@@ -757,25 +830,26 @@ for (const arm of allArms) {
 
 const champValues = champArms.map((arm) => healthChecks(arm, args));
 const candValues = candArms.map((arm) => healthChecks(arm, args));
-for (const [i, value] of champValues.entries()) {
-  // Every percentage below divides by a champion reading.
+for (const [i, value] of candValues.entries()) {
+  // A candidate may legitimately reach zero — that is what "sixteen spawns
+  // became none" looks like — but never go below it.
   check(
-    value !== 0,
-    `champ${i + 1}: target is not degenerate`,
+    typeof value === "number" && value >= 0,
+    `cand${i + 1}: target is not negative`,
     `${args.target} = ${String(value)}`
   );
 }
-
-if (checks.some((entry) => !entry.ok)) {
-  const failed = checks.filter((entry) => !entry.ok).length;
-  report([], 1, `\n${failed} check(s) FAILED — these arms are not a result.`);
+for (const [i, value] of champValues.entries()) {
+  // Every percentage below divides by a champion reading, so a champion of zero
+  // makes them infinite and a NEGATIVE champion inverts them: with lower-is-
+  // better, -10 -> -5 is a regression that the arithmetic reports as a 50%
+  // improvement. A cost metric below zero is not a measurement of a cost.
+  check(
+    typeof value === "number" && value > 0,
+    `champ${i + 1}: target is a usable positive reading`,
+    `${args.target} = ${String(value)}`
+  );
 }
-
-const pct = (value) => `${value >= 0 ? "" : "-"}${Math.abs(value).toFixed(1)}%`;
-const num = (value) => String(Math.round(value * 1000) / 1000);
-/** Positive means better, whichever direction "better" points. */
-const improvement = (base, other) =>
-  ((args.higherIsBetter ? other - base : base - other) / base) * 100;
 
 const cvs = allArms.map((arm) => ({
   label: arm.label,
@@ -795,6 +869,17 @@ if (maxCv !== null) {
       : `${worstCv.label} varied ${worstCv.cv.toFixed(1)}% across its own iterations, over the ${maxCv}% allowed — that arm measured the machine, not the code`
   );
 }
+
+if (checks.some((entry) => !entry.ok)) {
+  const failed = checks.filter((entry) => !entry.ok).length;
+  report([], 1, `\n${failed} check(s) FAILED — these arms are not a result.`);
+}
+
+const pct = (value) => `${value >= 0 ? "" : "-"}${Math.abs(value).toFixed(1)}%`;
+const num = (value) => String(Math.round(value * 1000) / 1000);
+/** Positive means better, whichever direction "better" points. */
+const improvement = (base, other) =>
+  ((args.higherIsBetter ? other - base : base - other) / base) * 100;
 
 let drift = 0;
 let driftPair = "";

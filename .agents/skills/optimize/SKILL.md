@@ -42,17 +42,23 @@ allowed-tools:
   - mcp__codex__codex
   - mcp__ask-google__ask_google
 hooks:
+  PreToolUse:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "bash -c 'INPUT=$(cat); CMD=$(echo \"$INPUT\" | jq -r \".tool_input.command // \\\"\\\"\"); case \"$CMD\" in *\"gh pr create\"*) HEAD=$(git rev-parse HEAD 2>/dev/null || echo none); REC=$(cat .tmp/optimize/tests-green 2>/dev/null || echo none); if [ \"$REC\" = \"$HEAD\" ]; then exit 0; fi; REASON=\"Phase 8 has not signed off this tree. .tmp/optimize/tests-green must hold the current HEAD ($HEAD); it holds $REC. Run npm run typecheck, the FULL npm test, and npm run check, write HEAD into that file only when all three are green, then open the pull request. A red or unproven suite never becomes a PR, and rewriting the tree after Phase 8 invalidates the receipt on purpose: re-run the suite and redo Cluster close.\"; jq -nc --arg r \"$REASON\" \"{hookSpecificOutput:{hookEventName:\\\"PreToolUse\\\",permissionDecision:\\\"deny\\\",permissionDecisionReason:\\$r}}\"; exit 0 ;; esac; exit 0'"
+          timeout: 10
   PostToolUse:
     - matcher: "Skill"
       hooks:
         - type: command
-          command: 'echo ''{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"OPTIMIZE CONTINUATION — a Skill call just returned. Never end your turn without text output. Re-read .tmp/optimize/ledger.md if you have lost your place; it is the source of truth for the branch, the target queue, the current target, the champion sha and the hypothesis log. This run is fully autonomous: never ask the user anything, never end a turn on an open question. An open question is a decision you have not made yet — make it, write it in the ledger with its price, and keep going. Phases 3-5 cycle once per benchmark in the cluster; then phase 6 re-measures every one of them against the branch point, and that is not optional. Phase 8 must be fully green — typecheck, the FULL vitest suite, npm run check — before phase 9 opens the pull request. The run ends only when you emit the Final report with OPTIMIZE_COMPLETE."}}'''
+          command: 'echo ''{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"OPTIMIZE CONTINUATION — a Skill call just returned. Never end your turn without text output. Re-read .tmp/optimize/ledger.md if you have lost your place; it is the source of truth for the branch, the cluster, the benchmark being worked, the champion sha and the hypothesis log. This run is fully autonomous: never ask the user anything, never end a turn on an open question. An open question is a decision you have not made yet — make it, write it in the ledger with its price, and keep going. Phases 3-5 cycle once per benchmark in the cluster; then phase 6 re-measures every one of them against the branch point, and that is not optional. Phase 8 must be fully green — typecheck, the FULL vitest suite, npm run check — before phase 9 opens the pull request. The run ends only when you emit the Final report with OPTIMIZE_COMPLETE."}}'''
           timeout: 5
   Stop:
     - blocking: true
       hooks:
         - type: command
-          command: "bash -c 'INPUT=$(cat); TRANSCRIPT=$(echo \"$INPUT\" | jq -r \".transcript_path\"); for i in 1 2 3 4 5; do MSG=$(tail -n 100 \"$TRANSCRIPT\" 2>/dev/null | jq -r \"select(.type==\\\"assistant\\\" and ((.isSidechain // false) | not)) | [.message.content[]? | .text // empty] | join(\\\"\\\\n\\\") | select(length > 0) | tojson\" 2>/dev/null | tail -n 1); if echo \"$MSG\" | grep -qE \"OPTIMIZE_(COMPLETE|BLOCKED)\"; then exit 0; fi; sleep 0.3; done; echo \"{\\\"decision\\\":\\\"block\\\",\\\"reason\\\":\\\"RUN INCOMPLETE — no outcome sentinel in your last message. Read .tmp/optimize/ledger.md; it is the source of truth. Find the current phase and target and resume from there, not from the top. Phases 3-5 cycle once per benchmark in the cluster: precommit and baseline, hypothesis loop, local claim. When the cluster is worked you still owe phase 6 (re-measure EVERY kept benchmark against the branch point on the final tree — one shared fix moves all of them, so every earlier number is stale until redone), phase 7 (the cross-OS count legs, or a recorded reason there are none), phase 8 (typecheck, the FULL vitest suite, npm run check, and the diff audit proving nothing under scripts/perf changed), phase 9 (push and open the pull request) and phase 10 (the report). None is optional. Phase 8 is a HARD GATE on phase 9: a red unit suite means no pull request — fix it or revert the change that caused it, then rerun the whole suite. If nothing improved, there is no pull request to open: skip phase 9, delete the branch, and report the honest zero. This run is fully autonomous and you are pre-authorized for every remaining hypothesis, revert, measurement, the push and the pull request; never stop to ask whether to continue and never ask the user to choose. A check-pair exit 5 is not a disproof: the machine was too noisy and the pair must be measured again. Emit the Final report ending with OPTIMIZE_COMPLETE. Only for a physically unrecoverable blocker (repo corruption, the harness cannot run at all, a test failure your change caused that you can neither fix nor revert) emit OPTIMIZE_BLOCKED with the reason — never for something you are merely undecided about.\\\"}\"; exit 0'"
+          command: "bash -c 'INPUT=$(cat); TRANSCRIPT=$(echo \"$INPUT\" | jq -r \".transcript_path\"); for i in 1 2 3 4 5; do MSG=$(tail -n 100 \"$TRANSCRIPT\" 2>/dev/null | jq -r \"select(.type==\\\"assistant\\\" and ((.isSidechain // false) | not)) | [.message.content[]? | .text // empty] | join(\\\"\\\\n\\\") | select(length > 0) | tojson\" 2>/dev/null | tail -n 1); if echo \"$MSG\" | grep -qE \"OPTIMIZE_(COMPLETE|BLOCKED)\"; then exit 0; fi; sleep 0.3; done; echo \"{\\\"decision\\\":\\\"block\\\",\\\"reason\\\":\\\"RUN INCOMPLETE — no outcome sentinel in your last message. Read .tmp/optimize/ledger.md; it is the source of truth. Find the current phase and target and resume from there, not from the top. Phases 3-5 cycle once per benchmark in the cluster: precommit and baseline, hypothesis loop, local claim. When the cluster is worked you still owe phase 6 (re-measure EVERY kept benchmark against the branch point on the final tree — one shared fix moves all of them, so every earlier number is stale until redone), phase 7 (the cross-OS count legs, or a recorded reason there are none), phase 8 (typecheck, the FULL vitest suite, npm run check, and the diff audit proving nothing under scripts/perf changed), phase 9 (push and open the pull request) and phase 10 (the report). None is optional. Phase 8 is a HARD GATE on phase 9: a red unit suite means no pull request — fix it or revert the change that caused it, then rerun the whole suite. Phase 9 is skipped in exactly two cases, both of which still owe phases 6, 8 and 10: nothing improved, so there is no pull request to open — delete the branch and report the honest zero; or the human passed --no-pr, so you commit and report the branch name. A --dry-run run owes only phases 1-3 and the plan. This run is fully autonomous and you are pre-authorized for every remaining hypothesis, revert, measurement, the push and the pull request; never stop to ask whether to continue and never ask the user to choose. A check-pair exit 5 is not a disproof: the machine was too noisy and the pair must be measured again. Emit the Final report ending with OPTIMIZE_COMPLETE. Only for a physically unrecoverable blocker (repo corruption, the harness cannot run at all, a test failure your change caused that you can neither fix nor revert) emit OPTIMIZE_BLOCKED with the reason — never for something you are merely undecided about.\\\"}\"; exit 0'"
           timeout: 15
 ---
 
@@ -194,6 +200,8 @@ Per benchmark, before the baseline, and never after a number exists.
 
 The old form of this skill made a human name the metric, the predicate, the guards and the threshold. That was friction with one real purpose: those terms were fixed before any number was on screen. Deriving them is fine — they are in the scenario definition and the probe. Deriving them _after seeing which one moved_ is the failure the whole loop exists to prevent. So the derivation is written once, to a file that refuses to be rewritten.
 
+**Precisely when.** After the probe and before the baseline. The probe measures the champion tree alone: it tells you which metrics exist, which are non-degenerate, whether the predicates are emitted on every iteration, and how much this machine drifts — all facts about a tree you have not changed yet. It cannot tell you which hypothesis will win, and that is the only thing the lock protects against. The gate enforces the ordering rather than trusting it: every arm's `generatedAt` must be later than the record's `createdAt`, so measuring first and locking afterwards fails instead of passing.
+
 **Derive, in this order:**
 
 1. **The target metric.** One scalar that can go down (or up, with `--higher-is-better`). Prefer, in order: a `count`, a `size`, or a structural `ratio` from the scenario's own metrics; then `p50Ms`; then a per-operation duration the scenario reports. **Never a `p95Ms`, `p99Ms` or `maxMs`** — `precommit.mjs` refuses those below 59 iterations because covering the 95th percentile with 95% confidence needs `ln(.05)/ln(.95) ≈ 59` samples and a p99 needs ~299. Below that a p95 is the second-largest reading with a percentage printed next to it. Prefer a deterministic class when the scenario offers one: it needs no interleaved A/B, no threshold you have to defend, and it is the only class the cross-OS legs can claim.
@@ -227,13 +235,22 @@ Every measurement in this run uses the same command shape, and any difference in
 npm run perf <mode> -- --scenario <ID> --iterations <N> --warmups <W> --label <name> --json .tmp/opt/<dir>/<name>.json
 ```
 
+The baseline is the run's first champion, so Phase 3 ends by making that explicit:
+
+```bash
+npm run perf <mode> -- --scenario <ID> --iterations <N> --warmups <W> --label before --json .tmp/opt/<dir>/before.json
+cp .tmp/opt/<dir>/before.json .tmp/opt/<dir>/best.json
+```
+
+`best.json` is what every round is judged against, and it is only ever a copy of a measurement that was actually taken — on KEEP, `cp .tmp/opt/<dir>/h<k>.json .tmp/opt/<dir>/best.json` and record the new champion sha beside it. A `best.json` whose `sourceSha` is not the champion sha is stale by definition: discard it and re-measure rather than reasoning about which tree produced it.
+
 Use `.tmp/opt/` for every artifact — `/tmp` is not portable to Windows, and the harness creates parent directories.
 
 **Machine hygiene, before the first arm and between every pair:**
 
 - Nothing else running: no build, no dev server, no other agent, no `npm install`. Abort and redo a whole interleave if something started mid-measurement — never replace one contaminated arm and keep its partner, which reintroduces exactly the pairing the interleave exists to prevent.
 - Plugged in, low-power mode off.
-- On macOS, run each arm under `taskpolicy -c user_interactive` so the work is not demoted to efficiency cores mid-arm. Apple Silicon exposes no frequency pinning or core affinity, so QoS is the only lever there is.
+- On macOS, hold the machine awake for the duration with `caffeinate -dimsu <command>`; a nap between arms is drift you introduced. Do **not** reach for `taskpolicy -c` — its clamp only lowers QoS (`user_interactive` is not even a parseable value, and `-c utility` would push the work onto efficiency cores, which is the opposite of what you want). Apple Silicon exposes no frequency pinning and no core affinity, so an idle machine is the whole of the lever.
 - Leave a few seconds between arms. Back-to-back arms accumulate heat, and the first arm of a session is always the coldest — which is why the A/B recipe reverses the middle pair.
 
 **Reading the run:** a `measurement-issues=` non-zero in the header, or a compare warning about a count no longer emitted or a count falling to zero, describes the dead-watcher shape, which looks identical to success. Read them.
@@ -261,6 +278,7 @@ Repeat per benchmark until the budget for it is spent or credible hypotheses run
 npm run perf <mode> -- --scenario <ID> --iterations <N> --warmups <W> --label h<k> --json .tmp/opt/<dir>/h<k>.json
 node .agents/skills/optimize/check-pair.mjs --scenario <ID> --target <metric path> \
   --predicate <each> --precommit .tmp/opt/<dir>/precommit.json \
+  [--higher-is-better] \
   --expect-before-sha <champion sha> --expect-after-sha $(git rev-parse HEAD) \
   .tmp/opt/<dir>/best.json .tmp/opt/<dir>/h<k>.json
 npm run perf compare .tmp/opt/<dir>/best.json .tmp/opt/<dir>/h<k>.json
@@ -306,13 +324,15 @@ None of that shape is on your honour:
 ```bash
 node .agents/skills/optimize/check-pair.mjs ab --scenario <ID> --target <metric path> \
   --predicate <each> --precommit .tmp/opt/<dir>/precommit.json \
-  --threshold <precommitted %> --max-cv 10 \
+  --threshold <precommitted %> --max-cv 10 [--higher-is-better] \
   --expect-champ-sha "$CHAMP" --expect-cand-sha "$CAND" \
   --champ .tmp/opt/<dir>/ab/champ1.json --champ .tmp/opt/<dir>/ab/champ2.json --champ .tmp/opt/<dir>/ab/champ3.json \
   --cand .tmp/opt/<dir>/ab/cand1.json --cand .tmp/opt/<dir>/ab/cand2.json --cand .tmp/opt/<dir>/ab/cand3.json
 ```
 
-It reconstructs the running order from the arms' own `generatedAt` stamps and refuses three champion runs followed by three candidate ones, an order that never reverses, arms passed out of measurement order, repeated or copied arms, and any arm whose `sourceSha` is dirty or is not the tree you named. Then it rules on four conditions: the candidate won **every** index-paired arm; the median-to-median improvement met the precommitted threshold; it exceeded the champion-versus-champion drift **D**; and no guard from the precommit record moved outside its tolerance. Pass `--champ`/`--cand` in measurement order, oldest first.
+It reconstructs the running order from the arms' own `generatedAt` stamps and refuses three champion runs followed by three candidate ones, an order that never reverses, arms passed out of measurement order, repeated or copied arms, and any arm whose `sourceSha` is dirty or is not the tree you named. Then it rules on four conditions: the candidate won **every** index-paired arm; the median-to-median improvement met the precommitted threshold; it exceeded the champion-versus-champion drift **D**; and no guard from the precommit record moved outside its tolerance. Pass `--champ`/`--cand` in measurement order, oldest first. `--higher-is-better` must match the precommit record — the gate compares the two and fails a mismatch, because a direction flipped after the fact turns every regression into a win.
+
+For the Phase 6 headline, add `--headline`: it asserts that the champion arms were measured at the **branch point** the record names, which is the one comparison that must not be against a mid-run tree.
 
 **Why unanimity plus a threshold plus D, rather than a significance test.** Three pairs is all the arms a multi-hour budget affords, and at n=3 no test has the power to separate a 5% effect from noise; requiring all three pairs to agree in direction is a sign test at the strongest level three pairs can reach, and D is a measured noise floor rather than an assumed one. That is honest about what three pairs can support. It is also why the loop leans so hard on deterministic targets, where none of this is needed.
 
@@ -336,7 +356,7 @@ So, on the final tree, for **every** member of the cluster including the ones yo
 - A member you never touched can come back **worse**. That is a real finding and it goes in the report as a row, not a footnote. If it is outside its own guard tolerance, treat it as a regression: revert the hypothesis responsible and redo this phase.
 - These are the only numbers the report is allowed to quote.
 
-If a headline A/B does not meet all three conditions, **the improvement was not real.** Reset the branch, report the headline numbers, and say the intermediate rounds over-read the noise. That verdict will feel wrong after hours of work on a change you can explain — the mechanism being plausible is what made it worth testing, and is not evidence that it worked.
+If a headline A/B does not meet all four conditions, **the improvement was not real.** Reset the branch, report the headline numbers, and say the intermediate rounds over-read the noise. That verdict will feel wrong after hours of work on a change you can explain — the mechanism being plausible is what made it worth testing, and is not evidence that it worked.
 
 ## §Cross-OS
 
@@ -347,10 +367,19 @@ An improvement measured on one machine is a claim about one machine. Local first
 **GitHub legs — counts, sizes and ratios only.** `.github/workflows/perf-ab.yml` measures both trees in one job on one runner and gates the result with `check-pair.mjs ab --cross-machine`, which refuses any target that is not machine-independent.
 
 ```bash
-gh workflow run perf-ab.yml -f base_sha=<branch point> -f cand_sha=<final sha> \
+gh workflow run perf-ab.yml --ref "$(git branch --show-current)" \
+  -f base_sha=<branch point> -f cand_sha=<final sha> \
   -f scenario=<ID> -f target=<metric path> -f predicates=<comma separated> \
-  -f mode=<mode> -f iterations=<N> -f warmups=<W> -f threshold=<pct> -f os=all
+  -f mode=<mode> -f iterations=<N> -f warmups=<W> -f threshold=<pct> \
+  -f higher_is_better=<true|false> -f os=all
+
+# Dispatch returns nothing useful, so find the run it started and WAIT for it.
+RUN=$(gh run list --workflow=perf-ab.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+gh run watch "$RUN" --exit-status || true
+gh run view "$RUN" --log | grep -E "VERDICT:|check-pair exit|::error"
 ```
+
+**Do not dispatch and walk on.** A leg that is still queued when Phase 9 opens the pull request contributes nothing but a claim in the report that nobody checked. Wait for each leg, read its verdict, and record it. A leg that comes back `NO MEASUREMENT` (exit 5) is re-dispatched once; if it will not settle, record it as not measured rather than as a failure. A leg that comes back `NO CLAIM` (exit 4) is a finding: the improvement did not reproduce on that platform, and the report says so per platform rather than averaging it away.
 
 **Never claim a duration off a hosted runner, whatever the workflow reports.** Hosted runners vary 5–25% run to run; `rustc-perf`, V8, Node core and bencher.dev all refuse shared cloud CI for wall-clock work, and CodSpeed replaces the clock with instruction counting rather than trusting it. Two arms in one job share a VM, which is why the deterministic classes are sound there — the counts are the same counts — but the clock is not.
 
@@ -365,13 +394,29 @@ Phase 8, and a hard gate on the pull request. Delegate every one of these to a �
 1. `npm run typecheck` — never a bare `tsc -b`, which emits build artifacts and phantom TS6305s outside the wrapper.
 2. **`npm test` — the full suite, not a subset.** Scoped runs have repeatedly hidden failures here and cost a CI round trip. This is the gate the pull request depends on.
 3. `npm run check` if anything touched types, IPC, keybindings, plugin manifests, or lint-visible code. `prettier` prints "All files formatted correctly" while exiting 1 — trust the exit code.
-4. `git diff --stat` against the branch point: confirm **nothing under `scripts/perf/` changed**. The apparatus hash already refuses a claim measured against an edited harness, but the diff is what proves it to a reader.
+4. `git diff --name-only` against the branch point, and audit it twice:
+   - **Nothing under `scripts/perf/`.** The apparatus hash already refuses a claim measured against an edited harness, but the diff is what proves it to a reader.
+   - **Nothing outside your area's owned paths** in `AREAS.md`. That partition is the only thing keeping concurrent workers from colliding, and it is not enforced anywhere else. A file you had to touch that no area lists is a real finding: name it in the report so the partition can be corrected, rather than silently claiming ownership of it.
 
 If a test fails, reproduce it narrowly and decide whether it is a real break from your change or a known flake (`.claude/rules/testing.md`: a worker crash after all tests pass is a flake; a teardown-timer failure naming a new file is real). Confirm a "looks unrelated" failure against `origin/develop` before believing it.
 
 **A real break you caused:** fix it, then rerun the full suite. If you cannot fix it, revert the hypothesis that caused it, redo §Cluster close without that hypothesis, and rerun. Only when neither is possible does the run finalise as **blocked** with the branch left in place. There is no path where a red suite becomes a pull request.
 
+**A failure already red on `origin/develop`** is not yours and not a blocker. Prove it — run the same test against `origin/develop` and confirm it fails there too — then name it in the report and proceed to the pull request. The base is broken independently of this work and CI re-runs it before anything lands. Do not fix code outside your cluster to go green: that is the scope widening §Autonomy forbids, and it collides with whichever worker owns that area.
+
+**An outage rather than a defect** — `gh` unauthenticated, GitHub unreachable, a push rejected for a reason no rebase fixes — is a legitimate `OPTIMIZE_BLOCKED`. Commit everything, leave the branch, and say exactly which step could not run.
+
 Cap at 3 fix iterations. Carry the counter in your text (`prove 2/3`) so a compacted summary keeps it.
+
+**When, and only when, all four are green:**
+
+```bash
+git rev-parse HEAD > .tmp/optimize/tests-green
+```
+
+That file is the receipt, and it is not paperwork: a `PreToolUse` hook reads it and **denies `gh pr create`** unless it holds the current HEAD. So the gate does not depend on you remembering the rule at hour six, and it re-arms itself against exactly the mistake that matters — any commit, squash or amend after Phase 8 moves HEAD, the receipt stops matching, and the pull request is refused until you re-run the suite and redo §Cluster close against the tree that actually ships.
+
+Never write the receipt ahead of the run, and never for a suite you did not watch finish. Writing it to get past the hook is forging your own evidence, and it is the one thing in this loop nothing else can catch.
 
 ## §Checks
 
@@ -412,15 +457,18 @@ Three outcomes. The first two are complete, correct runs.
 
 ### Nothing improved
 
-`git reset --hard <branch point>`, confirm `git status --porcelain` and `git diff origin/develop` are both empty, delete the branch. **No pull request, no commit to `develop`, never an empty or marker commit.** The evidence is the report: the target and its before value, every hypothesis with the measured reason it was rejected, and what you would try next or why you believe the number is at its floor.
+`git reset --hard <branch point>`, confirm `git status --porcelain` and `git diff origin/develop` are both empty, then `git switch develop` before `git branch -D <branch>` — git refuses to delete the branch you are standing on, and a run that ends holding a branch it says it deleted has lied in its own report. **No pull request, no commit to `develop`, never an empty or marker commit.** The evidence is the report: the target and its before value, every hypothesis with the measured reason it was rejected, and what you would try next or why you believe the number is at its floor.
 
 ### Something improved
 
 Only after phase 8 is fully green.
 
-1. Squash the kept commits into one focused commit per benchmark, or one for the cluster when a single fix moved all of them. Conventional-commit subject, `perf(<scope>): <what>`. Squashing rewrites shas, so §Cluster close must already have run against the shas it actually measured.
+1. Squash the kept commits into one focused commit per benchmark, or one for the cluster when a single fix moved all of them. Conventional-commit subject, `perf(<scope>): <what>`.
+
+   **Squash before Phase 6, not here, and redo Phase 6 if Phase 8 changed anything.** Squashing rewrites the sha, so a headline measured at the old sha names a commit the pull request does not contain. The order that keeps the report honest is: finish the hypotheses, squash, §Cluster close against the squashed tree, then Phase 8. If Phase 8 forces a code change — a test fix, a revert — that tree is no longer the one Phase 6 measured, so **redo §Cluster close** before opening the pull request. A tidy history is not worth a table naming a tree nobody can check out.
+
 2. `git push -u origin <branch>`, then `gh pr create --base develop` — **never `main`**.
-3. The PR body carries the evidence: the per-benchmark table from §Report, the machine line, the hypothesis ledger including the rejections, and an explicit statement of what was **not** measured (no E2E, which OS legs are missing and why). Write it in Greg's voice — invoke `greg-priday-writing` for the body.
+3. The PR body carries the evidence: the per-benchmark table from §Report, the machine line, the hypothesis ledger including the rejections, and an explicit statement of what was **not** measured (no E2E, which OS legs are missing and why). Write it in Greg's voice — invoke the `greg-priday-writing` skill if this runner exposes it, and otherwise write plainly and directly yourself rather than stalling on a skill that is not there.
 4. **No AI attribution anywhere** — no `Co-Authored-By`, no generated-by footers, no mention in the PR description.
 5. Do not merge. Leave the PR for the human.
 
@@ -449,7 +497,7 @@ Statistic: <median|count> · precommitted threshold: <value> · measured drift D
 ```
 
 - Both numbers come from **§Cluster close**, not from any file measured earlier in the run. Paste `check-pair.mjs ab`'s verdict block verbatim below the table: it carries D, the per-pair results and the threshold the tool actually used, so the report cannot quote a threshold it was not given.
-- The predicate is always a row, reading `ok` only when `count === runs` and `max === 0` on both sides. A reader must see that the feature still works **and** that the check was taken.
+- The predicate is always a row, reading `ok` only when `count === runs`, `min === 0` and `max === 0` on both sides — all three, the same terms the gate applies. A reader must see that the feature still works **and** that the check was taken.
 - Every guard is a row, including ones that moved the wrong way.
 - Percentages only where the comparison is legitimate — never across machines for anything outside `count`, `size` and `ratio`, and never on a machine-dependent metric whose threshold you did not precommit or whose improvement did not exceed D.
 - Below the tables: the hypothesis ledger, one line each, including the rejected ones. The rejections are most of the value.

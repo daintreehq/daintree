@@ -150,13 +150,32 @@ const guards = args.guards.map((entry) => {
 
 // The tail statistic is not a decision the loop gets to make per target: at the
 // iteration counts this harness runs, a p95 IS one of the two largest samples.
-// Covering the 95th percentile with 95% confidence needs ln(.05)/ln(.95) ≈ 59
-// samples, and a p99 needs ~299.
-if (/\.(p95Ms|p99Ms|maxMs)$/.test(args.target) && iterations < 59) {
+// Covering the 95th percentile with 95% confidence needs ln(.05)/ln(.95) ~= 59
+// samples; the 99th needs ln(.05)/ln(.99) ~= 299.
+//
+// The metric name is matched with an optional leading path segment, because the
+// aggregate-level fields are addressed bare — `--target p95Ms`, not
+// `--target metricStats.p95Ms.max`. An earlier version required the dot and let
+// every bare tail target straight through, which is the exact case this refuses.
+const TAIL_FLOORS = [
+  { pattern: /(^|\.)p95Ms$/, floor: 59, name: "p95" },
+  { pattern: /(^|\.)p99Ms$/, floor: 299, name: "p99" },
+];
+for (const tail of TAIL_FLOORS) {
+  if (tail.pattern.test(args.target) && iterations < tail.floor) {
+    usageError(
+      `--target ${args.target} is a ${tail.name} and --iterations is ${iterations}. ` +
+        `Covering the ${tail.name} needs about ${tail.floor} samples; below that it is the ` +
+        "second-largest reading with a percentage printed beside it. Target the median " +
+        "(`p50Ms`), a metric, or raise the iteration count."
+    );
+  }
+}
+if (/(^|\.)maxMs$/.test(args.target)) {
   usageError(
-    `--target ${args.target} is a tail statistic and --iterations is ${iterations}. ` +
-      "A p95 needs ~59 samples to be an estimate rather than the second-largest reading, and a " +
-      "p99 needs ~299. Target the median (`p50Ms`), a metric, or raise the iteration count."
+    "--target maxMs is the single largest sample of the run, so it moves with whatever else " +
+      "the machine did during one iteration and no sample count fixes that. Target the median " +
+      "or a metric."
   );
 }
 

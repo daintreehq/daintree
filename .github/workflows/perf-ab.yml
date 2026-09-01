@@ -172,63 +172,109 @@ jobs:
         # would hand that handicap to the same side three times. `npm ci` ran
         # once, against the candidate tree: node_modules is deliberately NOT
         # reinstalled between arms, because a dependency difference between the
-        # two trees would then be measured as a code difference. If the arms
-        # need different dependencies they are not an A/B.
+        # two trees would then be measured as a code difference. The manifest
+        # check below is what makes that sound rather than merely convenient.
+        #
+        # Every dispatch input arrives as an environment variable and is quoted
+        # at the point of use. Interpolating `${{ inputs.x }}` into the script
+        # body would put a dispatcher's quote inside the shell command.
+        env:
+          BASE_SHA: ${{ inputs.base_sha }}
+          CAND_SHA: ${{ inputs.cand_sha }}
+          SCENARIO: ${{ inputs.scenario }}
+          MODE: ${{ inputs.mode }}
+          ITERATIONS: ${{ inputs.iterations }}
+          WARMUPS: ${{ inputs.warmups }}
         run: |
           set -euo pipefail
           mkdir -p .tmp/opt/ab
+
+          # An A/B whose two trees want different dependencies is not an A/B:
+          # one arm would run against the other's node_modules and the whole
+          # comparison would be measuring the install.
+          for manifest in package.json package-lock.json; do
+            if ! git diff --quiet "$BASE_SHA" "$CAND_SHA" -- "$manifest"; then
+              echo "::error::$manifest differs between the two trees. One npm ci cannot serve both arms, so this is not a comparison."
+              exit 1
+            fi
+          done
+
           arm() {
             git checkout --quiet --detach "$1"
-            npm run perf ${{ inputs.mode }} -- \
-              --scenario '${{ inputs.scenario }}' \
-              --iterations '${{ inputs.iterations }}' \
-              --warmups '${{ inputs.warmups }}' \
+            npm run perf "$MODE" -- \
+              --scenario "$SCENARIO" \
+              --iterations "$ITERATIONS" \
+              --warmups "$WARMUPS" \
               --label "$2" \
               --json ".tmp/opt/ab/$2.json"
           }
-          arm '${{ inputs.base_sha }}' champ1
-          arm '${{ inputs.cand_sha }}' cand1
-          arm '${{ inputs.cand_sha }}' cand2
-          arm '${{ inputs.base_sha }}' champ2
-          arm '${{ inputs.base_sha }}' champ3
-          arm '${{ inputs.cand_sha }}' cand3
-          git checkout --quiet --detach '${{ inputs.cand_sha }}'
+          arm "$BASE_SHA" champ1
+          arm "$CAND_SHA" cand1
+          arm "$CAND_SHA" cand2
+          arm "$BASE_SHA" champ2
+          arm "$BASE_SHA" champ3
+          arm "$CAND_SHA" cand3
+          git checkout --quiet --detach "$CAND_SHA"
+
+      - name: Take the gate scripts from the champion tree
+        shell: bash
+        # The candidate is the tree under judgement, so running the judge out of
+        # it lets a change weaken its own gate. Where the branch point carries
+        # the scripts, use those; where it does not (the commit that introduced
+        # them), say so rather than pretending otherwise.
+        env:
+          BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          set -euo pipefail
+          if git cat-file -e "$BASE_SHA:.agents/skills/optimize/check-pair.mjs" 2>/dev/null; then
+            git checkout "$BASE_SHA" -- .agents/skills/optimize/
+            echo "Gate scripts restored from the champion tree $BASE_SHA."
+          else
+            echo "::warning::The champion tree has no gate scripts, so the candidate's own copy is judging it. Read this leg's verdict knowing that."
+          fi
 
       - name: Gate the arms and rule on the claim
         shell: bash
+        env:
+          BASE_SHA: ${{ inputs.base_sha }}
+          CAND_SHA: ${{ inputs.cand_sha }}
+          SCENARIO: ${{ inputs.scenario }}
+          TARGET: ${{ inputs.target }}
+          PREDICATES: ${{ inputs.predicates }}
+          THRESHOLD: ${{ inputs.threshold }}
+          HIGHER_IS_BETTER: ${{ inputs.higher_is_better }}
+          LEG: ${{ matrix.name }}
         run: |
-          set -euo pipefail
-          PRED_ARGS=""
-          IFS=',' read -ra PREDS <<< '${{ inputs.predicates }}'
+          # NO `-e` here on purpose. Exits 4 and 5 are results this step has to
+          # read and classify; under errexit the failing side of the pipeline
+          # aborted the step before `code=` was ever assigned, which made both
+          # of them look like infrastructure failures.
+          set -uo pipefail
+
+          args=(
+            ab
+            --scenario "$SCENARIO"
+            --target "$TARGET"
+            --threshold "$THRESHOLD"
+            --cross-machine
+            --expect-champ-sha "$BASE_SHA"
+            --expect-cand-sha "$CAND_SHA"
+          )
+          IFS=',' read -ra PREDS <<< "$PREDICATES"
           for p in "${PREDS[@]}"; do
             trimmed="$(echo "$p" | tr -d '[:space:]')"
-            [ -n "$trimmed" ] && PRED_ARGS="$PRED_ARGS --predicate $trimmed"
+            [ -n "$trimmed" ] && args+=(--predicate "$trimmed")
           done
-          HIGHER=""
-          [ '${{ inputs.higher_is_better }}' = 'true' ] && HIGHER="--higher-is-better"
+          [ "$HIGHER_IS_BETTER" = "true" ] && args+=(--higher-is-better)
+          for label in champ1 champ2 champ3; do args+=(--champ ".tmp/opt/ab/$label.json"); done
+          for label in cand1 cand2 cand3; do args+=(--cand ".tmp/opt/ab/$label.json"); done
 
-          node .agents/skills/optimize/check-pair.mjs ab \
-            --scenario '${{ inputs.scenario }}' \
-            --target '${{ inputs.target }}' \
-            $PRED_ARGS $HIGHER \
-            --cross-machine \
-            --threshold '${{ inputs.threshold }}' \
-            --expect-champ-sha '${{ inputs.base_sha }}' \
-            --expect-cand-sha '${{ inputs.cand_sha }}' \
-            --champ .tmp/opt/ab/champ1.json \
-            --champ .tmp/opt/ab/champ2.json \
-            --champ .tmp/opt/ab/champ3.json \
-            --cand .tmp/opt/ab/cand1.json \
-            --cand .tmp/opt/ab/cand2.json \
-            --cand .tmp/opt/ab/cand3.json \
-            | tee .tmp/opt/ab/verdict.txt
-          # `tee` would otherwise mask the exit code this whole workflow exists
-          # to read.
+          node .agents/skills/optimize/check-pair.mjs "${args[@]}" | tee .tmp/opt/ab/verdict.txt
           code=${PIPESTATUS[0]}
-          echo "check-pair exit $code"
           echo "$code" > .tmp/opt/ab/exit-code.txt
+          echo "check-pair exit $code"
           case "$code" in
-            0) echo "CLAIM — the improvement holds on ${{ matrix.name }}." ;;
+            0) echo "CLAIM — the improvement holds on $LEG." ;;
             # A sound measurement that did not support the hypothesis on this
             # platform, or a runner too noisy to resolve it. Both are results
             # worth reading rather than broken jobs: an improvement on one OS
@@ -242,9 +288,13 @@ jobs:
       - name: Summarise
         if: always()
         shell: bash
+        env:
+          LEG: ${{ matrix.name }}
+          SCENARIO: ${{ inputs.scenario }}
+          TARGET: ${{ inputs.target }}
         run: |
           {
-            echo "## ${{ matrix.name }} — ${{ inputs.scenario }} \`${{ inputs.target }}\`"
+            echo "## $LEG — $SCENARIO \`$TARGET\`"
             echo
             echo '```'
             cat .tmp/opt/ab/verdict.txt 2>/dev/null || echo "no verdict produced"
