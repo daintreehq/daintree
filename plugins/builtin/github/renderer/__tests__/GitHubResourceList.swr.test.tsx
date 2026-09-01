@@ -89,17 +89,24 @@ const mockSelectionClear = vi.fn();
 // Stable identities — the component memoizes and effects off these.
 const EMPTY_ITEMS = new Map();
 const mockReconcile = vi.fn();
+const mockSelectAll = vi.fn();
+// Seeded per test, so the selection menu's "everything visible is already
+// picked" branch is reachable. Reassigned rather than mutated: the identity
+// still changes only when a test means it to.
+let mockSelectedIds = new Set<number>();
 
 vi.mock("@/hooks/useIssueSelection", () => ({
   useIssueSelection: () => ({
-    selectedIds: new Set<number>(),
+    get selectedIds() {
+      return mockSelectedIds;
+    },
     get isSelectionActive() {
       return mockIsSelectionActive;
     },
     selectedItems: EMPTY_ITEMS,
     toggle: vi.fn(),
     toggleRange: vi.fn(),
-    selectAll: vi.fn(),
+    selectAll: mockSelectAll,
     reconcile: mockReconcile,
     clear: mockSelectionClear,
   }),
@@ -273,6 +280,8 @@ beforeEach(() => {
   notifyMock.mockReset();
   initializeMock.mockClear();
   mockSelectionClear.mockReset();
+  mockSelectAll.mockReset();
+  mockSelectedIds = new Set<number>();
   mockOpenCreateDialog.mockReset();
   mockOpenCreateDialogForPR.mockReset();
   mockSelectWorktree.mockReset();
@@ -3318,5 +3327,203 @@ describe("GitHubResourceList — the keyboard cursor across a refresh", () => {
     view.rerender(<GitHubResourceList type="issue" projectPath="/other/proj" />);
 
     await waitFor(() => expect(activeDescendant()).toBeNull());
+  });
+});
+
+describe("GitHubResourceList bulk selection menu (#12124)", () => {
+  const assigned = (issue: Issue): Issue => ({
+    ...issue,
+    assignees: [{ login: "octocat", avatarUrl: "", rawData: null }],
+  });
+  const closed = (issue: Issue): Issue => ({ ...issue, state: "closed", rawState: "CLOSED" });
+
+  /** The always-present header trigger, by its accessible name. */
+  const trigger = (kind: "issues" | "pull requests" = "issues") =>
+    screen.findByRole("button", { name: `Select ${kind}` });
+
+  const openMenu = async (kind: "issues" | "pull requests" = "issues") => {
+    const button = await trigger(kind);
+    // The trigger is inert until there is something to select, so a click
+    // fired mid-load would silently do nothing.
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    act(() => {
+      button.click();
+    });
+    await screen.findByRole("group", { name: "Selection actions" });
+    return button;
+  };
+
+  it("selects every visible result with no row ticked first", async () => {
+    // The reported workflow: a comma-separated number query, then one press.
+    // Ticking a row to reveal the helper is exactly what must not be needed.
+    useGitHubFilterStore.getState().setIssueSearchQuery("#1, #2, #3");
+    mockGetIssuesByNumbers.mockResolvedValue([makeIssue(1), makeIssue(2), makeIssue(3)]);
+    mockIsSelectionActive = false;
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await screen.findByTestId("item-3");
+
+    await openMenu();
+    const selectAll = await screen.findByRole("button", { name: "Select all (3)" });
+    act(() => {
+      selectAll.click();
+    });
+
+    expect(mockSelectAll).toHaveBeenCalledTimes(1);
+    expect((mockSelectAll.mock.calls[0]![0] as Issue[]).map((i) => i.number)).toEqual([1, 2, 3]);
+  });
+
+  it("keeps the trigger in the header whether or not a selection is live", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    const view = render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    expect(await trigger()).toBeTruthy();
+    view.unmount();
+
+    mockIsSelectionActive = true;
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    expect(await trigger()).toBeTruthy();
+  });
+
+  it("never puts the helpers in a header row of their own", async () => {
+    // The old row was a whole extra band in a vertically stacked header, so it
+    // could only ever be gated — on selection mode (unreachable) or on the
+    // query (which grew the header on the first keystroke). Inside the menu it
+    // is neither, and it must not be on the page until the menu is opened.
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+    mockIsSelectionActive = true;
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await trigger();
+    expect(screen.queryByRole("group", { name: "Selection actions" })).toBeNull();
+  });
+
+  it("offers unassigned again, and skips the assigned rows", async () => {
+    mockListIssues.mockResolvedValue(
+      makeResponse([makeIssue(1), assigned(makeIssue(2)), makeIssue(3)])
+    );
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await openMenu();
+    const unassigned = await screen.findByRole("button", { name: "Select unassigned (2)" });
+    act(() => {
+      unassigned.click();
+    });
+
+    expect((mockSelectAll.mock.calls[0]![0] as Issue[]).map((i) => i.number)).toEqual([1, 3]);
+  });
+
+  it("does not narrow unassigned to open items the way the worktree preset does", async () => {
+    // Assignment and worktree readiness measure different things. A closed
+    // issue with nobody on it is still unassigned; the worktree preset drops it
+    // because the bulk planner would skip it anyway.
+    useGitHubFilterStore.getState().setIssueFilter("all");
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1), closed(makeIssue(2))]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await openMenu();
+    expect(screen.getByRole("button", { name: "Select unassigned (2)" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Select without worktrees (1)" })).toBeTruthy();
+  });
+
+  it("excludes rows that already have a worktree", async () => {
+    worktreeMap.set("wt-2", { id: "wt-2", issueNumber: 2 });
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1), makeIssue(2)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await openMenu();
+    const withoutWorktree = await screen.findByRole("button", {
+      name: "Select without worktrees (1)",
+    });
+    act(() => {
+      withoutWorktree.click();
+    });
+
+    expect((mockSelectAll.mock.calls[0]![0] as Issue[]).map((i) => i.number)).toEqual([1]);
+  });
+
+  it("omits unassigned for pull requests, which carry no assignment model", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([makeIssue(5)]));
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await openMenu("pull requests");
+    expect(screen.getByRole("button", { name: "Select all (1)" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /select unassigned/i })).toBeNull();
+  });
+
+  it("keeps an empty preset listed but disabled rather than dropping it", async () => {
+    // A menu whose entries come and go between openings has to be re-read every
+    // time, and an empty preset would replace the selection with nothing.
+    worktreeMap.set("wt-1", { id: "wt-1", issueNumber: 1 });
+    mockListIssues.mockResolvedValue(makeResponse([assigned(makeIssue(1))]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await openMenu();
+    const unassigned = screen.getByRole("button", { name: "Select unassigned (0)" });
+    const withoutWorktree = screen.getByRole("button", { name: "Select without worktrees (0)" });
+    expect((unassigned as HTMLButtonElement).disabled).toBe(true);
+    expect((withoutWorktree as HTMLButtonElement).disabled).toBe(true);
+
+    act(() => {
+      unassigned.click();
+    });
+    expect(mockSelectAll).not.toHaveBeenCalled();
+  });
+
+  it("turns the first entry into deselect all once everything visible is picked", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1), makeIssue(2)]));
+    mockSelectedIds = new Set([1, 2]);
+    mockIsSelectionActive = true;
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await openMenu();
+    expect(screen.queryByRole("button", { name: /^select all/i })).toBeNull();
+    act(() => {
+      screen.getByRole("button", { name: "Deselect all" }).click();
+    });
+
+    expect(mockSelectionClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays present but disabled when there is nothing to select", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "Select issues" }) as HTMLButtonElement).disabled)
+        .toBe(true);
+    });
+  });
+
+  it("closes the menu when the parent dropdown goes away", async () => {
+    // Nothing of this panel's may stay portaled on document.body after the
+    // toolbar dropdown closes.
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    const view = render(
+      <FixedDropdownVisibleContext.Provider value={true}>
+        <GitHubResourceList type="issue" projectPath="/test/proj" />
+      </FixedDropdownVisibleContext.Provider>
+    );
+
+    await openMenu();
+
+    view.rerender(
+      <FixedDropdownVisibleContext.Provider value={false}>
+        <GitHubResourceList type="issue" projectPath="/test/proj" />
+      </FixedDropdownVisibleContext.Provider>
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole("group", { name: "Selection actions" })).toBeNull();
+    });
   });
 });

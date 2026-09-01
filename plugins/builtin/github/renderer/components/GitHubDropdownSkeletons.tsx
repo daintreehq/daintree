@@ -1,4 +1,5 @@
 import { Search, ExternalLink, Plus, ArrowUpDown, RefreshCw } from "lucide-react";
+import { ListChecks } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useSkeletonGate } from "@/hooks/useDeferredLoading";
 
@@ -74,13 +75,16 @@ export function GitHubResourceListSkeleton({
               Search {type === "issue" ? "issues" : "pull requests"}…
             </span>
           </div>
-          {/* Both icon slots, or the search field jumps narrower the moment
+          {/* Every icon slot, or the search field jumps narrower the moment
               real content replaces this. */}
           <div className="flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0 text-text-secondary">
             <RefreshCw className="w-3.5 h-3.5" />
           </div>
           <div className="flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0 text-text-secondary">
             <ArrowUpDown className="w-3.5 h-3.5" />
+          </div>
+          <div className="flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0 text-text-secondary">
+            <ListChecks className="w-3.5 h-3.5" />
           </div>
         </div>
 

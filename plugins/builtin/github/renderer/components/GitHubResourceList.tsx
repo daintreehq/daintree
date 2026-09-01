@@ -19,6 +19,7 @@ import {
   ArrowUpDown,
   Clock,
 } from "lucide-react";
+import { ListChecks } from "@/components/icons";
 import { GitHubIcon } from "@/components/icons/brands";
 import { isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors";
 import { Button } from "@/components/ui/button";
@@ -287,6 +288,7 @@ export function GitHubResourceList({
 
   const [activeIndex, setActiveIndex] = useState(-1);
   const [sortPopoverOpen, setSortPopoverOpen] = useState(false);
+  const [selectionMenuOpen, setSelectionMenuOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
 
@@ -592,6 +594,7 @@ export function GitHubResourceList({
     if (isDropdownOpen) return;
     // Closing — nothing of ours may stay portaled on `document.body`.
     setSortPopoverOpen(false);
+    setSelectionMenuOpen(false);
     setOpenRowMenuNumber(null);
   }, [isDropdownOpen]);
 
@@ -1220,61 +1223,136 @@ export function GitHubResourceList({
               </div>
             </PopoverContent>
           </Popover>
-        </div>
-
-        {/* Tied to selection mode rather than to a non-empty query: this is a
-            whole extra row in a vertically stacked header, so typing the first
-            character of a search used to grow the header and shove the list
-            down. Entering selection is a deliberate act; typing is not. */}
-        {selection.isSelectionActive &&
-          data.length > 0 &&
-          !loading &&
-          (() => {
-            const allSelected = data.every((item) => selection.selectedIds.has(item.number));
-            // The bulk action these helpers feed is creating worktrees, so the
-            // useful filter is which rows do not have one yet. "Unassigned" was
-            // a proxy for that, and a poor one — plenty of assigned issues have
-            // no local worktree, and picking them selected rows the bulk create
-            // would immediately skip.
-            // Open as well as worktree-less: the bulk planner skips closed
-            // issues and merged PRs outright, so selecting them would walk you
-            // into a dialog with nothing left to create.
-            const withoutWorktree = data.filter(
-              (item) => item.state === "open" && !worktreeIndex.has(item.number)
-            );
-            return (
-              <div
-                className="flex items-center gap-1.5"
-                role="group"
-                aria-label="Selection actions"
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (allSelected) {
-                      selection.clear();
-                    } else {
-                      selection.selectAll(data);
-                    }
-                  }}
-                  className="text-xs text-text-secondary hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary transition-colors duration-150 ease-out px-1 py-0.5 rounded"
-                >
-                  {allSelected ? "Deselect all" : `Select all (${data.length})`}
-                </button>
-                {withoutWorktree.length > 0 && withoutWorktree.length < data.length && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      selection.selectAll(withoutWorktree);
-                    }}
-                    className="text-xs text-text-secondary hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary transition-colors duration-150 ease-out px-1 py-0.5 rounded"
-                  >
-                    {`Select without worktrees (${withoutWorktree.length})`}
-                  </button>
+          {/* The bulk-select entry point lives here, in the fixed icon row,
+              rather than in a row of its own. A helper row keyed to selection
+              mode could only be reached by ticking a row first, and one keyed
+              to the search query grew the stacked header on the first
+              keystroke and shoved the list down. A trigger that is always
+              present at a fixed size is neither. */}
+          <Popover open={selectionMenuOpen} onOpenChange={setSelectionMenuOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                disabled={loading || data.length === 0}
+                aria-label={`Select ${type === "issue" ? "issues" : "pull requests"}`}
+                aria-haspopup="dialog"
+                aria-expanded={selectionMenuOpen}
+                title="Select"
+                className={cn(
+                  "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0",
+                  "text-text-secondary hover:text-text-primary hover:bg-overlay-medium",
+                  "transition-[background-color,color] duration-150 ease-out",
+                  // No lift while a selection is live: the bulk bar already
+                  // states the count, and a second membership signal here
+                  // would say the same thing twice.
+                  "disabled:cursor-default disabled:opacity-50",
+                  "disabled:hover:bg-transparent disabled:hover:text-text-secondary"
                 )}
+              >
+                <ListChecks className="w-3.5 h-3.5" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              sideOffset={8}
+              className="w-56 p-3"
+              onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
+              onTouchStart={(e: React.TouchEvent) => e.stopPropagation()}
+              onKeyDown={(e: React.KeyboardEvent) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setSelectionMenuOpen(false);
+                }
+              }}
+            >
+              <div className="text-xs font-medium text-text-secondary mb-2">Select</div>
+              <div className="flex flex-col gap-1" role="group" aria-label="Selection actions">
+                {(() => {
+                  const allSelected =
+                    data.length > 0 && data.every((item) => selection.selectedIds.has(item.number));
+                  // Assignment, not worktree readiness — the two measure
+                  // different things, so this one does NOT inherit the open
+                  // filter below. `data` is already scoped by the state tab,
+                  // and a closed issue with nobody on it is still unassigned.
+                  // PRs carry no assignment model at all, so the choice is
+                  // absent for them rather than permanently empty.
+                  const unassigned =
+                    type === "issue"
+                      ? data.filter((item) => (item as Issue).assignees.length === 0)
+                      : null;
+                  // Open as well as worktree-less: the bulk planner skips
+                  // closed issues and merged PRs outright, so selecting them
+                  // would walk you into a dialog with nothing left to create.
+                  const withoutWorktree = data.filter(
+                    (item) => item.state === "open" && !worktreeIndex.has(item.number)
+                  );
+
+                  const options: {
+                    key: string;
+                    label: string;
+                    disabled: boolean;
+                    onSelect: () => void;
+                  }[] = [
+                    allSelected
+                      ? {
+                          key: "deselect-all",
+                          label: "Deselect all",
+                          disabled: false,
+                          onSelect: () => selection.clear(),
+                        }
+                      : {
+                          key: "select-all",
+                          label: `Select all (${data.length})`,
+                          disabled: false,
+                          onSelect: () => selection.selectAll(data),
+                        },
+                  ];
+                  if (unassigned !== null) {
+                    options.push({
+                      key: "select-unassigned",
+                      label: `Select unassigned (${unassigned.length})`,
+                      disabled: unassigned.length === 0,
+                      onSelect: () => selection.selectAll(unassigned),
+                    });
+                  }
+                  options.push({
+                    key: "select-without-worktrees",
+                    label: `Select without worktrees (${withoutWorktree.length})`,
+                    disabled: withoutWorktree.length === 0,
+                    onSelect: () => selection.selectAll(withoutWorktree),
+                  });
+
+                  // Disabled rather than dropped at zero: a menu whose entries
+                  // come and go between openings has to be re-read every time,
+                  // and an empty preset would replace the selection with
+                  // nothing.
+                  return options.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      disabled={option.disabled}
+                      onClick={() => {
+                        option.onSelect();
+                        setSelectionMenuOpen(false);
+                      }}
+                      className={cn(
+                        "flex items-center px-2 py-1 text-xs text-start rounded-[var(--radius-sm)]",
+                        "transition-[background-color,color] duration-150 ease-out",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2",
+                        "focus-visible:outline-accent-primary",
+                        "text-text-secondary hover:bg-overlay-medium hover:text-text-primary",
+                        "disabled:cursor-default disabled:opacity-50",
+                        "disabled:hover:bg-transparent disabled:hover:text-text-secondary"
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  ));
+                })()}
               </div>
-            );
-          })()}
+            </PopoverContent>
+          </Popover>
+        </div>
 
         <div
           className="flex p-0.5 bg-overlay-soft border border-[var(--border-divider)] rounded-[var(--radius-md)]"
