@@ -28,6 +28,7 @@ import {
   isTerminalClipboardPasteKey,
   isTuiReservedKey,
 } from "@/services/terminalReservedKeys";
+import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 
 export interface XtermAdapterProps {
   terminalId: string;
@@ -505,7 +506,12 @@ export function XtermAdapter({
                     }
                   )
                   .then((dispatchResult) => {
-                    if (!dispatchResult.ok) {
+                    // A destructive action that parked a confirmation reports
+                    // CONFIRMATION_REQUIRED rather than a silent ok (#12120).
+                    // terminal.kill/restart are bound by default and land here
+                    // when the terminal has focus, so logging that as a failure
+                    // would fire on the normal "the dialog opened" path.
+                    if (!dispatchResult.ok && !isStagedConfirmation(dispatchResult.error)) {
                       logError(
                         `[XtermKeybinding] Action "${result.match!.actionId}" failed`,
                         undefined,

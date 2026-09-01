@@ -48,6 +48,7 @@ import { useActionMruStore } from "@/store/actionMruStore";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { useActionPalette } from "../useActionPalette";
 import { getActionCategoryLabel, orderActionCategories } from "@/config/actionCategoryOrder";
+import { ConfirmationStagedError } from "@/services/actions/confirmationStaged";
 
 function makeEntry(
   id: string,
@@ -554,7 +555,7 @@ describe("useActionPalette", () => {
   async function runFailingPaletteAction(
     entry: ReturnType<typeof makeEntry> & { pluginId?: string; paletteRedirectTo?: string },
     query: string,
-    error: { code: string; message: string }
+    error: { code: string; message: string; details?: unknown }
   ): Promise<void> {
     dispatchMock.mockResolvedValue({ ok: false, error });
     listMock.mockReturnValue([entry]);
@@ -589,6 +590,28 @@ describe("useActionPalette", () => {
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({ type: "error", title: "Couldn't run 'Acmething'" })
     );
+  });
+
+  // A destructive action that parked a confirmation reports CONFIRMATION_REQUIRED
+  // so an agent can't read the no-op as a completed kill (#12120). The dialog it
+  // opened is the user's feedback, so the palette must not toast over it — but
+  // only for that sentinel: the outer gate emits the same code to mean a genuine
+  // refusal, which still needs reporting.
+  it("suppresses the palette toast when the action parked a confirmation", async () => {
+    await runFailingPaletteAction(makeEntry("terminal.kill", "Killterminal"), "killterminal", {
+      code: "CONFIRMATION_REQUIRED",
+      message: "Killing this terminal was not performed",
+      details: new ConfirmationStagedError("Killing this terminal was not performed"),
+    });
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("still toasts a CONFIRMATION_REQUIRED that did not come from a parked confirmation", async () => {
+    await runFailingPaletteAction(makeEntry("terminal.kill", "Killterminal"), "killterminal", {
+      code: "CONFIRMATION_REQUIRED",
+      message: "requires explicit confirmation",
+    });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 
   it("still toasts a built-in action EXECUTION_ERROR (no pluginId, doesn't self-notify)", async () => {

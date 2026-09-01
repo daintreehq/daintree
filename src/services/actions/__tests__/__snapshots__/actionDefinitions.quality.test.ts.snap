@@ -4807,7 +4807,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "confirm",
     "dangerRationale": "Permanently kills the PTY process. Scrollback and session state are lost.",
-    "description": "Permanently destroy a panel and its process, with no trash step and no recovery. Not limited to terminals: whatever the id names is removed. A panel running an agent session is untouched unless the call is marked confirmed, so read back its state rather than assume it went. Identify it explicitly: an automated caller cannot see what the user focused. Close it instead when recovery matters.",
+    "description": "Permanently destroy a panel and its process, with no trash step and no recovery. Not limited to terminals: whatever the id names is removed. A panel running an agent session is untouched unless the call is confirmed, and an untouched call fails rather than reporting it went. Identify it explicitly: an automated caller cannot see what the user focused. Close it instead when recovery matters.",
     "examples": undefined,
     "id": "terminal.kill",
     "keywords": [
@@ -4824,7 +4824,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "confirm",
     "dangerRationale": "Permanently kills every user-facing terminal. All scrollback and session state are lost.",
-    "description": "Permanently destroy every panel in the project, across all worktrees and kinds, including trashed and backgrounded, with no trash step and no recovery. It takes the user's own shells and other agents' work with it; only tooling-internal and dialog-hosted panels are spared. While an agent session runs it destroys nothing unless the call is marked confirmed. Automated callers should never need this.",
+    "description": "Permanently destroy every panel in the project, across all worktrees and kinds, including trashed and backgrounded, with no trash step and no recovery. It takes the user's own shells and other agents' work with it; only tooling-internal and dialog-hosted panels are spared. While an agent session runs it destroys nothing unless the call is confirmed. Automated callers should never need this.",
     "examples": undefined,
     "id": "terminal.killAll",
     "keywords": [
@@ -5083,7 +5083,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "confirm",
     "dangerRationale": "Restarts the terminal process. Scrollback is lost and the process is re-spawned.",
-    "description": "Restart a terminal's process in place, keeping the pane. This returns before the restart finishes, so it is not ready when it does; watch its status before sending anything. A terminal running an agent session is left untouched unless the call is marked confirmed; otherwise whatever was running is terminated and unsaved state is lost. A panel with no process is ignored, not an error.",
+    "description": "Restart a terminal's process in place, keeping the pane. This returns before the restart finishes, so it is not ready when it does; watch its status before sending anything. A terminal running an agent session is left untouched unless the call is confirmed; otherwise whatever was running is terminated and unsaved state is lost. A panel with no process is ignored, not an error.",
     "examples": undefined,
     "id": "terminal.restart",
     "keywords": [
