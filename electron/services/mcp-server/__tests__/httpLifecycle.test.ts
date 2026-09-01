@@ -902,6 +902,31 @@ describe("HttpLifecycle", () => {
       expect(persisted.capturedTurnId).toBeUndefined();
     });
 
+    it("passes startedAt through the closure untouched (#12122)", () => {
+      // This hop has no explicit handling for `startedAt` — it survives only on
+      // the `...recordInput` rest spread, which peels off `capturedTurnId` and
+      // keeps everything else. That makes it exactly the kind of silent-drop
+      // risk a future edit to the destructure could reintroduce, so pin it.
+      const deps = fakeDeps();
+      deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
+      const lc = new HttpLifecycle(deps);
+      const deps_ = buildDeps(lc, "session-1");
+      const startedAt = 1_767_225_600_123;
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-1",
+        tier: "action",
+        args: {},
+        durationMs: 5,
+        startedAt,
+        outcome: { kind: "result", value: { ok: true, result: null } },
+        capturedTurnId: null,
+      });
+      expect(deps.auditService.appendRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ startedAt })
+      );
+    });
+
     it("omits turnId when the captured snapshot is null", () => {
       const deps = fakeDeps();
       deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");

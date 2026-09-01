@@ -163,6 +163,12 @@ export class AuditService {
     tier: McpTier;
     args: unknown;
     durationMs: number;
+    /**
+     * Dispatch-start snapshot from the CallTool handler. Optional here because
+     * `recordAuth401` writes pre-auth rows that never had a handler; the
+     * `SessionServerDeps` carrier makes it required for every real dispatch.
+     */
+    startedAt?: number;
     outcome: AuditOutcome;
     confirmationDecision?: McpConfirmationDecision;
     argsSummary: string;
@@ -192,6 +198,12 @@ export class AuditService {
       schemaVersion: MCP_AUDIT_SCHEMA_VERSION,
       severity: computeMcpAuditSeverity(classification.result, classification.errorCode),
     };
+    // Stored verbatim — unlike `durationMs`, which is clamped because a
+    // wall-clock step can make an elapsed interval negative. `startedAt` is an
+    // absolute epoch reading; rounding or flooring it would fabricate.
+    if (input.startedAt !== undefined) {
+      record.startedAt = input.startedAt;
+    }
     if (classification.errorCode !== undefined) {
       record.errorCode = classification.errorCode;
     }

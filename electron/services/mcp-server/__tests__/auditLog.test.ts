@@ -294,6 +294,99 @@ describe("AuditService.appendRecord — resultMeta (#10014)", () => {
   });
 });
 
+describe("AuditService.appendRecord — startedAt (#12122)", () => {
+  it("persists the caller's startedAt verbatim and round-trips it through getRecords", () => {
+    const { service } = makeFixture();
+    // A real epoch reading, not a small sentinel: the service must not clamp,
+    // round, or re-derive it the way it normalises `durationMs`.
+    const startedAt = 1_767_225_600_123;
+    service.appendRecord({
+      toolId: "worktree.list",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 40,
+      startedAt,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    const [record] = service.getRecords();
+    expect(record!.startedAt).toBe(startedAt);
+  });
+
+  it("records startedAt independently of timestamp and durationMs", () => {
+    // The whole point of the field (#12122): `timestamp` is a fresh clock read
+    // taken inside appendRecord, so `timestamp - durationMs` lands after the
+    // real start. A consumer ordering calls must be able to read the start
+    // directly rather than reconstruct it.
+    const { service } = makeFixture();
+    const startedAt = 1_767_225_600_000;
+    service.appendRecord({
+      toolId: "worktree.list",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 250,
+      startedAt,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    const [record] = service.getRecords();
+    expect(record!.startedAt).toBe(startedAt);
+    // timestamp is "now", far from the fixed historical startedAt above —
+    // proving the field is stored, not derived from the other two.
+    expect(record!.timestamp).not.toBe(startedAt);
+    expect(record!.timestamp - record!.durationMs).not.toBe(startedAt);
+  });
+
+  it("keeps startedAt on gate outcomes, which are real dispatch attempts", () => {
+    // Unlike `resultMeta`, absence is NOT the right behaviour for gates: an
+    // unauthorized / dedup / collision row is a call the backend actually
+    // issued, so it must count when measuring concurrency.
+    const { service } = makeFixture();
+    const outcomes: AuditOutcome[] = [
+      { kind: "unauthorized" },
+      { kind: "dedup" },
+      { kind: "collision" },
+    ];
+    outcomes.forEach((outcome, i) => {
+      service.appendRecord({
+        toolId: "agent.terminal",
+        sessionId: "sess-1",
+        tier: "action",
+        args: {},
+        durationMs: 0,
+        startedAt: 1_767_225_600_000 + i,
+        outcome,
+        argsSummary: "{}",
+      });
+    });
+    const records = service.getRecords();
+    expect(records).toHaveLength(3);
+    // Newest-first, so the starts run back down the sequence.
+    expect(records.map((r) => r.startedAt).sort((a, b) => a! - b!)).toEqual([
+      1_767_225_600_000, 1_767_225_600_001, 1_767_225_600_002,
+    ]);
+  });
+
+  it("omits startedAt as a key entirely when the caller supplies none", () => {
+    const { service } = makeFixture();
+    service.appendRecord({
+      toolId: "agent.launch",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: 5,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    const [record] = service.getRecords();
+    // Absent as a key, not present-and-undefined — persisted JSON must not
+    // carry a stray `startedAt: undefined`.
+    expect("startedAt" in record!).toBe(false);
+  });
+});
+
 describe("AuditService.recordAuth401 pre-auth records", () => {
   it("emits a pre-auth record alongside the counter increment", () => {
     const { service } = makeFixture();
@@ -313,6 +406,10 @@ describe("AuditService.recordAuth401 pre-auth records", () => {
     expect(record!.durationMs).toBe(0);
     expect(record!.argsSummary).toBe("pre-auth request rejected");
     expect(record!.repeatCount).toBeUndefined();
+    // A 401 is rejected before any CallTool handler exists, so there is no
+    // start to record — the key must stay absent rather than be invented
+    // from the write time (#12122).
+    expect("startedAt" in record!).toBe(false);
   });
 
   it("coalesces bursts within 1s by incrementing repeatCount", () => {
@@ -408,6 +505,26 @@ describe("AuditService hydrate — backward compat", () => {
     const records = service.getRecords();
     expect(records).toHaveLength(1);
     expect(records[0]!.id).toBe("old-1");
+  });
+
+  it("leaves startedAt absent on rows written before the field existed (#12122)", () => {
+    // hydrate() backfills only schemaVersion/severity. An old row has no start
+    // to recover, and inferring one from `timestamp - durationMs` would be a
+    // fabricated value a concurrency reader would silently trust.
+    const { service } = makeFixture({}, [
+      {
+        id: "old-1",
+        timestamp: 1000,
+        toolId: "agent.terminal",
+        sessionId: "sess-1",
+        tier: "action",
+        argsSummary: "{}",
+        result: "success",
+        durationMs: 5,
+      },
+    ]);
+    const [record] = service.getRecords();
+    expect("startedAt" in record!).toBe(false);
   });
 
   it("backfills schemaVersion and severity on old persisted records", () => {

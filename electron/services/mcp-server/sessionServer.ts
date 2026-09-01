@@ -308,6 +308,16 @@ export interface SessionServerDeps {
     tier: McpTier;
     args: unknown;
     durationMs: number;
+    /**
+     * The handler's dispatch-start snapshot (#12122), forwarded so the
+     * persisted record carries the same start the live strip's started event
+     * does. Required — the audit record's own `timestamp` is a later clock
+     * read, so a site that omitted this would leave its row unable to be
+     * ordered against its siblings. Every CallTool audit write has it in
+     * scope; making it mandatory here is what stops the next one from
+     * dropping it.
+     */
+    startedAt: number;
     outcome: AuditOutcome;
     confirmationDecision?: import("../../../shared/types/ipc/mcpServer.js").McpConfirmationDecision;
     bannerSuppressed?: boolean;
@@ -860,6 +870,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           tier,
           args,
           durationMs: Date.now() - startedAt,
+          startedAt,
           outcome: { kind: "unauthorized" },
           bannerSuppressed: suppressBanner ? true : undefined,
           capturedTurnId,
@@ -934,6 +945,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             tier,
             args,
             durationMs: Date.now() - startedAt,
+            startedAt,
             outcome: { kind: "throw", error: err },
             capturedTurnId,
           });
@@ -1019,6 +1031,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             tier,
             args,
             durationMs: Date.now() - startedAt,
+            startedAt,
             outcome: { kind: "result", value },
             capturedTurnId,
           });
@@ -1100,6 +1113,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 tier,
                 args,
                 durationMs: Date.now() - startedAt,
+                startedAt,
                 outcome: { kind: "collision" },
                 capturedTurnId,
               });
@@ -1120,6 +1134,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               tier,
               args,
               durationMs: Date.now() - startedAt,
+              startedAt,
               outcome: { kind: "dedup" },
               capturedTurnId,
             });
@@ -1141,6 +1156,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               tier,
               args,
               durationMs: Date.now() - startedAt,
+              startedAt,
               outcome: { kind: "collision" },
               capturedTurnId,
             });
@@ -1161,6 +1177,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             tier,
             args,
             durationMs: Date.now() - startedAt,
+            startedAt,
             outcome: { kind: "dedup" },
             capturedTurnId,
           });
@@ -1841,6 +1858,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             tier,
             args,
             durationMs,
+            startedAt,
             outcome: settledOutcome,
             confirmationDecision,
             capturedTurnId,

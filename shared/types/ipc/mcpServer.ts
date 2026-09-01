@@ -105,7 +105,31 @@ export function computeMcpAuditSeverity(
 
 export interface McpAuditRecord {
   id: string;
+  /**
+   * When the record was written — the outcome-decision time, not the moment
+   * the caller got its response. For the in-flight dedup gate that is when the
+   * duplicate was detected, before the handler awaits the original promise.
+   * Do not reconstruct the start as `timestamp - durationMs`: the two come
+   * from different clock reads separated by the audit's own summarize/redact
+   * work, so they disagree. Use {@link McpAuditRecord.startedAt} (#12122).
+   */
   timestamp: number;
+  /**
+   * Epoch ms snapshotted once at CallTool-handler entry — the same value the
+   * live {@link McpToolCallStartedPayload} carries, never a re-read. Lets a
+   * reader order dispatches by true arrival and compute real overlap
+   * (`startA < endB && startB < endA`) to tell whether an assistant backend
+   * issues MCP calls concurrently or serially, which `durationMs` alone can't
+   * answer (#12122).
+   *
+   * Present on every CallTool record including the gate outcomes
+   * (unauthorized / dedup / collision) — those are real attempts the backend
+   * made, so they count for concurrency. Presence does NOT imply the
+   * underlying action ran; `result` is what says that. Absent on pre-auth
+   * rejections (no handler exists yet) and on records written before the
+   * field existed.
+   */
+  startedAt?: number;
   toolId: string;
   sessionId: string;
   /**
