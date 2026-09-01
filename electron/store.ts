@@ -26,6 +26,7 @@ import type { PluginMcpAuditRecord } from "../shared/types/ipc/pluginMcpAudit.js
 import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/pluginMcpAudit.js";
 import type { PluginMcpConsentRecord } from "../shared/types/pluginMcpConsent.js";
 import type { PluginCapabilityConsentRecord } from "../shared/types/pluginCapabilityConsent.js";
+import type { ProjectPluginTrustRecord } from "../shared/types/plugin.js";
 import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pluginMcp.js";
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
 import type { RunParkRecord, RunSnoozeRecord } from "../shared/types/ipc/fleet.js";
@@ -533,15 +534,33 @@ export interface StoreSchema {
   };
   /**
    * Just-in-time (JIT) consent grants for plugin host capabilities (#10524).
-   * Each grant is a `(pluginId, capability)` pair the user approved on first
-   * use of a high-risk host surface (`shell:exec`, `fs:*-write`, `git:write`),
-   * so later calls run without re-prompting. Plaintext, matching the
-   * `pluginMcpConsent` precedent — a grant holds no secret, only the pair and a
-   * timestamp.
+   * Each grant is a `(scopeKey, pluginId, capability)` triple the user approved
+   * on first use of a high-risk host surface (`shell:exec`, `fs:*-write`,
+   * `git:write`), so later calls run without re-prompting. Plaintext, matching
+   * the `pluginMcpConsent` precedent — a grant holds no secret, only the triple
+   * and a timestamp. Records written before the scope key existed have no
+   * `scopeKey` field and hydrate as `"global"`.
    */
   pluginCapabilityConsent: {
     grants?: PluginCapabilityConsentRecord[];
   };
+  /**
+   * Per-project trust decisions for `<projectRoot>/.daintree/plugins/`, keyed by
+   * `projectId`. Deliberately here and never in the repository: a decision that
+   * a repository could carry would be a decision the repository makes for you,
+   * and the whole gate exists because a project folder is writable by everyone
+   * who can push to it — agents included.
+   *
+   * Absence means no decision, which means disabled: discovery still parses
+   * manifests so the UI can say what is there, but nothing runs. An
+   * enable-for-this-session choice is held in memory by
+   * `ProjectPluginController` and never reaches this key.
+   *
+   * Additive key with no numbered migration, matching `forgeDefaultProviderId`,
+   * `pluginMcpConfig` and `pluginCapabilityConsent` — every read goes through
+   * `?? {}` and a missing key is indistinguishable from an empty one.
+   */
+  projectPluginTrust?: Record<string, ProjectPluginTrustRecord>;
 }
 
 const storeOptions = {
@@ -738,6 +757,7 @@ const storeOptions = {
       maxToolsPerSession: PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION,
     },
     pluginCapabilityConsent: {},
+    projectPluginTrust: {},
   },
   cwd: process.env.DAINTREE_USER_DATA,
 };

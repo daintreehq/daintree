@@ -10,6 +10,31 @@ Each section below documents a contribution point, its schema, an example, and c
 - **Planned** — design locked, implementation in progress
 - **Future** — not yet committed
 
+## Project scope
+
+A plugin that declares `"scope": "project"` lives in a project's own repository and loads only while that project is open — see [Project-local plugins](./project-local.md). Not every contribution point can be narrowed to one project yet, so the manifest gate refuses the ones that cannot. This table is the per-point status; the sections below describe each point in its app-wide form, which is what an installed or builtin plugin always gets.
+
+| Contribution | Under `scope: "project"` |
+| --- | --- |
+| `panels` | Available — registered against the project, visible only in its views |
+| `views` | Available — served and mounted only in the owning project's renderer |
+| `commands` | Available — in that project's palette, dispatched into that project's renderer |
+| `toolbarButtons` | Available — only in the owning project's toolbar |
+| `contextMenus` | Available — only in the owning project's views |
+| `keybindings` | Available — renderer-level, so they resolve within the focused project |
+| `settings` | Available — `scope: "project"` values resolve from the bound project root, not the focused one |
+| `surfaces` | **Project scope only** — see [Surfaces](#surfaces--shipped-project-scope-only) |
+| `menuItems` | Rejected — the application menu is one OS-level menu shared by every window, with no per-project projection |
+| `agents` | Rejected — the agent roster is one app-wide registry mirrored into the shared pty-host, and launch identity outlives the project binding |
+| `skills` | Rejected — contributed skills land in one app-wide index behind the MCP server's `skills.search` / `skills.load` |
+| `recipes` | Rejected — the plugin recipe registry is broadcast to every renderer unfiltered |
+| `fileDecorationProviders` | Rejected — decoration requests carry a resource path with no owning-project routing |
+| `processTools` | Rejected — detections are mirrored into the shared pty-host as one table for every terminal |
+| `mcpServers` | Rejected — contributed servers are reachable app-globally, where a session carries no project binding to check |
+| `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
+
+Each rejection is a manifest error naming the obstacle, not a silent drop, and each is deferred rather than closed — the reason says what has to be built before the rule can go.
+
 ## Commands — _Shipped_
 
 Commands are callable actions that appear in the command palette and can be bound to keybindings, toolbar buttons, or menu items. Declare them in `plugin.json` so the command shows up in the palette before your plugin activates, or register them at runtime via `host.registerAction()` for dynamic cases. See [Host API → registerAction](./host-api.md#registeraction) for the full signature.
@@ -271,7 +296,7 @@ These are two different reloads, and a plugin author debugging "my change didn't
 - **Worker reload** replaces the plugin's _backend_ Realm. `activate()` runs again against a fresh module graph, so edits to your main entry take effect on the next reload.
 - **View-module replacement** is the _renderer_ half. Chromium caches ESM module records by URL with no eviction API, so re-importing the same `plugin://` specifier returns the module already in memory no matter how thoroughly the panel remounts.
 
-Daintree bridges the gap by stamping a per-load generation into the view URL — `plugin://<id>/__dtv-<n>/dist/view.js`. Every time the plugin is **loaded** — an install, a replacement install, an enable, or an app start — it mints a new `<n>`, which is a specifier the renderer has never imported, so the new bundle is genuinely fetched and evaluated. Open panels remount onto it automatically; no Force Reload, and no need to hand-version your bundle filename each release.
+Daintree bridges the gap by stamping a per-load generation into the view URL — `plugin://<authority>/__dtv-<n>/dist/view.js`. The authority is an opaque per-load token (`pi-` plus 32 hex characters). The host also seeds the plugin's **host-side id** into the same resolver map as an alias, which is what keeps a hand-written `plugin://<pluginId>/…` URL working — including the example above. That id is your manifest id for an installed plugin, but for a project-local plugin it is the instance key (`project__{projectId}__{manifestId}`), so use the `pluginId` you were handed in `PanelViewProps` rather than hardcoding your manifest name. Both keys are dropped on unload. Every time the plugin is **loaded** — an install, a replacement install, an enable, or an app start — it mints a new `<n>`, which is a specifier the renderer has never imported, so the new bundle is genuinely fetched and evaluated. Open panels remount onto it automatically; no Force Reload, and no need to hand-version your bundle filename each release.
 
 The `daintree-plugin dev` hot-reload path is the exception: it respawns the plugin's **worker** without re-registering contributions, so your backend changes take effect but the generation does not advance and open views keep the module already in memory. Reopen the plugin (disable/enable, or reinstall) — or Force Reload the window — to pick up view changes during a dev session.
 
@@ -590,6 +615,40 @@ Named multi-terminal launch layouts a plugin ships. A contributed recipe is regi
 **Referencing your own agent.** A recipe terminal may name an agent id from the same plugin's `contributes.agents`. Ownership is resolved against the live registry, not the manifest: if another plugin already claimed that agent id, the terminal is dropped rather than silently launching someone else's agent.
 
 **Agent-initiated runs are confirmation-gated.** Any agent or MCP dispatch that carries a `recipeId` — through `recipe.run` or a composite like `worktree.createWithRecipe` — pauses for a single human approval showing the resolved recipe, its origin, and the commands each terminal will run (env keys are listed, values are not). This applies to every recipe tier, not just plugin-contributed ones. An external MCP session bound to one workspace has no one watching that view to answer the dialog, so there the dispatch is refused outright rather than paused (#11789).
+
+## Surfaces — _Shipped (project scope only)_
+
+`contributes.surfaces` lets a **project-local** plugin replace one of Daintree's own surfaces for its own project, so a project can present as a purpose-built application rather than as the host with one extra panel. It is the only contribution point that replaces something the host already draws.
+
+Available to `"scope": "project"` plugins alone. An installed plugin is bound to no project, so there would be nothing to scope the claim to and no project registry to arbitrate a second claimant against; a manifest without `"scope": "project"` that declares any surface is rejected at validation.
+
+```json
+{
+  "scope": "project",
+  "contributes": {
+    "panels": [{ "id": "overview", "name": "Overview", "iconId": "gauge" }],
+    "views": [{ "id": "overview", "componentPath": "dist/panel.js", "location": "panel" }],
+    "surfaces": {
+      "emptyCanvas": { "viewId": "overview" }
+    }
+  }
+}
+```
+
+| Slot | Replaces |
+| --- | --- |
+| `emptyCanvas` | What the content grid draws when the project has no panels open — the region the stock launcher lives in |
+
+`emptyCanvas` is the only slot the schema accepts today.
+
+Rules:
+
+- **Slot-replacing, never removing.** Surrounding chrome is untouched: the project switcher, the sidebar and the worktree dashboard stay where they are. The host wraps the region in a frame that always offers a control back to the stock launcher, so a broken or half-finished surface cannot strand the user.
+- **`viewId` must name a declared `contributes.views` entry**, cross-checked at validation like any other dangling reference (`surface_view_ref_unknown`). It must not name a panel with `hasPty: true` (`surface_view_ref_pty`) — a PTY panel is rendered by the terminal host and never loads the view module, so the claim would hold the slot and draw nothing.
+- **At most one plugin per slot per project.** First claim wins; a second is refused and logged with both plugin names, so the author can tell which manifest to change. Never a silent last-wins. The refused plugin still loads and its other contributions work, and its claim is remembered — it inherits the slot if the incumbent later unloads.
+- The surface view receives the standard `PanelViewProps` (`panelId`, `pluginId`, `disposeSignal`) and sits inside the standard plugin error boundary, so a crash falls back with a working "Try again" rather than a blank region.
+
+`projectHome` (a persistent project-owned entry in the primary navigation) and `defaultLayout` (the arrangement opened on a cold first open) appear in this feature's design notes and are **not implemented** — the schema rejects them. There is no per-project routing a persistent home surface could live at yet, and a recipe is launched against a worktree rather than against a project cold open.
 
 ## Themes — _Future_
 

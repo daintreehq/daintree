@@ -1969,6 +1969,22 @@ export interface IpcEventMap {
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
 
+  // A project's `.daintree/plugins/` folder holds valid manifests and has no
+  // trust decision on record (main → renderer, project-scoped). The ONLY signal
+  // that may open the project-plugin trust dialog: the controller alone knows
+  // whether a prompt is due, and it never re-emits after a decision is stored.
+  "plugin:project-trust-prompt": import("../plugin.js").ProjectPluginTrustPromptEvent;
+
+  // Full snapshot of a project's own plugins and its trust state (main →
+  // renderer, project-scoped). Emitted on every open, trust change and staged
+  // activation, so the plugin manager renders from the push rather than
+  // refetching.
+  "plugin:project-plugins-changed": import("../plugin.js").ProjectPluginsChangedEvent;
+
+  // A manifest id this trusted project has never had appeared and was staged
+  // rather than run (main → renderer, project-scoped). Fires once per new id.
+  "plugin:project-plugin-staged": import("../plugin.js").ProjectPluginStagedEvent;
+
   // The project's git remote table changed (main → renderer, #11155) — e.g.
   // `git remote add origin`. Signal-only and project-scoped: the renderer drops
   // its cached forge-provider resolution for `projectId` and re-resolves via
@@ -2120,6 +2136,10 @@ export type IpcEventBusMap = Pick<
   | "plugin:panel-badges-cleared"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // Project-local plugin trust + inventory (project-scoped send)
+  | "plugin:project-trust-prompt"
+  | "plugin:project-plugins-changed"
+  | "plugin:project-plugin-staged"
   // Project's git remotes changed — re-resolve the forge provider (global broadcast)
   | "forge:remote-changed"
   // Background plugin update check found updates (global broadcast)

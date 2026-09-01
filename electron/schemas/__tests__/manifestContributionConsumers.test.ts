@@ -21,6 +21,8 @@ import {
   RecipeContributionTerminalSchema,
   SettingDefinitionObjectSchema,
   SkillContributionSchema,
+  SurfaceContributionsSchema,
+  SurfaceViewSlotSchema,
   ToolbarButtonContributionSchema,
   ViewContributionSchema,
 } from "../plugin.js";
@@ -110,7 +112,9 @@ const SWEPT_SCHEMAS = {
   processTools: ProcessToolContributionSchema,
   settings: SettingDefinitionObjectSchema,
   recipes: RecipeContributionSchema,
+  surfaces: SurfaceContributionsSchema,
   "agents.detection": AgentDetectionConfigSchema,
+  "surfaces.emptyCanvas": SurfaceViewSlotSchema,
   "recipes.terminals": RecipeContributionTerminalSchema,
   "forgeProviders.credentialFields": CredentialFieldSchema,
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
@@ -139,6 +143,7 @@ const TOP_LEVEL_GROUPS = [
   "processTools",
   "settings",
   "recipes",
+  "surfaces",
 ] as const;
 
 /** Reduce a swept schema entry to its ZodObject and read the field keys. */
@@ -180,7 +185,9 @@ type FieldConsumerCoverage = {
   processTools: Record<keyof z.infer<typeof ProcessToolContributionSchema>, ConsumerDescriptor>;
   settings: Record<keyof z.infer<typeof SettingDefinitionObjectSchema>, ConsumerDescriptor>;
   recipes: Record<keyof z.infer<typeof RecipeContributionSchema>, ConsumerDescriptor>;
+  surfaces: Record<keyof z.infer<typeof SurfaceContributionsSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
+  "surfaces.emptyCanvas": Record<keyof z.infer<typeof SurfaceViewSlotSchema>, ConsumerDescriptor>;
   "recipes.terminals": Record<
     keyof z.infer<typeof RecipeContributionTerminalSchema>,
     ConsumerDescriptor
@@ -947,12 +954,38 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       note: "Resolved to the provider's issue-selector renderer view.",
     },
   },
+  surfaces: {
+    emptyCanvas: {
+      mode: "verbatim",
+      consumers: [
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (surfaces loop → claimProjectSurface)" },
+        {
+          file: "src/hooks/app/useEmptyCanvasContent.tsx",
+          symbol: "useEmptyCanvasContent (useProjectSurface)",
+        },
+      ],
+      note: "Claims the project's empty-canvas slot at load; the renderer draws the claimed view in place of the stock launcher.",
+    },
+  },
+  "surfaces.emptyCanvas": {
+    viewId: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (surface_view_ref_unknown)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "loadPlugin (toRuntimePanelKindId → claimProjectSurface)" },
+      ],
+      note: "Cross-checked against declared contributes.views, then resolved to the runtime panel-kind id the surface mounts.",
+    },
+  },
 } satisfies FieldConsumerCoverage;
 
 const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 function parseEmptyContributes() {
-  return getPluginManifestSchema(false).safeParse({
+  return getPluginManifestSchema("user").safeParse({
     name: "acme.consumer-contract",
     version: "1.0.0",
     contributes: {},

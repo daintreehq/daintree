@@ -1,7 +1,7 @@
 import { ipcMain, webContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
-import { getWindowRegistry, getProjectViewManager } from "../../window/windowRef.js";
+import { resolveTargetWebContents, type PluginTargetProjectId } from "./rendererTargeting.js";
 import type {
   PluginUiPromptParams,
   PluginUiPromptResultValue,
@@ -69,38 +69,6 @@ export class PluginUIPromptDispatcher {
   }
 
   /**
-   * Resolve the active project's renderer WebContents, mirroring
-   * {@link PluginRendererDispatcher.resolveActiveWebContents}: the focused
-   * window first (prompts carry no source window), then every live window, then
-   * the global `ProjectViewManager`. Returns `null` when no renderer is
-   * available so {@link requestPrompt} resolves the cancel value.
-   */
-  private resolveActiveWebContents(): Electron.WebContents | null {
-    const registry = getWindowRegistry();
-    if (registry) {
-      const primary = registry.getPrimary();
-      if (primary && !primary.browserWindow.isDestroyed()) {
-        const primaryWc = primary.services.projectViewManager?.getActiveView()?.webContents;
-        if (primaryWc && !primaryWc.isDestroyed()) {
-          return primaryWc;
-        }
-      }
-      for (const ctx of registry.all()) {
-        if (ctx.browserWindow.isDestroyed()) continue;
-        const webContents = ctx.services.projectViewManager?.getActiveView()?.webContents;
-        if (webContents && !webContents.isDestroyed()) {
-          return webContents;
-        }
-      }
-    }
-    const fallback = getProjectViewManager()?.getActiveView()?.webContents;
-    if (fallback && !fallback.isDestroyed()) {
-      return fallback;
-    }
-    return null;
-  }
-
-  /**
    * Lazily register the single `ipcMain` listener that resolves prompt
    * responses. The handler validates `event.sender.id` against the pending
    * request's `webContentsId` so a renderer in another window cannot resolve a
@@ -132,14 +100,19 @@ export class PluginUIPromptDispatcher {
   }
 
   /**
-   * Send a prompt request to the active renderer and await the user's answer.
-   * Always resolves with a {@link PluginUiPromptResultValue} — no renderer,
-   * renderer destroyed, plugin unload, and disposal all resolve the kind's
-   * cancel value rather than rejecting.
+   * Send a prompt request to a renderer and await the user's answer. Resolves
+   * with a {@link PluginUiPromptResultValue} — no renderer, renderer destroyed,
+   * plugin unload, and disposal all resolve the kind's cancel value rather than
+   * rejecting.
+   *
+   * `projectId` binds the prompt to one project's renderer, including a cached
+   * (not currently visible) view so the user finds it on switching back; it is
+   * the only path that can reject, with `PROJECT_VIEW_UNAVAILABLE`.
    */
   requestPrompt(
     pluginId: string,
-    params: PluginUiPromptParams
+    params: PluginUiPromptParams,
+    projectId?: PluginTargetProjectId
   ): Promise<PluginUiPromptResultValue> {
     const cancelValue = cancelValueFor(params.kind);
     return new Promise((resolve) => {
@@ -147,7 +120,9 @@ export class PluginUIPromptDispatcher {
         resolve(cancelValue);
         return;
       }
-      const webContents = this.resolveActiveWebContents();
+      // Unbound: deliberately ambient — an installed plugin's prompt belongs in
+      // front of whoever is looking, which is the focused project view.
+      const webContents = resolveTargetWebContents(projectId, `Plugin ${params.kind} prompt`);
       if (!webContents) {
         resolve(cancelValue);
         return;

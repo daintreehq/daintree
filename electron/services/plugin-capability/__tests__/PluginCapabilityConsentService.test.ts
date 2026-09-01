@@ -264,10 +264,79 @@ describe("PluginCapabilityConsentService", () => {
     expect(bridge).toHaveBeenCalledTimes(2);
   });
 
-  it("revokeAllForPlugin clears grants through the service", async () => {
+  it("does not coalesce prompts across scopes", async () => {
+    const { service } = makeService();
+    const bridge = vi.fn(async () => "approved-once" as PluginCapabilityConsentDecision);
+    service.setConsentBridge(bridge);
+
+    await Promise.all([
+      service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS),
+      service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS, "proj-1"),
+      service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS, "proj-2"),
+    ]);
+    // Three scopes, three decisions — collapsing them would approve two scopes
+    // the user was never shown.
+    expect(bridge).toHaveBeenCalledTimes(3);
+  });
+
+  it("treats an omitted scope and an explicit global scope as one prompt", async () => {
+    const { service } = makeService();
+    let resolveBridge!: (d: PluginCapabilityConsentDecision) => void;
+    const bridge = vi.fn(
+      () =>
+        new Promise<PluginCapabilityConsentDecision>((resolve) => {
+          resolveBridge = resolve;
+        })
+    );
+    service.setConsentBridge(bridge);
+
+    // The store key and the coalescing key each default an absent scope
+    // independently; if they ever drift, these two stop being the same request.
+    const a = service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS);
+    const b = service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS, "global");
+    expect(bridge).toHaveBeenCalledTimes(1);
+
+    resolveBridge("approved-and-pin");
+    await expect(Promise.all([a, b])).resolves.toEqual([undefined, undefined]);
+  });
+
+  it("a grant in one scope does not satisfy a check in another", async () => {
+    const { service, store } = makeService();
+    store.grant({ pluginId: "acme.x", capability: "shell:exec", scopeKey: "proj-1" });
+    const bridge = vi.fn(async () => "rejected" as PluginCapabilityConsentDecision);
+    service.setConsentBridge(bridge);
+
+    // Granted scope passes silently...
+    await expect(
+      service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS, "proj-1")
+    ).resolves.toBeUndefined();
+    expect(bridge).not.toHaveBeenCalled();
+
+    // ...and the global scope still has to ask.
+    await expect(service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS)).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+    expect(bridge).toHaveBeenCalledTimes(1);
+  });
+
+  it("approved-and-pin pins only the scope that was asked about", async () => {
+    const { service, store } = makeService();
+    service.setConsentBridge(async () => "approved-and-pin");
+    await service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS, "proj-1");
+    expect(
+      store.hasGrant({ pluginId: "acme.x", capability: "shell:exec", scopeKey: "proj-1" })
+    ).toBe(true);
+    expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(false);
+  });
+
+  it("revokeAllForPlugin clears grants in every scope through the service", async () => {
     const { service, store } = makeService();
     store.grant({ pluginId: "acme.x", capability: "shell:exec" });
+    store.grant({ pluginId: "acme.x", capability: "shell:exec", scopeKey: "proj-1" });
     expect(service.revokeAllForPlugin("acme.x")).toBe(true);
     expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(false);
+    expect(
+      store.hasGrant({ pluginId: "acme.x", capability: "shell:exec", scopeKey: "proj-1" })
+    ).toBe(false);
   });
 });

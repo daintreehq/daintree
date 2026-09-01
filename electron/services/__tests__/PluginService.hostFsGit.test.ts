@@ -99,7 +99,9 @@ function makeManifest(capabilities: string[], allowedPaths: string[]): PluginMan
     name: "acme.fsgit",
     version: "1.0.0",
     capabilities,
-    scopes: { fs: { allowedPaths } },
+    // `PluginFsScopeSchema` requires `.min(1)`, so a validated manifest never
+    // carries an empty `allowedPaths` — an undeclared scope omits the key.
+    ...(allowedPaths.length > 0 ? { scopes: { fs: { allowedPaths } } } : {}),
     contributes: { fileDecorationProviders: [], forgeProviders: [] },
   } as unknown as PluginManifest;
 }
@@ -566,5 +568,151 @@ describe("JIT capability consent gating (#10524)", () => {
     );
     expect(git.add).not.toHaveBeenCalled();
     expect(git.commit).not.toHaveBeenCalled();
+  });
+});
+
+describe("a bound plugin's ${project}/${worktree} allowlist roots", () => {
+  const PROJECT_A = "a".repeat(64);
+  const PROJECT_B = "b".repeat(64);
+
+  interface BoundFakePlugin extends FakeLoadedPlugin {
+    binding: { projectId: string | null; projectRoot: string | null };
+    origin?: "builtin" | "user" | "project";
+  }
+
+  /**
+   * A workspace client that answers the app-global fetch with B's worktrees and
+   * the per-project fetch with the caller's own. A bound plugin that resolves
+   * its tokens ambiently would land on B.
+   */
+  function setSplitWorktrees(perProject: Record<string, string>, ambient: string) {
+    const asCurrent = (p: string) => [{ path: p, isCurrent: true, isMainWorktree: true }];
+    const forProject = vi.fn(async (_root: string, projectId: string) =>
+      perProject[projectId] ? asCurrent(perProject[projectId]!) : []
+    );
+    (svc as unknown as { setWorkspaceClient(c: unknown): void }).setWorkspaceClient({
+      getAllStatesAsync: async () => asCurrent(ambient),
+      getAllStatesForProjectAsync: forProject,
+      on: vi.fn(),
+      off: vi.fn(),
+    });
+    return forProject;
+  }
+
+  function registerBound(binding: {
+    projectId: string | null;
+    projectRoot: string | null;
+  }): PluginHostApi {
+    const seam = svc as unknown as {
+      _registerFakePluginForTests(p: BoundFakePlugin): void;
+      _createHostForTests(id: string, b?: unknown): PluginHostApi;
+    };
+    seam._registerFakePluginForTests({
+      manifest: makeManifest(["fs:project-read"], ["${worktree}"]),
+      dir: baseDir,
+      loadedAt: 0,
+      isBuiltin: false,
+      binding,
+    });
+    return seam._createHostForTests("acme.fsgit", binding);
+  }
+
+  it("expands against its own project, not the focused one", async () => {
+    const mine = join(baseDir, "mine");
+    const theirs = join(baseDir, "theirs");
+    await fs.mkdir(mine, { recursive: true });
+    await fs.mkdir(theirs, { recursive: true });
+    await fs.writeFile(join(mine, "a.txt"), "mine", "utf8");
+    await fs.writeFile(join(theirs, "a.txt"), "theirs", "utf8");
+
+    const forProject = setSplitWorktrees({ [PROJECT_A]: mine }, theirs);
+    const host = registerBound({ projectId: PROJECT_A, projectRoot: mine });
+
+    expect(await host.fs.readFile(join(mine, "a.txt"))).toBe("mine");
+    expect(forProject).toHaveBeenCalledWith(mine, PROJECT_A);
+    // The focused project's tree is outside this plugin's declared roots.
+    await expect(host.fs.readFile(join(theirs, "a.txt"))).rejects.toThrow();
+  });
+
+  it("defaults a project plugin with no declared allowedPaths to its project root", async () => {
+    // Spec §7.2: a project plugin lives inside the tree, so the tree is the
+    // only sensible default. Without it host.fs and host.git reach nothing but
+    // the plugin's own data dir.
+    //
+    // The root sits UNDER the faked home deliberately. Literal allowlist paths
+    // are classified `user-data` when they are under the home dir, and most
+    // real projects are — so a default routed through literal classification
+    // would deny `fs:project-read` the project root. A root outside the home
+    // dir passes either way and proves nothing.
+    const mine = join(homeDir, "Projects", "defaulted");
+    await fs.mkdir(mine, { recursive: true });
+    await fs.writeFile(join(mine, "a.txt"), "mine", "utf8");
+
+    setSplitWorktrees({}, join(baseDir, "elsewhere"));
+    const seam = svc as unknown as {
+      _registerFakePluginForTests(p: BoundFakePlugin): void;
+      _createHostForTests(id: string, b?: unknown): PluginHostApi;
+    };
+    const binding = { projectId: PROJECT_A, projectRoot: mine };
+    const manifest = makeManifest(["fs:project-read"], []);
+    seam._registerFakePluginForTests({
+      manifest,
+      dir: baseDir,
+      loadedAt: 0,
+      isBuiltin: false,
+      origin: "project",
+      binding,
+    });
+    const host = seam._createHostForTests("acme.fsgit", binding);
+
+    expect(await host.fs.readFile(join(mine, "a.txt"))).toBe("mine");
+  });
+
+  it("does not widen an unbound plugin with no declared allowedPaths", async () => {
+    // An installed plugin has no project of its own; defaulting it to a tree
+    // would grant reach nobody asked for.
+    const somewhere = join(baseDir, "somewhere");
+    await fs.mkdir(somewhere, { recursive: true });
+    await fs.writeFile(join(somewhere, "a.txt"), "x", "utf8");
+
+    const seam = svc as unknown as {
+      _registerFakePluginForTests(p: BoundFakePlugin): void;
+      _createHostForTests(id: string, b?: unknown): PluginHostApi;
+    };
+    const binding = { projectId: null, projectRoot: null };
+    seam._registerFakePluginForTests({
+      manifest: makeManifest(["fs:project-read"], []),
+      dir: baseDir,
+      loadedAt: 0,
+      isBuiltin: false,
+      origin: "user",
+      binding,
+    });
+    const host = seam._createHostForTests("acme.fsgit", binding);
+
+    await expect(host.fs.readFile(join(somewhere, "a.txt"))).rejects.toThrow();
+  });
+
+  it("expands ambiently for an unbound plugin", async () => {
+    const ambient = join(baseDir, "ambient");
+    await fs.mkdir(ambient, { recursive: true });
+    await fs.writeFile(join(ambient, "a.txt"), "ambient", "utf8");
+
+    setSplitWorktrees({ [PROJECT_B]: join(baseDir, "unused") }, ambient);
+    const host = registerBound({ projectId: null, projectRoot: null });
+
+    expect(await host.fs.readFile(join(ambient, "a.txt"))).toBe("ambient");
+  });
+
+  it("expands to nothing for a malformed bound-but-rootless binding", async () => {
+    const ambient = join(baseDir, "ambient2");
+    await fs.mkdir(ambient, { recursive: true });
+    await fs.writeFile(join(ambient, "a.txt"), "ambient", "utf8");
+
+    setSplitWorktrees({}, ambient);
+    const host = registerBound({ projectId: PROJECT_A, projectRoot: null });
+
+    // Fails closed: the token contributes no root rather than falling back.
+    await expect(host.fs.readFile(join(ambient, "a.txt"))).rejects.toThrow();
   });
 });

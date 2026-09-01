@@ -4,6 +4,8 @@
 
 Plugins extend Daintree with new panels, actions, keybindings, MCP servers, agents, and — planned — skills. You can write a plugin for your own workflow and sideload it, share a plugin with your team by distributing a single file or URL, or publish one for others to install.
 
+A plugin can also belong to a **project** rather than to you: committed to a repository at `<projectRoot>/.daintree/plugins/`, gated by one trust decision, and loaded only while that project is open. See [Project-local plugins](./project-local.md).
+
 This section documents the plugin system for plugin authors. If you're looking for information on Daintree's internals, see [`../development.md`](../development.md).
 
 ## What a plugin is
@@ -33,6 +35,7 @@ Plugins are **sandboxed by convention, not by runtime enforcement.** They run wi
 | [Forge providers](./forge-provider.md) | The `forgeProviders` contribution type for code-hosting integrations |
 | [Distribution](./distribution.md) | Packaging, sharing, installing from file or URL |
 | [Development loop](./dev-loop.md) | The `daintree-plugin` CLI, hot reload, debugging |
+| [Project-local plugins](./project-local.md) | Plugins a project ships in its own repo — layout, the committed `dist/` contract, trust, hot reload |
 | [Trust model](./trust-model.md) | Capability disclosure, confirm-dialog policy, the security contract |
 | [Architecture](./architecture.md) | How the plugin system works under the hood |
 | [1.0 freeze plan](./freeze-plan.md) | Planning: the path to a frozen/stable 1.0 plugin API — root decisions, freeze roadmap, and rationale of record |

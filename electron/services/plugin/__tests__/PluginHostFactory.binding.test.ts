@@ -1,0 +1,509 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "path";
+
+const ipcUtilsMock = vi.hoisted(() => ({
+  broadcastToRenderer: vi.fn(),
+  broadcastToProjectRenderers: vi.fn(),
+}));
+const serviceRefsMock = vi.hoisted(() => ({
+  getPtyClient: vi.fn((): unknown => null),
+}));
+
+vi.mock("electron", () => ({
+  app: { getPath: vi.fn(() => "/tmp/daintree-test"), getVersion: vi.fn(() => "0.0.0") },
+  clipboard: { readImage: vi.fn(), writeText: vi.fn(), readText: vi.fn() },
+  shell: { openPath: vi.fn(), showItemInFolder: vi.fn(), openExternal: vi.fn() },
+  ipcMain: { on: vi.fn(), removeListener: vi.fn(), handle: vi.fn() },
+}));
+vi.mock("../../../ipc/utils.js", () => ({
+  broadcastToRenderer: ipcUtilsMock.broadcastToRenderer,
+  broadcastToProjectRenderers: ipcUtilsMock.broadcastToProjectRenderers,
+}));
+vi.mock("../../../window/serviceRefs.js", () => ({
+  getPtyClient: serviceRefsMock.getPtyClient,
+}));
+vi.mock("../../forgeProviderRegistry.js", () => ({
+  registerForgeProviderImpl: vi.fn(),
+  unregisterForgeProviderImpl: vi.fn(),
+}));
+vi.mock("../../fileDecorationRegistry.js", () => ({
+  registerFileDecorationProviderImpl: vi.fn(),
+  unregisterFileDecorationProviderImpl: vi.fn(),
+  scopeMatchesPattern: vi.fn((scope: string, pattern: string) => scope === pattern),
+}));
+vi.mock("../../PluginActionAuditService.js", () => ({
+  getPluginActionAuditService: vi.fn(() => ({ append: vi.fn(), getRecords: vi.fn(() => []) })),
+}));
+vi.mock("../../plugin-capability/instances.js", () => ({
+  getPluginCapabilityConsentService: vi.fn(() => ({ ensureAllowed: vi.fn(async () => undefined) })),
+}));
+vi.mock("../../forge/forgeCredentialUtils.js", () => ({
+  buildStoredCredentials: vi.fn(() => null),
+}));
+
+import { createHost, type PluginHostFactoryDeps } from "../PluginHostFactory.js";
+import { CHANNELS } from "../../../ipc/channels.js";
+import { events } from "../../events.js";
+import { AppError } from "../../../utils/errorTypes.js";
+import { UNBOUND_PLUGIN_HOST_BINDING } from "../../../../shared/types/plugin.js";
+import type { PluginHostBinding } from "../../../../shared/types/plugin.js";
+import type { WorktreeSnapshot } from "../../../../shared/types/workspace-host.js";
+import type { LoadedPlugin } from "../PluginServiceTypes.js";
+
+const PLUGIN_ID = "acme";
+const PROJECT_A = "project-a";
+const ROOT_A = path.join(path.sep, "repos", "alpha");
+const ROOT_B = path.join(path.sep, "repos", "beta");
+
+const BOUND: PluginHostBinding = { projectId: PROJECT_A, projectRoot: ROOT_A };
+
+function worktree(overrides: Partial<WorktreeSnapshot>): WorktreeSnapshot {
+  return {
+    id: "wt-1",
+    path: path.join(ROOT_A, "main"),
+    branch: "main",
+    isCurrent: false,
+    worktreeChanges: { changes: [] },
+    ...overrides,
+  } as unknown as WorktreeSnapshot;
+}
+
+function fakePlugin(): LoadedPlugin {
+  return {
+    // Builtin so the JIT capability-consent prompt is skipped in these tests.
+    isBuiltin: true,
+    manifest: {
+      name: PLUGIN_ID,
+      displayName: "Acme",
+      capabilities: ["agent:input"],
+      contributes: { forgeProviders: [], fileDecorationProviders: [] },
+    },
+  } as unknown as LoadedPlugin;
+}
+
+type WorktreeHandler = (payload?: { projectPath?: string }) => void;
+
+interface Harness {
+  deps: PluginHostFactoryDeps;
+  ambientFetch: ReturnType<typeof vi.fn>;
+  projectFetch: ReturnType<typeof vi.fn>;
+  recordPluginLog: ReturnType<typeof vi.fn>;
+  sendDispatchToRenderer: ReturnType<typeof vi.fn>;
+  sendActionsListToRenderer: ReturnType<typeof vi.fn>;
+  sendActionsGetToRenderer: ReturnType<typeof vi.fn>;
+  requestPrompt: ReturnType<typeof vi.fn>;
+  handlers: Map<string, WorktreeHandler[]>;
+}
+
+function makeHarness(): Harness {
+  const plugins = new Map<string, LoadedPlugin>([[PLUGIN_ID, fakePlugin()]]);
+  const handlers = new Map<string, WorktreeHandler[]>();
+
+  const ambientFetch = vi.fn(async (): Promise<WorktreeSnapshot[]> => []);
+  const projectFetch = vi.fn(async (): Promise<WorktreeSnapshot[]> => []);
+  const recordPluginLog = vi.fn();
+  const sendDispatchToRenderer = vi.fn(async () => ({ ok: true, data: undefined }));
+  const sendActionsListToRenderer = vi.fn(async () => []);
+  const sendActionsGetToRenderer = vi.fn(async () => null);
+  const requestPrompt = vi.fn(async () => undefined);
+
+  const deps = {
+    plugins,
+    pluginEventCleanups: new Map(),
+    pluginActions: new Map(),
+    pluginActionHandlers: new Map(),
+    pluginActionOwners: new Map(),
+    actionValidators: new Map(),
+    pluginBadges: new Map(),
+    pluginFsWatchers: new Map(),
+    broadcaster: { broadcastPluginActions: vi.fn() },
+    panelLifecycleBroker: { subscribe: vi.fn(() => () => {}) },
+    dispatcher: {
+      sendDispatchToRenderer,
+      sendActionsListToRenderer,
+      sendActionsGetToRenderer,
+    },
+    promptDispatcher: { requestPrompt },
+    settings: {},
+    storage: {},
+    getHostGitFactory: () => undefined,
+    getProcessManager: vi.fn(),
+    declaredCapabilities: () => new Set(["agent:input", "agent:read"]),
+    fetchAllWorktreeSnapshots: ambientFetch,
+    fetchWorktreeSnapshotsForProject: projectFetch,
+    recordPluginLog,
+    serializePluginBadges: () => ({}),
+    pluginDataDir: () => path.join(path.sep, "tmp", "data"),
+    isPathUnder: () => false,
+    expandAllowedPathEntries: async () => [],
+    subscribeWorktreeEvent: vi.fn((_pluginId: string, event: string, handler: WorktreeHandler) => {
+      const list = handlers.get(event) ?? [];
+      list.push(handler);
+      handlers.set(event, list);
+      return () => {};
+    }),
+    registerHandler: vi.fn(),
+    validateAndBuildActionDescriptor: vi.fn(),
+    safeAppendAudit: vi.fn(),
+    safeArgsHash: () => "",
+  } as unknown as PluginHostFactoryDeps;
+
+  return {
+    deps,
+    ambientFetch,
+    projectFetch,
+    recordPluginLog,
+    sendDispatchToRenderer,
+    sendActionsListToRenderer,
+    sendActionsGetToRenderer,
+    requestPrompt,
+    handlers,
+  };
+}
+
+function emit(h: Harness, event: string, payload?: { projectPath?: string }): void {
+  for (const handler of h.handlers.get(event) ?? []) handler(payload);
+}
+
+/** Flush the microtask queue so a subscription's async re-fetch settles. */
+async function flush(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  serviceRefsMock.getPtyClient.mockReturnValue(null);
+});
+
+describe("createHost worktree surfaces", () => {
+  it("reads the bound project's worktrees, never the focus-resolved set", async () => {
+    const h = makeHarness();
+    h.projectFetch.mockResolvedValue([
+      worktree({ id: "wt-a", isCurrent: true, path: path.join(ROOT_A, "feature") }),
+    ]);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect((await host.getActiveWorktree())?.id).toBe("wt-a");
+    expect((await host.getWorktrees()).map((w) => w.id)).toEqual(["wt-a"]);
+    expect(await host.getWorktreeStatus(path.join(ROOT_A, "feature"))).not.toBeNull();
+
+    expect(h.ambientFetch).not.toHaveBeenCalled();
+    expect(h.projectFetch).toHaveBeenCalledWith(PROJECT_A, ROOT_A);
+  });
+
+  it("leaves the unbound path on the ambient read", async () => {
+    const h = makeHarness();
+    h.ambientFetch.mockResolvedValue([worktree({ id: "wt-focus", isCurrent: true })]);
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    expect((await host.getActiveWorktree())?.id).toBe("wt-focus");
+    expect(h.projectFetch).not.toHaveBeenCalled();
+    expect(h.ambientFetch).toHaveBeenCalled();
+  });
+
+  it("fails closed rather than widening when a binding has no root", async () => {
+    const h = makeHarness();
+    h.ambientFetch.mockResolvedValue([worktree({ id: "wt-focus", isCurrent: true })]);
+    const { host } = createHost(h.deps, PLUGIN_ID, { projectId: PROJECT_A, projectRoot: null });
+
+    expect(await host.getActiveWorktree()).toBeNull();
+    expect(await host.getWorktrees()).toEqual([]);
+    expect(h.ambientFetch).not.toHaveBeenCalled();
+    expect(h.projectFetch).not.toHaveBeenCalled();
+  });
+
+  it("degrades to null/[] once the bound project is gone", async () => {
+    const h = makeHarness();
+    h.projectFetch.mockResolvedValue([]);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect(await host.getActiveWorktree()).toBeNull();
+    expect(await host.getWorktrees()).toEqual([]);
+    expect(await host.getWorktreeStatus(path.join(ROOT_A, "feature"))).toBeNull();
+  });
+});
+
+describe("createHost worktree subscriptions", () => {
+  it("fires onDidChangeActiveWorktree only for the bound project", async () => {
+    const h = makeHarness();
+    h.projectFetch.mockResolvedValue([worktree({ id: "wt-a", isCurrent: true })]);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidChangeActiveWorktree(callback);
+
+    emit(h, "worktree-activated", { projectPath: ROOT_B });
+    await flush();
+    expect(callback).not.toHaveBeenCalled();
+
+    emit(h, "worktree-activated", { projectPath: ROOT_A });
+    await flush();
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(callback.mock.calls[0][0]?.id).toBe("wt-a");
+  });
+
+  it("fires onDidChangeWorktrees only for the bound project", async () => {
+    const h = makeHarness();
+    h.projectFetch.mockResolvedValue([worktree({ id: "wt-a" })]);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback);
+
+    emit(h, "worktree-update", { projectPath: ROOT_B });
+    emit(h, "worktree-removed", { projectPath: ROOT_B });
+    await flush();
+    expect(callback).not.toHaveBeenCalled();
+
+    emit(h, "worktree-update", { projectPath: ROOT_A });
+    await flush();
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an unbound subscription firing for every project", async () => {
+    const h = makeHarness();
+    h.ambientFetch.mockResolvedValue([worktree({ id: "wt-focus" })]);
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeWorktrees(callback);
+
+    emit(h, "worktree-update", { projectPath: ROOT_B });
+    await flush();
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createHost renderer pushes", () => {
+  it("routes toast, broadcast and panel posts to the bound project's views", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.showToast({ message: "hi", type: "info" });
+    await host.broadcastToRenderer("ping", { a: 1 });
+    await host.postToPanel("stream", { b: 2 }, "panel-1");
+
+    expect(ipcUtilsMock.broadcastToRenderer).not.toHaveBeenCalled();
+    const targets = ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map((c) => c[0]);
+    expect(targets).toEqual([PROJECT_A, PROJECT_A, PROJECT_A]);
+    expect(ipcUtilsMock.broadcastToProjectRenderers.mock.calls[0][1]).toBe(
+      CHANNELS.NOTIFICATION_SHOW_TOAST
+    );
+  });
+
+  it("still broadcasts app-wide when unbound", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    await host.showToast({ message: "hi", type: "info" });
+    await host.broadcastToRenderer("ping", { a: 1 });
+
+    expect(ipcUtilsMock.broadcastToProjectRenderers).not.toHaveBeenCalled();
+    expect(ipcUtilsMock.broadcastToRenderer).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("createHost dispatch, catalog and prompts", () => {
+  it("hands the bound project id to every renderer round-trip", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.dispatch("terminal.focus");
+    await host.actions.list();
+    await host.actions.get("terminal.focus");
+    await host.showInputBox({ title: "name" });
+    await host.showConfirm({ title: "sure?" });
+
+    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith("terminal.focus", undefined, PROJECT_A);
+    expect(h.sendActionsListToRenderer).toHaveBeenCalledWith(PROJECT_A);
+    expect(h.sendActionsGetToRenderer).toHaveBeenCalledWith("terminal.focus", PROJECT_A);
+    for (const call of h.requestPrompt.mock.calls) expect(call[2]).toBe(PROJECT_A);
+  });
+
+  it("passes null through when unbound so the dispatchers stay ambient", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    await host.dispatch("terminal.focus");
+    await host.actions.list();
+    await host.showInputBox({ title: "name" });
+
+    expect(h.sendDispatchToRenderer).toHaveBeenCalledWith("terminal.focus", undefined, null);
+    expect(h.sendActionsListToRenderer).toHaveBeenCalledWith(null);
+    expect(h.requestPrompt.mock.calls[0][2]).toBeNull();
+  });
+
+  it("keeps the catalog's never-throws contract when the bound view is gone", async () => {
+    const h = makeHarness();
+    const unavailable = new AppError({
+      code: "PROJECT_VIEW_UNAVAILABLE",
+      message: "no live renderer",
+    });
+    h.sendActionsListToRenderer.mockRejectedValue(unavailable);
+    h.sendActionsGetToRenderer.mockRejectedValue(unavailable);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect(await host.actions.list()).toEqual([]);
+    expect(await host.actions.get("terminal.focus")).toBeNull();
+    expect(await host.actions.canDispatch("terminal.focus")).toBe("restricted");
+  });
+
+  it("still surfaces an unrelated catalog failure", async () => {
+    const h = makeHarness();
+    h.sendActionsListToRenderer.mockRejectedValue(new Error("boom"));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.actions.list()).rejects.toThrow("boom");
+  });
+
+  it("propagates a bound dispatch rejection rather than retargeting", async () => {
+    const h = makeHarness();
+    h.sendDispatchToRenderer.mockRejectedValue(
+      new AppError({ code: "PROJECT_VIEW_UNAVAILABLE", message: "no live renderer" })
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.dispatch("terminal.focus")).rejects.toMatchObject({
+      code: "PROJECT_VIEW_UNAVAILABLE",
+    });
+  });
+});
+
+describe("createHost sendToActiveAgent", () => {
+  function installPty(terminals: Array<Record<string, unknown>>, activeProjectId: string | null) {
+    const client = {
+      getAllTerminalsAsync: vi.fn(async () => terminals),
+      getActiveProjectId: vi.fn(() => activeProjectId),
+      stage: vi.fn(),
+      submit: vi.fn(),
+    };
+    serviceRefsMock.getPtyClient.mockReturnValue(client);
+    return client;
+  }
+
+  const agentTerminal = (id: string, projectId: string) => ({
+    id,
+    projectId,
+    launchAgentId: "claude",
+    hasPty: true,
+    agentState: "waiting",
+    activityTier: "active",
+    lastOutputTime: 1,
+  });
+
+  it("reaches only the bound project's agent", async () => {
+    const h = makeHarness();
+    const pty = installPty(
+      [agentTerminal("term-b", "project-b"), agentTerminal("term-a", PROJECT_A)],
+      "project-b"
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await host.sendToActiveAgent("hello");
+
+    expect(pty.stage).toHaveBeenCalledWith("term-a", "hello");
+    expect(pty.getActiveProjectId).not.toHaveBeenCalled();
+  });
+
+  it("no-ops with a warning when the bound project has no agent", async () => {
+    const h = makeHarness();
+    const pty = installPty([agentTerminal("term-b", "project-b")], "project-b");
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    await expect(host.sendToActiveAgent("hello")).resolves.toBeUndefined();
+
+    expect(pty.stage).not.toHaveBeenCalled();
+    expect(pty.submit).not.toHaveBeenCalled();
+    expect(h.recordPluginLog).toHaveBeenCalledWith(
+      expect.anything(),
+      PLUGIN_ID,
+      "warn",
+      expect.stringContaining("no agent terminal")
+    );
+  });
+
+  it("still throws NO_ACTIVE_AGENT for an unbound host with no agent", async () => {
+    const h = makeHarness();
+    installPty([], null);
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    await expect(host.sendToActiveAgent("hello")).rejects.toThrow("NO_ACTIVE_AGENT");
+  });
+
+  it("keeps the unbound host on the pty host's focused project", async () => {
+    const h = makeHarness();
+    const pty = installPty(
+      [agentTerminal("term-b", "project-b"), agentTerminal("term-a", PROJECT_A)],
+      "project-b"
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    await host.sendToActiveAgent("hello", { submit: true });
+
+    expect(pty.submit).toHaveBeenCalledWith("term-b", "hello");
+  });
+});
+
+describe("createHost onDidChangeAgentState", () => {
+  function installPtyForAgentState(terminalProjects: Record<string, string>) {
+    serviceRefsMock.getPtyClient.mockReturnValue({
+      getTerminalProjectId: vi.fn((id: string) => terminalProjects[id] ?? null),
+    });
+  }
+
+  it("delivers only the bound project's agent transitions", async () => {
+    const h = makeHarness();
+    installPtyForAgentState({ "term-a": PROJECT_A, "term-b": "project-b" });
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidChangeAgentState(callback);
+
+    events.emit("agent:state-changed", {
+      terminalId: "term-b",
+      state: "working",
+      previousState: "idle",
+      timestamp: 1,
+    } as never);
+    expect(callback).not.toHaveBeenCalled();
+    expect(await host.getAgentState()).toBeNull();
+
+    events.emit("agent:state-changed", {
+      terminalId: "term-a",
+      state: "waiting",
+      previousState: "working",
+      timestamp: 2,
+    } as never);
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect((await host.getAgentState())?.state).toBe("waiting");
+  });
+
+  it("drops an unattributable transition for a bound host", async () => {
+    const h = makeHarness();
+    installPtyForAgentState({});
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidChangeAgentState(callback);
+
+    events.emit("agent:state-changed", {
+      state: "working",
+      previousState: "idle",
+      timestamp: 1,
+    } as never);
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unbound host observing every project's agents", async () => {
+    const h = makeHarness();
+    installPtyForAgentState({ "term-b": "project-b" });
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    const callback = vi.fn();
+    await host.onDidChangeAgentState(callback);
+
+    events.emit("agent:state-changed", {
+      terminalId: "term-b",
+      state: "working",
+      previousState: "idle",
+      timestamp: 1,
+    } as never);
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+});

@@ -1042,7 +1042,7 @@ export async function initGlobalServices(
     run: async () => {
       const { pluginService } = await import("../services/PluginService.js");
       // Point the already-registered `plugin://` handler at the live resolver
-      // BEFORE `initialize()` runs, not after (#11728). `getPluginDir` is a
+      // BEFORE `initialize()` runs, not after (#11728). The resolver is a
       // plain lookup in a map that exists from construction, so it is safe to
       // call at any point — it simply returns `undefined` until a plugin
       // registers. Wiring it after `initialize()` left the placeholder resolver
@@ -1053,7 +1053,7 @@ export async function initGlobalServices(
       // Every `plugin://` module request in that window 404'd, and a rejected
       // dynamic import is permanent for that specifier — the module map has no
       // eviction, so "Try again" re-imported the same poisoned URL forever.
-      setPluginDirResolver((pluginId) => pluginService.getPluginDir(pluginId));
+      setPluginDirResolver((authority) => pluginService.getPluginRootByAuthority(authority));
       try {
         await pluginService.initialize();
       } catch (err) {

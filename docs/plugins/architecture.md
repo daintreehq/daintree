@@ -6,7 +6,7 @@ How the plugin system works internally. Most plugin authors don't need this docu
 
 A plugin's life has five phases:
 
-1. **Discovery** — startup scan of `~/.daintree/plugins/`
+1. **Discovery** — startup scan of `~/.daintree/plugins/`, plus a per-project scan of `<projectRoot>/.daintree/plugins/` on project open
 2. **Manifest validation** — `plugin.json` parsed, validated against the Zod schema
 3. **Registration** — eager contribution points (panels, toolbar buttons, menu items) registered in the respective registries
 4. **Activation** — plugin's `main` module imported, `activate(host)` called (lazy — triggered by first use)
@@ -20,6 +20,14 @@ Plugin directory names must match the plugin's `name` field. A plugin named `acm
 
 The `plugins` root is configurable for testing via the `PluginService` constructor argument but otherwise fixed.
 
+There are three discovery roots, and which one a manifest was found under is its **origin** (`PluginOrigin = "builtin" | "user" | "project"` in `shared/types/plugin.ts`). The origin is what the manifest gate keys its three-way rules off, and it replaced the older `isBuiltin` boolean, which could only say "first-party or not":
+
+- `"builtin"` — shipped inside the app bundle (`plugins/builtin/`), plus the E2E sideload root, loaded on the same trust footing.
+- `"user"` — the startup scan of `~/.daintree/plugins/`.
+- `"project"` — `<projectRoot>/.daintree/plugins/`, scanned per project on open rather than once at startup. Unlike the other two this root is plural and dynamic: one per open project. See [Project-local plugins](#project-local-plugins).
+
+`discoverProjectPlugins` (`electron/services/plugin/projectPluginDiscovery.ts`) is the project-root scan. It deliberately does not compare the directory name against the manifest `name`: identity comes from the manifest, and the shipping `plugins/builtin/github` directory already declares `daintree.github`, so making the rule hard for one root alone would leave the roots disagreeing about what a plugin folder is.
+
 ### Manifest validation
 
 Validation is strict. The manifest is parsed by `PluginManifestSchema` (Zod) in strict mode, which rejects unknown top-level keys and unknown keys inside `contributes` (both the inner object itself and contributions whose individual entry schemas opt into `.strict()`). The reason is conservative: unknown keys are almost always typos, and silently dropping typo'd contributions is a bad debugging experience.
@@ -28,6 +36,8 @@ Validation also runs structural checks across the whole `contributes` block via 
 
 - **Duplicate contribution IDs** within any one array (`panels`, `commands`, `views`, `mcpServers`, `agents`, `settings`, `forgeProviders`, `fileDecorationProviders`, …) are rejected with a `duplicate_contribution_id` error.
 - **Dangling cross-references** are rejected: a `forgeProvider`'s `settingsScopeRef` and `viewRefs[]` must resolve to declared settings/views; every `view.id` must match a declared `panels[].id` (an orphaned view that names no panel is now a hard manifest error, not a load-time warning); and `${settings:settingId}` tokens inside an MCP server's `command`/`args`/`env` must reference a declared setting (unknown tokens fail with `settings_token_unknown` / `settings_token_malformed`).
+
+The schema is built per origin — `getPluginManifestSchema(origin)` — so a handful of rules differ by discovery root. The reserved `daintree.*` namespace is builtin-only, and `scope: "project"` is enforced in both directions: required under the project root (`project_scope_required`), rejected under the user and builtin roots (`project_scope_not_allowed`). A project-scoped manifest additionally may not declare the contribution groups that are still structurally app-wide, or claim `contributes.surfaces` unless it is project-scoped — see [Project-local plugins](#project-local-plugins).
 
 Agent `command`/`args` are the one exception to the token check: the schema does **not** validate their `${settings:*}` tokens at parse time even though the runtime resolves them at spawn (see [Environment variable substitution](#environment-variable-substitution)).
 
@@ -104,6 +114,80 @@ On plugin unload, `PluginService.unloadPlugin()` runs these cleanups in order:
 
 For a user-installed plugin the disposal cascade is followed by killing its worker, which reclaims the plugin's entire module realm — module-scope state never survives a reload. For a built-in (which runs in-process) the module is merely orphaned: Node's module cache still holds it but no live references point to it, and since built-ins are never uninstalled that residue never accumulates.
 
+## Project-local plugins
+
+A project can ship plugins in its own repository at `<projectRoot>/.daintree/plugins/`. The author-facing guide is [Project-local plugins](./project-local.md); this section is the internal shape.
+
+`ProjectPluginController` (`electron/services/plugin/ProjectPluginController.ts`) is a `PluginService` collaborator in the same injected-callback-bag shape as `PluginInstaller` and `PluginSettingsManager` — it never imports the facade back. It owns one entry per open project: the trust decision, the last discovery result, the set of manifest ids the project has ever had (`known`), the set staged but not run (`staged`), and the map of what is loaded. Every mutation runs on a per-project serialization chain behind a generation counter, so a close or a revoke landing mid-scan cancels the load that was already in flight rather than being undone by a teardown queued behind it.
+
+### Discovery executes nothing
+
+`discoverProjectPlugins` reads and parses `plugin.json` and stops there. It never stats `dist/`, resolves `main`, imports a module or forks a worker. This is a hard property, not an implementation detail: discovery runs _before_ the trust gate on a folder anyone who can push to the repository can write, so a project the user has never trusted must be fully describable without a line of its code having run. Symlink containment matches the `plugin://` handler — every candidate directory and `plugin.json` is realpath-resolved and checked against the realpath-resolved project root — and a manifest over 512 KB is refused outright.
+
+### Trust
+
+One gate, at the project folder, once. `ProjectPluginController` emits a trust prompt only when the folder holds at least one valid manifest and no decision is on record; the three outcomes are `"disabled"` (persisted, never re-prompts), `"session"` (memory only, written nowhere) and `"enabled"` (persisted). The record lives under `projectPluginTrust` in `electron/store.ts`, keyed by `projectId` — deliberately in Daintree's own store and never in the repository, because a decision a repository could carry would be a decision the repository makes for you.
+
+Content changes never re-prompt. The one content signal kept is a manifest id the project has **never had**: it is parsed, listed as `staged`, announced once, and not activated until the user clicks through. A revoke unloads everything the project owns, invalidates its authorities, and purges its capability grants; a close unloads but keeps the decision.
+
+Only the project root is scanned, so worktrees inherit the project's decision by construction rather than by a special case.
+
+### Identity
+
+Four keys, and collapsing any two is where the model breaks:
+
+| Key | Shape | Lifetime |
+| --- | --- | --- |
+| Manifest id | `acme.dashboard` | Source-controlled |
+| Instance key | `project__{projectId}__{acme.dashboard}` | While loaded, and in every durable record |
+| Runtime panel kind id | `project:{projectId}/{manifestId}/{kindId}` | While loaded |
+| Protocol authority | `pi-` + 32 hex | While loaded |
+
+The instance key is what `PluginService.plugins`, the contribution registries, the `plugin://` resolver map, the capability-consent subject and the **user-scope** settings/storage filenames all index on, which is what keeps two projects shipping the same manifest id genuinely separate. The separator is `__` rather than `/` or `:` because the key is joined onto filesystem paths, and neither half can contain it (a project id is lowercase hex, a manifest id is `publisher.name`). Two things deliberately do not use it: the trust record is keyed by `projectId` alone, and files written into the git-tracked `<projectRoot>/.daintree/` are named by the bare manifest id, because an instance key embeds this machine's project id and committing that would make every other checkout read nothing.
+
+Panel kinds are the subtle one, because `PanelKindConfig.id` is persisted inside saved layouts. The intent is that the qualified runtime id never reaches persistence: layouts should store `PersistedPanelKindRef` (`{ origin, pluginId, kindId }`, no project id — layouts are already project-associated) and re-qualify against the owning project at restore, through `toRuntimePanelKindId` / `toPersistedPanelKindRef` in `shared/config/panelKindRegistry.ts`. **Only the qualifying half is wired.** `PluginService` builds the runtime id through `toRuntimePanelKindId`, but `panelPersistence.ts` still writes `kind: t.kind` verbatim and nothing on the save or restore path calls `toPersistedPanelKindRef` — today it has one caller, `PluginMissingPanel`, which uses it to name the missing plugin. So a project-qualified kind currently does reach saved layouts, and a re-clone at a different path would orphan those panels. The unqualification is the piece still to land. A panel whose kind no longer resolves renders `PluginMissingPanel` and is retained, never deleted.
+
+### Contribution scoping
+
+Every registration is tagged with a scope and filtered at broadcast and query time (`PluginContributionBroadcaster`). Global mutations broadcast as before; project-scoped mutations go to that project's renderers only, and the cold-start replay (`pushSnapshotTo`) takes the target view's `projectId` and pushes `global ∪ that project`. Getting that replay wrong is invisible until a project view is recreated after LRU eviction and suddenly sees another project's panels, which is why it takes the project explicitly rather than inferring one.
+
+Panels, commands/actions, toolbar buttons, keybindings, context menus and settings scope cleanly. The groups that register into a registry with no project axis at all — `menuItems`, `agents`, `skills`, `recipes`, `fileDecorationProviders`, `processTools`, `mcpServers` — are rejected at manifest validation for `scope: "project"`, each with an error naming its structural obstacle, rather than accepted and silently over-published. `forgeProviders` is rejected for a different reason: its host methods are synchronous and cannot cross the worker's message port. `PROJECT_SCOPE_UNSCOPED_CONTRIBUTIONS` in `electron/schemas/plugin.ts` is the enumerated set, so a group that later grows a project axis is removed in one place.
+
+### Host binding
+
+`createPluginHost` takes a `PluginHostBinding` (`{ projectId, projectRoot }`) and captures it **once, at construction**. Every closure reads the captured values; no bound host method resolves a project, worktree, or renderer from focus. That covers renderer dispatch and `host.actions.*`, the UI prompts, worktree getters and events, agent-state events, `sendToActiveAgent`, toasts and renderer pushes, and settings and storage `"project"` scope resolution. One gap is worth knowing: `PluginHostFactory` passes only `projectRoot` into `resolveStorageFilePath`, so `host.storage` at `scope: "worktree"` still falls back to the app-global active worktree and can follow focus rather than the binding.
+
+A bound round-trip with no live renderer for its own project throws `PROJECT_VIEW_UNAVAILABLE` (`shared/types/appError.ts`) rather than falling back — the fallback _is_ the confused-deputy bug. `resolveTargetWebContents` in `electron/services/plugin/rendererTargeting.ts` is the single decision point: nullish `projectId` means unbound and resolves ambiently, anything else resolves that project or throws. The throw reaches the plugin as a rejection from `host.dispatch` and the UI prompts; the read-only catalog surfaces (`host.actions.list` / `get` / `canDispatch`) are documented never to throw, so they catch exactly this code and answer empty. A cached (evicted-but-retained) view still counts as live; a visible view wins when the project is open in more than one window.
+
+Installed and builtin plugins keep an unbound binding (`UNBOUND_PLUGIN_HOST_BINDING`) and the ambient behaviour they always had. Making them project-bound is a separate product decision; what this feature delivers is that the binding exists, project plugins always have one, and a bound plugin's resolution path never consults focus.
+
+### Execution
+
+Project plugins load with `origin: "project"` and `isBuiltin: false`, so they always activate through `activateViaWorker` — the in-process builtin loader is never used for them. One worker per plugin _instance_, keyed by the instance key, so a crash in one project plugin does not take out its siblings. `main` is realpath-contained to the plugin directory before it is imported: a `dist/index.js` that symlinks out of the plugin is ignored rather than executed. Activation still obeys the manifest's own activation events — a trusted project plugin without `onStartupFinished` does not run until one of its contributions is used.
+
+Project open and close are wired through `electron/window/projectPluginLifecycle.ts`, both as fire-and-forget dynamic imports so neither path blocks on plugin work. "Opened" hangs off the project switch (where the project actually comes into use) and "closed" off `project:close` (where the user says so). **LRU eviction is not a close**: the project is still open, its terminals still run, and its plugins survive the renderer being reclaimed — the recreated view gets a full project-aware snapshot push.
+
+### Hot reload for project plugins
+
+`ProjectPluginWatcher` holds one `@parcel/watcher` subscription per trusted project over `<projectRoot>/.daintree/plugins`. `plugin.json` and `dist/` are the only paths that count; `src/`, `node_modules/` and `.git/` are ignored, because the host does not know how a given plugin builds and a source write says nothing about whether a loadable artifact exists yet.
+
+A settled burst is treated as "rescan that plugin directory", never as "these exact files changed" — FSEvents coalesces a mass rewrite into a directory-level flag — and the rescan is handed back to the ordinary project-open reconcile rather than to a second loader, which is what makes the trust gate, the staging rules, the serialization chain and the generation guard apply to a reload for free. Four properties are the watcher's own:
+
+- **A ~200 ms trailing debounce.** Rebuilds and branch switches arrive as storms.
+- **Deferral behind `.git/index.lock`.** While the lock exists the tree is mid-rewrite and any scan of it is a scan of a half-applied state. The wait is capped at 30 seconds so a crashed `git` cannot silently stop the watcher.
+- **A per-directory artifact fingerprint** over `plugin.json` + `dist/` (path, size, nanosecond mtime per file). Without it, FSEvents replaying pre-subscribe history would make every project open immediately reload everything it had just loaded.
+- **An invalid manifest keeps the running version.** The rescan happens before anything is unloaded; a currently-active plugin whose `plugin.json` stops parsing is retried with a short backoff, and only a manifest still broken afterwards falls through to the reconcile that disables it. A directory that has vanished is a different signal and unloads immediately.
+
+Reloads are per plugin directory, not per project. Each one mints a fresh `__dtv-` view generation, which is what makes the renderer re-import the bundle; the watcher reports the session's generation count so the accumulation is measured rather than assumed. Settings and `host.storage` survive a reload because both are files keyed by identity; module-scope state and React state do not.
+
+### Surfaces
+
+`contributes.surfaces` is the one contribution that _replaces_ something the host already draws, so it needs an arbiter the other points do not — two panels of the same name coexist, two empty canvases cannot. `PluginSurfaceRegistry` is that arbiter: one owner per `(projectId, slot)`, first claim wins, and a second claimant is refused with both names logged rather than silently overwriting. The refusal is a diagnostic, not a load failure — the second plugin still loads and its other contributions register. A refused claimant is remembered rather than discarded, so it inherits the slot if the incumbent unloads — nothing would ever retry it otherwise, because a loaded plugin is not scanned again.
+
+`emptyCanvas` is the only slot the schema accepts. A claim is only published when the named view actually registered a panel kind with a resolvable `componentPath`; a claim that would hold the slot and render nothing is dropped with a warning and the slot keeps its stock content. The renderer wraps the region in `ProjectSurfaceFrame`, which always offers a way back to the stock launcher — nothing here can remove host chrome, which is the boundary that keeps a broken plugin from stranding the user.
+
+`projectHome` and `defaultLayout` are described in the design notes and are deliberately not implemented: this renderer has no per-project routing a persistent home surface could live at, and a recipe is launched against a worktree rather than against a project cold open. Accepting either now would put a field in a frozen public contract that nothing reads.
+
 ## Renderer host
 
 Plugin views render inside Daintree's existing panel system. They must share Daintree's React 19 instance — two React copies on one page produce "Invalid hook call" errors even if the versions match exactly.
@@ -134,13 +218,15 @@ Plugins declare a `react` peer dependency in their own `package.json`. The host 
 
 ### Import URL flow
 
-Plugin view modules are loaded via Daintree's `plugin://` privileged protocol. When `PluginService.loadPlugin` matches a `contributes.views` entry to a panel by bare id, it stores the resolved URL — `plugin://{pluginId}/{componentPath}` — on the `PanelKindConfig` and broadcasts it through `plugin:panel-kinds-changed`. The renderer's `PluginViewHost` calls `React.lazy(() => import(componentPath))` against that URL; Chromium 146 resolves the protocol, the response carries the `plugin://` security headers, and the bare `react` / `react/jsx-runtime` specifiers in the bundle resolve through the host import map to Daintree's single React instance.
+Plugin view modules are loaded via Daintree's `plugin://` privileged protocol. When `PluginService.loadPlugin` matches a `contributes.views` entry to a panel by bare id, it stores the resolved URL on the `PanelKindConfig` and broadcasts it through `plugin:panel-kinds-changed`. The renderer's `PluginViewHost` calls `React.lazy(() => import(componentPath))` against that URL; Chromium 146 resolves the protocol, the response carries the `plugin://` security headers, and the bare `react` / `react/jsx-runtime` specifiers in the bundle resolve through the host import map to Daintree's single React instance.
+
+**The URL authority is opaque, not the plugin id.** Every load mints an authority — `pi-` plus 32 hex characters from a CSPRNG — and host-built URLs use it: `plugin://pi-{token}/__dtv-{n}/dist/panel.js`. The authority is never reissued, so a URL captured before an unload 404s forever rather than resolving into whatever next occupies that plugin id, and two projects shipping the same manifest id get separate authorities and separate trees. `mintPluginAuthority` seeds a second key into the same resolver map as an **alias**: the plugin's host-side id, which is the manifest id for an installed plugin and the instance key for a project-local one. That alias is what keeps a hand-written `plugin://{pluginId}/…` URL working (`contribution-points.md` documents the form, and the `pluginId` a view is handed is exactly this key). It is rebound on every reload and dropped on unload. Treat the authority as the real addressing unit — nothing should assume the hostname is a bare manifest id — and do not treat it as a secret. It is a namespace, not a capability.
 
 The resolved URL travels through the renderer over the existing panel-kinds IPC broadcast — no separate channel is required. `location: "sidebar"` and an unsafe `componentPath` (absolute paths, URL schemes, `..` segments) are rejected at manifest validation, so the whole plugin fails to load loudly rather than silently dropping the view. A view that targets a panel id with no matching `contributes.panels` entry is likewise rejected at manifest validation (#10620) — an orphaned view would otherwise never render, so the whole plugin fails to load rather than silently dropping it.
 
 ### Hot reload — dev only
 
-In dev, the host can re-evaluate a plugin view's module after the source changes. There is no production hot-reload path. V8 caches ESM module records by URL string and Chromium offers no eviction API (Vite #14438 / Chromium #350426234, unresolved as of 2026). Every cache-busting query string permanently expands the renderer's module map; iterating against a long-lived production renderer would leak memory indefinitely. Treat hot reload as a dev affordance and assume production users reach a clean state by closing and reopening the panel.
+In dev, the host can re-evaluate a plugin view's module after the source changes. For installed and builtin plugins there is no production hot-reload path; project-local plugins are the exception, and reload from a watched `dist/` in an ordinary session (see [Hot reload for project plugins](#hot-reload-for-project-plugins)). V8 caches ESM module records by URL string and Chromium offers no eviction API (Vite #14438 / Chromium #350426234, unresolved as of 2026). Every cache-busting query string permanently expands the renderer's module map; iterating against a long-lived production renderer would leak memory indefinitely. Treat hot reload as a dev affordance and assume production users reach a clean state by closing and reopening the panel.
 
 ### Renderer-first teardown
 

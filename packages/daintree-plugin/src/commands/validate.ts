@@ -4,6 +4,7 @@ import {
   DEPRECATED_CONTRIBUTION_ALIASES,
   getPluginManifestSchema,
 } from "../../../../electron/schemas/plugin.js";
+import type { PluginOrigin } from "../../../../shared/types/plugin.js";
 import { PLUGIN_ICON_IDS, isPluginIconId } from "../../../../shared/config/pluginIconIds.js";
 import { isBuiltInAgentId } from "../../../../shared/config/agentIds.js";
 
@@ -109,7 +110,15 @@ export async function runValidate(opts: ValidateOptions = {}): Promise<ValidateR
     return { ok: false, errors: ["plugin.json is not valid JSON"], warnings };
   }
 
-  const result = getPluginManifestSchema(false).safeParse(json);
+  // The CLI validates a source directory, so there is no discovery root to key
+  // the origin off — take the author at their word. A manifest declaring
+  // `scope: "project"` is checked under the project origin (which is where it
+  // will actually be loaded from); everything else under `"user"`, the origin a
+  // packaged .dntr installs into. `"builtin"` is deliberately unreachable: the
+  // reserved `daintree.*` namespace stays refused for third-party authors.
+  const declaredScope = (json as { scope?: unknown } | null)?.scope;
+  const origin: PluginOrigin = declaredScope === "project" ? "project" : "user";
+  const result = getPluginManifestSchema(origin).safeParse(json);
   if (!result.success) {
     for (const issue of result.error.issues) {
       const where = issue.path.length > 0 ? issue.path.join(".") : "(root)";

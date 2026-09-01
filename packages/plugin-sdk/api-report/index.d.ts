@@ -1712,6 +1712,14 @@ interface ViewContribution {
     location: ViewLocation;
     iconId?: string;
 }
+/** A surface slot claim naming one of the plugin's own `contributes.views`. */
+interface SurfaceViewSlot {
+    viewId: string;
+}
+/** The `contributes.surfaces` block of a project plugin's manifest. */
+interface SurfaceContributions {
+    emptyCanvas?: SurfaceViewSlot;
+}
 /**
  * Props every plugin-contributed panel view receives from the renderer host.
  * Intentionally narrower than the host-internal `PanelComponentProps` so the
@@ -2086,6 +2094,18 @@ interface PluginManifest {
     engines?: {
         daintree?: string;
     };
+    /**
+     * Declares the plugin is only ever loaded project-locally. REQUIRED when the
+     * manifest is discovered under a project's own plugins directory, REJECTED
+     * under the user or builtin roots. The manifest gate enforces both directions,
+     * so a project plugin cannot be dropped into the user directory (or a user
+     * plugin into a project) and quietly keep working under assumptions its author
+     * never made.
+     *
+     * A guardrail against accidental promotion, not a security control: the trust
+     * decision is the project folder, not this field.
+     */
+    scope?: "project";
     capabilities?: PluginCapability[];
     /**
      * Per-capability scope bindings that attenuate the compound-capability
@@ -2150,6 +2170,17 @@ interface PluginManifest {
          * qualified id. Empty unless the plugin ships recipes.
          */
         recipes: RecipeContribution[];
+        /**
+         * Project surfaces this plugin claims (§7.8). Optional in the type but
+         * always materialized by the manifest schema's `.default({})`, so a
+         * consumer reading it off a parsed manifest never sees `undefined` — the
+         * optionality is for the hand-built manifest literals in tests and tooling
+         * that predate the field.
+         *
+         * Only meaningful for a `scope: "project"` plugin; the manifest schema
+         * rejects the key outright for any other origin.
+         */
+        surfaces?: SurfaceContributions;
     };
 }
 /**

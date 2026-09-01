@@ -18,6 +18,14 @@ export type { BuiltInPanelKind };
  *
  * Built-in kinds are listed in `BUILT_IN_PANEL_KINDS`.
  * Extensions can register additional kinds as strings.
+ *
+ * A plugin-contributed kind is `{manifestId}.{kindId}` for a globally installed
+ * plugin and `project:{projectId}/{manifestId}/{kindId}` for a project-local
+ * one. Layouts persist `PanelSnapshot.kind` verbatim, so the project-qualified
+ * form reaches disk as-is today. `toRuntimePanelKindId` /
+ * `toPersistedPanelKindRef` in `shared/config/panelKindRegistry.ts` are the
+ * conversion for a later layout schema that drops the project id, so that a
+ * re-clone at a different path stops orphaning saved panels.
  */
 export type PanelKind = BuiltInPanelKind | (string & {});
 

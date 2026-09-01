@@ -877,6 +877,19 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:deep-link",
   "window:disk-space-status",
   "plugin:archive-install-intent",
+  // Project-local plugin trust: both are pushed during `onProjectOpened`, which
+  // on a cold project view runs before the React tree that subscribes has
+  // mounted. The trust prompt is the one and only signal permitted to raise the
+  // consent gate and main never re-emits it once a decision is stored, so a
+  // dropped push means the folder stays silently blocked with no way back but
+  // the indicator. Both are latest-wins single-shot signals, which is exactly
+  // what this buffer is for.
+  "plugin:project-trust-prompt",
+  "plugin:project-plugins-changed",
+  // Staged plugins are announced exactly once per new manifest id — main records
+  // the id as it stages it and never announces it again — so a push that lands
+  // before the subscriber mounts is a notification the user never gets.
+  "plugin:project-plugin-staged",
 ]);
 // Replayable events that accumulate instead of superseding. A double-clicked
 // `.dntr` archive (#11280) is one decision per file, so collapsing two
@@ -885,6 +898,10 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
 // current value matters. Buffered payloads replay in arrival order.
 const _eventBusFifoReplay: ReadonlySet<keyof IpcEventBusMap> = new Set([
   "plugin:archive-install-intent",
+  // Same reasoning: two plugin ids staged before the subscriber mounts are two
+  // separate "something new wants to run here" signals, and collapsing them to
+  // the latest would silently drop one.
+  "plugin:project-plugin-staged",
 ]);
 const _eventBusBuffered = new Map<keyof IpcEventBusMap, unknown[]>();
 

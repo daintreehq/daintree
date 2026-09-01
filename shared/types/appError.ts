@@ -30,6 +30,10 @@ export type AppErrorCode =
   | "PAYLOAD_TOO_LARGE"
   | "RECIPE_STALE_CONFLICT"
   | "PLUGIN_ACTIVATION_FAILED"
+  // A project-bound plugin host call had no live renderer for its own project.
+  // Deliberately not a fallback to the focused view: delivering it elsewhere is
+  // the confused-deputy bug this code exists to make visible.
+  | "PROJECT_VIEW_UNAVAILABLE"
   // Session-bookmark capture/persistence outcomes (#11288). Stable codes so the
   // UI (and MCP/automation callers) surface copy from the code, not exception text.
   | "NOT_BOOKMARKABLE"

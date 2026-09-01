@@ -1,4 +1,4 @@
-import type { BuiltInPluginCapability } from "../../../shared/types/plugin.js";
+import type { BuiltInPluginCapability, PluginScopeKey } from "../../../shared/types/plugin.js";
 import type { PluginCapabilityConsentOutcome } from "../../../shared/types/pluginCapabilityConsent.js";
 import type { PluginCapabilityConsentStore } from "./PluginCapabilityConsentStore.js";
 
@@ -35,9 +35,12 @@ export type PluginCapabilityConsentBridge = (
  * proceeds when it resolves; on denial it rejects, and the closure surfaces the
  * `PERMISSION_REQUIRED:` error to the plugin.
  *
- * Concurrent first-use calls for the same `(pluginId, capability)` are coalesced
- * onto a single in-flight prompt — a plugin firing several `host.process.spawn`
- * calls at once raises one dialog, not a stack of duplicates.
+ * Concurrent first-use calls for the same `(scopeKey, pluginId, capability)`
+ * are coalesced onto a single in-flight prompt — a plugin firing several
+ * `host.process.spawn` calls at once raises one dialog, not a stack of
+ * duplicates. The coalescing key carries the scope for the same reason the
+ * grant key does: two scopes are two decisions, so they must not collapse onto
+ * one dialog.
  */
 export class PluginCapabilityConsentService {
   private bridge: PluginCapabilityConsentBridge | null = null;
@@ -61,7 +64,7 @@ export class PluginCapabilityConsentService {
   }
 
   /**
-   * Purge every grant for a plugin. Delegated to the store (which is private to
+   * Purge every grant for a plugin, in every scope. Delegated to the store (which is private to
    * this service) so uninstall callers go through the service. Returns whether
    * the purge was durably persisted so the caller can retry or escalate.
    */
@@ -86,19 +89,21 @@ export class PluginCapabilityConsentService {
     pluginId: string,
     pluginDisplayName: string,
     capability: BuiltInPluginCapability,
-    declaredCapabilities: readonly BuiltInPluginCapability[]
+    declaredCapabilities: readonly BuiltInPluginCapability[],
+    scopeKey?: PluginScopeKey
   ): Promise<void> {
-    if (this.consentStore.hasGrant({ pluginId, capability })) return;
+    if (this.consentStore.hasGrant({ pluginId, capability, scopeKey })) return;
 
     const outcome = await this.requestOutcome(
       pluginId,
       pluginDisplayName,
       capability,
-      declaredCapabilities
+      declaredCapabilities,
+      scopeKey
     );
 
     if (outcome === "approved-and-pin") {
-      this.consentStore.grant({ pluginId, capability });
+      this.consentStore.grant({ pluginId, capability, scopeKey });
       return;
     }
     if (outcome === "approved-once") return;
@@ -133,7 +138,7 @@ export class PluginCapabilityConsentService {
   }
 
   /**
-   * Resolve the outcome for a `(pluginId, capability)`, coalescing concurrent
+   * Resolve the outcome for a `(scopeKey, pluginId, capability)`, coalescing concurrent
    * first-use requests onto one in-flight prompt. Re-checks the grant store
    * after awaiting a coalesced prompt so a sibling call that just got
    * `approved-and-pin` lets the rest through without a second decision.
@@ -147,13 +152,14 @@ export class PluginCapabilityConsentService {
     pluginId: string,
     pluginDisplayName: string,
     capability: BuiltInPluginCapability,
-    declaredCapabilities: readonly BuiltInPluginCapability[]
+    declaredCapabilities: readonly BuiltInPluginCapability[],
+    scopeKey?: PluginScopeKey
   ): Promise<PluginCapabilityConsentOutcome> {
     if (this.bridge === null) {
       // Fail closed — no UI to approve through.
       return Promise.resolve("undeliverable");
     }
-    const key = JSON.stringify([pluginId, capability]);
+    const key = JSON.stringify([scopeKey ?? "global", pluginId, capability]);
     const existing = this.inFlight.get(key);
     if (existing) return existing;
 

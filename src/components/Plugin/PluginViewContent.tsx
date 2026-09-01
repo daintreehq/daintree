@@ -64,6 +64,19 @@ export interface PluginViewContentProps {
   /** The worktree owning the panel instance, forwarded to the view as
    * `PanelViewProps.worktreeId` so it can reconstruct its own context (#11297). */
   worktreeId?: string;
+  /**
+   * Override the panel-removal signal, for a host whose content is NOT a panel
+   * record (§7.8 project surfaces).
+   *
+   * `pluginPanelLifecycle` derives permanent removal from the panel store and
+   * aborts the signal of any tracked id the store no longer lists. A surface's
+   * synthesized id is never in that store, so the default lookup would report a
+   * still-mounted surface as permanently removed on the next panel-store write
+   * — tearing down exactly the durable resources this signal exists to outlive.
+   * A host that owns its own removal lifetime supplies it here and is never
+   * tracked.
+   */
+  panelRemovedSignal?: AbortSignal;
 }
 
 /**
@@ -154,7 +167,9 @@ function isPluginViewModule(mod: unknown): mod is { default: ComponentType<Panel
  *     unmount — maximizing a sibling pane, leaving a dock tab — aborts it too.
  *   - `panelRemovedSignal` is per panel. It comes from `pluginPanelLifecycle`,
  *     which keys it by `panelId` so every mount of the same panel receives the
- *     same object, and aborts it only when the panel is permanently removed.
+ *     same object, and aborts it only when the panel is permanently removed. A
+ *     host whose content is not a panel record supplies its own instead — see
+ *     {@link PluginViewContentProps.panelRemovedSignal}.
  *   - On render error the boundary's "Try again" button reloads the module — a
  *     fresh state-held ref produces a new `lazy()` call so `import()` is
  *     re-evaluated rather than returning the cached failed promise.
@@ -332,6 +347,7 @@ export function makePluginViewContent(
     initialArgs,
     onRequestClose,
     worktreeId,
+    panelRemovedSignal: panelRemovedSignalOverride,
   }: PluginViewContentProps) {
     // Store the lazy component in state so retries can swap in a fresh ref
     // without a useMemo dependency array. Each `lazy()` wrapper caches its
@@ -397,7 +413,10 @@ export function makePluginViewContent(
     // Stable for this panel across every remount and retry — the identity IS
     // the contract, so it is read from the lifecycle service rather than held in
     // component state (which dies with the subtree this signal must outlive).
-    const panelRemovedSignal = getPanelRemovedSignal(panelId);
+    // A supplied signal short-circuits the lookup entirely: calling
+    // `getPanelRemovedSignal` would register this id with the lifecycle service,
+    // which is what makes a non-panel host's content get swept as removed.
+    const panelRemovedSignal = panelRemovedSignalOverride ?? getPanelRemovedSignal(panelId);
 
     const closeContextValue = useMemo(() => ({ onRequestClose }), [onRequestClose]);
 

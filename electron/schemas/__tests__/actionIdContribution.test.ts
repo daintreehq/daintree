@@ -45,7 +45,7 @@ function commandEntry(id: string): Record<string, unknown> {
 }
 
 describe("manifest-level actionId namespace gate (issue #10565)", () => {
-  const schema = getPluginManifestSchema(false);
+  const schema = getPluginManifestSchema("user");
 
   it("accepts a contribution referencing a built-in action", () => {
     const result = schema.safeParse(

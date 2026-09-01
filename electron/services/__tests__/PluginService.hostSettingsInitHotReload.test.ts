@@ -243,6 +243,25 @@ type SettingsHostShape = (pluginId: string) => {
   revoke: () => void;
 };
 
+/** The private settings manager, for the paths the host doesn't yet exercise. */
+type ServiceWithSettingsManager = {
+  settings: {
+    resolveSettingsFilePath: (
+      pluginId: string,
+      scope: SettingsScope,
+      projectRoot?: string | null
+    ) => string | undefined;
+    getOrCreateSettingsStore: (
+      pluginId: string,
+      scope: SettingsScope,
+      filePath: string
+    ) => {
+      get: <T = unknown>(key: string) => Promise<T | undefined>;
+      set: (key: string, value: unknown) => Promise<boolean>;
+    };
+  };
+};
+
 async function setupSettingsService(
   pluginId: string,
   settings?: Array<{ id: string; type: string; scope?: SettingsScope }>
@@ -320,7 +339,9 @@ describe("createHost — settings", () => {
     expect(JSON.parse(raw)).toEqual({ token: "in-project" });
   });
 
-  it("resolves the active project at call time, tracking project switches", async () => {
+  // The host supplies no project root, so it stays on the ambient path: an
+  // unbound (installed/builtin) plugin has no project of its own to pin.
+  it("resolves the active project at call time when no project root is supplied", async () => {
     const projA = path.join(tmpDir, "projA");
     const projB = path.join(tmpDir, "projB");
     const { service } = await setupSettingsService("acme.settings-switch");
@@ -336,6 +357,37 @@ describe("createHost — settings", () => {
 
     projectStoreMock.getCurrentProject.mockReturnValue({ path: projA });
     expect(await host.settings.get<string>("k", "project")).toBe("a-value");
+  });
+
+  it("an explicit project root wins over the active project and survives a switch", async () => {
+    const pluginId = "acme.settings-bound";
+    const bound = path.join(tmpDir, "bound");
+    const { service } = await setupSettingsService(pluginId);
+    const { settings } = service as unknown as ServiceWithSettingsManager;
+    const boundFile = path.join(bound, ".daintree", "plugin-settings", `${pluginId}.json`);
+
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: path.join(tmpDir, "projA") });
+    expect(settings.resolveSettingsFilePath(pluginId, "project", bound)).toBe(boundFile);
+    await settings.getOrCreateSettingsStore(pluginId, "project", boundFile).set("k", "bound-value");
+
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: path.join(tmpDir, "projB") });
+    expect(settings.resolveSettingsFilePath(pluginId, "project", bound)).toBe(boundFile);
+    expect(
+      await settings.getOrCreateSettingsStore(pluginId, "project", boundFile).get<string>("k")
+    ).toBe("bound-value");
+    // Only the bound read is pinned — the unbound one still follows the switch.
+    expect(settings.resolveSettingsFilePath(pluginId, "project")).toBe(
+      path.join(tmpDir, "projB", ".daintree", "plugin-settings", `${pluginId}.json`)
+    );
+  });
+
+  it("a supplied-but-empty project root has no target rather than falling back", async () => {
+    const pluginId = "acme.settings-empty-root";
+    const { service } = await setupSettingsService(pluginId);
+    const { settings } = service as unknown as ServiceWithSettingsManager;
+
+    projectStoreMock.getCurrentProject.mockReturnValue({ path: path.join(tmpDir, "projA") });
+    expect(settings.resolveSettingsFilePath(pluginId, "project", "")).toBeUndefined();
   });
 
   it("set rejects undefined and non-serializable values", async () => {

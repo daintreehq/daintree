@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { getPluginManifestSchema } from "../plugin.js";
 
-const schema = getPluginManifestSchema(false);
+const schema = getPluginManifestSchema("user");
 
 function manifestWith(contributes: Record<string, unknown>) {
   return schema.safeParse({

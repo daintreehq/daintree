@@ -472,6 +472,9 @@ export interface GeneratedElectronAPI {
     activateForView(
       ...args: IpcInvokeMap["plugin:activate-for-view"]["args"]
     ): Promise<IpcInvokeMap["plugin:activate-for-view"]["result"]>;
+    activateStagedProjectPlugin(
+      ...args: IpcInvokeMap["plugin:project-activate-staged"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-activate-staged"]["result"]>;
     cancelInstall(
       ...args: IpcInvokeMap["plugin:cancel-install"]["args"]
     ): Promise<IpcInvokeMap["plugin:cancel-install"]["result"]>;
@@ -520,6 +523,12 @@ export interface GeneratedElectronAPI {
     getPanelKinds(
       ...args: IpcInvokeMap["plugin:panel-kinds-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:panel-kinds-get"]["result"]>;
+    getProjectPlugins(
+      ...args: IpcInvokeMap["plugin:project-list"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-list"]["result"]>;
+    getProjectSurfaces(
+      ...args: IpcInvokeMap["plugin:project-surfaces-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-surfaces-get"]["result"]>;
     getRecipes(
       ...args: IpcInvokeMap["plugin:recipes-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:recipes-get"]["result"]>;
@@ -559,6 +568,9 @@ export interface GeneratedElectronAPI {
     registerAction(
       ...args: IpcInvokeMap["plugin:actions-register"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-register"]["result"]>;
+    reloadProjectPlugins(
+      ...args: IpcInvokeMap["plugin:project-reload"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-reload"]["result"]>;
     reportPanelLifecycle(
       ...args: IpcInvokeMap["plugin:report-panel-lifecycle"]["args"]
     ): Promise<IpcInvokeMap["plugin:report-panel-lifecycle"]["result"]>;
@@ -577,6 +589,9 @@ export interface GeneratedElectronAPI {
     setEnabled(
       ...args: IpcInvokeMap["plugin:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["plugin:set-enabled"]["result"]>;
+    setProjectPluginTrust(
+      ...args: IpcInvokeMap["plugin:project-set-trust"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-set-trust"]["result"]>;
     setSettingValue(
       ...args: IpcInvokeMap["plugin:settings-set-value"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-set-value"]["result"]>;

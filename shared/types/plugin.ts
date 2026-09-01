@@ -175,6 +175,41 @@ export interface ViewContribution {
 }
 
 /**
+ * The project surfaces a project-local plugin can own. See §7.8 and
+ * `SurfaceContributionsSchema` in `electron/schemas/plugin.ts` for why
+ * `projectHome` and `defaultLayout` are not here yet.
+ */
+export type ProjectSurfaceSlot = "emptyCanvas";
+
+/** A surface slot claim naming one of the plugin's own `contributes.views`. */
+export interface SurfaceViewSlot {
+  viewId: string;
+}
+
+/** The `contributes.surfaces` block of a project plugin's manifest. */
+export interface SurfaceContributions {
+  emptyCanvas?: SurfaceViewSlot;
+}
+
+/**
+ * A resolved surface claim, as the renderer receives it.
+ *
+ * `panelKindId` is the RUNTIME, project-qualified panel-kind id the view
+ * registered under, not the manifest's bare `viewId` — the renderer already
+ * knows how to turn one of those into a mounted plugin view (icon, name, the
+ * `plugin://` component path, the error boundary), so a surface reuses that
+ * path wholesale instead of growing a second way to mount the same module.
+ */
+export interface ProjectSurfaceClaim {
+  /** The owning plugin INSTANCE key, matching `PanelKindConfig.extensionId`. */
+  pluginId: string;
+  panelKindId: string;
+}
+
+/** Every surface claimed in one project, keyed by slot. */
+export type ProjectSurfaceSnapshot = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceClaim>>;
+
+/**
  * Props every plugin-contributed panel view receives from the renderer host.
  * Intentionally narrower than the host-internal `PanelComponentProps` so the
  * SDK surface stays stable across a future `plugin://` → trusted-iframe
@@ -541,6 +576,22 @@ export interface PluginAuthor {
   role?: string;
 }
 
+/**
+ * Which root a plugin was discovered under. Replaces the `isBuiltin` boolean at
+ * the manifest gate, which could only say "first-party or not" and had no way
+ * to express a third root:
+ *
+ * - `"builtin"` — shipped inside the app bundle (`plugins/builtin/`), plus the
+ *   E2E sideload root, which is loaded on the same trust footing.
+ * - `"user"` — installed by the user into the per-user plugins directory.
+ * - `"project"` — lives in a project's own `.daintree/plugins/`, is only ever
+ *   loaded while that project is open, and must declare `scope: "project"`.
+ *
+ * Host-internal: a plugin never learns its own origin, so this is deliberately
+ * not re-exported from the SDK barrel.
+ */
+export type PluginOrigin = "builtin" | "user" | "project";
+
 export interface PluginManifest {
   name: string;
   version: string;
@@ -565,6 +616,18 @@ export interface PluginManifest {
   engines?: {
     daintree?: string;
   };
+  /**
+   * Declares the plugin is only ever loaded project-locally. REQUIRED when the
+   * manifest is discovered under a project's own plugins directory, REJECTED
+   * under the user or builtin roots. The manifest gate enforces both directions,
+   * so a project plugin cannot be dropped into the user directory (or a user
+   * plugin into a project) and quietly keep working under assumptions its author
+   * never made.
+   *
+   * A guardrail against accidental promotion, not a security control: the trust
+   * decision is the project folder, not this field.
+   */
+  scope?: "project";
   capabilities?: PluginCapability[];
   /**
    * Per-capability scope bindings that attenuate the compound-capability
@@ -629,6 +692,17 @@ export interface PluginManifest {
      * qualified id. Empty unless the plugin ships recipes.
      */
     recipes: RecipeContribution[];
+    /**
+     * Project surfaces this plugin claims (§7.8). Optional in the type but
+     * always materialized by the manifest schema's `.default({})`, so a
+     * consumer reading it off a parsed manifest never sees `undefined` — the
+     * optionality is for the hand-built manifest literals in tests and tooling
+     * that predate the field.
+     *
+     * Only meaningful for a `scope: "project"` plugin; the manifest schema
+     * rejects the key outright for any other origin.
+     */
+    surfaces?: SurfaceContributions;
   };
 }
 
@@ -2678,4 +2752,227 @@ export interface PluginActionDescriptor extends PluginActionContribution {
    * `requires` keeps the whole-manifest derivation.
    */
   effectiveDanger: "safe" | "confirm";
+}
+
+/**
+ * Durable scope a plugin's persisted per-plugin state belongs to. `"global"`
+ * covers installed and builtin plugins, which are app-wide by design; a
+ * project-scoped plugin uses its app-minted `projectId` (see `mintProjectId`),
+ * which is derived from the normalized folder path and stored outside the
+ * repository — so a repository cannot forge or address another project's key.
+ */
+export type PluginScopeKey = "global" | (string & {});
+
+/**
+ * Hostname segment of a `plugin://` URL. Minted per loaded plugin instance and
+ * invalidated on unload, so a URL captured before an unload resolves to
+ * nothing rather than into whatever now occupies that plugin id.
+ *
+ * Not a secret. It is a namespace, not a capability — never build
+ * authorization on possession of one.
+ */
+export type PluginProtocolAuthority = string & {
+  readonly __brand: "PluginProtocolAuthority";
+};
+
+/**
+ * Binds a plugin's host API to one project. Built once per plugin instance and
+ * captured by every closure in the host object, so "which project?" is
+ * answerable from the binding instead of from whichever window happens to be
+ * focused when the plugin calls.
+ *
+ * `projectId: null` marks an unbound plugin — installed and builtin plugins,
+ * which stay app-global. Unbound host surfaces still resolve their target from
+ * focus; each such site says so explicitly at the call site. A bound plugin
+ * never consults focus, because a plugin acting on a project it does not
+ * belong to is never right.
+ */
+export interface PluginHostBinding {
+  /** Owning project, or null for an app-global (installed/builtin) plugin. */
+  readonly projectId: string | null;
+  /** Absolute, realpath-resolved project root. Null iff `projectId` is null. */
+  readonly projectRoot: string | null;
+}
+
+/** An unbound binding — the app-global default for installed and builtin plugins. */
+export const UNBOUND_PLUGIN_HOST_BINDING: PluginHostBinding = {
+  projectId: null,
+  projectRoot: null,
+};
+
+/**
+ * Prefix marking a plugin instance key as project-owned.
+ *
+ * A project plugin is keyed `project__{projectId}__{manifestId}` everywhere the
+ * host indexes a plugin instance — `PluginService.plugins`, the contribution
+ * registries' `pluginId`/`extensionId`, the `plugin://` authority map, the
+ * capability-consent subject, the per-plugin settings/storage filename. That is
+ * what keeps two projects shipping the same manifest id genuinely separate:
+ * separate contributions, separate authority, separate grants, separate
+ * teardown. Keying them by bare manifest id would give one project's revoke the
+ * power to sweep the other's registrations, and one project's grant the power
+ * to answer for both.
+ *
+ * The separator is `__` rather than `/` or `:` on purpose: an instance key is
+ * joined onto a filesystem path for the user-scope settings and storage files,
+ * and both of those characters are either a path separator or illegal on
+ * Windows. A project id is 64 lowercase hex (`mintProjectId`) and a manifest id
+ * is `publisher.name` in `[a-z0-9-]`, so neither half can contain `__` and the
+ * parse below is unambiguous.
+ */
+export const PROJECT_PLUGIN_INSTANCE_PREFIX = "project__";
+
+const PROJECT_PLUGIN_INSTANCE_SEPARATOR = "__";
+
+/** Build the instance key a project-owned plugin loads under. */
+export function makeProjectPluginInstanceKey(projectId: string, manifestId: string): string {
+  return `${PROJECT_PLUGIN_INSTANCE_PREFIX}${projectId}${PROJECT_PLUGIN_INSTANCE_SEPARATOR}${manifestId}`;
+}
+
+/**
+ * Split an instance key back into its project and manifest halves, or `null`
+ * when the key is not a project instance key (an installed or builtin plugin
+ * id, which is its own manifest id).
+ */
+export function parseProjectPluginInstanceKey(
+  instanceKey: string
+): { projectId: string; manifestId: string } | null {
+  if (!instanceKey.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX)) return null;
+  const rest = instanceKey.slice(PROJECT_PLUGIN_INSTANCE_PREFIX.length);
+  const cut = rest.indexOf(PROJECT_PLUGIN_INSTANCE_SEPARATOR);
+  if (cut <= 0) return null;
+  const projectId = rest.slice(0, cut);
+  const manifestId = rest.slice(cut + PROJECT_PLUGIN_INSTANCE_SEPARATOR.length);
+  if (projectId.length === 0 || manifestId.length === 0) return null;
+  return { projectId, manifestId };
+}
+
+/**
+ * The manifest id behind a plugin instance key. Identity for an installed or
+ * builtin plugin; the bare `publisher.name` for a project instance.
+ *
+ * This is what belongs in anything the *repository* sees — the project-scope
+ * settings and storage filenames under `<projectRoot>/.daintree/` are
+ * git-tracked, so writing a machine-local project id into them would commit one
+ * developer's identity into everyone's checkout.
+ */
+export function pluginManifestIdFromInstanceKey(instanceKey: string): string {
+  return parseProjectPluginInstanceKey(instanceKey)?.manifestId ?? instanceKey;
+}
+
+/** The owning project of a plugin instance key, or null for an app-global one. */
+export function projectIdFromPluginInstanceKey(instanceKey: string): string | null {
+  return parseProjectPluginInstanceKey(instanceKey)?.projectId ?? null;
+}
+
+/**
+ * What the user decided about a project's `.daintree/plugins/` folder.
+ *
+ * `"session"` is deliberately absent from the persisted record — an
+ * enable-for-this-session choice lives in memory only and is gone on relaunch,
+ * which is the whole point of offering it.
+ */
+export type ProjectPluginTrustDecision = "enabled" | "disabled" | "session";
+
+/** The persisted half of a project's plugin trust state. */
+export interface ProjectPluginTrustRecord {
+  /** Persisted decisions only. A `"session"` enable never reaches this record. */
+  decision: "enabled" | "disabled";
+  /** Epoch ms of the decision, for the plugin manager's audit line. */
+  decidedAt: number;
+  /**
+   * Manifest ids this project has already surfaced to the user — activated,
+   * declined, or merely staged. A plugin id absent from here is NEW, and new is
+   * the one content change worth a notification. A plugin that disappears and
+   * comes back is still in this list, so it is treated as known, not new.
+   */
+  knownPluginIds: string[];
+  /**
+   * Manifest ids staged and not activated. Staged plugins are parsed but never
+   * executed. A declined stage stays here so it does not re-notify on every
+   * subsequent edit.
+   */
+  stagedPluginIds: string[];
+}
+
+/** Runtime state of one plugin directory found under a project's `.daintree/plugins/`. */
+export type ProjectPluginState =
+  /** Loaded and running. */
+  | "active"
+  /** Manifest valid, trust granted, but the id is new — parsed, never executed. */
+  | "staged"
+  /** Manifest valid; no trust decision, or trust is disabled. Never executed. */
+  | "blocked"
+  /** The directory does not hold a loadable manifest. Never executed. */
+  | "invalid";
+
+/** One row of the project's plugin list, as the plugin manager and the trust gate render it. */
+export interface ProjectPluginInfo {
+  /** Owning project. */
+  projectId: string;
+  /** Manifest id (`publisher.name`), or the directory name when the manifest is unreadable. */
+  id: string;
+  /** The key this plugin loads under. Absent for an invalid manifest. */
+  instanceId?: string;
+  displayName: string;
+  version: string;
+  description?: string;
+  /** Declared capabilities, disclosed in the manager. Never a consent gate. */
+  capabilities: PluginCapability[];
+  /** Directory name under `.daintree/plugins/`. Not required to equal `id`. */
+  dirName: string;
+  state: ProjectPluginState;
+  /** Why the directory was rejected. Set iff `state === "invalid"`. */
+  error?: string;
+  /**
+   * An installed or builtin plugin already claims this manifest id. Both load —
+   * the instance key keeps them apart — and the collision is surfaced here
+   * rather than resolved silently.
+   */
+  collidesWithGlobal: boolean;
+}
+
+/** The trust state a renderer needs to decide whether to prompt. */
+export interface ProjectPluginTrustState {
+  projectId: string;
+  /** `null` when no decision is on record — the only state that may prompt. */
+  decision: ProjectPluginTrustDecision | null;
+  /** Whether project plugins are currently permitted to run. */
+  enabled: boolean;
+  /** True when the decision came from electron-store rather than this session. */
+  persisted: boolean;
+}
+
+/**
+ * `plugin:project-trust-prompt` — the one signal that may open the project
+ * plugin trust dialog. The controller emits it only when the folder holds at
+ * least one valid manifest and no decision is on record, so the renderer never
+ * decides for itself that a prompt is due.
+ */
+export interface ProjectPluginTrustPromptEvent {
+  projectId: string;
+  /** Every valid manifest in the folder, named so the dialog can list them. */
+  plugins: Array<{ id: string; displayName: string }>;
+}
+
+/**
+ * `plugin:project-plugins-changed` — a full snapshot, emitted on every project
+ * open, trust change and staged activation. It carries everything the plugin
+ * manager renders, so the manager can be purely reactive rather than refetching.
+ */
+export interface ProjectPluginsChangedEvent {
+  projectId: string;
+  plugins: ProjectPluginInfo[];
+  trust: ProjectPluginTrustState;
+}
+
+/**
+ * `plugin:project-plugin-staged` — a manifest id this project has never had
+ * appeared in a trusted folder. Non-blocking, and emitted once per new id: a
+ * staged plugin the user ignored or declined never re-announces itself.
+ */
+export interface ProjectPluginStagedEvent {
+  projectId: string;
+  pluginId: string;
+  displayName: string;
 }

@@ -44,6 +44,8 @@ import {
 } from "../../../shared/config/toolbarButtonRegistry.js";
 import {
   getPluginPanelKinds,
+  isProjectQualifiedPanelKindId,
+  projectIdFromRuntimePanelKindId,
   type PanelKindConfig,
 } from "../../../shared/config/panelKindRegistry.js";
 import { isPluginInvokeOwnershipError } from "../../services/plugin/PluginInvokeErrors.js";
@@ -52,6 +54,8 @@ import { sendToRendererContext } from "../utils.js";
 import { getPluginMenuItems } from "../../services/pluginMenuRegistry.js";
 import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
+import { selectContributionsForProject } from "../../services/plugin/PluginContributionBroadcaster.js";
+import { getProjectSurfaces } from "../../services/plugin/PluginSurfaceRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import type { AgentConfig } from "../../../shared/config/agentRegistry.js";
 import type { PluginRecipeMetadataPatch, TerminalRecipe } from "../../../shared/types/project.js";
@@ -79,8 +83,18 @@ import type {
   PluginWorktreeStatus,
   PluginActivationResult,
   PluginPanelLifecycleEvent,
+  ProjectSurfaceSnapshot,
 } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
+import {
+  isSafePluginInstanceId,
+  projectIdFromPluginInstanceKey,
+  PROJECT_PLUGIN_INSTANCE_PREFIX,
+} from "../../services/plugin/projectPluginIdentity.js";
+import type {
+  ProjectPluginInfo,
+  ProjectPluginTrustDecision,
+} from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
 import {
@@ -582,28 +596,36 @@ async function handleGetLatestBackgroundUpdateCheck(): Promise<PluginBackgroundU
   return getPluginUpdateCheckService().getLatest();
 }
 
-async function handleToolbarButtons(): Promise<ToolbarButtonConfig[]> {
+async function handleToolbarButtons(ctx: IpcContext): Promise<ToolbarButtonConfig[]> {
   // Block the renderer's mount-time pull until startup activation has settled,
   // otherwise a fast renderer can read an empty registry before any plugin's
   // activate() runs — leaving plugin toolbar buttons missing until the next
   // mutation pushes a fresh broadcast (#9285).
   await (await getPluginService()).waitForInit();
-  return getPluginToolbarButtonIds()
+  const buttons = getPluginToolbarButtonIds()
     .map((id) => getToolbarButtonConfig(id))
     .filter((c): c is ToolbarButtonConfig => c !== undefined);
+  // Scoped to the SENDER's project, not the active one: this pull is the
+  // renderer's own mount-time path and must agree with what the push path
+  // broadcast to that same view.
+  return selectContributionsForProject(buttons, (c) => c.pluginId, ctx.projectId);
 }
 
-async function handleKeybindings() {
+async function handleKeybindings(ctx: IpcContext) {
   await (await getPluginService()).waitForInit();
-  return getPluginKeybindings();
+  return selectContributionsForProject(getPluginKeybindings(), (e) => e.pluginId, ctx.projectId);
 }
 
-async function handleContextMenuItems() {
+async function handleContextMenuItems(ctx: IpcContext) {
   // Same init-race guard as `handleToolbarButtons` — block until startup
   // activation settles so the renderer's mount-time pull can't observe an empty
   // registry before plugins finish registering (#9285).
   await (await getPluginService()).waitForInit();
-  return getPluginContextMenuItems();
+  return selectContributionsForProject(
+    getPluginContextMenuItems(),
+    (e) => e.pluginId,
+    ctx.projectId
+  );
 }
 
 async function handleValidateActionIds(actionIds: string[]): Promise<void> {
@@ -646,26 +668,77 @@ async function handleValidateActionIds(actionIds: string[]): Promise<void> {
 // because it uses raw ipcMain.handle for its variadic signature, which
 // gives it direct access to event.senderFrame — the typed path here does
 // not and doesn't need it.
-async function handleActionsGet(): Promise<PluginActionDescriptor[]> {
+async function handleActionsGet(ctx: IpcContext): Promise<PluginActionDescriptor[]> {
   const pluginService = await getPluginService();
   await pluginService.waitForInit();
-  return pluginService.listPluginActions();
+  return selectContributionsForProject(
+    pluginService.listPluginActions(),
+    (a) => a.pluginId,
+    ctx.projectId
+  );
+}
+
+/**
+ * A project plugin's actions answer only to its own project's renderers.
+ *
+ * The instance key names its project and is not a secret, so without this a
+ * renderer for project B could register — or silently unregister — actions
+ * owned by project A's plugin. Same rule, and the same reason, as
+ * `plugin:invoke` and the settings bridge.
+ */
+function assertSenderOwnsPluginInstance(ctx: IpcContext, pluginId: string): void {
+  const boundProjectId = projectIdFromPluginInstanceKey(pluginId);
+  // A `null` here means "not a project instance key" — which covers both a bare
+  // app-global id and a malformed one like `project____acme.dashboard`, whose
+  // separator sits at offset zero. Only the first is legitimately unconstrained,
+  // so reject anything that merely looks project-scoped rather than letting the
+  // guard skip and lean on an exact-match lookup further down.
+  if (boundProjectId === null && pluginId.startsWith(PROJECT_PLUGIN_INSTANCE_PREFIX)) {
+    throw new Error("plugin action rejected: malformed project plugin id");
+  }
+  if (boundProjectId !== null && boundProjectId !== ctx.projectId) {
+    throw new Error("plugin action rejected: plugin belongs to a different project");
+  }
 }
 
 async function handleActionsRegister(
+  ctx: IpcContext,
   pluginId: string,
   contribution: PluginActionContribution
 ): Promise<void> {
+  assertSenderOwnsPluginInstance(ctx, pluginId);
   (await getPluginService()).registerPluginAction(pluginId, contribution);
 }
 
-async function handleActionsUnregister(pluginId: string, actionId: string): Promise<void> {
+async function handleActionsUnregister(
+  ctx: IpcContext,
+  pluginId: string,
+  actionId: string
+): Promise<void> {
+  assertSenderOwnsPluginInstance(ctx, pluginId);
   (await getPluginService()).unregisterPluginAction(pluginId, actionId);
 }
 
-async function handlePanelKindsGet(): Promise<PanelKindConfig[]> {
+async function handlePanelKindsGet(ctx: IpcContext): Promise<PanelKindConfig[]> {
   await (await getPluginService()).waitForInit();
-  return getPluginPanelKinds();
+  return selectContributionsForProject(getPluginPanelKinds(), (c) => c.extensionId, ctx.projectId);
+}
+
+/**
+ * The project surfaces claimed in the SENDER's project (§7.8).
+ *
+ * The project comes from the sender's own view registration, never from an
+ * argument — the same rule the contribution broadcaster follows, and for the
+ * same reason: a renderer that could name the project could read another one's
+ * surfaces. A sender with no project binding gets an empty snapshot, which is
+ * the stock chrome.
+ */
+async function handleProjectSurfacesGet(ctx: IpcContext): Promise<ProjectSurfaceSnapshot> {
+  // Same init-race guard as handlePanelKindsGet: a mount-time pull before the
+  // deferred initialize() would cache "no surfaces" and leave the project on
+  // its stock canvas until the next panel-kinds push.
+  await (await getPluginService()).waitForInit();
+  return getProjectSurfaces(ctx.projectId);
 }
 
 /**
@@ -688,9 +761,31 @@ async function handlePanelKindsGet(): Promise<PanelKindConfig[]> {
  * unknown kind, PTY panel, or no matching view contribution).
  */
 async function handleActivateForView(
+  ctx: IpcContext,
   panelKindId: string,
   requestRecoveryPath?: boolean
 ): Promise<string | undefined> {
+  // A project-qualified kind may only be activated by a renderer belonging to
+  // the project that owns it. `activatePluginForView` searches every loaded
+  // instance for a matching kind, so without this a renderer could activate —
+  // and thereby start the worker for — another project's plugin.
+  const owningProjectId = projectIdFromRuntimePanelKindId(panelKindId);
+  // Same reasoning as the action guard: a project-prefixed id that does not
+  // parse is malformed, not global, and must not skip the check.
+  if (owningProjectId === null && isProjectQualifiedPanelKindId(panelKindId)) {
+    throw new AppError({
+      code: "PLUGIN_ACTIVATION_FAILED",
+      message: `Plugin activation rejected for view "${panelKindId}": malformed project panel kind id`,
+      userMessage: "That panel could not be identified.",
+    });
+  }
+  if (owningProjectId !== null && owningProjectId !== ctx.projectId) {
+    throw new AppError({
+      code: "PLUGIN_ACTIVATION_FAILED",
+      message: `Plugin activation rejected for view "${panelKindId}": sender belongs to a different project`,
+      userMessage: "That panel belongs to a different project.",
+    });
+  }
   const result: PluginActivationResult = await (
     await getPluginService()
   ).activatePluginForView(panelKindId, requestRecoveryPath === true);
@@ -1099,40 +1194,128 @@ async function handleGetDiagnosticsSnapshot(): Promise<PluginDiagnosticsSnapshot
 
 // ── Plugin settings UI bridge (#9301) ─────────────────────────────────────
 
+/**
+ * Settings reads and writes answer only to a renderer that owns the project
+ * they name.
+ *
+ * `PluginSettingsManager` checks that the supplied `pluginId` and `projectId`
+ * agree with each other, but never that the *sender* owns that project. An
+ * instance key is not a secret, so without this a renderer for project B that
+ * knows A's ids could read — or with `revealSecret`, decrypt — project A's
+ * plugin settings. Both halves are checked: the id the caller names, and the
+ * project the plugin instance itself belongs to.
+ *
+ * `projectId: null` is the legitimate `"user"`-scope case and needs no owner.
+ */
+function assertSenderOwnsSettingsTarget(
+  ctx: IpcContext,
+  pluginId: string,
+  projectId: string | null
+): void {
+  if (projectId !== null && projectId !== ctx.projectId) {
+    throw new Error("plugin settings rejected: sender belongs to a different project");
+  }
+  const boundProjectId = projectIdFromPluginInstanceKey(pluginId);
+  if (boundProjectId !== null && boundProjectId !== ctx.projectId) {
+    throw new Error("plugin settings rejected: plugin belongs to a different project");
+  }
+}
+
 async function handleSettingsGetValues(
+  ctx: IpcContext,
   pluginId: string,
   scope: PluginSettingsScope,
   projectId: string | null
 ): Promise<PluginSettingsUiValues> {
+  assertSenderOwnsSettingsTarget(ctx, pluginId, projectId);
   return (await getPluginService()).getSettingValuesForUi(pluginId, scope, projectId);
 }
 
 async function handleSettingsSetValue(
+  ctx: IpcContext,
   pluginId: string,
   key: string,
   value: unknown,
   scope: PluginSettingsScope,
   projectId: string | null
 ): Promise<void> {
+  assertSenderOwnsSettingsTarget(ctx, pluginId, projectId);
   await (await getPluginService()).setSettingValueFromUi(pluginId, key, value, scope, projectId);
 }
 
 async function handleSettingsDeleteValue(
+  ctx: IpcContext,
   pluginId: string,
   key: string,
   scope: PluginSettingsScope,
   projectId: string | null
 ): Promise<void> {
+  assertSenderOwnsSettingsTarget(ctx, pluginId, projectId);
   await (await getPluginService()).deleteSettingValueFromUi(pluginId, key, scope, projectId);
 }
 
 async function handleSettingsRevealSecret(
+  ctx: IpcContext,
   pluginId: string,
   key: string,
   scope: PluginSettingsScope,
   projectId: string | null
 ): Promise<string | null> {
+  assertSenderOwnsSettingsTarget(ctx, pluginId, projectId);
   return (await getPluginService()).revealSecretSettingForUi(pluginId, key, scope, projectId);
+}
+
+/**
+ * Project-local plugin rows for the SENDER's project.
+ *
+ * The project is resolved from the sender's own view registration, never from a
+ * renderer-supplied id — the same reason the pull-on-mount contribution
+ * handlers do it: a compromised or merely confused renderer must not be able to
+ * read, or act on, another project's plugin state. A sender with no project
+ * binding (the picker window, an unbound window) legitimately has none, and
+ * gets an empty list rather than the active project's.
+ */
+async function handleProjectPluginsList(ctx: IpcContext): Promise<ProjectPluginInfo[]> {
+  if (!ctx.projectId) return [];
+  const svc = await getPluginService();
+  return svc.listProjectPlugins(ctx.projectId);
+}
+
+/**
+ * Record the trust decision for the sender's project. `"session"` is held in
+ * memory only; `"enabled"` and `"disabled"` persist. Revoking (`"disabled"`)
+ * unloads every plugin the project owns and purges its capability grants.
+ */
+async function handleProjectPluginsSetTrust(
+  ctx: IpcContext,
+  decision: ProjectPluginTrustDecision
+): Promise<void> {
+  if (!ctx.projectId) throw new Error("project plugins: sender has no project");
+  if (decision !== "enabled" && decision !== "disabled" && decision !== "session") {
+    throw new Error("project plugins: invalid trust decision");
+  }
+  const svc = await getPluginService();
+  await svc.setProjectPluginTrust(ctx.projectId, decision);
+}
+
+/** One-click activation of a plugin the project staged rather than ran. */
+async function handleProjectPluginsActivateStaged(
+  ctx: IpcContext,
+  pluginId: string
+): Promise<void> {
+  if (!ctx.projectId) throw new Error("project plugins: sender has no project");
+  if (typeof pluginId !== "string" || !SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+    throw new Error("project plugins: pluginId must be a scoped plugin name (publisher.name)");
+  }
+  const svc = await getPluginService();
+  await svc.activateStagedProjectPlugin(ctx.projectId, pluginId);
+}
+
+/** Manual re-scan. Runs the same trust gate and staging rules as a project open. */
+async function handleProjectPluginsReload(ctx: IpcContext): Promise<void> {
+  if (!ctx.projectId) throw new Error("project plugins: sender has no project");
+  const svc = await getPluginService();
+  await svc.reloadProjectPlugins(ctx.projectId);
 }
 
 // Native folder/file chooser for `path` / `directory` / `file` settings fields.
@@ -1146,7 +1329,7 @@ async function handlePickPath(
   pluginId: string,
   request: PluginPickPathRequest
 ): Promise<string | null> {
-  if (typeof pluginId !== "string" || !SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
     throw new Error("pickPath: pluginId must be a scoped plugin name (publisher.name)");
   }
   const isDirectory = request.kind === "directory";
@@ -1183,7 +1366,7 @@ async function handlePickPath(
 // resolves false rather than throwing so a stale stored value can't crash the
 // form.
 async function handlePathExists(pluginId: string, targetPath: string): Promise<boolean> {
-  if (typeof pluginId !== "string" || !SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+  if (typeof pluginId !== "string" || !isSafePluginInstanceId(pluginId)) {
     throw new Error("pathExists: pluginId must be a scoped plugin name (publisher.name)");
   }
   if (typeof targetPath !== "string" || !isAbsolute(targetPath)) {
@@ -1215,15 +1398,48 @@ export const pluginNamespace = defineIpcNamespace({
     cancelInstall: op(PLUGIN_METHOD_CHANNELS.cancelInstall, handleCancelInstall),
     uninstall: op(PLUGIN_METHOD_CHANNELS.uninstall, handleUninstall),
     checkForUpdate: op(PLUGIN_METHOD_CHANNELS.checkForUpdate, handleCheckForUpdate),
-    toolbarButtons: op(PLUGIN_METHOD_CHANNELS.toolbarButtons, handleToolbarButtons),
-    keybindings: op(PLUGIN_METHOD_CHANNELS.keybindings, handleKeybindings),
-    contextMenuItems: op(PLUGIN_METHOD_CHANNELS.contextMenuItems, handleContextMenuItems),
+    toolbarButtons: op(PLUGIN_METHOD_CHANNELS.toolbarButtons, handleToolbarButtons, {
+      withContext: true,
+    }),
+    keybindings: op(PLUGIN_METHOD_CHANNELS.keybindings, handleKeybindings, { withContext: true }),
+    contextMenuItems: op(PLUGIN_METHOD_CHANNELS.contextMenuItems, handleContextMenuItems, {
+      withContext: true,
+    }),
     validateActionIds: op(PLUGIN_METHOD_CHANNELS.validateActionIds, handleValidateActionIds),
-    getActions: op(PLUGIN_METHOD_CHANNELS.getActions, handleActionsGet),
-    registerAction: op(PLUGIN_METHOD_CHANNELS.registerAction, handleActionsRegister),
-    unregisterAction: op(PLUGIN_METHOD_CHANNELS.unregisterAction, handleActionsUnregister),
-    getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet),
-    activateForView: op(PLUGIN_METHOD_CHANNELS.activateForView, handleActivateForView),
+    getActions: op(PLUGIN_METHOD_CHANNELS.getActions, handleActionsGet, { withContext: true }),
+    registerAction: op(PLUGIN_METHOD_CHANNELS.registerAction, handleActionsRegister, {
+      withContext: true,
+    }),
+    unregisterAction: op(PLUGIN_METHOD_CHANNELS.unregisterAction, handleActionsUnregister, {
+      withContext: true,
+    }),
+    getPanelKinds: op(PLUGIN_METHOD_CHANNELS.getPanelKinds, handlePanelKindsGet, {
+      withContext: true,
+    }),
+    getProjectSurfaces: op(PLUGIN_METHOD_CHANNELS.getProjectSurfaces, handleProjectSurfacesGet, {
+      withContext: true,
+    }),
+    getProjectPlugins: op(PLUGIN_METHOD_CHANNELS.getProjectPlugins, handleProjectPluginsList, {
+      withContext: true,
+    }),
+    setProjectPluginTrust: op(
+      PLUGIN_METHOD_CHANNELS.setProjectPluginTrust,
+      handleProjectPluginsSetTrust,
+      { withContext: true }
+    ),
+    activateStagedProjectPlugin: op(
+      PLUGIN_METHOD_CHANNELS.activateStagedProjectPlugin,
+      handleProjectPluginsActivateStaged,
+      { withContext: true }
+    ),
+    reloadProjectPlugins: op(
+      PLUGIN_METHOD_CHANNELS.reloadProjectPlugins,
+      handleProjectPluginsReload,
+      { withContext: true }
+    ),
+    activateForView: op(PLUGIN_METHOD_CHANNELS.activateForView, handleActivateForView, {
+      withContext: true,
+    }),
     reportPanelLifecycle: op(
       PLUGIN_METHOD_CHANNELS.reportPanelLifecycle,
       handleReportPanelLifecycle,
@@ -1251,10 +1467,20 @@ export const pluginNamespace = defineIpcNamespace({
       PLUGIN_METHOD_CHANNELS.getDiagnosticsSnapshot,
       handleGetDiagnosticsSnapshot
     ),
-    getSettingValues: op(PLUGIN_METHOD_CHANNELS.getSettingValues, handleSettingsGetValues),
-    setSettingValue: op(PLUGIN_METHOD_CHANNELS.setSettingValue, handleSettingsSetValue),
-    deleteSettingValue: op(PLUGIN_METHOD_CHANNELS.deleteSettingValue, handleSettingsDeleteValue),
-    revealSecretSetting: op(PLUGIN_METHOD_CHANNELS.revealSecretSetting, handleSettingsRevealSecret),
+    getSettingValues: op(PLUGIN_METHOD_CHANNELS.getSettingValues, handleSettingsGetValues, {
+      withContext: true,
+    }),
+    setSettingValue: op(PLUGIN_METHOD_CHANNELS.setSettingValue, handleSettingsSetValue, {
+      withContext: true,
+    }),
+    deleteSettingValue: op(PLUGIN_METHOD_CHANNELS.deleteSettingValue, handleSettingsDeleteValue, {
+      withContext: true,
+    }),
+    revealSecretSetting: op(
+      PLUGIN_METHOD_CHANNELS.revealSecretSetting,
+      handleSettingsRevealSecret,
+      { withContext: true }
+    ),
     pickPath: op(PLUGIN_METHOD_CHANNELS.pickPath, handlePickPath, { withContext: true }),
     pathExists: op(PLUGIN_METHOD_CHANNELS.pathExists, handlePathExists),
     getBackgroundUpdateCheckSettings: op(
@@ -1326,6 +1552,26 @@ export function registerPluginHandlers(): () => void {
         });
         throw new Error(`plugin:invoke rejected: untrusted sender (url=${senderUrl ?? "unknown"})`);
       }
+      // A project plugin answers only to its own project's renderers. The
+      // instance key names its project and is not a secret, so without this a
+      // renderer for project B could invoke project A's plugin handler and make
+      // it act on A — with A's host binding, A's capabilities and A's files.
+      // Checked against the sender's own registration, never a supplied id.
+      const boundProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (boundProjectId !== null && boundProjectId !== senderProjectId) {
+        safeAppend({
+          pluginId,
+          actionId: channel,
+          recordType: "ipc-invoke",
+          channel: CHANNELS.PLUGIN_INVOKE,
+          result: "restricted",
+          errorMessage: "sender belongs to a different project",
+          argsHash: "",
+          durationMs: Date.now() - start,
+        });
+        throw new Error("plugin:invoke rejected: plugin belongs to a different project");
+      }
+
       try {
         const service = await getPluginService();
         // No trustworthy window means no worktree — short-circuit rather than
