@@ -910,13 +910,20 @@ const PROJECT_PANEL_KIND_PREFIX = "project:";
 const SCOPED_MANIFEST_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /**
- * What a saved layout stores for a plugin-contributed panel kind.
+ * The layout-schema shape for a plugin-contributed panel kind.
  *
  * Deliberately excludes `projectId`: layouts are already project-associated,
- * and embedding the project's identity here would orphan every panel when a
- * repo is re-cloned to a different path. The qualified runtime id
- * (`project:{projectId}/…`) MUST NOT reach persistence for the same reason —
- * see {@link isProjectQualifiedPanelKindId}.
+ * and embedding the project's identity would orphan every panel when a repo is
+ * re-cloned to a different path.
+ *
+ * Not what layouts store today. `PanelSnapshot.kind` is persisted verbatim, so
+ * a saved project-local panel carries the qualified runtime id
+ * (`project:{projectId}/…`). That is tolerable because a project id is stable
+ * for the life of an install, and a re-clone starts from a fresh layout
+ * anyway — a qualified id that no longer resolves degrades to
+ * `PluginMissingPanel`, which is the same outcome as an uninstalled plugin.
+ * This ref and {@link toPersistedPanelKindRef} exist for the layout-schema
+ * change that takes the project id off disk.
  */
 export interface PersistedPanelKindRef {
   /** `"project"` for a `.daintree/plugins` contribution, `"global"` otherwise. */
@@ -980,9 +987,11 @@ export function projectIdFromRuntimePanelKindId(kind: PanelKind): string | null 
 }
 
 /**
- * Whether a runtime panel kind id carries a project qualification. The one
- * assertion persistence needs: a `true` here means the id must be converted
- * with {@link toPersistedPanelKindRef} before it is written to disk.
+ * Whether a runtime panel kind id carries a project qualification.
+ *
+ * Used by the plugin IPC guard to tell a malformed `project:` id from a global
+ * one, so an id that fails to parse cannot skip the owning-project check.
+ * Persistence does not consult it yet — see {@link PersistedPanelKindRef}.
  */
 export function isProjectQualifiedPanelKindId(kind: PanelKind): boolean {
   return typeof kind === "string" && kind.startsWith(PROJECT_PANEL_KIND_PREFIX);
