@@ -33,6 +33,7 @@
  *     --threshold 5 [--higher-is-better] \
  *     [--precommit .tmp/opt/<target>/precommit.json] \
  *     [--max-drift <pct>] [--max-cv <pct>] [--cross-machine] \
+ *     [--allow-guard-regression <guard name>] \
  *     --expect-champ-sha <sha> --expect-cand-sha <sha> \
  *     --champ champ1.json --champ champ2.json --champ champ3.json \
  *     --cand cand1.json --cand cand2.json --cand cand3.json
@@ -60,7 +61,8 @@
  *   3  everything else passed, but `sourceSha` is missing, so the files cannot be
  *      tied to a checkpoint. Only proceed when every arm was measured in this
  *      session, interleaved, and say so in the report.
- *   4  AB only: measured cleanly, but at least one of the three conditions failed.
+ *   4  AB only: measured cleanly, but at least one of the four conditions failed
+ *      — the hypothesis lost, or it won the target and broke a guard.
  *      NO CLAIM. Distinct from 1 so an unattended caller cannot read a sound
  *      measurement that disproved the hypothesis as a broken one worth retrying.
  *   5  AB only: the machine drifted more than `--max-drift` between champion
@@ -92,6 +94,7 @@ const USAGE =
   "[--precommit REC] A.json B.json\n" +
   "       check-pair.mjs ab --scenario ID --target PATH --predicate NAME --threshold PCT " +
   "[--precommit REC] [--max-drift PCT] [--max-cv PCT] [--cross-machine] " +
+  "[--allow-guard-regression NAME] " +
   "--expect-champ-sha SHA --expect-cand-sha SHA --champ F [...] --cand F [...]";
 
 function usageError(message) {
@@ -115,6 +118,7 @@ const REPEATED = {
   "--predicate": "predicates",
   "--champ": "champs",
   "--cand": "cands",
+  "--allow-guard-regression": "allowedGuardRegressions",
 };
 
 function parseArgs(argv) {
@@ -123,6 +127,7 @@ function parseArgs(argv) {
     champs: [],
     cands: [],
     files: [],
+    allowedGuardRegressions: [],
     higherIsBetter: false,
     crossMachine: false,
   };
@@ -342,6 +347,24 @@ function coefficientOfVariation(arm, scenario) {
   return (stdDevMs / meanMs) * 100;
 }
 
+/**
+ * A guard metric's value on one arm.
+ *
+ * Guards are cost metrics by convention — every one this harness emits gets
+ * worse as it gets larger, whether it is a duration, a tally or a byte count —
+ * so "moved the wrong way" means "went up". A guard that genuinely improves
+ * upward does not belong in the guard list; it belongs in the report as a
+ * second result.
+ */
+function guardValue(arm, scenario, name) {
+  const aggregate = (arm.summary.aggregates ?? []).find((entry) => entry.id === scenario);
+  if (!aggregate) return null;
+  const stat = aggregate.metricStats?.[name];
+  if (stat && typeof stat.mean === "number" && Number.isFinite(stat.mean)) return stat.mean;
+  const average = aggregate.metricAverages?.[name];
+  return typeof average === "number" && Number.isFinite(average) ? average : null;
+}
+
 /** Returns the arm's target value, or null when the arm is unusable. */
 function healthChecks(arm, args) {
   const aggregate = (arm.summary.aggregates ?? []).find((entry) => entry.id === args.scenario);
@@ -452,6 +475,12 @@ if (mode === "pair") {
     usageError(
       "--expect-champ-sha/--expect-cand-sha belong to the `ab` subcommand; " +
         "pair mode uses --expect-before-sha/--expect-after-sha"
+    );
+  }
+  if (args.allowedGuardRegressions.length > 0) {
+    usageError(
+      "--allow-guard-regression belongs to the `ab` subcommand — a guard trade is accepted " +
+        "against the interleaved arms that measured it, not against a stored pair"
     );
   }
   const arms = [
@@ -787,6 +816,61 @@ const candMedian = middle(candValues);
 const medianImprovement = improvement(champMedian, candMedian);
 const combinations = (champValues.length * (champValues.length - 1)) / 2;
 
+/**
+ * The guards the precommit record named, judged the same way as the target.
+ *
+ * Without this the guard list was prose: a run could buy a 40% win on the
+ * target with a 300% regression on the metric beside it and every gate would
+ * still print CLAIM. Machine-dependent guards are judged against the same drift
+ * D as the target — a guard that moved less than D has not been SHOWN to move,
+ * and reading a guard as noise on grounds you would not accept for the target
+ * is how a win gets bought with an unreported regression.
+ *
+ * `--allow-guard-regression <name>` is the deliberate trade. It has to be named
+ * on the command line that produces the verdict, for the same reason the
+ * threshold does: an exception accepted after the numbers were on screen would
+ * only move the self-deception one step later.
+ */
+const guardRows = [];
+for (const guard of precommit?.guards ?? []) {
+  const champSide = champArms.map((arm) => guardValue(arm, args.scenario, guard.name));
+  const candSide = candArms.map((arm) => guardValue(arm, args.scenario, guard.name));
+  if (champSide.some((v) => v === null) || candSide.some((v) => v === null)) {
+    guardRows.push({ name: guard.name, status: "ABSENT", detail: "not emitted on every arm" });
+    continue;
+  }
+  const champG = middle(champSide);
+  const candG = middle(candSide);
+  if (champG === 0) {
+    guardRows.push({
+      name: guard.name,
+      status: candG === 0 ? "OK" : "WORSE",
+      detail: `${num(champG)} → ${num(candG)} (champion is zero, so no percentage)`,
+      breach: candG !== 0 && !args.allowedGuardRegressions.includes(guard.name),
+    });
+    continue;
+  }
+  // Cost metrics: up is worse.
+  const move = ((candG - champG) / champG) * 100;
+  const machineDependent = !isMachineIndependent(guard.class ?? classifyTarget(guard.name));
+  const withinNoise = machineDependent && Math.abs(move) <= drift;
+  const allowed = args.allowedGuardRegressions.includes(guard.name);
+  const breach = move > guard.tolerancePct && !withinNoise && !allowed;
+  guardRows.push({
+    name: guard.name,
+    status: breach
+      ? "BREACH"
+      : allowed && move > guard.tolerancePct
+        ? "ALLOWED"
+        : withinNoise
+          ? "NOISE"
+          : "OK",
+    detail: `${num(champG)} → ${num(candG)}  ${move >= 0 ? "+" : ""}${move.toFixed(1)}% ${move > 0 ? "worse" : "better"}  tolerance ${guard.tolerancePct}%${machineDependent ? " (machine-dependent)" : ""}`,
+    breach,
+  });
+}
+const guardBreaches = guardRows.filter((row) => row.breach).map((row) => row.name);
+
 const conditions = [
   {
     ok: wins === pairImprovements.length,
@@ -799,6 +883,13 @@ const conditions = [
   {
     ok: medianImprovement > drift,
     text: `improvement ${pct(medianImprovement)} > champion drift D ${pct(drift)}`,
+  },
+  {
+    ok: guardBreaches.length === 0,
+    text:
+      guardBreaches.length === 0
+        ? `no guard outside its precommitted tolerance — ${guardRows.length} checked`
+        : `guards outside tolerance: ${guardBreaches.join(", ")} — this change has a cost nobody authorised`,
   },
 ];
 
@@ -821,6 +912,13 @@ lines.push(
   `  precommitted threshold (--threshold): ${pct(threshold)}`,
   ""
 );
+if (guardRows.length > 0) {
+  lines.push("  guards (cost metrics — up is worse):");
+  for (const row of guardRows) lines.push(`    ${row.status.padEnd(7)} ${row.name}  ${row.detail}`);
+  lines.push("");
+} else if (precommit) {
+  lines.push("  guards: none precommitted — nothing was watched for a hidden cost", "");
+}
 for (const [i, condition] of conditions.entries()) {
   lines.push(`  condition ${i + 1}  ${condition.ok ? "PASS" : "FAIL"}  ${condition.text}`);
 }
@@ -846,10 +944,13 @@ if (!claim) {
   report(
     lines,
     4,
-    "\nNO CLAIM — the arms are sound and they do not support the hypothesis. This is a " +
-      "complete result, not a run to retry with more pairs: extending after seeing an " +
-      "unfavourable number is the same fallacy as re-choosing the threshold."
+    "\nNO CLAIM — the arms are sound and they do not support an unqualified improvement. " +
+      "This is a complete result, not a run to retry with more pairs: extending after seeing " +
+      "an unfavourable number is the same fallacy as re-choosing the threshold. If the failing " +
+      "condition is the guard one, the change won its target and bought it with a cost " +
+      "somewhere else — revert it, or name that trade with --allow-guard-regression and " +
+      "justify it in the report."
   );
 }
 if (provenanceMissing) report(lines, 3, PROVENANCE_NOTE);
-report(lines, 0, "\nCLAIM — all three conditions hold.");
+report(lines, 0, "\nCLAIM — all four conditions hold.");
