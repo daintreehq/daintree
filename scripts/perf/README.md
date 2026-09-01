@@ -213,6 +213,18 @@ npm run perf smoke -- --scenario PERF-105 --iterations 5 --label before --json .
 
 Argument parsing is strict: an unknown flag, a missing value or a stray positional is an error rather than being ignored. The previous parser silently dropped what it did not recognise, so a typo'd `--secnario` ran the whole matrix and looked like it had worked. Every run ends by printing the exact invocation to reproduce it.
 
+### Measuring the noise before trusting a number
+
+```bash
+npm run perf calibrate -- --scenario PERF-036 --rounds 8
+```
+
+Runs one scenario several times against the current tree and reports how much everything moved. Every figure it prints is noise by construction: same commit, same machine, same protocol.
+
+This is the missing input to any threshold. The gate that used to exist ran red for fifteen consecutive days over ~2% overshoots and trained everyone to ignore it, which is what a threshold set below the noise floor does; widening one until it can never fire is the same mistake from the other side. Neither is decidable without knowing what an unchanged tree looks like. `calibrate` sets nothing and writes no baseline, it just says what the floor is.
+
+It is also the answer to "is this predicate flaky, or did the subject break". A correctness term is a structural fact, so a term that reads nonzero on an untouched tree is measuring the machine. It found one within minutes of existing: PERF-036's `settleShortfallMisses` fired in one round out of five, because at a 1ms debounce the two `Date.now()` reads inside `waitForOutputSettle` can straddle a millisecond tick and a submit whose output is still flowing returns as settled. The held arm now uses a debounce above the clock's resolution and reads 0 across eight rounds.
+
 ### Comparing two runs
 
 ```bash

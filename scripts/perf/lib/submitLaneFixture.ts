@@ -41,6 +41,30 @@ const ENTER = "\r";
 const SETTLE_FLOOR_FRACTION = 0.5;
 
 /**
+ * Debounce a held-open submit waits against, relative to its own `maxWaitMs`.
+ *
+ * ABOVE the bound, so the debounce can never be satisfied before `maxWaitMs`
+ * fires and the arm is bounded by construction rather than by luck. An earlier
+ * version used a fixed 8ms, which only made the race unlikely: a scheduler
+ * pause longer than the debounce still lets a held submit settle early.
+ *
+ * The race is real and was found by `perf calibrate`. `waitForOutputSettle`
+ * reads the clock twice per poll, once through `lastOutputTime()` and once for
+ * `Date.now()`, and `Date.now()` has millisecond granularity — so at a 1ms
+ * debounce those two reads can straddle a tick, `timeSinceOutput` comes back as
+ * 1, and a submit whose output is still flowing returns as settled. It surfaced
+ * as `settleShortfallMisses` reading 1 in one round out of five on an untouched
+ * tree. That is a fixture parameter choice, not a product defect: production
+ * debounces are orders of magnitude above the clock's resolution.
+ *
+ * Ordinary submits keep the small debounce and stay quick, where settling early
+ * is exactly what they are supposed to do.
+ */
+function heldSubmitDebounceMs(maxWaitMs: number): number {
+  return maxWaitMs + 1;
+}
+
+/**
  * How long the whole burst may take before the watchdog calls it stuck.
  *
  * VERY generous on purpose. This is not a latency assertion — the drain time is
@@ -408,7 +432,9 @@ export async function runSubmitLane(options: SubmitLaneOptions): Promise<SubmitL
         if (!queue) throw new Error("submit lane: performSubmit ran before the queue existed");
         const settleStart = performance.now();
         await queue.waitForOutputSettle({
-          debounceMs: options.debounceMs,
+          // A held submit needs a debounce above the clock's granularity or it
+          // can settle on a rounding boundary; see heldSubmitDebounceMs.
+          debounceMs: slow ? heldSubmitDebounceMs(maxWaitMs) : options.debounceMs,
           maxWaitMs,
           pollMs: options.pollMs,
         });

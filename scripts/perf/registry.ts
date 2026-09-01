@@ -199,6 +199,11 @@ export const REGISTRY: Record<string, Command> = {
     kind: "diagnostic",
     runner: tsxScript("journeys/affected.ts"),
   },
+  calibrate: {
+    summary: "Run one scenario repeatedly on an unchanged tree and report the noise floor",
+    kind: "diagnostic",
+    runner: tsxScript("calibrate.ts"),
+  },
   "verify-baselines": {
     summary:
       "Assert the committed baseline files are usable — shape, provenance, no degenerate references",
