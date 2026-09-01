@@ -33,8 +33,9 @@ describe("PtyPauseCoordinator", () => {
 
     coord.pause("backpressure");
     coord.pause("resource-governor");
-    coord.resume("backpressure");
+    const resumed = coord.resume("backpressure");
 
+    expect(resumed).toBe(false);
     expect(raw.resume).not.toHaveBeenCalled();
     expect(coord.isPaused).toBe(true);
   });
@@ -46,8 +47,9 @@ describe("PtyPauseCoordinator", () => {
     coord.pause("backpressure");
     coord.pause("resource-governor");
     coord.resume("backpressure");
-    coord.resume("resource-governor");
+    const resumed = coord.resume("resource-governor");
 
+    expect(resumed).toBe(true);
     expect(raw.resume).toHaveBeenCalledTimes(1);
     expect(coord.isPaused).toBe(false);
   });
@@ -57,8 +59,9 @@ describe("PtyPauseCoordinator", () => {
     const coord = new PtyPauseCoordinator(raw);
 
     coord.pause("backpressure");
-    coord.resume("ipc-queue");
+    const resumed = coord.resume("ipc-queue");
 
+    expect(resumed).toBe(false);
     expect(raw.resume).not.toHaveBeenCalled();
     expect(coord.isPaused).toBe(true);
   });

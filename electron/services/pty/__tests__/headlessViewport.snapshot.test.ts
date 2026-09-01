@@ -307,4 +307,22 @@ describe("ViewportSnapshotCache (PERF-035)", () => {
     // Same generation, different n — must re-extract, not serve the n=6 object.
     expect(cache.read(term, 15)).not.toBe(six);
   });
+
+  it("preserves the legacy delta sequence while unchanged raw rows are reused", async () => {
+    let previousLegacy = legacySnapshot(term);
+    let previousCached = cache.read(term, 15)!;
+
+    for (const state of STATES) {
+      await write(term, state.data);
+      const legacy = legacySnapshot(term);
+      const cached = cache.read(term, 15)!;
+
+      expect(measureVisibleContentDelta(previousCached, cached), `state "${state.name}"`).toEqual(
+        measureVisibleContentDelta(previousLegacy, legacy)
+      );
+
+      previousLegacy = legacy;
+      previousCached = cached;
+    }
+  });
 });
