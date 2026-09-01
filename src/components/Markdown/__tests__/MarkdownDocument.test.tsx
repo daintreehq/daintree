@@ -338,28 +338,32 @@ describe("MarkdownDocument", () => {
  * source instead, which is what actually ships in the lazy markdown chunk.
  */
 describe("MarkdownDocument.css document scale (#12134)", () => {
-  const css = fs.readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "../MarkdownDocument.css"),
-    "utf8"
-  );
+  // Comments go first throughout: the file's header explains both rules below
+  // by quoting the very things they forbid, so a raw scan reads its own prose.
+  const rules = fs
+    .readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "../MarkdownDocument.css"),
+      "utf8"
+    )
+    .replace(/\/\*[\s\S]*?\*\//g, "");
+
+  /** The `.markdown-document` rule's own body, not a descendant's. */
+  const rootBlock = /(?:^|\n)\.markdown-document\s*\{([^}]*)\}/.exec(rules)?.[1] ?? "";
 
   it("sizes the document from --markdown-font-size, falling back to the type scale", () => {
-    const declarations = [...css.matchAll(/(?:^|[^-\w])font-size\s*:\s*([^;}\n]+)/g)].map(
+    expect(rootBlock).not.toBe("");
+    const declarations = [...rootBlock.matchAll(/(?:^|[^-\w])font-size\s*:\s*([^;}\n]+)/g)].map(
       (match) => match[1]?.trim()
     );
 
-    // The root rule's own declaration, not one of the descendant overrides.
-    expect(declarations).toContain("var(--markdown-font-size, var(--text-sm))");
     // The fallback is load-bearing: a document mounted without the prop, and
     // every surface that predates the control, still renders at 14px.
-    expect(declarations).not.toContain("var(--markdown-font-size)");
+    expect(declarations).toEqual(["var(--markdown-font-size, var(--text-sm))"]);
   });
 
   it("keeps the scale unlayered, where it still outranks the typography plugin", () => {
     // Wrapping this file in @layer hands the prose rules back to the plugin's
-    // light-theme defaults — the regression the file header records. Comments
-    // go first: the header explains the rule by naming the at-rule it forbids.
-    const rules = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    // light-theme defaults — the regression the file header records.
     expect(rules).not.toMatch(/@layer/);
   });
 });

@@ -931,6 +931,12 @@ describe("FilePane show in file browser (#11483)", () => {
 // #11191: HTML files get the same Source/Rendered toggle as Markdown; rendered
 // HTML routes to the sandboxed-iframe HtmlViewer.
 describe("FilePane HTML Source/Rendered (#11191)", () => {
+  // Hoisted, so its call history would otherwise carry across tests and let a
+  // later assertion pass on an earlier test's click.
+  beforeEach(() => {
+    setMarkdownFontSizeMock.mockReset();
+  });
+
   function renderPane(filePath: string, fileViewMode?: "source" | "rendered") {
     panelsById["file-1"] = { id: "file-1", kind: "file", filePath, fileViewMode };
     return render(
