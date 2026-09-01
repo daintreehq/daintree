@@ -861,6 +861,14 @@ const worstCv = cvs.reduce(
   { label: "", cv: 0 }
 );
 if (maxCv !== null) {
+  const unmeasured = cvs.filter((entry) => entry.cv === null).map((entry) => entry.label);
+  check(
+    unmeasured.length === 0,
+    "within-arm spread is computable on every arm",
+    unmeasured.length === 0
+      ? `${cvs.length} arms`
+      : `${unmeasured.join(", ")} reported no usable meanMs/stdDevMs, so --max-cv passed them without measuring anything`
+  );
   check(
     worstCv.cv <= maxCv,
     "within-arm spread under --max-cv",
@@ -921,7 +929,13 @@ for (const guard of precommit?.guards ?? []) {
   const champSide = champArms.map((arm) => guardValue(arm, args.scenario, guard.name));
   const candSide = candArms.map((arm) => guardValue(arm, args.scenario, guard.name));
   if (champSide.some((v) => v === null) || candSide.some((v) => v === null)) {
-    guardRows.push({ name: guard.name, status: "ABSENT", detail: "not emitted on every arm" });
+    guardRows.push({
+      name: guard.name,
+      status: "ABSENT",
+      detail:
+        "not emitted on every arm — a guard that stopped being reported is not a guard that passed",
+      breach: true,
+    });
     continue;
   }
   const champG = middle(champSide);
@@ -939,12 +953,22 @@ for (const guard of precommit?.guards ?? []) {
   const move = ((candG - champG) / champG) * 100;
   const machineDependent = !isMachineIndependent(guard.class ?? classifyTarget(guard.name));
   const withinNoise = machineDependent && Math.abs(move) <= drift;
-  const allowed = args.allowedGuardRegressions.includes(guard.name);
+  // Declared in the record AND named on the command line. The flag alone would
+  // reproduce the problem the lock exists to prevent: measure, see the breach,
+  // add the flag, re-run the same arms, call it a CLAIM. A trade discovered
+  // mid-run is a NO CLAIM — precommit it in a fresh directory and record why
+  // the first decision was abandoned.
+  const declared = precommit
+    ? (precommit.allowedGuardRegressions ?? []).includes(guard.name)
+    : true;
+  const allowed = args.allowedGuardRegressions.includes(guard.name) && declared;
   const breach = move > guard.tolerancePct && !withinNoise && !allowed;
   guardRows.push({
     name: guard.name,
     status: breach
-      ? "BREACH"
+      ? args.allowedGuardRegressions.includes(guard.name) && !declared
+        ? "UNDECLARED"
+        : "BREACH"
       : allowed && move > guard.tolerancePct
         ? "ALLOWED"
         : withinNoise

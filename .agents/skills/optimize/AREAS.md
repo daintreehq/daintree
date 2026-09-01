@@ -2,7 +2,11 @@
 
 The 156-scenario matrix, partitioned five ways so a fleet of workers can each take one without colliding.
 
-**An area is a batch of runs, not a run.** `/optimize` works one cluster: one benchmark, or a handful that share a subject and a plausible common fix. Each area below lists its clusters; a worker given an area picks the one with the best evidence, runs it end to end, opens one pull request, and names in its report which clusters it passed over so the next run can take them.
+**An area is a batch of runs, not a run.** `/optimize` works one cluster: one benchmark, or up to four that share a subject and a plausible common fix.
+
+**The rows below are families, not clusters.** A family is everything that measures one subject; several run to six or nine scenarios. A _cluster_ is what one run takes out of a family — the entry target plus at most three siblings a single fix would plausibly move together. So a worker given an area picks the family with the best evidence, takes a cluster from it, runs that end to end, opens one pull request, and names in its report which family it drew from, which siblings it left, and which families it passed over. Reading a nine-scenario family as one cluster is the grab-bag §Cluster exists to refuse.
+
+The scenario lists are also not exhaustive per family: every rostered id belongs to exactly one area, but the family rows name the ones with recorded evidence, and an area's headline count is the authority on what it owns.
 
 **The partition is by owned source path**, which is what makes parallel workers safe: two areas do not edit the same files, so two pull requests do not conflict. A run that widens outside its area's paths breaks that guarantee. Where an area's paths would overlap another's, the shared file is listed under the area that owns the _mechanism_, and the other area treats it as read-only.
 
@@ -18,7 +22,7 @@ The largest measured cost in the matrix, and the one a user feels as a machine t
 
 **Owned paths:** `electron/services/git/`, `electron/services/worktree/`, `electron/services/ProcessDetector/`, `electron/services/ProcessTreeCache.ts`, `electron/services/ActivityMonitor.ts`, `src/store/worktree*`.
 
-| Cluster | Scenarios | Entry target | Recorded evidence |
+| Family | Scenarios | Entry target | Recorded evidence |
 | --- | --- | --- | --- |
 | Git status pass | `PERF-100`, `103` | `metricStats.gitSpawns.max` | One spawn per pass, clean and dirty; 132 ms and 18 ms in CI |
 | Git poll cycle scaling | `PERF-101`, `102`, `104` | `metricStats.spawnsPerWorktreeN50.max` | `cycleMsN50` 580 ms at 50 worktrees, one git process per worktree per cycle, unbatched |
@@ -40,7 +44,7 @@ Every byte of agent output crosses this. The felt symptom is a terminal that stu
 
 **Owned paths:** `electron/pty-host/`, `electron/services/pty/`, `src/panels/terminal/`, `shared/utils/agentFsm.ts`, `electron/services/AgentStateService*`.
 
-| Cluster | Scenarios | Entry target | Recorded evidence |
+| Family | Scenarios | Entry target | Recorded evidence |
 | --- | --- | --- | --- |
 | Flow control and the resume sweep | `PERF-370`, `371`, `372`, `373` | `metricStats.sweepAckUsAt48.mean` | The ack crossing the low watermark costs ~38 µs against ~0.06 µs for an ordinary ack — ~600×, superlinear in fleet size |
 | Output pipeline | `PERF-030`, `031`, `032`, `045` | `metricStats.forwardedBytes.mean` | The burst and sustained paths, plus the pty-host's own volume |
@@ -62,7 +66,7 @@ Nothing here is individually slow. All of it is paid on every invoke, every keys
 
 **Owned paths:** `electron/setup/security.ts`, `electron/ipc/`, `electron/utils/logger.ts`, `electron/services/mcp-server/`, `electron/services/forge/`, `electron/services/forge*.ts` (the registry, resolver, RPC server and both relays are siblings of that directory, not inside it), `electron/services/CopyTreeService.ts`, `src/services/ActionService.ts`, `src/services/actions/`, `shared/config/agentRegistry.ts`.
 
-| Cluster | Scenarios | Entry target | Recorded evidence |
+| Family | Scenarios | Entry target | Recorded evidence |
 | --- | --- | --- | --- |
 | Log emit path | `PERF-380`, `381`, `382`, `383`, `384` | `metricStats.perEntryUsProbeHit.mean` | A 1 KiB line carrying a `sk-`/`ghp_`/`Bearer` sigil that completes no pattern costs **15.9 µs against 9.6 µs — 1.66× for zero redactions**. Paid by any line holding a git remote or a header dump |
 | IPC envelope | `PERF-360`, `361`, `362`, `363`, `364` | `metricStats.perInvokeUsDeep.mean` | A deep object chain costs **13.6×** a flat payload of identical bytes, because `sizeGuardReplacer` stringifies the whole thing to produce a byte count. An error envelope is ~20× a success one |
@@ -82,7 +86,7 @@ The "why did switching projects just stall" cluster, and the subsystems undernea
 
 **Owned paths:** `electron/window/`, `electron/services/persistence/`, `electron/services/migrations/`, `electron/store.ts`, `electron/workspace-host/`, `electron/services/plugin/`, `electron/services/CrashRecoveryService.ts`, `src/store/project*`.
 
-| Cluster | Scenarios | Entry target | Recorded evidence |
+| Family | Scenarios | Entry target | Recorded evidence |
 | --- | --- | --- | --- |
 | Project switch phases | `PERF-070`, `071`, `072`, `073` | `metricStats.payloadBytes.max` | A `size` target — what has to cross to hydrate is upstream of every duration in the family |
 | Project view lifecycle | `PERF-074`..`077` | `metricStats.viewCreateCount.max` | Warm rotation, LRU eviction, pressure ladder, queued switches |
@@ -103,11 +107,11 @@ The "why did switching projects just stall" cluster, and the subsystems undernea
 
 Per-keystroke and per-open work. The sharpest single finding in the repo lives here.
 
-**Owned paths:** `src/panels/file-browser/`, `src/panels/review/`, `src/panels/diff/`, `src/panels/file/`, `src/components/`, `src/hooks/`, `src/lib/worktreeFilters.ts`, `src/lib/projectSwitcherSearch.ts`, `src/lib/actionPaletteSearch.ts`, `shared/theme/`, `electron/services/AgentNotificationService.ts`, `electron/services/CliAvailabilityService.ts`, `electron/services/FileSearchService*`.
+**Owned paths:** `src/panels/file-browser/`, `src/panels/review/`, `src/panels/diff/`, `src/panels/file/`, `src/components/`, `src/hooks/`, `src/lib/worktreeFilters.ts`, `src/lib/projectSwitcherSearch.ts`, `src/lib/actionPaletteSearch.ts`, `shared/theme/`, `electron/services/AgentNotificationService.ts`, `electron/services/NotificationService.ts`, `electron/services/IdleTerminalNotificationService.ts`, `electron/services/CliAvailabilityService.ts`, `electron/services/FileSearchService*`.
 
 The three `src/lib/` entries are the actual subjects of this area's sharpest clusters — the sidebar derivation fixture imports `worktreeFilters` directly, and the switcher fixture imports `projectSwitcherSearch`. An earlier draft listed the panels that render those results and not the functions that compute them, which would have left a compliant worker unable to touch the thing it was sent to optimise.
 
-| Cluster | Scenarios | Entry target | Recorded evidence |
+| Family | Scenarios | Entry target | Recorded evidence |
 | --- | --- | --- | --- |
 | Sidebar derivation | `PERF-400`, `401`, `402` | `metricStats.chipCountsMs.mean` | At 200 worktrees `computeChipCounts` is **2.87 ms of the 3.78 ms sweep — 76%, ~6× the row filter beside it**, because it is six more full `matchesFilters` sweeps. The filter bar's live counts cost several times more than the filtering |
 | Project switcher ranking | `PERF-403`, `404` | `metricStats.worstKeystrokeMsLarge.mean` | ⌘P re-ranks the whole workspace list per keystroke; `404` is the one-edit correction path. Kept apart from `PERF-170/171`, which score a different catalog with a different scorer — one fix does not move both |
@@ -116,7 +120,7 @@ The three `src/lib/` entries are the actual subjects of this area's sharpest clu
 | Diff tokenize | `PERF-160`, `161`, `162` | `metricStats.tokensProduced.max` | Representative, oversized fallback, multi-file review open |
 | CLI availability storm | `PERF-393`, `394` | `metricStats.windowSpawns.max` | `useAgentSetupPoll` re-probes all 18 CLIs every 3 s — 37 process starts per refresh, 111 across a wizard window |
 | Themes | `PERF-300`..`305` | `metricStats.resolveMisses`-guarded durations | 15 palettes, oracles anchored on values absent from the subject |
-| Notifications | `PERF-320`..`325` | `metricStats.gateDecisionCount.max` | 24-row gate battery, every gate present twice — suppressing and passing |
+| Notifications | `PERF-320`, `321`, `325` | `metricStats.badgeWriteCount.max` | Routing cost against fleet size, and the badge/title fan-out. Not `PERF-322`'s `gateDecisionCount`: that is a fixed 24-case corpus tally, so driving it down trips the scenario's own `gateShortfallCount` |
 | DevPreview detection | `PERF-020`..`024` | `metricStats.maxChunksBeforeUrlCount.max` | URL detection, dual startup, restart loop, exit classification |
 
 **Start with:** sidebar derivation on `PERF-402`, targeting `chipCountsMs`. One named function, a four-way predicate that catches skipping any of them, and a mechanism already diagnosed.

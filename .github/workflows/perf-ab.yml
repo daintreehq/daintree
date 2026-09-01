@@ -145,6 +145,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libarchive-tools
 
+      - name: Refuse two trees that want different dependencies
+        # Before `npm ci`, not after: one install serves both arms, so if the
+        # manifests diverge the base arm would run against the candidate's
+        # node_modules and the comparison would be measuring the install.
+        # Workspace manifests count — `packages/*` and `plugins/*` are in the
+        # install graph, so a change to any of them moves what gets installed.
+        shell: bash
+        env:
+          BASE_SHA: ${{ inputs.base_sha }}
+          CAND_SHA: ${{ inputs.cand_sha }}
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only "$BASE_SHA" "$CAND_SHA" -- \
+            package.json package-lock.json \
+            "packages/*/package.json" "plugins/*/package.json" "plugins/*/*/package.json")
+          if [ -n "$changed" ]; then
+            echo "::error::These trees want different dependencies, so one npm ci cannot serve both arms:"
+            echo "$changed"
+            exit 1
+          fi
+          echo "Dependency manifests are identical across both trees."
+
       - name: Install dependencies
         run: npm ci
 
@@ -188,16 +210,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .tmp/opt/ab
-
-          # An A/B whose two trees want different dependencies is not an A/B:
-          # one arm would run against the other's node_modules and the whole
-          # comparison would be measuring the install.
-          for manifest in package.json package-lock.json; do
-            if ! git diff --quiet "$BASE_SHA" "$CAND_SHA" -- "$manifest"; then
-              echo "::error::$manifest differs between the two trees. One npm ci cannot serve both arms, so this is not a comparison."
-              exit 1
-            fi
-          done
 
           arm() {
             git checkout --quiet --detach "$1"

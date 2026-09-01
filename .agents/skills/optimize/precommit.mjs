@@ -44,7 +44,8 @@ const USAGE =
   "usage: precommit.mjs --dir DIR --scenario ID --target PATH --predicate NAME [...]\n" +
   "                     --mode MODE --iterations N --warmups W --statistic median|count\n" +
   "                     --threshold PCT --baseline-sha SHA\n" +
-  "                     [--higher-is-better] [--guard NAME:TOLERANCE_PCT] [--note TEXT] [--force]\n" +
+  "                     [--higher-is-better] [--guard NAME:TOLERANCE_PCT]\n" +
+  "                     [--allow-guard-regression NAME] [--note TEXT] [--force]\n" +
   "       precommit.mjs --print --dir DIR";
 
 function usageError(message) {
@@ -64,12 +65,17 @@ const SINGLE = {
   "--baseline-sha": "baselineSha",
   "--note": "note",
 };
-const REPEATED = { "--predicate": "predicates", "--guard": "guards" };
+const REPEATED = {
+  "--predicate": "predicates",
+  "--guard": "guards",
+  "--allow-guard-regression": "allowedGuardRegressions",
+};
 
 function parseArgs(argv) {
   const out = {
     predicates: [],
     guards: [],
+    allowedGuardRegressions: [],
     higherIsBetter: false,
     force: false,
     print: false,
@@ -148,6 +154,16 @@ const guards = args.guards.map((entry) => {
   return { name, tolerancePct: tolerance, class: classifyTarget(name) };
 });
 
+const guardNames = new Set(guards.map((g) => g.name));
+for (const name of args.allowedGuardRegressions) {
+  if (!guardNames.has(name)) {
+    usageError(
+      `--allow-guard-regression ${name} names a metric that is not one of the --guard entries. ` +
+        "Declaring a trade for a guard you are not watching disables nothing and hides a typo."
+    );
+  }
+}
+
 // The tail statistic is not a decision the loop gets to make per target: at the
 // iteration counts this harness runs, a p95 IS one of the two largest samples.
 // Covering the 95th percentile with 95% confidence needs ln(.05)/ln(.95) ~= 59
@@ -202,6 +218,11 @@ const record = {
   higherIsBetter: args.higherIsBetter,
   predicates: [...args.predicates].sort(),
   guards,
+  // A guard you already know you are trading away, declared here rather than
+  // discovered later. `check-pair` honours a --allow-guard-regression only for
+  // a name that appears in this list, so the trade is a decision made before
+  // the numbers rather than an exception granted after them.
+  allowedGuardRegressions: [...args.allowedGuardRegressions].sort(),
   mode: args.mode,
   iterations,
   warmups,
@@ -226,6 +247,9 @@ console.log(`  predicates   ${record.predicates.join(", ")}`);
 console.log(
   `  guards       ${guards.length === 0 ? "(none)" : guards.map((g) => `${g.name} ±${g.tolerancePct}%`).join(", ")}`
 );
+if (record.allowedGuardRegressions.length > 0) {
+  console.log(`  trades       ${record.allowedGuardRegressions.join(", ")} — declared up front`);
+}
 console.log(
   `  protocol     mode ${record.mode} · ${record.iterations} iterations · ${record.warmups} warmups`
 );

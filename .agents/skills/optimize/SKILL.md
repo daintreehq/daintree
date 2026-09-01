@@ -169,10 +169,10 @@ Phases 3, 4 and 5 cycle once per benchmark in the cluster. While cycling, hold t
 | 3 | Precommit & baseline | Per benchmark: probe, choose target metric + full predicate set + guards, run `precommit.mjs`, prove a predicate can fail, measure the baseline (§Precommit, §Measure) | `precommit.json` written, `before.json` healthy and non-degenerate |
 | 4 | Hypothesis loop | Per benchmark: one hypothesis per round, commit before measuring, gate, keep or revert (§Loop) | Budget spent, or credible hypotheses exhausted |
 | 5 | Local claim | Per benchmark: fresh interleaved A/B of its own baseline sha against the current tree (§Claim) | `CLAIM`, `NO CLAIM`, or a recorded `NO MEASUREMENT` retry. More cluster members → back to 3 |
-| 6 | Cluster close | Re-measure **every** benchmark in the cluster — kept, unmoved, and the ones you never formed a hypothesis for — against the branch point, on the final tree (§Cluster close) | Every member has a final number measured on the tree that ships |
+| 6 | Cluster close | **Squash first**, then re-measure **every** benchmark in the cluster — kept, unmoved, and the ones you never formed a hypothesis for — against the branch point, on the squashed tree (§Cluster close) | Every member has a final number measured on the tree that ships |
 | 7 | Cross-OS legs | Dispatch `perf-ab.yml` for every count/size/ratio target; durations get no CI claim (§Cross-OS) | Legs reported, or a recorded reason there are none |
 | 8 | Prove the tree | `npm run typecheck`, **the full `npm test`**, `npm run check`, and the diff audit proving nothing under `scripts/perf/` changed (§Prove the tree) | All green. **Hard gate on phase 9** |
-| 9 | Pull request | Squash to coherent commits, push the branch, open the PR against `develop` with the evidence in the body (§Finalization) | PR URL captured — or skipped, with the branch deleted, when nothing improved |
+| 9 | Pull request | Push the branch and open the PR against `develop` with the evidence in the body (§Finalization). The squash happened before phase 6 — a rewrite here would orphan every number phase 6 measured | PR URL captured — or skipped, with the branch deleted, when nothing improved |
 | 10 | Report | Per-benchmark and per-machine tables, hypothesis ledger, PR link (§Report) | Ends with `OPTIMIZE_COMPLETE` |
 
 Emit a transition after every phase: position line, what you learned, decision, then start the next phase **in the same turn**.
@@ -187,7 +187,7 @@ To resolve a subject to benchmarks:
 
 1. `rg -n "<subject words>" scripts/perf/scenarios/` and read the matching scenario definitions — `name`, `description`, `correctness`, and the fixture header, which states the scope limits in full.
 2. Cross-read `scripts/perf/README.md`. Several families have a "the one to watch" or "the number to read" paragraph naming the finding the family was built around; that paragraph is usually the target.
-3. Check `AREAS.md` for the recorded evidence and the suggested entry point.
+3. Check `AREAS.md` for the recorded evidence and the suggested entry point. Its rows are **families**, not clusters — several run to six or nine scenarios. Take the entry target plus at most three siblings that one fix would move; leave the rest and name them in the report.
 4. Rank candidates by **evidence of headroom**, not by size of number: a benchmark with a named mechanism in the README beats a big p95 with no explanation. An idle-window scenario's p95 is a fixed observation window by design and is never the target — its counts are.
 
 Then write the cluster into the ledger with, per member: the scenario id, why it is in, and the metric you expect to target. And write the rejections: what you considered and why it is a different subject. That list is what stops a later round quietly widening scope.
@@ -373,8 +373,12 @@ gh workflow run perf-ab.yml --ref "$(git branch --show-current)" \
   -f mode=<mode> -f iterations=<N> -f warmups=<W> -f threshold=<pct> \
   -f higher_is_better=<true|false> -f os=all
 
-# Dispatch returns nothing useful, so find the run it started and WAIT for it.
-RUN=$(gh run list --workflow=perf-ab.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+# Dispatch returns nothing useful, so correlate the run yourself and WAIT.
+# Filter by branch: several workers dispatch this workflow at once, and a bare
+# `--limit 1` cheerfully returns whichever of them started most recently.
+BRANCH=$(git branch --show-current); SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+RUN=$(gh run list --workflow=perf-ab.yml --branch "$BRANCH" --event workflow_dispatch \
+  --created ">=$SINCE" --limit 1 --json databaseId --jq '.[0].databaseId')
 gh run watch "$RUN" --exit-status || true
 gh run view "$RUN" --log | grep -E "VERDICT:|check-pair exit|::error"
 ```
@@ -416,7 +420,9 @@ git rev-parse HEAD > .tmp/optimize/tests-green
 
 That file is the receipt, and it is not paperwork: a `PreToolUse` hook reads it and **denies `gh pr create`** unless it holds the current HEAD. So the gate does not depend on you remembering the rule at hour six, and it re-arms itself against exactly the mistake that matters — any commit, squash or amend after Phase 8 moves HEAD, the receipt stops matching, and the pull request is refused until you re-run the suite and redo §Cluster close against the tree that actually ships.
 
-Never write the receipt ahead of the run, and never for a suite you did not watch finish. Writing it to get past the hook is forging your own evidence, and it is the one thing in this loop nothing else can catch.
+Never write the receipt ahead of the run, and never for a suite you did not watch finish.
+
+**Be clear about what that hook is.** It matches the literal PR-create command, so it stops the ordinary mistake — reaching phase 9 without having run phase 8, or opening the PR after a squash moved HEAD. It does not stop a determined agent: a different spelling of the command, the REST API, or simply writing the receipt by hand all get past it, and nothing in this loop can catch a fabricated receipt. It is a guard against forgetting, not against dishonesty. The same is true one level down: `check-pair.mjs` reads the summary files the runner wrote and cannot tell a real measurement from a hand-edited one. Every gate here raises the cost of fooling yourself by accident. None of them makes it impossible on purpose, and a report that says otherwise is overclaiming.
 
 ## §Checks
 
@@ -457,7 +463,7 @@ Three outcomes. The first two are complete, correct runs.
 
 ### Nothing improved
 
-`git reset --hard <branch point>`, confirm `git status --porcelain` and `git diff origin/develop` are both empty, then `git switch develop` before `git branch -D <branch>` — git refuses to delete the branch you are standing on, and a run that ends holding a branch it says it deleted has lied in its own report. **No pull request, no commit to `develop`, never an empty or marker commit.** The evidence is the report: the target and its before value, every hypothesis with the measured reason it was rejected, and what you would try next or why you believe the number is at its floor.
+`git reset --hard <branch point>`, confirm `git status --porcelain` and `git diff origin/develop` are both empty, then `git switch --detach <branch point>` before `git branch -D <branch>`. Git refuses to delete the branch you are standing on, and plain `git switch develop` fails here too — this run works in a linked worktree and `develop` is checked out in the main one. A run that ends holding a branch it said it deleted has lied in its own report. **No pull request, no commit to `develop`, never an empty or marker commit.** The evidence is the report: the target and its before value, every hypothesis with the measured reason it was rejected, and what you would try next or why you believe the number is at its floor.
 
 ### Something improved
 

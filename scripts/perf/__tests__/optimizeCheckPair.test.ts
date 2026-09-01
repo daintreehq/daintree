@@ -58,6 +58,8 @@ type ArmSpec = {
   stdDevMs?: number;
   /** Overrides ARM_EPOCH — used to stamp an arm before the precommit record. */
   epoch?: number;
+  /** `diagnostic` marks a reading the runner knows is not authoritative here. */
+  applicability?: string;
 };
 
 function writeArm(dir: string, spec: ArmSpec): string {
@@ -116,6 +118,7 @@ function writeArm(dir: string, spec: ArmSpec): string {
           },
           refreshMisses: { mean: 0, max: 0, min: 0, sum: 0, count: 20 },
         },
+        ...(spec.applicability ? { applicability: spec.applicability } : {}),
         outsideReference: false,
         measurementIssues: [],
         notes: [],
@@ -156,7 +159,7 @@ function writeInterleavedArms(
   return paths;
 }
 
-function precommit(dir: string, extra: string[] = []) {
+function precommit(dir: string, extra: string[] = [], baselineSha: string = CHAMP_SHA) {
   const result = spawnSync(
     process.execPath,
     [
@@ -180,7 +183,7 @@ function precommit(dir: string, extra: string[] = []) {
       "--threshold",
       "5",
       "--baseline-sha",
-      CHAMP_SHA,
+      baselineSha,
       ...extra,
     ],
     { encoding: "utf8" }
@@ -279,6 +282,33 @@ describe("check-pair ab verdicts", () => {
     expect(status).toBe(1);
   });
 
+  // A Windows leg whose spawn observer cannot see Windows spawns still produces
+  // a number; `run.ts` marks it diagnostic and nothing downstream refused it.
+  it("refuses an arm the runner marked non-authoritative on this platform", () => {
+    const dir = scratch();
+    const paths = writeInterleavedArms(dir, [50, 50.4, 50.2], [44, 43.6, 44.2]);
+    paths.cand1 = writeArm(dir, {
+      label: "cand1",
+      sha: CAND_SHA,
+      target: 44,
+      at: 5,
+      applicability: "diagnostic",
+    });
+    const { status, out } = ab(paths);
+    expect(out).toContain("FAIL  cand1: scenario is authoritative on this platform");
+    expect(status).toBe(1);
+  });
+
+  // A zero champion makes every percentage infinite, and usually means the
+  // scenario measured nothing — which reads as the best score ever recorded.
+  it("refuses a champion reading of zero", () => {
+    const dir = scratch();
+    const paths = writeInterleavedArms(dir, [0, 0, 0], [0, 0, 0]);
+    const { status, out } = ab(paths);
+    expect(out).toContain("FAIL  champ1: target is a usable positive reading");
+    expect(status).toBe(1);
+  });
+
   it("refuses arms that ran three of one side then three of the other", () => {
     const dir = scratch();
     const paths: Record<string, string> = {};
@@ -328,9 +358,12 @@ describe("check-pair against a precommit record", () => {
     expect(status).toBe(4);
   });
 
-  it("allows a guard trade only when it is named on the command line", () => {
+  it("honours a guard trade only when it was declared BEFORE the numbers", () => {
     const dir = scratch();
-    expect(precommit(dir, ["--guard", "residentBytes:5"]).status).toBe(0);
+    expect(
+      precommit(dir, ["--guard", "residentBytes:5", "--allow-guard-regression", "residentBytes"])
+        .status
+    ).toBe(0);
     const paths = writeInterleavedArms(dir, [50, 50.4, 50.2], [44, 43.6, 44.2], {
       guardChamp: 1000,
       guardCand: 2000,
@@ -345,8 +378,65 @@ describe("check-pair against a precommit record", () => {
     expect(status).toBe(0);
   });
 
-  // Without this the lock is a formality: measure first, then write a record
-  // that matches the numbers you already have.
+  // The flag alone would reproduce exactly what the lock exists to prevent:
+  // measure, see the breach, add the flag, re-run the same arms, call it a win.
+  it("refuses a trade added on the command line but absent from the record", () => {
+    const dir = scratch();
+    expect(precommit(dir, ["--guard", "residentBytes:5"]).status).toBe(0);
+    const paths = writeInterleavedArms(dir, [50, 50.4, 50.2], [44, 43.6, 44.2], {
+      guardChamp: 1000,
+      guardCand: 2000,
+    });
+    const { status, out } = ab(paths, [
+      "--precommit",
+      join(dir, "precommit.json"),
+      "--allow-guard-regression",
+      "residentBytes",
+    ]);
+    expect(out).toContain("UNDECLARED residentBytes");
+    expect(status).toBe(4);
+  });
+
+  it("refuses a declared trade for a guard that is not being watched", () => {
+    const dir = scratch();
+    const result = precommit(dir, ["--allow-guard-regression", "residentBytes"]);
+    expect(result.status).toBe(2);
+    expect(result.out).toContain("not one of the --guard entries");
+  });
+
+  it("fails a guard that stopped being emitted rather than reading it as a pass", () => {
+    const dir = scratch();
+    expect(precommit(dir, ["--guard", "vanishedMetric:5"]).status).toBe(0);
+    const paths = writeInterleavedArms(dir, [50, 50.4, 50.2], [44, 43.6, 44.2]);
+    const { status, out } = ab(paths, ["--precommit", join(dir, "precommit.json")]);
+    expect(out).toContain("ABSENT  vanishedMetric");
+    expect(status).toBe(4);
+  });
+
+  // Mid-run the champion moves with every kept hypothesis, so this is opt-in —
+  // but the ONE comparison that produces the reported number must be against
+  // the branch point, and this is what pins that.
+  it("refuses a headline whose champion is not the precommitted branch point", () => {
+    const dir = scratch();
+    expect(precommit(dir, [], "c".repeat(40)).status).toBe(0);
+    const paths = writeInterleavedArms(dir, [50, 50.4, 50.2], [44, 43.6, 44.2]);
+
+    const withoutFlag = ab(paths, ["--precommit", join(dir, "precommit.json")]);
+    expect(withoutFlag.status).toBe(0);
+
+    const headline = ab(paths, ["--precommit", join(dir, "precommit.json"), "--headline"]);
+    expect(headline.out).toContain("FAIL  precommit: headline champion is the branch point");
+    expect(headline.status).toBe(1);
+  });
+
+  it("accepts a headline measured at the precommitted branch point", () => {
+    const dir = scratch();
+    expect(precommit(dir).status).toBe(0);
+    const paths = writeInterleavedArms(dir, [50, 50.4, 50.2], [44, 43.6, 44.2]);
+    const { status } = ab(paths, ["--precommit", join(dir, "precommit.json"), "--headline"]);
+    expect(status).toBe(0);
+  });
+
   it("refuses arms that were measured before the decision was written", () => {
     const dir = scratch();
     expect(precommit(dir).status).toBe(0);
