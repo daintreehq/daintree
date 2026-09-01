@@ -207,21 +207,37 @@ export const McpGetSchemaResultSchema = z.object({
  * would have done the same to consumers narrowing on the two that exist —
  * `daintreehq/assistant#368` among them.
  */
-export const McpGetSchemaWireResultSchema = z.discriminatedUnion("ok", [
-  z.strictObject({
-    ok: z.literal(true),
-    entry: z.record(z.string(), z.unknown()),
-    policy: McpTargetPolicySchema,
-    error: z.null(),
-  }),
-  z.strictObject({
-    ok: z.literal(false),
-    entry: z.null(),
-    policy: z.null(),
-    unavailable: McpUnavailableActionStubSchema.optional(),
-    error: z.strictObject({
-      code: z.enum(["NOT_FOUND", "TIER_NOT_PERMITTED"]),
-      message: z.string(),
+export const McpGetSchemaWireResultSchema = z
+  .discriminatedUnion("ok", [
+    z.strictObject({
+      ok: z.literal(true),
+      entry: z.record(z.string(), z.unknown()),
+      policy: McpTargetPolicySchema,
+      error: z.null(),
     }),
-  }),
-]);
+    z.strictObject({
+      ok: z.literal(false),
+      entry: z.null(),
+      policy: z.null(),
+      unavailable: McpUnavailableActionStubSchema.optional(),
+      error: z.strictObject({
+        code: z.enum(["NOT_FOUND", "TIER_NOT_PERMITTED"]),
+        message: z.string(),
+      }),
+    }),
+  ])
+  // The two denial fields are correlated, and the strict shape alone cannot say
+  // so: an optional key beside an enum admits `TIER_NOT_PERMITTED` with no stub
+  // and `NOT_FOUND` carrying one, neither of which main emits. Without this the
+  // conformance test would pass on both, which is precisely the drift the
+  // strictness above exists to catch. Refined on the union rather than split
+  // into two `ok: false` members, which `discriminatedUnion` cannot hold.
+  .refine(
+    (result) =>
+      result.ok ||
+      (result.error.code === "TIER_NOT_PERMITTED") === (result.unavailable !== undefined),
+    {
+      message: "TIER_NOT_PERMITTED must carry an `unavailable` stub, and NOT_FOUND must carry none",
+      path: ["unavailable"],
+    }
+  );

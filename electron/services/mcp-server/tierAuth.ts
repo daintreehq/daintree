@@ -574,7 +574,11 @@ function isExistenceCatalogVisible(
 ): snapshot is TargetPolicySessionSnapshot & { tier: LadderTier } {
   if (snapshot === undefined) return false;
   if (!snapshot.rendererOwnedOrigin) return false;
-  return snapshot.tier !== "external";
+  // Named positively rather than as `!== "external"`. A second flat peer added
+  // to `McpTier` would be admitted by the negative form on the day it landed,
+  // with no tier to report and nothing here to notice; this form refuses it
+  // until someone puts it on the ladder deliberately.
+  return snapshot.tier === "workbench" || snapshot.tier === "action" || snapshot.tier === "system";
 }
 
 /**
@@ -744,13 +748,23 @@ export function filterIntrospectionResultForSession(
         hasMore: offset + limit < permitted.length,
         // `total` and `hasMore` keep their callable-only meaning: a client that
         // pages on them walks the surface it can dispatch, exactly as before.
-        // The catalog is paged by the same window but counted separately, so
-        // neither collection's length can move the other's cursor (#12117).
+        // The catalog is paged by the same window but counted and continued
+        // separately, so neither collection's length can move the other's
+        // cursor (#12117).
+        //
+        // `unavailableHasMore` is why the second flag exists rather than
+        // leaving the client to compare `offset + limit` itself: with 5
+        // callable entries and 60 out-of-tier ones at `limit: 50`, `hasMore`
+        // is already false on the first page while 10 stubs are still
+        // unfetched. A client paging on `hasMore` alone would stop there and
+        // conclude the catalog was exhaustive — the exact wrong conclusion for
+        // a surface whose whole job is to prove a capability exists.
         ...(unavailable === null
           ? {}
           : {
               unavailable: unavailable.slice(offset, offset + limit),
               unavailableTotal: unavailable.length,
+              unavailableHasMore: offset + limit < unavailable.length,
             }),
       },
     };
@@ -802,7 +816,14 @@ export function filterIntrospectionResultForSession(
       payload?.ok === true &&
       requestedId !== undefined &&
       readEntryId(payload.entry) === requestedId;
-    if (answersTheRequest && isIntrospectableForSession(payload.entry, permittedActionIds)) {
+    // Resolved once and branched on below, never asked twice. An entry that IS
+    // introspectable but whose policy cannot be built must fall to the
+    // fail-closed NOT_FOUND, not to the catalog: it is reachable right now —
+    // through a live grant, say — so reporting a tier it would need would be a
+    // lie about access the caller already has.
+    const introspectable =
+      answersTheRequest && isIntrospectableForSession(payload?.entry, permittedActionIds);
+    if (introspectable) {
       // The renderer has no session, tier, or grant state, so it returns
       // `policy: null` and main substitutes the real record here — the same
       // rebuild-from-scratch point that strips any sibling key the renderer
@@ -828,7 +849,7 @@ export function filterIntrospectionResultForSession(
     // tells it about a door it has no key to. A renderer-owned session does
     // have one — the panel's tier control — which is what makes the answer
     // worth giving here and nowhere else.
-    if (answersTheRequest) {
+    if (answersTheRequest && !introspectable) {
       const unavailable = buildUnavailableStub(payload?.entry, options.policySnapshot);
       if (unavailable !== null) {
         return {

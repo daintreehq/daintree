@@ -1730,20 +1730,27 @@ describe("filterIntrospectionResultForSession", () => {
 
     function listFor(
       entries: ActionManifestEntry[],
-      policySnapshot: TargetPolicySessionSnapshot | undefined
+      policySnapshot: TargetPolicySessionSnapshot | undefined,
+      opts: { listPaging?: { offset: number; limit: number }; permit?: ReadonlySet<string> } = {}
     ) {
       return (
         filterIntrospectionResultForSession(
           "actions.list",
           { ok: true as const, result: { actions: entries } },
-          permitted,
-          { callerLimit: 20, ...(policySnapshot ? { policySnapshot } : {}) }
+          opts.permit ?? permitted,
+          {
+            callerLimit: 20,
+            ...(opts.listPaging ? { listPaging: opts.listPaging } : {}),
+            ...(policySnapshot ? { policySnapshot } : {}),
+          }
         ) as {
           result: {
             actions: unknown[];
             total: number;
+            hasMore: boolean;
             unavailable?: unknown[];
             unavailableTotal?: number;
+            unavailableHasMore?: boolean;
           };
         }
       ).result;
@@ -1751,14 +1758,15 @@ describe("filterIntrospectionResultForSession", () => {
 
     function searchFor(
       entries: ActionManifestEntry[],
-      policySnapshot: TargetPolicySessionSnapshot | undefined
+      policySnapshot: TargetPolicySessionSnapshot | undefined,
+      callerLimit = 20
     ) {
       return (
         filterIntrospectionResultForSession(
           "actions.search",
           { ok: true as const, result: { totalMatches: entries.length, results: entries } },
           permitted,
-          { callerLimit: 20, ...(policySnapshot ? { policySnapshot } : {}) }
+          { callerLimit, ...(policySnapshot ? { policySnapshot } : {}) }
         ) as {
           result: {
             results: unknown[];
@@ -1768,6 +1776,11 @@ describe("filterIntrospectionResultForSession", () => {
           };
         }
       ).result;
+    }
+
+    /** Ids of whichever collection the caller names, for order-sensitive asserts. */
+    function stubIds(stubs: unknown[] | undefined): string[] {
+      return (stubs ?? []).map((s) => (s as { id: string }).id);
     }
 
     function schemaFor(
@@ -1813,6 +1826,31 @@ describe("filterIntrospectionResultForSession", () => {
         callable: false,
       });
       expect(McpUnavailableActionStubSchema.safeParse(stub).success).toBe(true);
+    });
+
+    // `git.push` above proves nothing about the derivation: BAND_OVERRIDES pins
+    // it, so a builder that passed a hard-coded `danger: "safe"` into
+    // `deriveBand` would still report it correctly. `worktree.delete` — the
+    // action #12117 was actually filed about — has no override and is
+    // `danger: "confirm"` in a non-open-world category, so its band can only be
+    // right if the entry's OWN danger reaches the derivation.
+    it("derives the band from the entry's own danger, not a fixed value", () => {
+      const destructive = buildUnavailableStub(
+        makeEntry({
+          id: "worktree.delete",
+          title: "Delete Worktree",
+          category: "worktree",
+          danger: "confirm",
+        }),
+        firstParty()
+      );
+      expect(destructive).toMatchObject({ band: "destructive-local", minimumTier: "system" });
+
+      const safe = buildUnavailableStub(
+        makeEntry({ id: "worktree.delete", category: "worktree", danger: "safe" }),
+        firstParty()
+      );
+      expect(safe).toMatchObject({ band: "reversible" });
     });
 
     it("carries no description, schemas, or policy across the tier boundary", () => {
@@ -1921,48 +1959,113 @@ describe("filterIntrospectionResultForSession", () => {
       });
     });
 
-    // Same collection, two counters: paging the callable set must not be
-    // steered by how many out-of-tier matches happen to sit beside it.
+    // Same window, two counters. Deliberately uneven — 2 callable against 3
+    // unavailable, paged 2 at a time — so a regression that shared one cursor,
+    // reported a page length as a total, or let one collection's size steer
+    // the other's slice cannot fit inside a single page and pass.
     it("counts and pages the two collections independently", () => {
-      const payload = listFor(
+      const entries = [
+        makeEntry({ id: "terminal.list" }),
+        makeEntry({ id: "worktree.list" }),
+        makeEntry({ id: OUT_OF_TIER }),
+        makeEntry({ id: "git.commit" }),
+        makeEntry({ id: "git.stageAll" }),
+      ];
+
+      const first = listFor(entries, firstParty(), { listPaging: { offset: 0, limit: 2 } });
+      expect((first.actions as ActionManifestEntry[]).map((e) => e.id)).toEqual([
+        "terminal.list",
+        "worktree.list",
+      ]);
+      expect(first.total).toBe(2);
+      expect(stubIds(first.unavailable)).toEqual([OUT_OF_TIER, "git.commit"]);
+      expect(first.unavailableTotal).toBe(3);
+
+      // Second page: the callable set is exhausted, the catalog is not. Each
+      // collection advances on its own contents, not on the other's.
+      const second = listFor(entries, firstParty(), { listPaging: { offset: 2, limit: 2 } });
+      expect(second.actions).toEqual([]);
+      expect(second.total).toBe(2);
+      expect(stubIds(second.unavailable)).toEqual(["git.stageAll"]);
+      expect(second.unavailableTotal).toBe(3);
+    });
+
+    // The case a shared cursor gets wrong: the callable set is exhausted on
+    // page one while the catalog is not. `hasMore` keeps its callable-only
+    // meaning, so a client paging on it alone would stop with stubs unfetched
+    // and conclude the catalog was exhaustive — the exact wrong conclusion for
+    // a surface whose job is to prove a capability exists. That is what
+    // `unavailableHasMore` is for.
+    it("signals more catalog entries when hasMore has already gone false", () => {
+      const page = listFor(
         [
           makeEntry({ id: "terminal.list" }),
-          makeEntry({ id: "worktree.list" }),
           makeEntry({ id: OUT_OF_TIER }),
           makeEntry({ id: "git.commit" }),
         ],
-        firstParty()
+        firstParty(),
+        { listPaging: { offset: 0, limit: 1 } }
       );
 
-      expect(payload.total).toBe(2);
-      expect(payload.unavailableTotal).toBe(2);
-      expect((payload.unavailable as { id: string }[]).map((s) => s.id)).toEqual([
-        OUT_OF_TIER,
-        "git.commit",
+      expect(page.hasMore).toBe(false);
+      expect(page.total).toBe(1);
+      expect(stubIds(page.unavailable)).toEqual([OUT_OF_TIER]);
+      expect(page.unavailableTotal).toBe(2);
+      expect(page.unavailableHasMore).toBe(true);
+
+      // And the continuation the flag promised actually resolves.
+      const next = listFor(
+        [
+          makeEntry({ id: "terminal.list" }),
+          makeEntry({ id: OUT_OF_TIER }),
+          makeEntry({ id: "git.commit" }),
+        ],
+        firstParty(),
+        { listPaging: { offset: 1, limit: 1 } }
+      );
+      expect(stubIds(next.unavailable)).toEqual(["git.commit"]);
+      expect(next.unavailableHasMore).toBe(false);
+    });
+
+    it("applies the caller's search limit to each collection on its own", () => {
+      const payload = searchFor(
+        [
+          makeEntry({ id: "terminal.list" }),
+          makeEntry({ id: OUT_OF_TIER }),
+          makeEntry({ id: "git.commit" }),
+        ],
+        firstParty(),
+        1
+      );
+
+      expect((payload.results as ActionManifestEntry[]).map((e) => e.id)).toEqual([
+        "terminal.list",
       ]);
+      expect(stubIds(payload.unavailable)).toEqual([OUT_OF_TIER]);
+      // The count is of everything main saw, not of the page it returned.
+      expect(payload.unavailableTotalMatches).toBe(2);
     });
 
     // A grant widens `permittedActionIds`, so the id takes the callable branch
     // and cannot also appear as a stub — the two collections are disjoint by
     // construction rather than by a second membership check.
     it("moves a granted id into the callable array rather than duplicating it", () => {
-      const payload = listFor([makeEntry({ id: OUT_OF_TIER })], firstParty());
-      expect(payload.unavailableTotal).toBe(1);
+      const entries = [makeEntry({ id: OUT_OF_TIER })];
 
-      const granted = (
-        filterIntrospectionResultForSession(
-          "actions.list",
-          { ok: true as const, result: { actions: [makeEntry({ id: OUT_OF_TIER })] } },
-          new Set([...permitted, OUT_OF_TIER]),
-          {
-            callerLimit: 20,
-            policySnapshot: firstParty({ perToolGrantedActionIds: new Set([OUT_OF_TIER]) }),
-          }
-        ) as { result: { actions: unknown[]; total: number; unavailable?: unknown[] } }
-      ).result;
+      const ungranted = listFor(entries, firstParty());
+      expect(ungranted.actions).toEqual([]);
+      expect(stubIds(ungranted.unavailable)).toEqual([OUT_OF_TIER]);
 
+      const granted = listFor(
+        entries,
+        firstParty({ perToolGrantedActionIds: new Set([OUT_OF_TIER]) }),
+        { permit: new Set([...permitted, OUT_OF_TIER]) }
+      );
+
+      expect((granted.actions as ActionManifestEntry[]).map((e) => e.id)).toEqual([OUT_OF_TIER]);
       expect(granted.total).toBe(1);
       expect(granted.unavailable).toEqual([]);
+      expect(granted.unavailableTotal).toBe(0);
     });
 
     it("answers actions.getSchema with the tier instead of an indistinguishable denial", () => {
@@ -1977,6 +2080,66 @@ describe("filterIntrospectionResultForSession", () => {
         expect.objectContaining({ id: OUT_OF_TIER, minimumTier: "system", callable: false })
       );
       expect(McpGetSchemaWireResultSchema.safeParse(payload).success).toBe(true);
+    });
+
+    // The two denial fields move together or the record lies. Strictness alone
+    // cannot say so — an optional key beside an enum admits both halves of a
+    // contradiction — so the correlation is asserted here rather than assumed.
+    it("rejects a denial whose code and stub disagree", () => {
+      const stub = buildUnavailableStub(makeEntry({ id: OUT_OF_TIER }), firstParty());
+      const denial = { ok: false as const, entry: null, policy: null };
+
+      // A tier denial that names no tier tells the model a capability exists
+      // and gives it nothing to say to the user.
+      expect(
+        McpGetSchemaWireResultSchema.safeParse({
+          ...denial,
+          error: { code: "TIER_NOT_PERMITTED", message: "x" },
+        }).success
+      ).toBe(false);
+
+      // And the reverse: a NOT_FOUND carrying a stub would confirm the id
+      // exists in the very shape that exists to be indistinguishable.
+      expect(
+        McpGetSchemaWireResultSchema.safeParse({
+          ...denial,
+          unavailable: stub,
+          error: { code: "NOT_FOUND", message: "x" },
+        }).success
+      ).toBe(false);
+    });
+
+    // The precondition `buildUnavailableStub` documents, enforced at the call
+    // site: an entry the session CAN reach right now — here through a live
+    // grant — must never fall through to the catalog when its policy fails to
+    // build. Reporting "needs system tier" for a tool the grant already admits
+    // would be a lie about access the caller has.
+    it("does not name a tier for a reachable target whose policy fails to build", () => {
+      const payload = (
+        filterIntrospectionResultForSession(
+          "actions.getSchema",
+          {
+            ok: true as const,
+            result: {
+              ok: true,
+              // `enabled` absent, so `buildTargetPolicy` fails closed.
+              entry: { ...makeEntry({ id: OUT_OF_TIER }), enabled: undefined },
+              policy: null,
+              error: null,
+            },
+          },
+          new Set([...permitted, OUT_OF_TIER]),
+          {
+            callerLimit: 20,
+            requestedActionId: OUT_OF_TIER,
+            policySnapshot: firstParty({ perToolGrantedActionIds: new Set([OUT_OF_TIER]) }),
+          }
+        ) as { result: { ok: boolean; unavailable?: unknown; error: { code: string } | null } }
+      ).result;
+
+      expect(payload.ok).toBe(false);
+      expect(payload.error?.code).toBe("NOT_FOUND");
+      expect(payload.unavailable).toBeUndefined();
     });
 
     it("keeps an unknown id indistinguishable even for a first-party session", () => {

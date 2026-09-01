@@ -576,8 +576,16 @@ export const MCP_SERVER_INSTRUCTIONS_MAX_BYTES =
  * (#12117), which reports out-of-tier ids to renderer-owned sessions. This
  * string is static and origin-agnostic, sent verbatim to api-key clients that
  * never receive that catalog, so a sentence about it would be false for most of
- * its readers. The rule for reading a stub lives in the first-party prompt
- * (`scripts/help-src/`), which only those sessions are given.
+ * its readers. The rule for reading a stub belongs in each first-party client's
+ * own prompt — `scripts/help-src/` for the ones this repo ships, and
+ * `DAINTREE_HOST.md` in `daintreehq/assistant` for the companion CLI, which
+ * carries its own.
+ *
+ * What it must NOT say is that an unlisted name cannot be called. `tools/list`
+ * is built from the static tier gate alone, while dispatch also honours live
+ * per-tool and native grants — so a granted tool is genuinely callable while
+ * absent from the listing, and an absolute claim here would contradict the
+ * grant flow the tier-mismatch banner exists to drive.
  *
  * The shell sentence is scoped to external clients deliberately. In-app tiers
  * withhold writes on purpose (git/file mutations arrive only at `system`), so
@@ -587,7 +595,7 @@ export const MCP_SERVER_INSTRUCTIONS_MAX_BYTES =
 export const MCP_SERVER_INSTRUCTIONS = [
   "Daintree orchestrates IDE-owned worktrees, recipes, and agent terminals — use it for that coordination. External clients should use their own shell and tooling for repository, file, git, and forge work omitted from `tools/list`; that is not licence to route around an in-app tier.",
 
-  "`tools/list` is the advertised baseline; do not invent tool names. When its schemas are too large to reason over, use `actions.search` for a compact ranked shortlist of what this session is already authorized to call, then `actions.getSchema` for one action's manifest entry and whatever schemas it publishes. Neither widens access: a name absent from `tools/list` cannot be called.",
+  "`tools/list` is the advertised baseline; do not invent tool names. When its schemas are too large to reason over, use `actions.search` for a compact ranked shortlist of what this session is already authorized to call, then `actions.getSchema` for one action's manifest entry and whatever schemas it publishes. Neither widens access: discovery reports the surface, it does not extend it.",
 
   'Resolve the target worktree and terminal ids before scoped actions. `terminal.sendCommand` returns once the text is submitted, not when the work finishes — prefer `terminal.waitUntilIdle` or `terminal.waitUntilIdleBatch` over tight polling, then read `idleReason`, `waitingReason`, and `exitCode` before your next turn or any irreversible step. Those waits track agent panes: a terminal with no tracked agent returns `idleReason: "unknown"` at once, which is not proof a shell command finished.',
 

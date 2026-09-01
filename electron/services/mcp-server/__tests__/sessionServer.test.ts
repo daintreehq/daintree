@@ -4089,6 +4089,54 @@ describe("sessionServer introspection tier filtering", () => {
       ]);
     });
 
+    // `actions.list` reaches the filter through its own paged-collection path
+    // (`collectListPages`), not the plain dispatch `actions.search` takes, so
+    // the catalog has to be proven on both. A snapshot dropped from only the
+    // paged path would leave search working and listing silently bare.
+    it("reports them through the paged actions.list path too", async () => {
+      const deps = firstPartyDeps({
+        actions: [entry("terminal.list"), entry("worktree.delete", { category: "worktree" })],
+      });
+      const server = createSessionServer("s1", deps);
+      const res = await callTool(server, { name: "actions.list" });
+
+      const body = payload<{
+        actions: ActionManifestEntry[];
+        total: number;
+        unavailable: Array<{ id: string; minimumTier: string }>;
+        unavailableTotal: number;
+      }>(res);
+      expect(body.actions.map((a) => a.id)).toEqual(["terminal.list"]);
+      expect(body.total).toBe(1);
+      expect(body.unavailable.map((s) => s.id)).toEqual(["worktree.delete"]);
+      expect(body.unavailableTotal).toBe(1);
+    });
+
+    // The catalog and the callable surface are one boundary read twice: the
+    // moment a grant admits the id, it must leave the catalog and appear in
+    // `actions`. Anything else advertises the same tool in two states at once.
+    it("moves a granted id out of the catalog and into the callable list", async () => {
+      const deps = firstPartyDeps({ actions: [entry("worktree.delete")] });
+      const server = createSessionServer("s1", deps);
+
+      const before = payload<{ actions: ActionManifestEntry[]; unavailableTotal: number }>(
+        await callTool(server, { name: "actions.list" })
+      );
+      expect(before.actions).toEqual([]);
+      expect(before.unavailableTotal).toBe(1);
+
+      deps.sessionStore.grantCache.issueGrant("s1", "worktree.delete");
+
+      const after = payload<{
+        actions: ActionManifestEntry[];
+        unavailable: unknown[];
+        unavailableTotal: number;
+      }>(await callTool(server, { name: "actions.list" }));
+      expect(after.actions.map((a) => a.id)).toEqual(["worktree.delete"]);
+      expect(after.unavailable).toEqual([]);
+      expect(after.unavailableTotal).toBe(0);
+    });
+
     // Existence is not dispatchability. The whole #11585 invariant rests on
     // `tools/list` and the callable set being one boundary, and a name in the
     // catalog must not appear on either side of it.
