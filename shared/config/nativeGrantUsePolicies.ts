@@ -30,12 +30,17 @@ export type NativeGrantUsePolicy = "per-dispatch" | "per-resolved-target";
  * dispatch. A `maxUses: 10` grant therefore reads as "ten careful approvals"
  * while authorizing ten unbounded sweeps.
  *
- * **A new destructive fan-out action must be added here.** The default is
- * deliberately permissive so ordinary single-target tools need no declaration,
- * which means an omission fails open. The batch terminal kill in #12123 is the
- * next tool that belongs in this map: it takes explicit ids rather than a live
- * query, but its blast radius is still per-target, so it gets one bulk human
- * confirmation rather than a generic grant's blanket pre-authorization.
+ * **A new action of this shape must be added here**, judged by what one call
+ * costs the user rather than by its `danger` field — `terminal.closeAll` is
+ * declared `danger: "safe"` and still belongs, because a single call discards
+ * every panel set to remove on exit. The default is deliberately permissive so
+ * ordinary single-target tools need no declaration, which means an omission
+ * fails open.
+ *
+ * The batch terminal kill in #12123 is the next tool that belongs here: it
+ * takes explicit ids rather than a live query, but its blast radius is still
+ * per-target, so it gets one bulk human confirmation rather than a generic
+ * grant's blanket pre-authorization.
  */
 export const NATIVE_GRANT_USE_POLICY_OVERRIDES: Readonly<
   Partial<Record<BuiltInActionId, NativeGrantUsePolicy>>

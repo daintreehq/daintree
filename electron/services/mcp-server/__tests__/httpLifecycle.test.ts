@@ -709,7 +709,7 @@ describe("HttpLifecycle", () => {
         // Names the offender AND the reason: `/cannot cover/` alone would also
         // pass if the tool had merely fallen out of every tier allowlist.
         expect(() => lc.issueNativeGrant("help-1", { allowedTools: [toolId] }, 42)).toThrow(
-          new RegExp(`cannot cover ${toolId.replace(".", "\\.")}\\b.*every target it finds`)
+          new RegExp(`cannot cover ${toolId.replaceAll(".", "\\.")}\\b.*every target it finds`)
         );
       }
       expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
@@ -720,10 +720,17 @@ describe("HttpLifecycle", () => {
       resolverOf(deps).mockReturnValue("transport-1");
       const lc = new HttpLifecycle(deps);
       // The minted scope must be exactly the scope the user approved: dropping
-      // the offender would hand back a grant card that reads as approved-in-full.
-      expect(() =>
-        lc.issueNativeGrant("help-1", { allowedTools: ["git.commit", "terminal.killAll"] }, 42)
-      ).toThrow(/cannot cover terminal\.killAll\b/);
+      // the offenders would hand back a grant card that reads as approved-in-full.
+      // Two of them, so this also pins the plural branch of the message — with
+      // one offender the singular wording passes either way.
+      const attempt = () =>
+        lc.issueNativeGrant(
+          "help-1",
+          { allowedTools: ["git.commit", "terminal.killAll", "terminal.closeAll"] },
+          42
+        );
+      expect(attempt).toThrow(/cannot cover terminal\.killAll, terminal\.closeAll\b/);
+      expect(attempt).toThrow(/Remove them\b/);
       expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
     });
 
