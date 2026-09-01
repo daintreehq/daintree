@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GrantCache } from "../grantCache.js";
 import { minimumPermittingTier } from "../shared.js";
-import { NATIVE_GRANT_USE_POLICY_OVERRIDES } from "../../../../shared/config/nativeGrantUsePolicies.js";
+import {
+  NATIVE_GRANT_USE_POLICY_OVERRIDES,
+  getNativeGrantUsePolicy,
+  isGenericNativeGrantEligible,
+} from "../../../../shared/config/nativeGrantUsePolicies.js";
+import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import type { McpGrantLifecyclePayload } from "../../../../shared/types/ipc/mcpServer.js";
 
 interface EmittedEvent {
@@ -674,36 +679,49 @@ describe("GrantCache native grants (#10648)", () => {
     cache.dispose();
   });
 
-  it("peekNativeGrant refuses a per-resolved-target tool without consuming or emitting", () => {
-    const { cache, emitted } = newCache();
-    const entry = issue(cache, { allowedTools: ["git.commit", "terminal.killAll"] });
-    emitted.length = 0;
-    expect(cache.peekNativeGrant("s1", "terminal.killAll").granted).toBe(false);
-    expect(emitted).toHaveLength(0);
-    // The refusal is scoped to the tool, not the grant: an eligible sibling in
-    // the same allowlist must still be authorized, with the budget untouched.
-    expect(cache.peekNativeGrant("s1", "git.commit")).toEqual({ granted: true, grantId: entry.id });
-    expect(cache._peekNative(entry.id)?.remainingUses).toBe(3);
-    cache.dispose();
-  });
+  // Both policy ids, not just the destructive one: terminal.closeAll is
+  // `danger: "safe"`, so it exercises the leg where a grant only ever widened
+  // the tier floor and never bought a confirm bypass.
+  it.each(["terminal.killAll", "terminal.closeAll"])(
+    "peekNativeGrant refuses %s without consuming or emitting",
+    (fanOutTool) => {
+      const { cache, emitted } = newCache();
+      const entry = issue(cache, { allowedTools: ["git.commit", fanOutTool] });
+      emitted.length = 0;
+      expect(cache.peekNativeGrant("s1", fanOutTool).granted).toBe(false);
+      expect(emitted).toHaveLength(0);
+      // The refusal is scoped to the tool, not the grant: an eligible sibling in
+      // the same allowlist must still be authorized, with the budget untouched.
+      expect(cache.peekNativeGrant("s1", "git.commit")).toEqual({
+        granted: true,
+        grantId: entry.id,
+      });
+      expect(cache._peekNative(entry.id)?.remainingUses).toBe(3);
+      cache.dispose();
+    }
+  );
 
-  it("consumeNativeGrantUse fails closed for a per-resolved-target tool without decrementing", () => {
-    const { cache, emitted } = newCache();
-    const entry = issue(cache, { allowedTools: ["git.commit", "terminal.killAll"] });
-    emitted.length = 0;
-    expect(cache.consumeNativeGrantUse(entry.id, "terminal.killAll")).toBe(false);
-    expect(emitted).toHaveLength(0);
-    // Nothing was authorized, so nothing was spent — and the grant survives for
-    // the siblings it legitimately covers.
-    expect(cache._peekNative(entry.id)?.remainingUses).toBe(3);
-    expect(cache.consumeNativeGrantUse(entry.id, "git.commit")).toBe(true);
-    cache.dispose();
-  });
+  it.each(["terminal.killAll", "terminal.closeAll"])(
+    "consumeNativeGrantUse fails closed for %s without decrementing",
+    (fanOutTool) => {
+      const { cache, emitted } = newCache();
+      const entry = issue(cache, { allowedTools: ["git.commit", fanOutTool] });
+      emitted.length = 0;
+      expect(cache.consumeNativeGrantUse(entry.id, fanOutTool)).toBe(false);
+      expect(emitted).toHaveLength(0);
+      // Nothing was authorized, so nothing was spent — and the grant survives for
+      // the siblings it legitimately covers.
+      expect(cache._peekNative(entry.id)?.remainingUses).toBe(3);
+      expect(cache.consumeNativeGrantUse(entry.id, "git.commit")).toBe(true);
+      cache.dispose();
+    }
+  );
 
   it("consumeNativeGrantUse reports expiry before refusing a per-resolved-target tool", () => {
-    // Pins the check order: the policy refusal sits AFTER the TTL/ceiling
-    // check, so a caller holding a stale grant id still learns the grant aged
-    // out rather than being told only that the tool was ineligible.
+    // An ORDER-LOCK, not coverage of the refusal itself — every assertion here
+    // also holds without the policy guard. What it catches is the guard being
+    // hoisted above the TTL/ceiling block, which would swallow the eviction and
+    // its `grant.expired` signal for a caller holding a stale id.
     let clock = 0;
     const { cache, emitted } = newCache({ ttlMs: 1000, maxLifetimeMs: 100000, now: () => clock });
     const entry = issue(cache, {
@@ -718,17 +736,41 @@ describe("GrantCache native grants (#10648)", () => {
     cache.dispose();
   });
 
-  it("every per-resolved-target override names a tool a grant could otherwise reach", () => {
+  // Naming the hazardous ids outright rather than asserting over whatever the
+  // map happens to contain: a generic "every entry is well-formed" check stays
+  // green when an entry is DELETED, which is the regression that reopens the
+  // hole. These two must be declared, by id, forever.
+  it.each(["terminal.killAll", "terminal.closeAll"])(
+    "%s is declared per-resolved-target and stays grant-ineligible",
+    (toolId) => {
+      expect(getNativeGrantUsePolicy(toolId)).toBe("per-resolved-target");
+      expect(isGenericNativeGrantEligible(toolId)).toBe(false);
+    }
+  );
+
+  it("every per-resolved-target override names a real tool a grant could otherwise reach", () => {
     // The policy is keyed by tool id and defaults to `per-dispatch`, so a
     // renamed or retired action would silently fall back to being grantable
-    // again — reopening exactly the hole #12121 closed. Fail here instead.
+    // again. `BuiltInActionId` typing does not catch this on its own — it also
+    // admits keybinding-only ids that no action registers.
     const overrides = Object.entries(NATIVE_GRANT_USE_POLICY_OVERRIDES);
     expect(overrides.length).toBeGreaterThan(0);
     for (const [toolId, policy] of overrides) {
       expect(policy).toBe("per-resolved-target");
+      expect(BUILT_IN_ACTION_IDS, `${toolId} is not a registered action id`).toContain(toolId);
       expect(minimumPermittingTier(toolId), `${toolId} is no longer a grantable tool id`).not.toBe(
         null
       );
+    }
+  });
+
+  it("treats a prototype-shaped tool id as an ordinary per-dispatch tool", () => {
+    // The lookup is a Map, not a bare index into an object literal, because
+    // `toolId` arrives from the MCP surface: an object literal would resolve
+    // "toString" to an inherited function and this would not be "per-dispatch".
+    for (const toolId of ["toString", "constructor", "__proto__", "hasOwnProperty"]) {
+      expect(getNativeGrantUsePolicy(toolId)).toBe("per-dispatch");
+      expect(isGenericNativeGrantEligible(toolId)).toBe(true);
     }
   });
 

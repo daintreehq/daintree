@@ -706,8 +706,10 @@ describe("HttpLifecycle", () => {
         // Both are real, tier-reachable tools — so it is the fan-out policy
         // refusing them here, not the unknown-tool check above.
         expect(minimumPermittingTier(toolId)).not.toBe(null);
+        // Names the offender AND the reason: `/cannot cover/` alone would also
+        // pass if the tool had merely fallen out of every tier allowlist.
         expect(() => lc.issueNativeGrant("help-1", { allowedTools: [toolId] }, 42)).toThrow(
-          /cannot cover/
+          new RegExp(`cannot cover ${toolId.replace(".", "\\.")}\\b.*every target it finds`)
         );
       }
       expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
@@ -721,7 +723,7 @@ describe("HttpLifecycle", () => {
       // the offender would hand back a grant card that reads as approved-in-full.
       expect(() =>
         lc.issueNativeGrant("help-1", { allowedTools: ["git.commit", "terminal.killAll"] }, 42)
-      ).toThrow(/terminal\.killAll/);
+      ).toThrow(/cannot cover terminal\.killAll\b/);
       expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
     });
 

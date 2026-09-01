@@ -2619,6 +2619,7 @@ describe("sessionServer grant cache fallback (#8442)", () => {
       maxUses: 3,
     });
     const consumeSpy = vi.spyOn(sessionStore.grantCache, "consumeNativeGrantUse");
+    const refreshSpy = vi.spyOn(sessionStore.grantCache, "refreshNativeGrant");
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
     const deps = fakeDeps({ sessionStore, dispatchAction });
     const server = createSessionServer("s", deps);
@@ -2635,6 +2636,10 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     expect(dispatchAction).toHaveBeenCalledWith("terminal.killAll", expect.any(Object), false);
     expect(consumeSpy).not.toHaveBeenCalled();
     expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(3);
+    // An untouched budget alone would not prove the grant was left alone: the
+    // post-dispatch refresh slides `expiresAt`, so a refused tool must not
+    // extend the window its eligible siblings are still running on.
+    expect(refreshSpy).not.toHaveBeenCalled();
     sessionStore.grantCache.dispose();
   });
 
@@ -2658,9 +2663,12 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     const result = (await callTool(server, {
       name: "terminal.killAll",
       arguments: {},
-    })) as { isError?: boolean };
+    })) as { isError?: boolean; content: Array<{ type: string; text: string }> };
 
     expect(result.isError).toBe(true);
+    // The specific code matters: this must read as an authorization denial the
+    // caller can act on, not a generic dispatch failure.
+    expect(JSON.parse(result.content[0]!.text)).toMatchObject({ code: TIER_NOT_PERMITTED_CODE });
     expect(dispatchAction).not.toHaveBeenCalled();
     expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(3);
     sessionStore.grantCache.dispose();
@@ -4404,6 +4412,32 @@ describe("sessionServer introspection tier filtering", () => {
       expect(payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id)).toEqual([
         "git.push",
         "git.commit",
+      ]);
+
+      deps.sessionStore.grantCache.dispose();
+    });
+
+    it("does not surface a per-resolved-target tool a native grant cannot admit (#12121)", async () => {
+      // The mirror of the test above. `peekNativeGrant` refuses terminal.killAll,
+      // so listing it here would produce the discoverable-but-uncallable state
+      // #11585 rejects: the agent finds the tool, calls it, and is told
+      // TIER_NOT_PERMITTED. The eligible sibling proves the grant is otherwise
+      // live, so the omission is the policy and not a dead grant.
+      const deps = introspectionDeps("workbench", {
+        actions: [entry("git.push"), entry("terminal.killAll"), entry("terminal.closeAll")],
+      });
+      const server = createSessionServer("s1", deps);
+      deps.sessionStore.grantCache.issueNativeGrant({
+        sessionId: "s1",
+        actorId: "test-actor",
+        actorType: "help-session",
+        allowedTools: ["git.push", "terminal.killAll", "terminal.closeAll"],
+        maxUses: 5,
+      });
+
+      const res = await callTool(server, { name: "actions.list" });
+      expect(payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id)).toEqual([
+        "git.push",
       ]);
 
       deps.sessionStore.grantCache.dispose();

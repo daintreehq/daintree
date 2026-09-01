@@ -15,6 +15,7 @@ import {
   ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 import { dispatchCarriesRecipeId } from "../../../shared/utils/dispatchRecipeId.js";
+import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
@@ -674,10 +675,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           const perToolGrantedActionIds = new Set<string>(
             sessionStore.grantCache.getLiveGrants(sessionId).map((grant) => grant.toolId)
           );
+          // Filtered to what the dispatch gate would actually honour: a grant
+          // listing a per-resolved-target tool buys nothing, because
+          // `peekNativeGrant` refuses it (#12121). Naming it here would produce
+          // the discoverable-but-uncallable state #11585 rejects — an agent
+          // would find `terminal.killAll` in `actions.search`, then be told
+          // TIER_NOT_PERMITTED when it called it.
           const nativeGrantedActionIds = new Set<string>(
             sessionStore.grantCache
               .getLiveNativeGrants(sessionId)
               .flatMap((grant) => [...grant.allowedTools])
+              .filter((toolId) => isGenericNativeGrantEligible(toolId))
           );
           return {
             permittedActionIds: new Set<string>([

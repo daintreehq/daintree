@@ -2107,8 +2107,10 @@ export class HttpLifecycle {
     const fanOut = allowedTools.filter((t) => !isGenericNativeGrantEligible(t));
     if (fanOut.length > 0) {
       throw new Error(
-        `A native grant cannot cover ${fanOut.join(", ")}: each call acts on every ` +
-          `target it finds, so a use count can't bound it. Remove it and approve those calls individually.`
+        `A native grant cannot cover ${fanOut.join(", ")}: each call acts on every target it ` +
+          `finds, so a use ceiling bounds how many calls run, never how much they affect. ` +
+          `Remove ${fanOut.length > 1 ? "them" : "it"} — those calls still run under the ` +
+          `session's normal tier and confirmation rules.`
       );
     }
 

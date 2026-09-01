@@ -8,9 +8,16 @@ import type { BuiltInActionId } from "../types/actions.js";
  *   The budget the Settings card presents ("N of M uses left") is a truthful
  *   count of what the grant still authorizes. This is the default.
  * - `per-resolved-target` — one call fans out across every target it resolves
- *   at dispatch time. A use count cannot bound it, because the target set is
- *   not known when the use is charged, so these tools are not eligible for a
+ *   at dispatch time, and losing those targets is what the user is being asked
+ *   to approve. A use count cannot bound it, because the target set is not
+ *   known when the use is charged, so these tools are not eligible for a
  *   generic native grant at all.
+ *
+ * Fan-out alone does not qualify a tool. `git.stageAll` touches every changed
+ * file in one call and stays `per-dispatch`, because the budget is not
+ * misrepresenting anything a user would count: staging is reversible and
+ * carries no per-file consequence to weigh. What earns the stricter policy is
+ * a call whose blast radius is both unbounded and the thing being approved.
  */
 export type NativeGrantUsePolicy = "per-dispatch" | "per-resolved-target";
 
