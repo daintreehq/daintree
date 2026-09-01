@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GrantCache } from "../grantCache.js";
+import { minimumPermittingTier } from "../shared.js";
+import { NATIVE_GRANT_USE_POLICY_OVERRIDES } from "../../../../shared/config/nativeGrantUsePolicies.js";
 import type { McpGrantLifecyclePayload } from "../../../../shared/types/ipc/mcpServer.js";
 
 interface EmittedEvent {
@@ -670,6 +672,64 @@ describe("GrantCache native grants (#10648)", () => {
     expect(cache.consumeNativeGrantUse(entry.id, "git.commit")).toBe(false);
     expect(cache._peekNative(entry.id)).toBeUndefined();
     cache.dispose();
+  });
+
+  it("peekNativeGrant refuses a per-resolved-target tool without consuming or emitting", () => {
+    const { cache, emitted } = newCache();
+    const entry = issue(cache, { allowedTools: ["git.commit", "terminal.killAll"] });
+    emitted.length = 0;
+    expect(cache.peekNativeGrant("s1", "terminal.killAll").granted).toBe(false);
+    expect(emitted).toHaveLength(0);
+    // The refusal is scoped to the tool, not the grant: an eligible sibling in
+    // the same allowlist must still be authorized, with the budget untouched.
+    expect(cache.peekNativeGrant("s1", "git.commit")).toEqual({ granted: true, grantId: entry.id });
+    expect(cache._peekNative(entry.id)?.remainingUses).toBe(3);
+    cache.dispose();
+  });
+
+  it("consumeNativeGrantUse fails closed for a per-resolved-target tool without decrementing", () => {
+    const { cache, emitted } = newCache();
+    const entry = issue(cache, { allowedTools: ["git.commit", "terminal.killAll"] });
+    emitted.length = 0;
+    expect(cache.consumeNativeGrantUse(entry.id, "terminal.killAll")).toBe(false);
+    expect(emitted).toHaveLength(0);
+    // Nothing was authorized, so nothing was spent — and the grant survives for
+    // the siblings it legitimately covers.
+    expect(cache._peekNative(entry.id)?.remainingUses).toBe(3);
+    expect(cache.consumeNativeGrantUse(entry.id, "git.commit")).toBe(true);
+    cache.dispose();
+  });
+
+  it("consumeNativeGrantUse reports expiry before refusing a per-resolved-target tool", () => {
+    // Pins the check order: the policy refusal sits AFTER the TTL/ceiling
+    // check, so a caller holding a stale grant id still learns the grant aged
+    // out rather than being told only that the tool was ineligible.
+    let clock = 0;
+    const { cache, emitted } = newCache({ ttlMs: 1000, maxLifetimeMs: 100000, now: () => clock });
+    const entry = issue(cache, {
+      allowedTools: ["git.commit", "terminal.killAll"],
+      ttlMs: 1000,
+    });
+    emitted.length = 0;
+    clock = 2000;
+    expect(cache.consumeNativeGrantUse(entry.id, "terminal.killAll")).toBe(false);
+    expect(emitted.some((e) => e.payload.type === "grant.expired")).toBe(true);
+    expect(cache._peekNative(entry.id)).toBeUndefined();
+    cache.dispose();
+  });
+
+  it("every per-resolved-target override names a tool a grant could otherwise reach", () => {
+    // The policy is keyed by tool id and defaults to `per-dispatch`, so a
+    // renamed or retired action would silently fall back to being grantable
+    // again — reopening exactly the hole #12121 closed. Fail here instead.
+    const overrides = Object.entries(NATIVE_GRANT_USE_POLICY_OVERRIDES);
+    expect(overrides.length).toBeGreaterThan(0);
+    for (const [toolId, policy] of overrides) {
+      expect(policy).toBe("per-resolved-target");
+      expect(minimumPermittingTier(toolId), `${toolId} is no longer a grantable tool id`).not.toBe(
+        null
+      );
+    }
   });
 
   it("a grant past the hard ceiling fails closed (peek) and emits grant-ceiling revoke", () => {

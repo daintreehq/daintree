@@ -2603,6 +2603,69 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     sessionStore.grantCache.dispose();
   });
 
+  it("terminal.killAll cannot ride a native grant past the confirm modal (#12121)", async () => {
+    // Issuance refuses a scope naming a fan-out tool, so this grant is minted
+    // through the cache directly — the stale/hand-rolled state the peek and
+    // consume guards exist to catch. The floor already admits terminal.killAll
+    // at the system tier, so the call must still run; what it must NOT do is
+    // arrive pre-confirmed or spend a use, because `maxUses` cannot express
+    // "every terminal in the project".
+    const sessionStore = fakeSessionStore("system");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["terminal.killAll"],
+      maxUses: 3,
+    });
+    const consumeSpy = vi.spyOn(sessionStore.grantCache, "consumeNativeGrantUse");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "terminal.killAll",
+      arguments: {},
+    })) as { isError?: boolean };
+
+    expect(result.isError).not.toBe(true);
+    // Dispatched, but unconfirmed — the renderer's modal decides, exactly as it
+    // would with no grant at all.
+    expect(dispatchAction).toHaveBeenCalledWith("terminal.killAll", expect.any(Object), false);
+    expect(consumeSpy).not.toHaveBeenCalled();
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(3);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("a native grant cannot admit terminal.killAll below the tier floor (#12121)", async () => {
+    // The other leg: at workbench tier nothing else admits the call, so a grant
+    // that covered it would be the authorization itself. It must fail closed
+    // rather than fall through to an unauthorized dispatch.
+    const sessionStore = fakeSessionStore("workbench");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["terminal.killAll"],
+      maxUses: 3,
+    });
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "terminal.killAll",
+      arguments: {},
+    })) as { isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(3);
+    sessionStore.grantCache.dispose();
+  });
+
   it("an already-admitted introspection carrier does not spend a native use (#11878)", async () => {
     // actions.search can never raise a confirm modal, so once the floor has
     // admitted it a grant buys it nothing — peeking would only drain the

@@ -371,6 +371,10 @@ tools/call(actionId, args)
   │      │  nothing; the same held when a per-tool grant had just admitted it.
   │      │  Skipped only for an already-admitted introspection carrier, which
   │      │  can never raise a modal, so a peek would just drain the budget.
+  │      │  Refused outright for a per-resolved-target tool (#12121) —
+  │      │  terminal.killAll / terminal.closeAll act on every target they find,
+  │      │  so no use count bounds them; issuance rejects such a scope and the
+  │      │  peek refuses one minted around it.
   │      ├─ granted → capture grantId (widens the floor AND pre-authorizes
   │      │            confirm; the use is charged later, at commit-to-dispatch)
   │      └─ neither gate 1 nor a grant admitted it → incrementDenial → maybe
@@ -407,6 +411,8 @@ tools/call(actionId, args)
 ```
 
 Gate order is load-bearing: a native grant's use is charged **after** admission and after the workspace-bound confirm ceiling — an unauthorized or refused call must never burn one — but **before** dedup, so a replayed duplicate spends a use without dispatching. The per-call rate limiter that used to sit between admission and dedup was removed in #10764.
+
+One use is also the only cost the charge site can express, and it is charged before dispatch — so a tool whose target set is resolved from live renderer state inside `run()` has no honest count available at the moment it would be billed. Those tools are barred from native grants entirely (`shared/config/nativeGrantUsePolicies.ts`) rather than under-charged: `HttpLifecycle.issueNativeGrant` rejects a scope naming one, and `peekNativeGrant`/`consumeNativeGrantUse` refuse one anyway as defence in depth. **A new destructive fan-out action must be added to that policy** — the default is `per-dispatch`, so an omission fails open.
 
 ### Dedup
 

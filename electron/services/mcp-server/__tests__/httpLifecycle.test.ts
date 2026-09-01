@@ -698,6 +698,33 @@ describe("HttpLifecycle", () => {
       expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
     });
 
+    it("rejects a fan-out tool a use count cannot bound (#12121)", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      const lc = new HttpLifecycle(deps);
+      for (const toolId of ["terminal.killAll", "terminal.closeAll"]) {
+        // Both are real, tier-reachable tools — so it is the fan-out policy
+        // refusing them here, not the unknown-tool check above.
+        expect(minimumPermittingTier(toolId)).not.toBe(null);
+        expect(() => lc.issueNativeGrant("help-1", { allowedTools: [toolId] }, 42)).toThrow(
+          /cannot cover/
+        );
+      }
+      expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
+    });
+
+    it("rejects a mixed scope rather than silently narrowing it (#12121)", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      const lc = new HttpLifecycle(deps);
+      // The minted scope must be exactly the scope the user approved: dropping
+      // the offender would hand back a grant card that reads as approved-in-full.
+      expect(() =>
+        lc.issueNativeGrant("help-1", { allowedTools: ["git.commit", "terminal.killAll"] }, 42)
+      ).toThrow(/terminal\.killAll/);
+      expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
+    });
+
     it("rejects an out-of-range maxUses", () => {
       const deps = fakeDeps();
       resolverOf(deps).mockReturnValue("transport-1");

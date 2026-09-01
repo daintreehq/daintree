@@ -1048,6 +1048,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // extend a confirm-gated sibling's bypass window (bounded by the hard
     // lifetime ceiling), and because this site precedes dedup, a replayed
     // duplicate spends a use without dispatching.
+    //
+    // One use is also the ONLY cost this site can express, which is why a tool
+    // that fans out across every target it resolves at dispatch time is barred
+    // from native grants entirely rather than charged here (#12121). Learning
+    // that count would mean reaching into the renderer before the charge — the
+    // async dependency the paragraph above rules out — so `peekNativeGrant`
+    // never hands one back a grant id and `nativeGrantId` stays undefined:
+    // no bypass, no use, and the confirm modal decides as it normally would.
     if (nativeGrantId !== undefined) {
       const consumed = sessionStore.grantCache.consumeNativeGrantUse(nativeGrantId, actionId);
       if (!consumed) {
