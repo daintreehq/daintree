@@ -30,3 +30,18 @@ export class ConfirmationStagedError extends Error {
 export function confirmationStagedMessage(what: string): string {
   return `${what} was not performed — it needs confirmation, and one is now waiting for the user. Nothing changed.`;
 }
+
+/**
+ * Did this failed dispatch park a confirmation, rather than actually fail?
+ *
+ * `CONFIRMATION_REQUIRED` has two producers: `ActionService`'s outer gate,
+ * which refuses an unattested agent or plugin dispatch, and this sentinel,
+ * which means a dialog is now open for the user to answer. Only the second is a
+ * normal outcome an interactive surface should stay quiet about — so match the
+ * class, which `ActionService` passes through as `error.details`, rather than
+ * the code alone. A surface that suppressed the code would also swallow a real
+ * refusal it ought to report.
+ */
+export function isStagedConfirmation(error: { code: string; details?: unknown }): boolean {
+  return error.code === "CONFIRMATION_REQUIRED" && error.details instanceof ConfirmationStagedError;
+}
