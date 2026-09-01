@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
@@ -11,6 +11,7 @@ import {
 } from "@/components/Worktree/diffRefractor";
 import { dirname, isAbsolute, isPathInside, join, normalize } from "@shared/utils/path";
 import { buildDaintreeFileUrl } from "@/components/FileViewer/filePreviewKinds";
+import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
@@ -132,6 +133,11 @@ export function MarkdownDocument({
     onRendered?.();
   }, [onRendered]);
 
+  // Nothing owns Select All over plain rendered DOM, so the native Edit-menu
+  // command falls back to the whole app (#12135). Claim it for the document.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useScopedSelectAll(rootRef);
+
   const urlTransform = useMemo(() => {
     return (url: string, key: string): string | null | undefined => {
       if (key === "src") {
@@ -215,7 +221,7 @@ export function MarkdownDocument({
   );
 
   return (
-    <div className={cn("markdown-document prose", className)}>
+    <div ref={rootRef} className={cn("markdown-document prose", className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         urlTransform={urlTransform}
