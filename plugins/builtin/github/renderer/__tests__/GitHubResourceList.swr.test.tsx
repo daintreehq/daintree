@@ -3586,19 +3586,49 @@ describe("GitHubResourceList bulk selection menu (#12124)", () => {
   });
 
   it("does not stand over a list that emptied out from under it", async () => {
-    // A background revalidation keeps the rows and the trigger live, so the
-    // menu can be open when a fresh page comes back with nothing. Left open,
-    // its select-all would replace a live selection with an empty one.
-    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+    // A background revalidation keeps the cached rows and the trigger live, so
+    // the menu can be open when the fresh page comes back with nothing. Left
+    // open, its select-all would replace a live selection with an empty one.
+    setCache(buildCacheKey("/test/proj", "issue", "open", "created"), {
+      items: [makeIssue(1)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now() - 30_000,
+    });
+    let resolveRevalidate: ((page: Page<Issue>) => void) | undefined;
+    mockListIssues.mockImplementation(
+      () =>
+        new Promise<Page<Issue>>((resolve) => {
+          resolveRevalidate = resolve;
+        })
+    );
     mockIsSelectionActive = true;
     mockSelectedIds = new Set([1]);
 
-    const view = render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
     await openMenu();
 
-    mockListIssues.mockResolvedValue(makeResponse([]));
     await act(async () => {
-      view.rerender(<GitHubResourceList type="issue" projectPath="/other/proj" />);
+      resolveRevalidate?.(makeResponse([]));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Selection actions" })).toBeNull();
+    });
+    expect(mockSelectAll).not.toHaveBeenCalled();
+  });
+
+  it("does not carry an open menu across a project switch", async () => {
+    // The panel survives a project change without remounting, so the presets
+    // would rebind to the new project while still listing the old one's rows.
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    const view = render(<GitHubResourceList type="issue" projectPath="/test/proj-a" />);
+    await openMenu();
+
+    await act(async () => {
+      view.rerender(<GitHubResourceList type="issue" projectPath="/test/proj-b" />);
     });
 
     await waitFor(() => {
