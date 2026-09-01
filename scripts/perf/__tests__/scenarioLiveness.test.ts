@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { allScenarios } from "../scenarios";
+import { TIMING_DEPENDENT_TERMS } from "./timingDependentTerms";
 
 /**
  * Does every scenario in the matrix still RUN?
@@ -134,30 +135,6 @@ const EXPENSIVE_SCENARIOS: Readonly<Record<string, string>> = {
  * asked for it, and all seven measure again.
  */
 const KNOWN_DEAD: Readonly<Record<string, string>> = {};
-
-/**
- * Correctness terms this guard does not assert to be zero, and why.
- *
- * Each one's expectation includes "the timer had NOT fired yet", which is the
- * one shape a loaded machine can break without anything being wrong.
- * `gradeFlushCadence` waits `PORT_BATCH_THROUGHPUT_DELAY_MS * 2 + 8` for the
- * real PortBatcher cadence; under four concurrent children plus Vitest's own
- * workers that window slips, and the scenario reports a miss for a subject that
- * is fine. Observed once during development, on exactly that shape.
- *
- * They remain fully graded through `run.ts`, which is where a number is taken
- * and where nothing else is competing for the box. This exemption is only about
- * what is safe to assert inside the unit suite.
- */
-const TIMING_DEPENDENT_TERMS: Readonly<Record<string, readonly string[]>> = {
-  // The PortBatcher idle -> latency -> throughput machine, in the three
-  // scenarios that drive it. Keyed by scenario AND term, not by term alone: a
-  // future scenario that happens to reuse one of these names would otherwise
-  // inherit the exemption without anyone deciding to give it one.
-  "PERF-063": ["immediateFlushMisses", "throughputFlushMisses"],
-  "PERF-370": ["immediateFlushMisses", "throughputFlushMisses"],
-  "PERF-371": ["immediateFlushMisses", "throughputFlushMisses"],
-};
 
 /**
  * Scenarios that decline to self-time, and why — named, because otherwise the

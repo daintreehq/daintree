@@ -24,6 +24,50 @@ This is deliberate, and the reasoning is recorded so nobody re-arms the gate by 
 
 **The consequence for anyone reading a run:** green means nothing threw. It is not evidence that the measurement still means anything. A metric that stopped being emitted is reported as a _measurement issue_ and still exits 0 — read that section of the report, not just the exit code.
 
+## What a number is allowed to mean
+
+Every scenario declares a **class**, and the class is printed in every report and beside every command in `npm run perf list`. `config/benchmarkClasses.ts` is the table; `__tests__/benchmarkClasses.test.ts` enforces that it covers the matrix exactly, in both directions.
+
+| Class | What it is | What may be claimed |
+| --- | --- | --- |
+| `journey` | Real user entry point, production process topology, ending at a correct visible or usable result | "This is faster for a user" |
+| `mechanism` | Real shipped function or service with one or more user-path layers deliberately removed | "This subsystem got cheaper" |
+| `diagnostic` | The subject inside the timed bracket is emulated, shimmed, simulated, or a deliberate floor | "This suggests where to look" |
+
+The problem this solves is not a wrong number. It is a correct number carrying a claim it cannot support — "production code ran" read as "the user received a correct, usable result". Almost everything in this matrix ends at a service return, a store update or a parser completing, with the renderer, Chromium scheduling, Electron transport, compositor and focus state absent on purpose. That is the right design for attribution and the wrong thing to quote in a sentence beginning "Daintree got faster".
+
+Alongside the class, each family carries a **fidelity record** — entry point, renderer, Electron transport, PTY, process topology, external dependencies. It is a description, not a grade: a `mechanism` benchmark with `renderer: "absent"` is working exactly as intended. It exists so no reader has to infer fidelity from a fixture comment.
+
+Three families are `diagnostic` on evidence, and the test pins each so a silent upgrade back to `mechanism` fails:
+
+- **PERF-074..077** run real `ProjectViewManager` control flow against inert Electron and Chromium stand-ins. The structural counts (creates, reactivations, evictions) are trustworthy. The **durations are not a switch latency** — no navigation, GPU work, paint or real renderer failure happens inside the bracket. `npm run perf project-switch` is where switch latency lives.
+- **PERF-196** is a declared parser floor. Production chunks payloads this size at 32 KiB with UI yields through `TerminalRestoreController`, which is not in the bracket, so real restore is slower by construction.
+- **PERF-035** drives the real detection FSM under a substituted virtual clock. Its CPU-per-MB is a real reading; its flip latencies are simulated time.
+
+## Three verdicts, not one
+
+A run answers three different questions and they must not share an exit code:
+
+| Verdict | Question | Behaviour |
+| --- | --- | --- |
+| **Integrity** | Is this evidence valid, complete and comparable? | Exits non-zero under `--enforce-integrity` |
+| **Correctness** | Did the subject perform the work it was asked to? | Reported as a measurement issue; feeds the integrity verdict |
+| **Performance** | Was valid, correct behaviour slower? | Advisory, always. Never an exit code |
+
+The stance above — never fail a run because a number got worse — was being read as "never fail a run", which meant a benchmark whose oracle had died exited 0 and looked exactly like a healthy one. `--enforce-integrity` separates the two. It fails on:
+
+- a correctness predicate that is missing, partially emitted, or reporting misses (including a negative one, where the subject produced _more_ than it was asked to);
+- a scenario that declares no correctness predicate at all — the matrix exemption list is empty, so an absent declaration is one that was deleted, and deleting it is the cheapest way to make a failing predicate stop failing;
+- a configured metric that has stopped being emitted, **or is emitted on only some iterations** — a ceiling checked against one sample in sixteen has fifteen blind iterations behind it and passes looking exactly like a clean result;
+- a non-finite measurement;
+- a run that produced no measurement at all. Every selected scenario being unsupported on this platform exits 0 by design, but under enforcement an empty result satisfies every other check vacuously, the way an empty page has no typos.
+
+It does **not** fail on drift, and the failure message says so, because the reflex on seeing a red perf run is to assume the numbers moved.
+
+Every summary carries an `integrity` block whether or not the flag was passed, so the verdict is legible from the file rather than only from the exit code.
+
+`--update-baseline` now refuses to promote a scenario whose run reported measurement issues, alongside the existing refusal for a `diagnostic` reading. A reference is what every later run is read against, so promoting one from broken evidence does not just record a bad number — it silently re-bases every future comparison on it.
+
 ## Reading a number
 
 Two things decide whether a number can be compared with another number, and `lib/comparability.ts` is the authority on both.
@@ -48,6 +92,39 @@ Every scenario declares a predicate. The exemption list in `__tests__/scenarioMa
 
 The spawn counter validates itself before a scenario trusts it: it confirms its `child_process` hook is still the wrapper it installed, and that starting a real child increments the counter through that hook — reporting `spawnObserverMisses` when either fails. Read that claim narrowly. It proves the funnel is intact, not that the count is complete: the probe cannot see what never reaches the funnel. The counter stays blind to starts made from C++ inside native addons (`@parcel/watcher`'s watchman, better-sqlite3, node-pty), to grandchildren (Windows `exec` → `cmd.exe` → PowerShell), and to `spawnSync`. A zero means "nothing started through Node in this process", never "nothing started". Closing that gap needs an OS-level observer, which this harness does not have.
 
+## The foreground is a metric too
+
+A background operation getting 10% faster is not an improvement if it doubles the pause the user feels in the terminal they are typing into. Daintree's promise is not that twelve agents can run; it is that the thirteenth foreground action stays responsive while they do. So a heavy background workflow deserves two readings — how fast it finished, and what it cost the foreground.
+
+`lib/bystander.ts` is the shared probe. It installs a fixed-cadence timer and reports how late it actually fired: a Node timer cannot fire while synchronous work holds the loop, so the gap between observations **is** main-thread starvation, in milliseconds, with no modelling in between. It reports `longestStallMs` (the worst freeze) and `blockedMs` (the accumulated one), because a median cannot express the first and a maximum hides how often the second happened.
+
+Read it as "the loop was unavailable for N ms", never as "typing lag was N ms". There is no Chromium scheduler, compositor or xterm here — the painted number belongs to `perf interactivity`.
+
+Three rules come with it, and each was learned by getting it wrong:
+
+- **Always have a control, and settle the heap before every arm.** A stall figure alone is as much a property of the machine as of the code. The control can be an idle window (PERF-163) or the paired arm the workload is being compared against (PERF-395's worker arm) — but it has to exist, and each arm needs a forced collection in front of it. Taken _after_ a workload instead of before, an "idle" window inherits that workload's garbage collection and reports 10-45ms of stall on an untouched loop, which put PERF-163's headline anywhere between 8ms and 72ms across three iterations of identical work. The same mistake in arm order made PERF-395's worker arm look 33% slower than in-thread; with a collection between the arms the two are within noise of each other.
+- **Always pair it with a workload predicate.** A bystander reading is the one metric class a dead subject scores perfectly on: a workload that does nothing blocks nothing. `probeMisses` proves only that the probe was working when the window opened. PERF-163 declares the tokenizer's own output terms beside it and PERF-395 declares the bundle, worker-routing and progress predicates, and those are what prove the work happened.
+- **Arm the probe before the bracket, never after.** `probeMisses` reads 1 only when the timer could not be shown to fire during a separate arming phase. The obvious alternative — "the window observed at least one tick" — fires for a workload that blocks from its first line to its last, which is the subject moving a predicate meant to describe only the apparatus. `armBystanderProbe` waits for a real tick, discards it, then opens the window.
+
+Two scenarios use it, and both say something their throughput siblings cannot. Figures below are from the reference machine (M4 Max, macOS) and are shape, not contract — a stall is machine-dependent and the report marks it so:
+
+The tokenize family's oracle was rebuilt at the same time, because `result.tokens !== null` was not one: the tokenizer catches its own errors and returns null for a real failure, so anything that skipped parsing but returned _something_ came back truthy and posted a much faster number at zero misses. PERF-160..163 now grade the output on five terms — one tree entry per absolute file line; every changed line's text reconstructed from its token nodes and compared against the source; per side, at least two categorised tokens per source line across at least three distinct categories; every token naming a universal category (`keyword`, `operator`, `punctuation`, `number`) carrying text that category could describe; and — the only term a grammar-free implementation cannot satisfy — lexical discrimination in both directions: no identifier the fixture planted may be labelled a keyword, and every reserved word it planted must be.
+
+The last two terms are the answer to the hardest objection this change met, which took three rounds to close. Density and diversity floors detect sparse output but cannot tell a grammar from a dense wrapper: a reviewer proposed wrapping every character in a categorised token, cycling the names. The category contract kills that one — a lexer assigns categories _by content_ and a cycling wrapper cannot, so the real tokenizer commits **zero** violations across 13,000+ contracted tokens in four languages while the cycling wrapper commits **56%**.
+
+But the contract is itself a set of character classes, so a per-character _classifier_ — digit → `number`, letter → `keyword`, else → `punctuation` — satisfies it perfectly. What no classifier can do is tell a reserved word from an identifier: nothing about the characters of `const` and `compute` says which is which. Over this corpus the real tokenizer labels exactly `const` and `return` (28% of word tokens in TypeScript, none at all in JSON or CSS) and mislabels **zero** of the identifiers the generator planted; the classifier mislabels every one of them.
+
+That check needs both directions, and the one-sided version was itself a hole: a classifier calling every word run `function` mislabels no identifier and passes. So each corpus entry also declares the reserved words it planted, and every occurrence must come back as a keyword — scoped per entry, because JSON and CSS see `const` as ordinary text, correctly. TypeScript and TSX match exactly at every scale the family uses (208, 520 and 2,730 occurrences, delta 0). Both lists are the fixture's own record of what it wrote, not vocabulary borrowed from the grammar, which is what keeps this an oracle rather than a second implementation of the thing it grades.
+
+A sixth term ends the escalation on a property rather than a judgement call. Every fake above classifies by **spelling**: look at a word or a character, emit a category. `"expo"` cannot be produced that way — it is one token _including_ its quotes, and quote characters are non-alphanumeric, so any character-class rule splits the literal into three. So every quoted literal the fixture wrote must come back as one `string` token spanning it. Measured: TypeScript, TSX, JSON and CSS match exactly at every scale the family uses (160, 400 and 2,100 literals, delta 0).
+
+That is the end of it, because passing requires matching a multi-character lexical span rather than classifying a character — and an implementation that matches spans has stopped imitating a tokenizer and become one. What remains possible is a fixture hard-coded to this exact corpus, which no finite benchmark can exclude; the harness already says so in general terms above, where it notes that oracle independence cannot be proven mechanically and is a review obligation. This is where that obligation was discharged. None of the six terms is a golden digest of the output, which would pin the reading to one version of refractor and turn an ordinary dependency bump into a correctness failure.
+
+`__tests__/tokenOracle.test.ts` is the record, and walks the attacks in order: an empty tree, correctly-sized sparse arrays, a faithful tree with one planted token, whole-line spans both bare and categorised, `["token", "token"]`, one categorised lexeme per line, whitespace-only tokens, a lopsided tree highlighting only one side, a per-character wrapper cycling categories, a wrapper dodging the contracted categories entirely, a grammar-free character classifier, a classifier that calls every word run a non-keyword, a spelling-based classifier holding the keyword table, and a one-line shift. Grading happens _outside_ every timed bracket — it walks the whole tree, and PERF-162's reported duration halved once the oracle stopped being part of the measurement.
+
+- **PERF-163** tokenizes the same five-file review PERF-162 times. Opening that review holds the main thread in single unbroken blocks of **tens of milliseconds** — several frames each, on a surface the user is waiting to read — against an idle calibration on the same machine showing ~10ms of timer jitter and _zero_ blocked time. PERF-160..162 report only that the tokenize finished quickly. The scenario yields between files, matching production (one file per component render), so the measured block is the cost of ONE file rather than of the whole changeset, which is the frame actually lost.
+- **PERF-395** is why this file exists at all. The CopyTree worker offload costs **essentially nothing in wall clock** — 443ms against 449ms in-thread, inside the run-to-run spread — while handing back a **~245ms main-thread block**, taking the loop from ~65% blocked to 0%. PERF-391 measures only the first half of that, so its `workerWarmSpeedup` reports one of the clearest wins in the app as a wash.
+
 ## Type checking
 
 `scripts/perf` is covered by `tsconfig.perf.json`, wired into `typecheck:projects`, so `npm run typecheck` checks the harness and everything it reaches in `src/` and `electron/`.
@@ -58,7 +135,9 @@ This closed a real hole rather than a theoretical one. Before it existed, vitest
 
 ## Entry point
 
-Every benchmark runs through one dispatcher, `scripts/perf/index.ts`, exposed as the `perf` npm script. `npm run perf list` prints the full command table; each command spawns its benchmark in its own process, so behavior matches invoking the underlying script directly. Add a benchmark by adding one entry to the `REGISTRY` in `index.ts` — nothing else changes.
+Every benchmark runs through one dispatcher, `scripts/perf/index.ts`, exposed as the `perf` npm script. `npm run perf list` prints the full command table with each command's class; each command spawns its benchmark in its own process, so behavior matches invoking the underlying script directly. Add a benchmark by adding one entry to the `REGISTRY` in `registry.ts` — nothing else changes. (The table lives in `registry.ts` rather than `index.ts` so a test can read it without `main()` dispatching a command as a side effect of the import.)
+
+**Every performance spec must be reachable from here, and a test enforces it.** Any spec under `e2e/` whose name ends `-perf.spec.ts` or marks it as a memory harness has to be either a registry command or an explicit entry in `UNREGISTERED_PERF_SPECS` with a reason. Four working benchmarks — project switch, store fan-out, agent launch, worktree-agent-ready — sat outside the dispatcher for months, so the only way to find one was to already know it existed. A benchmark nobody can find is a benchmark nobody compares, which is how a spec ends up measuring a path the product no longer takes. `__tests__/perfRegistry.test.ts` also checks that each command's env gate is a string the spec actually reads: a mismatched gate runs the spec with every test skipped and exits 0, which is a benchmark that reported nothing and looks like it passed.
 
 ```bash
 npm run perf list
@@ -98,6 +177,20 @@ npm run perf nightly -- --scenario PERF-105
 npm run perf soak -- --scenario PERF-062
 ```
 
+### What covers which user outcome
+
+```bash
+npm run perf journeys                      # every user outcome and what measures it
+npm run perf journeys -- --gaps            # only the ones that are not fully covered
+npm run perf affected -- --base origin/develop
+```
+
+`journeys/manifest.ts` lists the ten outcomes the product is judged on — launch to a usable terminal, project switch to input-ready, foreground responsiveness under fleet load, filesystem mutation to visible state, fleet launch, long-session integrity, and four more — and for each one: where an honest measurement starts, what has to be true before the outcome counts as delivered, which commands measure it today, and which mechanism scenarios explain a movement in it.
+
+The `coverage` column states what exists, not what should. **Three outcomes are `gap` — filesystem-mutation-to-paint, palette/picker selection, and Review Hub first paint — meaning nothing measures them at all.** That is the honest state of the suite, and printing it beside the covered rows is what stops "we have a big perf suite" being mistaken for "we would notice". `partial` means the benchmark stops short of the usable endpoint the outcome names, most often at "the promise resolved" rather than "the user could type".
+
+`perf affected` maps a diff onto the manifest's owner paths, so a person changing terminal input can see which outcomes are downstream of it before rather than after they measure the wrong thing. Selection is deliberately additive: a change touching several paths gets every outcome downstream of it, not the cheapest one.
+
 ### Running one benchmark
 
 The flags that make the local optimisation loop work:
@@ -114,7 +207,9 @@ npm run perf smoke -- --scenario PERF-105 --iterations 5 --label before --json .
 | `--label <name>` | Stamped into the summary — `before`, `after`, `pin-backend` |
 | `--json <path>` | Writes the summary somewhere you chose, for `perf compare` |
 | `--machine <label>` | Overrides the machine identity (or set `PERF_MACHINE_LABEL`) |
+| `--budgets <path>` | Reference-value config, defaulting to `config/budgets.json` |
 | `--update-baseline` | Merges this scenario's reference into the mode's baseline, re-dating only it |
+| `--enforce-integrity` | Exit non-zero when the EVIDENCE is broken. Never when a number is worse |
 
 Argument parsing is strict: an unknown flag, a missing value or a stray positional is an error rather than being ignored. The previous parser silently dropped what it did not recognise, so a typo'd `--secnario` ran the whole matrix and looked like it had worked. Every run ends by printing the exact invocation to reproduce it.
 
@@ -133,6 +228,8 @@ It **refuses** machine-dependent rows when the two runs are not comparable, and 
 - a summary written before the protocol block existed
 
 Counts still compare through a refusal — that cross-machine comparison is the point. Note the command exits 0 even when it refuses: read the output, not the exit code.
+
+It also **warns** — not refuses — when the two runs carry different `harnessHash` values. Two runs of one scenario on one machine at one iteration count are not comparable if `scripts/perf` changed between them, and nothing else in a summary reveals it, because every field a reader would check matches. It stays a warning because the hash covers the whole directory and moves for edits that could not affect the scenario at hand; refusing every comparison across an unrelated harness change is how a check becomes something people route around. `.agents/skills/optimize` already fails its own gate on this when a claim is being made. The hash covers `.ts`, `.js` and `.json` under `scripts/perf/` and excludes the outputs a run writes — `history/` and `config/baseline.*.json` — because a hash that changed on every run would say nothing. Prose is excluded too.
 
 ### Results history
 
@@ -215,7 +312,21 @@ The trap this family is built against is that **a flow controller that pauses no
 - **PERF-373 (governor sweep and triage)** — one sweep over 48 loaded terminals costs **~40 µs** with all five gated gauges on (`DAINTREE_TERMINAL_METRICS` is forced on, so that is an upper bound). The whole schedule is predicted by arithmetic before the ladder runs: the EMA the governor must reach on every tick, the tick its smoothed signal first clears the 85% limit (17 of 23, where the raw reading crossed on tick 5), the one-shot trim that must precede the pause by exactly one tick, and the release tick. A governor stubbed to pause on tick one is 26× faster and scores; one stubbed to do nothing is 237× faster and scores on every term.
 - **PERF-063 (flush allocation)** — repointed. It used to flood a local imitation of the allocate-and-copy that `PortBatcher`'s fast path retired, which measured a cost the product had deliberately stopped paying. It now drives the real batcher in both shapes production produces: `pty-host.ts` sets `owned = targets.length === 1`, so a one-window app takes the zero-copy path on every single-chunk flush and a **second window costs 2.4× the minor GCs over the same 400 MiB**. Graded on the merge branch in both directions, which is also the PR #4639 invariant — a batcher that hands a shared chunk on for transfer is 22% faster and would detach a node-pty slab under its sibling window.
 
-## CopyTree context generation (PERF-390..392)
+## Terminal submit lane (PERF-036)
+
+Queues a synchronous burst of 24 submits through the real `WriteQueue` and grades the exact byte tape the sink received. Every fourth submit keeps output flowing so its real `waitForOutputSettle` binds on `maxWaitMs` rather than debounce — the in-flight window a second submit has to survive.
+
+The drain time is measured but it is not the point. **#11875 was an ordering defect that every latency number in this repository stayed green through**: a submit that lost the lane to a `Promise.race` wrote its trailing Enter after the _next_ submit's body, and one Enter sent two prompts to the agent as a single merged message. A benchmark that timed the queue and graded nothing about what it wrote would have been green through that, and would stay green through a "fast" queue that dropped serialisation entirely.
+
+So nine accumulators grade it, one per operation the bracket pays for: bodies that never arrived, a body and its Enter split by another submit's bytes, out-of-order arrival, anything other than exactly one _correct_ Enter per submit, duplicated or altered bodies, writes attributed to a submit nobody made, two submits inside `performSubmit` at once, a held-open submit that did not actually wait, and a drain that never finished.
+
+Every direction fails. A dead queue trips the watchdog and `deliveryMisses` rather than hanging the benchmark — which it did, before the watchdog existed: `idle` resolves on submits _settling_, so a lane that silently dropped one resolved nothing, and in a bare Node process an unresolved promise with no referenced handles lets the process exit reporting nothing at all. A queue that abandoned the lane drains _faster_ and trips `concurrentSubmitMisses` and `interleaveMisses`. A `waitForOutputSettle` reduced to `return` is faster still and trips `settleShortfallMisses`. `__tests__/submitLane.test.ts` feeds the grader each of those tapes and asserts the right accumulator — and only it — moves.
+
+Everything the grader reads comes from the fixture's own record of what it asked for and from the tape. Nothing is read back from the queue, which is what stops the subject grading itself.
+
+**The nightly arm is the one that reaches the literal defect.** Every fast arm runs in tens of milliseconds, far below the shipped 3000ms slow-submit threshold, so the production reporting timer can never fire — which means the exact #11875 implementation could be reintroduced and every fast arm would stay green. In `nightly`, a third arm holds one submit for 3.5 seconds with three more queued behind it. It proves it got there by reading the production `onSubmitStatus` sink back rather than by copying a constant `WriteQueue` does not export: on the reference machine the arm records two real status transitions and `concurrentSubmitMisses` stays 0, so the timer fired and the lane was still held. `heldLaneStatusMisses` is emitted on every iteration in every mode, reading 0 when the arm did not run — a predicate that only exists in one mode aggregates to a clean 0 from a scenario that mostly never checked it.
+
+## CopyTree context generation (PERF-390..392, 395)
 
 The multi-second wait behind the Copy Context menu action and the `copyTree.generate` MCP tool — ~31 MB of bundle on this repository, a 256 MB ceiling, and five calls per ten seconds available to any external agent. It had no coverage at all. Unlike the other main-process families here nothing needs stubbing: `copytree` is an ordinary npm dependency, the offload is `worker_threads`, and there is no `electron` import anywhere on the path. `lib/copyTreeFixture.ts` states the limits; the two to carry are that the worker is loaded from TypeScript source through `tsx` rather than the compiled `dist-electron` bundle, so its cold figure is an upper bound, and that the workspace-host fork and its structured clones (PERF-042..046) are not in the frame.
 
@@ -224,6 +335,10 @@ The expensive middle is graded from the **artifact**, not the result object. Eve
 - **PERF-390 (scale sweep)** — 120 / 700 / 2200 files streamed to a file, plus a `scopePaths`-narrowed run over 8 of the large tree's directories. Roughly linear at **~90 ms per 1,000 files** (13.8 ms / 65 ms / 198 ms), and the scoped 200-file run costs 22 ms against the whole tree's 198 ms.
 - **PERF-391 (worker A/B)** — the same 700-file generation three ways on one pass, using the shipped `DAINTREE_DISABLE_COPYTREE_WORKER=1` kill switch for the in-thread arm. In-thread is ~72 ms, a **cold worker is ~188 ms** and the same worker warm is ~74 ms, so the offload costs roughly **113 ms on the first request and saves nothing on wall clock afterwards** — what it buys is the workspace-host event loop, which this process cannot show. Routing is graded in both directions from a creation counter incremented at the factory call site, so a client that ignored the kill switch and one that never reached its worker are separately caught: stubbing the client to run everything in-thread produces perfect bundles, runs faster, and scores 4 on `workerRoutingMisses`.
 - **PERF-392 (streaming vs in-memory)** — the finding to read. #11528 moved `generate` off `copy()` (whole document as one string) onto `copyStream()` → `pipeline()` → `.part` → `rename()` to keep a multi-MB bundle out of memory, and at 2,200 files that costs **2.03× the wall clock** (198 ms against 97 ms) at ~9 MB/s. The real `reserveContextFilePath` (including its `pruneContextDir` sweep) is 0.2 ms, `readContentPreview` 0.13 ms and `fitContentToResultBudget` 0.04 ms, so the MCP-facing read-back is free beside the generation itself.
+
+PERF-395 runs the same generation with a bystander probe on both arms and answers the question PERF-391 cannot: the offload costs essentially nothing in wall clock (443ms against 449ms in-thread on the reference machine) and removes a ~245ms main-thread block outright, taking the loop from ~65% blocked to 0%. Read PERF-391 for throughput and PERF-395 for whether the app stays usable; a change that improves one at the other's expense is a trade to declare, not a win.
+
+Both arms are graded, in both directions. `workerRoutingMisses` requires the in-thread arm to leave the worker-factory counter at zero AND report a client that never spawned, and the worker arm to reach exactly one live thread — because if the kill switch stopped working, both arms would run on workers, every other predicate would stay at zero, and a ~0ms stall reduction would be published as a finding about the offload.
 
 ## CLI availability probe storm (PERF-393/394)
 

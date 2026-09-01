@@ -608,3 +608,88 @@ describe("cli", () => {
     expect(result.stdout).toContain("REFUSED");
   });
 });
+
+describe("harness identity", () => {
+  /**
+   * Two runs of one scenario on one machine at one iteration count are still
+   * not comparable if `scripts/perf` changed between them, and every field a
+   * reader would check matches. The hash is the only evidence, so the warning
+   * built on it has to appear — and has to stay a warning, because refusing
+   * every comparison across an unrelated harness edit is how a check becomes
+   * something people route around.
+   */
+  const withHarness = (label: string, hash: string | null | undefined) =>
+    summary(label, MAC, [scenario("PERF-105", 200, {})], {
+      protocol: {
+        iterations: null,
+        warmups: null,
+        scenarioSelection: null,
+        ...(hash === undefined ? {} : { harnessHash: hash }),
+      },
+    });
+
+  it("warns when the two runs were measured by different harnesses", () => {
+    const output = render(
+      withHarness("before", "aaaaaaaaaaaaaaaa"),
+      withHarness("after", "bbbbbbbbbbbbbbbb")
+    );
+    expect(output).toContain("the harness itself differs between the two runs");
+    expect(output).toContain("aaaaaaaaaaaaaaaa");
+    // A warning, not a refusal: the durations are still shown and judged.
+    expect(output).not.toContain("Machine-dependent comparison REFUSED");
+  });
+
+  it("says nothing when both sides carry the same hash", () => {
+    const output = render(
+      withHarness("before", "aaaaaaaaaaaaaaaa"),
+      withHarness("after", "aaaaaaaaaaaaaaaa")
+    );
+    expect(output).not.toContain("the harness itself differs");
+    expect(output).not.toContain("could not record a harness hash");
+  });
+
+  it("distinguishes a hash that failed from one that was never recorded", () => {
+    // null means the harness tried and could not; absent means the summary
+    // predates the field. Only the first is worth a line, because only the
+    // first describes a run this harness produced.
+    expect(render(withHarness("before", null), withHarness("after", "aaaaaaaaaaaaaaaa"))).toContain(
+      "could not record a harness hash"
+    );
+    expect(render(withHarness("before", undefined), withHarness("after", undefined))).not.toContain(
+      "could not record a harness hash"
+    );
+  });
+});
+
+describe("benchmark class in a comparison", () => {
+  it("says when a compared scenario is a floor or a simulation", () => {
+    // "PERF-196 improved 18%" is true and is not a product claim: PERF-196 is a
+    // declared parser floor that production does not take. Nothing else in the
+    // comparison output carries that.
+    const withKind = (label: string) =>
+      summary(label, MAC, [{ ...scenario("PERF-196", 200, {}), kind: "diagnostic" as const }]);
+    const output = render(withKind("before"), withKind("after"));
+    expect(output).toContain("PERF-196");
+    expect(output).toContain("classified `diagnostic`");
+  });
+
+  it("says nothing for an ordinary mechanism benchmark", () => {
+    const withKind = (label: string) =>
+      summary(label, MAC, [{ ...scenario("PERF-105", 200, {}), kind: "mechanism" as const }]);
+    expect(render(withKind("before"), withKind("after"))).not.toContain("classified `diagnostic`");
+  });
+
+  it("does not withhold the diagnostic row", () => {
+    // A floor's delta is still worth reading — it catches a parser regression.
+    // The warning is a label on the number, not a refusal of it.
+    const withKind = (label: string, p50: number) =>
+      summary(label, MAC, [{ ...scenario("PERF-196", p50, {}), kind: "diagnostic" as const }]);
+    const output = render(withKind("before", 200), withKind("after", 100));
+    // Asserted on the ROW, not on the whole document: the reading guide
+    // explains what a refusal looks like, so the word appears either way.
+    const cells = rowCells(output, "PERF-196")[0];
+    expect(cells).toBeDefined();
+    expect(cells!.join(" ")).not.toContain("REFUSED");
+    expect(cells!.join(" ")).toContain("-50");
+  });
+});

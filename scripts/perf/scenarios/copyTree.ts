@@ -1,5 +1,11 @@
 import { performance } from "node:perf_hooks";
 
+import {
+  armBystanderProbe,
+  bystanderMetrics,
+  type BystanderProbe,
+  type BystanderReading,
+} from "../lib/bystander";
 import type { PerfScenario, ScenarioSample } from "../types";
 import type { CopyTreeOptions, CopyTreeResult } from "../../../shared/types/ipc/copyTree";
 import {
@@ -64,6 +70,9 @@ const SCOPE_DIRECTORY_COUNT = 8;
 
 /** The scale the A/B and streaming scenarios hold constant. */
 const AB_SCALE = "medium";
+
+/** Roughly one frame. Below this the bystander probe measures the probe. */
+const PROBE_CADENCE_MS = 8;
 
 const BUNDLE_CORRECTNESS = [
   "generateErrorMisses",
@@ -429,6 +438,151 @@ export const copyTreeScenarios: PerfScenario[] = [
           ...bundleMisses(grade),
         },
         notes: `${tree.plantedFiles} files, ${bundleBytes} B bundle`,
+      };
+    },
+  },
+  {
+    id: "PERF-395",
+    name: "CopyTree Foreground Cost - In-Thread vs Worker Offload",
+    description:
+      "The same generation PERF-391 times, with a fixed-cadence probe watching the main thread " +
+      "through both arms: once in-thread behind the shipped DAINTREE_DISABLE_COPYTREE_WORKER kill " +
+      "switch, then on a warm worker_threads worker, with a forced collection in front of each so " +
+      "the second arm does not inherit the first arm's garbage. PERF-391 answers how much faster " +
+      "the offload makes the operation; this answers the question the user actually has, which is " +
+      "whether the app stays usable while it runs. A worker that made generation 5% slower but " +
+      "removed a multi-second block from the loop would score badly on PERF-391 and correctly " +
+      "here. The " +
+      "reading is main-thread AVAILABILITY, not keystroke-to-paint — no Chromium scheduler is in " +
+      "the frame. Three sets of predicates ride along, one per operation the bracket pays for. The " +
+      "bundle predicates, because a probe cannot tell a free loop from a generator that produced " +
+      "nothing. workerRoutingMisses graded both ways, because if the kill switch stopped working " +
+      "both arms would run on workers, every other predicate would stay at zero, and a ~0ms stall " +
+      "reduction would be reported as a finding about the offload. And the progress predicates, " +
+      "because the callback is installed inside the bracket and deleting its emissions makes both " +
+      "arms cheaper for free.",
+    tier: "heavy",
+    modes: ["smoke", "ci", "nightly"],
+    warmups: WARMUPS,
+    correctness: [
+      ...BUNDLE_CORRECTNESS,
+      ...PROGRESS_CORRECTNESS,
+      "workerRoutingMisses",
+      "probeMisses",
+    ],
+    async run(): Promise<ScenarioSample> {
+      const modules = await loadCopyTreeModules();
+      const tree = getTree(AB_SCALE);
+      const expectation = expectationFor(tree);
+      const grade = emptyBundleGrade();
+      const progress = emptyProgressGrade();
+      // The headline compares an in-thread arm against a worker arm, so
+      // "was each arm actually on the side it claims" is an operation inside
+      // the bracket and needs its own term. Without it, a kill switch that
+      // stopped working would put BOTH arms on workers, every bundle and probe
+      // predicate would stay at zero, and the scenario would report a
+      // ~0ms stall reduction as a finding about the offload.
+      let workerRoutingMisses = 0;
+
+      const probe = createWorkerFactoryProbe();
+      const previousDisable = process.env.DAINTREE_DISABLE_COPYTREE_WORKER;
+
+      let inThreadMs = 0;
+      let workerMs = 0;
+      let inThreadReading: BystanderReading | null = null;
+      let workerReading: BystanderReading | null = null;
+      const watches: BystanderProbe[] = [];
+
+      try {
+        process.env.DAINTREE_DISABLE_COPYTREE_WORKER = "1";
+        const inThreadClient = new modules.CopytreeWorkerClient(probe.factory);
+        const inThreadWatch = await armBystanderProbe({ cadenceMs: PROBE_CADENCE_MS });
+        watches.push(inThreadWatch);
+        const inThread = await runThroughClient(
+          inThreadClient,
+          tree,
+          expectation,
+          "stall-inthread"
+        );
+        inThreadReading = inThreadWatch.stop();
+        addBundleGrade(grade, inThread.grade);
+        inThreadMs = inThread.ms;
+
+        delete process.env.DAINTREE_DISABLE_COPYTREE_WORKER;
+        const workerClient = new modules.CopytreeWorkerClient(probe.factory);
+        // Spawn and module-load on a discarded run: worker startup is a one-off,
+        // and folding it into the measured arm would report it as an ongoing
+        // foreground cost that it is not. Its artifact is graded too — a warm-up
+        // that silently produced nothing would leave the measured arm running
+        // against a worker in an unknown state.
+        const warmUp = await runThroughClient(workerClient, tree, expectation, "stall-warmup");
+        addBundleGrade(grade, warmUp.grade);
+        addProgressGrade(progress, warmUp.progress);
+        if (probe.creations() !== 1) workerRoutingMisses += 1;
+        const spawned = workerClient.getGovernanceSnapshot();
+        if (spawned.state !== "running" || spawned.alive !== true) workerRoutingMisses += 1;
+        if (spawned.threadId === null || spawned.threadId === 0) workerRoutingMisses += 1;
+
+        // Settle the heap between arms. The measured worker arm runs third, so
+        // without this it can inherit collection caused by the two generations
+        // before it and report a smaller benefit for a reason that has nothing
+        // to do with the worker.
+        globalThis.gc?.();
+
+        const workerWatch = await armBystanderProbe({ cadenceMs: PROBE_CADENCE_MS });
+        watches.push(workerWatch);
+        const worker = await runThroughClient(workerClient, tree, expectation, "stall-worker");
+        workerReading = workerWatch.stop();
+        addBundleGrade(grade, worker.grade);
+        addProgressGrade(progress, worker.progress);
+        workerMs = worker.ms;
+        // Still exactly one worker: a measured arm that quietly respawned would
+        // be timing a cold worker against a warm in-thread run.
+        if (probe.creations() !== 1) workerRoutingMisses += 1;
+      } finally {
+        if (previousDisable === undefined) {
+          delete process.env.DAINTREE_DISABLE_COPYTREE_WORKER;
+        } else {
+          process.env.DAINTREE_DISABLE_COPYTREE_WORKER = previousDisable;
+        }
+        // A bystander probe holds a REFERENCED timer while live — an unref'd one
+        // lets the process exit before it has ever fired, which is a deadlock
+        // rather than a leak. So a generation that throws must not leave one
+        // running. `stop()` is idempotent, so stopping an already-stopped probe
+        // returns the same window rather than widening it.
+        watches.forEach((watch) => watch.stop());
+        await probe.disposeAll();
+      }
+
+      if (!inThreadReading || !workerReading) {
+        throw new Error("PERF-395: a bystander arm produced no reading");
+      }
+
+      return {
+        durationMs: inThreadMs + workerMs,
+        metrics: {
+          inThreadMs,
+          workerMs,
+          ...bystanderMetrics("inThread", inThreadReading),
+          ...bystanderMetrics("worker", workerReading),
+          // What the offload buys the foreground, in milliseconds of main
+          // thread handed back. Subtraction rather than a ratio: a worker arm
+          // that blocks for near-zero makes a ratio unbounded and unreadable.
+          stallReductionMs: Math.max(
+            0,
+            inThreadReading.longestStallMs - workerReading.longestStallMs
+          ),
+          blockedReductionMs: Math.max(0, inThreadReading.blockedMs - workerReading.blockedMs),
+          workerCreations: probe.creations(),
+          workerRoutingMisses,
+          probeMisses: inThreadReading.probeMisses + workerReading.probeMisses,
+          ...bundleMisses(grade),
+          ...progressMisses(progress),
+        },
+        notes:
+          `${tree.plantedFiles} files; longest block in-thread ` +
+          `${inThreadReading.longestStallMs.toFixed(1)}ms vs worker ` +
+          `${workerReading.longestStallMs.toFixed(1)}ms`,
       };
     },
   },

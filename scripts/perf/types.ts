@@ -28,6 +28,45 @@ export interface ScenarioSample {
  */
 export type PlatformApplicability = "supported" | "diagnostic" | "unsupported";
 
+/**
+ * What a benchmark's numbers are allowed to be claimed to mean.
+ *
+ * `journey` starts at a real user entry point, runs the production process
+ * topology, and ends at a correct visible or usable result. `mechanism` measures
+ * a real shipped function or service with one or more user-path layers removed
+ * on purpose. `diagnostic` means the subject inside the timed bracket is
+ * emulated, shimmed, simulated, or a deliberate floor — a signal, never a
+ * product claim.
+ *
+ * The classification table is `config/benchmarkClasses.ts`.
+ */
+export type BenchmarkKind = "journey" | "mechanism" | "diagnostic";
+
+/**
+ * Which layers of the real path a benchmark actually contains.
+ *
+ * Not a quality score — a `mechanism` benchmark with `renderer: "absent"` is
+ * working as designed. It is a compact statement of what the number means, so
+ * a reader never has to infer fidelity from a fixture comment.
+ */
+export interface BenchmarkFidelity {
+  entryPoint: "user-event" | "public-api" | "internal-function";
+  renderer: "real" | "headless" | "absent";
+  electronTransport: "real" | "node-channel" | "stubbed" | "none";
+  pty: "real" | "replay" | "fake" | "none";
+  processTopology: "packaged" | "e2e-build" | "partial" | "single-process";
+  externalDependencies: "hermetic" | "controlled-network" | "uncontrolled";
+}
+
+export interface BenchmarkClass {
+  kind: BenchmarkKind;
+  /** Short family label, e.g. "git pipeline". */
+  family: string;
+  fidelity: BenchmarkFidelity;
+  /** What may be claimed from these numbers, and what is deliberately absent. */
+  claim: string;
+}
+
 export interface PerfScenario {
   id: string;
   name: string;
@@ -115,6 +154,17 @@ export interface ScenarioAggregate {
    * emulated path as an authoritative one.
    */
   applicability?: PlatformApplicability;
+  /**
+   * What layer this number describes — `journey`, `mechanism` or `diagnostic`.
+   *
+   * Carried on the aggregate rather than looked up by readers, so a summary
+   * JSON handed to another tool states its own fidelity. A row without one is a
+   * scenario missing from `config/benchmarkClasses.ts`, which the matrix test
+   * refuses.
+   */
+  kind?: BenchmarkKind;
+  /** The claim sentence from the classification table, verbatim. */
+  claim?: string;
   notes: string[];
 }
 
@@ -168,6 +218,43 @@ export interface RunProtocol {
   warmups: number | null;
   /** Scenario ids when the run was filtered with `--scenario`, else null. */
   scenarioSelection: string[] | null;
+  /**
+   * Content hash of `scripts/perf/`, or null when it could not be computed.
+   *
+   * A before/after pair measured under two different harnesses is a comparison
+   * of two measuring instruments, not of two implementations — and nothing else
+   * in the file reveals it, because the scenario id, machine, iteration count
+   * and protocol all match. `.agents/skills/optimize` already hashes this
+   * directory into its precommit record; recording it here means an ordinary
+   * `perf compare` can say so too.
+   */
+  harnessHash?: string | null;
+  /**
+   * Whether the run was invoked with `--enforce-integrity`.
+   *
+   * Optional for the same reason as `harnessHash`: a summary written before
+   * this existed has no answer, and `false` would be an invention rather than a
+   * reading. Every run written from now on states it.
+   */
+  enforceIntegrity?: boolean;
+}
+
+/**
+ * Whether a run produced usable EVIDENCE, as distinct from good numbers.
+ *
+ * These are three different questions and the harness answers them separately:
+ * integrity ("is this evidence valid?"), correctness ("did the subject do the
+ * work?") and performance ("was valid, correct behaviour slow?"). Only the
+ * third is the advisory one. A run whose oracle failed is not a slow result; it
+ * is not a result, and `--enforce-integrity` is what lets a caller act on that
+ * distinction without also arming a numeric gate.
+ */
+export interface IntegrityResult {
+  /** True when `--enforce-integrity` was passed; the exit code only moves then. */
+  enforced: boolean;
+  valid: boolean;
+  /** One entry per broken measurement, prefixed with the scenario id. */
+  issues: string[];
 }
 
 export interface PerfRunSummary {
@@ -192,6 +279,11 @@ export interface PerfRunSummary {
    * missing by design.
    */
   scenariosSkipped: string[];
+  /**
+   * Whether the evidence in this file is trustworthy, and whether the run was
+   * asked to fail on that. Absent from summaries written before it existed.
+   */
+  integrity?: IntegrityResult;
   aggregates: ScenarioAggregate[];
 }
 

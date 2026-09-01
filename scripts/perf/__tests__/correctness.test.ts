@@ -151,15 +151,38 @@ describe("evaluateCorrectness — an undeclared predicate", () => {
     ).toHaveLength(1);
   });
 
-  it("leaves a scenario reporting no count-class metric alone", () => {
-    // Classification is `classifyMetric`'s job, not a name match here: a
-    // duration falling to zero is visible as a duration.
+  it("reports a duration-only scenario that declares nothing", () => {
+    // This used to pass silently, on the reasoning that a duration falling to
+    // zero is visible as a duration and so needs no predicate. The reasoning is
+    // sound about DURATIONS and wrong about the situation: every scenario in the
+    // matrix declares a predicate and `scenarioMatrix.test.ts`'s exemption list
+    // is empty, so an absent declaration reaching here is one that was removed —
+    // and removing it is the cheapest way to make a failing predicate stop
+    // failing. With both the declaration and its emission gone, the old rule
+    // produced no issue at all and `--enforce-integrity` did not uphold what it
+    // documents.
     const issues = evaluateCorrectness({
       correctness: undefined,
       metricStats: statsFor([{ applyMs: 4, heapDeltaMb: 2, msPerKFile: 0.3 }]),
       runs: 1,
     });
-    expect(issues).toEqual([]);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("declares no correctness predicate");
+    // No count-class metric survived, so the message must not claim one did.
+    expect(issues[0]).not.toContain("count-class");
+  });
+
+  it("still names the surviving counts when there are any", () => {
+    // Classification stays `classifyMetric`'s job rather than a name match here.
+    const issues = evaluateCorrectness({
+      correctness: undefined,
+      metricStats: statsFor([{ applyMs: 4, gitSpawns: 0, refreshCount: 2 }]),
+      runs: 1,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("gitSpawns");
+    expect(issues[0]).toContain("refreshCount");
+    expect(issues[0]).not.toContain("applyMs");
   });
 
   it("does not double-report on a scenario that declares a predicate", () => {
@@ -191,6 +214,7 @@ describe("evaluateCorrectness — never a gate", () => {
     const { outsideReference } = evaluateScenarioBudget({
       scenarioId: "PERF-000",
       p95Ms: 1,
+      runs: 1,
       metricStats,
       budget: {},
       baselineP95: 1,

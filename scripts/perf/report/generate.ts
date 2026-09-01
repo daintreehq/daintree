@@ -1,3 +1,4 @@
+import { classifyBenchmark, describeBenchmarkClass } from "../config/benchmarkClasses";
 import { classifyMetric, comparabilityMarker } from "../lib/comparability";
 import type { ComparabilityClass } from "../lib/comparability";
 import { round } from "../lib/stats";
@@ -210,6 +211,62 @@ function metricsSection(aggregates: ScenarioAggregate[]): string[] {
   ];
 }
 
+/**
+ * What each measured scenario's number is allowed to be claimed to mean.
+ *
+ * Placed above the tables rather than as a column, because the claim is a
+ * sentence and a table cell is where a sentence goes to be skipped. Every run
+ * measures one scenario, so this section is two or three lines.
+ *
+ * The failure it addresses is a specific one: a `mechanism` number quoted in a
+ * sentence beginning "Daintree got faster for users". Nothing about the figure
+ * itself reveals that the renderer, transport and compositor were absent.
+ */
+function claimSection(aggregates: ScenarioAggregate[]): string[] {
+  const lines = ["", "## What this measures", ""];
+  let any = false;
+
+  for (const aggregate of aggregates) {
+    const cls = classifyBenchmark(aggregate.id);
+    if (!cls) {
+      lines.push(
+        `- **${cell(aggregate.id)}** — UNCLASSIFIED. No entry in \`config/benchmarkClasses.ts\`, so nothing here states what this number covers. Treat it as diagnostic until one is added.`
+      );
+      any = true;
+      continue;
+    }
+    lines.push(
+      `- **${cell(aggregate.id)}** \`${cls.kind}\` — ${cell(cls.claim)}`,
+      `  - Fidelity: ${cell(describeBenchmarkClass(cls))}`
+    );
+    any = true;
+  }
+
+  if (!any) return [];
+
+  lines.push(
+    "",
+    "`journey` numbers describe an outcome a user experiences. `mechanism` numbers describe shipped code with user-path layers deliberately removed — real, attributable, and not a statement about perceived speed. `diagnostic` numbers are signals: the subject inside the bracket is emulated, shimmed or a floor."
+  );
+  return lines;
+}
+
+/**
+ * Evidence quality, stated in the header where the exit code used to be the
+ * only signal. A run that reports issues here is not slow; its numbers do not
+ * mean anything, whether or not `--enforce-integrity` made it exit non-zero.
+ */
+function integrityLine(summary: PerfRunSummary): string[] {
+  const integrity = summary.integrity;
+  if (!integrity) return [];
+  const mode = integrity.enforced ? "enforced" : "advisory";
+  return [
+    integrity.valid
+      ? `- Integrity: ok (${mode})`
+      : `- Integrity: **${integrity.issues.length} broken measurement(s)** (${mode}) — the numbers below are not slow, they are not results`,
+  ];
+}
+
 export function buildMarkdownReport(summary: PerfRunSummary): string {
   const outside = summary.scenariosOutsideReference;
   const issueCount = summary.aggregates.reduce(
@@ -228,10 +285,15 @@ export function buildMarkdownReport(summary: PerfRunSummary): string {
     `- Scenarios: ${summary.scenarioCount}`,
     `- Outside a reference value: ${outside.length}${outside.length > 0 ? ` (${outside.join(", ")})` : ""}`,
     `- Measurement issues: ${issueCount}`,
+    ...integrityLine(summary),
+    // The measuring instrument's own identity. Two runs of one scenario on one
+    // machine at one iteration count are still not comparable if this differs.
+    `- Harness: ${summary.protocol.harnessHash ?? "unknown"}`,
   ];
 
   return [
     ...header,
+    ...claimSection(summary.aggregates),
     ...readingGuide(summary.environment),
     ...measurementIssuesSection(summary.aggregates),
     ...latencySection(summary),

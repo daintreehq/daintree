@@ -9,6 +9,13 @@ import {
   runPipelinePlan,
   type PipelinePlan,
 } from "../lib/ptyOutputPipelineFixture";
+import {
+  addSubmitLaneGrade,
+  emptySubmitLaneGrade,
+  heldLaneStatusMisses,
+  runSubmitLane,
+  SUBMIT_LANE_CORRECTNESS,
+} from "../lib/submitLaneFixture";
 import { percentile } from "../lib/stats";
 import { INCREMENTAL_RESTORE_CONFIG } from "../../../src/services/terminal/types";
 import { WorkerParseSession } from "../../../src/services/terminal/workerParse/WorkerParseSession";
@@ -99,6 +106,51 @@ const CROSSING_CHUNK_BYTES = INCREMENTAL_RESTORE_CONFIG.chunkBytes + 1024;
 const STEADY_CHUNK_BYTES = 4 * 1024;
 /** PERF-033 writes exactly three chunks and ends on the last log line. */
 const WRITE_COUNT = 3;
+
+/**
+ * Submits queued in one synchronous burst by PERF-036.
+ *
+ * Enough that a lane which serialises and one which does not produce visibly
+ * different tapes, and few enough that the contended arm stays inside a `fast`
+ * tier: six held-open submits at {@link SUBMIT_SLOW_WAIT_MS} dominate its
+ * duration.
+ */
+const SUBMIT_BURST = 24;
+
+/**
+ * How long a held-open submit occupies the lane in PERF-036.
+ *
+ * SCOPE LIMIT, stated plainly because the earlier wording overstated this. The
+ * shipped SUBMIT_SLOW_THRESHOLD_MS is 3000ms, and 20ms is far below it, so a
+ * reintroduction of the exact #11875 implementation — a `Promise.race` against
+ * that reporting timer — would not be caught here: the timer could never win
+ * the race inside a 20ms submit. What this arm does catch is the CLASS: any
+ * lane released before its submit finishes, on any threshold at or below the
+ * held-open window, trips `concurrentSubmitMisses` and `interleaveMisses`.
+ *
+ * Three seconds per held-open submit is the price of covering the literal
+ * historical constant, which would put this scenario an order of magnitude
+ * outside its tier for one arm's worth of extra coverage. The trade is recorded
+ * rather than hidden; a nightly-only arm at the real threshold is the obvious
+ * way to close it if the class-level cover ever proves insufficient.
+ */
+const SUBMIT_SLOW_WAIT_MS = 20;
+
+/**
+ * How long the nightly arm holds one submit open.
+ *
+ * Above the shipped SUBMIT_SLOW_THRESHOLD_MS of 3000, so the queue's REAL
+ * reporting timer fires while the lane is still held — which is the literal
+ * #11875 condition and the one thing the fast arms above cannot reach. The
+ * threshold is not imported because `WriteQueue` does not export it; the arm
+ * proves it crossed by reading the production `onSubmitStatus` sink back
+ * (`heldLaneStatusMisses`), which is evidence rather than a copied constant.
+ *
+ * `nightly` only. Three and a half seconds is an order of magnitude outside
+ * this scenario's tier, and paying it on every smoke run to cover one arm would
+ * be the wrong trade.
+ */
+const SUBMIT_HELD_NIGHTLY_MS = 3500;
 const EXPECTED_LAST_LINE = "log entry 99 from agent terminal";
 
 export const terminalScenarios: PerfScenario[] = [
@@ -527,6 +579,102 @@ export const terminalScenarios: PerfScenario[] = [
         focused.dispose();
         background.forEach((terminal) => terminal.dispose());
       }
+    },
+  },
+  {
+    id: "PERF-036",
+    name: "Terminal Submit Lane - Serialisation Under a Slow Submit",
+    description:
+      "Queues a synchronous burst of 24 submits through the real WriteQueue and grades the exact " +
+      "byte tape the sink received. Every fourth submit keeps output flowing so its real " +
+      "waitForOutputSettle binds on maxWaitMs rather than debounce — the in-flight window a second " +
+      "submit has to survive. durationMs is the drain, but the drain is not the point: #11875 was " +
+      "an ORDERING defect that every latency number in this repository stayed green through, " +
+      "because a submit that lost the lane to a Promise.race wrote its trailing Enter after the " +
+      "NEXT submit's body and merged two prompts into one. Nine accumulators grade it, one per " +
+      "operation the bracket pays for: bodies that never arrived, a body and its Enter split by " +
+      "another submit's bytes, out-of-order arrival, anything other than exactly one correct Enter " +
+      "per submit, duplicated or altered bodies, writes attributed to a submit that was never " +
+      "made, two submits inside performSubmit at once, a held-open submit that did not actually " +
+      "wait, and a drain that never finished. Every direction fails: a queue that dropped " +
+      "serialisation drains faster and trips concurrentSubmitMisses and interleaveMisses; a " +
+      "waitForOutputSettle reduced to a return is faster still and trips settleShortfallMisses; a " +
+      "queue that stopped accepting submits trips the watchdog and deliveryMisses rather than " +
+      "hanging. In nightly a third arm holds one submit past the shipped 3000ms reporting " +
+      "threshold with three more queued behind it, which is the only arm that reaches the literal " +
+      "#11875 condition; it proves it got there by reading the production onSubmitStatus sink back " +
+      "rather than by copying a constant WriteQueue does not export.",
+    tier: "fast",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 6, ci: 12, nightly: 18 },
+    warmups: 1,
+    correctness: [...SUBMIT_LANE_CORRECTNESS, "heldLaneStatusMisses"],
+    async run(context) {
+      // Two shapes on one pass. The fast lane is every submit settling on its
+      // debounce (the ordinary case, where the queue's own overhead is the whole
+      // cost); the contended lane holds the lane open on every fourth submit,
+      // which is the shape #11875 lived in.
+      const fast = await runSubmitLane({
+        submits: SUBMIT_BURST,
+        slowEvery: 0,
+        debounceMs: 1,
+        maxWaitMs: 20,
+        pollMs: 2,
+      });
+      const contended = await runSubmitLane({
+        submits: SUBMIT_BURST,
+        slowEvery: 4,
+        debounceMs: 1,
+        maxWaitMs: SUBMIT_SLOW_WAIT_MS,
+        pollMs: 2,
+      });
+
+      // The arm that reaches the real threshold. Nightly only — see
+      // SUBMIT_HELD_NIGHTLY_MS for why it is not paid on every run.
+      const held =
+        context.mode === "nightly"
+          ? await runSubmitLane({
+              submits: 4,
+              slowEvery: 0,
+              debounceMs: 1,
+              maxWaitMs: 20,
+              pollMs: 25,
+              holdFirstSubmitMs: SUBMIT_HELD_NIGHTLY_MS,
+            })
+          : null;
+
+      const grade = addSubmitLaneGrade(
+        addSubmitLaneGrade(emptySubmitLaneGrade(), fast.grade),
+        contended.grade
+      );
+      if (held) addSubmitLaneGrade(grade, held.grade);
+
+      return {
+        durationMs: fast.drainMs + contended.drainMs + (held?.drainMs ?? 0),
+        metrics: {
+          fastDrainMs: fast.drainMs,
+          contendedDrainMs: contended.drainMs,
+          fastMsPerSubmit: fast.drainMs / fast.submitsRequested,
+          // What one held-open submit costs the ones behind it. The interesting
+          // half of the measurement: it is bounded by maxWaitMs by construction,
+          // so a value far above it means the queue is adding its own delay.
+          contendedMsPerSlowSubmit:
+            contended.slowSubmits > 0 ? contended.drainMs / contended.slowSubmits : 0,
+          submitsCompleted: fast.submitsRequested + contended.submitsRequested,
+          slowSubmits: contended.slowSubmits,
+          failedSubmits: fast.failedSubmits + contended.failedSubmits,
+          drainTimeouts: (fast.timedOut ? 1 : 0) + (contended.timedOut ? 1 : 0),
+          bytesWritten: fast.bytesWritten + contended.bytesWritten + (held?.bytesWritten ?? 0),
+          heldSubmitMs: held?.drainMs ?? 0,
+          heldStatusEvents: held?.statusEvents.length ?? 0,
+          // Emitted on EVERY iteration and every mode, reading 0 when the arm
+          // did not run. A predicate present only in nightly aggregates to a
+          // clean 0 from a scenario that mostly did not check it.
+          heldLaneStatusMisses: held ? heldLaneStatusMisses(held, true) : 0,
+          ...grade,
+        },
+        notes: `${SUBMIT_BURST} submits per arm, ${contended.slowSubmits} held open at ${SUBMIT_SLOW_WAIT_MS}ms`,
+      };
     },
   },
 ];

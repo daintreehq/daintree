@@ -16,10 +16,23 @@ function statsFor(samples: Array<Record<string, number>>): Record<string, Metric
   return aggregateMetrics(samples);
 }
 
+/**
+ * Derived from the stats rather than fixed at 1, so a fixture built from three
+ * samples is COMPLETE by default and the partial-emission check stays out of
+ * the way of every case that is about something else. A test that wants to
+ * exercise partiality passes `runs` explicitly.
+ */
+function completeRuns(metricStats: Record<string, MetricStat>): number {
+  const counts = Object.values(metricStats).map((stat) => stat.count);
+  return counts.length > 0 ? Math.max(...counts) : 1;
+}
+
 function makeParams(overrides: Partial<GateParams> = {}): GateParams {
+  const metricStats = overrides.metricStats ?? {};
   return {
     scenarioId: "PERF-TEST",
     p95Ms: 1,
+    runs: completeRuns(metricStats),
     metricStats: {},
     budget: { p95Ms: 1000, maxRegressionPct: 15 },
     baselineP95: undefined,
@@ -446,5 +459,70 @@ describe("evaluateScenarioBudget — metric-only budgets (no p95Ms)", () => {
     expect(result.measurementIssues).toHaveLength(1);
     expect(result.measurementIssues[0]).toContain("renamedAway");
     expect(result.outsideReference).toBe(false);
+  });
+});
+
+describe("evaluateScenarioBudget — a configured metric emitted on only some iterations", () => {
+  /**
+   * `MetricStat.count` tallies the iterations that emitted a metric, not the
+   * run count. A ceiling checked against one sample out of sixteen is a ceiling
+   * with fifteen blind iterations behind it, and it passes — looking exactly
+   * like a clean result. Correctness predicates have always been checked this
+   * way; configured metrics were not, which left the louder case enforced and
+   * this one open.
+   */
+  it("reports a partial emission as a measurement issue, not a pass", () => {
+    const metricStats = statsFor([{ gitSpawns: 2 }, {}, {}]);
+    const result = evaluateScenarioBudget(
+      makeParams({
+        runs: 3,
+        metricStats,
+        budget: { maxMetricValues: { gitSpawns: 10 } },
+      })
+    );
+
+    expect(result.measurementIssues).toHaveLength(1);
+    expect(result.measurementIssues[0]).toContain("emitted on 1 of 3");
+    // A broken measurement, not a slow one — same rule as a vanished metric.
+    expect(result.outsideReference).toBe(false);
+  });
+
+  it("does not re-report the ceiling for a metric it already called partial", () => {
+    // The ceiling comparison is skipped once the emission is known partial:
+    // reporting both would say the number is too high AND that there is no
+    // trustworthy number, and only the second is true.
+    const result = evaluateScenarioBudget(
+      makeParams({
+        runs: 4,
+        metricStats: statsFor([{ gitSpawns: 900 }, {}, {}, {}]),
+        budget: { maxMetricValues: { gitSpawns: 10 } },
+      })
+    );
+    expect(result.outsideReference).toBe(false);
+    expect(result.reasons.join(" ")).not.toContain("> reference 10");
+  });
+
+  it("passes a metric emitted on every iteration", () => {
+    const result = evaluateScenarioBudget(
+      makeParams({
+        runs: 3,
+        metricStats: statsFor([{ gitSpawns: 1 }, { gitSpawns: 2 }, { gitSpawns: 1 }]),
+        budget: { maxMetricValues: { gitSpawns: 10 } },
+      })
+    );
+    expect(result.measurementIssues).toEqual([]);
+  });
+
+  it("says nothing about emission when there is no run count to compare against", () => {
+    // `runs: 0` means the caller did not supply one; the check is skipped
+    // rather than reporting every metric as partial against a zero denominator.
+    const result = evaluateScenarioBudget(
+      makeParams({
+        runs: 0,
+        metricStats: statsFor([{ gitSpawns: 1 }]),
+        budget: { maxMetricValues: { gitSpawns: 10 } },
+      })
+    );
+    expect(result.measurementIssues).toEqual([]);
   });
 });
