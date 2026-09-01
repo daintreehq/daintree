@@ -37,6 +37,7 @@ import { createHash } from "node:crypto";
 import { HttpLifecycle } from "../httpLifecycle.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 import { minimumPermittingTier } from "../shared.js";
+import type { SessionServerDeps } from "../sessionServer.js";
 import { WorkspaceBindingError } from "../rendererBridge.js";
 
 type BearerTestHandle = {
@@ -845,10 +846,11 @@ describe("HttpLifecycle", () => {
   });
 
   describe("buildSessionServerDeps — turnId snapshot stamping (#10067)", () => {
-    type TurnDeps = {
-      getCurrentTurnId?: () => string | null;
-      appendAuditRecord: (input: Record<string, unknown>) => void;
-    };
+    // Picked from the real dep contract rather than a `Record<string, unknown>`
+    // carrier: this block is the only coverage of the closure's
+    // `{ capturedTurnId, ...recordInput }` hop, and a structural stand-in would
+    // let a field the real callers must pass go missing here unnoticed.
+    type TurnDeps = Pick<SessionServerDeps, "getCurrentTurnId" | "appendAuditRecord">;
     const buildDeps = (lc: HttpLifecycle, sessionId: string): TurnDeps =>
       (
         lc as unknown as { buildSessionServerDeps: (id: string) => TurnDeps }
@@ -885,6 +887,7 @@ describe("HttpLifecycle", () => {
         tier: "action",
         args: {},
         durationMs: 5,
+        startedAt: 1_767_225_600_000,
         outcome: { kind: "result", value: { ok: true, result: null } },
         capturedTurnId: "turn-uuid-abc",
       });
@@ -902,6 +905,33 @@ describe("HttpLifecycle", () => {
       expect(persisted.capturedTurnId).toBeUndefined();
     });
 
+    it("passes startedAt through the closure untouched (#12122)", () => {
+      // This hop has no explicit handling for `startedAt` — it survives only on
+      // the `...recordInput` rest spread, which peels off `capturedTurnId` and
+      // keeps everything else. So this asserts a property the closure has
+      // always had rather than one #12122 added; it earns its place as the
+      // guard against a future destructure widening to drop the field, which
+      // would otherwise fail nowhere until a consumer noticed missing starts.
+      const deps = fakeDeps();
+      deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
+      const lc = new HttpLifecycle(deps);
+      const deps_ = buildDeps(lc, "session-1");
+      const startedAt = 1_767_225_600_123;
+      deps_.appendAuditRecord({
+        toolId: "agent.terminal",
+        sessionId: "session-1",
+        tier: "action",
+        args: {},
+        durationMs: 5,
+        startedAt,
+        outcome: { kind: "result", value: { ok: true, result: null } },
+        capturedTurnId: null,
+      });
+      expect(deps.auditService.appendRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ startedAt })
+      );
+    });
+
     it("omits turnId when the captured snapshot is null", () => {
       const deps = fakeDeps();
       deps.sessionStore.sessionHelpIdMap.set("session-1", "help-session-9");
@@ -913,6 +943,7 @@ describe("HttpLifecycle", () => {
         tier: "action",
         args: {},
         durationMs: 5,
+        startedAt: 1_767_225_600_000,
         outcome: { kind: "result", value: { ok: true, result: null } },
         capturedTurnId: null,
       });
@@ -935,6 +966,7 @@ describe("HttpLifecycle", () => {
         tier: "action",
         args: {},
         durationMs: 5,
+        startedAt: 1_767_225_600_000,
         outcome: { kind: "result", value: { ok: true, result: null } },
         capturedTurnId: null,
       });
@@ -968,6 +1000,7 @@ describe("HttpLifecycle", () => {
         tier: "action",
         args: {},
         durationMs: 5,
+        startedAt: 1_767_225_600_000,
         outcome: { kind: "result", value: { ok: true, result: null } },
         capturedTurnId,
       });

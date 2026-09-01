@@ -899,9 +899,11 @@ describe("CallTool idempotency dedup", () => {
           resolveDispatch = resolve as (envelope: unknown) => void;
         })
     );
+    const appendAuditRecord = vi.fn();
     const deps = fakeDeps({
       sessionStore: fakeSessionStore("system"),
       dispatchAction,
+      appendAuditRecord,
     });
     const server = createSessionServer("dedup-1", deps);
 
@@ -929,6 +931,21 @@ describe("CallTool idempotency dedup", () => {
     expect(dispatchAction).toHaveBeenCalledTimes(1);
     expect(resultA).toEqual(resultB);
     expect((resultA as { content: Array<{ text: string }> }).content[0].text).toContain("t-1");
+
+    // The in-flight dedup row is the case `startedAt` exists for (#12122):
+    // audit-write order and arrival order genuinely disagree here. B's `dedup`
+    // row is written while A is still suspended on the held dispatch, so it
+    // lands FIRST even though A arrived first — a reader ordering by write
+    // time would invert the two. Their starts restore the truth.
+    const calls = appendAuditRecord.mock.calls.map(
+      (call) => call[0] as { outcome: { kind: string }; startedAt: number }
+    );
+    expect(calls.map((c) => c.outcome.kind)).toEqual(["dedup", "result"]);
+    const [dedupCall, dispatchCall] = calls;
+    expect(typeof dedupCall!.startedAt).toBe("number");
+    expect(typeof dispatchCall!.startedAt).toBe("number");
+    // A entered the handler no later than B, despite settling after it.
+    expect(dispatchCall!.startedAt).toBeLessThanOrEqual(dedupCall!.startedAt);
   });
 
   it("returns the cached result for a post-completion duplicate within TTL", async () => {
@@ -1174,11 +1191,27 @@ describe("CallTool idempotency dedup", () => {
     await callTool(server, { name: "terminal.new", arguments: args });
     await callTool(server, { name: "terminal.new", arguments: args });
 
-    const outcomes = appendAuditRecord.mock.calls.map(
-      (call) => (call[0] as { outcome: { kind: string } }).outcome.kind
+    const calls = appendAuditRecord.mock.calls.map(
+      (call) => call[0] as { outcome: { kind: string }; startedAt: number }
     );
-    expect(outcomes).toContain("dedup");
-    expect(outcomes.filter((k) => k === "dedup")).toHaveLength(1);
+    const outcomes = calls.map((c) => c.outcome.kind);
+    // The original's settlement row is written in the dispatch `finally`,
+    // which runs before the first awaited callTool returns — so the order is
+    // fixed, not merely "contains a dedup".
+    expect(outcomes).toEqual(["result", "dedup"]);
+
+    // The suppressed duplicate is still a call the backend issued, so its row
+    // carries its own start — that is what makes back-to-back vs. overlapping
+    // dispatch distinguishable downstream (#12122).
+    for (const call of calls) {
+      expect(typeof call.startedAt).toBe("number");
+    }
+    const [dispatchCall, dedupCall] = calls;
+    // Two separate CallTool handlers, each taking its own snapshot. They can
+    // legitimately land in the same millisecond, so this asserts ordering, not
+    // distinctness — the guarantee is that the dedup row never reaches back
+    // for a start earlier than the call it duplicated.
+    expect(dedupCall!.startedAt).toBeGreaterThanOrEqual(dispatchCall!.startedAt);
   });
 
   it("treats requestKey:'' as absent (falls through to auto-hash)", async () => {
@@ -1750,6 +1783,14 @@ describe("CallTool live activity notifications (#9759)", () => {
     expect(appendAuditRecord).toHaveBeenCalledWith(
       expect.objectContaining({ capturedTurnId: "turn-xyz" })
     );
+
+    // Same single-snapshot discipline for the dispatch start (#12122): the
+    // audit record must carry the exact value the live started event carries,
+    // not a second Date.now() read that would put the persisted row and the
+    // strip on slightly different starts.
+    const startedAt = (started.mock.calls[0]?.[0] as { startedAt: number }).startedAt;
+    expect(typeof startedAt).toBe("number");
+    expect(appendAuditRecord).toHaveBeenCalledWith(expect.objectContaining({ startedAt }));
   });
 
   it("snapshots the turn id at start so started/settled agree across an FSM clear (#10067)", async () => {
@@ -1789,6 +1830,32 @@ describe("CallTool live activity notifications (#9759)", () => {
 
     expect(started).not.toHaveBeenCalled();
     expect(settled).not.toHaveBeenCalled();
+  });
+
+  it("stamps startedAt on a tier-rejected record that has no live started event (#12122)", async () => {
+    const started = vi.fn();
+    const appendAuditRecord = vi.fn();
+    const deps = fakeDeps({ notifyToolCallStarted: started, appendAuditRecord });
+    const server = createSessionServer("session-U", deps);
+    await server.connect(makeMockTransport());
+
+    const before = Date.now();
+    // worktree.delete is system-tier — denied at the default workbench tier.
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+    const after = Date.now();
+
+    // The gate refuses before anything announces, so the audit row is the only
+    // record of this attempt existing. Without its own start it could never be
+    // ordered against the calls around it.
+    expect(started).not.toHaveBeenCalled();
+    expect(appendAuditRecord).toHaveBeenCalledTimes(1);
+    const input = appendAuditRecord.mock.calls[0]?.[0] as {
+      outcome: { kind: string };
+      startedAt: number;
+    };
+    expect(input.outcome.kind).toBe("unauthorized");
+    expect(input.startedAt).toBeGreaterThanOrEqual(before);
+    expect(input.startedAt).toBeLessThanOrEqual(after);
   });
 
   it('flags danger:"confirm" tools on the started event', async () => {
