@@ -27,6 +27,12 @@ import {
   formatGitRemoteOperationPreviewLines,
 } from "@/components/Git/gitRemoteOperationPreview";
 import { formatRecipePreviewLines } from "@/components/TerminalRecipe/recipeConfirmPreview";
+import {
+  formatForgeCreateIssuePreviewLines,
+  formatForgeIssueCommentPreviewLines,
+  type ForgeCreateIssuePreview,
+  type ForgeIssueCommentPreview,
+} from "@/components/Forge/forgeWritePreview";
 import { readDispatchRecipeId } from "@/services/actions/effectiveDanger";
 import { MAX_AGENT_RECIPE_TERMINALS, useRecipeStore } from "@/store/recipeStore";
 import {
@@ -143,7 +149,21 @@ export type McpConfirmPreviewTarget =
    * interactive, and a late-arriving row is a row that appears under a cursor
    * already moving toward the confirm button.
    */
-  | { kind: "terminalKillBatch"; terminalIds: readonly string[] };
+  | { kind: "terminalKillBatch"; terminalIds: readonly string[] }
+  /**
+   * The two forge writes that publish something nobody can retract (#12118).
+   *
+   * Unlike every other kind here, the content is already IN the dispatch
+   * arguments — so no fetch, on the `recipe` model. The preview exists anyway
+   * because the arguments an approver actually sees are redacted: any body over
+   * `MCP_ARGS_INLINE_STRING_LIMIT` reaches `ArgumentsDisclosure` as
+   * `<string: N chars>`, which is the "count instead of content" the D2 rule
+   * exists to forbid. `worktreePath` is resolved the same way a push target is,
+   * because neither action takes a repository — it is derived from the worktree,
+   * and filing into the wrong one is the mistake nothing used to catch.
+   */
+  | ({ kind: "forgeCreateIssue" } & ForgeCreateIssuePreview)
+  | ({ kind: "forgeAddIssueComment" } & ForgeIssueCommentPreview);
 
 /** Section heading rendered above each kind's preview lines. */
 const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
@@ -154,6 +174,8 @@ const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   // Unused: this kind renders a selectable checklist with its own heading
   // rather than the preview card. Present so the map stays exhaustive.
   terminalKillBatch: "Terminals",
+  forgeCreateIssue: "Issue to be filed",
+  forgeAddIssueComment: "Comment to be posted",
 };
 
 export function mcpConfirmPreviewTitle(target: McpConfirmPreviewTarget): string {
@@ -298,6 +320,110 @@ export function buildTerminalKillBatchTargets(
 }
 
 /**
+ * How a forge write named the content its preview would show.
+ *
+ * Three states rather than `T | undefined`, for the reason
+ * {@link GitLocationArg} has three: the two non-supplied states are different
+ * facts and NEITHER may be repaired with a default. `"omitted"` is a caller
+ * that named no content; `"invalid"` is a caller that named content of the
+ * wrong shape. `argsSchema` rejects both, and both give up the preview and fall
+ * through to that rejection — exactly as an unusable location does for
+ * `git.push`. Substituting a placeholder for either would put text in front of
+ * an approver that nobody is about to publish.
+ */
+type ForgeContentArg<T> =
+  { state: "omitted" } | { state: "invalid" } | { state: "supplied"; value: T };
+
+type ForgeCreateIssueContent = Omit<ForgeCreateIssuePreview, "worktreePath">;
+type ForgeIssueCommentContent = Omit<ForgeIssueCommentPreview, "worktreePath">;
+
+/**
+ * Read `forge.createIssue`'s authored content from the dispatch arguments.
+ *
+ * Mirrors `argsSchema` rather than approximating it — non-empty title, optional
+ * string body, optional array of string labels — so a preview can only ever
+ * describe a dispatch that would also pass validation. Strings are carried
+ * verbatim: trimming or collapsing them here would show an approver something
+ * other than the bytes that get posted.
+ */
+function readForgeCreateIssueContent(args: unknown): ForgeContentArg<ForgeCreateIssueContent> {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return { state: "omitted" };
+  // `in` rather than a cast to `Record<string, unknown>`: it narrows each
+  // property to `unknown` on its own, which is what the guards below want, and
+  // keeps the reader free of the type assertion the lint ratchet counts.
+  if (!("title" in args)) return { state: "omitted" };
+  const title = args.title;
+  const body = "body" in args ? args.body : undefined;
+  const labels = "labels" in args ? args.labels : undefined;
+  if (title === undefined) return { state: "omitted" };
+  if (typeof title !== "string" || title.length === 0) return { state: "invalid" };
+  if (body !== undefined && typeof body !== "string") return { state: "invalid" };
+  let labelList: readonly string[] | undefined;
+  if (labels !== undefined) {
+    if (!Array.isArray(labels)) return { state: "invalid" };
+    const collected: string[] = [];
+    for (const label of labels) {
+      if (typeof label !== "string") return { state: "invalid" };
+      collected.push(label);
+    }
+    labelList = collected;
+  }
+  return { state: "supplied", value: { title, body, labels: labelList } };
+}
+
+/** The same contract as {@link readForgeCreateIssueContent}, for a comment. */
+function readForgeIssueCommentContent(args: unknown): ForgeContentArg<ForgeIssueCommentContent> {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return { state: "omitted" };
+  const issueNumber = "issueNumber" in args ? args.issueNumber : undefined;
+  const body = "body" in args ? args.body : undefined;
+  if (issueNumber === undefined && body === undefined) return { state: "omitted" };
+  if (typeof issueNumber !== "number" || !Number.isInteger(issueNumber) || issueNumber <= 0) {
+    return { state: "invalid" };
+  }
+  if (typeof body !== "string" || body.length === 0) return { state: "invalid" };
+  return { state: "supplied", value: { issueNumber, body } };
+}
+
+/**
+ * The worktree a dispatch would act on, resolved exactly as `run()` will.
+ *
+ * Shared by the git remote previews and the forge writes so the two can never
+ * drift: both pin the result back into the dispatch arguments, and a preview
+ * measured against one worktree while `run()` resolved another would attest to
+ * a repository the approver never saw. `undefined` means "no preview" — a named
+ * but unusable selector, contradictory path spellings, or no active worktree —
+ * and the dispatch falls through to the validation that rejects it.
+ */
+function resolvePreviewWorktreePath(
+  args: unknown,
+  context: ActionContext | undefined
+): string | undefined {
+  const named = readGitLocationArg(args);
+  // A named-but-unusable selector gets no preview and no pinning — it falls
+  // through to schema/`run()` validation and fails, as it did before #11538.
+  if (named.state === "invalid") return undefined;
+  // Run the action's OWN resolver (`worktreeId` wins, then a path spelling,
+  // then the active worktree) so the previewed repository is byte-for-byte the
+  // one `run()` will act on. And mirror ActionService's WHOLE-OBJECT
+  // `contextOverride ?? live` precedence (ActionService.ts:349): a per-field
+  // fallback would diverge, because a pinned context that carries no worktree
+  // path must NOT borrow the live one.
+  const effectiveContext = context ?? actionService.getContext();
+  let cwd: string | undefined;
+  try {
+    cwd = resolveWorktreeLocation(
+      named.state === "named" ? named.location : undefined,
+      effectiveContext
+    ).worktreePath;
+  } catch {
+    // Contradictory path spellings, which `argsSchema` rejects anyway.
+    // Previewing either one would attest to a dispatch that never runs.
+    return undefined;
+  }
+  return cwd === undefined || cwd.length === 0 ? undefined : cwd;
+}
+
+/**
  * Resolve what this dispatch should preview, or `undefined` when it has no
  * preview. Called ONCE per dispatch: the result drives `previewPending`, the
  * fetch, the modal heading, and — for git — the cwd the approved dispatch is
@@ -321,30 +447,30 @@ export function resolveMcpConfirmPreviewTarget(
       : { kind: "worktreeDelete", worktreeId, force: forceArg(args) };
   }
   if (actionId === "git.push" || actionId === "git.pullRebase") {
-    const named = readGitLocationArg(args);
-    // A named-but-unusable selector gets no preview and no pinning — it falls
-    // through to schema/`run()` validation and fails, as it did before #11538.
-    if (named.state === "invalid") return undefined;
-    // Run the action's OWN resolver (`worktreeId` wins, then a path spelling,
-    // then the active worktree) so the previewed repository is byte-for-byte the
-    // one `run()` will push. And mirror ActionService's WHOLE-OBJECT
-    // `contextOverride ?? live` precedence (ActionService.ts:349): a per-field
-    // fallback would diverge, because a pinned context that carries no worktree
-    // path must NOT borrow the live one.
-    const effectiveContext = context ?? actionService.getContext();
-    let cwd: string | undefined;
-    try {
-      cwd = resolveWorktreeLocation(
-        named.state === "named" ? named.location : undefined,
-        effectiveContext
-      ).worktreePath;
-    } catch {
-      // Contradictory path spellings, which `argsSchema` rejects anyway.
-      // Previewing either one would attest to a dispatch that never runs.
-      return undefined;
-    }
-    if (cwd === undefined || cwd.length === 0) return undefined;
+    const cwd = resolvePreviewWorktreePath(args, context);
+    if (cwd === undefined) return undefined;
     return actionId === "git.push" ? { kind: "gitPush", cwd } : { kind: "gitPullRebase", cwd };
+  }
+  // The forge writes resolve their worktree the same way — neither takes a
+  // repository argument, so the worktree IS the repository selection — and then
+  // read the authored content straight out of the arguments. Both halves must
+  // land or there is no preview: a card naming a repository with no content, or
+  // content with no repository, is half of what the approver is consenting to.
+  if (actionId === "forge.createIssue") {
+    const worktreePath = resolvePreviewWorktreePath(args, context);
+    if (worktreePath === undefined) return undefined;
+    const content = readForgeCreateIssueContent(args);
+    return content.state === "supplied"
+      ? { kind: "forgeCreateIssue", worktreePath, ...content.value }
+      : undefined;
+  }
+  if (actionId === "forge.addIssueComment") {
+    const worktreePath = resolvePreviewWorktreePath(args, context);
+    if (worktreePath === undefined) return undefined;
+    const content = readForgeIssueCommentContent(args);
+    return content.state === "supplied"
+      ? { kind: "forgeAddIssueComment", worktreePath, ...content.value }
+      : undefined;
   }
   // Any dispatch carrying a recipe id — `recipe.run` and the two composites that
   // reach the same effect — previews the terminals it would start. Keyed on the
@@ -531,6 +657,14 @@ export async function buildMcpConfirmPreview(
     const gate = resolveWorktreeDeleteGate(target, outcome);
     return gate.state === "required" ? { lines, typedNameTarget: gate.typedNameTarget } : { lines };
   }
+  // Synchronous, like `recipe`: the content is already in hand, so there is
+  // nothing to fetch and nothing that could fail mid-modal.
+  if (target.kind === "forgeCreateIssue") {
+    return { lines: formatForgeCreateIssuePreviewLines(target) };
+  }
+  if (target.kind === "forgeAddIssueComment") {
+    return { lines: formatForgeIssueCommentPreviewLines(target) };
+  }
   const operation = target.kind === "gitPush" ? "push" : "pull-rebase";
   try {
     const preview = await buildGitRemoteOperationPreview(target.cwd, operation);
@@ -653,22 +787,25 @@ export function worktreeDeleteGateRefusal(
 }
 
 /**
- * Pin an approved git dispatch to the cwd the human actually previewed.
+ * Pin an approved dispatch to the worktree the human actually previewed.
  *
- * The preview resolves cwd when the modal opens; `ActionService.dispatch` would
- * otherwise re-resolve live context AFTER the wait, so switching worktrees
- * mid-modal could push a different repository than the one just approved
- * (#8725). Non-git targets are untouched — only these two carry a cwd.
+ * The preview resolves the path when the modal opens; `ActionService.dispatch`
+ * would otherwise re-resolve live context AFTER the wait, so switching
+ * worktrees mid-modal could push — or, since #12118, file an issue against — a
+ * different repository than the one just approved (#8725).
  *
  * A target only exists when the caller named no worktree or named a resolvable
- * one, and `target.cwd` is what that action's own resolver returned — so writing
- * it back can never point the dispatch somewhere the approver did not see.
+ * one, and the path is what that action's own resolver returned — so writing it
+ * back can never point the dispatch somewhere the approver did not see.
  * Where the caller named a `worktreeId`, that id still wins in `run()` and
  * resolves to this same path; where it named a path, this is that path. Malformed
  * args produce no target and pass through untouched, for validation to reject
- * rather than being repaired into a valid push.
+ * rather than being repaired into a valid dispatch.
  */
-function withPreviewedGitCwd(args: unknown, target: McpConfirmPreviewTarget | undefined): unknown {
+function withPreviewedWorktreeCwd(
+  args: unknown,
+  target: McpConfirmPreviewTarget | undefined
+): unknown {
   if (target === undefined || target.kind === "worktreeDelete") return args;
   // The batch kill pins its approval through the dispatch options rather than
   // through args, so there is nothing to rewrite here — and rewriting the id
@@ -681,9 +818,16 @@ function withPreviewedGitCwd(args: unknown, target: McpConfirmPreviewTarget | un
     if (args === null || typeof args !== "object" || Array.isArray(args)) return args;
     return { ...args, recipeId: target.resolvedRecipeId };
   }
-  if (args === undefined) return { cwd: target.cwd };
+  // Named per kind rather than left to a fall-through: every remaining kind
+  // happens to carry a path today, and a future one that does not would
+  // otherwise silently pin `cwd: undefined` onto a dispatch.
+  const cwd =
+    target.kind === "forgeCreateIssue" || target.kind === "forgeAddIssueComment"
+      ? target.worktreePath
+      : target.cwd;
+  if (args === undefined) return { cwd };
   if (args === null || typeof args !== "object" || Array.isArray(args)) return args;
-  return { ...args, cwd: target.cwd };
+  return { ...args, cwd };
 }
 
 /**
@@ -995,7 +1139,7 @@ export function useMcpBridge(): void {
 
           const dispatchArgs = tagMcpSpawnSource(
             actionId,
-            withPreviewedGitCwd(args, previewTarget),
+            withPreviewedWorktreeCwd(args, previewTarget),
             sessionOrigin
           );
           const result = await runWithMcpSpawnFocusSuppressed(

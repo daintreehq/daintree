@@ -439,6 +439,56 @@ describe("useMcpBridge", () => {
     );
   });
 
+  // #12118: the two forge writes that publish something nobody can retract now
+  // raise the confirm — and the only surface an agent's approver sees is this
+  // modal, so the body has to reach it as content rather than as the redacted
+  // `<string: N chars>` the arguments disclosure shows.
+  it("previews the authored issue content and pins the worktree it resolved (#12118)", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({
+        id: "forge.createIssue",
+        name: "forge.createIssue",
+        title: "Create Issue",
+        category: "forge",
+      })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/repo/active" });
+
+    renderHook(() => useMcpBridge());
+
+    const body = `The reporter said:\n${"z".repeat(120)}`;
+    const dispatched = dispatchHandler?.({
+      requestId: "req-create-issue",
+      actionId: "forge.createIssue",
+      args: { title: "Crash on startup", body, labels: ["bug"] },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.preview).toBeDefined();
+    });
+    const current = useMcpConfirmStore.getState().current;
+    expect(current?.previewTitle).toBe("Issue to be filed");
+    const previewText = (current?.preview ?? []).join("\n");
+    expect(previewText).toContain("Worktree: /repo/active");
+    expect(previewText).toContain("Crash on startup");
+    expect(previewText).toContain(body.split("\n")[1]);
+    // The disclosure the approver would otherwise have relied on hides exactly
+    // the part the preview now shows.
+    expect(current?.argsSummary).not.toContain("zzz");
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    // The approved dispatch is pinned to the worktree the card named, so a
+    // worktree switch during the modal cannot redirect the filing.
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "forge.createIssue",
+      expect.objectContaining({ title: "Crash on startup", cwd: "/repo/active" }),
+      expect.objectContaining({ source: "agent", confirmed: true })
+    );
+  });
+
   it("returns USER_REJECTED without ever calling actionService.dispatch when the user cancels", async () => {
     mocks.get.mockReturnValue(confirmManifestEntry());
     mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
@@ -2530,5 +2580,125 @@ describe("batch terminal kill targets (#12123)", () => {
     const [row] = buildTerminalKillBatchTargets(["p1"]);
     expect(row?.worktree).toBeUndefined();
     expect(row?.name).toBe("zsh");
+  });
+});
+
+describe("forge write previews (#12118)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/repo/active" });
+  });
+
+  it("resolves forge.createIssue content alongside the worktree it files into", () => {
+    expect(
+      resolveMcpConfirmPreviewTarget(
+        "forge.createIssue",
+        { title: "Crash", body: "steps", labels: ["bug", "p1"] },
+        undefined
+      )
+    ).toEqual({
+      kind: "forgeCreateIssue",
+      worktreePath: "/repo/active",
+      title: "Crash",
+      body: "steps",
+      labels: ["bug", "p1"],
+    });
+  });
+
+  it("resolves forge.addIssueComment content the same way", () => {
+    expect(
+      resolveMcpConfirmPreviewTarget(
+        "forge.addIssueComment",
+        { issueNumber: 42, body: "still broken" },
+        undefined
+      )
+    ).toEqual({
+      kind: "forgeAddIssueComment",
+      worktreePath: "/repo/active",
+      issueNumber: 42,
+      body: "still broken",
+    });
+  });
+
+  it("prefers an explicitly named worktree over the active one", () => {
+    expect(
+      resolveMcpConfirmPreviewTarget(
+        "forge.createIssue",
+        { cwd: "/repo/named", title: "Crash", body: undefined, labels: undefined },
+        undefined
+      )
+    ).toEqual({
+      kind: "forgeCreateIssue",
+      worktreePath: "/repo/named",
+      title: "Crash",
+      body: undefined,
+      labels: undefined,
+    });
+  });
+
+  // Both halves must land or there is no preview. A card naming a repository
+  // with no content — or content with no repository — is only half of what the
+  // approver is being asked to consent to, and neither may be repaired with a
+  // default (#7880).
+  it.each([
+    ["a missing title", { body: "b" }],
+    ["an empty title", { title: "" }],
+    ["a non-string title", { title: 7 }],
+    ["a non-string body", { title: "t", body: 7 }],
+    ["a non-array labels", { title: "t", labels: "bug" }],
+    ["a non-string label", { title: "t", labels: ["bug", 3] }],
+  ])("refuses to preview forge.createIssue with %s", (_label, args) => {
+    expect(resolveMcpConfirmPreviewTarget("forge.createIssue", args, undefined)).toBeUndefined();
+  });
+
+  it.each([
+    ["a missing issue number", { body: "b" }],
+    ["a zero issue number", { issueNumber: 0, body: "b" }],
+    ["a fractional issue number", { issueNumber: 1.5, body: "b" }],
+    ["a missing body", { issueNumber: 1 }],
+    ["an empty body", { issueNumber: 1, body: "" }],
+  ])("refuses to preview forge.addIssueComment with %s", (_label, args) => {
+    expect(
+      resolveMcpConfirmPreviewTarget("forge.addIssueComment", args, undefined)
+    ).toBeUndefined();
+  });
+
+  it("refuses to preview when the named worktree is unusable, rather than substituting the active one", () => {
+    expect(
+      resolveMcpConfirmPreviewTarget("forge.createIssue", { cwd: "", title: "t" }, undefined)
+    ).toBeUndefined();
+  });
+
+  it("refuses to preview when no worktree resolves at all", () => {
+    mocks.getContext.mockReturnValue({});
+    expect(
+      resolveMcpConfirmPreviewTarget("forge.createIssue", { title: "t" }, undefined)
+    ).toBeUndefined();
+  });
+
+  it("builds the issue preview synchronously, with no fetch", async () => {
+    const { lines } = await buildMcpConfirmPreview({
+      kind: "forgeCreateIssue",
+      worktreePath: "/repo/active",
+      title: "Crash on startup",
+      body: "line one\nline two",
+      labels: ["bug"],
+    });
+    expect(lines[0]).toBe("Worktree: /repo/active");
+    expect(lines.join("\n")).toContain("line two");
+    expect(mocks.buildGitPreview).not.toHaveBeenCalled();
+    expect(mocks.buildPreview).not.toHaveBeenCalled();
+  });
+
+  it("builds the comment preview synchronously, with no fetch", async () => {
+    const { lines } = await buildMcpConfirmPreview({
+      kind: "forgeAddIssueComment",
+      worktreePath: "/repo/active",
+      issueNumber: 9,
+      body: "still broken",
+    });
+    expect(lines).toContain("Issue: #9");
+    expect(lines.join("\n")).toContain("still broken");
+    expect(mocks.buildGitPreview).not.toHaveBeenCalled();
   });
 });

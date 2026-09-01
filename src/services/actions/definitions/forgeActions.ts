@@ -482,6 +482,10 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Assign an issue to a user on the active forge. Read back the resulting assignee list rather than assuming the request applied in full: forges silently drop accounts that lack access to the repository, so the returned list is what actually landed. Assigning someone already assigned is harmless.",
       category: "forge",
       kind: "command",
+      // Deliberately unattended at system tier (#12118): assigning is an
+      // idempotent state-set whose exact inverse is `forge.unassignIssue`. It
+      // authors no content and creates no new record, which is also why it was
+      // dropped from MCP_DEDUP_ALLOWLIST (#11534) — a repeat call is a no-op.
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
@@ -514,6 +518,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Remove one user's assignment from an issue on the active forge. Read back the resulting assignee list to confirm what remains. Removing someone who was not assigned is harmless rather than an error, so this is safe to call without checking first.",
       category: "forge",
       kind: "command",
+      // Deliberately unattended at system tier (#12118), on the same reasoning
+      // as `forge.assignIssue`: idempotent, exactly reversible, authors nothing.
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
@@ -1083,7 +1089,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "File a new issue on the active forge. This is publicly visible and notifies watchers. Labels must already exist on the repository — the forge rejects the request rather than creating them, so confirm the names first.",
       category: "forge",
       kind: "command",
-      danger: "safe",
+      danger: "confirm",
+      dangerRationale:
+        "Files a publicly visible issue and notifies every watcher of the repository. Closing it afterwards removes neither the record nor the notifications it already sent.",
       scope: "renderer",
       argsSchema: z.object({
         ...worktreeLocationShape({ legacy: ["cwd"] }),
@@ -1195,6 +1203,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Reopen a closed issue, putting it back in the active queue and notifying watchers. This is publicly visible and reversible by closing it again.",
       category: "forge",
       kind: "command",
+      // Deliberately unattended at system tier (#12118). `forge.closeIssue` is
+      // `confirm` because closing HIDES work; reopening hides nothing, authors
+      // nothing, creates no new record, and closing again is its exact inverse.
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
@@ -1305,7 +1316,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Post a comment on an issue, visible to everyone watching it and delivered as a notification. Comments cannot be edited or withdrawn through this capability, so treat posting as final.",
       category: "forge",
       kind: "command",
-      danger: "safe",
+      danger: "confirm",
+      dangerRationale:
+        "Posts a public comment that participants are notified about. This capability cannot edit or withdraw it afterwards, so posting is final.",
       scope: "renderer",
       argsSchema: z.object({
         ...worktreeLocationShape({ legacy: ["cwd"] }),
@@ -1328,6 +1341,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Add one existing label to an issue. This is additive — labels already on the issue are kept — so read back the returned label set to see the result. The label must already exist on the repository; the forge rejects an unknown name rather than creating it.",
       category: "forge",
       kind: "command",
+      // Deliberately unattended at system tier (#12118): the label must already
+      // exist on the repository, so nothing is authored or created, and
+      // `forge.removeIssueLabel` is the exact inverse.
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
@@ -1351,6 +1367,9 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Remove one label from an issue. Unlike adding, this fails when the label is not currently on the issue, so check the issue's labels first rather than calling speculatively. Read back the remaining label set to confirm the result.",
       category: "forge",
       kind: "command",
+      // Deliberately unattended at system tier (#12118): reversible by
+      // `forge.addIssueLabel`, and it destroys nothing — the label itself stays
+      // on the repository.
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({

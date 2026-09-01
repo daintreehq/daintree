@@ -614,6 +614,10 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       "Stage one file's changes for the next commit. Reversible by unstaging, and staging an already-staged file is harmless. This changes the index only — nothing is committed or pushed until you do so explicitly.",
     category: "git",
     kind: "command",
+    // Deliberately unattended at system tier (#12118): the index is the only
+    // thing written, `git.unstageFile` is the exact inverse, and no
+    // working-tree content can be lost. A confirm on every staging call would
+    // buy fatigue rather than safety.
     danger: "safe",
     scope: "renderer",
     argsSchema: withWorktreeLocation({ filePath: z.string() }, { legacy: ["cwd"] }),
@@ -630,6 +634,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       "Remove one file from the staging area, leaving its working-tree changes untouched. This is the inverse of staging and discards no edits.",
     category: "git",
     kind: "command",
+    // Deliberately unattended at system tier (#12118): the inverse of staging,
+    // and it discards no edits.
     danger: "safe",
     scope: "renderer",
     argsSchema: withWorktreeLocation({ filePath: z.string() }, { legacy: ["cwd"] }),
@@ -646,6 +652,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       "Stage every change in the worktree for the next commit — modifications, new files, deletions and renames alike. This is broader than it looks — it sweeps in unrelated edits — so read the staging status first when the commit is meant to be scoped. Reversible by unstaging everything.",
     category: "git",
     kind: "command",
+    // Deliberately unattended at system tier (#12118) despite the wider reach:
+    // the working tree is untouched and `git.unstageAll` reverses it whole.
     danger: "safe",
     scope: "renderer",
     argsSchema: withWorktreeLocation({}, { legacy: ["cwd"] }).optional(),
@@ -663,6 +671,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       "Clear the staging area entirely, leaving all working-tree changes untouched. This is the inverse of staging everything and discards no edits.",
     category: "git",
     kind: "command",
+    // Deliberately unattended at system tier (#12118): clears the index only.
+    // Every working-tree edit survives and the staging can be redone.
     danger: "safe",
     scope: "renderer",
     argsSchema: withWorktreeLocation({}, { legacy: ["cwd"] }).optional(),
@@ -680,6 +690,10 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
       "Commit whatever is currently staged, with a message. Read the staging status first — this commits the index as it stands, including anything staged earlier that you did not intend. The commit stays local until it is pushed, so it is recoverable, but rewriting it afterwards is not something this surface offers.",
     category: "git",
     kind: "command",
+    // Deliberately unattended at system tier (#12118): the commit stays local
+    // and Git-recoverable until it is pushed, `run()` refuses without an
+    // authored message, and `git.push` — the point at which the work becomes
+    // shared — is the D2 gate, with its own branch and commit preview.
     danger: "safe",
     scope: "renderer",
     keywords: ["commit", "stage", "review", "changes"],

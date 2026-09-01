@@ -69,6 +69,8 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "forge.editPR",
   "forge.closeIssue",
   "forge.editIssue",
+  "forge.createIssue",
+  "forge.addIssueComment",
   "session.bookmarkAndClose",
   "session.bookmark.delete",
 ]);
@@ -135,6 +137,15 @@ const BYPASS_WIRED = new Set([
   "forge.editPR",
   "forge.closeIssue", // agent/MCP-only forge write (#10653); danger:"confirm" gates agent dispatch only, no user-side ConfirmDialog
   "forge.editIssue", // agent/MCP-only forge write (#10653); danger:"confirm" gates agent dispatch only, no user-side ConfirmDialog
+  // Forge issue writes that publish a record nobody can retract (#12118):
+  // `forge.createIssue` files a public issue and notifies watchers,
+  // `forge.addIssueComment` posts a comment this capability cannot edit or
+  // delete. Both are agent/MCP-only, so the confirm they gate on is
+  // `McpConfirmDialog` — which, since #12118, previews the actual title, body,
+  // labels and target worktree rather than the redacted argument summary. There
+  // is no user-side dispatch path to co-locate a ConfirmDialog with.
+  "forge.createIssue",
+  "forge.addIssueComment",
   // Session bookmarks (#11288): Phase 1 is programmatic/MCP-only and palette-hidden;
   // confirmation is the explicit `confirmed: true` arg. The Phase-2 pane dialog
   // will add a co-located ConfirmDialog; until then there is none to scan.
