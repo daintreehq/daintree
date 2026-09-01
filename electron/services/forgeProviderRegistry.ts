@@ -22,6 +22,7 @@ export type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js"
  * the hostname table) without those services polling the registry.
  */
 const REGISTRY_CHANGE_LISTENERS = new Set<() => void>();
+const MATCHER_CHANGE_LISTENERS = new Set<() => void>();
 
 export function onForgeProviderRegistryChanged(listener: () => void): () => void {
   REGISTRY_CHANGE_LISTENERS.add(listener);
@@ -30,8 +31,30 @@ export function onForgeProviderRegistryChanged(listener: () => void): () => void
   };
 }
 
+/**
+ * Subscribe only to descriptor-table changes that can alter hostname routing.
+ * Runtime impl binding is intentionally excluded: it changes health/RPC
+ * availability, but cannot change the manifest-owned matcher table.
+ */
+export function onForgeProviderMatchersChanged(listener: () => void): () => void {
+  MATCHER_CHANGE_LISTENERS.add(listener);
+  return () => {
+    MATCHER_CHANGE_LISTENERS.delete(listener);
+  };
+}
+
 function notifyRegistryChanged(): void {
   for (const listener of [...REGISTRY_CHANGE_LISTENERS]) {
+    try {
+      listener();
+    } catch {
+      // A throwing listener must not break registration or other listeners.
+    }
+  }
+}
+
+function notifyMatchersChanged(): void {
+  for (const listener of [...MATCHER_CHANGE_LISTENERS]) {
     try {
       listener();
     } catch {
@@ -73,10 +96,12 @@ export function registerForgeProviders(
   if (!Array.isArray(contributions) || contributions.length === 0) {
     PLUGIN_FORGE_PROVIDERS.delete(pluginId);
     notifyRegistryChanged();
+    notifyMatchersChanged();
     return;
   }
   PLUGIN_FORGE_PROVIDERS.set(pluginId, contributions.map(freezeContribution));
   notifyRegistryChanged();
+  notifyMatchersChanged();
 }
 
 function freezeContribution(c: ForgeProviderContribution): ForgeProviderContribution {
@@ -99,11 +124,13 @@ export function unregisterForgeProviders(pluginId: string): void {
   if (typeof pluginId !== "string" || pluginId.length === 0) return;
   PLUGIN_FORGE_PROVIDERS.delete(pluginId);
   notifyRegistryChanged();
+  notifyMatchersChanged();
 }
 
 export function clearForgeProviderRegistry(): void {
   PLUGIN_FORGE_PROVIDERS.clear();
   notifyRegistryChanged();
+  notifyMatchersChanged();
 }
 
 /**
