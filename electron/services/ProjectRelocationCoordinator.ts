@@ -237,8 +237,8 @@ export class ProjectRelocationCoordinator {
     // never stops the Assistant, so blocking on it there would be a phantom.
     if (usesPipeline) {
       try {
-        const assistant = await getAssistantBackend(projectId);
-        if (assistant) {
+        const assistantActive = await hasAssistantBackend(projectId);
+        if (assistantActive) {
           blockers.push({
             reason: "assistant-active",
             message: "Stop the Daintree Assistant for this project before moving it.",
@@ -371,9 +371,9 @@ export class ProjectRelocationCoordinator {
     // rather than silently destroying in-flight agent work. A failed check is
     // treated as "may be active" — never as "clear". Phase 4/5 own hibernate.
     if (disposition === "refuse") {
-      let assistant: { terminalId: string; webContentsId: number } | null;
+      let assistantActive: boolean;
       try {
-        assistant = await getAssistantBackend(projectId);
+        assistantActive = await hasAssistantBackend(projectId);
       } catch (error) {
         logError("relocate-assistant-check-failed", error, { projectId });
         throw new ProjectRelocationError(
@@ -381,7 +381,7 @@ export class ProjectRelocationCoordinator {
           "Couldn't check the Daintree Assistant for this project — stop it and try again."
         );
       }
-      if (assistant) {
+      if (assistantActive) {
         throw new ProjectRelocationError(
           "assistant-active",
           "Stop the Daintree Assistant for this project before moving it."
@@ -711,17 +711,18 @@ export class ProjectRelocationCoordinator {
 }
 
 /**
- * Read the Assistant backend for a project, if one is live. Dynamically imported
- * to avoid pulling the heavy HelpSessionService into this module's eval graph
+ * Whether the project has any live Assistant backend. Dynamically imported to
+ * avoid pulling the heavy HelpSessionService into this module's eval graph
  * (the IPC layer loads it lazily too). THROWS on failure — the caller fails
  * closed (treats an unverifiable Assistant as possibly-active) rather than
  * risking a silent sub-agent-tree kill.
+ *
+ * Any lane counts (#12108): relocation quiesces the whole project, so one
+ * running lane is enough to refuse.
  */
-async function getAssistantBackend(
-  projectId: string
-): Promise<{ terminalId: string; webContentsId: number } | null> {
+async function hasAssistantBackend(projectId: string): Promise<boolean> {
   const { helpSessionService } = await import("./HelpSessionService.js");
-  return helpSessionService.getAssistantBackend(projectId);
+  return helpSessionService.getAssistantBackends(projectId).length > 0;
 }
 
 export const projectRelocationCoordinator = new ProjectRelocationCoordinator();

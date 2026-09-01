@@ -1,8 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store/panelStore";
 import { setDockPopoverOpen } from "@/lib/dockPopoverLayer";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { selectOpenDockPopoverId } from "./dockPanelVisibility";
 
 /**
@@ -27,9 +28,13 @@ import { selectOpenDockPopoverId } from "./dockPanelVisibility";
  */
 export function useOpenDockPopoverId(): string | null {
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
-  const helpTerminalId = useHelpPanelStore((state) => state.terminalId);
+  // Shallow-compared array, then a Set: returning a fresh Set straight from
+  // the selector would fail every equality check and re-render on every store
+  // write.
+  const helpTerminalIdList = useHelpPanelStore(useShallow(selectSlotTerminalIds));
+  const helpTerminalIds = useMemo(() => new Set(helpTerminalIdList), [helpTerminalIdList]);
   return usePanelStore((state) =>
-    selectOpenDockPopoverId(state, { helpTerminalId, activeWorktreeId })
+    selectOpenDockPopoverId(state, { helpTerminalIds, activeWorktreeId })
   );
 }
 

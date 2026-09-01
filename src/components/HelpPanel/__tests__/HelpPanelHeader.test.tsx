@@ -41,6 +41,8 @@ function renderHeader(overrides: Partial<ComponentProps<typeof HelpPanelHeader>>
       agentState={null}
       canStartNewSession={false}
       canEndSession={false}
+      canOpenParallelSession
+      onOpenParallelSession={vi.fn()}
       onNewSession={vi.fn()}
       onEndSession={vi.fn()}
       onOpenDocs={vi.fn()}

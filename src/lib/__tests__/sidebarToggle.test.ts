@@ -58,6 +58,10 @@ vi.mock("@/store/worktreeStore", () => ({
 
 vi.mock("@/store/helpPanelStore", () => ({
   useHelpPanelStore: helpPanelStoreMock,
+  // #12108: the reveal repaint follows the lane on screen; resize suppression
+  // covers every lane. The fixture runs one lane, so both project it.
+  selectActiveSlot: (s: HelpPanelFixture) => s,
+  selectSlotTerminalIds: (s: HelpPanelFixture) => (s.terminalId ? [s.terminalId] : []),
 }));
 
 vi.mock("../layoutTransitionLock", () => ({

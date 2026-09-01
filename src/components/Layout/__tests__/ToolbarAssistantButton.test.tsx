@@ -71,11 +71,28 @@ vi.mock("@/store/focusStore", () => ({
   ),
 }));
 
+/**
+ * Seed the panel with a single assistant lane (#12108). These cases predate
+ * lanes and all describe one session, so they seed slot 0; the aggregate
+ * behaviour across lanes has its own tests below.
+ */
 function setHelpPanel(state: { isOpen: boolean; terminalId: string | null }) {
   useHelpPanelStore.setState({
     isOpen: state.isOpen,
-    terminalId: state.terminalId,
+    sessions: { 0: { ...emptyLane(), terminalId: state.terminalId } },
+    activeSlot: 0,
   });
+}
+
+function emptyLane() {
+  return {
+    terminalId: null,
+    agentId: null,
+    sessionId: null,
+    conversationTouched: false,
+    figures: [],
+    activeFigureNumber: null,
+  };
 }
 
 function setPanel(id: string, agentState: string | undefined): void {
@@ -102,9 +119,8 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     mcpReadinessMock.mockReturnValue({ enabled: true, state: "ready", port: 0, lastError: null });
     useHelpPanelStore.setState({
       isOpen: false,
-      terminalId: null,
-      agentId: null,
-      sessionId: null,
+      sessions: { 0: emptyLane() },
+      activeSlot: 0,
     });
     usePanelStore.setState({ panelsById: {}, panelIds: [] } as never);
     mockGestureAssistantHidden = false;
@@ -286,7 +302,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     // The user has not seen *this* session, so the pip should fire.
     act(() => {
       setPanel("t-new", "waiting");
-      useHelpPanelStore.setState({ terminalId: "t-new" });
+      useHelpPanelStore.setState({ sessions: { 0: { ...emptyLane(), terminalId: "t-new" } } });
     });
     const pip = queryByTestId("assistant-working-pip");
     expect(pip?.getAttribute("data-visible")).toBe("true");
@@ -435,7 +451,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
 describe("ToolbarAssistantButton — MCP anomaly pip (#10022)", () => {
   beforeEach(() => {
     mcpReadinessMock.mockReturnValue({ enabled: true, state: "ready", port: 0, lastError: null });
-    useHelpPanelStore.setState({ isOpen: false, terminalId: null, agentId: null, sessionId: null });
+    useHelpPanelStore.setState({ isOpen: false, sessions: { 0: emptyLane() }, activeSlot: 0 });
     usePanelStore.setState({ panelsById: {}, panelIds: [] } as never);
     mockGestureAssistantHidden = false;
     __resetMcpAnomalyStoreForTesting();

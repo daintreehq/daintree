@@ -105,6 +105,13 @@ export interface CountableTerminal {
    * overlapping records is the current one.
    */
   spawnedAt?: number;
+  /**
+   * Which assistant lane this help terminal serves (#12108), or undefined when
+   * it serves none — an ordinary terminal, or a displaced assistant backend
+   * whose record has already been dropped. Resolved from `HelpSessionService`
+   * rather than stored on the panel, so it tracks displacement synchronously.
+   */
+  assistantSlot?: number;
 }
 
 /**
@@ -197,31 +204,21 @@ function assistantLiveness(state: AgentState | undefined): number {
 }
 
 /**
- * Whether `candidate` should replace `incumbent` as the project's reported
- * assistant.
+ * Whether `candidate` should replace `incumbent` WITHIN one lane.
  *
- * `HelpSessionService` enforces at most one assistant PTY per project, so in
- * steady state there is nothing to choose between. The window this exists for
- * is displacement: a new backend is provisioned while the old one is still
- * being killed, and for those moments two terminals answer to the same
- * project.
- *
- * Spawn time decides it, because that is the fact that actually identifies the
- * session — `AgentStateService` uses the same stamp to reject state updates
- * from a superseded run. Liveness cannot lead here: a displaced PTY whose kill
- * has not landed yet still reads `working`, so ranking activity first would let
- * the corpse keep reporting over a new session that is genuinely blocked.
+ * Two records answer for the same lane only during displacement: a new backend
+ * is provisioned while the old one is still being killed. Spawn time decides
+ * it, because that is the fact that actually identifies the session —
+ * `AgentStateService` uses the same stamp to reject state updates from a
+ * superseded run. Liveness cannot lead here: a displaced PTY whose kill has not
+ * landed yet still reads `working`, so ranking activity first would let the
+ * corpse keep reporting over a new session that is genuinely blocked.
  *
  * The remaining tie-breaks only matter when spawn times are missing or equal,
  * and terminal id closes the last gap, so the answer never depends on listing
  * order.
  */
-function beatsIncumbent(
-  candidate: CountableTerminal,
-  incumbent: CountableTerminal | null
-): boolean {
-  if (incumbent === null) return true;
-
+function beatsWithinLane(candidate: CountableTerminal, incumbent: CountableTerminal): boolean {
   const candidateSpawn = usableTimestamp(candidate.spawnedAt);
   const incumbentSpawn = usableTimestamp(incumbent.spawnedAt);
   if (candidateSpawn !== incumbentSpawn) return candidateSpawn > incumbentSpawn;
@@ -230,11 +227,93 @@ function beatsIncumbent(
   const incumbentRank = assistantLiveness(incumbent.agentState);
   if (candidateRank !== incumbentRank) return candidateRank < incumbentRank;
 
+  return finalTieBreak(candidate, incumbent);
+}
+
+/**
+ * Attention rank for picking BETWEEN lanes. Lower wins: blocked on the user,
+ * then busy, then settled.
+ *
+ * Deliberately not {@link assistantLiveness}, which ranks `working` above
+ * `waiting` — the right order inside a lane, where the question is "which of
+ * these two records is the live session", but the wrong one across lanes,
+ * where the question is "which of these sessions needs the user". A busy lane
+ * must not silence a sibling that is waiting on an answer.
+ */
+function assistantAttention(state: AgentState | undefined): number {
+  if (state === "waiting") return 0;
+  if (state === "working" || state === "directing") return 1;
+  return 2;
+}
+
+/**
+ * Whether `candidate` should replace `incumbent` ACROSS lanes.
+ *
+ * Different lanes are concurrent sessions the user deliberately started, so
+ * whichever one needs the user leads: the project row exists to surface
+ * attention, and a busy lane must not silence a sibling that is blocked on a
+ * question.
+ */
+function beatsAcrossLanes(candidate: CountableTerminal, incumbent: CountableTerminal): boolean {
+  const candidateRank = assistantAttention(candidate.agentState);
+  const incumbentRank = assistantAttention(incumbent.agentState);
+  if (candidateRank !== incumbentRank) return candidateRank < incumbentRank;
+
+  const candidateSpawn = usableTimestamp(candidate.spawnedAt);
+  const incumbentSpawn = usableTimestamp(incumbent.spawnedAt);
+  if (candidateSpawn !== incumbentSpawn) return candidateSpawn > incumbentSpawn;
+
+  return finalTieBreak(candidate, incumbent);
+}
+
+function finalTieBreak(candidate: CountableTerminal, incumbent: CountableTerminal): boolean {
   const candidateSince = usableTimestamp(candidate.lastStateChange);
   const incumbentSince = usableTimestamp(incumbent.lastStateChange);
   if (candidateSince !== incumbentSince) return candidateSince > incumbentSince;
 
   return (candidate.id ?? "") < (incumbent.id ?? "");
+}
+
+/**
+ * The one assistant that speaks for a project, chosen from every live help
+ * terminal it owns (#12108).
+ *
+ * Reduced in two stages rather than by one pairwise comparator, because the
+ * two rules genuinely disagree: within a lane spawn time must lead (a mid-kill
+ * corpse still reads `working`), across lanes liveness must lead (attention is
+ * the whole point of the row). A single comparator mixing them is CYCLIC — with
+ * A(lane 0, idle, t=300), B(lane 0, working, t=100) and C(lane 1, waiting,
+ * t=200), A beats B, B beats C and C beats A — so the winner would depend on
+ * the order the host happened to list terminals in.
+ *
+ * Unslotted records are displacement corpses whose session record has already
+ * been dropped; they are reduced among themselves and only ever win when no
+ * lane has a live representative at all.
+ */
+function pickProjectAssistant(candidates: CountableTerminal[]): CountableTerminal | null {
+  const byLane = new Map<number, CountableTerminal>();
+  let unslotted: CountableTerminal | null = null;
+
+  for (const candidate of candidates) {
+    if (candidate.assistantSlot === undefined) {
+      if (unslotted === null || beatsWithinLane(candidate, unslotted)) unslotted = candidate;
+      continue;
+    }
+    const incumbent = byLane.get(candidate.assistantSlot);
+    if (incumbent === undefined || beatsWithinLane(candidate, incumbent)) {
+      byLane.set(candidate.assistantSlot, candidate);
+    }
+  }
+
+  let winner: CountableTerminal | null = null;
+  // Ascending lane order so the reduction itself cannot depend on Map insertion
+  // order, only on the comparator.
+  for (const slot of [...byLane.keys()].sort((a, b) => a - b)) {
+    const laneWinner = byLane.get(slot)!;
+    if (winner === null || beatsAcrossLanes(laneWinner, winner)) winner = laneWinner;
+  }
+
+  return winner ?? unslotted;
 }
 
 /**
@@ -285,16 +364,32 @@ export function computeProjectAgentCounts(
    * every live assistant reports, which is what a harness computing raw tallies
    * wants.
    */
-  isAssistantVisible?: (workspaceId: string) => boolean
+  isAssistantVisible?: (workspaceId: string) => boolean,
+  /**
+   * Which assistant lane a help terminal serves, or null when it serves none
+   * (#12108). `HelpSessionService.getSlotForTerminal` is the intended source.
+   *
+   * Needed once a project can run concurrent assistants, because "two
+   * terminals answer to this project" stops meaning "one is a corpse". See
+   * {@link pickProjectAssistant}: without a lane, concurrent sessions are
+   * ranked by spawn time and a freshly started one silences a sibling that is
+   * blocked on the user.
+   *
+   * Omitting the resolver leaves every candidate unslotted, which is exactly
+   * the pre-lane spawn-time ordering — the right answer for a harness
+   * computing raw tallies, and for any caller that has no session service.
+   */
+  assistantSlotForTerminal?: (terminalId: string) => number | null
 ): Map<string, ProjectAgentCounts> {
   const counts = new Map<string, ProjectAgentCounts>();
   for (const id of projectIds) counts.set(id, empty());
 
   const availability = getAgentAvailabilityStore();
-  // Which assistant terminal currently speaks for each project. Held aside
-  // rather than written straight into `counts` so the winner is decided by
-  // `beatsIncumbent` alone and never by which terminal happened to come first.
-  const assistantByProject = new Map<string, CountableTerminal>();
+  // Every live assistant terminal per project. Collected rather than reduced
+  // inline so the winner is decided by `pickProjectAssistant` over the whole
+  // set — the two ranking rules (within a lane, across lanes) cannot be
+  // expressed as one pairwise comparator without introducing a cycle.
+  const assistantsByProject = new Map<string, CountableTerminal[]>();
 
   for (const terminal of terminals) {
     if (!terminal.projectId) continue;
@@ -307,9 +402,13 @@ export function computeProjectAgentCounts(
       // subtracted from the host's count nor speak for the project.
       if (terminal.hasPty !== false) {
         entry.helpTerminals += 1;
-        if (beatsIncumbent(terminal, assistantByProject.get(terminal.projectId) ?? null)) {
-          assistantByProject.set(terminal.projectId, terminal);
-        }
+        const slot =
+          terminal.id !== undefined ? (assistantSlotForTerminal?.(terminal.id) ?? null) : null;
+        const candidate: CountableTerminal =
+          slot === null ? terminal : { ...terminal, assistantSlot: slot };
+        const bucket = assistantsByProject.get(terminal.projectId);
+        if (bucket) bucket.push(candidate);
+        else assistantsByProject.set(terminal.projectId, [candidate]);
       }
       continue;
     }
@@ -389,9 +488,11 @@ export function computeProjectAgentCounts(
 
   // Assistant presence, written last so it can never be mistaken for a tally
   // that accumulated alongside the worker states above.
-  for (const [projectId, assistant] of assistantByProject) {
+  for (const [projectId, laneCandidates] of assistantsByProject) {
     const entry = counts.get(projectId);
     if (!entry) continue;
+    const assistant = pickProjectAssistant(laneCandidates);
+    if (!assistant) continue;
     // Out of sight, out of the tallies. Left as the `null` every state field
     // starts at, so a hidden assistant is indistinguishable from no assistant
     // — which is the point: every surface reading these fields asks the same

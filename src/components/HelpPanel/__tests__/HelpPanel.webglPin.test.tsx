@@ -14,6 +14,18 @@ const { setFocusedMock, focusMock, helpPanelState, panelStoreState } = vi.hoiste
   setFocusedMock: vi.fn(),
   focusMock: vi.fn(),
   helpPanelState: {
+    clearDroppedPreferredAgent: vi.fn(),
+    setAutoLaunchEnabled: vi.fn(),
+    requestFocus: vi.fn(),
+    setActiveFigureNumber: vi.fn(),
+    addFigure: vi.fn(),
+    setActiveSlot: vi.fn(),
+    closeSlot: vi.fn(),
+    openSlot: vi.fn(),
+    // #12108: the panel reads its lane pointer; the mocked selectors
+    // above project this same flat object as that lane.
+    activeSlot: 0,
+    sessions: {} as Record<number, unknown>,
     isOpen: true,
     width: 380,
     terminalId: "t-1" as string | null,
@@ -152,7 +164,19 @@ vi.mock("@/store/helpPanelStore", () => {
   const store = (selector?: (s: typeof helpPanelState) => unknown) =>
     selector ? selector(helpPanelState) : helpPanelState;
   store.getState = () => helpPanelState;
-  return { useHelpPanelStore: store, HELP_PANEL_MIN_WIDTH: 320, HELP_PANEL_MAX_WIDTH: 800 };
+  return {
+    useHelpPanelStore: store,
+    HELP_PANEL_MIN_WIDTH: 320,
+    HELP_PANEL_MAX_WIDTH: 800,
+    // #12108 selectors. Fixtures stay flat, so these project the same object
+    // as the lane and every existing assertion keeps working.
+    selectSlot: (s: typeof helpPanelState) => s,
+    selectActiveSlot: (s: typeof helpPanelState) => s,
+    selectOpenSlots: () => [0],
+    selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
+      s.terminalId === id && id ? 0 : null,
+  };
 });
 
 vi.mock("@/store", () => {
@@ -220,6 +244,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
 vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
+import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
 
 function getAside(): HTMLElement {
   const aside = document.getElementById("daintree-assistant-panel");
@@ -233,6 +258,9 @@ function pinCalls(): unknown[][] {
 }
 
 beforeEach(() => {
+  // #12108: controllers live in a per-view registry, not component
+  // state, so they outlive a render and must be reset between tests.
+  __resetHelpSessionControllersForTests();
   setFocusedMock.mockClear();
   focusMock.mockClear();
 

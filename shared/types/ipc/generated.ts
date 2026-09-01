@@ -749,6 +749,10 @@ export interface GeneratedIpcInvokeMap {
     args: [sessionId: string];
     result: import("./help.js").PinnedActionContextSnapshot | null;
   };
+  "help:list-pending-hibernation-slots": {
+    args: [projectId: string];
+    result: number[];
+  };
   "help:mark-terminal": {
     args: [terminalId: string];
     result: void;
@@ -758,7 +762,7 @@ export interface GeneratedIpcInvokeMap {
     result: { path: string; opened: boolean } | null;
   };
   "help:peek-pending-hibernation": {
-    args: [projectId: string];
+    args: [projectId: string, rawSlot?: number | undefined];
     result: { agentId: string; agentSessionId: string; cwd: string; panelWasOpen: boolean } | null;
   };
   "help:provision-session": {
@@ -768,6 +772,7 @@ export interface GeneratedIpcInvokeMap {
         projectPath: string;
         agentId: string;
         context?: import("../actions.js").ActionContext | undefined;
+        slot?: number | undefined;
       },
     ];
     result: {
@@ -784,7 +789,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "help:restore-pending-hibernation": {
-    args: [projectId: string, claimId: string];
+    args: [projectId: string, claimId: string, rawSlot?: number | undefined];
     result: boolean;
   };
   "help:revoke-session": {
@@ -792,7 +797,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "help:take-pending-hibernation": {
-    args: [projectId: string];
+    args: [projectId: string, rawSlot?: number | undefined];
     result: { agentId: string; agentSessionId: string; cwd: string; claimId: string } | null;
   };
   "help:unmark-terminal": {

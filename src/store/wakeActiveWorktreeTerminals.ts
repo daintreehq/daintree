@@ -1,6 +1,6 @@
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { isDocumentHidden, revealUntilStable } from "@/services/terminal/revealUntilStable";
-import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { logWarn } from "@/utils/logger";
@@ -86,9 +86,10 @@ function collectActiveWorktreeTerminalTargets(): string[] {
   // id straight from the help-panel store and fold it into the same fan-out;
   // the per-terminal methods guard on disposal internally, so a stale id whose
   // panel was cleared on project switch safely misses the lookup.
-  const assistantId = useHelpPanelStore.getState().terminalId;
-  if (assistantId && panelsById[assistantId] && !targets.includes(assistantId)) {
-    targets.push(assistantId);
+  for (const assistantId of selectSlotTerminalIds(useHelpPanelStore.getState())) {
+    if (panelsById[assistantId] && !targets.includes(assistantId)) {
+      targets.push(assistantId);
+    }
   }
 
   return targets;

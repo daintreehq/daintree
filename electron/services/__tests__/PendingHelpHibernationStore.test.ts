@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PendingHelpHibernationStore } from "../PendingHelpHibernationStore.js";
+import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots.js";
 
 describe("PendingHelpHibernationStore", () => {
   let tmpDir: string;
@@ -86,6 +87,59 @@ describe("PendingHelpHibernationStore", () => {
     expect(store.get("proj-B")).not.toBeNull();
   });
 
+  // #12108
+  it("migrates v1 bare-projectId keys onto slot 0 rather than dropping the file", async () => {
+    // `load()` returns early on an unrecognized version, so without the
+    // migration a version bump would silently destroy every existing user's
+    // captured resume tokens.
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "proj-legacy": {
+            agentId: "claude",
+            agentSessionId: "legacy-id",
+            cwd: "/legacy",
+            capturedAt: Date.now(),
+          },
+        },
+      }),
+      "utf-8"
+    );
+
+    const store = new PendingHelpHibernationStore(filePath);
+    await store.load();
+
+    expect(store.get(slotKey("proj-legacy", 0))?.agentSessionId).toBe("legacy-id");
+    // The bare key is gone — nothing looks it up any more.
+    expect(store.get("proj-legacy")).toBeNull();
+  });
+
+  it("rewrites every lane's cwd when a project folder moves", async () => {
+    const store = new PendingHelpHibernationStore(filePath);
+    await store.load();
+    await store.set(slotKey("proj-multi", 0), {
+      agentId: "claude",
+      agentSessionId: "s0",
+      cwd: "/old/root/sessions/a",
+      capturedAt: Date.now(),
+    });
+    await store.set(slotKey("proj-multi", 1), {
+      agentId: "claude",
+      agentSessionId: "s1",
+      cwd: "/old/root/sessions/b",
+      capturedAt: Date.now(),
+    });
+
+    await store.rewriteProjectPath("proj-multi", "/old/root", "/new/root");
+
+    // Leaving a sibling behind would resume it in a folder that no longer
+    // exists — the failure the rebase exists to prevent, once per lane.
+    expect(store.get(slotKey("proj-multi", 0))?.cwd).toBe("/new/root/sessions/a");
+    expect(store.get(slotKey("proj-multi", 1))?.cwd).toBe("/new/root/sessions/b");
+  });
+
   it("drops entries older than the staleness cutoff on load", async () => {
     // Stale = older than 14 days. Write a file directly with one stale and
     // one fresh entry, then load and verify only the fresh one survives.
@@ -114,8 +168,8 @@ describe("PendingHelpHibernationStore", () => {
 
     const store = new PendingHelpHibernationStore(filePath);
     await store.load();
-    expect(store.get("proj-stale")).toBeNull();
-    expect(store.get("proj-fresh")).not.toBeNull();
+    expect(store.get(slotKey("proj-stale", 0))).toBeNull();
+    expect(store.get(slotKey("proj-fresh", 0))).not.toBeNull();
   });
 
   it("accepts an empty agentSessionId as the resume-latest sentinel (#9639)", async () => {
@@ -162,7 +216,7 @@ describe("PendingHelpHibernationStore", () => {
 
     const store = new PendingHelpHibernationStore(filePath);
     await store.load();
-    expect(store.get("proj-stale-sentinel")).toBeNull();
+    expect(store.get(slotKey("proj-stale-sentinel", 0))).toBeNull();
   });
 
   it("rejects entries with a far-future capturedAt (corruption / clock skew)", async () => {
@@ -186,7 +240,7 @@ describe("PendingHelpHibernationStore", () => {
 
     const store = new PendingHelpHibernationStore(filePath);
     await store.load();
-    expect(store.get("proj-future-stamp")).toBeNull();
+    expect(store.get(slotKey("proj-future-stamp", 0))).toBeNull();
   });
 
   it("ignores entries with the wrong shape", async () => {
@@ -209,8 +263,8 @@ describe("PendingHelpHibernationStore", () => {
 
     const store = new PendingHelpHibernationStore(filePath);
     await store.load();
-    expect(store.get("proj-malformed")).toBeNull();
-    expect(store.get("proj-ok")).not.toBeNull();
+    expect(store.get(slotKey("proj-malformed", 0))).toBeNull();
+    expect(store.get(slotKey("proj-ok", 0))).not.toBeNull();
   });
 
   it("ignores files written with a future version (forward incompatibility)", async () => {
@@ -298,7 +352,7 @@ describe("PendingHelpHibernationStore", () => {
 
     const store = new PendingHelpHibernationStore(filePath);
     await store.load();
-    const entry = store.get("proj-tainted");
+    const entry = store.get(slotKey("proj-tainted", 0));
     expect(entry).not.toBeNull();
     expect(entry?.panelWasOpen).toBeUndefined();
   });

@@ -103,9 +103,9 @@ const liveTerminalIds = vi.hoisted(() => new Set<string>());
 
 const helpSessionServiceMock = vi.hoisted(() => ({
   revokeByProjectId: vi.fn(async (_projectId: string) => {}),
-  getAssistantBackend: vi.fn((projectId: string) => {
+  getAssistantBackends: vi.fn((projectId: string) => {
     const terminalId = assistantBackends.get(projectId);
-    return terminalId ? { terminalId, webContentsId: 42 } : null;
+    return terminalId ? [{ terminalId, webContentsId: 42, slot: 0 }] : [];
   }),
 }));
 
@@ -430,9 +430,9 @@ describe("IdleBackgroundAutoCloseService", () => {
       // re-check ran, so the second look finds one. Queued per-call rather than
       // via a persistent mockImplementation, which `clearAllMocks` would not
       // undo and would poison later tests.
-      helpSessionServiceMock.getAssistantBackend
-        .mockReturnValueOnce(null)
-        .mockReturnValueOnce({ terminalId: "t-help-late", webContentsId: 42 });
+      helpSessionServiceMock.getAssistantBackends
+        .mockReturnValueOnce([])
+        .mockReturnValueOnce([{ terminalId: "t-help-late", webContentsId: 42, slot: 0 }]);
       const service = makeService();
       await runCheck(service);
 

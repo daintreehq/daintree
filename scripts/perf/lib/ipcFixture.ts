@@ -456,6 +456,9 @@ export const PTY_LINE_MARKER = "PERFLINE";
 
 let payloadScriptPath: string | null = null;
 
+/** How long the payload waits for its release byte before exiting anyway. */
+export const PTY_PAYLOAD_HOLD_TIMEOUT_MS = 10_000;
+
 /**
  * A generator for a known, countable terminal payload.
  *
@@ -463,6 +466,21 @@ let payloadScriptPath: string | null = null;
  * crosses a PTY spawn, and Windows argv quoting through ConPTY is not a thing
  * to make a measurement depend on. Each line carries its own index, so the
  * receiver can prove which lines arrived rather than only how many bytes did.
+ *
+ * IT DOES NOT EXIT ON ITS OWN, and that is load-bearing. node-pty gives the pty
+ * socket `DESTROY_SOCKET_TIMEOUT_MS` (200ms) after the child dies to close by
+ * itself and then calls `destroy()` on it — which throws away whatever the read
+ * side has not taken yet. Both the timer and the socket reads live on the
+ * host's event loop, so a stall longer than 200ms fires the expired timer
+ * first, and the last kernel buffer of output is gone. That is a truncation
+ * this fixture cannot distinguish from a dropped chunk, and it read as
+ * `lineMisses` on a loaded CI box. So the child stays alive until the reader
+ * says it has everything (any byte on stdin) and only then exits 0.
+ *
+ * Raw mode before the wait: canonical echo would put the release byte back on
+ * the master, and `payloadBytes` would stop reproducing to the byte. The
+ * timeout is a wedge guard — a handshake that never arrives must not leave a
+ * live PTY behind the scenario's own timeout.
  */
 export function ptyPayloadScript(): string {
   if (!payloadScriptPath) {
@@ -477,6 +495,9 @@ export function ptyPayloadScript(): string {
         "for (let i = 1; i <= total; i += 1) {",
         `  process.stdout.write(\`${PTY_LINE_MARKER}-\${i}-\${pad}\\n\`);`,
         "}",
+        "try { process.stdin.setRawMode(true); } catch {}",
+        "process.stdin.once('data', () => process.exit(0));",
+        `setTimeout(() => process.exit(0), ${PTY_PAYLOAD_HOLD_TIMEOUT_MS});`,
         "",
       ].join("\n"),
       "utf8"

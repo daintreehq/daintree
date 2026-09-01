@@ -16,6 +16,7 @@ import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
 import { useUrlHistoryStore } from "./urlHistoryStore";
 import { useHelpPanelStore } from "./helpPanelStore";
+import { ASSISTANT_SLOTS, assistantSlotKey } from "../../shared/config/assistantSlots";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { panelPersistence, panelToSnapshot } from "./persistence/panelPersistence";
@@ -353,11 +354,16 @@ function cancelProjectReadRequests(): void {
 function migrateHibernateSession(fromProjectId: string, toProjectId: string, newCwd: string): void {
   try {
     const helpPanel = useHelpPanelStore.getState();
-    const orphaned = helpPanel.hibernateSessions?.[fromProjectId];
-    if (orphaned) {
-      helpPanel.setHibernateSession(toProjectId, { ...orphaned, cwd: newCwd });
+    // Every lane (#12108) — the project may have hibernated more than one
+    // conversation, and leaving a sibling keyed to the old project id strands
+    // it under an id nothing will ever look up again.
+    for (const slot of ASSISTANT_SLOTS) {
+      const orphaned = helpPanel.hibernateSessions?.[assistantSlotKey(fromProjectId, slot)];
+      if (orphaned) {
+        helpPanel.setHibernateSession(toProjectId, slot, { ...orphaned, cwd: newCwd });
+      }
+      helpPanel.clearHibernateSession(fromProjectId, slot);
     }
-    helpPanel.clearHibernateSession(fromProjectId);
   } catch (error) {
     logErrorWithContext(error, {
       operation: "migrate_hibernate_session",
@@ -378,11 +384,15 @@ function migrateHibernateSession(fromProjectId: string, toProjectId: string, new
 function rebaseHibernateSessionCwd(projectId: string, oldPath: string, newPath: string): void {
   try {
     const helpPanel = useHelpPanelStore.getState();
-    const session = helpPanel.hibernateSessions?.[projectId];
-    if (!session) return;
-    const nextCwd = rebaseAbsolutePath(session.cwd, oldPath, newPath);
-    if (nextCwd === session.cwd) return;
-    helpPanel.setHibernateSession(projectId, { ...session, cwd: nextCwd });
+    // Each lane captured its own cwd under the old root, so each needs its own
+    // rebase (#12108).
+    for (const slot of ASSISTANT_SLOTS) {
+      const session = helpPanel.hibernateSessions?.[assistantSlotKey(projectId, slot)];
+      if (!session) continue;
+      const nextCwd = rebaseAbsolutePath(session.cwd, oldPath, newPath);
+      if (nextCwd === session.cwd) continue;
+      helpPanel.setHibernateSession(projectId, slot, { ...session, cwd: nextCwd });
+    }
   } catch (error) {
     logErrorWithContext(error, {
       operation: "rebase_hibernate_session_cwd",
@@ -976,7 +986,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         set({ currentProject: null });
       }
       useUrlHistoryStore.getState().removeProjectHistory(id);
-      useHelpPanelStore.getState().clearHibernateSession(id);
+      for (const slot of ASSISTANT_SLOTS) {
+        useHelpPanelStore.getState().clearHibernateSession(id, slot);
+      }
       set({ isLoading: false });
     } catch (error) {
       logErrorWithContext(error, {

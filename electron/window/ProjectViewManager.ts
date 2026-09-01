@@ -186,12 +186,12 @@ export interface ProjectViewManagerOptions {
    * Absent — as in tests that don't exercise the assistant — every project reads
    * as having no backend, which is the pre-#11157 behavior.
    */
-  assistantBackendForProject?: (projectId: string) => {
+  assistantBackendsForProject?: (projectId: string) => Array<{
     terminalId: string;
     webContentsId: number;
-  } | null;
+  }>;
   /**
-   * Whether a PTY is still running. Paired with `assistantBackendForProject`:
+   * Whether a PTY is still running. Paired with `assistantBackendsForProject`:
    * the help-session binding outlives an assistant that exits on its own, so
    * eviction protection needs a liveness source that tracks exits.
    */
@@ -199,7 +199,7 @@ export interface ProjectViewManagerOptions {
   /**
    * Why MCP needs this view kept running right now (#11790) — a live session
    * binding, an in-flight dispatch, or neither. Injected from the composition
-   * root for the same reason as `assistantBackendForProject`: electron/window/
+   * root for the same reason as `assistantBackendsForProject`: electron/window/
    * stays free of the service, and here it also keeps the MCP module graph off
    * eager boot, since it is deliberately behind a dynamic import.
    *
@@ -274,10 +274,10 @@ export class ProjectViewManager {
   onViewCached?: (webContentsId: number) => void;
   onViewReady?: (webContents: Electron.WebContents) => void;
   onViewCrashed?: (webContents: Electron.WebContents) => void;
-  assistantBackendForProject?: (projectId: string) => {
+  assistantBackendsForProject?: (projectId: string) => Array<{
     terminalId: string;
     webContentsId: number;
-  } | null;
+  }>;
   isTerminalLive?: (terminalId: string) => boolean;
   mcpViewActivity?: (workspaceId: string, webContentsId: number) => McpViewActivity | null;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
@@ -345,7 +345,7 @@ export class ProjectViewManager {
     this.onViewCached = opts.onViewCached;
     this.onViewReady = opts.onViewReady;
     this.onViewCrashed = opts.onViewCrashed;
-    this.assistantBackendForProject = opts.assistantBackendForProject;
+    this.assistantBackendsForProject = opts.assistantBackendsForProject;
     this.isTerminalLive = opts.isTerminalLive;
     this.mcpViewActivity = opts.mcpViewActivity;
     this.windowRegistry = opts.windowRegistry;

@@ -31,6 +31,9 @@ const availabilityMock = vi.hoisted(() => ({
 // what a live assistant reports, not about where it is rendered.
 const helpSessionMock = vi.hoisted(() => ({
   isPanelVisible: vi.fn<(id: string) => boolean>(() => true),
+  // #12108: the counts path resolves each help terminal's lane so concurrent
+  // assistants rank by who needs the user. These fixtures run one, at lane 0.
+  getSlotForTerminal: vi.fn<(terminalId: string) => number | null>(() => 0),
 }));
 
 vi.mock("../../ipc/utils.js", () => ({

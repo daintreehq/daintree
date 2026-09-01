@@ -17,6 +17,24 @@ const GRANT_ENDED_BANNER_AUTO_DISMISS_MS = 15_000;
 export interface McpActivityTrackerHost {
   getSnapshot(): HelpSessionSnapshot;
   patch(partial: Partial<HelpSessionSnapshot>): void;
+  /**
+   * The MCP session id of the lane this tracker belongs to, or null before one
+   * is bound (#12108).
+   *
+   * Deliberately NOT read off the global store. Every push below is targeted
+   * at a WebContents, and with concurrent lanes all of a project's sessions
+   * share one — so routing can no longer say which lane an event belongs to
+   * and the payload's session id is the only thing that can. Sourcing this
+   * from the host keeps each tracker comparing against ITS OWN session rather
+   * than whichever lane happens to be focused.
+   */
+  getSessionId(): string | null;
+  /**
+   * The lane this tracker writes figures into. A function rather than a value
+   * because the host constructs this tracker in a class field initializer,
+   * which runs before its own constructor body has assigned the lane.
+   */
+  getSlot(): number;
 }
 
 /**
@@ -32,9 +50,24 @@ export class McpActivityTracker {
 
   constructor(private readonly host: McpActivityTrackerHost) {}
 
+  /**
+   * Whether an incoming push belongs to this tracker's lane.
+   *
+   * A live session always commits its id before any tool call — and thus
+   * before any denial, grant or revoke — so a null or mismatched id means the
+   * event is for a sibling lane, or for a torn-down / mid-relaunch session of
+   * our own. Painting either would stomp the lane the user is actually in
+   * (#10017, generalized to lanes in #12108).
+   */
+  private _isMine(sessionId: string | null | undefined): boolean {
+    const mine = this.host.getSessionId();
+    return mine !== null && sessionId === mine;
+  }
+
   /** Arm IPC subscriptions. Idempotency is the caller's responsibility (controller `start()`). */
   start(): void {
     const disposeTier = window.electron.mcpServer.onTierNotPermitted((payload) => {
+      if (!this._isMine(payload.sessionId)) return;
       const projectId = useProjectStore.getState().currentProject?.id ?? null;
       // A fresh denial supersedes any lingering "approval ended" notice — the
       // banner the user is about to re-approve from carries the same signal.
@@ -53,14 +86,7 @@ export class McpActivityTracker {
     this._disposers.push(disposeTier);
 
     const disposeRevoked = window.electron.mcpServer.onSessionRevoked((payload) => {
-      // Only surface a revoke that matches the session this panel currently
-      // holds. A live session always has its id committed to the store before
-      // any tool call (and thus before any denial/revoke), so a null or
-      // mismatched `sessionId` here means the revoke is for a torn-down or
-      // mid-relaunch session — painting its banner would stomp the fresh
-      // launch the user just started to escape it (#10017).
-      const currentSessionId = useHelpPanelStore.getState().sessionId;
-      if (currentSessionId === null || payload.sessionId !== currentSessionId) return;
+      if (!this._isMine(payload.sessionId)) return;
       this.host.patch({
         sessionRevoked: { sessionId: payload.sessionId, denialKind: payload.denialKind },
       });
@@ -68,27 +94,36 @@ export class McpActivityTracker {
     this._disposers.push(disposeRevoked);
 
     const disposeGrant = window.electron.mcpServer.onGrantLifecycle((payload) => {
+      if (!this._isMine(payload.sessionId)) return;
       this._onGrantLifecycle(payload);
     });
     this._disposers.push(disposeGrant);
 
     const disposeToolStarted = window.electron.mcpServer.onToolCallStarted((payload) => {
+      if (!this._isMine(payload.sessionId)) return;
       this._onToolCallStarted(payload);
     });
     const disposeToolSettled = window.electron.mcpServer.onToolCallSettled((payload) => {
+      if (!this._isMine(payload.sessionId)) return;
       this._onToolCallSettled(payload);
     });
     this._disposers.push(disposeToolStarted, disposeToolSettled);
 
     const disposeOutcomeAlert = window.electron.mcpServer.onTurnOutcomeAlert((payload) => {
+      // This channel names the lane with `helpSessionId` rather than
+      // `sessionId`; both are the same public help-session id.
+      if (!this._isMine(payload.helpSessionId)) return;
       this._onTurnOutcomeAlert(payload);
     });
     this._disposers.push(disposeOutcomeAlert);
 
     const disposeDisplayImage = window.electron.mcpServer.onDisplayImage((payload) => {
+      // Gate before writing: figures are per lane, so an unfiltered push would
+      // file a sibling's image under this conversation (#12108).
+      if (!this._isMine(payload.sessionId)) return;
       // The main process already validated the URL and assigned the figure
       // number (#9828); the renderer just records the figure for inline display.
-      useHelpPanelStore.getState().addFigure({
+      useHelpPanelStore.getState().addFigure(this.host.getSlot(), {
         imageId: payload.imageId,
         figureNumber: payload.figureNumber,
         figureLabel: payload.figureLabel,

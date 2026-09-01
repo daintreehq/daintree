@@ -116,9 +116,12 @@ export class IdleBackgroundAutoCloseService {
    * be unconditional; it lifts as soon as the PTY exits.
    */
   private hasLiveAssistantBackend(projectId: string): boolean {
-    const backend = helpSessionService.getAssistantBackend(projectId);
-    if (!backend) return false;
-    return this.ptyClient?.hasTerminal(backend.terminalId) === true;
+    // ANY live lane floors the whole project (#12108). Reclaim closes the
+    // project, not one lane, and it finishes by revoking every session the
+    // project owns — so a lane whose PTY has exited must never be read as
+    // "clear" while a sibling is still running.
+    const backends = helpSessionService.getAssistantBackends(projectId);
+    return backends.some((backend) => this.ptyClient?.hasTerminal(backend.terminalId) === true);
   }
 
   /**

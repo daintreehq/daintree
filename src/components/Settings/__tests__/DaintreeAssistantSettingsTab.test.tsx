@@ -132,6 +132,9 @@ vi.mock("@/store/helpPanelStore", () => {
   store.getState = () => helpPanelState;
   return {
     useHelpPanelStore: store,
+    // #12108: the live-status card follows the lane on screen. This fixture is
+    // flat and single-lane, so the selector projects it as that lane.
+    selectActiveSlot: (s: typeof helpPanelState) => s,
     HELP_PANEL_MIN_WIDTH: 320,
     HELP_PANEL_MAX_WIDTH: 800,
     HELP_PANEL_DEFAULT_WIDTH: 380,

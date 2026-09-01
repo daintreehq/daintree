@@ -449,9 +449,10 @@ export async function initGlobalServices(
       // instant. Lazy, like the provider above — the PtyClient is not resolved
       // yet at wiring time.
       svc.setHasLiveAssistantBackend((projectId) => {
-        const backend = helpSessionService.getAssistantBackend(projectId);
-        if (!backend) return false;
-        return getPtyClient()?.hasTerminal(backend.terminalId) === true;
+        // Any live lane floors the project (#12108) — hibernating it would
+        // revoke every lane, taking running siblings with it.
+        const backends = helpSessionService.getAssistantBackends(projectId);
+        return backends.some((backend) => getPtyClient()?.hasTerminal(backend.terminalId) === true);
       });
     },
   });

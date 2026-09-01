@@ -57,6 +57,21 @@ const {
   grantLifecycleListeners: [] as Array<(payload: unknown) => void>,
   outcomeAlertListeners: [] as Array<(payload: unknown) => void>,
   helpPanelState: {
+    clearDroppedPreferredAgent: vi.fn(),
+    dismissIntro: vi.fn(),
+    setAutoLaunchEnabled: vi.fn(),
+    setWidth: vi.fn(),
+    requestFocus: vi.fn(),
+    setActiveFigureNumber: vi.fn(),
+    addFigure: vi.fn(),
+    markConversationStarted: vi.fn(),
+    setActiveSlot: vi.fn(),
+    closeSlot: vi.fn(),
+    openSlot: vi.fn(),
+    // #12108: the panel reads its lane pointer; the mocked selectors
+    // above project this same flat object as that lane.
+    activeSlot: 0,
+    sessions: {} as Record<number, unknown>,
     isOpen: false,
     terminalId: null as string | null,
     agentId: null as string | null,
@@ -97,7 +112,18 @@ vi.mock("@/store/helpPanelStore", () => {
   const store = (selector?: (s: typeof helpPanelState) => unknown) =>
     selector ? selector(helpPanelState) : helpPanelState;
   store.getState = () => helpPanelState;
-  return { useHelpPanelStore: store };
+  return {
+    useHelpPanelStore: store,
+    // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
+    // and these project that same object as the lane, so every existing
+    // assertion keeps driving the controller unchanged.
+    selectSlot: (s: typeof helpPanelState) => s,
+    selectActiveSlot: (s: typeof helpPanelState) => s,
+    selectOpenSlots: () => [0],
+    selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
+      s.terminalId === id && id ? 0 : null,
+  };
 });
 
 vi.mock("@/store", () => {
@@ -828,7 +854,12 @@ describe("HelpSessionController — launch error routing", () => {
     // against is the re-eval's launch() being swallowed by the still-held
     // re-entrancy guard, leaving _hasAutoLaunched stuck and codex unlaunched.
     await vi.waitFor(() => {
-      expect(helpPanelState.setTerminal).toHaveBeenCalledWith("term-codex", "codex", "sess-codex");
+      expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+        0,
+        "term-codex",
+        "codex",
+        "sess-codex"
+      );
     });
     // The superseded claude attempt is cleaned up: orphan terminal removed,
     // stale session token revoked.

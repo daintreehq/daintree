@@ -57,6 +57,21 @@ const {
   grantLifecycleListeners: [] as Array<(payload: unknown) => void>,
   outcomeAlertListeners: [] as Array<(payload: unknown) => void>,
   helpPanelState: {
+    clearDroppedPreferredAgent: vi.fn(),
+    dismissIntro: vi.fn(),
+    setAutoLaunchEnabled: vi.fn(),
+    setWidth: vi.fn(),
+    requestFocus: vi.fn(),
+    setActiveFigureNumber: vi.fn(),
+    addFigure: vi.fn(),
+    markConversationStarted: vi.fn(),
+    setActiveSlot: vi.fn(),
+    closeSlot: vi.fn(),
+    openSlot: vi.fn(),
+    // #12108: the panel reads its lane pointer; the mocked selectors
+    // above project this same flat object as that lane.
+    activeSlot: 0,
+    sessions: {} as Record<number, unknown>,
     isOpen: false,
     terminalId: null as string | null,
     agentId: null as string | null,
@@ -97,7 +112,18 @@ vi.mock("@/store/helpPanelStore", () => {
   const store = (selector?: (s: typeof helpPanelState) => unknown) =>
     selector ? selector(helpPanelState) : helpPanelState;
   store.getState = () => helpPanelState;
-  return { useHelpPanelStore: store };
+  return {
+    useHelpPanelStore: store,
+    // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
+    // and these project that same object as the lane, so every existing
+    // assertion keeps driving the controller unchanged.
+    selectSlot: (s: typeof helpPanelState) => s,
+    selectActiveSlot: (s: typeof helpPanelState) => s,
+    selectOpenSlots: () => [0],
+    selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
+      s.terminalId === id && id ? 0 : null,
+  };
 });
 
 vi.mock("@/store", () => {
@@ -318,6 +344,8 @@ describe("HelpSessionController — handleViewRevealed (switch-back recovery #10
   }
 
   it("silently reaps a stranded loading-phase launch and re-drives it (no error surfaced)", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     startStuckLaunch(ctrl);
@@ -343,6 +371,8 @@ describe("HelpSessionController — handleViewRevealed (switch-back recovery #10
   });
 
   it("revokes the minted-but-orphaned pending session token when reaping", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     startStuckLaunch(ctrl);
@@ -355,6 +385,8 @@ describe("HelpSessionController — handleViewRevealed (switch-back recovery #10
   });
 
   it("is a no-op when a session is already live (no reap, no re-drive)", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     ctrl["_patch"]({ phase: "live" });
@@ -368,6 +400,8 @@ describe("HelpSessionController — handleViewRevealed (switch-back recovery #10
   });
 
   it("is a no-op while idle", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     const genBefore = ctrl["_launchGen"] as number;
@@ -380,6 +414,8 @@ describe("HelpSessionController — handleViewRevealed (switch-back recovery #10
   });
 
   it("does not reap a hibernating phase (it owns a live terminal mid-shutdown)", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     ctrl["_patch"]({ phase: "hibernating" });
@@ -393,6 +429,8 @@ describe("HelpSessionController — handleViewRevealed (switch-back recovery #10
   });
 
   it("does not reap a manual (non-auto) launch — the _hasAutoLaunched guard protects it", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     // A manual selectAgent() launch never sets `_hasAutoLaunched`; reaping it
@@ -420,6 +458,8 @@ describe("HelpSessionController — handleViewRevealed (switch-back recovery #10
   });
 
   it("does not surface a launch error when the original hung IPC rejects after the reap", async () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     helpPanelState.preferredAgentId = "claude";
@@ -461,6 +501,8 @@ describe("HelpSessionController — handleViewRevealed (switch-back recovery #10
   });
 
   it("does not reap a loading phase when a terminal is already bound (reserved-id guard)", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     // A newSession/runAnyway launch reserves its terminal slot synchronously, so
@@ -490,6 +532,8 @@ describe("HelpSessionController — handleViewRevealed (switch-back recovery #10
 
 describe("HelpSessionController — tier-mismatch handlers", () => {
   it("approveTierOnce() calls issueGrant (per-tool) and clears banner on success", async () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     tierListeners[0]?.({
@@ -515,6 +559,8 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
   });
 
   it("approveTierOnce() is a no-op while another approval is in flight", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     tierListeners[0]?.({
@@ -531,6 +577,8 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
   });
 
   it("dismissTierMismatch() clears the banner immediately", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     tierListeners[0]?.({
@@ -546,6 +594,8 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
   });
 
   it("dismissTierMismatch() resets the denial counter for the dismissed session (#10017)", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "sess-9";
     const ctrl = new HelpSessionController();
     ctrl.start();
     tierListeners[0]?.({
@@ -562,6 +612,8 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
   });
 
   it("dismissTierMismatch() does not reset denial counts when no banner is showing", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     ctrl.dismissTierMismatch();
@@ -570,6 +622,8 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
   });
 
   it("dismissTierMismatch() clears the banner even if the denial-reset IPC rejects", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "sess-r";
     const ctrl = new HelpSessionController();
     ctrl.start();
     // Fire-and-forget: a rejected reset (e.g. caller-pin mismatch after a view
@@ -590,6 +644,8 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
 
 describe("HelpSessionController — session revoked (#10017)", () => {
   it("start() arms the session-revoked subscription", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     expect(mockMcpOnSessionRevoked).toHaveBeenCalledTimes(1);
@@ -597,6 +653,8 @@ describe("HelpSessionController — session revoked (#10017)", () => {
   });
 
   it("a session-revoked push surfaces the recovery banner", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     helpPanelState.sessionId = "sess-live";
@@ -609,6 +667,8 @@ describe("HelpSessionController — session revoked (#10017)", () => {
   });
 
   it("ignores a revoke for a session the panel has already replaced", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     helpPanelState.sessionId = "sess-current";
@@ -618,6 +678,8 @@ describe("HelpSessionController — session revoked (#10017)", () => {
   });
 
   it("ignores a revoke while no session is pinned (torn-down or mid-relaunch window)", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     // A null store sessionId means there is no live session to end — a revoke
@@ -630,6 +692,8 @@ describe("HelpSessionController — session revoked (#10017)", () => {
   });
 
   it("dismissSessionRevoked clears the banner", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl["_patch"]({ sessionRevoked: { sessionId: "sess-1", denialKind: "tierMismatch" } });
     expect(ctrl.getSnapshot().sessionRevoked).not.toBeNull();
@@ -638,6 +702,8 @@ describe("HelpSessionController — session revoked (#10017)", () => {
   });
 
   it("a launch supersedes any standing revoked-session banner", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     ctrl["_lastInputs"] = {
@@ -670,6 +736,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   }
 
   it("start() arms the grant lifecycle subscription", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     expect(mockMcpOnGrantLifecycle).toHaveBeenCalledTimes(1);
@@ -678,6 +746,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   });
 
   it("grant.issued sets the active countdown and clears the prompting mismatch", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     armMismatch();
@@ -704,6 +774,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   });
 
   it("grant.issued without expiresAt is ignored rather than seeding a NaN countdown", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     grantLifecycleListeners[0]?.({
@@ -717,6 +789,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   });
 
   it("grant.expired retires the active grant and surfaces an 'expired' notice", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     grantLifecycleListeners[0]?.({
@@ -738,6 +812,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   });
 
   it("grant.revoked with grant-ceiling surfaces a ceiling notice", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     grantLifecycleListeners[0]?.({
@@ -762,6 +838,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   it.each(["user", "session-ended", "session-idle"] as const)(
     "grant.revoked with reason %s clears the grant silently (no notice)",
     (revokedReason) => {
+      // #12108: MCP pushes are matched against the lane's own session id.
+      helpPanelState.sessionId = "s1";
       const ctrl = new HelpSessionController();
       ctrl.start();
       grantLifecycleListeners[0]?.({
@@ -785,6 +863,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   );
 
   it("a lapse for a different tool leaves the on-screen countdown intact", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     grantLifecycleListeners[0]?.({
@@ -807,6 +887,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   });
 
   it("tier.elevated / tier.decayed do not disturb the per-tool countdown", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     grantLifecycleListeners[0]?.({
@@ -834,6 +916,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   });
 
   it("a fresh tier denial supersedes a lingering 'approval ended' notice", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     grantLifecycleListeners[0]?.({
@@ -867,6 +951,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   }
 
   it("revokeGrant() revokes the session's grants and clears the countdown once the IPC settles", async () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     issueGrant();
@@ -883,6 +969,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   });
 
   it("revokeGrant() is a no-op while a revoke is already in flight", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     issueGrant();
@@ -900,6 +988,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   });
 
   it("revokeGrant() does not wipe a newer grant that arrived before the IPC settled", async () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     issueGrant();
@@ -929,6 +1019,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   });
 
   it("a failed revoke keeps the countdown banner up as the retry surface", async () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     issueGrant();
@@ -943,6 +1035,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   });
 
   it("a teardown mid-revoke does not leak a disabled Revoke button into the next grant", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     issueGrant();
@@ -962,6 +1056,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   });
 
   it("revokeGrant() is a no-op when there is no active grant", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     ctrl.revokeGrant();
@@ -970,6 +1066,8 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   });
 
   it("dismissGrantEnded() clears the notice", () => {
+    // #12108: MCP pushes are matched against the lane's own session id.
+    helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
     grantLifecycleListeners[0]?.({

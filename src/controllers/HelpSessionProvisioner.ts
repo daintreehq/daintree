@@ -7,6 +7,7 @@ import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionContext } from "@shared/types/actions";
 import type { HelpProjectRef, LaunchErrorKind } from "./HelpSessionController";
+import { DEFAULT_ASSISTANT_SLOT } from "@shared/config/assistantSlots";
 
 export interface HelpSessionRef {
   sessionId: string;
@@ -41,13 +42,20 @@ export type ProvisionOutcome =
 export async function provisionHelpSession(
   project: HelpProjectRef,
   agentId: string,
-  context?: ActionContext
+  context?: ActionContext,
+  /**
+   * The assistant lane to provision into (#12108). Main displaces only the
+   * prior session in this lane, so naming it is what lets sibling sessions
+   * survive a launch.
+   */
+  slot: number = DEFAULT_ASSISTANT_SLOT
 ): Promise<ProvisionOutcome> {
   try {
     const result = await window.electron.help.provisionSession({
       projectId: project.id,
       projectPath: project.path,
       agentId,
+      slot,
       ...(context && { context }),
     });
     if (!result) {
