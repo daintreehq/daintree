@@ -185,7 +185,6 @@ export function McpConfirmDialog() {
   // red. Daintree classifies its own actions, so unlike a remote server's
   // self-reported tool annotations this value is trusted.
   const isDestructive = current.danger === "confirm";
-  const variant = isDestructive ? "destructive" : "default";
   const previewState = derivePreviewState(current);
   const hasArgs = current.argsSummary.trim().length > 0;
 
@@ -195,43 +194,64 @@ export function McpConfirmDialog() {
   // either is present — matching every sibling confirm that shows a preview.
   const hasScrollableContent = previewState !== "none" || hasArgs;
 
+  const sharedProps = {
+    isOpen: true,
+    onClose: () => resolveOnce(current.requestId, "rejected"),
+    title: confirmTitle(current),
+    description: current.actionDescription,
+    confirmLabel: current.actionTitle,
+    cancelLabel: "Cancel",
+    onConfirm: () => resolveOnce(current.requestId, "approved"),
+    hasPreview: hasScrollableContent,
+    confirmDisabled: previewState === "pending",
+    confirmCooldownMs: isDestructive ? CONFIRM_COOLDOWN_MS : undefined,
+    cooldownKey: current.requestId,
+    hint: <GateHint previewState={previewState} queueDepth={queueDepth} />,
+  };
+
+  const body = (
+    <div className="space-y-3">
+      <RequesterRow current={current} />
+
+      {current.dangerRationale && (
+        <ConsequenceNote isDestructive={isDestructive}>{current.dangerRationale}</ConsequenceNote>
+      )}
+
+      {previewState !== "none" && (
+        <PreviewCard
+          title={current.previewTitle ?? "Working tree changes"}
+          state={previewState}
+          lines={current.preview ?? []}
+        />
+      )}
+
+      {hasArgs && <ArgumentsDisclosure argsSummary={current.argsSummary} />}
+    </div>
+  );
+
+  // Two fully-shaped calls rather than one with a computed `variant`:
+  // `ConfirmDialogProps` is a discriminated union that admits `typedNameTarget`
+  // only on the destructive arm, and a variable variant erases the discriminant
+  // that makes the gate impossible to attach to a non-destructive confirm.
   return (
     <ErrorBoundary variant="component" componentName="McpConfirmDialog" resetKeys={[resetKey]}>
-      <ConfirmDialog
-        isOpen={true}
-        onClose={() => resolveOnce(current.requestId, "rejected")}
-        title={confirmTitle(current)}
-        description={current.actionDescription}
-        confirmLabel={current.actionTitle}
-        cancelLabel="Cancel"
-        onConfirm={() => resolveOnce(current.requestId, "approved")}
-        variant={variant}
-        hasPreview={hasScrollableContent}
-        confirmDisabled={previewState === "pending"}
-        confirmCooldownMs={isDestructive ? CONFIRM_COOLDOWN_MS : undefined}
-        cooldownKey={current.requestId}
-        hint={<GateHint previewState={previewState} queueDepth={queueDepth} />}
-      >
-        <div className="space-y-3">
-          <RequesterRow current={current} />
-
-          {current.dangerRationale && (
-            <ConsequenceNote isDestructive={isDestructive}>
-              {current.dangerRationale}
-            </ConsequenceNote>
-          )}
-
-          {previewState !== "none" && (
-            <PreviewCard
-              title={current.previewTitle ?? "Working tree changes"}
-              state={previewState}
-              lines={current.preview ?? []}
-            />
-          )}
-
-          {hasArgs && <ArgumentsDisclosure argsSummary={current.argsSummary} />}
-        </div>
-      </ConfirmDialog>
+      {isDestructive ? (
+        <ConfirmDialog
+          {...sharedProps}
+          variant="destructive"
+          // The D3 typed-name gate for an agent-dispatched force delete
+          // (#12115). Resolved in the bridge from the renderer's own stores and
+          // the same fresh fetch that produced the preview above — never from
+          // the dispatch arguments, which are the one thing the caller controls.
+          typedNameTarget={current.typedNameTarget}
+        >
+          {body}
+        </ConfirmDialog>
+      ) : (
+        <ConfirmDialog {...sharedProps} variant="default">
+          {body}
+        </ConfirmDialog>
+      )}
     </ErrorBoundary>
   );
 }

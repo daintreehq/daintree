@@ -17,7 +17,10 @@ import {
   submoduleFileCount,
   submoduleForceRequired,
   submodulesFromPreviewError,
+  settleWorktreeDeleteOutcome,
   summarizeWorktreeChanges,
+  worktreeDeleteBlockedBy,
+  worktreeDeleteContentRisk,
   PREVIEW_FILE_LIMIT,
   type WorktreeDeletePreview,
   type WorktreeSubmoduleRiskState,
@@ -335,15 +338,10 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const revalidateThenDelete = async () => {
     const session = sessionRef.current;
     setIsDeleting(true);
-    let preview: WorktreeDeletePreview | null = null;
-    let failed = false;
-    let failedRisk: WorktreeSubmoduleRiskState | null = null;
-    try {
-      preview = await buildWorktreeDeletePreview(worktree.id);
-    } catch (error) {
-      failed = true;
-      failedRisk = submodulesFromPreviewError(error);
-    }
+    const outcome = await settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(worktree.id));
+    const preview = outcome.state === "verified" ? outcome.preview : null;
+    const failed = outcome.state === "failed";
+    const failedRisk = outcome.state === "failed" ? outcome.submodules : null;
     // Abort if the dialog closed/reopened/changed worktree or unmounted while
     // the fresh re-check was in flight — never dispatch against a session the
     // user is no longer looking at.
@@ -359,29 +357,21 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     //
     // A parent-status failure does not exempt this: the submodule arm may have
     // completed, and a completed inventory is what the host refuses on.
-    const freshRisk = failed ? failedRisk : (preview?.submodules ?? null);
-    if (
-      freshRisk &&
-      (!failed || freshRisk.status === "verified") &&
-      submoduleDeleteBlock(freshRisk) !== null
-    ) {
+    if (worktreeDeleteBlockedBy(outcome) !== null) {
       setIsDeleting(false);
       return;
     }
-    const freshHasTracked = failed ? true : (preview ?? seedSummary).hasTrackedChanges;
-    // Same fail-closed shape as `freshHasTracked`. A resolved-`null` preview
-    // means the monitor is gone — the worktree is already removed, so there is
-    // no submodule left to lose and escalating would only strand the user.
-    // `submoduleForceRequired` answers false for anything unverified, so a
-    // surviving inventory from a failed parent fetch escalates on its own
-    // merits rather than being discarded with the arm that failed.
-    const freshSubmoduleFilesAtRisk = freshRisk ? submoduleForceRequired(freshRisk) : false;
+    // Shared with the MCP confirm bridge, which gates the same force delete
+    // dispatched by an agent (#12115) — the fail-closed rules for a failed
+    // fetch and an already-removed worktree have to be one implementation or
+    // the two surfaces eventually disagree about the same worktree.
+    const freshRisk = worktreeDeleteContentRisk(outcome, seedSummary);
     const freshTier = deriveEffectiveTier("worktree.delete", {
       force: true,
       isProtectedBranch,
       isMainWorktree: worktree.isMainWorktree === true,
-      hasTrackedChanges: freshHasTracked,
-      submoduleFilesAtRisk: freshSubmoduleFilesAtRisk,
+      hasTrackedChanges: freshRisk.hasTrackedChanges,
+      submoduleFilesAtRisk: freshRisk.submoduleFilesAtRisk,
     });
     if (freshTier === "D3" && confirmInput !== confirmTarget) {
       // Escalated on fresh data — show the typed-name gate, do not dispatch.

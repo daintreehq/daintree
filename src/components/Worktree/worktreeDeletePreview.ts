@@ -240,6 +240,115 @@ export async function buildWorktreeDeletePreview(
   };
 }
 
+/**
+ * What a fresh delete-preview fetch established, in the three states whose
+ * fail-closed rules genuinely differ.
+ *
+ * Kept as a union rather than `WorktreeDeletePreview | null` plus a thrown
+ * error because every consumer has to branch on all three anyway, and the two
+ * failure spellings are NOT interchangeable: `"gone"` means nobody is left to
+ * lose anything, while `"failed"` means we could not find out — the difference
+ * between "do not escalate" and "escalate on principle".
+ */
+export type WorktreeDeletePreviewOutcome =
+  | { state: "verified"; preview: WorktreeDeletePreview }
+  | { state: "gone" }
+  | { state: "failed"; submodules: WorktreeSubmoduleRiskState | null };
+
+/**
+ * Fold a {@link buildWorktreeDeletePreview} call's three endings — a preview, a
+ * `null`, a rejection — into one value. Never rejects.
+ *
+ * The gate lives on two surfaces now — `WorktreeDeleteDialog`'s submit-time
+ * re-check and the MCP confirm bridge — and both need the same three-way
+ * answer. Having each write its own try/catch is how the fail-closed rules
+ * drift apart, which is the whole failure class this module exists to prevent.
+ *
+ * Takes the pending call rather than a worktree id so the CALLER is the one
+ * that invokes the builder. That is deliberate: suites that steer this path
+ * mock `buildWorktreeDeletePreview` on this module, and a wrapper that called
+ * it from in here would reach the real implementation past the mock and quietly
+ * test nothing.
+ */
+export async function settleWorktreeDeleteOutcome(
+  pending: Promise<WorktreeDeletePreview | null>
+): Promise<WorktreeDeletePreviewOutcome> {
+  try {
+    const preview = await pending;
+    return preview === null ? { state: "gone" } : { state: "verified", preview };
+  } catch (error) {
+    return { state: "failed", submodules: submodulesFromPreviewError(error) };
+  }
+}
+
+/** The two content-derived tier inputs, plus the risk state they came from. */
+export interface WorktreeDeleteContentRisk {
+  /** `deriveEffectiveTier`'s `hasTrackedChanges` — never a combined `hasChanges` (#4927). */
+  hasTrackedChanges: boolean;
+  /** `deriveEffectiveTier`'s `submoduleFilesAtRisk`. */
+  submoduleFilesAtRisk: boolean;
+  /** The inventory the outcome established, or `null` when none survived. */
+  submodules: WorktreeSubmoduleRiskState | null;
+}
+
+/**
+ * Derive the content half of `WorktreeDeleteTierCtx` from a fetch outcome.
+ *
+ * The three rules are load-bearing and each has a scar behind it:
+ *   - `failed` forces `hasTrackedChanges` true. We could not read the parent
+ *     status, so the tier must assume the worst rather than read "no data" as
+ *     "clean".
+ *   - `gone` does NOT escalate on submodules. The monitor is gone, so the
+ *     worktree is already removed and there is nothing left to lose;
+ *     escalating there would only strand the caller behind a gate for a delete
+ *     with no content. Its tracked-changes answer comes from `fallback` —
+ *     whatever seed the caller already had, or `false` where it has none.
+ *   - A surviving inventory from a failed parent fetch still escalates on its
+ *     own merits: half an answer about the submodules is real evidence, and
+ *     `submoduleForceRequired` already answers false for anything unverified.
+ */
+export function worktreeDeleteContentRisk(
+  outcome: WorktreeDeletePreviewOutcome,
+  fallback: { hasTrackedChanges: boolean }
+): WorktreeDeleteContentRisk {
+  const submodules =
+    outcome.state === "verified"
+      ? outcome.preview.submodules
+      : outcome.state === "failed"
+        ? outcome.submodules
+        : null;
+  const hasTrackedChanges =
+    outcome.state === "verified"
+      ? outcome.preview.hasTrackedChanges
+      : outcome.state === "failed"
+        ? true
+        : fallback.hasTrackedChanges;
+  return {
+    hasTrackedChanges,
+    submoduleFilesAtRisk: submodules ? submoduleForceRequired(submodules) : false,
+    submodules,
+  };
+}
+
+/**
+ * Why the host will refuse this outcome's delete outright, or `null` when it
+ * won't — the blocked state, which is not a tier.
+ *
+ * A parent-status failure does not exempt the check: the submodule arm may
+ * have completed on its own, and a completed inventory is exactly what
+ * `WorkspaceService.guardSubmoduleDelete` refuses on. But an inventory that is
+ * itself only `unverified` BECAUSE the parent fetch took it down must not read
+ * as a refusal — that is how a parent timeout turned into a blocked delete.
+ */
+export function worktreeDeleteBlockedBy(
+  outcome: WorktreeDeletePreviewOutcome
+): WorktreeSubmoduleDeleteBlock | null {
+  const risk = worktreeDeleteContentRisk(outcome, { hasTrackedChanges: false }).submodules;
+  if (!risk) return null;
+  if (outcome.state === "failed" && risk.status !== "verified") return null;
+  return submoduleDeleteBlock(risk);
+}
+
 /** Max file rows shown in a compact preview before collapsing the tail. */
 export const PREVIEW_FILE_LIMIT = 12;
 

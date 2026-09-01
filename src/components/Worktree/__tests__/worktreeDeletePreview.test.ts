@@ -26,7 +26,11 @@ import {
   submoduleForceRequired,
   submoduleCommitsAreCapped,
   submodulesFromPreviewError,
+  settleWorktreeDeleteOutcome,
+  worktreeDeleteBlockedBy,
+  worktreeDeleteContentRisk,
   WorktreeDeletePreviewError,
+  type WorktreeDeletePreview,
   type WorktreeSubmoduleRiskState,
 } from "../worktreeDeletePreview";
 
@@ -590,5 +594,136 @@ describe("formatWorktreeDeletePreviewLines — submodules", () => {
     expect(caution?.startsWith("⚠ ")).toBe(true);
     expect(caution).toContain("Could not finish checking");
     expect(caution).toContain("cannot be deleted until that check completes");
+  });
+});
+
+/**
+ * The fail-closed rules shared by the two surfaces that gate a force delete —
+ * `WorktreeDeleteDialog`'s submit-time re-check and the MCP confirm bridge
+ * (#12115). One implementation, so they cannot disagree about the same
+ * worktree.
+ */
+describe("settleWorktreeDeleteOutcome / worktreeDeleteContentRisk (#12115)", () => {
+  function preview(over: Partial<WorktreeDeletePreview> = {}): WorktreeDeletePreview {
+    return {
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      rootPath: "/repo/wt-1",
+      submodules: { status: "verified", risk: emptyRisk() },
+      ...over,
+    };
+  }
+
+  it("folds a resolved preview, a null and a rejection into the three distinct states", async () => {
+    const settled = preview({ hasTrackedChanges: true, trackedChangeCount: 1 });
+    await expect(settleWorktreeDeleteOutcome(Promise.resolve(settled))).resolves.toEqual({
+      state: "verified",
+      preview: settled,
+    });
+    await expect(settleWorktreeDeleteOutcome(Promise.resolve(null))).resolves.toEqual({
+      state: "gone",
+    });
+    await expect(settleWorktreeDeleteOutcome(Promise.reject(new Error("boom")))).resolves.toEqual({
+      state: "failed",
+      submodules: null,
+    });
+  });
+
+  it("keeps the submodule half a failed parent fetch carried out with it", async () => {
+    const risk: WorktreeSubmoduleRiskState = {
+      status: "verified",
+      risk: emptyRisk({ dirtyFiles: ["vendor/lib/a.c"] }),
+    };
+    await expect(
+      settleWorktreeDeleteOutcome(
+        Promise.reject(new WorktreeDeletePreviewError(risk, new Error("timeout")))
+      )
+    ).resolves.toEqual({ state: "failed", submodules: risk });
+  });
+
+  it("reads the tracked-only count, never a combined hasChanges (#4927)", () => {
+    const risk = worktreeDeleteContentRisk(
+      { state: "verified", preview: preview({ untrackedFileCount: 3, hasUntrackedFiles: true }) },
+      { hasTrackedChanges: false }
+    );
+    expect(risk.hasTrackedChanges).toBe(false);
+    expect(risk.submoduleFilesAtRisk).toBe(false);
+  });
+
+  it("assumes the worst when the parent status could not be read", () => {
+    // "No data" must never be read as "clean".
+    expect(
+      worktreeDeleteContentRisk({ state: "failed", submodules: null }, { hasTrackedChanges: false })
+        .hasTrackedChanges
+    ).toBe(true);
+  });
+
+  it("escalates on a surviving inventory even though the parent fetch failed", () => {
+    const risk = worktreeDeleteContentRisk(
+      {
+        state: "failed",
+        submodules: { status: "verified", risk: emptyRisk({ untrackedFiles: ["vendor/lib/b.c"] }) },
+      },
+      { hasTrackedChanges: false }
+    );
+    expect(risk.submoduleFilesAtRisk).toBe(true);
+  });
+
+  it("takes the caller's seed for an already-removed worktree and loses no submodules with it", () => {
+    // The monitor is gone, so nothing is left to lose; escalating there would
+    // strand the caller behind a gate for a delete with no content.
+    expect(worktreeDeleteContentRisk({ state: "gone" }, { hasTrackedChanges: true })).toEqual({
+      hasTrackedChanges: true,
+      submoduleFilesAtRisk: false,
+      submodules: null,
+    });
+  });
+});
+
+describe("worktreeDeleteBlockedBy (#12115)", () => {
+  const commits = {
+    status: "verified",
+    risk: emptyRisk({ atRiskCommits: [{ oid: "abc", subject: "s" }] }),
+  } as const;
+
+  it("blocks on commits held only in this worktree's own module store", () => {
+    expect(
+      worktreeDeleteBlockedBy({
+        state: "verified",
+        preview: {
+          trackedChangeCount: 0,
+          untrackedFileCount: 0,
+          hasTrackedChanges: false,
+          hasUntrackedFiles: false,
+          changes: [],
+          rootPath: "/repo/wt-1",
+          submodules: commits,
+        },
+      })
+    ).toBe("at-risk-commits");
+  });
+
+  it("blocks on a completed inventory that a failed parent fetch did not take down with it", () => {
+    expect(worktreeDeleteBlockedBy({ state: "failed", submodules: commits })).toBe(
+      "at-risk-commits"
+    );
+  });
+
+  it("does not read an inventory the parent failure itself unverified as a refusal", () => {
+    // A parent timeout turning an unrecoverable-commit refusal into a blocked
+    // delete is the regression this guard exists for.
+    expect(
+      worktreeDeleteBlockedBy({
+        state: "failed",
+        submodules: { status: "unverified", risk: null },
+      })
+    ).toBeNull();
+  });
+
+  it("has nothing to block on for an already-removed worktree", () => {
+    expect(worktreeDeleteBlockedBy({ state: "gone" })).toBeNull();
   });
 });
