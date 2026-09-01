@@ -48,10 +48,7 @@ vi.mock("@/store/preferencesStore", () => ({
 // A Popover, whose open/close choreography jsdom does not drive. Its own
 // behaviour is covered in MarkdownTextSizeControl.test.tsx.
 vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
-  MarkdownTextSizeControl: (props: {
-    value: string;
-    onValueChange: (next: string) => void;
-  }) => (
+  MarkdownTextSizeControl: (props: { value: string; onValueChange: (next: string) => void }) => (
     <button
       type="button"
       data-testid="markdown-text-size-mock"

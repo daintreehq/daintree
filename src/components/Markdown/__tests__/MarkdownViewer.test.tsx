@@ -80,12 +80,7 @@ describe("MarkdownViewer", () => {
   it("stays silent in source mode, which has no chunk to wait on", () => {
     const onRendered = vi.fn();
     const { container } = render(
-      <MarkdownViewer
-        {...FIXTURE_PROPS}
-        viewMode="source"
-        fontSize="2xl"
-        onRendered={onRendered}
-      />
+      <MarkdownViewer {...FIXTURE_PROPS} viewMode="source" fontSize="2xl" onRendered={onRendered} />
     );
 
     expect(screen.getByTestId("code-viewer-mock")).toBeDefined();
@@ -93,8 +88,6 @@ describe("MarkdownViewer", () => {
     // Source is CodeMirror, which this scale does not reach: the rung must not
     // leak onto the editor as an inherited custom property.
     expect(container.querySelector(".markdown-document")).toBeNull();
-    expect(
-      container.querySelector<HTMLElement>("[style*='--markdown-font-size']")
-    ).toBeNull();
+    expect(container.querySelector<HTMLElement>("[style*='--markdown-font-size']")).toBeNull();
   });
 });

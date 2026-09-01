@@ -720,12 +720,9 @@ describe("preferencesStore migration", () => {
       // Drive `migrate` directly: hydration's sanitizer would supply the same
       // default, so a store-level assertion passes with the v18 branch deleted.
       const store = await loadStore();
-      const migrated = store.persist
-        .getOptions()
-        .migrate?.({ dockDensity: "compact" }, 17) as Record<string, unknown>;
+      const migrated = store.persist.getOptions().migrate?.({ dockDensity: "compact" }, 17);
 
-      expect(migrated.markdownFontSize).toBe("sm");
-      expect(migrated.dockDensity).toBe("compact");
+      expect(migrated).toMatchObject({ markdownFontSize: "sm", dockDensity: "compact" });
       // Pin the bump too: `migrate` only runs for a blob below the configured
       // version, so leaving it at 17 would skip the branch above entirely and
       // hydration's sanitizer would quietly supply the same default.
@@ -734,11 +731,9 @@ describe("preferencesStore migration", () => {
 
     it("leaves an already-valid rung alone when migrating", async () => {
       const store = await loadStore();
-      const migrated = store.persist
-        .getOptions()
-        .migrate?.({ markdownFontSize: "2xl" }, 17) as Record<string, unknown>;
+      const migrated = store.persist.getOptions().migrate?.({ markdownFontSize: "2xl" }, 17);
 
-      expect(migrated.markdownFontSize).toBe("2xl");
+      expect(migrated).toMatchObject({ markdownFontSize: "2xl" });
     });
 
     it("replaces a value that is not a rung, including a plausible pixel number", async () => {

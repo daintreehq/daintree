@@ -101,7 +101,7 @@ describe("MarkdownTextSizeControl (#12134)", () => {
     fireEvent.click(increase());
     expect(readout().textContent).toBe("30 px");
     expect(increase().getAttribute("aria-disabled")).toBe("true");
-    expect((increase() as HTMLButtonElement).disabled).toBe(false);
+    expect(increase().hasAttribute("disabled")).toBe(false);
     expect(document.activeElement).toBe(increase());
   });
 

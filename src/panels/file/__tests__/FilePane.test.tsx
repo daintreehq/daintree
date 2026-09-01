@@ -165,9 +165,7 @@ vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 // of silently capturing undefined forever.
 type CapturedMarkdownProps = Pick<MarkdownViewerProps, "onRendered" | "cacheBust" | "fontSize">;
 const markdownViewerProps = vi.hoisted(() => ({
-  current: null as
-    | { onRendered?: () => void; cacheBust?: string; fontSize?: string }
-    | null,
+  current: null as { onRendered?: () => void; cacheBust?: string; fontSize?: string } | null,
 }));
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
   MarkdownViewer: (props: CapturedMarkdownProps) => {
@@ -179,10 +177,7 @@ vi.mock("@/components/Markdown/MarkdownViewer", () => ({
 // drive; what this suite owns is which modes it appears in and the value it is
 // handed. Its own behaviour is covered in MarkdownTextSizeControl.test.tsx.
 vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
-  MarkdownTextSizeControl: (props: {
-    value: string;
-    onValueChange: (next: string) => void;
-  }) => (
+  MarkdownTextSizeControl: (props: { value: string; onValueChange: (next: string) => void }) => (
     <button
       type="button"
       data-testid="markdown-text-size-mock"

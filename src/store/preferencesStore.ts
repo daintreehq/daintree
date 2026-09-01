@@ -252,7 +252,9 @@ function isDiffFontSize(value: unknown): value is DiffFontSize {
 }
 
 function isMarkdownFontSize(value: unknown): value is MarkdownFontSize {
-  return MARKDOWN_FONT_SIZE_STEPS.includes(value as MarkdownFontSize);
+  // `some` rather than `includes`: the latter narrows its argument to the
+  // tuple's own type, so it would need an assertion here to accept `unknown`.
+  return MARKDOWN_FONT_SIZE_STEPS.some((step) => step === value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
