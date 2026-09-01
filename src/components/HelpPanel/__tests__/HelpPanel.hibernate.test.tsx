@@ -11,6 +11,7 @@ const {
   mockPeekPendingHibernation,
   mockTakePendingHibernation,
   mockRestorePendingHibernation,
+  mockListPendingHibernationSlots,
   mockReportPanelOpen,
   mockProvisionSession,
   mockRevokeSession,
@@ -44,6 +45,7 @@ const {
   mockPeekPendingHibernation: vi.fn().mockResolvedValue(null),
   mockTakePendingHibernation: vi.fn().mockResolvedValue(null),
   mockRestorePendingHibernation: vi.fn().mockResolvedValue(false),
+  mockListPendingHibernationSlots: vi.fn().mockResolvedValue([]),
   mockReportPanelOpen: vi.fn().mockResolvedValue(undefined),
   mockProvisionSession: vi.fn().mockResolvedValue(null),
   mockRevokeSession: vi.fn().mockResolvedValue(undefined),
@@ -81,6 +83,7 @@ const {
     setActiveSlot: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
+    ensureSlot: vi.fn(),
     // #12108: the panel reads its lane pointer; the mocked selectors
     // above project this same flat object as that lane.
     activeSlot: 0,
@@ -492,6 +495,9 @@ function resetState() {
   mockTakePendingHibernation.mockResolvedValue(null);
   mockRestorePendingHibernation.mockReset();
   mockRestorePendingHibernation.mockResolvedValue(false);
+  mockListPendingHibernationSlots.mockReset();
+  mockListPendingHibernationSlots.mockResolvedValue([]);
+  helpPanelState.ensureSlot = vi.fn();
   mockReportPanelOpen.mockReset();
   mockReportPanelOpen.mockResolvedValue(undefined);
   focusStoreState.gestureAssistantHidden = false;
@@ -570,6 +576,7 @@ beforeEach(() => {
           peekPendingHibernation: mockPeekPendingHibernation,
           takePendingHibernation: mockTakePendingHibernation,
           restorePendingHibernation: mockRestorePendingHibernation,
+          listPendingHibernationSlots: mockListPendingHibernationSlots,
           reportPanelOpen: mockReportPanelOpen,
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
@@ -2135,5 +2142,43 @@ describe("HelpPanel — + New session clears hibernated entry", () => {
     });
 
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
+  });
+});
+
+describe("HelpPanel — cold-view lane restore (#12108)", () => {
+  it("recreates a tab for every lane holding an eviction-captured conversation", async () => {
+    // A cold view knows only slot 0, so lanes 1+ would have no tab to reach
+    // their captured conversations from even though the entries are on disk.
+    helpPanelState.terminalId = null;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockListPendingHibernationSlots.mockResolvedValue([0, 2]);
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    expect(mockListPendingHibernationSlots).toHaveBeenCalledWith("proj-1");
+    expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(0);
+    expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(2);
+    // Recreating a background lane must not start (or bill) it — the restored
+    // tab lands on its own Resume CTA and waits for the user. (Slot 0 is the
+    // visible lane and follows the ordinary auto-launch consent path.)
+    expect(mockProvisionSession).not.toHaveBeenCalledWith(expect.objectContaining({ slot: 2 }));
+  });
+
+  it("does not recreate lanes for a view that already holds a live session", async () => {
+    helpPanelState.terminalId = "term-live";
+    helpPanelState.agentId = "claude";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockListPendingHibernationSlots.mockResolvedValue([1]);
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    expect(mockListPendingHibernationSlots).not.toHaveBeenCalled();
+    expect(helpPanelState.ensureSlot).not.toHaveBeenCalled();
   });
 });

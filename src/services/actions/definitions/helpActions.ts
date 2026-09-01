@@ -8,6 +8,7 @@ import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useFocusStore } from "@/store/focusStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
@@ -261,12 +262,25 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       );
 
       if (result.ok && result.result?.terminalId) {
+        const launchedTerminalId = result.result.terminalId;
+        // The lane can be closed while the provision + dispatch awaits are
+        // outstanding (#12108). `setTerminal` refuses to bind into a lane that
+        // is gone, so binding blind would leave this PTY holding a live bearer,
+        // owned by no lane and no longer filtered out of the dock. Tear it down
+        // instead — revoke before kill, mirroring `_teardownBoundSession`.
+        if (!useHelpPanelStore.getState().sessions[activeSlot]) {
+          window.electron.help.revokeSession(session.sessionId).catch((err) => {
+            logError("Failed to revoke help session for a lane closed mid-launch", err);
+          });
+          usePanelStore.getState().removePanel(launchedTerminalId);
+          return;
+        }
         // Bind into the lane the panel is showing (#12108). The action never
         // picks a lane implicitly: provisioning targeted this same lane above,
         // so binding anywhere else would leave that session unreachable.
         useHelpPanelStore
           .getState()
-          .setTerminal(activeSlot, result.result.terminalId, agentId, session?.sessionId ?? null);
+          .setTerminal(activeSlot, launchedTerminalId, agentId, session?.sessionId ?? null);
         useFocusStore.getState().clearAssistantGesture();
         if (!useHelpPanelStore.getState().isOpen) {
           suppressSidebarResizes();

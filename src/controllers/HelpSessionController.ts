@@ -633,9 +633,16 @@ export class HelpSessionController {
    * starts fresh through the normal launch / auto-launch flow. Safe to call
    * repeatedly: with nothing bound it skips the teardown but still invalidates
    * any in-flight launch and closes, converging on the same stopped state.
+   *
+   * `closePanel: false` is for the parallel-lane close (#12108), where a
+   * sibling lane is still live behind the tab strip and sliding the whole
+   * sidebar out would take a running conversation off screen with it. It stays
+   * true by default — for the last lane the close is load-bearing, not
+   * cosmetic: `closeSlot` recreates an empty slot 0 whose fresh controller has
+   * never auto-launched, and `_maybeAutoLaunch` hard-gates on `isOpen`.
    */
-  endSession(): void {
-    this._stopBoundSession();
+  endSession(options: { closePanel?: boolean } = {}): void {
+    this._stopBoundSession(options.closePanel ?? true);
   }
 
   /**
@@ -657,7 +664,7 @@ export class HelpSessionController {
   handleAgentExited(terminalId: string): void {
     if (this._snapshot.phase === "hibernating") return;
     if (this._slotState().terminalId !== terminalId) return;
-    this._stopBoundSession();
+    this._stopBoundSession(true);
   }
 
   /**
@@ -665,11 +672,11 @@ export class HelpSessionController {
    * self-exit (`handleAgentExited`). Aborts any in-flight launch first (mirrors
    * `cancelLaunch`) so a late-settling provision can't bind a fresh terminal
    * after the stop, tears the bound session down (revoke-before-kill), makes
-   * the stop stick, then slides the sidebar out. The close is unconditional:
-   * both callers end the session outright, so neither leaves the panel behind
-   * on its empty state.
+   * the stop stick, then slides the sidebar out. Both callers end the session
+   * outright, so neither leaves the panel behind on its empty state — except
+   * when `closePanel` is false because another lane is still live (#12108).
    */
-  private _stopBoundSession(): void {
+  private _stopBoundSession(closePanel: boolean): void {
     this._launchGen++;
     this._isLaunching = false;
     this._clearLaunchWatchdog();
@@ -687,7 +694,7 @@ export class HelpSessionController {
 
     this._applyStopSuppression();
 
-    useHelpPanelStore.getState().setOpen(false);
+    if (closePanel) useHelpPanelStore.getState().setOpen(false);
   }
 
   /**

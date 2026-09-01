@@ -185,6 +185,10 @@ export function HelpPanel({
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
   const [showEndSessionConfirm, setShowEndSessionConfirm] = useState(false);
   const [showAgentSwitchConfirm, setShowAgentSwitchConfirm] = useState(false);
+  // The lane a tab's close button is waiting on confirmation for (#12108).
+  // Null means no close is pending — closing is destructive (the conversation
+  // is discarded, not paused), so it takes the same gate the Stop control uses.
+  const [pendingCloseSlot, setPendingCloseSlot] = useState<number | null>(null);
   // Tracks the last preferredAgentId the switch effect acted on so a single
   // preference change drives at most one switch attempt (the effect re-runs
   // on unrelated dep changes while the async launch settles).
@@ -1045,6 +1049,41 @@ export function HelpPanel({
     [openSlots, laneAgentStates]
   );
 
+  // Bring back the tabs for lanes whose conversations an eviction or crash
+  // captured (#12108). A cold view starts at slot 0 alone, so lanes 1+ — whose
+  // resume entries survived on disk — would have no tab to reach them from and
+  // their conversations would be stranded despite still being there. The
+  // listing is non-consuming, like the peeks: a recreated lane simply lands on
+  // its own "Resume assistant" empty state, and nothing launches (or bills)
+  // until the user asks. Background lanes report `isOpen: false` to their
+  // controller, so auto-launch can't fire behind the tab strip either.
+  //
+  // One-shot per workspace, and only while the view is genuinely cold — a
+  // single, unbound lane — so it can never fight the user's own tab edits.
+  const restoredLaneWorkspaceRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeWorkspaceId || restoredLaneWorkspaceRef.current === activeWorkspaceId) return;
+    if (openSlots.length > 1 || terminalId) return;
+    // Optional-chained like the hibernation peeks: a missing binding degrades
+    // to the pre-lane behaviour rather than throwing.
+    const listing = window.electron.help.listPendingHibernationSlots?.(activeWorkspaceId);
+    if (!listing) return;
+    let cancelled = false;
+    void listing
+      .then((slots) => {
+        if (cancelled || restoredLaneWorkspaceRef.current === activeWorkspaceId) return;
+        restoredLaneWorkspaceRef.current = activeWorkspaceId;
+        const store = useHelpPanelStore.getState();
+        for (const slot of slots) store.ensureSlot(slot);
+      })
+      .catch((err) => {
+        logWarn("HelpPanel: failed to list pending hibernation lanes", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId, openSlots.length, terminalId]);
+
   const handleOpenParallelSession = useCallback(() => {
     const slot = useHelpPanelStore.getState().openSlot();
     if (slot === null) return;
@@ -1061,18 +1100,64 @@ export function HelpPanel({
     useHelpPanelStore.getState().requestFocus();
   }, []);
 
-  const handleCloseSlot = useCallback((slot: number) => {
+  const closeSlotNow = useCallback((slot: number) => {
     const state = useHelpPanelStore.getState();
     const lane = state.sessions[slot];
     // Revoke and kill BEFORE dropping the lane. `stop()` only disarms
     // listeners — it deliberately does not end the session — so releasing the
     // controller first would strand a live agent with nothing to shut it down.
     if (lane?.terminalId || lane?.sessionId) {
-      acquireHelpSessionController(slot).endSession();
+      // Keep the panel on screen while a sibling lane is still live: the tab
+      // strip only exists at two lanes or more, so an unconditional close would
+      // slide a running Session 1 out because Session 2 was dismissed. Closing
+      // the LAST lane still closes — `closeSlot` recreates an empty slot 0
+      // whose fresh controller would auto-launch straight back into a session
+      // the user just ended if the panel stayed open.
+      const isLastLane = selectOpenSlots(state).length <= 1;
+      acquireHelpSessionController(slot).endSession({ closePanel: isLastLane });
     }
     releaseHelpSessionController(slot);
     state.closeSlot(slot);
   }, []);
+
+  // Same "something to lose" gate the Stop control uses, but evaluated against
+  // the lane BEING CLOSED rather than the one on screen — a background lane is
+  // exactly where a working agent goes unnoticed.
+  const laneNeedsCloseConfirm = useCallback((slot: number) => {
+    const lane = useHelpPanelStore.getState().sessions[slot];
+    if (!lane) return false;
+    if (lane.conversationTouched) return true;
+    if (!lane.terminalId) return false;
+    const panel = usePanelStore.getState().panelsById[lane.terminalId];
+    const agentState = panel && isPtyPanel(panel) ? panel.agentState : undefined;
+    return agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(agentState);
+  }, []);
+
+  const handleCloseSlot = useCallback(
+    (slot: number) => {
+      if (laneNeedsCloseConfirm(slot)) {
+        setPendingCloseSlot(slot);
+        return;
+      }
+      closeSlotNow(slot);
+    },
+    [laneNeedsCloseConfirm, closeSlotNow]
+  );
+
+  const handleConfirmCloseSlot = useCallback(() => {
+    const slot = pendingCloseSlot;
+    setPendingCloseSlot(null);
+    if (slot !== null) closeSlotNow(slot);
+  }, [pendingCloseSlot, closeSlotNow]);
+
+  const handleCancelCloseSlot = useCallback(() => {
+    setPendingCloseSlot(null);
+  }, []);
+
+  const pendingCloseLabel =
+    pendingCloseSlot === null
+      ? null
+      : (sessionTabs.find((tab) => tab.slot === pendingCloseSlot)?.label ?? "this session");
 
   const handleNewSession = useCallback(() => {
     if (!terminalId || !agentId) return;
@@ -1712,6 +1797,15 @@ export function HelpPanel({
         confirmLabel="Stop assistant"
         onConfirm={handleConfirmEndSession}
         onClose={handleCancelEndSession}
+        variant="destructive"
+      />
+      <ConfirmDialog
+        isOpen={pendingCloseSlot !== null}
+        title={`Close ${pendingCloseLabel ?? "this session"}?`}
+        description="The assistant will stop and the conversation will be discarded"
+        confirmLabel="Close session"
+        onConfirm={handleConfirmCloseSlot}
+        onClose={handleCancelCloseSlot}
         variant="destructive"
       />
       <ConfirmDialog

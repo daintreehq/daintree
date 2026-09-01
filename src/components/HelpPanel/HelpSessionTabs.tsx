@@ -55,13 +55,20 @@ interface HelpSessionTabsProps {
  * No accent anywhere: the strip sits inside the assistant focus region, whose
  * one load-bearing accent is already spent on the focus ring. The active tab
  * is distinguished by surface and text hierarchy instead.
+ *
+ * Deliberately a toggle-button group rather than the ARIA tabs pattern. Tabs
+ * promise a roving tabindex with arrow-key navigation and one `tabpanel` per
+ * tab; this strip drives a single shared body and keeps each lane's close
+ * button in the tab order on purpose, so claiming `role="tab"` would announce
+ * keyboard behaviour that isn't there. `aria-pressed` says exactly what is
+ * true: one of these selectors is currently on.
  */
 export function HelpSessionTabs({ tabs, activeSlot, onSelect, onClose }: HelpSessionTabsProps) {
   if (tabs.length < 2) return null;
 
   return (
     <div
-      role="tablist"
+      role="group"
       aria-label="Assistant sessions"
       className="flex items-stretch gap-1 px-2 py-1 border-b border-border-default shrink-0 overflow-x-auto"
     >
@@ -78,8 +85,7 @@ export function HelpSessionTabs({ tabs, activeSlot, onSelect, onClose }: HelpSes
           >
             <button
               type="button"
-              role="tab"
-              aria-selected={isActive}
+              aria-pressed={isActive}
               onClick={() => onSelect(tab.slot)}
               className={cn(
                 "flex items-center gap-1.5 min-w-0 text-xs transition-colors duration-150 ease-out",

@@ -146,6 +146,15 @@ interface HelpPanelActions {
    * one, since reuse would displace a session the user never named.
    */
   openSlot: () => number | null;
+  /**
+   * Open one specific lane if it isn't already, leaving the active lane alone.
+   *
+   * The restore half of `openSlot`: a cold view knows only slot 0, so a lane
+   * whose eviction-captured conversation survived on disk has to come back at
+   * its ORIGINAL slot — the persisted entries are keyed by it — and recreating
+   * a background tab must not yank the user off the lane they're looking at.
+   */
+  ensureSlot: (slot: number) => void;
   /** Drop a lane. Never removes the last one: the panel always has slot 0. */
   closeSlot: (slot: number) => void;
   setActiveSlot: (slot: number) => void;
@@ -394,6 +403,13 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
         });
         return taken;
       },
+
+      ensureSlot: (slot) =>
+        set((s) =>
+          isValidAssistantSlot(slot) && !s.sessions[slot]
+            ? { sessions: { ...s.sessions, [slot]: emptySlot() } }
+            : s
+        ),
 
       closeSlot: (slot) =>
         set((s) => {

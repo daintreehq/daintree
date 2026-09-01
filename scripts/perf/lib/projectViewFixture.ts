@@ -702,7 +702,7 @@ export class ProjectViewHarness {
 
   /**
    * Re-point the assistant floor at the assistant project's CURRENT view. The
-   * product re-reads `assistantBackendForProject` on every eviction pass, and
+   * product re-reads `assistantBackendsForProject` on every eviction pass, and
    * a stale WebContents id would silently stop protecting anything.
    */
   syncAssistantPin(): void {

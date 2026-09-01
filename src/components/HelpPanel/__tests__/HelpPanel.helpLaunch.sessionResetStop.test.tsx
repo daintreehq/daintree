@@ -76,7 +76,10 @@ const {
     // #12108: the panel reads its lane pointer; the mocked selectors
     // above project this same flat object as that lane.
     activeSlot: 0,
-    sessions: {} as Record<number, unknown>,
+    sessions: {} as Record<number, Record<string, unknown>>,
+    // #12108: which lanes the tab strip renders. Stays [0] for every
+    // single-lane case; the parallel-lane suite below widens it.
+    openSlots: [0] as number[],
     isOpen: true,
     width: 380,
     terminalId: null as string | null,
@@ -300,9 +303,12 @@ vi.mock("@/store/helpPanelStore", () => {
     // #12108 selectors. The fixtures below stay FLAT (terminalId/agentId/…)
     // and these project that same object as the lane, so every existing
     // assertion keeps driving the controller unchanged.
-    selectSlot: (s: typeof helpPanelState) => s,
+    // The active lane is the flat fixture; a background lane comes from
+    // `sessions[slot]`, which only the parallel-lane suite populates.
+    selectSlot: (s: typeof helpPanelState, slot: number) =>
+      slot === s.activeSlot ? s : ((s.sessions[slot] as typeof s) ?? s),
     selectActiveSlot: (s: typeof helpPanelState) => s,
-    selectOpenSlots: () => [0],
+    selectOpenSlots: (s: typeof helpPanelState) => s.openSlots,
     selectSlotTerminalIds: (s: typeof helpPanelState) => (s.terminalId ? [s.terminalId] : []),
     selectSlotForTerminal: (s: typeof helpPanelState, id: string) =>
       s.terminalId === id && id ? 0 : null,
@@ -425,7 +431,10 @@ vi.mock("@/types", () => ({
 vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
-import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
+import {
+  __resetHelpSessionControllersForTests,
+  acquireHelpSessionController,
+} from "@/controllers/helpSessionControllerRegistry";
 
 // The real `app:view-revealed` bridge fans out to every registered listener;
 // HelpPanel registers the switch-back recovery effect against it (#10739).
@@ -444,6 +453,11 @@ function resetState() {
   helpPanelState.conversationTouched = false;
   helpPanelState.hibernateSessions = {};
   helpPanelState.figures = [];
+  helpPanelState.sessions = {};
+  helpPanelState.openSlots = [0];
+  helpPanelState.activeSlot = 0;
+  helpPanelState.closeSlot = vi.fn();
+  helpPanelState.openSlot = vi.fn();
   helpPanelState.markConversationStarted = vi.fn();
   helpPanelState.setTerminal = vi.fn();
   helpPanelState.setOpen = vi.fn();
@@ -1143,5 +1157,122 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
       "sess-fresh"
     );
     expect(panelStoreState.removePanel).toHaveBeenCalledWith(reservedId);
+  });
+});
+
+describe("HelpPanel — closing one parallel lane (#12108)", () => {
+  // Two live lanes: slot 0 on screen (the flat fixture) and slot 1 behind the
+  // tab strip. `sessions` is what the close path and the per-lane state marker
+  // read, so both lanes have to appear there.
+  function setupTwoLanes(opts: { backgroundAgentState?: string } = {}) {
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    helpPanelState.sessionId = "sess-front";
+    helpPanelState.activeSlot = 0;
+    helpPanelState.openSlots = [0, 1];
+    helpPanelState.sessions = {
+      0: {
+        terminalId: "term-1",
+        agentId: "claude",
+        sessionId: "sess-front",
+        conversationTouched: false,
+        figures: [],
+        activeFigureNumber: null,
+      },
+      1: {
+        terminalId: "term-2",
+        agentId: "claude",
+        sessionId: "sess-back",
+        conversationTouched: false,
+        figures: [],
+        activeFigureNumber: null,
+      },
+    };
+    panelStoreState.panelsById = {
+      "term-1": {
+        id: "term-1",
+        kind: "terminal",
+        spawnStatus: "ready",
+        cwd: "/help",
+        title: "Claude",
+        command: "claude",
+        location: "dock",
+        agentState: "idle",
+      },
+      "term-2": {
+        id: "term-2",
+        kind: "terminal",
+        spawnStatus: "ready",
+        cwd: "/help",
+        title: "Claude",
+        command: "claude",
+        location: "dock",
+        agentState: opts.backgroundAgentState ?? "idle",
+      },
+    };
+  }
+
+  function closeButtonFor(container: HTMLElement, label: string): HTMLButtonElement {
+    const button = container.querySelector<HTMLButtonElement>(
+      `button[aria-label="Close ${label}"]`
+    );
+    if (!button) throw new Error(`no close button for ${label}`);
+    return button;
+  }
+
+  it("tears down only the closed lane and leaves the panel open on the survivor", () => {
+    setupTwoLanes();
+    const survivor = acquireHelpSessionController(0);
+    const closing = acquireHelpSessionController(1);
+
+    const { container } = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(container, "Session 2"));
+
+    // The closed lane's backend is gone…
+    expect(mockRevokeSession).toHaveBeenCalledWith("sess-back");
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-2");
+    expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
+    // …its controller was released, so a later acquire mints a fresh one…
+    expect(acquireHelpSessionController(1)).not.toBe(closing);
+    // …while the surviving lane keeps its running session AND its controller…
+    expect(mockRevokeSession).not.toHaveBeenCalledWith("sess-front");
+    expect(panelStoreState.removePanel).not.toHaveBeenCalledWith("term-1");
+    expect(acquireHelpSessionController(0)).toBe(survivor);
+    // …and the sidebar does not slide shut on it (#12108).
+    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
+  });
+
+  it("confirms before closing a lane whose agent is working, gated on THAT lane", () => {
+    setupTwoLanes({ backgroundAgentState: "working" });
+
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(container, "Session 2"));
+
+    // Nothing torn down until the user answers.
+    expect(mockRevokeSession).not.toHaveBeenCalled();
+    expect(helpPanelState.closeSlot).not.toHaveBeenCalled();
+    expect(getByTestId("dialog-title").textContent).toBe("Close Session 2?");
+    expect(getByTestId("dialog-confirm").textContent).toBe("Close session");
+    expect(getByTestId("dialog-description").textContent).toContain(
+      "the conversation will be discarded"
+    );
+
+    fireEvent.click(getByTestId("dialog-confirm"));
+    expect(mockRevokeSession).toHaveBeenCalledWith("sess-back");
+    expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps the lane when the close confirm is cancelled", () => {
+    setupTwoLanes({ backgroundAgentState: "working" });
+
+    const { container, getByTestId, queryByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(container, "Session 2"));
+    fireEvent.click(getByTestId("dialog-cancel"));
+
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    expect(mockRevokeSession).not.toHaveBeenCalled();
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(helpPanelState.closeSlot).not.toHaveBeenCalled();
   });
 });
