@@ -1353,7 +1353,7 @@ export function GitHubResourceList({
               label = `Showing #${numberQuery.from} and above`;
             }
             return (
-              <p className="bg-overlay-soft border border-[var(--border-divider)] rounded px-2 py-1 text-xs text-text-secondary">
+              <p className="bg-overlay-soft border border-[var(--border-divider)] rounded-[var(--radius-sm)] px-2 py-1 text-xs text-text-secondary">
                 {label}
               </p>
             );
@@ -1365,11 +1365,15 @@ export function GitHubResourceList({
             mentions those numbers. Say so rather than letting the list quietly
             fill with rows nobody asked for. Gated hard (see
             `looksLikeNumberList`) so ordinary text searches stay silent. */}
-        {numberQuery === null && !loading && looksLikeNumberList(debouncedSearch) && (
-          <p className="bg-overlay-soft border border-[var(--border-divider)] rounded px-2 py-1 text-xs text-text-secondary">
-            Showing text matches — separate numbers with commas or spaces
-          </p>
-        )}
+        {numberQuery === null &&
+          !loading &&
+          !error &&
+          !isRateLimited &&
+          looksLikeNumberList(debouncedSearch) && (
+            <p className="bg-overlay-soft border border-[var(--border-divider)] rounded-[var(--radius-sm)] px-2 py-1 text-xs text-text-secondary">
+              Showing text matches — separate numbers with commas or spaces
+            </p>
+          )}
       </div>
 
       {/* The combobox points `aria-controls` here, so this element exists in

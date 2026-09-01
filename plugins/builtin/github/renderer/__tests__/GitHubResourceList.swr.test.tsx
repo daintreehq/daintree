@@ -2545,6 +2545,45 @@ describe("GitHubResourceList number-query chip (#6867)", () => {
       "/test/proj",
       asked.slice(0, MULTI_FETCH_CAP)
     );
+    // The point of the cap is one batch, not a sequential fan-out over the rest.
+    expect(mockGetIssuesByNumbers).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a list of exactly the cap uncapped", async () => {
+    const asked = Array.from({ length: MULTI_FETCH_CAP }, (_, i) => i + 1);
+    mockGetIssuesByNumbers.mockResolvedValue(asked.map(makeIssue));
+    useGitHubFilterStore.getState().setIssueSearchQuery(asked.join(", "));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing #1, #2, #3 + 17 more")).toBeTruthy();
+    });
+    expect(mockGetIssuesByNumbers).toHaveBeenCalledWith("/test/proj", asked);
+    expect(screen.queryByText(/\(capped\)/)).toBeNull();
+  });
+
+  it("caps the PR variant through its own batch lookup", async () => {
+    const asked = Array.from({ length: MULTI_FETCH_CAP + 5 }, (_, i) => i + 1);
+    mockGetPRsByNumbers.mockResolvedValue(
+      asked.slice(0, MULTI_FETCH_CAP).map((n) => ({
+        ...makeIssue(n),
+        isDraft: false,
+        ciStatus: "SUCCESS" as const,
+      }))
+    );
+    useGitHubFilterStore.getState().setPrSearchQuery(asked.join(" "));
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(`Showing first ${MULTI_FETCH_CAP} of ${asked.length} numbers (capped)`)
+      ).toBeTruthy();
+    });
+    expect(mockGetPRsByNumbers).toHaveBeenCalledWith("/test/proj", asked.slice(0, MULTI_FETCH_CAP));
+    expect(mockGetPRsByNumbers).toHaveBeenCalledTimes(1);
+    expect(mockListPRs).not.toHaveBeenCalled();
   });
 
   it("says the results are text matches when a number list fails to parse", async () => {
@@ -2559,7 +2598,56 @@ describe("GitHubResourceList number-query chip (#6867)", () => {
     await waitFor(() => {
       expect(screen.getByText(FALLBACK_COPY)).toBeTruthy();
     });
+    // The chip has to sit over the text-search rows it describes, not over a
+    // skeleton or an empty list.
+    expect(screen.getByTestId("item-500")).toBeTruthy();
     expect(mockGetIssuesByNumbers).not.toHaveBeenCalled();
+  });
+
+  it("holds the text-match chip back until the search settles", async () => {
+    mockListIssues.mockImplementation(() => new Promise(() => {}));
+    useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("skeleton")).toBeTruthy();
+    });
+    expect(screen.queryByText(FALLBACK_COPY)).toBeNull();
+  });
+
+  it("yields the chip slot to an error rather than claiming text matches", async () => {
+    mockListIssues.mockRejectedValue(new Error("Couldn't reach GitHub."));
+    useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Couldn't reach GitHub/)).toBeTruthy();
+    });
+    expect(screen.queryByText(FALLBACK_COPY)).toBeNull();
+  });
+
+  it("drops a stale exact-number miss when the query falls back to text search", async () => {
+    mockGetIssueByNumber.mockResolvedValue(null);
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(500)]));
+    useGitHubFilterStore.getState().setIssueSearchQuery("#999");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/No issue #999 in this view/)).toBeTruthy();
+    });
+
+    // Falling through to text search must not leave the miss behind, or the
+    // empty state goes on naming #999 over rows that have nothing to do with it.
+    act(() => {
+      useGitHubFilterStore.getState().setIssueSearchQuery("123,,124");
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(/No issue #999 in this view/)).toBeNull();
+    });
   });
 
   it("stays quiet for an ordinary text search that contains numbers", async () => {

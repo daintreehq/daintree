@@ -99,10 +99,13 @@ describe("parseNumberQuery", () => {
         kind: "multi",
         numbers: [12036, 12037, 12041],
       });
-      expect(parseNumberQuery("123 AND 124")).toEqual({
-        kind: "multi",
-        numbers: [123, 124],
-      });
+    });
+
+    it("should leave uppercase boolean operators to text search", () => {
+      // GitHub search reads `AND`/`OR` as operators — hijacking them into a
+      // number lookup would break a query that works today.
+      expect(parseNumberQuery("123 AND 124")).toBeNull();
+      expect(parseNumberQuery("123 OR 124")).toBeNull();
     });
 
     it("should de-duplicate across mixed separators", () => {
@@ -213,6 +216,12 @@ describe("parseNumberQuery", () => {
     it("should reject zero in range", () => {
       expect(parseNumberQuery("0..5")).toBeNull();
     });
+
+    it("should reject range endpoints past the safe-integer ceiling", () => {
+      // Both endpoints collapse onto the same float, and the consumer's
+      // `for (let n = from; n <= to; n++)` loop then never advances.
+      expect(parseNumberQuery("9007199254740992..9007199254740993")).toBeNull();
+    });
   });
 
   describe("open-ended", () => {
@@ -263,6 +272,15 @@ describe("parseNumberQuery", () => {
       expect(parseNumberQuery("123 .. 125")).toBeNull();
       expect(parseNumberQuery("123 +")).toBeNull();
     });
+
+    it("should reject numbers past the safe-integer ceiling", () => {
+      // parseInt collapses these onto one float, so two distinct requested
+      // numbers would silently dedupe into a single lookup.
+      expect(parseNumberQuery("99999999999999999999")).toBeNull();
+      expect(parseNumberQuery("99999999999999999999,")).toBeNull();
+      expect(parseNumberQuery("9007199254740992 9007199254740993")).toBeNull();
+      expect(parseNumberQuery("9007199254740993+")).toBeNull();
+    });
   });
 });
 
@@ -292,6 +310,11 @@ describe("looksLikeNumberList", () => {
     expect(looksLikeNumberList("issue 123")).toBe(false);
     expect(looksLikeNumberList("2024 2025 roadmap")).toBe(false);
     expect(looksLikeNumberList("12036 12037 fix")).toBe(false);
+  });
+
+  it("leaves GitHub boolean queries alone", () => {
+    expect(looksLikeNumberList("123 AND 456")).toBe(false);
+    expect(looksLikeNumberList("123 OR 456")).toBe(false);
   });
 
   it("stays quiet for version strings and dates", () => {
