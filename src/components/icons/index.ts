@@ -38,6 +38,7 @@ export {
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)
   Link2Off, // detach the issue linked to a worktree
+  ListChecks, // bulk selection of forge rows — the preset picker that selects many issues or PRs at once
   Menu, // the application menu, surfaced in-app where the native menu bar can't render
   Moon, // sleep a project — shut it down the way quitting does, restored on reopen
   Network, // Subagent tree — a parent session's spawned child sessions

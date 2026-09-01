@@ -83,6 +83,15 @@ describe("GitHubResourceListSkeleton", () => {
     expect(status?.getAttribute("aria-busy")).toBe("true");
     expect(status?.getAttribute("aria-label")).toBe("Loading GitHub results");
   });
+
+  it("reserves every header icon slot the loaded list renders", () => {
+    // Refresh, sort and bulk-select. One slot short and the search field
+    // jumps narrower the moment real content replaces this.
+    const { container } = render(<GitHubResourceListSkeleton />);
+    const header = container.querySelector(".border-b");
+    const slots = header?.querySelectorAll(".w-8.h-8");
+    expect(slots).toHaveLength(3);
+  });
 });
 
 describe("CommitListSkeleton", () => {
