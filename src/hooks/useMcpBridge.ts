@@ -459,6 +459,25 @@ export async function buildMcpConfirmPreview(
 const GATE_RECHECK_BUDGET_MS = 5_000;
 
 /**
+ * How long after RECEIVING a dispatch the bridge may still start a force
+ * delete on the strength of its approval.
+ *
+ * Not main's deadline itself, and short of it by exactly the re-check budget.
+ * Two clocks are involved and the renderer holds the later one: main starts its
+ * 30s timer when it queues the dispatch, before a routed send that may first
+ * have to thaw an evicted view, so `Date.now() - receivedAt` UNDERSTATES how
+ * long main has been waiting by however long that took. Reserving the re-check
+ * budget means even a delete that spends its full allowance re-reading the
+ * worktree cannot begin later than main's deadline measured from receipt — the
+ * unseen send latency is what the remaining margin is for.
+ *
+ * Refusing early is the safe direction: nothing is deleted, and the caller can
+ * ask again. Dispatching late is not — the worktree would be destroyed after
+ * the caller was told the call timed out.
+ */
+const APPROVAL_ACTION_DEADLINE_MS = MAIN_DISPATCH_DEADLINE_MS - GATE_RECHECK_BUDGET_MS;
+
+/**
  * The pre-dispatch re-check, bounded. Resolves to an unverified outcome rather
  * than rejecting or hanging, so the gate below fails closed on a slow read the
  * same way it does on a failed one.
@@ -469,13 +488,17 @@ export function recheckWorktreeDeleteOutcome(
   worktreeId: string,
   budgetMs: number = GATE_RECHECK_BUDGET_MS
 ): Promise<WorktreeDeletePreviewOutcome> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<WorktreeDeletePreviewOutcome>((resolve) => {
-    setTimeout(() => resolve({ state: "failed", submodules: null }), budgetMs);
+    timer = setTimeout(() => resolve({ state: "failed", submodules: null }), budgetMs);
   });
+  // Clear on the winner either way: the loser of a race stays pending, and a
+  // live timer holding the renderer awake for the rest of the budget after the
+  // fetch already answered is a handle nobody asked for.
   return Promise.race([
     settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(worktreeId)),
     expired,
-  ]);
+  ]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -511,7 +534,7 @@ export function worktreeDeleteGateRefusal(
       error: {
         code: "CONFIRMATION_REQUIRED",
         message:
-          "Force delete refused: this window can no longer resolve the worktree, so the approval could not be re-checked before running. Nothing was deleted. The worktree's state has changed since this call was approved, so a fresh call is a changed-context retry rather than a repeat of this one.",
+          "Force delete refused: this window cannot resolve the worktree named, so the tier this delete would run at is unknowable and no approval can cover it. Nothing was deleted.",
       },
     };
   }
@@ -803,7 +826,7 @@ export function useMcpBridge(): void {
                 // point destroys it behind a reported failure, so the deadline
                 // wins over the approval.
                 const refusal =
-                  Date.now() - receivedAt >= MAIN_DISPATCH_DEADLINE_MS
+                  Date.now() - receivedAt >= APPROVAL_ACTION_DEADLINE_MS
                     ? EXPIRED_APPROVAL_RESULT
                     : worktreeDeleteGateRefusal(
                         resolveWorktreeDeleteGate(previewTarget, outcome),

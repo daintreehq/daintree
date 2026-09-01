@@ -1289,7 +1289,10 @@ describe("useMcpBridge", () => {
       await vi.waitFor(() => {
         expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
       });
-      elapsed = 31_000;
+      // Past the bridge's own action deadline (main's 30s less the re-check
+      // budget it may still have to spend), which is the point where it can no
+      // longer prove the call is still live.
+      elapsed = 26_000;
       useMcpConfirmStore.getState().resolveCurrent("approved");
       await dispatched;
 
