@@ -42,12 +42,14 @@ const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
   {
     value: "action",
     label: "Action",
-    description: "Workbench + create worktrees, inject context, stage changes.",
+    description:
+      "Workbench + create worktrees, inject context, send terminal commands, confirm-gated worktree deletes.",
   },
   {
     value: "system",
     label: "System",
-    description: "Action + commit, push, delete, send terminal commands.",
+    description:
+      "Action + git commits and pushes, forge and file writes, terminal arming, worktree creation anywhere on disk.",
   },
 ];
 
