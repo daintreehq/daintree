@@ -30,7 +30,7 @@ Use `npm run typecheck`, never a bare `tsc -b` — the project-reference graph e
 
 Each project gets its own `WebContentsView` and V8 context via `ProjectViewManager`, with LRU eviction under memory pressure — so renderer state is **per project view**, not global. Per-window services live in `WindowContext.services`; PtyClient and WorkspaceClient are shared globals.
 
-**Cross-store reads go through `src/store/storeAccessors.ts`** — never import a partner store at module eval (TDZ; see `docs/architecture/store-init-order.md`). ~108 Zustand stores in two flavors, app-global vs per-project-view.
+**Cross-store reads go through `src/store/storeAccessors.ts`** — never import a partner store at module eval (TDZ; see `docs/architecture/store-init-order.md`). 116 store creation sites across 115 files — 114 app-global `create()`, plus two `zustand/vanilla`: `shortcutHintStore` (module singleton) and `createWorktreeStore`, the sole per-project-view factory.
 
 **Durable state spans two engines with separate migrations:** better-sqlite3 + drizzle (`npm run db:generate`) and electron-store JSON (`electron/store.ts`).
 
@@ -51,7 +51,7 @@ Plugins are manifest-driven, run in sandboxed utility subprocesses, and contribu
 | drizzle migrations               | `npm run db:generate`                                 |
 | help prompts                     | `npm run build:help`                                  |
 
-Nine ratchet baselines live in `scripts/baselines/`. Each has a matching `*:check` and `*:update` script — **regenerate the baseline, never hand-edit the JSON**: `lint:ratchet` (eslint warnings), `compiler-budget` (React Compiler bailouts), `import-budget`, `renderer-import-budget`, `renderer-bundle-budget`, `first-render-chunk-budget`, `test-ratio`, `check:ipc-handwritten`, `theme:text-ramp`.
+Nine ratchet baselines live in `scripts/baselines/` — **regenerate the baseline, never hand-edit the JSON**: `lint:ratchet` (eslint warnings), `compiler-budget` (React Compiler bailouts), `import-budget`, `renderer-import-budget`, `renderer-bundle-budget`, `first-render-chunk-budget`, `test-ratio`, `check:ipc-handwritten`, `theme:text-ramp`. Six have matching `*:check`/`*:update` scripts; three do not — update `lint:ratchet` with `-- --update`, `check:ipc-handwritten` via `ipc-handwritten:update`, and `theme:text-ramp` with `-- --check` / `-- --plan` (`--plan` rewrites the manifest).
 
 Only `lint:ratchet` and `check:ipc-handwritten` run inside `npm run check`; the budget scripts are deliberately out of CI pre-1.0. The lint ratchet gates **per-rule as well as in total**, and a rule vanishing from live output is a hard failure — so you cannot silence a rule in config to get under the gate.
 
