@@ -33,6 +33,9 @@ const WINDOWS: RunEnvironment = {
   osRelease: "10.0.22631",
 };
 
+/** Stands for "both fixtures came off the same harness"; identity is all that matters. */
+const HARNESS = "0000000000000000";
+
 function stat(overrides: Partial<MetricStat> & Pick<MetricStat, "max" | "sum">): MetricStat {
   return {
     mean: overrides.sum / (overrides.count ?? 8),
@@ -84,8 +87,11 @@ function summary(
     environment,
     // Both sides default to the same protocol so a fixture pair is comparable
     // unless a test deliberately overrides it — the machine/protocol refusals
-    // are what several of these cases are about.
-    protocol: { iterations: null, warmups: null, scenarioSelection: null },
+    // are what several of these cases are about. The harness hash is part of
+    // that default: a summary with no hash at all predates the field, which is
+    // its own warning, and every fixture here stands for a run this harness
+    // wrote.
+    protocol: { iterations: null, warmups: null, scenarioSelection: null, harnessHash: HARNESS },
     scenarioCount: aggregates.length,
     scenariosOutsideReference: [],
     scenariosSkipped: [],
@@ -298,7 +304,12 @@ describe("scenario-selection refusal", () => {
   // pairable, which is what makes this one worth refusing rather than noting.
   const selected = (label: string, p50: number, selection: string[] | null) =>
     summary(label, MAC, [scenario("PERF-105", p50, { gitSpawns: stat({ max: 6, sum: 24 }) })], {
-      protocol: { iterations: null, warmups: null, scenarioSelection: selection },
+      protocol: {
+        iterations: null,
+        warmups: null,
+        scenarioSelection: selection,
+        harnessHash: HARNESS,
+      },
     });
 
   it("refuses machine-dependent rows when a filtered run meets a full one", () => {
@@ -650,14 +661,26 @@ describe("harness identity", () => {
 
   it("distinguishes a hash that failed from one that was never recorded", () => {
     // null means the harness tried and could not; absent means the summary
-    // predates the field. Only the first is worth a line, because only the
-    // first describes a run this harness produced.
+    // predates the field. Both leave the same fact unproven, so both get a
+    // line — they differ in what it says, not in whether it appears.
     expect(render(withHarness("before", null), withHarness("after", "aaaaaaaaaaaaaaaa"))).toContain(
       "could not record a harness hash"
     );
-    expect(render(withHarness("before", undefined), withHarness("after", undefined))).not.toContain(
-      "could not record a harness hash"
+    const absent = render(withHarness("before", undefined), withHarness("after", undefined));
+    expect(absent).toContain("predates harness recording");
+    expect(absent).not.toContain("could not record a harness hash");
+  });
+
+  it("still warns when only the stored side predates the field", () => {
+    // The case the hash was added for: a baseline written before this PR
+    // compared against a run written after it. Staying silent here would fail
+    // the provenance check open in its most common situation.
+    const output = render(
+      withHarness("before", undefined),
+      withHarness("after", "aaaaaaaaaaaaaaaa")
     );
+    expect(output).toContain("predates harness recording");
+    expect(output).not.toContain("the harness itself differs");
   });
 });
 

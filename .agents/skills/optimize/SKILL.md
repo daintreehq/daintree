@@ -229,16 +229,16 @@ Pass `--precommit <that file>` to every `check-pair.mjs` call afterwards. It re-
 
 ## §Measure
 
-Every measurement in this run uses the same command shape, and any difference in it is a difference `perf compare` will report as though it were a difference in the code.
+Every measurement in this run uses the same command shape, and any difference in it is a difference `perf compare` will report as though it were a difference in the code. `--enforce-integrity` is part of that shape on every arm: every number here is consumed by `check-pair.mjs` rather than read by a person, and a run whose evidence is broken must fail where it was taken, not read as a result three steps later.
 
 ```bash
-npm run perf <mode> -- --scenario <ID> --iterations <N> --warmups <W> --label <name> --json .tmp/opt/<dir>/<name>.json
+npm run perf <mode> -- --scenario <ID> --iterations <N> --warmups <W> --enforce-integrity --label <name> --json .tmp/opt/<dir>/<name>.json
 ```
 
 The baseline is the run's first champion, so Phase 3 ends by making that explicit:
 
 ```bash
-npm run perf <mode> -- --scenario <ID> --iterations <N> --warmups <W> --label before --json .tmp/opt/<dir>/before.json
+npm run perf <mode> -- --scenario <ID> --iterations <N> --warmups <W> --enforce-integrity --label before --json .tmp/opt/<dir>/before.json
 cp .tmp/opt/<dir>/before.json .tmp/opt/<dir>/best.json
 ```
 
@@ -275,7 +275,7 @@ Repeat per benchmark until the budget for it is spent or credible hypotheses run
 3. **Re-measure with the identical protocol, then gate the pair before reading any number in it:**
 
 ```bash
-npm run perf <mode> -- --scenario <ID> --iterations <N> --warmups <W> --label h<k> --json .tmp/opt/<dir>/h<k>.json
+npm run perf <mode> -- --scenario <ID> --iterations <N> --warmups <W> --enforce-integrity --label h<k> --json .tmp/opt/<dir>/h<k>.json
 node .agents/skills/optimize/check-pair.mjs --scenario <ID> --target <metric path> \
   --predicate <each> --precommit .tmp/opt/<dir>/precommit.json \
   [--higher-is-better] \
@@ -284,7 +284,7 @@ node .agents/skills/optimize/check-pair.mjs --scenario <ID> --target <metric pat
 npm run perf compare .tmp/opt/<dir>/best.json .tmp/opt/<dir>/h<k>.json
 ```
 
-4. **Act on `check-pair.mjs`'s exit code — `perf compare` and `run` exit 0 on every one of these:**
+4. **Act on `check-pair.mjs`'s exit code — `perf compare` exits 0 on every one of these, and `run` moves its own only on broken evidence under `--enforce-integrity`:**
    - **1** → the pair is not a result. Protocol, machine, mode or selection mismatch; a `sourceSha` that is not the tree you think you measured; a toolchain version move; a broken apparatus; an unhealthy or under-emitted predicate; a precommit term that does not match; an edited harness. Do not read the comparison. Fix the cause and re-measure.
    - **2** → the command line was wrong, so nothing was judged. Fix the invocation.
    - **3** → no `sourceSha`. Proceed only if you measured both arms in this session, interleaved, and say so in the report.
@@ -313,7 +313,7 @@ Both trees must already be commits, because `sourceSha` is what proves each arm 
 
 ```bash
 BRANCH=$(git branch --show-current); CHAMP=<champion sha>; CAND=$(git rev-parse HEAD)
-arm() { git switch --detach "$1" && npm run perf <mode> -- --scenario <ID> --iterations <N> --warmups <W> --label "$2" --json ".tmp/opt/<dir>/ab/$2.json"; }
+arm() { git switch --detach "$1" && npm run perf <mode> -- --scenario <ID> --iterations <N> --warmups <W> --enforce-integrity --label "$2" --json ".tmp/opt/<dir>/ab/$2.json"; }
 arm "$CHAMP" champ1 && arm "$CAND" cand1
 arm "$CAND" cand2 && arm "$CHAMP" champ2
 arm "$CHAMP" champ3 && arm "$CAND" cand3

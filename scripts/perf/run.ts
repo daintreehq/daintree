@@ -290,12 +290,13 @@ export function parseArgs(argv: string[]): CliOptions {
  * way to run the matrix: this harness exists for targeted optimisation work,
  * driven a benchmark at a time by `.agents/skills/optimize`, and a
  * whole-matrix run serves no purpose it has. Nothing gates on these numbers,
- * nothing schedules them, and a sweep of 112 scenarios produces a wall of
+ * nothing schedules them, and a sweep of the whole matrix produces a wall of
  * figures nobody reads while taking the machine away from the one measurement
  * somebody actually wanted.
  *
  * It is also the load-bearing half of the optimiser's own comparability check:
- * a scenario measured alone and the same scenario measured beside 111 others
+ * a scenario measured alone and the same scenario measured beside the rest of
+ * the matrix
  * ran under different heap, JIT and thermal conditions, and `perf compare`
  * refuses the pair. Making the filter mandatory means every result this harness
  * produces is comparable with every other result for that scenario.

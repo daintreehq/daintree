@@ -2,8 +2,9 @@
  * The user outcomes this product is judged on, and what currently measures them.
  *
  * WHY A MANIFEST AND NOT MORE BENCHMARKS
- *   The matrix has 159 scenarios and it is very good at answering "which
- *   subsystem moved". It cannot answer "would a user notice", because almost
+ *   The matrix — every id in `scenarios/index.ts`'s `EXPECTED_SCENARIO_IDS` —
+ *   is very good at answering "which subsystem moved". It cannot answer "would
+ *   a user notice", because almost
  *   every scenario ends below the renderer — and the handful of Playwright
  *   benchmarks that do reach a painted result were, until recently, not even
  *   listed in `npm run perf list`. This file is the missing index: one row per

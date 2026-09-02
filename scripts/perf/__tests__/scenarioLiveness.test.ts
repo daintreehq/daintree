@@ -34,8 +34,8 @@ import { TIMING_DEPENDENT_TERMS } from "./timingDependentTerms";
  *   carrying 16 and 4 misses. Every correctness metric is a MISS COUNT, so a
  *   healthy run is 0 BY CONSTRUCTION — it is a structural fact about the
  *   predicate, not a threshold about the machine, so asserting it cannot make
- *   this guard timing-sensitive. All 149 scenarios driven here report 0 on
- *   every declared term; none needed an exemption.
+ *   this guard timing-sensitive. Every scenario driven here reports 0 on every
+ *   declared term; none needed an exemption.
  *
  * WHAT IT DOES NOT PROVE
  *   Nothing about the NUMBERS. A scenario whose subject got 10x slower passes
@@ -57,8 +57,8 @@ import { TIMING_DEPENDENT_TERMS } from "./timingDependentTerms";
  *   A hardcoded duration is identical across two runs and a real measurement
  *   essentially never is, so a second `run()` in the same child would catch the
  *   one case containment cannot: a constant SMALLER than the bracket. It was
- *   built and measured rather than argued about. It works — across all 149
- *   scenarios no pair of runs produced the same `durationMs`, and every one
+ *   built and measured rather than argued about. It works — across every
+ *   scenario no pair of runs produced the same `durationMs`, and every one
  *   tolerated the repeat — and it costs 67s against 55s, +22%, on every
  *   `npm test`.
  *
@@ -186,7 +186,7 @@ const WALL_CLOCK_TIMED: Readonly<Record<string, string>> = {
  * with `Date.now()`, which quantizes to whole milliseconds and can round its
  * bracket up past the driver's on a sub-millisecond run. It is nowhere near
  * wide enough to admit a hardcoded constant: the widest real ratio measured
- * across all 149 scenarios is 0.993.
+ * across the whole matrix is 0.993.
  */
 const CONTAINMENT_SLACK_MS = 1;
 

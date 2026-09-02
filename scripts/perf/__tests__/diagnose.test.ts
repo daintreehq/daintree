@@ -27,12 +27,15 @@ afterAll(() => {
   for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-async function diagnose(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+async function diagnose(
+  args: string[],
+  cwd = repoRoot
+): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
       ["--import", "tsx", path.join(perfDir, "diagnose.ts"), ...args],
-      { cwd: repoRoot }
+      { cwd }
     );
     return { code: 0, stdout, stderr };
   } catch (error) {
@@ -60,10 +63,16 @@ describe("perf diagnose", () => {
   });
 
   it("writes a bundle whose manifest refuses its own durations", { timeout: 300_000 }, async () => {
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "perf-diagnose-test-"));
-    dirs.push(outDir);
+    // Deliberately WITHOUT `--out-dir`, driven from a throwaway cwd: the
+    // default `<cwd>/.tmp/perf-diagnostics` is the path every real caller
+    // takes, and a test that always passed its own out-dir under the system
+    // temp dir never exercised the rename that assembles the bundle there.
+    fs.mkdirSync(path.join(repoRoot, ".tmp"), { recursive: true });
+    const cwd = fs.mkdtempSync(path.join(repoRoot, ".tmp", "perf-diagnose-cwd-"));
+    dirs.push(cwd);
+    const outDir = path.join(cwd, ".tmp", "perf-diagnostics");
 
-    const { code, stdout } = await diagnose(["--scenario", "PERF-036", "--out-dir", outDir]);
+    const { code, stdout } = await diagnose(["--scenario", "PERF-036"], cwd);
     expect(code, stdout).toBe(0);
 
     const bundles = fs.readdirSync(outDir).filter((name) => name.startsWith("PERF-036-"));

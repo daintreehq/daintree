@@ -2,10 +2,10 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { classifyMetric, comparabilityMarker, isMachineIndependent } from "./lib/comparability";
 import { percentile, round } from "./lib/stats";
-import type { PerfMode, PerfRunSummary } from "./types";
+import type { PerfMode, PerfRunSummary, ScenarioAggregate } from "./types";
 
 /**
  * `npm run perf calibrate` — how much a number moves when NOTHING changed.
@@ -141,9 +141,12 @@ function runOnce(options: CalibrateOptions, jsonPath: string): Promise<number> {
   });
 }
 
-interface Spread {
+export interface Spread {
   name: string;
+  /** Only the rounds that emitted this metric. An absent round is not a 0. */
   samples: number[];
+  /** Rounds that emitted nothing for this metric. */
+  absentRounds: number;
   medianValue: number;
   min: number;
   max: number;
@@ -153,13 +156,14 @@ interface Spread {
   rangePct: number | null;
 }
 
-function describeSpread(name: string, samples: number[]): Spread {
+function describeSpread(name: string, samples: number[], absentRounds: number): Spread {
   const min = Math.min(...samples);
   const max = Math.max(...samples);
   const medianValue = percentile(samples, 50);
   return {
     name,
     samples,
+    absentRounds,
     medianValue,
     min,
     max,
@@ -168,18 +172,86 @@ function describeSpread(name: string, samples: number[]): Spread {
   };
 }
 
-function formatSpread(spread: Spread): string {
+/**
+ * Every metric name ANY round emitted.
+ *
+ * Reading the key set off the first round alone would miss a metric that only
+ * started being emitted later, and the whole point of these two functions is
+ * that a metric present in some rounds and not others is a finding.
+ */
+function metricNamesAcross(aggregates: readonly ScenarioAggregate[]): string[] {
+  return [...new Set(aggregates.flatMap((a) => Object.keys(a.metricStats)))].sort();
+}
+
+/**
+ * Correctness terms that did not read a clean 0 in every round.
+ *
+ * Absence is reported apart from zero, the same split `lib/gate.ts` makes for
+ * the same reason: a predicate that stopped being emitted produced no reading
+ * at all, and folding that into the zero case reports a measurement that
+ * vanished mid-calibration as a perfectly stable one — the more reassuring and
+ * more wrong of the two readings.
+ */
+export function describePredicateInstability(
+  aggregates: readonly ScenarioAggregate[],
+  rounds: number
+): string[] {
+  const findings: string[] = [];
+  for (const name of metricNamesAcross(aggregates)) {
+    if (!name.endsWith("Misses")) continue;
+    const readings = aggregates.map((a) => a.metricStats[name]?.max);
+    const absent = readings.filter((value) => value === undefined).length;
+    if (absent > 0) {
+      findings.push(`${name} not emitted in ${absent}/${rounds} rounds`);
+    }
+    const nonzero = readings.filter((value) => value !== undefined && value !== 0).length;
+    if (nonzero > 0) {
+      findings.push(`${name} nonzero in ${nonzero}/${rounds} rounds`);
+    }
+  }
+  return findings;
+}
+
+/**
+ * The duration spread and one per metric, each over the rounds that measured it.
+ *
+ * A round that never emitted a metric contributes no sample. Passing 0 in its
+ * place would widen the range with a number nothing measured, and that range is
+ * the effect-size reference the guide tells people to set thresholds from.
+ */
+export function buildSpreads(aggregates: readonly ScenarioAggregate[]): Spread[] {
+  const spreads: Spread[] = [
+    describeSpread(
+      "p50Ms",
+      aggregates.map((a) => a.p50Ms),
+      0
+    ),
+  ];
+  for (const name of metricNamesAcross(aggregates)) {
+    const readings = aggregates.map((a) => a.metricStats[name]?.max);
+    const emitted = readings.filter((value): value is number => value !== undefined);
+    spreads.push(describeSpread(name, emitted, readings.length - emitted.length));
+  }
+  return spreads;
+}
+
+function formatSpread(spread: Spread, rounds: number): string {
   const cls = classifyMetric(spread.name);
   const pct = spread.rangePct === null ? "n/a" : `${round(spread.rangePct, 1)}%`;
   // Correctness predicates get no effect-size reference. They are structural
   // facts with one correct value, so "a movement worth calling" is a category
   // error: any nonzero reading matters and no multiple of a spread applies.
   const isPredicate = spread.name.endsWith("Misses");
-  const reference = isPredicate
-    ? "n/a (predicate)"
-    : spread.range === 0
-      ? "no spread this session"
-      : `2x ${round(spread.range, 3)}${spread.rangePct === null ? "" : ` (${round(spread.rangePct, 1)}%)`}`;
+  // A spread taken over fewer rounds than ran describes fewer rounds than ran,
+  // so it cannot carry an effect-size reference. The column says which rounds
+  // are missing instead of quoting a figure the reader would take for all of them.
+  const reference = spread.absentRounds
+    ? `not emitted in ${spread.absentRounds}/${rounds} rounds`
+    : isPredicate
+      ? "n/a (predicate)"
+      : spread.range === 0
+        ? "no spread this session"
+        : `2x ${round(spread.range, 3)}${spread.rangePct === null ? "" : ` (${round(spread.rangePct, 1)}%)`}`;
   return [
     spread.name,
     `${comparabilityMarker(cls)} ${cls}`,
@@ -231,16 +303,7 @@ async function main(): Promise<void> {
     // Correctness first: a term that is nonzero on an untouched tree is
     // measuring the machine, and that is the single most useful thing this
     // command can tell anyone.
-    const unstablePredicates: string[] = [];
-    for (const [name, stat] of Object.entries(aggregates[0]!.metricStats)) {
-      if (!name.endsWith("Misses")) continue;
-      void stat;
-      const values = aggregates.map((a) => a.metricStats[name]?.max ?? 0);
-      if (values.some((value) => value !== 0)) {
-        const bad = values.filter((value) => value !== 0).length;
-        unstablePredicates.push(`${name} nonzero in ${bad}/${options.rounds} rounds`);
-      }
-    }
+    const unstablePredicates = describePredicateInstability(aggregates, options.rounds);
 
     console.log("");
     if (unstablePredicates.length > 0) {
@@ -249,7 +312,9 @@ async function main(): Promise<void> {
       console.log(
         "\nA correctness term is a structural fact with one correct value, so a nonzero " +
           "reading on an unchanged tree means something is non-deterministic: the fixture, " +
-          "the predicate's own timing assumptions, or the subject. Which one it is takes " +
+          "the predicate's own timing assumptions, or the subject. A term that was NOT " +
+          "EMITTED in some rounds is worse than a nonzero one — there is no reading at all, " +
+          "and nothing proves the subject ran in those rounds. Which one it is takes " +
           "reading; what is certain is that the numbers below cannot be trusted until it " +
           "is settled.\n"
       );
@@ -260,15 +325,7 @@ async function main(): Promise<void> {
     }
 
     const durations = aggregates.map((a) => a.p50Ms);
-    const spreads: Spread[] = [describeSpread("p50Ms", durations)];
-    for (const name of Object.keys(aggregates[0]!.metricStats).sort()) {
-      spreads.push(
-        describeSpread(
-          name,
-          aggregates.map((a) => a.metricStats[name]?.max ?? 0)
-        )
-      );
-    }
+    const spreads = buildSpreads(aggregates);
 
     console.log(`## Spread across ${options.rounds} identical runs, this session\n`);
     console.log(
@@ -278,7 +335,7 @@ async function main(): Promise<void> {
     );
     console.log("Metric | Comparable | median | min | max | range | effect-size reference");
     console.log("--- | --- | ---: | ---: | ---: | ---: | ---");
-    for (const spread of spreads) console.log(formatSpread(spread));
+    for (const spread of spreads) console.log(formatSpread(spread, options.rounds));
 
     const durationSpread = spreads[0]!;
     console.log(
@@ -328,11 +385,13 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  if (error instanceof UsageError) {
-    console.error(`[calibrate] ${error.message}`);
-  } else {
-    console.error("[calibrate] failed", error);
-  }
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    if (error instanceof UsageError) {
+      console.error(`[calibrate] ${error.message}`);
+    } else {
+      console.error("[calibrate] failed", error);
+    }
+    process.exit(1);
+  });
+}

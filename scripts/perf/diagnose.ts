@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyBenchmark } from "./config/benchmarkClasses";
@@ -169,7 +168,12 @@ async function main(): Promise<void> {
   // Assembled under a temporary name and renamed into place, so a bundle that
   // exists is always a bundle that finished. A half-written one is the shape
   // that gets read as complete a week later.
-  const staging = fs.mkdtempSync(path.join(os.tmpdir(), "perf-diagnose-"));
+  //
+  // Staged inside the out dir rather than the system temp dir: the rename below
+  // is the SUCCESS path and is unguarded, and a cross-device rename throws
+  // EXDEV wherever the temp dir is a separate mount — losing the entire bundle
+  // of a run that worked.
+  const staging = fs.mkdtempSync(path.join(options.outDir, ".staging-"));
   const bundle = path.join(options.outDir, `${options.scenarioId}-${stamp}`);
 
   console.log(

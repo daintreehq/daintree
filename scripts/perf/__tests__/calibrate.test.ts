@@ -3,7 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { buildSpreads, describePredicateInstability } from "../calibrate";
 import { REGISTRY } from "../registry";
+import type { MetricStat, ScenarioAggregate } from "../types";
 
 /**
  * `perf calibrate` answers the question every threshold depends on and nobody
@@ -32,6 +34,97 @@ async function calibrate(args: string[]): Promise<{ code: number; stderr: string
     return { code: failure.code ?? -1, stderr: failure.stderr ?? "" };
   }
 }
+
+function stat(max: number): MetricStat {
+  return { mean: max, min: max, max, sum: max, count: 8 };
+}
+
+/** One round's aggregate, carrying only what the spread code reads. */
+function round_(p50Ms: number, metricStats: Record<string, MetricStat>): ScenarioAggregate {
+  return {
+    id: "PERF-036",
+    name: "fixture",
+    description: "fixture",
+    tier: "fast",
+    runs: 8,
+    p50Ms,
+    p95Ms: p50Ms,
+    p99Ms: p50Ms,
+    maxMs: p50Ms,
+    meanMs: p50Ms,
+    stdDevMs: 0,
+    metricAverages: {},
+    metricStats,
+    outsideReference: false,
+    measurementIssues: [],
+    notes: [],
+  };
+}
+
+describe("a metric a round never emitted", () => {
+  /**
+   * The failure this guards is the one `lib/gate.ts` already refuses to make:
+   * a reading that is missing read as a reading of 0. Here it would report a
+   * predicate that stopped being emitted mid-calibration as perfectly stable,
+   * and would widen every spread with a sample nothing measured.
+   */
+  it("is reported as absent rather than as a clean zero", () => {
+    const rounds = [
+      round_(10, { parseMisses: stat(0) }),
+      round_(10, {}),
+      round_(10, { parseMisses: stat(0) }),
+    ];
+
+    const findings = describePredicateInstability(rounds, 3);
+
+    expect(findings).toEqual(["parseMisses not emitted in 1/3 rounds"]);
+  });
+
+  it("is still found when it is the FIRST round that lacks it", () => {
+    // Reading the key set off round one alone would see no predicate at all.
+    const findings = describePredicateInstability(
+      [round_(10, {}), round_(10, { aMisses: stat(2) })],
+      2
+    );
+
+    expect(findings).toEqual([
+      "aMisses not emitted in 1/2 rounds",
+      "aMisses nonzero in 1/2 rounds",
+    ]);
+  });
+
+  it("says nothing when every round read a clean zero", () => {
+    expect(
+      describePredicateInstability(
+        [round_(10, { aMisses: stat(0) }), round_(10, { aMisses: stat(0) })],
+        2
+      )
+    ).toEqual([]);
+  });
+
+  it("contributes no sample to the spread it is missing from", () => {
+    // A fabricated 0 would put the range at 40 and the rangePct at 100%, and
+    // that range is the effect-size reference the guide sets thresholds from.
+    const spreads = buildSpreads([
+      round_(10, { gitSpawns: stat(40) }),
+      round_(10, {}),
+      round_(10, { gitSpawns: stat(40) }),
+    ]);
+    const gitSpawns = spreads.find((spread) => spread.name === "gitSpawns")!;
+
+    expect(gitSpawns.samples).toEqual([40, 40]);
+    expect(gitSpawns.absentRounds).toBe(1);
+    expect(gitSpawns.range).toBe(0);
+  });
+
+  it("leaves the duration spread alone, which is never absent", () => {
+    const spreads = buildSpreads([round_(10, {}), round_(14, {})]);
+
+    expect(spreads[0]!.name).toBe("p50Ms");
+    expect(spreads[0]!.absentRounds).toBe(0);
+    expect(spreads[0]!.range).toBe(4);
+  });
+});
 
 describe("perf calibrate", () => {
   it("is reachable from the dispatcher", () => {

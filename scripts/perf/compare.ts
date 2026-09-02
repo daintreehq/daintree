@@ -436,19 +436,26 @@ export function buildComparison(before: PerfRunSummary, after: PerfRunSummary): 
   // a CLAIM is being made; here the reader is handed the fact and the judgement.
   const beforeHarness = before.protocol?.harnessHash;
   const afterHarness = after.protocol?.harnessHash;
-  if (beforeHarness !== undefined && afterHarness !== undefined) {
-    if (beforeHarness === null || afterHarness === null) {
-      warnings.push(
-        "one side could not record a harness hash, so it cannot be shown that both runs were " +
-          "measured by the same instrument"
-      );
-    } else if (beforeHarness !== afterHarness) {
-      warnings.push(
-        `the harness itself differs between the two runs (${beforeHarness} vs ${afterHarness}) — ` +
-          "scripts/perf changed, so part of any delta below may be the measuring instrument " +
-          "rather than the code; re-measure both sides on one harness before claiming a result"
-      );
-    }
+  if (beforeHarness === undefined || afterHarness === undefined) {
+    // A summary written before `harnessHash` existed has no field at all, which
+    // is the ordinary case for a comparison against a stored baseline — exactly
+    // what the field was added for. Staying silent here would fail the check
+    // open in the one situation it was meant to speak up in.
+    warnings.push(
+      "one side predates harness recording, so it cannot be shown that both runs were measured " +
+        "by the same instrument"
+    );
+  } else if (beforeHarness === null || afterHarness === null) {
+    warnings.push(
+      "one side could not record a harness hash, so it cannot be shown that both runs were " +
+        "measured by the same instrument"
+    );
+  } else if (beforeHarness !== afterHarness) {
+    warnings.push(
+      `the harness itself differs between the two runs (${beforeHarness} vs ${afterHarness}) — ` +
+        "scripts/perf changed, so part of any delta below may be the measuring instrument " +
+        "rather than the code; re-measure both sides on one harness before claiming a result"
+    );
   }
   if (before.mode !== after.mode) {
     warnings.push(
