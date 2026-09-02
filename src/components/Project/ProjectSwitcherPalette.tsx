@@ -624,7 +624,7 @@ function ProjectListItem({
       aria-current={project.isActive ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-md)] text-left cursor-pointer",
+        "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)] text-left cursor-pointer",
         project.isActive
           ? // Hover still has to answer: the band wash used to sit under this
             // row permanently, which both marked it and made it look hovered
@@ -848,7 +848,7 @@ function ScratchListItem({
       aria-current={scratch.isActive ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-md)] text-left cursor-pointer",
+        "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)] text-left cursor-pointer",
         scratch.isActive
           ? "text-text-primary hover:bg-overlay-subtle"
           : "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
