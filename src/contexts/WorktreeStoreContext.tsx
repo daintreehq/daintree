@@ -1000,6 +1000,32 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       if (wakeRafId !== null) cancelAnimationFrame(wakeRafId);
     });
 
+    // Warm reactivation runs the fan-out NOW rather than through scheduleWake's
+    // double-rAF settle. Main has just re-attached this view beneath the
+    // outgoing one and is holding that bridge until the fan-out reports back;
+    // an undrawn view's frames are throttled to ~2 Hz, so each deferred frame
+    // cost ~500 ms and the gate (1.5 s hard) expired on every switch that had
+    // panes to wake. The wake's repairs are synchronous and the post-reveal
+    // repaint (#10362) redoes the paint at full rate once the view is on top.
+    // A pending frame-deferred wake is folded in, and one frame of
+    // `wakePending` absorbs the same-turn `resume`/`visibilitychange` echoes.
+    function runWakeNow() {
+      if (wakeRafId !== null) {
+        cancelAnimationFrame(wakeRafId);
+        wakeRafId = null;
+      }
+      wakePending = true;
+      void wakeActiveWorktreeTerminals();
+      if (typeof requestAnimationFrame !== "function") {
+        wakePending = false;
+        return;
+      }
+      wakeRafId = requestAnimationFrame(() => {
+        wakeRafId = null;
+        wakePending = false;
+      });
+    }
+
     function handleVisibilityChange() {
       if (document.visibilityState !== "visible") return;
       scheduleWake();
@@ -1084,19 +1110,17 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // WebContentsView, and `resume` needs an actual freeze), so on most warm
     // switches the wake fan-out — whose completion releases main's warm paint
     // gate via notifyWarmViewPainted — had no trigger and the gate always ran
-    // to its hard timeout. Routed through scheduleWake so it coalesces with any
-    // visibility/resume-triggered wake and inherits the same double-rAF settle.
-    // Deliberately NO entry-time visibility guard: this is the one trigger main
-    // asserts is valid, and dropping it here would re-open the hard-timeout
-    // stall; scheduleWake re-checks visibility at execution and APP_VIEW_CACHED
-    // cancels a pending wake if the view is switched away mid-schedule.
+    // to its hard timeout. Runs the fan-out synchronously (see runWakeNow) and
+    // deliberately has NO visibility guard: main asserts the activation and is
+    // holding the bridge on the reply, so skipping the wake would only trade a
+    // fan-out for a 1.5 s stall.
     const offViewWarmActivated = window.electron?.app?.onViewWarmActivated?.((payload) => {
       // First signal the incoming view gets on a warm switch: adopt the trace
       // so the wake fan-out marks below join it (`project:on-switch` fills in
       // the entry point later).
       if (payload?.switchId) setActiveSwitchTrace({ switchId: payload.switchId });
       markSwitch(PERF_MARKS.PROJECT_SWITCH_WARM_ACTIVATED_RECEIVED);
-      scheduleWake();
+      runWakeNow();
     });
     if (offViewWarmActivated) cleanups.push(offViewWarmActivated);
 
