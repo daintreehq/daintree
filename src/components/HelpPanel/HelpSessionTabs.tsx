@@ -68,6 +68,7 @@ function TabLabel({ label, isTaskTitle }: { label: string; isTaskTitle: boolean 
 }
 
 export interface HelpSessionTab {
+  native?: boolean;
   slot: number;
   /** What the tab shows: the agent's trimmed task title, or `Session N`. */
   label: string;
@@ -284,7 +285,6 @@ function NativeSessionTabChip(props: SessionTabChipProps) {
 }
 
 interface HelpSessionTabsProps {
-  native?: boolean;
   tabs: HelpSessionTab[];
   activeSlot: number;
   onSelect: (slot: number) => void;
@@ -350,7 +350,6 @@ interface PendingCloseFocus {
  * down and remount two sessions on the way past.
  */
 export function HelpSessionTabs({
-  native = false,
   tabs,
   activeSlot,
   onSelect,
@@ -522,7 +521,7 @@ export function HelpSessionTabs({
         className="flex items-stretch gap-0.5 min-w-0 overflow-x-auto [scrollbar-width:none]"
       >
         {tabs.map((tab) => {
-          const Chip = native ? NativeSessionTabChip : SessionTabChip;
+          const Chip = tab.native ? NativeSessionTabChip : SessionTabChip;
           return (
           <Chip
             key={tab.slot}
