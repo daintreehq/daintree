@@ -401,13 +401,23 @@ function envObjectNames(expression: ts.Expression, what: string, into: Set<strin
     // find, or one that returns something it cannot read, still stops the run.
     if (ts.isCallExpression(spread) && ts.isIdentifier(spread.expression)) {
       const helper = spread.expression.text;
-      const declaration = hostFunction(helper);
-      if (declaration) {
-        for (const returned of returnExpressions(declaration, `${what} → ${helper}()`)) {
-          envExpressionNames(returned, `${what} → ${helper}()`, into);
-        }
-        continue;
+      const declaration = hostFunction(helper, spread.getSourceFile(), what);
+      const via = `${what} → ${helper}()`;
+      // Cycle guard, held across the whole follow. Two helpers that spread each other
+      // would otherwise recurse until the stack gave out — technically fail-closed, but
+      // as a crash rather than as the diagnostic every other refusal here is.
+      if (followingHelpers.has(declaration)) {
+        outgrew(via, "this helper spreads its own result, directly or through another");
       }
+      followingHelpers.add(declaration);
+      try {
+        for (const returned of returnExpressions(declaration, via)) {
+          envExpressionNames(returned, via, into);
+        }
+      } finally {
+        followingHelpers.delete(declaration);
+      }
+      continue;
     }
     outgrew(what, "a spread of something this cannot read could carry any variable");
   }
@@ -424,16 +434,78 @@ function envExpressionNames(expression: ts.Expression, what: string, into: Set<s
   envObjectNames(node, what, into);
 }
 
-/** The host's own declaration of `name`, if it has one. */
-function hostFunction(name: string): ts.FunctionDeclaration | null {
-  for (const file of hostSourceFiles()) {
-    const source = parseText(readFileSync(file, "utf8"), file);
-    for (const statement of source.statements) {
-      if (ts.isFunctionDeclaration(statement) && statement.name?.text === name) return statement;
-    }
+/**
+ * The host's declaration of `name`, resolved the way TypeScript would.
+ *
+ * IN THE CALLING FILE ONLY. A search across every host module treats them as one
+ * namespace, which they are not: two files may each declare `function namespaceEnv`,
+ * and following whichever the directory listing happened to yield first would read a
+ * body the call never reaches — the scanner reporting a variable set it has not
+ * actually checked. That is precisely the silent under-report this whole file exists to
+ * make impossible, so an unresolvable or duplicated name is a hard stop.
+ */
+function hostFunction(name: string, from: ts.SourceFile, what: string): ts.FunctionDeclaration {
+  const found = from.statements.filter(
+    (statement): statement is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(statement) && statement.name?.text === name
+  );
+  if (found.length === 0) {
+    return outgrew(
+      what,
+      `\`${name}\` is not a function declared in this file — it could be an import, ` +
+        "an arrow constant, or a nested scope, and this cannot follow any of them"
+    );
   }
-  return null;
+  if (found.length > 1) {
+    return outgrew(what, `\`${name}\` is declared more than once here, so the call is ambiguous`);
+  }
+  // A top-level function is not proof the CALL reaches it. A `const`, a `let`, a
+  // parameter or an import of the same name shadows it in whatever scope the call sits
+  // in, and following the function body would then report on an implementation the
+  // child never runs — the scanner's one unforgivable failure. Resolving scopes properly
+  // means a type checker; refusing on any second binding of the name costs a rename and
+  // is the fail-closed half of the same answer.
+  const resolved = found[0]!;
+  let shadowed = false;
+  const findShadow = (node: ts.Node): void => {
+    if (shadowed) return;
+    // The declaration we resolved to is not its own shadow.
+    if (node === resolved) return;
+    if (
+      (ts.isVariableDeclaration(node) ||
+        ts.isParameter(node) ||
+        ts.isImportSpecifier(node) ||
+        ts.isImportClause(node) ||
+        ts.isNamespaceImport(node) ||
+        ts.isImportEqualsDeclaration(node) ||
+        ts.isBindingElement(node) ||
+        // A NESTED `function name()` shadows the top-level one inside its own scope,
+        // and unlike a `const` it is a perfectly ordinary thing to write — which makes
+        // it the most likely form of this hole rather than the least.
+        ts.isFunctionDeclaration(node)) &&
+      node.name &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === name
+    ) {
+      shadowed = true;
+      return;
+    }
+    ts.forEachChild(node, findShadow);
+  };
+  ts.forEachChild(from, findShadow);
+  if (shadowed) {
+    return outgrew(
+      what,
+      `\`${name}\` is bound more than once in this file — as a variable, a parameter, an ` +
+        "import, or a nested function — so which one the call reaches depends on a scope " +
+        "this cannot resolve"
+    );
+  }
+  return found[0]!;
 }
+
+/** Helpers currently being followed, so a spread cycle is refused rather than fatal. */
+const followingHelpers = new Set<ts.FunctionDeclaration>();
 
 /** Every expression a function returns. A bare `return;` is a shape this cannot read. */
 function returnExpressions(fn: ts.FunctionDeclaration, what: string): ts.Expression[] {
@@ -786,11 +858,9 @@ describe("assistant account-ownership boundary", () => {
       expect(() => persistedSettingKeys(bad)).toThrow(/element is not a literal name/i);
     });
 
-    it("stops at an environment spread it cannot read", () => {
-      const names = new Set<string>();
-      const source = parseText(
-        `const options = { env: { ...assistantChildEnv(), ...buildAccountEnvironment() } };\n`
-      );
+    /** The `env: { … }` literal out of a one-off fixture, ready to scan. */
+    const fixtureEnvLiteral = (text: string): ts.Expression => {
+      const source = parseText(text);
       const literal = declarationInitializer(source, "options");
       const envProperty = ts.isObjectLiteralExpression(literal)
         ? literal.properties.find(
@@ -801,9 +871,99 @@ describe("assistant account-ownership boundary", () => {
           )
         : undefined;
       expect(envProperty, "the fixture no longer contains an env literal").toBeDefined();
-      expect(() =>
-        envObjectNames(unwrap(envProperty!.initializer), "fixture env literal", names)
-      ).toThrow(/spread of something this cannot read/i);
+      return unwrap(envProperty!.initializer);
+    };
+
+    it("stops at an environment spread it cannot read", () => {
+      const names = new Set<string>();
+      const literal = fixtureEnvLiteral(
+        `const options = { env: { ...assistantChildEnv(), ...buildAccountEnvironment() } };\n`
+      );
+      // A call to something this file does not declare — an import, a const arrow, a
+      // nested closure. Every one of those could carry any variable at all, so the
+      // scanner refuses rather than reporting a set it has not checked.
+      expect(() => envObjectNames(literal, "fixture env literal", names)).toThrow(
+        /outgrown this scanner/i
+      );
+    });
+
+    it("follows a spread of a helper declared in the same file", () => {
+      const names = new Set<string>();
+      const literal = fixtureEnvLiteral(
+        `function laneEnv(slot) {\n` +
+          `  return slot === 0 ? {} : { DAINTREE_ASSISTANT_STATE_NAMESPACE: "s" + slot };\n` +
+          `}\n` +
+          `const options = { env: { ...assistantChildEnv(), ...laneEnv(slot) } };\n`
+      );
+      envObjectNames(literal, "fixture env literal", names);
+      // The whole point of following it: a variable set inside a helper is still a
+      // variable the child gets, and the check downstream claims to have seen them all.
+      expect([...names]).toEqual(["DAINTREE_ASSISTANT_STATE_NAMESPACE"]);
+    });
+
+    it("refuses a helper name that is declared twice", () => {
+      const names = new Set<string>();
+      const literal = fixtureEnvLiteral(
+        `function laneEnv() { return { DAINTREE_A: "1" }; }\n` +
+          `function laneEnv() { return { DAINTREE_B: "2" }; }\n` +
+          `const options = { env: { ...laneEnv() } };\n`
+      );
+      // Ambiguous resolution is the shape that would let the scanner read one body and
+      // report on another — silently, and about exactly the variables it exists to pin.
+      expect(() => envObjectNames(literal, "fixture env literal", names)).toThrow(
+        /declared more than once/i
+      );
+    });
+
+    it("refuses a helper name that a local binding shadows", () => {
+      const names = new Set<string>();
+      const literal = fixtureEnvLiteral(
+        `function laneEnv() { return { DAINTREE_HARMLESS: "1" }; }\n` +
+          `function build() {\n` +
+          `  const laneEnv = () => ({ DAINTREE_MCP_TOKEN: secret });\n` +
+          `  return { env: { ...laneEnv() } };\n` +
+          `}\n` +
+          `const options = { env: { ...laneEnv() } };\n`
+      );
+      // The failure this exists to prevent: reading the harmless top-level body while
+      // the call actually reaches an arrow that carries a bearer. Resolving scopes
+      // properly needs a type checker, so a second binding of the name is refused.
+      expect(() => envObjectNames(literal, "fixture env literal", names)).toThrow(
+        /bound more than once in this file/i
+      );
+    });
+
+    it("refuses a helper name that a nested function declaration shadows", () => {
+      const names = new Set<string>();
+      const literal = fixtureEnvLiteral(
+        `function laneEnv() { return { DAINTREE_HARMLESS: "1" }; }\n` +
+          `function build(key, secret) {\n` +
+          `  function laneEnv() { return { [key]: secret }; }\n` +
+          `  return { env: { ...laneEnv() } };\n` +
+          `}\n` +
+          `const options = { env: { ...laneEnv() } };\n`
+      );
+      // The most likely form of the hole, because a nested `function` is an ordinary
+      // thing to write. Following the top-level body here would report the harmless
+      // name while the call reaches one whose key is computed — which the supplemental
+      // `DAINTREE_*` text scan cannot see either.
+      expect(() => envObjectNames(literal, "fixture env literal", names)).toThrow(
+        /bound more than once in this file/i
+      );
+    });
+
+    it("refuses a helper that spreads itself", () => {
+      const names = new Set<string>();
+      const literal = fixtureEnvLiteral(
+        `function a() { return { ...b() }; }\n` +
+          `function b() { return { ...a() }; }\n` +
+          `const options = { env: { ...a() } };\n`
+      );
+      // A refusal, not a stack overflow. Fail-closed is the contract; crashing happens
+      // to satisfy it and explains nothing.
+      expect(() => envObjectNames(literal, "fixture env literal", names)).toThrow(
+        /spreads its own result/i
+      );
     });
 
     it("reads the conditional spreads the real environment literal is built from", () => {

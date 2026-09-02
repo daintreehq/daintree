@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -23,7 +24,28 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { AssistantPanel } from "@/components/AssistantPanel";
-import { assistantStoreForSlot, releaseAssistantStore } from "@/store/assistantStore";
+import {
+  assistantStoreForSlot,
+  releaseAssistantStore,
+  selectAssistantLaneState,
+} from "@/store/assistantStore";
+
+/**
+ * Whether a native lane holds something a restart, a stop or a close would destroy.
+ *
+ * Two readings, because a lane can be worth protecting before anybody has said
+ * anything: `turns` is the conversation, and the lane state is the engine mid-flight —
+ * a wake's first phase lands BEFORE its turn opens, so a transcript test alone would
+ * wave through a Stop on a lane that is actively working.
+ *
+ * The same test for all three controls on purpose. They discard the same thing, and
+ * three answers to one question is how "+ New session" ended up asking while Stop did
+ * not.
+ */
+function nativeLaneHasSomethingToLose(slot: number): boolean {
+  const state = assistantStoreForSlot(slot).getState();
+  return state.turns.length > 0 || selectAssistantLaneState(state) !== null;
+}
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
 import {
   getTerminalFocusTarget,
@@ -60,7 +82,7 @@ import {
   HELP_PANEL_MIN_WIDTH,
   HELP_PANEL_MAX_WIDTH,
 } from "@/store/helpPanelStore";
-import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
+import { ASSISTANT_SLOTS, MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import {
   usePanelStore,
   getTerminalRefreshTier,
@@ -263,27 +285,6 @@ export function HelpPanel({
     }))
   );
 
-  /**
-   * The Daintree Assistant renders NATIVELY; every other help agent keeps the xterm pane.
-   *
-   * There is deliberately no toggle. This is not a preference between two working
-   * surfaces — the engine no longer HAS a terminal UI. Its cockpit was removed when
-   * Daintree took over rendering, so pointing the PTY path at a current engine would
-   * show the bare line REPL that exists for SSH sessions. Claude, Codex and the rest
-   * are real terminal programs and stay on xterm.
-   *
-   * It is also the DEFAULT. The Daintree Assistant is the assistant — the picker,
-   * the availability probe and the "Start assistant" consent CTA all exist because
-   * this panel could host Claude or Codex instead, and none of that should stand
-   * between someone opening the panel and seeing their own assistant. Another agent
-   * takes the panel only when it has been chosen explicitly.
-   *
-   * Keyed off the preferred agent as well as the launched one: in native mode no
-   * terminal is ever launched, so `agentId` stays null.
-   */
-  const useNativeAssistant =
-    (agentId ?? preferredAgentId ?? DAINTREE_ASSISTANT_AGENT_ID) === DAINTREE_ASSISTANT_AGENT_ID;
-
   /** Whether the built-in engine can run here — see `assistantPlatformSupport`. */
   const platformSupport = assistantPlatformSupport();
 
@@ -352,6 +353,73 @@ export function HelpPanel({
   const [nativeSessionNonceBySlot, setNativeSessionNonceBySlot] = useState<Record<number, number>>(
     {}
   );
+  /**
+   * The Daintree Assistant renders NATIVELY; every other help agent keeps the xterm pane.
+   *
+   * There is deliberately no toggle. This is not a preference between two working
+   * surfaces — the engine no longer HAS a terminal UI. Its cockpit was removed when
+   * Daintree took over rendering, so pointing the PTY path at a current engine would
+   * show the bare line REPL that exists for SSH sessions. Claude, Codex and the rest
+   * are real terminal programs and stay on xterm.
+   *
+   * It is also the DEFAULT. The Daintree Assistant is the assistant — the picker,
+   * the availability probe and the "Start assistant" consent CTA all exist because
+   * this panel could host Claude or Codex instead, and none of that should stand
+   * between someone opening the panel and seeing their own assistant. Another agent
+   * takes the panel only when it has been chosen explicitly.
+   *
+   * Asked PER LANE (#12108), from three readings in priority order:
+   *
+   * 1. What the lane BOUND. A lane that launched an agent is that agent, whatever the
+   *    preference says now.
+   * 2. Whether the lane is ARMED. A native lane never binds anything — no terminal is
+   *    ever launched — so "unbound" would otherwise be indistinguishable between a
+   *    running native session and a lane that has not started, and changing the global
+   *    preference would reclassify a live native sibling and stop its engine. The arm
+   *    is the only record that a lane took the native path, so it is what says so.
+   * 3. Otherwise the preference, defaulting to the assistant.
+   *
+   * Answering this once for the whole panel from the lane on screen made every sibling
+   * follow it: switching the tab you are looking at to Claude unmounted the native
+   * panels of the lanes you were not, and their engines stopped through the very
+   * cleanup a project switch uses.
+   */
+  const laneBoundAgentBySlot = useHelpPanelStore(
+    useShallow((s) => {
+      const out: Record<number, string | null> = {};
+      // Through `selectSlot`, the canonical accessor — the same one every other read of
+      // a lane's agent goes through, so this cannot drift from what the panel believes
+      // the lane is bound to.
+      for (const slot of selectOpenSlots(s)) out[slot] = selectSlot(s, slot).agentId ?? null;
+      return out;
+    })
+  );
+  const laneUsesNativeAssistant = useCallback(
+    (slot: number) => {
+      const bound = laneBoundAgentBySlot[slot] ?? null;
+      if (bound !== null) return bound === DAINTREE_ASSISTANT_AGENT_ID;
+      // Armed for ANY workspace, not just this one: a lane armed under the project you
+      // switched away from is still a native lane, it is simply not running.
+      if (armedWorkspaceBySlot[slot] !== undefined) return true;
+      return (preferredAgentId ?? DAINTREE_ASSISTANT_AGENT_ID) === DAINTREE_ASSISTANT_AGENT_ID;
+    },
+    [laneBoundAgentBySlot, armedWorkspaceBySlot, preferredAgentId]
+  );
+
+  /** The backend of the lane on screen — what the panel BODY shows. */
+  const useNativeAssistant = laneUsesNativeAssistant(activeSlot);
+  /**
+   * The same answer, readable from a deferred frame without being a trigger.
+   *
+   * The reveal-focus effect below depends on a deliberately narrow set of structural
+   * primitives (#11472) and re-runs a focus grab for each of them. The backend of the
+   * lane on screen is something that grab has to CONSULT — it must not step on focus the
+   * native panel has placed itself — but it is not a reason to grab, and adding it to
+   * the array would make every preference change one.
+   */
+  const useNativeAssistantRef = useRef(useNativeAssistant);
+  useNativeAssistantRef.current = useNativeAssistant;
+
   const isLaneArmed = useCallback(
     (slot: number) =>
       activeWorkspaceId !== null && armedWorkspaceBySlot[slot] === activeWorkspaceId,
@@ -368,6 +436,80 @@ export function HelpPanel({
       prev[activeSlot] === activeWorkspaceId ? prev : { ...prev, [activeSlot]: activeWorkspaceId }
     );
   }, [isOpen, useNativeAssistant, activeWorkspaceId, activeSlot]);
+
+  // A transcript belongs to the workspace it was said in.
+  //
+  // Renderer state is normally per project view, so a workspace change usually takes a
+  // whole V8 context with it and this never fires. The same-renderer switch path is the
+  // exception, and there the lane stores are keyed by slot alone: switching A→B and
+  // selecting a lane that had not run in B yet showed A's conversation under B, and
+  // once B used that slot, going back to A found it overwritten.
+  //
+  // Every lane, not just the open ones — a slot closed under A still holds its store
+  // until something reuses the number. Before paint, so the stale transcript is never
+  // on screen under the new workspace.
+  const storedWorkspaceRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const previous = storedWorkspaceRef.current;
+    if (previous === activeWorkspaceId) return;
+    storedWorkspaceRef.current = activeWorkspaceId;
+    // First run has nothing behind it: the stores are already empty, and releasing here
+    // would wipe a conversation restored into slot 0 before this component mounted.
+    if (previous === null) return;
+    for (const slot of ASSISTANT_SLOTS) releaseAssistantStore(slot);
+  }, [activeWorkspaceId]);
+
+  // Moving the agent preference to a terminal agent converts the lane the user is
+  // LOOKING AT, and only that one.
+  //
+  // This is #8353's contract — choosing another agent in settings replaces the live
+  // session rather than silently doing nothing — narrowed to one lane. It used to fall
+  // out of the derivation for free, because an unbound lane simply followed the
+  // preference; once the arm became part of a lane's identity (so a background native
+  // session survives a preference change it had nothing to do with), converting has to
+  // be an act rather than an inference. Dropping the active lane's arm is that act: the
+  // lane goes back to following the preference, its engine stops through the ordinary
+  // disarm path, and the PTY runtime launches the chosen agent into it.
+  //
+  // A background lane keeps running whatever it is running. The route to converting one
+  // is to stop it — which drops its arm — and the Stop control is in the same menu the
+  // preference came from.
+  const preferenceForNativeRef = useRef(preferredAgentId);
+  useEffect(() => {
+    if (preferenceForNativeRef.current === preferredAgentId) return;
+    preferenceForNativeRef.current = preferredAgentId;
+    if (preferredAgentId === null || preferredAgentId === DAINTREE_ASSISTANT_AGENT_ID) return;
+    setArmedWorkspaceBySlot((prev) => {
+      if (!(activeSlot in prev)) return prev;
+      const next = { ...prev };
+      delete next[activeSlot];
+      return next;
+    });
+  }, [preferredAgentId, activeSlot]);
+
+  // A lane that BINDS a terminal agent must not keep its native arm. The arm is what
+  // `active` reads, so a stale one re-mounts an engine into a slot a PTY now holds —
+  // and provisioning displaces every prior backend at that `(projectId, slot)`, which
+  // kills the terminal the user just switched to.
+  //
+  // Keyed on the binding, not on `laneUsesNativeAssistant`: the arm is itself an input
+  // to that answer, so asking it here would be asking whether the arm implies the arm.
+  // A lane leaves the native path exactly when it binds another agent, and that is the
+  // one signal this needs.
+  useEffect(() => {
+    setArmedWorkspaceBySlot((prev) => {
+      const converted = Object.keys(prev)
+        .map(Number)
+        .filter((slot) => {
+          const bound = laneBoundAgentBySlot[slot] ?? null;
+          return bound !== null && bound !== DAINTREE_ASSISTANT_AGENT_ID;
+        });
+      if (converted.length === 0) return prev;
+      const next = { ...prev };
+      for (const slot of converted) delete next[slot];
+      return next;
+    });
+  }, [laneBoundAgentBySlot]);
 
   const activeWorkspacePath = currentProject?.path ?? currentScratch?.path ?? null;
   const activeWorkspace = useMemo(
@@ -877,6 +1019,17 @@ export function HelpPanel({
           completeFocusTrigger();
           return;
         }
+        // The native panel places its own focus — the composer on a click, an approval
+        // card claiming the keys when its lane becomes visible, a question sheet taking
+        // them from the composer. Once focus is already inside it, this grab has nothing
+        // left to do, and doing it anyway lands on "the first tabbable element in the
+        // panel", which is a header button. That is how switching from a terminal lane
+        // to a native one took the keys straight back off an approval card a frame after
+        // it claimed them, leaving Y/N/Escape dead on a card that looked live.
+        if (useNativeAssistantRef.current && current && panelRef.current?.contains(current)) {
+          completeFocusTrigger();
+          return;
+        }
 
         // Read the panel non-reactively at execution time. The effect no longer
         // subscribes to the panel object, so this is both the freshest value
@@ -1188,6 +1341,21 @@ export function HelpPanel({
     )
   );
 
+  /**
+   * The open lanes whose own backend is the native assistant.
+   *
+   * Not "every open lane when the panel is in native mode": a lane keeps the agent it
+   * launched with, so changing the agent preference with lanes open leaves a native
+   * lane beside a live Claude terminal. Rendering a native panel for the terminal lane
+   * would arm an engine into a slot a PTY already holds, and provisioning displaces
+   * every prior backend at that `(projectId, slot)` — so the tab you were not looking
+   * at would lose its agent to a session it never asked for.
+   */
+  const nativeLanes = useMemo(
+    () => openSlots.filter((slot) => laneUsesNativeAssistant(slot)),
+    [openSlots, laneUsesNativeAssistant]
+  );
+
   const sessionTabs = useMemo<HelpSessionTab[]>(
     () =>
       openSlots.map((slot, index) => ({
@@ -1201,8 +1369,13 @@ export function HelpPanel({
         // `openSlot` always takes the lowest free slot.
         label: `Session ${slot + 1}`,
         agentState: laneAgentStates[index],
+        // Where this tab's marker comes from, decided per lane: a native lane reports
+        // from its own store, a terminal lane from its panel's `agentState`. Asked of
+        // the strip as a whole, a mixed pair would have read every tab through the
+        // active lane's backend and shown one lane's activity on the other's tab.
+        native: laneUsesNativeAssistant(slot),
       })),
-    [openSlots, laneAgentStates]
+    [openSlots, laneAgentStates, laneUsesNativeAssistant]
   );
 
   // Bring back the tabs for lanes whose conversations an eviction or crash
@@ -1251,17 +1424,28 @@ export function HelpPanel({
     useHelpPanelStore.getState().requestFocus();
   }, []);
 
-  const handleSelectSlot = useCallback((slot: number) => {
-    // The deck reports on the session it was opened from, so it closes with the tab
-    // switch rather than surviving it showing the wrong lane's watchers and timers.
-    setOperationsOpen(false);
-    useHelpPanelStore.getState().setActiveSlot(slot);
-    // A lane's xterm was hidden while it was in the background, so it has no
-    // trustworthy geometry until it is measured on screen. `requestFocus`
-    // drives HelpPanel's existing reveal path, which fits and repaints before
-    // handing it the caret — the same treatment a panel reveal gets.
-    useHelpPanelStore.getState().requestFocus();
-  }, []);
+  const handleSelectSlot = useCallback(
+    (slot: number) => {
+      // The deck reports on the session it was opened from, so it closes with the tab
+      // switch rather than surviving it showing the wrong lane's watchers and timers.
+      setOperationsOpen(false);
+      useHelpPanelStore.getState().setActiveSlot(slot);
+      // A PTY lane's xterm was hidden while it was in the background, so it has no
+      // trustworthy geometry until it is measured on screen. `requestFocus`
+      // drives HelpPanel's existing reveal path, which fits and repaints before
+      // handing it the caret — the same treatment a panel reveal gets.
+      //
+      // NOT for a native lane. There is no xterm to fit, and the reveal path ends by
+      // focusing the panel's first tabbable element a frame later — which would step on
+      // whatever the revealed lane put focus on for itself. That is not hypothetical:
+      // an approval card claims the keys when its lane becomes visible, and this would
+      // take them straight back one frame afterwards, leaving Y/N/Escape dead on a card
+      // that looks live. Leaving focus on the tab the user just clicked is both correct
+      // and out of the way.
+      if (!laneUsesNativeAssistant(slot)) useHelpPanelStore.getState().requestFocus();
+    },
+    [laneUsesNativeAssistant]
+  );
 
   const closeSlotNow = useCallback(
     (slot: number) => {
@@ -1332,11 +1516,10 @@ export function HelpPanel({
       if (agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(agentState)) return true;
     }
     // The native lane keeps its whole conversation in its own store, so "something to
-    // lose" is whether anything has been said in it — the same test `+ New session`
-    // applies to the native panel. Asked of the lane rather than of the panel's current
-    // mode, so a background native session with a live conversation cannot be closed on
-    // one silent click just because the tab on screen is a terminal.
-    return assistantStoreForSlot(slot).getState().turns.length > 0;
+    // lose" is read from there. Asked of the lane rather than of the panel's current
+    // mode, so a background native session cannot be closed on one silent click just
+    // because the tab on screen is a terminal.
+    return nativeLaneHasSomethingToLose(slot);
   }, []);
 
   const handleCloseSlot = useCallback(
@@ -1364,17 +1547,52 @@ export function HelpPanel({
     pendingCloseSlot === null
       ? null
       : (sessionTabs.find((tab) => tab.slot === pendingCloseSlot)?.label ?? "this session");
+  /**
+   * Whether the native lane on screen has a conversation a restart or a stop would
+   * discard.
+   *
+   * The native transcript lives only in that lane's store, so "something to lose" is
+   * whether anything has been said at all — the same test the tab's own close applies.
+   * This used to be asserted in a comment and never implemented: both native controls
+   * returned before reaching the gate, so a conversation went on one click while the
+   * identical PTY action asked first.
+   */
+  const nativeLaneHasConversation = useCallback(
+    () => nativeLaneHasSomethingToLose(activeSlot),
+    [activeSlot]
+  );
+
+  /** Restart the lane on screen. The deck is a reading of the session that just ended,
+   *  so it closes with it — leaving it up would show the outgoing session's watchers
+   *  over a fresh one. */
+  const restartNativeLane = useCallback(() => {
+    setOperationsOpen(false);
+    setNativeSessionNonceBySlot((prev) => ({
+      ...prev,
+      [activeSlot]: (prev[activeSlot] ?? 0) + 1,
+    }));
+  }, [activeSlot]);
+
+  /** Stop the lane on screen. Disarms THIS LANE only: a parallel session the user did
+   *  not stop keeps running, exactly as "Stop" reads. Disarming ends the engine through
+   *  the same effect cleanup a project change uses; re-selecting the tab arms it again. */
+  const stopNativeLane = useCallback(() => {
+    setOperationsOpen(false);
+    setArmedWorkspaceBySlot((prev) => {
+      if (!(activeSlot in prev)) return prev;
+      const next = { ...prev };
+      delete next[activeSlot];
+      return next;
+    });
+  }, [activeSlot]);
+
   const handleNewSession = useCallback(() => {
     if (useNativeAssistant) {
-      // The native transcript lives only in the store, so "something to lose" is
-      // whether anything has been said at all.
-      // The deck is a reading of the session that just ended, so it closes with it —
-      // leaving it up would show the outgoing session's watchers over a fresh one.
-      setOperationsOpen(false);
-      setNativeSessionNonceBySlot((prev) => ({
-        ...prev,
-        [activeSlot]: (prev[activeSlot] ?? 0) + 1,
-      }));
+      if (nativeLaneHasConversation()) {
+        setShowNewSessionConfirm(true);
+        return;
+      }
+      restartNativeLane();
       return;
     }
     if (!terminalId || !agentId) return;
@@ -1383,12 +1601,24 @@ export function HelpPanel({
       return;
     }
     controller.newSession();
-  }, [controller, terminalId, agentId, shouldConfirmNewSession, useNativeAssistant, activeSlot]);
+  }, [
+    controller,
+    terminalId,
+    agentId,
+    shouldConfirmNewSession,
+    useNativeAssistant,
+    nativeLaneHasConversation,
+    restartNativeLane,
+  ]);
 
   const handleConfirmNewSession = useCallback(() => {
     setShowNewSessionConfirm(false);
+    if (useNativeAssistant) {
+      restartNativeLane();
+      return;
+    }
     controller.newSession();
-  }, [controller]);
+  }, [controller, useNativeAssistant, restartNativeLane]);
 
   const handleCancelNewSession = useCallback(() => {
     setShowNewSessionConfirm(false);
@@ -1398,17 +1628,11 @@ export function HelpPanel({
   // only when a working agent or an engaged conversation would be discarded.
   const handleEndSession = useCallback(() => {
     if (useNativeAssistant) {
-      // Disarms THIS LANE only. A parallel session the user did not stop keeps running:
-      // "Stop" acts on the conversation on screen, exactly as it reads. Disarming stops
-      // the engine through the same effect cleanup that a project change uses;
-      // re-selecting the tab arms it again.
-      setOperationsOpen(false);
-      setArmedWorkspaceBySlot((prev) => {
-        if (!(activeSlot in prev)) return prev;
-        const next = { ...prev };
-        delete next[activeSlot];
-        return next;
-      });
+      if (nativeLaneHasConversation()) {
+        setShowEndSessionConfirm(true);
+        return;
+      }
+      stopNativeLane();
       return;
     }
     if (!terminalId || !agentId) return;
@@ -1417,12 +1641,24 @@ export function HelpPanel({
       return;
     }
     controller.endSession();
-  }, [controller, terminalId, agentId, shouldConfirmNewSession, useNativeAssistant, activeSlot]);
+  }, [
+    controller,
+    terminalId,
+    agentId,
+    shouldConfirmNewSession,
+    useNativeAssistant,
+    nativeLaneHasConversation,
+    stopNativeLane,
+  ]);
 
   const handleConfirmEndSession = useCallback(() => {
     setShowEndSessionConfirm(false);
+    if (useNativeAssistant) {
+      stopNativeLane();
+      return;
+    }
     controller.endSession();
-  }, [controller]);
+  }, [controller, useNativeAssistant, stopNativeLane]);
 
   const handleCancelEndSession = useCallback(() => {
     setShowEndSessionConfirm(false);
@@ -1740,7 +1976,6 @@ export function HelpPanel({
       <HelpSessionTabs
         tabs={sessionTabs}
         activeSlot={activeSlot}
-        native={useNativeAssistant}
         onSelect={handleSelectSlot}
         onClose={handleCloseSlot}
         // The strip is the only home for this action now. It used to live in the
@@ -1762,12 +1997,13 @@ export function HelpPanel({
           slot={slot}
           isActive={slot === activeSlot}
           isOpen={isOpen}
-          // Withheld for the native assistant: the launch controller exists to spawn a
-          // PTY, and in native mode there is no terminal to spawn. Letting it run would
-          // start a SECOND engine alongside the one the panel owns, and both would reach
-          // for the same per-project state lease. Applied per lane, since #12108 moved
-          // the `syncInputs` this used to gate into `HelpSessionLaneRuntime`.
-          isReadyToLaunch={isReadyToLaunch && !useNativeAssistant}
+          // Withheld from a lane whose OWN backend is native: the launch controller
+          // exists to spawn a PTY, and a native lane has no terminal to spawn. Letting
+          // it run would start a second engine alongside the one that lane's panel
+          // owns, and both would reach for the same lane state lease. Asked per lane,
+          // not per panel — a terminal lane must keep launching while the lane on
+          // screen is native.
+          isReadyToLaunch={isReadyToLaunch && !laneUsesNativeAssistant(slot)}
           currentProject={activeWorkspace}
           preferredAgentId={preferredAgentId}
           supportedInstalledAgentIds={supportedInstalledAgentIds}
@@ -1818,6 +2054,53 @@ export function HelpPanel({
           onStartNewSession={handleNewSession}
           onDismissSessionRevoked={dismissSessionRevoked}
         />
+        {/* Every NATIVE lane, mounted for as long as the lane is open — deliberately
+            outside the branch below, which only decides what the panel BODY shows.
+            A lane's engine must not stop because a DIFFERENT lane changed backend, and
+            it would: unmounting runs the same hook cleanup a project switch does, so
+            folding this into the body's ternary meant switching the visible tab to
+            Claude silently ended every native conversation behind it. Hidden rather
+            than unmounted for the same reason between lanes — and because remounting a
+            transcript loses where the reader was in it. */}
+        {platformSupport.supported && nativeLanes.length > 0 && (
+          <div
+            className="flex-1 relative min-h-0"
+            hidden={!useNativeAssistant}
+            // `flex-1` on a hidden box is inert, but the box still owns the flex slot
+            // when it comes back — so the terminal below can take the whole panel while
+            // this is away without either of them resizing on the swap.
+          >
+            {nativeLanes.map((slot) => (
+              <div key={slot} className="absolute inset-0" hidden={slot !== activeSlot}>
+                <AssistantPanel
+                  slot={slot}
+                  projectId={activeWorkspaceId}
+                  projectPath={activeWorkspacePath}
+                  // Latched, not `isOpen`. The engine must not start for a panel the user
+                  // never opened — hiding slides it off-canvas rather than unmounting, so
+                  // every project view would otherwise spin one up unprompted. But it must
+                  // not STOP on close either: closing the sidebar is not ending a
+                  // conversation, and tying the engine to `isOpen` silently discarded the
+                  // transcript every time the panel was dismissed. Start on first open,
+                  // then live until the project changes or the view goes away.
+                  active={isLaneArmed(slot)}
+                  // Separate from `active` on purpose. `active` is latched — it says the
+                  // engine should be RUNNING — while this says the panel is on screen
+                  // right now. Only the second one may drive a ticking clock: hiding
+                  // slides the panel off-canvas rather than unmounting it, so a countdown
+                  // gated on `active` would keep re-rendering behind a closed sidebar all
+                  // session. A background LANE is hidden the same way, and pays the same
+                  // nothing.
+                  visible={isOpen && isVisible && useNativeAssistant && slot === activeSlot}
+                  restartNonce={nativeSessionNonceBySlot[slot] ?? 0}
+                  operationsOpen={slot === activeSlot && operationsOpen}
+                  onOperationsOpenChange={setOperationsOpen}
+                  className="h-full"
+                />
+              </div>
+            ))}
+          </div>
+        )}
         {useNativeAssistant && !platformSupport.supported ? (
           <div className="flex-1 min-h-0 overflow-y-auto p-3">
             <InlineStatusBanner
@@ -1837,46 +2120,7 @@ export function HelpPanel({
               }}
             />
           </div>
-        ) : useNativeAssistant ? (
-          /* One panel per open lane (#12108).
-             Every lane stays MOUNTED, and the ones off screen are hidden rather than
-             unmounted. Two reasons, and both are the difference between tabs that work
-             and tabs that only look like they do: a background lane's engine has to keep
-             running — its turn keeps streaming, its approval still has somewhere to
-             surface — and an unmounted lane would tear its session down through the very
-             effect cleanup that a project switch uses. The second is smaller and just as
-             visible: remounting a transcript loses where the reader was in it. */
-          <div className="flex-1 relative min-h-0">
-            {openSlots.map((slot) => (
-              <div key={slot} className="absolute inset-0" hidden={slot !== activeSlot}>
-                <AssistantPanel
-                  slot={slot}
-                  projectId={activeWorkspaceId}
-                  projectPath={activeWorkspacePath}
-                  // Latched, not `isOpen`. The engine must not start for a panel the user
-                  // never opened — hiding slides it off-canvas rather than unmounting, so
-                  // every project view would otherwise spin one up unprompted. But it must
-                  // not STOP on close either: closing the sidebar is not ending a
-                  // conversation, and tying the engine to `isOpen` silently discarded the
-                  // transcript every time the panel was dismissed. Start on first open,
-                  // then live until the project changes or the view goes away.
-                  active={isLaneArmed(slot)}
-                  // Separate from `active` on purpose. `active` is latched — it says the
-                  // engine should be RUNNING — while this says the panel is on screen right
-                  // now. Only the second one may drive a ticking clock: hiding slides the
-                  // panel off-canvas rather than unmounting it, so a countdown gated on
-                  // `active` would keep re-rendering behind a closed sidebar all session.
-                  // A background LANE is hidden the same way, and pays the same nothing.
-                  visible={isOpen && isVisible && slot === activeSlot}
-                  restartNonce={nativeSessionNonceBySlot[slot] ?? 0}
-                  operationsOpen={slot === activeSlot && operationsOpen}
-                  onOperationsOpenChange={setOperationsOpen}
-                  className="h-full"
-                />
-              </div>
-            ))}
-          </div>
-        ) : showTerminal ? (
+        ) : useNativeAssistant ? null : showTerminal ? (
           isMissingCli && agentId ? (
             <MissingCliGate
               agentId={agentId}
