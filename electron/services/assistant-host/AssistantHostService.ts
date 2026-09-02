@@ -15,6 +15,11 @@ import {
   type AssistantHostEvent,
 } from "../../../shared/types/ipc/assistantHost.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import {
+  DEFAULT_ASSISTANT_SLOT,
+  assistantSlotKey,
+  isValidAssistantSlot,
+} from "../../../shared/config/assistantSlots.js";
 import type { AssistantHostStartResult } from "../../../shared/types/ipc/assistantHostIpc.js";
 import { createLogger } from "../../utils/logger.js";
 
@@ -28,15 +33,24 @@ import { createLogger } from "../../utils/logger.js";
  *    `WebContents` that started the session. Daintree is multi-window and each project
  *    has its own renderer; a broadcast would put one project's conversation — and its
  *    approval prompts — on another project's screen.
- * 2. **One engine per project** (#7522). Starting a session for a project that already
- *    has one displaces the old one rather than running two. Two engines would both
- *    hold the project's state lease and fight over it.
+ * 2. **One engine per LANE** (#7522, re-scoped by #12108). A lane is `(projectId,
+ *    slot)`. Starting a session for a lane that already has one displaces the old one
+ *    rather than running two, because two engines on one lane would both hold that
+ *    lane's state lease and fight over it. Different lanes of the same project run
+ *    side by side: each gets its own engine state namespace, so each takes its own
+ *    `owner.lock` and none of them contends.
  */
 
 export interface StartSessionOptions {
   projectId: string;
   /** Project root; the engine's working directory. */
   cwd: string;
+  /**
+   * Which parallel lane this session is (#12108). Defaults to
+   * {@link DEFAULT_ASSISTANT_SLOT} so a caller that predates lanes still means the
+   * one session a project used to have.
+   */
+  slot?: number;
   windowId: number;
   /** The renderer that owns this session. Events are pinned to it. */
   webContentsId: number;
@@ -45,6 +59,8 @@ export interface StartSessionOptions {
 interface LiveSession {
   sessionId: string;
   projectId: string;
+  /** The lane this engine occupies. `(projectId, slot)` is its identity. */
+  slot: number;
   host: AssistantHostProcess;
   /**
    * Every surface watching this session: WebContents id → its attachment.
@@ -95,6 +111,35 @@ function newAttachmentId(): string {
 
 /** The roster id the MCP tier policy is keyed on for this surface. */
 const ASSISTANT_AGENT_ID = "daintree-assistant";
+
+/**
+ * The engine state namespace a lane runs in, as an env fragment.
+ *
+ * The namespace moves the engine's PER-PROJECT directory — its `state.db` and the
+ * `owner.lock` guarding it — while deliberately leaving the state ROOT alone, where
+ * `auth/` and the endpoint preference live. That distinction is the whole reason this
+ * is the right lever for parallel sessions: every lane is the same signed-in account
+ * talking to the same backend, with its own conversation and its own lease, rather
+ * than a second installation that would demand a fresh `/login`.
+ *
+ * Two axes fold into one string:
+ *
+ * - An unpackaged build gets `dev`, so a dev build and the installed app open on the
+ *   same project do not contend. (Packaged builds cannot: Electron's single-instance
+ *   lock means two of them never run at once.)
+ * - Lanes 1+ get an `s<N>` suffix. Slot 0 gets none, which is what keeps an existing
+ *   install's conversation, memories, audit trail and automation grants exactly where
+ *   they already are.
+ *
+ * Returns an EMPTY fragment for the packaged default lane so the variable stays unset
+ * rather than set-to-empty — the engine reads a blank namespace as "no namespace"
+ * either way, but leaving it out is the honest spelling and the one that shipped.
+ */
+function namespaceEnv(slot: number): Record<string, string> {
+  const parts = [app.isPackaged ? "" : "dev", slot === DEFAULT_ASSISTANT_SLOT ? "" : `s${slot}`];
+  const namespace = parts.filter(Boolean).join("-");
+  return namespace ? { DAINTREE_ASSISTANT_STATE_NAMESPACE: namespace } : {};
+}
 
 /**
  * How often to say an engine is still short of `host:ready`.
@@ -198,11 +243,18 @@ export class AssistantHostService {
    */
   readonly timers = new AssistantTimerService();
 
-  /** projectId → live session. The one-per-project rule lives in this keying. */
-  private readonly byProject = new Map<string, LiveSession>();
+  /**
+   * `assistantSlotKey(projectId, slot)` → live session.
+   *
+   * The one-engine-per-lane rule lives in this keying. It used to be keyed by project
+   * alone, which is exactly what made a second Daintree Assistant session impossible:
+   * every start found the project's existing engine and joined it, so both tabs drew
+   * one conversation.
+   */
+  private readonly bySlotKey = new Map<string, LiveSession>();
   /** sessionId → live session, for command routing. */
   private readonly bySession = new Map<string, LiveSession>();
-  /** projectId → tail of the in-flight start chain. See `start`. */
+  /** Slot key → tail of the in-flight start chain. See `start`. */
   private readonly startQueue = new Map<string, Promise<unknown>>();
   /**
    * Set once the app is shutting down. New starts are refused from here on.
@@ -267,21 +319,33 @@ export class AssistantHostService {
     // This call came FROM the renderer, so the surface is alive right now — whatever a
     // previous teardown recorded about it is stale.
     this.departedSurfaces.delete(opts.webContentsId);
-    // Serialized per project. `start` awaits twice — the displacement grace period and
-    // the engine's own readiness — and the one-per-project invariant lives in a plain
-    // Map, so two overlapping starts could both clear the project entry and then both
+    // Serialized per LANE. `start` awaits twice — the displacement grace period and
+    // the engine's own readiness — and the one-per-lane invariant lives in a plain
+    // Map, so two overlapping starts could both clear the lane entry and then both
     // register, leaving an engine that nothing can find and nothing will displace.
-    // Chaining keeps "displace, register, become ready" indivisible per project.
-    const prior = this.startQueue.get(opts.projectId) ?? Promise.resolve();
-    const run = prior.catch(() => undefined).then(() => this.startLocked(opts));
+    // Chaining keeps "displace, register, become ready" indivisible per lane.
+    //
+    // Per lane rather than per project on purpose: two lanes of one project have
+    // separate state namespaces and therefore separate leases, so making the second
+    // one queue behind the first would serialize two starts that do not contend —
+    // adding the whole of a cold engine boot to opening a parallel session.
+    // Normalized BEFORE the key is built, and the normalized value is what runs.
+    // Keying on the raw slot let `{slot: 9}` and `{slot: 0}` queue separately and then
+    // both resolve to lane 0 inside — two starts racing on one lane, both passing the
+    // empty-lane check, both spawning, and the loser left in `bySession` only: an engine
+    // holding lane 0's lease that no later start can find or displace.
+    const slot = isValidAssistantSlot(opts.slot) ? opts.slot : DEFAULT_ASSISTANT_SLOT;
+    const slotKey = assistantSlotKey(opts.projectId, slot);
+    const prior = this.startQueue.get(slotKey) ?? Promise.resolve();
+    const run = prior.catch(() => undefined).then(() => this.startLocked({ ...opts, slot }));
     const settled = run.catch(() => undefined);
-    this.startQueue.set(opts.projectId, settled);
+    this.startQueue.set(slotKey, settled);
     // Identity-checked so a later start that already replaced this tail is not
-    // dropped. Without it the map retains one settled promise per project id it has
+    // dropped. Without it the map retains one settled promise per lane key it has
     // ever seen, which project ids arriving over IPC make unbounded.
     void settled.then(() => {
-      if (this.startQueue.get(opts.projectId) === settled) {
-        this.startQueue.delete(opts.projectId);
+      if (this.startQueue.get(slotKey) === settled) {
+        this.startQueue.delete(slotKey);
       }
     });
     return run;
@@ -292,28 +356,34 @@ export class AssistantHostService {
     // rather than only that it did.
     const startedAt = Date.now();
     const elapsedMs = () => Date.now() - startedAt;
+    // Already normalized by `start`, which has to know the lane to key the queue on it.
+    // Re-resolved rather than asserted so a direct call from a test still means lane 0.
+    const slot = isValidAssistantSlot(opts.slot) ? opts.slot : DEFAULT_ASSISTANT_SLOT;
+    const slotKey = assistantSlotKey(opts.projectId, slot);
     logger.info("engine start requested", {
       projectId: opts.projectId,
+      slot,
       cwd: opts.cwd,
       windowId: opts.windowId,
       webContentsId: opts.webContentsId,
     });
 
-    // One engine per project, shared by every surface showing it.
+    // One engine per LANE, shared by every surface showing that lane.
     //
     // A second window JOINS the running session. It cannot start its own — the engine
-    // holds an exclusive flock lease on the project's state, so a sibling queues behind
+    // holds an exclusive flock lease on the lane's state, so a sibling queues behind
     // it and times out — and it must not displace the first, which is what shipped
     // before: opening a project in a second window silently tore down the conversation
     // the first window was showing.
-    const existing = this.byProject.get(opts.projectId);
+    const existing = this.bySlotKey.get(slotKey);
     if (existing && !existing.host.hasExited()) {
       return this.attach(existing, opts, elapsedMs());
     }
 
-    // Only a session belonging to THIS surface is displaced — a view re-running its
-    // start effect, or switching projects, must be able to replace its own engine.
-    await this.stopProject(opts.projectId);
+    // Only a session belonging to THIS lane is displaced — a view re-running its
+    // start effect, or switching projects, must be able to replace its own engine,
+    // and must not reach a sibling lane's.
+    await this.stopSlot(slotKey);
 
     // Logged as well as thrown. The renderer surfaces this one, but a resolution failure
     // names a build step someone has to run, and the main log is where they will look for
@@ -391,6 +461,11 @@ export class AssistantHostService {
         projectId: opts.projectId,
         projectPath: opts.cwd,
         agentId: ASSISTANT_AGENT_ID,
+        // The lane, so a parallel session provisions its own bearer instead of
+        // displacing its sibling's. `displacePriorSessions` is keyed on
+        // `(projectId, slot)`, which is what keeps lane 0's MCP binding alive when
+        // lane 1 starts.
+        slot,
         windowId: opts.windowId,
         projectViewWebContentsId: opts.webContentsId,
       });
@@ -486,7 +561,14 @@ export class AssistantHostService {
         //
         // Packaged builds never set it: Electron's single-instance lock means two of
         // them cannot run at once, so they have nothing to contend with.
-        ...(app.isPackaged ? {} : { DAINTREE_ASSISTANT_STATE_NAMESPACE: "dev" }),
+        //
+        // A PARALLEL LANE uses the same lever for the same reason (#12108). Lanes 1+
+        // append their own suffix, so each one opens its own `state.db` behind its own
+        // `owner.lock` — which is the whole of what makes two Daintree Assistant
+        // sessions run at once, rather than the second waiting out its deadline on a
+        // lease the first holds. Slot 0's namespace is byte-identical to what shipped,
+        // so an existing conversation is exactly where it was.
+        ...namespaceEnv(slot),
         // The SAME value the descriptor above carries. The engine cross-checks the two
         // and treats a disagreement as fatal, so this is one variable holding one
         // decision rather than two independent derivations that happen to agree.
@@ -533,8 +615,8 @@ export class AssistantHostService {
         const watching = [...(this.bySession.get(sessionId)?.subscribers.keys() ?? [])];
         this.bySession.delete(sessionId);
         revokeHelpSessionFor(sessionId);
-        if (this.byProject.get(opts.projectId)?.sessionId === sessionId) {
-          this.byProject.delete(opts.projectId);
+        if (this.bySlotKey.get(slotKey)?.sessionId === sessionId) {
+          this.bySlotKey.delete(slotKey);
         }
         // Falls back to the starter when the session never registered: a start that
         // failed before registration still has a panel waiting for an answer.
@@ -552,11 +634,12 @@ export class AssistantHostService {
     const session: LiveSession = {
       sessionId,
       projectId: opts.projectId,
+      slot,
       host,
       provisionerWebContentsId: opts.webContentsId,
       subscribers: new Map([[opts.webContentsId, { windowId: opts.windowId, attachmentId }]]),
     };
-    this.byProject.set(opts.projectId, session);
+    this.bySlotKey.set(slotKey, session);
     this.bySession.set(sessionId, session);
 
     // Beats while the handshake is outstanding. `host.start()` returning says only that
@@ -578,8 +661,8 @@ export class AssistantHostService {
       // engine orphaned and holding the project's lease.
       this.bySession.delete(sessionId);
       revokeHelpSessionFor(sessionId);
-      if (this.byProject.get(opts.projectId)?.sessionId === sessionId) {
-        this.byProject.delete(opts.projectId);
+      if (this.bySlotKey.get(slotKey)?.sessionId === sessionId) {
+        this.bySlotKey.delete(slotKey);
       }
       this.spawnedHosts.delete(host);
       throw new Error("Daintree is shutting down");
@@ -607,7 +690,11 @@ export class AssistantHostService {
       // silently the day either drifted. Learned once, used after the engine is gone.
       const ready = host.getReadyEvent();
       if (ready?.controlSocket) {
-        this.timers.rememberEndpoint(opts.projectId, {
+        // Per LANE, not per project: each lane runs in its own state namespace, so
+        // each has its own state dir, its own supervisor socket and its own timer
+        // table. Keyed by project alone, whichever lane became ready last would answer
+        // for all of them once the engines were gone.
+        this.timers.rememberEndpoint(opts.projectId, slot, {
           socketPath: ready.controlSocket,
           stateDir: ready.stateDir,
         });
@@ -622,11 +709,11 @@ export class AssistantHostService {
       // Clean up rather than leaving a half-registered session that commands would
       // route to and silently drop.
       //
-      // The project entry is removed only if it is still OURS. A displaced engine can
+      // The lane entry is removed only if it is still OURS. A displaced engine can
       // take up to `GRACEFUL_EXIT_MS` to die while its replacement is already
       // registered, so an unconditional delete here evicts the live successor and
-      // leaves it invisible to `stopProject` — an engine nothing can displace, holding
-      // the project's lease against every later start.
+      // leaves it invisible to `stopSlot` — an engine nothing can displace, holding
+      // the lane's lease against every later start.
       logger.error("engine start failed", error, {
         sessionId,
         pid: host.getPid(),
@@ -634,8 +721,8 @@ export class AssistantHostService {
       });
       this.bySession.delete(sessionId);
       revokeHelpSessionFor(sessionId);
-      if (this.byProject.get(opts.projectId)?.sessionId === sessionId) {
-        this.byProject.delete(opts.projectId);
+      if (this.bySlotKey.get(slotKey)?.sessionId === sessionId) {
+        this.bySlotKey.delete(slotKey);
       }
       host.dispose();
       throw error;
@@ -703,8 +790,9 @@ export class AssistantHostService {
     if (!session) return;
     this.bySession.delete(sessionId);
     revokeHelpSessionFor(sessionId);
-    if (this.byProject.get(session.projectId)?.sessionId === sessionId) {
-      this.byProject.delete(session.projectId);
+    const slotKey = assistantSlotKey(session.projectId, session.slot);
+    if (this.bySlotKey.get(slotKey)?.sessionId === sessionId) {
+      this.bySlotKey.delete(slotKey);
     }
     session.host.dispose();
   }
@@ -722,9 +810,10 @@ export class AssistantHostService {
       throw new Error("The assistant panel closed before its engine finished starting.");
     }
     const transcript = session.host.getTranscript();
-    logger.info("surface joined the project's running engine", {
+    logger.info("surface joined the lane's running engine", {
       sessionId: session.sessionId,
       projectId: opts.projectId,
+      slot: session.slot,
       webContentsId: opts.webContentsId,
       subscribers: session.subscribers.size,
       replayEvents: transcript.events.length,
@@ -806,12 +895,12 @@ export class AssistantHostService {
     if (session) this.detach(session, webContentsId, attachmentId);
   }
 
-  /** Stops whatever session a project has, if any. */
-  private async stopProject(projectId: string): Promise<void> {
-    const existing = this.byProject.get(projectId);
+  /** Stops whatever session a lane has, if any. */
+  private async stopSlot(slotKey: string): Promise<void> {
+    const existing = this.bySlotKey.get(slotKey);
     if (!existing) return;
     this.stop(existing.sessionId);
-    // Give the displaced engine a moment to release the project's state lease. Without
+    // Give the displaced engine a moment to release the lane's state lease. Without
     // it the incoming engine can lose a race against an owner that is still exiting,
     // and fail its own startup for a reason that looks like nothing to do with this.
     await new Promise((r) => setTimeout(r, 250));
@@ -912,8 +1001,8 @@ export class AssistantHostService {
   /**
    * Stops every session owned by a window (window closed).
    *
-   * A linear scan rather than a second index: there is at most one engine per project
-   * and a handful of projects, so the map is tiny — and a second index would have to be
+   * A linear scan rather than a second index: there are at most three engines per
+   * project and a handful of projects, so the map is tiny — and a second index would have to be
    * kept consistent through displacement, failed starts and exits, which is more ways to
    * be wrong than it saves work.
    *

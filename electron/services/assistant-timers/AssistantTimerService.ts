@@ -8,6 +8,7 @@ import type {
   ProjectTimersResult,
 } from "../../../shared/types/ipc/assistantTimers.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { DEFAULT_ASSISTANT_SLOT, assistantSlotKey } from "../../../shared/config/assistantSlots.js";
 
 /**
  * Answers "what is this project's assistant still going to do" when no engine is
@@ -106,7 +107,14 @@ function toOutcome(row: DaemonOutcome): AssistantTimerOutcomeRow {
 
 export class AssistantTimerService {
   /**
-   * Where each project's daemon listens, learned from `host:ready`.
+   * Where each LANE's daemon listens, learned from `host:ready`, keyed by
+   * `assistantSlotKey(projectId, slot)`.
+   *
+   * Per lane rather than per project because parallel sessions (#12108) run in
+   * separate engine state namespaces, so each has its own state dir, its own
+   * supervisor socket and its own timer table. Keyed by project alone, whichever lane
+   * booted last would answer for every lane once the engines were gone — reporting one
+   * lane's schedule as another's.
    *
    * LEARNED, never derived. Working the path out means reimplementing two hashes —
    * project id to a slug-plus-SHA-256 state dir, then the absolute state dir to a
@@ -121,17 +129,24 @@ export class AssistantTimerService {
    */
   private readonly endpoints = new Map<string, ProjectControlEndpoint>();
 
-  /** Records where a project's daemon listens, from an engine that just booted. */
-  rememberEndpoint(projectId: string, endpoint: Partial<ProjectControlEndpoint>): void {
+  /** Records where a lane's daemon listens, from an engine that just booted. */
+  rememberEndpoint(
+    projectId: string,
+    slot: number,
+    endpoint: Partial<ProjectControlEndpoint>
+  ): void {
     if (!projectId || !endpoint.socketPath) return;
-    this.endpoints.set(projectId, {
+    this.endpoints.set(assistantSlotKey(projectId, slot), {
       socketPath: endpoint.socketPath,
       stateDir: endpoint.stateDir ?? "",
     });
   }
 
-  endpointFor(projectId: string): ProjectControlEndpoint | undefined {
-    return this.endpoints.get(projectId);
+  endpointFor(
+    projectId: string,
+    slot: number = DEFAULT_ASSISTANT_SLOT
+  ): ProjectControlEndpoint | undefined {
+    return this.endpoints.get(assistantSlotKey(projectId, slot));
   }
 
   /**
@@ -141,9 +156,12 @@ export class AssistantTimerService {
    * yielded the lease to an attached session are all answers rather than faults, and
    * each of them has to be distinguishable from "nothing is scheduled".
    */
-  async list(projectId: string): Promise<ProjectTimersResult> {
+  async list(
+    projectId: string,
+    slot: number = DEFAULT_ASSISTANT_SLOT
+  ): Promise<ProjectTimersResult> {
     const empty = { timers: [], outcomes: [], takenAt: 0 };
-    const endpoint = this.endpoints.get(projectId);
+    const endpoint = this.endpointFor(projectId, slot);
     if (!endpoint) {
       return {
         ...empty,
@@ -182,8 +200,12 @@ export class AssistantTimerService {
    * confirmation channel. Unlike {@link list} this DOES throw, because a cancel that
    * did not happen must never settle as though it had.
    */
-  async cancel(projectId: string, timerId: string): Promise<DaemonTimerCancelResult> {
-    const endpoint = this.endpoints.get(projectId);
+  async cancel(
+    projectId: string,
+    timerId: string,
+    slot: number = DEFAULT_ASSISTANT_SLOT
+  ): Promise<DaemonTimerCancelResult> {
+    const endpoint = this.endpointFor(projectId, slot);
     if (!endpoint) {
       throw new DaemonUnavailableError(
         "Daintree has not seen this project's assistant since it started, so it cannot reach its timers."

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
-import { useAssistantStore, type AssistantTimers } from "@/store/assistantStore";
+import { useStore } from "zustand";
+import type { AssistantStoreApi, AssistantTimers } from "@/store/assistantStore";
 
 /**
  * Tells the user when a scheduled timer has actually fired.
@@ -157,13 +158,23 @@ export function useAssistantTimerNotifications({
   }, [timers, sessionId]);
 }
 
-/** Reads the pieces this hook needs straight off the store. */
-export function useAssistantTimerNotificationsFromStore(requestTimers: () => void) {
-  const timers = useAssistantStore((s) => s.timers);
-  const timersStale = useAssistantStore((s) => s.timersStale);
-  const sessionId = useAssistantStore((s) => s.sessionId);
-  const takeFiredTimerIds = useAssistantStore((s) => s.takeFiredTimerIds);
-  const pushNotice = useAssistantStore((s) => s.pushNotice);
+/**
+ * Reads the pieces this hook needs straight off ONE LANE's store.
+ *
+ * The store is a parameter rather than the module singleton because a project can run
+ * several assistant sessions at once (#12108) and each schedules its own timers — a
+ * fire in a background lane has to announce itself in that lane's transcript, not in
+ * whichever one happens to be on screen.
+ */
+export function useAssistantTimerNotificationsFromStore(
+  requestTimers: () => void,
+  store: AssistantStoreApi
+) {
+  const timers = useStore(store, (s) => s.timers);
+  const timersStale = useStore(store, (s) => s.timersStale);
+  const sessionId = useStore(store, (s) => s.sessionId);
+  const takeFiredTimerIds = useStore(store, (s) => s.takeFiredTimerIds);
+  const pushNotice = useStore(store, (s) => s.pushNotice);
   useAssistantTimerNotifications({
     timers,
     timersStale,

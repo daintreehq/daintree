@@ -1,4 +1,6 @@
-import { create } from "zustand";
+import { create, type StateCreator } from "zustand";
+import { createStore, type StoreApi } from "zustand/vanilla";
+import { DEFAULT_ASSISTANT_SLOT, isValidAssistantSlot } from "@shared/config/assistantSlots";
 import type {
   AssistantAgentRow,
   AssistantAsyncRow,
@@ -12,6 +14,7 @@ import type {
   AssistantToolState,
 } from "@shared/types/ipc/assistantHost";
 import type { McpAuditSeverity, TurnOutcomeClass } from "@shared/types/ipc/mcpServer";
+import type { AgentState } from "@shared/types/agent";
 
 /**
  * Renderer-side model of an assistant session, built by reducing the host event
@@ -742,7 +745,7 @@ function localUserTurn(text: string): AssistantTurn {
   };
 }
 
-export const useAssistantStore = create<AssistantStore>((set, get) => ({
+const assistantStoreCreator: StateCreator<AssistantStore> = (set, get) => ({
   ...EMPTY,
 
   reset: (sessionId) => set({ ...EMPTY, sessionId }),
@@ -1625,7 +1628,69 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
       }
     }
   },
-}));
+});
+
+/**
+ * The DEFAULT lane's store (#12108).
+ *
+ * A hook as well as a store, so the call sites that predate parallel sessions keep
+ * working unchanged — and, more importantly, so slot 0's state is the same object it
+ * always was rather than one entry in a table that happens to start at zero.
+ */
+export const useAssistantStore = create<AssistantStore>(assistantStoreCreator);
+
+/** One lane's store, in the shape every consumer takes it in. */
+export type AssistantStoreApi = StoreApi<AssistantStore>;
+
+/**
+ * One store per parallel lane, rather than one store with a lane dimension.
+ *
+ * Every field on this store — the turns, the tool calls, the approvals, the phase, the
+ * spend — belongs to exactly one conversation, so a lane axis would have to be threaded
+ * through all of them and through every branch of `applyEvent`. A store per lane says
+ * the same thing in the type system for free: two conversations are two stores, and no
+ * reducer branch can accidentally read across them.
+ *
+ * The precedent is `createWorktreeStore` — a `zustand/vanilla` factory rather than an
+ * app-global `create()`. Lanes are bounded by `MAX_ASSISTANT_SLOTS` and this map is per
+ * project view, so it holds at most three entries.
+ */
+const storesBySlot = new Map<number, AssistantStoreApi>([
+  [DEFAULT_ASSISTANT_SLOT, useAssistantStore],
+]);
+
+/**
+ * The store for one lane, created on first ask.
+ *
+ * Safe to call during render: it is idempotent and the store it returns is stable for
+ * the life of the lane, which is what lets a component subscribe to it without an
+ * effect.
+ */
+export function assistantStoreForSlot(slot: number): AssistantStoreApi {
+  const key = isValidAssistantSlot(slot) ? slot : DEFAULT_ASSISTANT_SLOT;
+  const existing = storesBySlot.get(key);
+  if (existing) return existing;
+  const created = createStore<AssistantStore>(assistantStoreCreator);
+  storesBySlot.set(key, created);
+  return created;
+}
+
+/**
+ * Drops a closed lane's store, so its transcript is not inherited by whoever next
+ * occupies that slot number.
+ *
+ * Slot 0's store is the module-level one and is never dropped — it is `reset` instead,
+ * exactly as ending a single session always was. Anything still holding a released
+ * store keeps working against it; only the next `assistantStoreForSlot` for that slot
+ * gets a fresh one.
+ */
+export function releaseAssistantStore(slot: number): void {
+  if (slot === DEFAULT_ASSISTANT_SLOT) {
+    useAssistantStore.getState().reset(null);
+    return;
+  }
+  storesBySlot.delete(slot);
+}
 
 /** Selector: the tool calls belonging to a turn, in announcement order. */
 export function selectTurnToolCalls(
@@ -1643,6 +1708,31 @@ export function selectTurnToolCalls(
 /** Selector: true when a turn is streaming right now. */
 export function selectIsStreaming(state: AssistantSessionState): boolean {
   return state.turns.some((t) => t.role === "assistant" && !t.complete);
+}
+
+/**
+ * Selector: one lane's state in the app's own agent vocabulary, for a tab marker.
+ *
+ * OBSERVATIONS, not conclusions. Each of the two answers is something the panel can
+ * point at in its own transcript: `waiting` is a card on screen that nothing but a
+ * human can answer, and `working` is the panel's own busy reading. Everything else is
+ * `null` — a quiet lane earns no marker, and the assistant has no equivalent of the
+ * PTY heuristics' `directing`, so it never claims one.
+ *
+ * `working` is deliberately the SAME predicate the panel uses to keep Stop reachable
+ * (`AssistantPanelView`), not just "a turn is open". A wake's first phase arrives
+ * before its turn does, and a local slash command runs with no turn at all — both are
+ * states the panel already calls busy, and a marker that disagreed would report a
+ * background lane as idle while its own header showed it working.
+ *
+ * This is the whole reason the strip carries state at all: the header speaks only for
+ * the lane on screen, so a background session that has stopped for an approval is
+ * otherwise invisible until the user happens to switch to it.
+ */
+export function selectAssistantLaneState(state: AssistantSessionState): AgentState | null {
+  if (state.approvals.length > 0 || state.pendingQuestion !== null) return "waiting";
+  const busy = selectIsStreaming(state) || state.phase !== null || state.awaitingLocalCommand;
+  return busy ? "working" : null;
 }
 
 export { EMPTY as ASSISTANT_EMPTY_STATE };
