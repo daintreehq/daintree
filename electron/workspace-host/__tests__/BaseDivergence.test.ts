@@ -187,6 +187,16 @@ describe("BaseDivergence", () => {
     expect(result?.baseRemote).toBeNull();
   });
 
+  it("uses the local base ref directly when the repository has no remotes", async () => {
+    installRepo({ remotes: [], revList: { "main...HEAD": "1\t2\n" } });
+    const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
+
+    const result = await divergence.compute(false);
+
+    expect(result?.baseCompareRef).toBe("main");
+    expect(revListRanges()).toEqual(["main...HEAD"]);
+  });
+
   it("returns null when both the remote and local rev-list fail", async () => {
     installRepo({});
     const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());

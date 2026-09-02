@@ -3,7 +3,10 @@ import { createHardenedGit, createWslHardenedGit } from "../utils/hardenedGit.js
 import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import { getGitDir } from "../utils/gitUtils.js";
 import { resolveBaseCompareRef } from "../../shared/utils/baseRemoteSelection.js";
-import { gatherBaseCompareRefInputs, readSymbolicRef } from "../utils/baseCompareRef.js";
+import {
+  gatherBaseCompareRefInputsWithRemoteStatus,
+  readSymbolicRef,
+} from "../utils/baseCompareRef.js";
 import type { StatPrecheck } from "./StatPrecheck.js";
 
 /**
@@ -51,6 +54,8 @@ interface RemoteResolution {
   upstreamRef: string | null;
   /** `git remote` output, cached so the stat stamp can cover each candidate ref. */
   availableRemotes: readonly string[];
+  /** Whether an empty `availableRemotes` came from a successful `git remote`. */
+  remotesReadSucceeded: boolean;
 }
 
 export interface BaseDivergenceHost {
@@ -152,16 +157,22 @@ export class BaseDivergence {
       let resolvedRef = remoteRef;
       let resolvedRemote = remoteName;
       let result: string;
-      try {
-        result = await git.raw(["rev-list", "--count", "--left-right", `${remoteRef}...HEAD`]);
-      } catch {
+      if (resolution?.remotesReadSucceeded && resolution.availableRemotes.length === 0) {
+        result = await git.raw(["rev-list", "--count", "--left-right", `${localRef}...HEAD`]);
+        resolvedRef = localRef;
+        resolvedRemote = null;
+      } else {
         try {
-          result = await git.raw(["rev-list", "--count", "--left-right", `${localRef}...HEAD`]);
-          resolvedRef = localRef;
-          resolvedRemote = null;
+          result = await git.raw(["rev-list", "--count", "--left-right", `${remoteRef}...HEAD`]);
         } catch {
-          this.lastKey = null;
-          return null;
+          try {
+            result = await git.raw(["rev-list", "--count", "--left-right", `${localRef}...HEAD`]);
+            resolvedRef = localRef;
+            resolvedRemote = null;
+          } catch {
+            this.lastKey = null;
+            return null;
+          }
         }
       }
       const trimmed = result.trim();
@@ -248,13 +259,20 @@ export class BaseDivergence {
     const git = await this.createGit();
     // Shared with the rebase/merge handlers (#12092) so the ref an operation
     // acts on is the ref the behind count was measured against.
-    const inputs = await gatherBaseCompareRefInputs(git, baseBranch);
+    const { inputs, remotesReadSucceeded } =
+      await gatherBaseCompareRefInputsWithRemoteStatus(git, baseBranch);
     const { availableRemotes } = inputs;
     const upstreamRef = hasUpstream ? await readSymbolicRef(git, "@{u}") : null;
 
     const { compareRef, remote } = resolveBaseCompareRef(inputs);
 
-    this.resolution = { compareRef, remote, upstreamRef, availableRemotes };
+    this.resolution = {
+      compareRef,
+      remote,
+      upstreamRef,
+      availableRemotes,
+      remotesReadSucceeded,
+    };
     this.resolutionAt = Date.now();
     // Re-derive the stamp: the first resolution discovers the remote names the
     // stamp's candidate-ref stats are built from, so the stamp computed before

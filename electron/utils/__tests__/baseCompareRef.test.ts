@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   gatherBaseCompareRefInputs,
+  gatherBaseCompareRefInputsWithRemoteStatus,
   readRemotes,
   readRemotesCarrying,
   readSymbolicRef,
@@ -87,6 +88,20 @@ describe("readRemotesCarrying", () => {
 });
 
 describe("gatherBaseCompareRefInputs", () => {
+  it("distinguishes a repository with no remotes from a failed remote read", async () => {
+    const successful = fakeGit({ remote: "" });
+    const failed = fakeGit({});
+
+    expect(
+      (await gatherBaseCompareRefInputsWithRemoteStatus(successful.git, "develop"))
+        .remotesReadSucceeded
+    ).toBe(true);
+    expect(
+      (await gatherBaseCompareRefInputsWithRemoteStatus(failed.git, "develop"))
+        .remotesReadSucceeded
+    ).toBe(false);
+  });
+
   it("skips the for-each-ref spawn when the base branch tracks something", async () => {
     const { git, raw } = fakeGit({
       remote: "origin\n",
