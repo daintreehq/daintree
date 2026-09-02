@@ -240,19 +240,22 @@ function restoreTerminalFocusOnRevealInner(): FocusRestoreOutcome {
       active.closest('[data-testid="project-switcher-palette"], [aria-label="Project switcher"]')
     );
     const tag = active.tagName;
-    const takesInput =
-      tag === "INPUT" ||
-      tag === "TEXTAREA" ||
-      tag === "SELECT" ||
-      active.isContentEditable ||
-      active.getAttribute("role") === "combobox" ||
-      active.getAttribute("role") === "textbox";
     if (!insideClosingSwitcher) {
-      if (takesInput) return "input-has-focus";
       if (active.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) {
         return "overlay-open";
       }
-      if (tag !== "BUTTON" && tag !== "BODY") return "non-button-focused";
+      // A button never takes typed text, whatever ARIA role it wears — the
+      // toolbar switcher pill is a button with role="combobox".
+      if (tag !== "BUTTON" && tag !== "BODY") {
+        const takesInput =
+          tag === "INPUT" ||
+          tag === "TEXTAREA" ||
+          tag === "SELECT" ||
+          active.isContentEditable ||
+          active.getAttribute("role") === "combobox" ||
+          active.getAttribute("role") === "textbox";
+        return takesInput ? "input-has-focus" : "non-button-focused";
+      }
     }
   }
   terminalInstanceService.focus(targetId);

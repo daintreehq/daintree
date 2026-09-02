@@ -78,6 +78,15 @@ describe("restoreTerminalFocusOnReveal", () => {
     expect(focusMock).toHaveBeenCalledWith("term-a");
   });
 
+  it("moves focus off the switcher pill even though it wears role=combobox", () => {
+    setGrid("term-a");
+    mountActive(
+      '<button data-active-target role="combobox" aria-label="Open project switcher for x" data-testid="project-switcher-trigger">pill</button>'
+    );
+    expect(restoreTerminalFocusOnReveal()).toBe(true);
+    expect(focusMock).toHaveBeenCalledWith("term-a");
+  });
+
   it("moves focus from the body to the focused terminal", () => {
     setGrid("term-a");
     document.body.innerHTML = "<div>nothing focused</div>";
