@@ -193,7 +193,15 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
  */
 export function restoreTerminalFocusOnReveal(): boolean {
   const outcome = restoreTerminalFocusOnRevealInner();
-  markSwitch(PERF_MARKS.PROJECT_SWITCH_FOCUS_RESTORE, { outcome });
+  const active = typeof document === "undefined" ? null : document.activeElement;
+  markSwitch(PERF_MARKS.PROJECT_SWITCH_FOCUS_RESTORE, {
+    outcome,
+    activeTag: active?.tagName ?? null,
+    activeRole: active?.getAttribute("role") ?? null,
+    activeLabel: active?.getAttribute("aria-label") ?? null,
+    activeTestId: active?.getAttribute("data-testid") ?? null,
+    activeClass: active instanceof HTMLElement ? active.className.toString().slice(0, 60) : null,
+  });
   return outcome === "moved";
 }
 
