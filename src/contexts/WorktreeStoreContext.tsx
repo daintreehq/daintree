@@ -21,6 +21,7 @@ import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import {
   repaintActiveWorktreeTerminals,
   wakeActiveWorktreeTerminals,
+  restoreTerminalFocusOnReveal,
 } from "@/store/wakeActiveWorktreeTerminals";
 import { worktreeClient } from "@/clients/worktreeClient";
 import { PERF_MARKS } from "@shared/perf/marks";
@@ -1129,6 +1130,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         ...(payload?.switchId ? { switchId: payload.switchId } : {}),
       });
       if (document.visibilityState !== "visible") return;
+      // Main has just focused this webContents; put DOM focus back on the
+      // working terminal if the round trip left it on a button or the body.
+      restoreTerminalFocusOnReveal();
       scheduleRepaint("initial");
       // Cancel any backstops still pending from a prior switch so rapid
       // back-and-forth switching can't stack passes, then arm this switch's.

@@ -178,6 +178,46 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
   markSwitch(PERF_MARKS.PROJECT_SWITCH_ALL_PANES_WOKEN, { paneCount: targets.length });
 }
 
+/**
+ * Put keyboard focus back on the working terminal when a warm view is revealed
+ * and nothing that takes typed input holds focus.
+ *
+ * Switching away through the toolbar switcher leaves the outgoing document's
+ * focus on the switcher pill (Radix returns focus to the trigger on close), and
+ * a document can be left on `body` by an unmounted overlay. Neither survives a
+ * round trip usefully: the user comes back, types, and the keystrokes land on
+ * a button. Focus is only moved off a button or the body — never off an input,
+ * a textarea, a combobox, editable content or anything inside an open dialog —
+ * and only onto the panel store's focused terminal when that pane is in the
+ * active worktree's grid. Returns whether focus was moved.
+ */
+export function restoreTerminalFocusOnReveal(): boolean {
+  if (typeof document === "undefined") return false;
+  const { focusedId, panelsById } = usePanelStore.getState();
+  if (!focusedId) return false;
+  const panel = panelsById[focusedId];
+  if (!panel || (panel.kind ?? "terminal") !== "terminal") return false;
+  if (!collectActiveWorktreeTerminalTargets().includes(focusedId)) return false;
+
+  const active = document.activeElement;
+  if (active instanceof HTMLElement) {
+    if (active.closest(`[data-panel-id="${focusedId}"]`)) return false;
+    const tag = active.tagName;
+    const takesInput =
+      tag === "INPUT" ||
+      tag === "TEXTAREA" ||
+      tag === "SELECT" ||
+      active.isContentEditable ||
+      active.getAttribute("role") === "combobox" ||
+      active.getAttribute("role") === "textbox";
+    if (takesInput) return false;
+    if (active.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) return false;
+    if (tag !== "BUTTON" && tag !== "BODY") return false;
+  }
+  terminalInstanceService.focus(focusedId);
+  return true;
+}
+
 // At most this many terminals repaint on any one frame so a large grid never
 // produces a single long task on the reveal frame.
 const REVEAL_CONCURRENCY = 2;

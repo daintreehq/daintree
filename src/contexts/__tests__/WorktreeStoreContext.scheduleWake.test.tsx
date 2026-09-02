@@ -10,6 +10,7 @@ import type { Project } from "@shared/types/project";
 const wakeMock = vi.fn<() => Promise<void>>(() => Promise.resolve());
 const repaintMock = vi.fn<() => Promise<void>>(() => Promise.resolve());
 vi.mock("@/store/wakeActiveWorktreeTerminals", () => ({
+  restoreTerminalFocusOnReveal: () => false,
   wakeActiveWorktreeTerminals: () => wakeMock(),
   repaintActiveWorktreeTerminals: () => repaintMock(),
 }));
