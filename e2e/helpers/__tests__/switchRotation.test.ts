@@ -294,6 +294,23 @@ describe("summarizeSample", () => {
   });
 
   it("reports ordering violations instead of silently producing negative timings", () => {
+    // Violations larger than the 2 ms cross-process clock-skew allowance; a
+    // sub-skew inversion is rebasing error, not a causality break.
+    const records = fullSwitch().map((r) =>
+      r.mark === SWITCH_MARK.REVEALED ? { ...r, elapsedMs: 1390 } : r
+    );
+    const { bySwitch, byNonce } = groupMarksBySwitch([
+      ...records,
+      mark(SWITCH_MARK.NONCE_PAINTED, 1385, { nonce: "n1" }),
+    ]);
+    const summary = summarizeSample(bySwitch.get(SWITCH)!, byNonce.get("n1"));
+    expect(summary.orderingViolations).toEqual([
+      "gate_resolved ≤ revealed (1400 vs 1390)",
+      "revealed < nonce_painted (1390 vs 1385)",
+    ]);
+  });
+
+  it("tolerates inversions inside the clock-skew allowance", () => {
     const records = fullSwitch().map((r) =>
       r.mark === SWITCH_MARK.REVEALED ? { ...r, elapsedMs: 1399 } : r
     );
@@ -302,10 +319,7 @@ describe("summarizeSample", () => {
       mark(SWITCH_MARK.NONCE_PAINTED, 1399, { nonce: "n1" }),
     ]);
     const summary = summarizeSample(bySwitch.get(SWITCH)!, byNonce.get("n1"));
-    expect(summary.orderingViolations).toEqual([
-      "gate_resolved ≤ revealed (1400 vs 1399)",
-      "revealed < nonce_painted (1399 vs 1399)",
-    ]);
+    expect(summary.orderingViolations).toEqual([]);
   });
 });
 
