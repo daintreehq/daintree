@@ -259,8 +259,10 @@ export class BaseDivergence {
     const git = await this.createGit();
     // Shared with the rebase/merge handlers (#12092) so the ref an operation
     // acts on is the ref the behind count was measured against.
-    const { inputs, remotesReadSucceeded } =
-      await gatherBaseCompareRefInputsWithRemoteStatus(git, baseBranch);
+    const { inputs, remotesReadSucceeded } = await gatherBaseCompareRefInputsWithRemoteStatus(
+      git,
+      baseBranch
+    );
     const { availableRemotes } = inputs;
     const upstreamRef = hasUpstream ? await readSymbolicRef(git, "@{u}") : null;
 

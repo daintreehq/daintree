@@ -97,8 +97,7 @@ describe("gatherBaseCompareRefInputs", () => {
         .remotesReadSucceeded
     ).toBe(true);
     expect(
-      (await gatherBaseCompareRefInputsWithRemoteStatus(failed.git, "develop"))
-        .remotesReadSucceeded
+      (await gatherBaseCompareRefInputsWithRemoteStatus(failed.git, "develop")).remotesReadSucceeded
     ).toBe(false);
   });
 
