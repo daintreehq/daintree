@@ -93,8 +93,18 @@ function readStorePath(snapshot: StoreRecord, key: string): unknown {
   return node;
 }
 
+// conf's `set()` and dot-prop's `setProperty()` both refuse these segments, so
+// the buffered facade must refuse them too or it becomes a prototype-pollution
+// hole that the direct path does not have.
+function hasReservedSegment(parts: string[]): boolean {
+  return parts.some(
+    (part) => part === "__proto__" || part === "prototype" || part === "constructor"
+  );
+}
+
 function writeStorePath(snapshot: StoreRecord, key: string, value: unknown): void {
   const parts = key.split(".");
+  if (hasReservedSegment(parts)) return;
   let node = snapshot;
   for (const part of parts.slice(0, -1)) {
     const current = node[part];
@@ -108,6 +118,7 @@ function writeStorePath(snapshot: StoreRecord, key: string, value: unknown): voi
 
 function deleteStorePath(snapshot: StoreRecord, key: string): void {
   const parts = key.split(".");
+  if (hasReservedSegment(parts)) return;
   let node = snapshot;
   for (const part of parts.slice(0, -1)) {
     const current = node[part];
@@ -122,6 +133,9 @@ function bufferedMigrationStore(snapshot: StoreRecord): Store<StoreSchema> {
     get(key: string, defaultValue?: unknown): unknown {
       const value = readStorePath(snapshot, key);
       return value === undefined ? defaultValue : cloneStoreValue(value);
+    },
+    has(key: string): boolean {
+      return readStorePath(snapshot, key) !== undefined;
     },
     set(key: string, value: unknown): void {
       if (value === undefined) {
