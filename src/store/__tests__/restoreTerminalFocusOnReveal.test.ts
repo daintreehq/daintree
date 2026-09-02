@@ -97,6 +97,19 @@ describe("restoreTerminalFocusOnReveal", () => {
     expect(focusMock).not.toHaveBeenCalled();
   });
 
+  it("moves focus out of the switcher palette that committed the switch", () => {
+    setGrid("term-a");
+    mountActive(
+      '<div data-testid="project-switcher-palette"><input data-active-target role="combobox" aria-label="Search workspaces" /></div>'
+    );
+    expect(restoreTerminalFocusOnReveal()).toBe(true);
+    mountActive(
+      '<div role="dialog" aria-label="Project switcher"><input data-active-target role="combobox" /></div>'
+    );
+    expect(restoreTerminalFocusOnReveal()).toBe(true);
+    expect(focusMock).toHaveBeenCalledTimes(2);
+  });
+
   it("leaves focus inside an open dialog alone", () => {
     setGrid("term-a");
     mountActive('<div role="dialog"><button data-active-target>ok</button></div>');

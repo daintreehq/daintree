@@ -224,6 +224,13 @@ function restoreTerminalFocusOnRevealInner(): FocusRestoreOutcome {
   const active = document.activeElement;
   if (active instanceof HTMLElement) {
     if (active.closest("[data-panel-id]")) return "already-in-pane";
+    // The switcher that committed the switch is still mid-close when the view
+    // was parked (its exit never got a frame), so its search box can hold
+    // focus here; that close is suppressed from bouncing to the pill, and the
+    // terminal is where the user expects to type.
+    const insideClosingSwitcher = Boolean(
+      active.closest('[data-testid="project-switcher-palette"], [aria-label="Project switcher"]')
+    );
     const tag = active.tagName;
     const takesInput =
       tag === "INPUT" ||
@@ -232,11 +239,13 @@ function restoreTerminalFocusOnRevealInner(): FocusRestoreOutcome {
       active.isContentEditable ||
       active.getAttribute("role") === "combobox" ||
       active.getAttribute("role") === "textbox";
-    if (takesInput) return "input-has-focus";
-    if (active.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) {
-      return "overlay-open";
+    if (!insideClosingSwitcher) {
+      if (takesInput) return "input-has-focus";
+      if (active.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) {
+        return "overlay-open";
+      }
+      if (tag !== "BUTTON" && tag !== "BODY") return "non-button-focused";
     }
-    if (tag !== "BUTTON" && tag !== "BODY") return "non-button-focused";
   }
   terminalInstanceService.focus(targetId);
   return "moved";

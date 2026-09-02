@@ -343,6 +343,13 @@ export interface UseProjectSwitcherPaletteReturn {
   onHoverProject: (projectId: string, pointerType: string) => void;
   /** Cancel any pending hover prefetch for `projectId`. */
   onHoverProjectEnd: (pointerType: string) => void;
+  /**
+   * Asked by the anchored dropdown once per close. Answers true — and disarms —
+   * only for the close that committed a switch, so that close does not bounce
+   * focus back to the toolbar pill: the view is about to be parked, and a
+   * warm return would otherwise send keystrokes to a button.
+   */
+  consumeCloseAutoFocusSuppression: () => boolean;
   confirmSelection: () => void;
   addProject: () => Promise<void>;
   cloneRepo: () => void;
@@ -865,6 +872,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const [isDeletingScratch, setIsDeletingScratch] = useState(false);
   const isDeletingScratchRef = useRef(false);
   const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suppressCloseAutoFocusRef = useRef(false);
   const prefetchInFlightRef = useRef<Set<string>>(new Set());
   const prefetchLastAtRef = useRef<Map<string, number>>(new Map());
 
@@ -1701,6 +1709,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         return;
       }
 
+      // The dropdown's close must not return focus to the pill: this view is
+      // being parked and comes back with focus wherever this close leaves it.
+      if (mode === "dropdown") suppressCloseAutoFocusRef.current = true;
       // Perf-trace entry point: the anchored dropdown is the toolbar surface;
       // the modal palette splits on how the row was committed.
       beginSwitchTrace(
@@ -1725,6 +1736,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         close();
         return;
       }
+      if (mode === "dropdown") suppressCloseAutoFocusRef.current = true;
       close();
       try {
         await switchScratchAction(scratch.id);
@@ -1737,12 +1749,20 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         });
       }
     },
-    [close, switchScratchAction]
+    [close, mode, switchScratchAction]
   );
 
   // The one commit path for a row of `results`. Both branches are fire-and-
   // forget by design — each closes the palette first and reports its own
   // failure, so there is nothing here for a caller to await.
+  // Read-and-disarm in one step so a close the shell suppressed for its own
+  // reasons still spends the flag instead of leaving it for the next Escape.
+  const consumeCloseAutoFocusSuppression = useCallback(() => {
+    const suppress = suppressCloseAutoFocusRef.current;
+    suppressCloseAutoFocusRef.current = false;
+    return suppress;
+  }, []);
+
   const selectRow = useCallback(
     (row: ProjectSwitcherRow, source?: ProjectSwitchSelectSource) => {
       if (row.kind === "scratch") {
@@ -2446,6 +2466,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     selectRow,
     onHoverProject,
     onHoverProjectEnd,
+    consumeCloseAutoFocusSuppression,
     confirmSelection,
     addProject,
     cloneRepo,

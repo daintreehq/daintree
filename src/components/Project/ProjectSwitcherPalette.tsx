@@ -159,6 +159,8 @@ export interface ProjectSwitcherPaletteProps {
    * reopening on the refocused trigger after a project switch. Dropdown-only.
    */
   onDropdownCloseAutoFocus?: () => void;
+  /** Dropdown only: whether this close must not return focus to the trigger. */
+  consumeCloseAutoFocusSuppression?: () => boolean;
   children?: React.ReactNode;
   removeConfirmProject?: SearchableProject | null;
   onRemoveConfirmClose?: () => void;
@@ -2511,6 +2513,7 @@ function DropdownContent({
   children,
   mode,
   onDropdownCloseAutoFocus,
+  consumeCloseAutoFocusSuppression,
   paletteInputRef: inputRef,
   onQueryChange,
   ...innerProps
@@ -2548,6 +2551,7 @@ function DropdownContent({
         inputRef={inputRef}
         onClearQuery={handleClearQuery}
         onCloseAutoFocus={onDropdownCloseAutoFocus}
+        consumeCloseAutoFocusSuppression={consumeCloseAutoFocusSuppression}
         // Keeps the trigger's focus ring on a pointer dismissal, which is what
         // this palette has always done. The shell's default (suppress) is the
         // better behaviour and worth adopting — but as its own change, not
