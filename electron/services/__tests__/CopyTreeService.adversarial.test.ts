@@ -26,7 +26,7 @@ describe("CopyTreeService adversarial", () => {
     // that stubs a config failure would otherwise inherit a previous test's
     // successful load (or leak its own failure forward).
     _resetConfigCacheForTests();
-    configCreateMock.mockResolvedValue({ isDefaultsLoaded: true });
+    configCreateMock.mockResolvedValue({ isDefaultsLoaded: true, set: vi.fn() });
   });
 
   afterEach(async () => {

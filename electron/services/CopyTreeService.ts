@@ -65,12 +65,12 @@ const TEST_CONFIG_FAILED_MESSAGE = "Failed to test context settings";
 const FILE_TREE_FAILED_MESSAGE = "Failed to read the project files";
 
 /**
- * The defaults-only config is immutable and project-independent (`userConfig`
- * is off, so nothing outside the packaged defaults feeds it), and loading one
- * parses every config file and compiles a JSON schema. Cache the promise per
- * isolate: the context listing runs a dry run per directory, and paying that
- * cost on every expansion is pure waste. Failures are evicted so a later call
- * retries rather than inheriting a dead config.
+ * The defaults-only config is project-independent (`userConfig` is off, so
+ * nothing outside the packaged defaults feeds it), and loading one parses every
+ * config file and compiles a JSON schema. Cache the promise per isolate: the
+ * context listing runs a dry run per directory, and paying that cost on every
+ * expansion is pure waste. Failures are evicted so a later call retries rather
+ * than inheriting a dead config.
  */
 let _configPromise: Promise<SdkConfigManager> | null = null;
 
@@ -585,6 +585,11 @@ class CopyTreeService {
         if (!config.isDefaultsLoaded) {
           throw new Error("CopyTree default configuration is missing");
         }
+
+        // CopyTree's default walker is sequential. Daintree routinely scans a
+        // whole repository, so use its bounded parallel walker; the canonical
+        // sort still runs after discovery and before any budget is applied.
+        config.set("copytree.discovery.parallelEnabled", true);
         return config;
       })().catch((error: unknown) => {
         _configPromise = null;
