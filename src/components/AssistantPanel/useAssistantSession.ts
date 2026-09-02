@@ -182,6 +182,36 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
     safeFireAndForget(window.electron.assistantHost.send(command));
   }, []);
 
+  /**
+   * Bring the store to rest when this surface stops watching an engine.
+   *
+   * Detaching is not enough on its own. `stop` only ends the ATTACHMENT, and the ref it
+   * clears is what `onExit` matches on — so nothing that arrives afterwards can settle
+   * the store, and it was left holding whatever the engine was mid-way through. On the
+   * single-session panel that showed as a "Connected" masthead over a dead session; with
+   * parallel lanes it is worse, because the tab strip reads its marker from exactly
+   * these fields and a lane the user stopped kept a spinner in its tab for the rest of
+   * the session.
+   *
+   * The same treatment `onExit` applies, for the same reason: the phase, the open turn,
+   * the approval card and the composer lease all belong to an engine this surface can no
+   * longer reach.
+   *
+   * `had` is false when there was never a session to lose — an idle lane that has not
+   * started — and settling one of those would report a stop that never happened. A start
+   * still in flight counts as one: the panel was showing it as connecting, and the
+   * promise it is waiting on will stop the engine it creates rather than adopt it.
+   */
+  const settle = useCallback(
+    (had: boolean) => {
+      if (!had) return;
+      const state = store.getState();
+      state.setConnection("stopped");
+      state.endLiveState();
+    },
+    [store]
+  );
+
   // Subscribe once; the listeners live as long as the component.
   useEffect(() => {
     const offEvent = window.electron.assistantHost.onEvent((event) => {
@@ -301,11 +331,14 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
     if (!enabled || !projectId || !cwd) {
       const current = sessionIdRef.current;
       const currentAttachment = attachmentIdRef.current;
+      const wasStarting = pendingSessionRef.current !== null;
+      pendingSessionRef.current = null;
       sessionIdRef.current = null;
       attachmentIdRef.current = null;
       if (current && currentAttachment) {
         safeFireAndForget(window.electron.assistantHost.stop(current, currentAttachment));
       }
+      settle(current !== null || wasStarting);
       return;
     }
 
@@ -424,6 +457,11 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
       // Marked FIRST: a start still awaiting readiness resolves after this, and the
       // flag is what makes it stop the engine it created instead of adopting it.
       cancelled = true;
+      // Read before it is cleared: a start that has not resolved yet is still a session
+      // this surface was showing as connecting, and its promise will stop the engine it
+      // created rather than adopt it. Without this the store sat on "starting" for good
+      // — a masthead connecting to an engine that was never going to arrive.
+      const wasStarting = pendingSessionRef.current !== null;
       pendingSessionRef.current = null;
       preAdoptionRef.current = new Map();
       const current = sessionIdRef.current;
@@ -434,10 +472,11 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
       if (current && currentAttachment) {
         safeFireAndForget(window.electron.assistantHost.stop(current, currentAttachment));
       }
+      settle(current !== null || wasStarting);
     };
     // `opts` is destructured above, so the effect depends on the VALUES rather than on
     // the options object — which callers rebuild every render.
-  }, [projectId, cwd, enabled, restartNonce, slot, store]);
+  }, [projectId, cwd, enabled, restartNonce, slot, store, settle]);
 
   const submit = useCallback(
     (text: string): boolean => {
