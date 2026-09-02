@@ -716,6 +716,12 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
 // either one back at `surfaceRefreshNonce` recreates the bug for that kind.
 describe("FileBrowserViewer media rides its own nonce (#12165)", () => {
   const mediaFetchMock = vi.fn();
+  // Restored one global at a time rather than through `vi.unstubAllGlobals()`:
+  // vitest.setup.ts installs ResizeObserver and rAF once at module load, so a
+  // blanket unstub here would strip them from every test that runs after this
+  // block. `unstubAllGlobals` would not restore the two URL methods anyway —
+  // they are assigned directly, not stubbed.
+  const realFetch = globalThis.fetch;
   const realCreateObjectURL = URL.createObjectURL;
   const realRevokeObjectURL = URL.revokeObjectURL;
   beforeEach(() => {
@@ -732,9 +738,8 @@ describe("FileBrowserViewer media rides its own nonce (#12165)", () => {
     URL.revokeObjectURL = vi.fn();
   });
   afterEach(() => {
-    vi.unstubAllGlobals();
     mediaFetchMock.mockReset();
-    // `vi.unstubAllGlobals` does not restore a directly assigned method.
+    vi.stubGlobal("fetch", realFetch);
     URL.createObjectURL = realCreateObjectURL;
     URL.revokeObjectURL = realRevokeObjectURL;
   });

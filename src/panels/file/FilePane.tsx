@@ -137,7 +137,9 @@ type LoadState =
 // otherwise use to reset playback. `revealed` is returning to this project:
 // silent like ambient, because nobody asked for a skeleton, but forcing the
 // reload key like explicit, because everything that happened while the view sat
-// cached is precisely what this pane cannot otherwise see.
+// cached is precisely what this pane cannot otherwise see — with one exception,
+// a player already running, whose position outranks bytes nobody asked for
+// (#12165).
 type FileLoadIntent = "explicit" | "ambient" | "revealed";
 
 // Which surface a toolbar action aims the current file at. `reveal` is always

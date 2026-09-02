@@ -80,10 +80,11 @@ export interface FileBrowserViewerProps {
   /**
    * Changes on a foreground refresh — pressing Refresh, or returning to this
    * project after it sat cached — never on an ambient worktree tick. The half
-   * of `revision` the media branches can safely honour. Typed `number` rather
-   * than `string | number` so handing it the merged `revision` (which also
-   * carries the change tick) is a compile error, not a silent regression to
-   * restarting playback on every background write.
+   * of `revision` the PDF frame can safely honour; media takes the narrower
+   * `mediaReloadNonce` below. Typed `number` rather than `string | number` so
+   * handing it the merged `revision` (which also carries the change tick) is a
+   * compile error, not a silent regression to re-navigating the frame on every
+   * background write.
    */
   surfaceRefreshNonce: number;
   /**

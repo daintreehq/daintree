@@ -277,6 +277,31 @@ describe("FileVideoPreview", () => {
     expect(onPlayingChange).toHaveBeenCalledWith(false);
   });
 
+  it("reports a stop when the element errors mid-playback", async () => {
+    // A decode failure stops playback without a `pause`. Owners that unmount on
+    // error get the retraction from the cleanup anyway; one that only logs
+    // would otherwise be left holding a player that stopped.
+    respondWith(new Blob(["x"]));
+    const onPlayingChange = vi.fn();
+    const { container } = render(
+      <FileVideoPreview
+        filePath="/repo/demo.mp4"
+        rootPath="/repo"
+        label="demo.mp4"
+        onPlayingChange={onPlayingChange}
+      />
+    );
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+    const element = container.querySelector("video")!;
+    setPlaybackState(element, { paused: false });
+    fireEvent.play(element);
+
+    onPlayingChange.mockClear();
+    fireEvent.error(element);
+
+    expect(onPlayingChange).toHaveBeenCalledWith(false);
+  });
+
   it("reports nothing when no owner is listening", async () => {
     // DiffPane renders this leaf without the prop; an unconditional call rather
     // than optional chaining would throw the moment anyone pressed play.

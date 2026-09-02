@@ -40,6 +40,8 @@ interface FileAudioPreviewProps {
    * player that no longer exists. That retraction goes to whichever handler is
    * committed at the time, so the callback must belong to one stable owner
    * rather than being swapped between independent recipients.
+   * Each call is a snapshot rather than a transition — the same value may
+   * arrive twice (an error retracts, then the unmount retracts again).
    */
   onPlayingChange?: (playing: boolean) => void;
 }

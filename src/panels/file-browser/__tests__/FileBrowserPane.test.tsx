@@ -2641,10 +2641,11 @@ describe("FileBrowserPane re-reads when the project view is revealed (#11588)", 
         await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
       });
 
-      it(`does not carry ${kind.tag} playing state to a text file`, async () => {
-        // The guarantee the nonce split exists to protect: whatever the media
-        // half is doing, a reveal must never leave the open file stale. If the
-        // flag outlived the player, this read would never happen.
+      it(`re-reads a text file revealed after a played ${kind.tag}`, async () => {
+        // The player is gone by the time this reveal lands, so the flag must be
+        // too. It is retracted when the preview unmounts, not by anything the
+        // pane does — leave that out of the leaf and the open file goes stale
+        // for the rest of the session.
         const { rerender } = await renderPlaying(kind);
 
         mockPanel.browserSelectedPath = "src/app.ts";
