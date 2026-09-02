@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useStore } from "zustand";
+import { assistantStoreForSlot, selectAssistantLaneState } from "@/store/assistantStore";
 import { Plus, X } from "lucide-react";
 import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
@@ -276,7 +278,13 @@ function SessionTabChip({
   );
 }
 
+function NativeSessionTabChip(props: SessionTabChipProps) {
+  const agentState = useStore(assistantStoreForSlot(props.tab.slot), selectAssistantLaneState);
+  return <SessionTabChip {...props} agentState={agentState} />;
+}
+
 interface HelpSessionTabsProps {
+  native?: boolean;
   tabs: HelpSessionTab[];
   activeSlot: number;
   onSelect: (slot: number) => void;
@@ -342,6 +350,7 @@ interface PendingCloseFocus {
  * down and remount two sessions on the way past.
  */
 export function HelpSessionTabs({
+  native = false,
   tabs,
   activeSlot,
   onSelect,
@@ -512,8 +521,10 @@ export function HelpSessionTabs({
         // scroll it.
         className="flex items-stretch gap-0.5 min-w-0 overflow-x-auto [scrollbar-width:none]"
       >
-        {tabs.map((tab) => (
-          <SessionTabChip
+        {tabs.map((tab) => {
+          const Chip = native ? NativeSessionTabChip : SessionTabChip;
+          return (
+          <Chip
             key={tab.slot}
             tab={tab}
             agentState={tab.agentState}
@@ -525,7 +536,8 @@ export function HelpSessionTabs({
             onClose={handlePointerClose}
             onFocusTab={handleTabFocus}
           />
-        ))}
+          );
+        })}
       </div>
       {/* The one way to another session, directly after the last tab where a tab set
           keeps it, drawn with the glyph that means "one more of these". It used to be a
