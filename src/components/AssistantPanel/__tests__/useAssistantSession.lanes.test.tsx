@@ -20,8 +20,10 @@ import {
  */
 
 type EventCb = (event: Record<string, unknown>) => void;
+type ExitCb = (payload: { sessionId: string; code: number | null }) => void;
 
 let eventCbs: EventCb[] = [];
+let exitCbs: ExitCb[] = [];
 let start: ReturnType<typeof vi.fn>;
 let stop: ReturnType<typeof vi.fn>;
 let send: ReturnType<typeof vi.fn>;
@@ -39,6 +41,7 @@ let pending: Array<{
 
 beforeEach(() => {
   eventCbs = [];
+  exitCbs = [];
   pending = [];
   start = vi.fn(
     (payload: { slot?: number }) =>
@@ -62,7 +65,12 @@ beforeEach(() => {
       },
       onPeerPrompt: () => () => {},
       onSequenceGap: () => () => {},
-      onExit: () => () => {},
+      onExit: (cb: ExitCb) => {
+        exitCbs.push(cb);
+        return () => {
+          exitCbs = exitCbs.filter((c) => c !== cb);
+        };
+      },
     },
   };
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0));
@@ -201,6 +209,10 @@ describe("two lanes of one project", () => {
     });
 
     expect(assistantStoreForSlot(0).getState().phase).toBe("mine");
+    // And lane 1 got none of it. Asserting only lane 0 would pass just as happily if
+    // both hooks were still writing into one shared store, which is the very thing
+    // being fixed.
+    expect(assistantStoreForSlot(1).getState().phase).toBe(null);
   });
 
   it("marks a background lane working from the same reading its own header uses", async () => {
@@ -256,5 +268,106 @@ describe("two lanes of one project", () => {
     // asked to end.
     expect(stop).toHaveBeenCalledTimes(1);
     expect(stop).toHaveBeenCalledWith("ses_a", "att_a");
+  });
+});
+
+describe("a lane that stops", () => {
+  it("settles its store when it is disarmed", async () => {
+    const lane = renderHook(
+      (props: { enabled: boolean }) =>
+        useAssistantSession({ ...BASE, slot: 1, enabled: props.enabled }),
+      { initialProps: { enabled: true } }
+    );
+    await waitFor(() => expect(pending).toHaveLength(1));
+    await act(async () => {
+      pending[0]!.resolve({ sessionId: "ses_b", attachmentId: "att_b", ready: null });
+    });
+    await act(async () => {
+      for (const cb of eventCbs) {
+        cb({ type: "turn:phase", sessionId: "ses_b", seq: 2, phase: "Thinking" });
+      }
+    });
+    expect(assistantStoreForSlot(1).getState().phase).toBe("Thinking");
+
+    // Stop disarms the lane. Detaching is all the old teardown did, and the ref it
+    // clears is what `onExit` matches on — so nothing arriving afterwards could settle
+    // the store and it kept the engine's last reading forever. With a tab strip that is
+    // not cosmetic: the marker reads exactly these fields, so a stopped lane kept a
+    // spinner in its tab for the rest of the session.
+    await act(async () => {
+      lane.rerender({ enabled: false });
+    });
+    expect(stop).toHaveBeenCalledWith("ses_b", "att_b");
+    expect(assistantStoreForSlot(1).getState().connection).toBe("stopped");
+    expect(assistantStoreForSlot(1).getState().phase).toBe(null);
+  });
+
+  it("leaves a lane that never started alone", async () => {
+    const lane = renderHook(
+      (props: { enabled: boolean }) =>
+        useAssistantSession({ ...BASE, slot: 1, enabled: props.enabled }),
+      { initialProps: { enabled: false } }
+    );
+    await act(async () => {
+      lane.rerender({ enabled: false });
+    });
+    // An idle lane has no engine to lose, and reporting a stop that never happened
+    // would put "stopped" on a session the user has not started yet.
+    expect(assistantStoreForSlot(1).getState().connection).toBe("idle");
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("settles only the lane whose engine exited", async () => {
+    renderHook(() => useAssistantSession({ ...BASE, slot: 0 }));
+    renderHook(() => useAssistantSession({ ...BASE, slot: 1 }));
+    await waitFor(() => expect(pending).toHaveLength(2));
+    await act(async () => {
+      pending[0]!.resolve({ sessionId: "ses_a", attachmentId: "att_a", ready: null });
+      pending[1]!.resolve({ sessionId: "ses_b", attachmentId: "att_b", ready: null });
+    });
+    await act(async () => {
+      for (const cb of eventCbs) {
+        cb({ type: "turn:phase", sessionId: "ses_a", seq: 2, phase: "Thinking" });
+        cb({ type: "turn:phase", sessionId: "ses_b", seq: 2, phase: "Thinking" });
+      }
+    });
+
+    // A background lane's engine dying must not settle the lane on screen. Both hooks
+    // are subscribed to one exit channel, so the session filter is the only thing
+    // keeping them apart.
+    await act(async () => {
+      for (const cb of exitCbs) cb({ sessionId: "ses_b", code: 0 });
+    });
+
+    expect(assistantStoreForSlot(1).getState().connection).toBe("stopped");
+    expect(assistantStoreForSlot(1).getState().phase).toBe(null);
+    expect(assistantStoreForSlot(0).getState().connection).not.toBe("stopped");
+    expect(assistantStoreForSlot(0).getState().phase).toBe("Thinking");
+  });
+
+  it("cannot reach the next occupant of a released slot", async () => {
+    renderHook(() => useAssistantSession({ ...BASE, slot: 1 }));
+    await waitFor(() => expect(pending).toHaveLength(1));
+    await act(async () => {
+      pending[0]!.resolve({ sessionId: "ses_b", attachmentId: "att_b", ready: null });
+    });
+    const closed = assistantStoreForSlot(1);
+
+    // The lane is closed while its hook is still mounted — which is the real order:
+    // `closeSlotNow` releases the store, and React unmounts the panel afterwards.
+    releaseAssistantStore(1);
+    const reopened = assistantStoreForSlot(1);
+    expect(reopened).not.toBe(closed);
+
+    await act(async () => {
+      for (const cb of eventCbs) {
+        cb({ type: "turn:phase", sessionId: "ses_b", seq: 3, phase: "Thinking" });
+      }
+    });
+
+    // The outgoing hook keeps writing to the store it was given, so a late frame lands
+    // on a transcript nobody is reading rather than in the next session's.
+    expect(reopened.getState().phase).toBe(null);
+    expect(reopened.getState().turns).toEqual([]);
   });
 });
