@@ -395,8 +395,64 @@ function envObjectNames(expression: ts.Expression, what: string, into: Set<strin
       envObjectNames(spread, what, into);
       continue;
     }
+    // A call to a helper declared in the host itself — `...namespaceEnv(slot)`. Its
+    // RETURNS are modelled, exactly as an inline conditional spread would be, so this
+    // reads the real shape rather than trusting a name. A helper the scanner cannot
+    // find, or one that returns something it cannot read, still stops the run.
+    if (ts.isCallExpression(spread) && ts.isIdentifier(spread.expression)) {
+      const helper = spread.expression.text;
+      const declaration = hostFunction(helper);
+      if (declaration) {
+        for (const returned of returnExpressions(declaration, `${what} → ${helper}()`)) {
+          envExpressionNames(returned, `${what} → ${helper}()`, into);
+        }
+        continue;
+      }
+    }
     outgrew(what, "a spread of something this cannot read could carry any variable");
   }
+}
+
+/** An env fragment as an expression: an object literal, or a conditional over them. */
+function envExpressionNames(expression: ts.Expression, what: string, into: Set<string>): void {
+  const node = unwrap(expression);
+  if (ts.isConditionalExpression(node)) {
+    envExpressionNames(node.whenTrue, what, into);
+    envExpressionNames(node.whenFalse, what, into);
+    return;
+  }
+  envObjectNames(node, what, into);
+}
+
+/** The host's own declaration of `name`, if it has one. */
+function hostFunction(name: string): ts.FunctionDeclaration | null {
+  for (const file of hostSourceFiles()) {
+    const source = parseText(readFileSync(file, "utf8"), file);
+    for (const statement of source.statements) {
+      if (ts.isFunctionDeclaration(statement) && statement.name?.text === name) return statement;
+    }
+  }
+  return null;
+}
+
+/** Every expression a function returns. A bare `return;` is a shape this cannot read. */
+function returnExpressions(fn: ts.FunctionDeclaration, what: string): ts.Expression[] {
+  const out: ts.Expression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isReturnStatement(node)) {
+      if (!node.expression) outgrew(what, "a bare `return` leaves the fragment unknown");
+      out.push(node.expression);
+      return;
+    }
+    // Not into nested functions: their returns belong to them, not to this one.
+    if (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node))
+      return;
+    ts.forEachChild(node, visit);
+  };
+  if (!fn.body) outgrew(what, "an overload signature has no body to read");
+  ts.forEachChild(fn.body, visit);
+  if (out.length === 0) outgrew(what, "the helper returns nothing this could model");
+  return out;
 }
 
 /** Every `env: { … }` literal in the host's own modules, read shape by shape. */

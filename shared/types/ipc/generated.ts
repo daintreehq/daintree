@@ -127,11 +127,11 @@ export interface GeneratedIpcInvokeMap {
     result: { stopped: boolean };
   };
   "assistant-timers:cancel": {
-    args: [projectId: string, timerId: string];
+    args: [projectId: string, timerId: string, slot?: number | undefined];
     result: import("./assistantTimers.js").DaemonTimerCancelResult;
   };
   "assistant-timers:list": {
-    args: [projectId: string];
+    args: [projectId: string, slot?: number | undefined];
     result: import("./assistantTimers.js").ProjectTimersResult;
   };
   "claude:list-subagents": {
