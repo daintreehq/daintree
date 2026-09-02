@@ -119,6 +119,8 @@ export const PERF_MARKS = {
   PROJECT_SWITCH_REVEALED_RECEIVED: "project_switch.revealed_received",
   PROJECT_SWITCH_REVEAL_REPAINT_DONE: "project_switch.reveal_repaint_done",
   PROJECT_SWITCH_PTY_PORT_READY: "project_switch.pty_port_ready",
+  /** Whether a warm reveal moved DOM focus back onto a terminal, or why not. */
+  PROJECT_SWITCH_FOCUS_RESTORE: "project_switch.focus_restore",
   // Spec-driven: emitted by the E2E harness through `__daintreeMarkPerf`.
   PROJECT_SWITCH_NONCE_PAINTED: "project_switch.nonce_painted",
   PROJECT_SWITCH_NONCE_FRAME: "project_switch.nonce_frame",

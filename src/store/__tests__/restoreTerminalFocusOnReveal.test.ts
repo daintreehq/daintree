@@ -21,6 +21,7 @@ let mockActiveWorktreeId: string | null = null;
 let mockPanelIds: string[] = [];
 let mockPanelsById: Record<string, PanelInstance> = {};
 let mockFocusedId: string | null = null;
+let mockPreviousFocusedId: string | null = null;
 
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: { getState: () => ({ activeWorktreeId: mockActiveWorktreeId }) },
@@ -31,6 +32,7 @@ vi.mock("@/store/panelStore", () => ({
       panelIds: mockPanelIds,
       panelsById: mockPanelsById,
       focusedId: mockFocusedId,
+      previousFocusedId: mockPreviousFocusedId,
     }),
   },
 }));
@@ -50,6 +52,7 @@ function setGrid(focused: string | null, ids = ["term-a", "term-b"]) {
   mockPanelIds = ids;
   mockPanelsById = Object.fromEntries(ids.map((id) => [id, panel(id, { worktreeId: "wt-1" })]));
   mockFocusedId = focused;
+  mockPreviousFocusedId = null;
 }
 
 function mountActive(html: string): HTMLElement {
@@ -101,6 +104,21 @@ describe("restoreTerminalFocusOnReveal", () => {
     expect(focusMock).not.toHaveBeenCalled();
   });
 
+  it("falls back to the previously focused pane when the store's focus was cleared", () => {
+    setGrid(null);
+    mockPreviousFocusedId = "term-b";
+    mountActive('<button data-active-target class="toolbar-project-pill">pill</button>');
+    expect(restoreTerminalFocusOnReveal()).toBe(true);
+    expect(focusMock).toHaveBeenCalledWith("term-b");
+  });
+
+  it("falls back to the first grid terminal when nothing was ever focused", () => {
+    setGrid(null);
+    mountActive("<button data-active-target>pill</button>");
+    expect(restoreTerminalFocusOnReveal()).toBe(true);
+    expect(focusMock).toHaveBeenCalledWith("term-a");
+  });
+
   it("is a no-op when the focused pane already holds focus", () => {
     setGrid("term-a");
     mountActive(
@@ -110,17 +128,18 @@ describe("restoreTerminalFocusOnReveal", () => {
     expect(focusMock).not.toHaveBeenCalled();
   });
 
-  it("does nothing when the focused panel is not in the active worktree's grid", () => {
+  it("falls back to a grid pane when the focused panel lives in another worktree", () => {
     setGrid("term-a");
     mockPanelsById["term-a"] = panel("term-a", { worktreeId: "wt-other" });
     mountActive("<button data-active-target>pill</button>");
-    expect(restoreTerminalFocusOnReveal()).toBe(false);
-    expect(focusMock).not.toHaveBeenCalled();
+    expect(restoreTerminalFocusOnReveal()).toBe(true);
+    expect(focusMock).toHaveBeenCalledWith("term-b");
   });
 
-  it("does nothing without a focused panel", () => {
-    setGrid(null);
+  it("does nothing when the active worktree has no grid terminal at all", () => {
+    setGrid(null, []);
     mountActive("<button data-active-target>pill</button>");
     expect(restoreTerminalFocusOnReveal()).toBe(false);
+    expect(focusMock).not.toHaveBeenCalled();
   });
 });

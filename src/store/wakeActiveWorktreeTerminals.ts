@@ -192,16 +192,38 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
  * active worktree's grid. Returns whether focus was moved.
  */
 export function restoreTerminalFocusOnReveal(): boolean {
-  if (typeof document === "undefined") return false;
-  const { focusedId, panelsById } = usePanelStore.getState();
-  if (!focusedId) return false;
-  const panel = panelsById[focusedId];
-  if (!panel || (panel.kind ?? "terminal") !== "terminal") return false;
-  if (!collectActiveWorktreeTerminalTargets().includes(focusedId)) return false;
+  const outcome = restoreTerminalFocusOnRevealInner();
+  markSwitch(PERF_MARKS.PROJECT_SWITCH_FOCUS_RESTORE, { outcome });
+  return outcome === "moved";
+}
+
+type FocusRestoreOutcome =
+  | "moved"
+  | "no-document"
+  | "already-in-pane"
+  | "input-has-focus"
+  | "overlay-open"
+  | "non-button-focused"
+  | "no-terminal";
+
+function restoreTerminalFocusOnRevealInner(): FocusRestoreOutcome {
+  if (typeof document === "undefined") return "no-document";
+  const targets = collectActiveWorktreeTerminalTargets();
+  const { focusedId, previousFocusedId, panelsById } = usePanelStore.getState();
+  const isGridTerminal = (id: string | null): id is string =>
+    Boolean(id) && (panelsById[id!]?.kind ?? "terminal") === "terminal" && targets.includes(id!);
+  // The store's focused pane, else the pane focus last left (a click on the
+  // toolbar clears the store's focus), else the first pane in the grid.
+  const targetId = isGridTerminal(focusedId)
+    ? focusedId
+    : isGridTerminal(previousFocusedId)
+      ? previousFocusedId
+      : (targets.find((id) => isGridTerminal(id)) ?? null);
+  if (!targetId) return "no-terminal";
 
   const active = document.activeElement;
   if (active instanceof HTMLElement) {
-    if (active.closest(`[data-panel-id="${focusedId}"]`)) return false;
+    if (active.closest("[data-panel-id]")) return "already-in-pane";
     const tag = active.tagName;
     const takesInput =
       tag === "INPUT" ||
@@ -210,12 +232,14 @@ export function restoreTerminalFocusOnReveal(): boolean {
       active.isContentEditable ||
       active.getAttribute("role") === "combobox" ||
       active.getAttribute("role") === "textbox";
-    if (takesInput) return false;
-    if (active.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) return false;
-    if (tag !== "BUTTON" && tag !== "BODY") return false;
+    if (takesInput) return "input-has-focus";
+    if (active.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) {
+      return "overlay-open";
+    }
+    if (tag !== "BUTTON" && tag !== "BODY") return "non-button-focused";
   }
-  terminalInstanceService.focus(focusedId);
-  return true;
+  terminalInstanceService.focus(targetId);
+  return "moved";
 }
 
 // At most this many terminals repaint on any one frame so a large grid never
