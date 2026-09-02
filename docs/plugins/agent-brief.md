@@ -222,5 +222,5 @@ Edits to `plugin.json` or `dist/` reload the plugin live, per plugin directory, 
 
 - [project-local.md](./project-local.md) — the full contract this brief compresses
 - [README.md](./README.md) — the plugin documentation index
-- `plugins/fixtures/project-local/` — the skeleton above, as a test fixture
+- `plugins/fixtures/project-local/` — a discovery/schema/watcher fixture at the real path, not the skeleton above: it registers no action and its view returns a plain object rather than React
 - `plugins/sample/rich-daintree/` — a fuller plugin exercising most contribution points
