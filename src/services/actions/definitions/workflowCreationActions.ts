@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
+import type { WorktreeBranchCollisionPolicy } from "@shared/types/git";
 
 import { worktreeClient, copyTreeClient, forgeClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
@@ -20,6 +21,7 @@ import { resolveAgentLaunchKind } from "@/utils/agentLaunchValidation";
 // this), but `@/config/agents` pulls the React icon map into the action module
 // graph, which action registration has no business importing.
 import { isEffectivelyRegisteredAgent } from "@shared/config/agentRegistry";
+import { WorktreeSetupStateSchema } from "./schemas";
 
 /**
  * Panel kinds `launchAgent` routes through its own non-PTY branches before it
@@ -30,6 +32,126 @@ import { isEffectivelyRegisteredAgent } from "@shared/config/agentRegistry";
  */
 const NON_TERMINAL_PANEL_IDS = new Set(["browser", "dev-preview"]);
 
+/**
+ * Where the managed creator's branch comes from, as a discriminated union.
+ *
+ * The flat predecessor took `branchName`, `baseBranch`, `useExistingBranch`,
+ * `fromRemote` and `pullRequestNumber` as five independently optional
+ * top-level fields whose legal combinations lived only in `run()`. Two things
+ * went wrong with that. The advertised JSON Schema accepted `{}` — Zod
+ * refinements do not survive `z.toJSONSchema`, so the manifest told every
+ * model an empty call was valid and only a dispatch could teach otherwise. And
+ * the modes were not actually separable: `baseBranch` and `fromRemote` mean
+ * nothing when an existing branch is being reused, but nothing said so.
+ *
+ * Each arm is `.strict()`, so a field borrowed from another mode — `baseBranch`
+ * on an existing-branch reuse, a `branchName` beside a pull request — is a
+ * validation error rather than a silently stripped key. Without it the
+ * generated JSON Schema emits no `additionalProperties: false` on the arms
+ * (production only closes the ROOT object), so the advertised contract was
+ * looser than the real one and told callers those combinations were fine.
+ *
+ * The union is NESTED under a `source` key rather than being the root schema
+ * deliberately: `buildToolInputSchema` forwards a generated schema only when
+ * its root is `type: "object"`, and a root union emits `anyOf` — which would
+ * advertise an empty schema and lose every field. Nested, the root stays an
+ * object and `toWireSchema` preserves the combinator.
+ */
+const WorktreeCreationSourceSchema = z
+  .discriminatedUnion("kind", [
+    z
+      .object({
+        kind: z
+          .literal("newBranch")
+          .describe(
+            "Branch off a base branch. If the name is already taken, `collisionPolicy` decides what happens."
+          ),
+        branchName: z
+          .string()
+          .trim()
+          .min(1)
+          .describe(
+            "Name for the new branch. Rejected outright if it is not a valid git ref — nothing rewrites it for you."
+          ),
+        baseBranch: z
+          .string()
+          .trim()
+          .min(1)
+          .optional()
+          .describe("Branch to base the new branch on (defaults to the main worktree's branch)."),
+        fromRemote: z
+          .boolean()
+          .optional()
+          .describe("Set true if baseBranch names a remote branch, e.g. origin/develop."),
+        collisionPolicy: z
+          .enum(["suffix", "error"])
+          .optional()
+          .describe(
+            "If the name is taken: 'suffix' (default) lets the host reuse that branch when nothing has it checked out, else create name-2, and reports which; 'error' fails instead."
+          ),
+        issueNumber: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "Issue this worktree is for. Given to the recipe and used by assignToSelf; it does not itself attach the issue."
+          ),
+        assignToSelf: z
+          .boolean()
+          .optional()
+          .describe(
+            "Assign the linked issue to the current user. Omit to use the persisted 'Assign issue to me' preference."
+          ),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z
+          .literal("existingBranch")
+          .describe("Check out a local branch that already exists, exactly as named."),
+        branchName: z
+          .string()
+          .trim()
+          .min(1)
+          .describe(
+            "The existing local branch to check out. Used verbatim — never suffixed, and never replaced by a new branch if it is missing."
+          ),
+        issueNumber: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "Issue this worktree is for. Given to the recipe and used by assignToSelf; it does not itself attach the issue."
+          ),
+        assignToSelf: z
+          .boolean()
+          .optional()
+          .describe(
+            "Assign the linked issue to the current user. Omit to use the persisted 'Assign issue to me' preference."
+          ),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z
+          .literal("pullRequest")
+          .describe(
+            "Check out a pull request's head branch. State is not checked, so a closed or merged PR is accepted as long as its head ref still exists."
+          ),
+        pullRequestNumber: z
+          .number()
+          .int()
+          .positive()
+          .describe(
+            "Pull request to check out. Its head branch is fetched and resolved for you; do not also pass a branch name."
+          ),
+      })
+      .strict(),
+  ])
+  .describe("Where the worktree's branch comes from. Required — pick exactly one mode.");
+
 export function registerWorkflowCreationActions(
   actions: ActionRegistry,
   callbacks: Pick<ActionCallbacks, "onLaunchAgent">
@@ -37,73 +159,45 @@ export function registerWorkflowCreationActions(
   actions.set("worktree.createWithRecipe", () =>
     defineAction({
       id: "worktree.createWithRecipe",
-      title: "Create Worktree with Recipe",
+      title: "Create Managed Worktree",
       description:
-        "Create a git worktree with its branch, optionally tracking a pull request, and optionally launch a recipe's terminals in it. This is the heavy composite path: it writes to disk, may check out a remote branch, and may start several processes. Create the worktree alone when neither is wanted. Partial failure is possible: the worktree can exist while its recipe did not fully start.",
+        "Create a managed git worktree — Daintree's own creator, which also copies project config, initializes submodules and runs setup. Name the creation mode: a new branch, an existing branch checked out exactly as asked, or a pull request. A recipe is OPTIONAL; pass one only to also launch terminals. Project setup runs in the background and can still fail after this returns.",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      // Headless/MCP tool: every field is optional but run() requires either a
-      // branchName or a pullRequestNumber, so dispatching it from the palette
-      // with {} throws. Redirect palette picks to the New Worktree dialog (which
-      // collects the branch/recipe/PR interactively); the headless action stays
-      // a full MCP tool and keybinding target.
+      // Headless/MCP tool: `source` names the creation mode and carries the
+      // fields that mode actually needs, so the manifest schema can no longer
+      // advertise `{}` as a valid call. Palette picks still redirect to the New
+      // Worktree dialog, which collects branch/recipe/PR interactively.
       palette: { mode: "redirect", to: "worktree.createDialog.open" },
-      argsSchema: z
-        .object({
-          branchName: z
-            .string()
-            .trim()
-            .min(1)
-            .optional()
-            .describe(
-              "Name for the new branch (will be sanitized for git compatibility). Required unless pullRequestNumber is provided — the PR's head branch is used in that case."
-            ),
-          baseBranch: z
-            .string()
-            .trim()
-            .min(1)
-            .optional()
-            .describe("Branch to base the worktree on (defaults to main worktree's branch)"),
-          recipeId: z.string().optional().describe("Recipe ID to run after creation"),
-          fromRemote: z.boolean().optional().describe("Set true if baseBranch is a remote branch"),
-          useExistingBranch: z
-            .boolean()
-            .optional()
-            .describe("Use an existing branch instead of creating a new one"),
-          issueNumber: z
-            .number()
-            .int()
-            .positive()
-            .optional()
-            .describe(
-              "Issue number to link with the worktree. Mutually exclusive with pullRequestNumber."
-            ),
-          pullRequestNumber: z
-            .number()
-            .int()
-            .positive()
-            .optional()
-            .describe(
-              "Pull request number to check out. Resolves the PR's head branch automatically and creates the worktree on it. Mutually exclusive with issueNumber."
-            ),
-          assignToSelf: z
-            .boolean()
-            .optional()
-            .describe(
-              "Assign the linked issue to the current user. Omit to use the user's persisted 'Assign issue to me' preference (mirrors the new-worktree dialog checkbox)."
-            ),
-          spawnedBy: TerminalSpawnSourceSchema.optional(),
-          focusPolicy: AddPanelFocusPolicySchema.optional(),
-        })
-        .refine((d) => !(d.issueNumber !== undefined && d.pullRequestNumber !== undefined), {
-          message: "issueNumber and pullRequestNumber are mutually exclusive",
-        }),
+      argsSchema: z.object({
+        source: WorktreeCreationSourceSchema,
+        recipeId: z
+          .string()
+          .optional()
+          .describe(
+            "Recipe to launch in the new worktree. Omit for a worktree with no terminals — project setup is started either way, and terminals do not wait for it."
+          ),
+        spawnedBy: TerminalSpawnSourceSchema.optional(),
+        focusPolicy: AddPanelFocusPolicySchema.optional(),
+      }),
       resultSchema: z.object({
         worktreeId: z.string(),
         worktreePath: z.string(),
+        /**
+         * Kept for compatibility with callers written against the original
+         * result shape. Always equal to `effectiveBranch` — read that one.
+         */
         branch: z.string(),
+        requestedBranch: z
+          .string()
+          .describe("The branch name this call asked for, before collision handling."),
+        effectiveBranch: z
+          .string()
+          .describe(
+            "The branch the worktree is actually on. Differs from requestedBranch only when a newBranch source hit a collision under collisionPolicy 'suffix'."
+          ),
         recipeLaunched: z.boolean(),
         spawnedTerminalCount: z.number().int().nonnegative(),
         // The composite's child panels, by id. Without these the terminals this
@@ -116,29 +210,22 @@ export function registerWorkflowCreationActions(
             "The recipe panels this call actually started, in spawn order. Use these ids to read output from or close the terminals it created."
           ),
         failedTerminalCount: z.number().int().nonnegative(),
+        setupState: WorktreeSetupStateSchema.describe(
+          "Setup state as of the moment git creation finished, which is BEFORE any recipe terminals or issue assignment this call also did — so it is a snapshot, not the state on return, and setup may since have advanced or failed. Re-read it from the worktree listing, or wait on it where a readiness wait is available, before running work that needs a fully initialized tree."
+        ),
         assignedToSelf: z.boolean(),
         assignedUsername: z.string().nullable(),
         assignmentError: z.string().nullable(),
       }),
-      run: async (
-        {
-          branchName,
-          baseBranch,
-          recipeId,
-          fromRemote,
-          useExistingBranch,
-          issueNumber,
-          pullRequestNumber,
-          assignToSelf,
-          spawnedBy,
-          focusPolicy,
-        },
-        ctx: ActionContext
-      ) => {
-        if (issueNumber !== undefined && pullRequestNumber !== undefined) {
-          throw new Error("issueNumber and pullRequestNumber are mutually exclusive");
-        }
-
+      run: async ({ source, recipeId, spawnedBy, focusPolicy }, ctx: ActionContext) => {
+        // Read off the arm rather than the top level. A `.refine()` cannot
+        // express this on the wire — Zod does not emit refinements — so the old
+        // top-level `issueNumber` advertised itself as valid beside a
+        // pull-request source and only a dispatch could teach otherwise. On the
+        // arms the JSON Schema enforces it: the pull-request arm is `.strict()`
+        // and simply has no such property.
+        const issueNumber = source.kind === "pullRequest" ? undefined : source.issueNumber;
+        const assignToSelf = source.kind === "pullRequest" ? undefined : source.assignToSelf;
         const currentProject = useProjectStore.getState().currentProject;
         if (!currentProject) {
           throw new Error("No active project");
@@ -171,38 +258,56 @@ export function registerWorkflowCreationActions(
           }
         }
 
-        let effectiveBranch: string;
+        const pullRequestNumber =
+          source.kind === "pullRequest" ? source.pullRequestNumber : undefined;
+
+        // What we ASK the host for. The host owns collision handling and may
+        // land on a different branch than this one, so nothing downstream may
+        // treat it as the answer — see `effectiveBranch` below.
+        let requestedBranch: string;
+        let candidateBranch: string;
         let effectiveBase: string;
         let effectiveUseExisting: boolean;
         let effectiveFromRemote: boolean;
+        let collisionPolicy: WorktreeBranchCollisionPolicy | undefined;
 
-        if (pullRequestNumber !== undefined) {
-          const pr = await forgeClient.getPR(rootPath, pullRequestNumber);
+        if (source.kind === "pullRequest") {
+          const pr = await forgeClient.getPR(rootPath, source.pullRequestNumber);
           if (!pr) {
-            throw new Error(`Pull request #${pullRequestNumber} not found in ${rootPath}`);
+            throw new Error(`Pull request #${source.pullRequestNumber} not found in ${rootPath}`);
           }
           if (!pr.headRef?.trim()) {
             throw new Error(
-              `Pull request #${pullRequestNumber} has no head branch — cannot create worktree`
+              `Pull request #${source.pullRequestNumber} has no head branch — cannot create worktree`
             );
           }
-          await worktreeClient.fetchPRBranch(rootPath, pullRequestNumber, pr.headRef);
-          effectiveBranch = pr.headRef;
+          await worktreeClient.fetchPRBranch(rootPath, source.pullRequestNumber, pr.headRef);
+          requestedBranch = pr.headRef;
+          candidateBranch = pr.headRef;
           effectiveBase = pr.headRef;
           effectiveUseExisting = true;
           effectiveFromRemote = false;
+        } else if (source.kind === "existingBranch") {
+          // The exact branch, never an available-name lookup. Suffixing here is
+          // what broke reuse outright: the old flat shape resolved
+          // `getAvailableBranch` BEFORE reading `useExistingBranch`, so reusing
+          // an existing `topic` asked the host to check out `topic-2` — a
+          // branch that by construction does not exist, since the whole point
+          // of the lookup was to find a free name.
+          requestedBranch = source.branchName;
+          candidateBranch = source.branchName;
+          effectiveBase = source.branchName;
+          effectiveUseExisting = true;
+          effectiveFromRemote = false;
         } else {
-          if (!branchName) {
-            throw new Error("branchName is required when pullRequestNumber is not provided");
-          }
-          let baseRef: string | undefined = baseBranch;
+          let baseRef: string | undefined = source.baseBranch;
           if (!baseRef) {
             const mainWorktree = Array.from(
               getCurrentViewStore().getState().worktrees.values()
             ).find((w) => w.isMainWorktree);
             if (!mainWorktree) {
               throw new Error(
-                "No base branch specified and no main worktree found. Please specify baseBranch parameter."
+                "No base branch specified and no main worktree found. Please specify source.baseBranch."
               );
             }
             baseRef = mainWorktree.branch;
@@ -210,28 +315,50 @@ export function registerWorkflowCreationActions(
           if (!baseRef) {
             throw new Error("Base branch is required but was not determined");
           }
-          effectiveBranch = await worktreeClient.getAvailableBranch(rootPath, branchName);
+          requestedBranch = source.branchName;
           effectiveBase = baseRef;
-          effectiveUseExisting = useExistingBranch ?? false;
-          effectiveFromRemote = fromRemote ?? false;
+          effectiveUseExisting = false;
+          effectiveFromRemote = source.fromRemote ?? false;
+          collisionPolicy = source.collisionPolicy ?? "suffix";
+          // Under `suffix` the available-name lookup survives, but only as a
+          // NAMING HINT: the worktree directory is derived from the branch, and
+          // deriving it from a name we already know is taken produces a
+          // directory whose name doesn't match the branch. It is not the
+          // collision gate — it reserves nothing, and the host re-resolves the
+          // collision atomically against the `git worktree add` failure. Under
+          // `error` it is skipped entirely, so the host sees the exact
+          // requested name and refuses it.
+          candidateBranch =
+            collisionPolicy === "suffix"
+              ? await worktreeClient.getAvailableBranch(rootPath, requestedBranch)
+              : requestedBranch;
         }
 
-        const path = await worktreeClient.getDefaultPath(rootPath, effectiveBranch);
+        const path = await worktreeClient.getDefaultPath(rootPath, candidateBranch);
 
-        const worktreeId = await worktreeClient.create(
+        const created = await worktreeClient.create(
           {
             baseBranch: effectiveBase,
-            newBranch: effectiveBranch,
+            newBranch: candidateBranch,
             path,
             fromRemote: effectiveFromRemote,
             useExistingBranch: effectiveUseExisting,
+            ...(collisionPolicy ? { collisionPolicy } : {}),
           },
           rootPath
         );
 
-        if (!worktreeId) {
+        if (!created?.worktreeId) {
           throw new Error("Failed to create worktree: no worktreeId returned from backend");
         }
+
+        // The branch the HOST landed on, carried back with the create result.
+        // It is not necessarily `candidateBranch`: the host owns collision
+        // handling and can suffix further under a lost race or reuse a stale
+        // local branch. Reading it out of the worktree store instead would be a
+        // race — store rows travel over a different port than this response,
+        // with no ordering between them.
+        const { worktreeId, branch: effectiveBranch, setupState } = created;
 
         let recipeLaunched = false;
         let spawnedTerminalCount = 0;
@@ -273,10 +400,13 @@ export function registerWorkflowCreationActions(
                 worktreeId,
                 worktreePath: path,
                 branch: effectiveBranch,
+                requestedBranch,
+                effectiveBranch,
                 recipeLaunched: false,
                 spawnedTerminalCount: 0,
                 spawnedTerminalIds: [],
                 failedTerminalCount: 0,
+                setupState,
                 assignedToSelf: false,
                 assignedUsername: null,
                 assignmentError: null,
@@ -323,10 +453,13 @@ export function registerWorkflowCreationActions(
           worktreeId,
           worktreePath: path,
           branch: effectiveBranch,
+          requestedBranch,
+          effectiveBranch,
           recipeLaunched,
           spawnedTerminalCount,
           spawnedTerminalIds,
           failedTerminalCount,
+          setupState,
           assignedToSelf,
           assignedUsername,
           assignmentError,
@@ -484,7 +617,7 @@ export function registerWorkflowCreationActions(
 
         const availableBranch = await worktreeClient.getAvailableBranch(rootPath, derivedBranch);
         const worktreePath = await worktreeClient.getDefaultPath(rootPath, availableBranch);
-        const worktreeId = await worktreeClient.create(
+        const created = await worktreeClient.create(
           {
             baseBranch: baseRef,
             newBranch: availableBranch,
@@ -494,9 +627,10 @@ export function registerWorkflowCreationActions(
           },
           rootPath
         );
-        if (!worktreeId) {
+        if (!created?.worktreeId) {
           throw new Error("Failed to create worktree: no worktreeId returned from backend");
         }
+        const { worktreeId } = created;
 
         let recipeLaunched = false;
         let spawnedTerminalCount = 0;

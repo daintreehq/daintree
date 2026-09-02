@@ -82,7 +82,7 @@ const RecipeEditorOpenArgsSchema = z.object({
     .max(MAX_TERMINALS_PER_RECIPE)
     .optional()
     .describe(
-      "Prefilled panes, for callers that already hold them. Capture a live layout instead."
+      `Prefilled panes, for callers that already hold them (max ${MAX_TERMINALS_PER_RECIPE}). Capture a live layout instead.`
     ),
 });
 

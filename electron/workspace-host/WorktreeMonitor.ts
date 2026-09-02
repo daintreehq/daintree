@@ -6,9 +6,11 @@ import type {
   Worktree,
   WorktreeMood,
   WorktreeLifecycleStatus,
+  WorktreeSetupStatus,
   WorktreeLifecyclePhaseResult,
   WslGitEligibility,
 } from "../../shared/types/worktree.js";
+import { WORKTREE_SETUP_ERROR_MAX_LENGTH } from "../../shared/types/worktree.js";
 import type { CIStatusState } from "../../shared/types/forge.js";
 import type { WorktreeSnapshot, WorkspaceFetchResult } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
@@ -195,6 +197,7 @@ export class WorktreeMonitor {
   // Extra state
   private _createdAt: number | undefined;
   private _lifecycleStatus: WorktreeLifecycleStatus | undefined;
+  private _setupStatus: WorktreeSetupStatus | undefined;
   // Accumulated per-phase teardown results. Lifecycle owned by
   // WorktreeLifecycleService.runLifecycleTeardown (cleared at run start, upserted
   // per phase) so a later phase no longer overwrites an earlier phase's outcome.
@@ -509,6 +512,9 @@ export class WorktreeMonitor {
       },
       get lifecycleStatus() {
         return monitor._lifecycleStatus;
+      },
+      get setupStatus() {
+        return monitor._setupStatus;
       },
       get lifecyclePhaseResults() {
         return monitor._lifecyclePhaseResults;
@@ -1097,6 +1103,10 @@ export class WorktreeMonitor {
     return this._lifecycleStatus;
   }
 
+  get setupStatus(): WorktreeSetupStatus | undefined {
+    return this._setupStatus;
+  }
+
   get hasWatcher(): boolean {
     return this.watcherController.hasWatcher;
   }
@@ -1191,6 +1201,18 @@ export class WorktreeMonitor {
 
   setLifecycleStatus(status: WorktreeLifecycleStatus | undefined): void {
     this._lifecycleStatus = status;
+  }
+
+  /**
+   * Record how far post-create initialization has got. `error` is truncated
+   * here rather than at the call sites: this value rides every snapshot and
+   * reaches model context, so the bound has to hold no matter who writes it.
+   */
+  setSetupStatus(status: WorktreeSetupStatus | undefined): void {
+    this._setupStatus =
+      status && status.error !== undefined
+        ? { ...status, error: status.error.slice(0, WORKTREE_SETUP_ERROR_MAX_LENGTH) }
+        : status;
   }
 
   get lifecyclePhaseResults(): readonly WorktreeLifecyclePhaseResult[] {

@@ -31,6 +31,7 @@ import type {
   WorkspaceHostGovernanceSnapshot,
   WorkspaceFetchResult,
 } from "../../shared/types/workspace-host.js";
+import type { WorktreeCreateResult, WorktreeSetupState } from "../../shared/types/worktree.js";
 import type {
   CopyTreeOptions,
   CopyTreeProgress,
@@ -1003,17 +1004,43 @@ export class WorkspaceClient extends EventEmitter {
     });
   }
 
-  async createWorktree(rootPath: string, options: CreateWorktreeOptions): Promise<string> {
+  /**
+   * Create a worktree, reporting BOTH its id and the branch the host landed on.
+   *
+   * The branch is not always the one requested — the host resolves collisions
+   * atomically against the failing `git worktree add`, which can suffix the
+   * name or switch to reusing an existing local branch. It travels with the
+   * result because the renderer's worktree rows arrive over a different port,
+   * so reading it back from the store afterwards races this response.
+   */
+  async createWorktree(
+    rootPath: string,
+    options: CreateWorktreeOptions
+  ): Promise<WorktreeCreateResult> {
     const host = this.pool.resolveHostForPath(rootPath);
     if (!host) throw new Error("No workspace host for project");
     const requestId = host.generateRequestId();
-    const result = await host.sendWithResponse<{ worktreeId?: string }>({
+    const result = await host.sendWithResponse<{
+      worktreeId?: string;
+      branch?: string;
+      setupState?: WorktreeSetupState;
+    }>({
       type: "create-worktree",
       requestId,
       rootPath,
       options,
     });
-    return result.worktreeId ?? options.path;
+    return {
+      worktreeId: result.worktreeId ?? options.path,
+      // Falling back to the requested name keeps the field populated rather
+      // than absent when an older host answers without it. It is the same value
+      // the caller already had, never a claim about something unobserved.
+      branch: result.branch ?? options.newBranch,
+      // `unknown` rather than a guessed `pending` when a host answers without
+      // it — saying "setup has started" about a host that never told us would
+      // be exactly the invention this field exists to remove.
+      setupState: result.setupState ?? "unknown",
+    };
   }
 
   async deleteWorktree(

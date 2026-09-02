@@ -573,6 +573,458 @@ describe("WorkspaceService.createWorktree", () => {
     warnSpy.mockRestore();
   });
 
+  it("never emits the create result with no setup status recorded", async () => {
+    // The create result means "git is done", not "the worktree is usable" —
+    // config copy, submodule init and the setup script all run afterwards. An
+    // ABSENT status means "this host process did not create this worktree", so
+    // if the result could go out before one was written, the caller could not
+    // tell its own brand-new worktree from a pre-existing one.
+    //
+    // The observed value is `running` rather than `pending`: the tail's IIFE
+    // runs synchronously up to its first `await`, which is past the
+    // config-copy stamp. `pending` is written first and does reach the wire on
+    // its own snapshot, but it is superseded within the same tick.
+    let stateAtEmission: string | undefined;
+    mockSendEvent.mockImplementation((event: { type: string; worktreeId?: string }) => {
+      if (event.type === "create-worktree-result" && event.worktreeId) {
+        stateAtEmission = service["monitors"].get(event.worktreeId)?.setupStatus?.state;
+      }
+    });
+
+    await service.createWorktree("req-setup-pending", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/setup-pending",
+      path: "/test/worktree-setup-pending",
+    });
+
+    // Exactly `running`, not "one of two": the tail's IIFE runs synchronously
+    // up to its first await, which is past the config-copy stamp. Asserting the
+    // set would let a reordering that changes the observable contract pass.
+    expect(stateAtEmission).toBe("running");
+  });
+
+  it("reaches ready once the whole tail has run, including with no setup commands", async () => {
+    // The gap `setupStatus` exists to close: `lifecycleStatus` is never written
+    // at all when a project declares no setup commands, so it cannot be read as
+    // "setup finished" — only this field settles on every path.
+    //
+    // The submodule pass is stubbed clean rather than left to the shared git
+    // mock, whose default `raw` resolves `undefined` — which the roster read
+    // correctly treats as a failure, not as "no submodules".
+    vi.spyOn(
+      service as unknown as {
+        initWorktreeSubmodules: (...args: unknown[]) => Promise<unknown>;
+      },
+      "initWorktreeSubmodules"
+    ).mockResolvedValue({ ok: true });
+
+    await service.createWorktree("req-setup-ready", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/setup-ready",
+      path: "/test/worktree-setup-ready",
+    });
+    await flushAsyncTail();
+
+    const status = service["monitors"].get(path.resolve("/test/worktree-setup-ready"))?.setupStatus;
+    expect(status?.state).toBe("ready");
+    expect(status?.completedAt).toBeGreaterThan(0);
+  });
+
+  it("settles failed from the REAL submodule pass, not a stubbed verdict", async () => {
+    // The tests below stub `initWorktreeSubmodules` to return the verdict they
+    // then assert on, which proves the tail reads a verdict but not that the
+    // real method produces the right one. This runs the real method — its
+    // roster read resolves a non-string, the "unreadable roster" case — through
+    // the real tail, so a regression where it logs the error but still returns
+    // `{ ok: true }` fails here instead of shipping a `ready` unbuildable tree.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockSimpleGit.raw.mockImplementation(async (args: string[]) =>
+      args[0] === "ls-files" ? undefined : undefined
+    );
+
+    await service.createWorktree("req-submodule-real", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/submodule-real",
+      path: "/test/worktree-submodule-real",
+      submoduleInit: "all",
+    });
+    await flushAsyncTail();
+
+    const status = service["monitors"].get(
+      path.resolve("/test/worktree-submodule-real")
+    )?.setupStatus;
+    expect(status?.state).toBe("failed");
+    expect(status?.stage).toBe("submodules");
+    expect(status?.error).toContain("no readable output");
+    warnSpy.mockRestore();
+  });
+
+  it("does not report ready when submodule initialization fails", async () => {
+    // Submodule init does not throw — it logs, emits a lifecycle-setup-error
+    // event, and returns. Inferring the verdict from `lifecycleStatus`
+    // afterwards therefore saw no failed "setup" phase and marked the worktree
+    // ready, which is precisely the "born unbuildable" tree the option exists
+    // to prevent being reported as usable.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const submodulesSpy = vi
+      .spyOn(
+        service as unknown as {
+          initWorktreeSubmodules: (...args: unknown[]) => Promise<unknown>;
+        },
+        "initWorktreeSubmodules"
+      )
+      .mockResolvedValue({ ok: false, error: "Submodule initialization failed: no such remote" });
+
+    await service.createWorktree("req-submodule-failed", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/submodule-failed",
+      path: "/test/worktree-submodule-failed",
+    });
+    await flushAsyncTail();
+
+    const status = service["monitors"].get(
+      path.resolve("/test/worktree-submodule-failed")
+    )?.setupStatus;
+    expect(status?.state).toBe("failed");
+    expect(status?.stage).toBe("submodules");
+    expect(status?.error).toContain("no such remote");
+    submodulesSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("still runs the setup script after a submodule failure, but does not call it ready", async () => {
+    // Two rules meet here and neither yields. One unreachable private submodule
+    // must not leave the worktree completely unprovisioned — there is no retry
+    // path for setup — so the tail carries on. But the tree is demonstrably
+    // unbuildable, so it must not end up reported as `ready` either.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(
+      service as unknown as {
+        initWorktreeSubmodules: (...args: unknown[]) => Promise<unknown>;
+      },
+      "initWorktreeSubmodules"
+    ).mockResolvedValue({ ok: false, error: "Submodule initialization failed" });
+    const setupSpy = vi
+      .spyOn(
+        service as unknown as { runLifecycleSetup: (...args: unknown[]) => Promise<unknown> },
+        "runLifecycleSetup"
+      )
+      .mockResolvedValue({ ok: true });
+
+    await service.createWorktree("req-submodule-continue", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/submodule-continue",
+      path: "/test/worktree-submodule-continue",
+    });
+    await flushAsyncTail();
+
+    expect(setupSpy).toHaveBeenCalledTimes(1);
+    const status = service["monitors"].get(
+      path.resolve("/test/worktree-submodule-continue")
+    )?.setupStatus;
+    expect(status?.state).toBe("failed");
+    // The submodule failure is the root cause and wins over a later one.
+    expect(status?.stage).toBe("submodules");
+    warnSpy.mockRestore();
+  });
+
+  it("does not report ready when the setup script exits non-zero", async () => {
+    // A failed setup script RESOLVES — it reports itself on `lifecycleStatus`
+    // rather than throwing — so arriving at the end of the tail is not evidence
+    // of success.
+    vi.spyOn(
+      service as unknown as {
+        initWorktreeSubmodules: (...args: unknown[]) => Promise<unknown>;
+      },
+      "initWorktreeSubmodules"
+    ).mockResolvedValue({ ok: true });
+
+    const monitorFor = (p: string) => service["monitors"].get(path.resolve(p));
+    vi.spyOn(service["lifecycleService"], "runLifecycleSetup").mockImplementation(
+      async (worktreeId: string) => {
+        service["monitors"].get(worktreeId)?.setLifecycleStatus({
+          phase: "setup",
+          state: "failed",
+          startedAt: Date.now(),
+          completedAt: Date.now(),
+          error: "npm ci exited 1",
+        });
+        return { shouldProvision: false };
+      }
+    );
+
+    await service.createWorktree("req-setup-script-failed", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/setup-script-failed",
+      path: "/test/worktree-setup-script-failed",
+    });
+    await flushAsyncTail();
+
+    const status = monitorFor("/test/worktree-setup-script-failed")?.setupStatus;
+    expect(status?.state).toBe("failed");
+    expect(status?.stage).toBe("setup-script");
+    expect(status?.error).toContain("npm ci exited 1");
+  });
+
+  it("does not report ready when auto-provisioning fails", async () => {
+    // Provisioning resolves `{ success: false }` rather than throwing, and it
+    // overwrites `lifecycleStatus` with its own `resource-provision` phase — so
+    // a verdict read back from that field saw no failed "setup" phase and
+    // called a worktree with no resource ready.
+    vi.spyOn(
+      service as unknown as {
+        initWorktreeSubmodules: (...args: unknown[]) => Promise<unknown>;
+      },
+      "initWorktreeSubmodules"
+    ).mockResolvedValue({ ok: true });
+
+    vi.spyOn(service["lifecycleService"], "runLifecycleSetup").mockResolvedValue({
+      shouldProvision: true,
+    });
+    // Auto-provision is guarded on the host having a loaded project.
+    (service as unknown as { projectRootPath: string }).projectRootPath = "/test/root";
+    const provisionSpy = vi
+      .spyOn(service, "runResourceAction")
+      .mockResolvedValue({ success: false, error: "devbox quota exceeded" });
+
+    await service.createWorktree("req-provision-failed", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/provision-failed",
+      path: "/test/worktree-provision-failed",
+      provisionResource: true,
+    });
+    await flushAsyncTail();
+
+    expect(provisionSpy).toHaveBeenCalled();
+    const status = service["monitors"].get(
+      path.resolve("/test/worktree-provision-failed")
+    )?.setupStatus;
+    expect(status?.state).toBe("failed");
+    expect(status?.error).toContain("devbox quota exceeded");
+  });
+
+  it("reports the branch it landed on with the create result", async () => {
+    // The renderer has no race-free way to read this back: worktree rows travel
+    // over the project port while this result answers on the parent-process
+    // transport, with no ordering between them.
+    let addAttempts = 0;
+    mockSimpleGit.raw.mockImplementation((args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "add") {
+        addAttempts += 1;
+        if (addAttempts === 1) {
+          return Promise.reject(new Error("fatal: a branch named 'feature/foo' already exists"));
+        }
+      }
+      return Promise.resolve(undefined);
+    });
+    mockSimpleGit.branchLocal.mockResolvedValue({ all: ["main", "feature/foo"] });
+
+    await service.createWorktree("req-report-branch", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/foo",
+      path: "/test/worktree-report-branch",
+    });
+
+    type CreateResultEvent = {
+      type: string;
+      requestId?: string;
+      success?: boolean;
+      branch?: string;
+      setupState?: string;
+    };
+    const result = mockSendEvent.mock.calls
+      .map(([event]: [CreateResultEvent]) => event)
+      .find(
+        (e: CreateResultEvent) =>
+          e.type === "create-worktree-result" && e.requestId === "req-report-branch"
+      );
+
+    expect(result?.success).toBe(true);
+    // Not the requested name: the host suffixed past the collision.
+    expect(result?.branch).toBe("feature/foo-2");
+    // The tail has started by the time the result is sent, so this is the
+    // contract value rather than merely "something".
+    expect(result?.setupState).toBe("running");
+  });
+
+  it("does not wedge retries when a project declares no setup commands", async () => {
+    // `retryLifecycleSetup` pre-stamps `lifecycleStatus: running` so a second
+    // concurrent request is rejected — and the lifecycle service returns early
+    // WITHOUT writing any status when there are no setup commands, so nothing
+    // replaced it. The first retry on such a project was therefore the last one
+    // it would ever accept: every later attempt hit "Setup is already running".
+    vi.spyOn(
+      service as unknown as {
+        initWorktreeSubmodules: (...args: unknown[]) => Promise<unknown>;
+      },
+      "initWorktreeSubmodules"
+    ).mockResolvedValue({ ok: true });
+    await service.createWorktree("req-retry-wedge", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/retry-wedge",
+      path: "/test/worktree-retry-wedge",
+    });
+    await flushAsyncTail();
+
+    const worktreeId = path.resolve("/test/worktree-retry-wedge");
+    (service as unknown as { projectRootPath: string }).projectRootPath = "/test/root";
+    // The no-setup-commands path: returns without writing a lifecycle status.
+    vi.spyOn(service["lifecycleService"], "runLifecycleSetup").mockResolvedValue({
+      shouldProvision: false,
+    });
+
+    await service.retryLifecycleSetup(worktreeId);
+    expect(service["monitors"].get(worktreeId)?.setupStatus?.state).toBe("ready");
+    // The load-bearing assertion: a second retry must still be accepted, and
+    // the successful no-command path settles as `success` rather than merely
+    // "not running" — which `undefined` or `failed` would also satisfy.
+    expect(service["monitors"].get(worktreeId)?.lifecycleStatus?.state).toBe("success");
+    await expect(service.retryLifecycleSetup(worktreeId)).resolves.toBeUndefined();
+  });
+
+  it("does not let a tail outliving its worktree stamp the replacement", async () => {
+    // Worktree ids are paths, and delete-then-recreate at the same path is a
+    // supported workflow — so an id alone does not identify an incarnation. A
+    // tail still running for a removed worktree would otherwise write its
+    // `running`/`failed`/`ready` onto the fresh monitor that took its place,
+    // reporting the dead worktree's setup outcome as the live one's.
+    let releaseCopy: (() => void) | undefined;
+    vi.spyOn(service["lifecycleService"], "copyDaintreeDir").mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseCopy = resolve;
+        })
+    );
+
+    await service.createWorktree("req-reincarnation", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/reincarnate",
+      path: "/test/worktree-reincarnate",
+    });
+    await flushAsyncTail();
+
+    const worktreeId = path.resolve("/test/worktree-reincarnate");
+    const original = service["monitors"].get(worktreeId);
+    expect(original).toBeTruthy();
+
+    // Stand in a NEW incarnation at the same id, as a delete-then-recreate
+    // would, and give it a fresh setup status of its own.
+    const replacement = {
+      ...original,
+      generation: (original?.generation ?? 0) + 1,
+      setupStatus: { state: "pending" as const, startedAt: 1 },
+      setSetupStatus(next: unknown) {
+        (this as { setupStatus: unknown }).setupStatus = next;
+      },
+    };
+    service["monitors"].set(worktreeId, replacement as never);
+
+    releaseCopy?.();
+    await flushAsyncTail();
+
+    // The old tail ran to completion and wrote nothing onto the replacement.
+    expect(replacement.setupStatus).toEqual({ state: "pending", startedAt: 1 });
+  });
+
+  it("does not coalesce two creates that ask for different collision policies", async () => {
+    // Coalescing means "these two callers asked for the same thing, so one
+    // answer serves both". A `collisionPolicy: "error"` caller handed another
+    // caller's suffixed success got the exact outcome it asked to be refused.
+    const keyOf = (options: Record<string, unknown>) =>
+      (
+        service as unknown as {
+          getCreateWorktreeInFlightKey: (root: string, o: unknown) => string;
+        }
+      ).getCreateWorktreeInFlightKey("/test/root", options);
+
+    const base = { baseBranch: "main", newBranch: "feature/foo", path: "/test/wt" };
+    expect(keyOf({ ...base, collisionPolicy: "error" })).not.toBe(keyOf(base));
+    expect(keyOf({ ...base, submoduleInit: "all" })).not.toBe(keyOf(base));
+    // `baseBranch` decides the commit the worktree is created AT, and was
+    // missing from the key entirely.
+    expect(keyOf({ ...base, baseBranch: "release" })).not.toBe(keyOf(base));
+    expect(keyOf({ ...base, useExistingBranch: true })).not.toBe(keyOf(base));
+    expect(keyOf({ ...base, fromRemote: true })).not.toBe(keyOf(base));
+    expect(keyOf({ ...base, worktreeMode: "remote-worker" })).not.toBe(keyOf(base));
+    expect(keyOf({ ...base, sourcePrNumber: 7 })).not.toBe(keyOf(base));
+  });
+
+  it("still coalesces two identical creates, including explicit defaults", async () => {
+    // The case coalescing exists for: an omitted flag and an explicit `false`
+    // are the same request, and over-keying would spawn two real `git worktree
+    // add` runs for one user action.
+    const keyOf = (options: Record<string, unknown>) =>
+      (
+        service as unknown as {
+          getCreateWorktreeInFlightKey: (root: string, o: unknown) => string;
+        }
+      ).getCreateWorktreeInFlightKey("/test/root", options);
+
+    const base = { baseBranch: "main", newBranch: "feature/foo", path: "/test/wt" };
+    expect(
+      keyOf({
+        ...base,
+        fromRemote: false,
+        useExistingBranch: false,
+        collisionPolicy: "suffix",
+        submoduleInit: "inherit",
+        provisionResource: false,
+        worktreeMode: "local",
+      })
+    ).toBe(keyOf(base));
+    // Whitespace around the branch name is not a different request either.
+    expect(keyOf({ ...base, newBranch: "  feature/foo  " })).toBe(keyOf(base));
+  });
+
+  it("records which stage failed when the tail throws", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(service["lifecycleService"], "copyDaintreeDir").mockRejectedValueOnce(
+      new Error("copyDaintreeDir exploded")
+    );
+
+    await service.createWorktree("req-setup-failed", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/setup-failed",
+      path: "/test/worktree-setup-failed",
+    });
+    await flushAsyncTail();
+
+    const status = service["monitors"].get(
+      path.resolve("/test/worktree-setup-failed")
+    )?.setupStatus;
+    expect(status?.state).toBe("failed");
+    // The stage in flight when it threw, so a caller knows the tree may lack
+    // its project config rather than merely having skipped a setup script.
+    expect(status?.stage).toBe("copy-config");
+    expect(status?.error).toContain("copyDaintreeDir exploded");
+    warnSpy.mockRestore();
+  });
+
+  it("bounds the failure text it puts on every snapshot", async () => {
+    // This field rides worktree listings into model context. `lifecycleStatus`
+    // carries up to 8 KiB of raw command output and stays where it is.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(service["lifecycleService"], "copyDaintreeDir").mockRejectedValueOnce(
+      new Error("x".repeat(5000))
+    );
+
+    await service.createWorktree("req-setup-long", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/setup-long",
+      path: "/test/worktree-setup-long",
+    });
+    await flushAsyncTail();
+
+    const status = service["monitors"].get(path.resolve("/test/worktree-setup-long"))?.setupStatus;
+    // Exactly the bound, and the retained text is the START of the message —
+    // `<= 200` would also pass for a truncation to one character, which loses
+    // the part a reader needs.
+    expect(status?.error?.length).toBe(200);
+    expect(status?.error?.startsWith("Submodule")).toBe(false);
+    expect(status?.error).toContain("x".repeat(50));
+    warnSpy.mockRestore();
+  });
+
   it("registers the monitor synchronously before emitting create-worktree-result", async () => {
     // Regression guard for the bug where monitor availability lagged event
     // emission. Any caller that synchronously queries this.monitors.get(id)
@@ -1028,6 +1480,116 @@ describe("WorkspaceService.createWorktree", () => {
       (call) => call[0][0] === "worktree" && call[0][1] === "add"
     );
     expect(addCalls).toHaveLength(1);
+  });
+
+  it("refuses a colliding branch outright under collisionPolicy 'error'", async () => {
+    // The renderer cannot implement either policy: checking a name reserves
+    // nothing, and the name can be claimed between the check and the create.
+    // Collision detection rides the atomic `worktree add` failure here, so this
+    // is the only place the policy can be honoured.
+    mockSimpleGit.raw.mockImplementation((args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "add") {
+        return Promise.reject(new Error("fatal: a branch named 'feature/foo' already exists"));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await service.createWorktree("req-collision-error", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/foo",
+      path: "/test/worktree-foo-strict",
+      collisionPolicy: "error",
+    });
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-collision-error",
+        success: false,
+        error: expect.stringContaining('collisionPolicy is "error"'),
+      })
+    );
+    // The whole point: no suffixed branch and no reuse of a stale one. The
+    // failed add is atomic, so exactly one add was attempted and nothing was
+    // created to unwind.
+    const addCalls = mockSimpleGit.raw.mock.calls.filter(
+      (call) => call[0][0] === "worktree" && call[0][1] === "add"
+    );
+    expect(addCalls).toHaveLength(1);
+  });
+
+  it("ignores collisionPolicy on a reuse, because reuse is not a collision", async () => {
+    // `CreateWorktreeOptions` documents this: the policy is about creating a
+    // branch that turns out to exist, and `useExistingBranch` is a request to
+    // check out one that is SUPPOSED to exist. Rejecting that as a collision
+    // would make the two options impossible to combine, which the managed
+    // creator relies on for its pull-request mode.
+    await service.createWorktree("req-reuse-strict", "/test/root", {
+      baseBranch: "feature/foo",
+      newBranch: "feature/foo",
+      path: "/test/worktree-reuse-strict",
+      useExistingBranch: true,
+      collisionPolicy: "error",
+    });
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-reuse-strict",
+        success: true,
+        // The exact branch, unsuffixed.
+        branch: "feature/foo",
+      })
+    );
+    // The reuse form: `worktree add <path> <branch>` with no `-b`, and no
+    // collision recovery to run because the add never failed.
+    const addCalls = mockSimpleGit.raw.mock.calls
+      .filter((call) => call[0][0] === "worktree" && call[0][1] === "add")
+      .map((call) => call[0] as string[]);
+    expect(addCalls).toHaveLength(1);
+    expect(addCalls[0]).not.toContain("-b");
+    expect(addCalls[0]).toEqual([
+      "worktree",
+      "add",
+      "--end-of-options",
+      "/test/worktree-reuse-strict",
+      "feature/foo",
+    ]);
+  });
+
+  it("still suffixes under the default policy, so omitting it changes nothing", async () => {
+    // `suffix` is the long-standing behaviour and stays the default: flipping it
+    // would silently break every caller that relies on creation succeeding.
+    let addAttempts = 0;
+    mockSimpleGit.raw.mockImplementation((args: string[]) => {
+      if (args[0] === "worktree" && args[1] === "add") {
+        addAttempts += 1;
+        if (addAttempts === 1) {
+          return Promise.reject(new Error("fatal: a branch named 'feature/foo' already exists"));
+        }
+      }
+      return Promise.resolve(undefined);
+    });
+    mockSimpleGit.branchLocal.mockResolvedValue({ all: ["main", "feature/foo"] });
+
+    await service.createWorktree("req-collision-default", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/foo",
+      path: "/test/worktree-foo-default",
+    });
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create-worktree-result",
+        requestId: "req-collision-default",
+        success: true,
+        // The suffixed name, not merely "it succeeded" — the point of the
+        // default policy is that the caller is told what it actually got.
+        branch: "feature/foo-2",
+      })
+    );
+    // Exactly one failed add and one successful retry.
+    expect(addAttempts).toBe(2);
   });
 
   it("does not run branch-collision recovery for non-collision add failures", async () => {
@@ -1868,7 +2430,7 @@ describe("WorkspaceService.createWorktree submodule init", () => {
       if (args[0] === "submodule") throw new Error("fatal: could not read from remote repository");
       return undefined;
     });
-    const setupSpy = vi.spyOn(service as any, "runLifecycleSetup").mockResolvedValue(undefined);
+    const setupSpy = vi.spyOn(service as any, "runLifecycleSetup").mockResolvedValue({ ok: true });
 
     await create({ submoduleInit: "all" });
 

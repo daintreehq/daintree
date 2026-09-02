@@ -400,7 +400,34 @@ export interface CreateWorktreeOptions {
    * creation have nobody to ask.
    */
   submoduleInit?: SubmoduleInitPolicy;
+  /**
+   * What to do when `newBranch` is already a local branch. Defaults to
+   * `suffix`, the long-standing behaviour.
+   *
+   * `suffix` — recover the way the host always has: reuse the branch when it is
+   * not checked out anywhere, otherwise create `name-2`, `name-3`, ... The
+   * branch actually used is reported back, so the caller is never left
+   * guessing.
+   *
+   * `error` — fail the create instead of quietly producing a different branch
+   * than the one asked for. This is the mode a caller wants when the branch
+   * name is load-bearing (an agent creating a worktree for a specific
+   * pre-existing branch, a campaign keyed on exact names).
+   *
+   * Honoured in the host and nowhere else: collision detection rides the `git
+   * worktree add` failure, which is atomic. A renderer-side pre-flight cannot
+   * implement either policy, because checking a name reserves nothing.
+   *
+   * Ignored when `useExistingBranch` is set — reuse is not a collision.
+   */
+  collisionPolicy?: WorktreeBranchCollisionPolicy;
 }
+
+/**
+ * How {@link CreateWorktreeOptions.collisionPolicy} resolves a branch-name
+ * collision. See that field for the semantics.
+ */
+export type WorktreeBranchCollisionPolicy = "suffix" | "error";
 
 /** Git commit author */
 export interface GitCommitAuthor {

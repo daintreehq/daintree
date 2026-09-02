@@ -7,7 +7,11 @@ import { projectStore } from "../../../services/ProjectStore.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { WorktreeDeletePayload } from "../../../types/index.js";
-import type { WorktreeState, WorktreeListResult } from "../../../../shared/types/worktree.js";
+import type {
+  WorktreeState,
+  WorktreeListResult,
+  WorktreeCreateResult,
+} from "../../../../shared/types/worktree.js";
 import { fileSearchService } from "../../../services/FileSearchService.js";
 import { gitServiceCache } from "../../../services/GitServiceCache.js";
 import { getSoundService } from "../../../services/getSoundService.js";
@@ -27,7 +31,7 @@ import {
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 
-const inFlightWorktreeCreateRequests = new Map<string, Promise<string>>();
+const inFlightWorktreeCreateRequests = new Map<string, Promise<WorktreeCreateResult>>();
 
 function playSoundFireAndForget(id: SoundId): void {
   void getSoundService()
@@ -49,6 +53,19 @@ function getWorktreeCreateRequestKey(
     newBranch: payload.options.newBranch.trim(),
     fromRemote: payload.options.fromRemote ?? false,
     useExistingBranch: payload.options.useExistingBranch ?? false,
+    // Part of the key because they change what a create DOES, not just how it
+    // is described. Coalescing a `collisionPolicy: "error"` request onto a
+    // concurrent `"suffix"` one would return the suffixed success the strict
+    // caller asked to be refused, and differing submodule policies would become
+    // first-request-wins.
+    collisionPolicy: payload.options.collisionPolicy ?? "suffix",
+    submoduleInit: payload.options.submoduleInit ?? "inherit",
+    // These change what gets provisioned and what the worktree's card shows, so
+    // two requests differing only here are still different requests.
+    provisionResource: payload.options.provisionResource ?? false,
+    worktreeMode: payload.options.worktreeMode ?? "local",
+    sourcePrNumber: payload.options.sourcePrNumber ?? null,
+    sourcePrLinkedIssueNumber: payload.options.sourcePrLinkedIssueNumber ?? null,
   });
 }
 
@@ -136,7 +153,7 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
 
   const handleWorktreeCreate = async (
     payload: z.output<typeof WorktreeCreatePayloadSchema>
-  ): Promise<string> => {
+  ): Promise<WorktreeCreateResult> => {
     // Semantic guard: rootPath flows into createHardenedGit at the service
     // layer and must be an absolute path. The schema enforces structure
     // (non-empty, no null bytes); absoluteness is checked here. #3742.
@@ -157,7 +174,7 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       return existingCreate;
     }
 
-    const createPromise = (async (): Promise<string> => {
+    const createPromise = (async (): Promise<WorktreeCreateResult> => {
       await waitForBurstRateLimitSlot(
         WORKTREE_RATE_LIMIT_KEY,
         WORKTREE_RATE_LIMIT_INTERVAL_MS,
@@ -166,10 +183,8 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       if (!deps.worktreeService) {
         throw new Error("Workspace client not initialized");
       }
-      const worktreeId = await deps.worktreeService.createWorktree(
-        payload.rootPath,
-        payload.options
-      );
+      const created = await deps.worktreeService.createWorktree(payload.rootPath, payload.options);
+      const { worktreeId } = created;
       try {
         fileSearchService.invalidate(payload.options.path);
       } catch (error) {
@@ -183,7 +198,7 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("worktree-create");
       }
-      return worktreeId;
+      return created;
     })();
 
     inFlightWorktreeCreateRequests.set(createKey, createPromise);

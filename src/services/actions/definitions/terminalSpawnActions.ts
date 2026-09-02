@@ -354,7 +354,7 @@ export function registerTerminalSpawnActions(
       // returns.
       if (ctx.dispatchSource === "agent") {
         throw new Error(
-          "terminal.moveToNewWorktree can't be dispatched by an agent or MCP client — it opens the new-worktree dialog, which a headless caller can never answer. Don't retry it. Create the worktree headlessly with `worktree.createWithRecipe` (pass `branchName`, and omit `recipeId` when no recipe is wanted), then call `terminal.moveToWorktree` with the original `terminalId` and the `worktreeId` it returns."
+          'terminal.moveToNewWorktree can\'t be dispatched by an agent or MCP client — it opens the new-worktree dialog, which a headless caller can never answer. Don\'t retry it. Create the worktree headlessly with `worktree.createWithRecipe` (pass `source: { kind: "newBranch", branchName: "..." }`, and omit `recipeId` when no recipe is wanted), then call `terminal.moveToWorktree` with the original `terminalId` and the `worktreeId` it returns.'
         );
       }
       const state = usePanelStore.getState();

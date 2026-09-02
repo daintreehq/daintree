@@ -680,7 +680,7 @@ export function NewWorktreeDialog({
           throw new Error(actionResult.error.message);
         }
 
-        const worktreeId = actionResult.result as string;
+        const { worktreeId } = actionResult.result as { worktreeId: string; branch: string };
         useWorktreeSelectionStore.getState().setPendingWorktree(worktreeId);
         useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
 

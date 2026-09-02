@@ -21,7 +21,28 @@ import {
 } from "../../shared/utils/gitOperationErrors.js";
 import { logWarn } from "../utils/logger.js";
 import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
-import type { Worktree, WslGitEligibility } from "../../shared/types/worktree.js";
+import type {
+  Worktree,
+  WorktreeSetupStatus,
+  WorktreeSetupState,
+  WslGitEligibility,
+} from "../../shared/types/worktree.js";
+
+/**
+ * What {@link WorkspaceService.runLifecycleSetup} learned, as a value rather
+ * than as mutable state a later phase can overwrite.
+ */
+/**
+ * What `createWorktree` produced: the canonical id AND the branch the host
+ * actually landed on after any collision recovery.
+ */
+interface CreatedWorktree {
+  worktreeId: string;
+  branch: string;
+  setupState: WorktreeSetupState;
+}
+
+type LifecycleSetupOutcome = { ok: true } | { ok: false; timedOut: boolean; error: string };
 import type {
   WorkspaceHostEvent,
   WorkspaceFetchResult,
@@ -490,7 +511,7 @@ export class WorkspaceService {
   // serialized reconciliation, the dark/recovered signal, and the
   // watcher-independent periodic safety net. See TopologyWatcher.ts.
   private readonly topologyWatcher: TopologyWatcher;
-  private readonly inFlightWorktreeCreates = new Map<string, Promise<string>>();
+  private readonly inFlightWorktreeCreates = new Map<string, Promise<CreatedWorktree>>();
   // Per-repo create chain: distinct creates on the same root run strictly
   // one-at-a-time, back to back. This enforces the no-concurrent-`git worktree
   // add` property (#5098 git lock contention) at the actual git boundary, so
@@ -2901,12 +2922,14 @@ export class WorkspaceService {
     const existingCreate = this.inFlightWorktreeCreates.get(createKey);
     if (existingCreate) {
       try {
-        const worktreeId = await existingCreate;
+        const created = await existingCreate;
         this.sendEvent({
           type: "create-worktree-result",
           requestId,
           success: true,
-          worktreeId,
+          worktreeId: created.worktreeId,
+          branch: created.branch,
+          setupState: created.setupState,
         });
       } catch (error) {
         this.sendEvent({
@@ -2923,12 +2946,14 @@ export class WorkspaceService {
     this.inFlightWorktreeCreates.set(createKey, createPromise);
 
     try {
-      const worktreeId = await createPromise;
+      const created = await createPromise;
       this.sendEvent({
         type: "create-worktree-result",
         requestId,
         success: true,
-        worktreeId,
+        worktreeId: created.worktreeId,
+        branch: created.branch,
+        setupState: created.setupState,
       });
     } catch (error) {
       this.sendEvent({
@@ -2944,7 +2969,10 @@ export class WorkspaceService {
     }
   }
 
-  private enqueueCreateWorktree(rootPath: string, options: CreateWorktreeOptions): Promise<string> {
+  private enqueueCreateWorktree(
+    rootPath: string,
+    options: CreateWorktreeOptions
+  ): Promise<CreatedWorktree> {
     const queueKey = this.normalizeCreateWorktreeKeyPath(pathResolve(rootPath));
     const prev = this.createWorktreeQueues.get(queueKey) ?? Promise.resolve();
     const run = prev.then(() => this.performCreateWorktree(rootPath, options));
@@ -2959,16 +2987,48 @@ export class WorkspaceService {
     return run;
   }
 
+  /**
+   * Identity of an in-flight create, for coalescing duplicate requests.
+   *
+   * EVERY option that changes what the create does is in the key, not just the
+   * three that name the destination. Coalescing is "these two callers asked for
+   * the same thing, so one answer serves both" — and it is only true if the
+   * requests really are the same. When the key was root/path/branch alone, a
+   * caller asking for `collisionPolicy: "error"` could be handed another
+   * caller's suffixed success (the exact outcome it asked to be refused), a
+   * different `submoduleInit` became first-request-wins, and `baseBranch` —
+   * which decides the commit the worktree is created AT — was ignored outright.
+   *
+   * Defaults are normalized so an explicit `false` and an omitted flag still
+   * coalesce, which is the case coalescing exists for.
+   */
   private getCreateWorktreeInFlightKey(rootPath: string, options: CreateWorktreeOptions): string {
     const absoluteCreatePath = isAbsolute(options.path)
       ? pathResolve(options.path)
       : pathResolve(rootPath, options.path);
-    const normalizedRootPath = this.normalizeCreateWorktreeKeyPath(pathResolve(rootPath));
-    const normalizedCreatePath = this.normalizeCreateWorktreeKeyPath(absoluteCreatePath);
-    const branchName =
-      typeof options.newBranch === "string" ? options.newBranch.trim() : String(options.newBranch);
 
-    return `${normalizedRootPath}\0${normalizedCreatePath}\0${branchName}`;
+    return JSON.stringify({
+      rootPath: this.normalizeCreateWorktreeKeyPath(pathResolve(rootPath)),
+      path: this.normalizeCreateWorktreeKeyPath(absoluteCreatePath),
+      newBranch:
+        typeof options.newBranch === "string"
+          ? options.newBranch.trim()
+          : String(options.newBranch),
+      baseBranch: options.baseBranch,
+      fromRemote: options.fromRemote ?? false,
+      useExistingBranch: options.useExistingBranch ?? false,
+      collisionPolicy: options.collisionPolicy ?? "suffix",
+      submoduleInit: options.submoduleInit ?? "inherit",
+      provisionResource: options.provisionResource ?? false,
+      worktreeMode: options.worktreeMode ?? "local",
+      // The PR seed fields change the monitor's linked-PR metadata, so two
+      // creates that differ only here still produce different worktrees.
+      sourcePrNumber: options.sourcePrNumber ?? null,
+      sourcePrLinkedIssueNumber: options.sourcePrLinkedIssueNumber ?? null,
+      sourcePrTitle: options.sourcePrTitle ?? null,
+      sourcePrUrl: options.sourcePrUrl ?? null,
+      sourcePrState: options.sourcePrState ?? null,
+    });
   }
 
   private normalizeCreateWorktreeKeyPath(pathValue: string): string {
@@ -2979,7 +3039,7 @@ export class WorkspaceService {
   private async performCreateWorktree(
     rootPath: string,
     options: CreateWorktreeOptions
-  ): Promise<string> {
+  ): Promise<CreatedWorktree> {
     // Hoisted so the catch can clear the pending entry even though
     // absoluteCreatePath is block-scoped to the try.
     let pendingCreateKey: string | null = null;
@@ -3112,6 +3172,22 @@ export class WorkspaceService {
           //     create a fresh branch.
           if (!isBranchAlreadyExistsError(addError)) throw addError;
 
+          // `collisionPolicy: "error"` opts out of the recovery below. The
+          // caller named a branch it needs, so producing `topic-2` — or
+          // silently checking out a stale `topic` left behind by an earlier
+          // worktree — is a wrong answer wearing a success. The add is atomic,
+          // so nothing has been created to unwind.
+          if (options.collisionPolicy === "error") {
+            throw new Error(
+              `Branch '${newBranch}' already exists and collisionPolicy is "error". ` +
+                `Choose a different branch name, pass collisionPolicy "suffix" to create ` +
+                `the next free name, or set useExistingBranch to check this branch out.`,
+              // git's own message is the evidence for this classification, so it
+              // travels with the symptom rather than being replaced by it.
+              { cause: addError }
+            );
+          }
+
           // The failed add produced no watcher event to suppress; release the
           // pending mark while the recovery probes run so an external create
           // of the same basename in this window isn't silently dropped, then
@@ -3210,6 +3286,14 @@ export class WorkspaceService {
       // We bypass syncMonitors here because syncMonitors treats its array as
       // authoritative and would remove every other non-main monitor.
       await this.addNewWorktreeMonitor(createdWorktree, isActive, true);
+      // Stamp `pending` before the create result goes out, so no caller can
+      // observe a worktree this process created without a setup status. An
+      // absent status means "some other process created this", and a caller
+      // that saw the create must never have to guess which it is looking at.
+      this.setWorktreeSetupStatus(canonicalWorktreeId, {
+        state: "pending",
+        startedAt: Date.now(),
+      });
       markHostPerformance("wtcreate.monitor-registered", { branch: newBranch });
 
       // Monitor is registered. Drop the pending entry now: any still-buffered
@@ -3289,34 +3373,115 @@ export class WorkspaceService {
       // Fire-and-forget tail: cache invalidation, .daintree copy, and
       // lifecycle setup are non-blocking for callers of create-worktree-result.
       // Tail failures are logged but never re-emit a result event.
+      const setupStartedAt = Date.now();
+      // Pinned so every write the tail makes can prove it is still talking to
+      // the worktree it was started for. Ids are paths, and
+      // delete-then-recreate at the same path is a supported workflow, so an id
+      // alone does not identify an incarnation.
+      const setupGeneration = this.monitors.get(canonicalWorktreeId)?.generation;
+      const setSetupStatus = (status: WorktreeSetupStatus): void =>
+        this.setWorktreeSetupStatus(canonicalWorktreeId, status, setupGeneration);
       void (async () => {
         // Invalidate first so any racing list() call after this emission
         // doesn't return a stale cached snapshot that excludes the new worktree.
         this.listService.invalidateCache(pathResolve(rootPath));
 
+        setSetupStatus({
+          state: "running",
+          stage: "copy-config",
+          startedAt: setupStartedAt,
+        });
         await this.lifecycleService.copyDaintreeDir(rootPath, canonicalPath);
 
-        // Awaited, and awaited HERE: `runLifecycleSetup` below is `void`-ed, so
-        // anything not finished before it starts races the user's setup script.
-        // A setup script running against an unpopulated submodule tree is the
-        // original "worktree is born unbuildable" bug wearing a different hat.
-        await this.initWorktreeSubmodules(
+        // Awaited, and awaited HERE: the setup script below must not start
+        // against an unpopulated submodule tree — the original "worktree is
+        // born unbuildable" bug wearing a different hat.
+        setSetupStatus({
+          state: "running",
+          stage: "submodules",
+          startedAt: setupStartedAt,
+        });
+        const submodules = await this.initWorktreeSubmodules(
           rootPath,
           canonicalPath,
           canonicalWorktreeId,
           options.submoduleInit ?? "inherit"
         );
+        // A submodule failure does NOT stop the tail: one unreachable private
+        // submodule must not leave the worktree completely unprovisioned, and
+        // there is no retry path for setup. But it does not throw either — it
+        // logs and returns — so without carrying it forward the tail reached
+        // the end, saw nothing wrong, and reported a demonstrably unbuildable
+        // tree as `ready`. It is remembered instead and settled below.
+        const submoduleFailure = submodules.ok ? undefined : submodules.error;
 
-        void this.runLifecycleSetup(
+        // Awaited rather than `void`-ed, which is the whole point of the setup
+        // status: without a completion signal here the tail had no moment at
+        // which it could honestly say the worktree was usable, and callers were
+        // left inferring it from a `lifecycleStatus` that is never written when
+        // a project declares no setup commands. Provisioning is inside this
+        // await too — an opt-in remote-worker worktree is not usable until its
+        // resource exists, and a caller watching `running` sees why it waits.
+        setSetupStatus({
+          state: "running",
+          stage: "setup-script",
+          startedAt: setupStartedAt,
+        });
+        const setup = await this.runLifecycleSetup(
           canonicalWorktreeId,
           canonicalPath,
           rootPath,
           options.provisionResource ?? options.worktreeMode === "remote-worker"
         );
+
+        // The verdict comes from what these steps RETURNED. Neither a submodule
+        // failure, nor a non-zero setup script, nor a failed auto-provision
+        // throws, so arriving here is not evidence of success.
+        //
+        // A submodule failure wins over a setup-script one when both happened:
+        // it came first, and a setup script failing against a half-populated
+        // tree is its consequence, not an independent problem.
+        const completedAt = Date.now();
+        if (submoduleFailure !== undefined) {
+          setSetupStatus({
+            state: "failed",
+            stage: "submodules",
+            startedAt: setupStartedAt,
+            completedAt,
+            error: submoduleFailure,
+          });
+        } else {
+          setSetupStatus(
+            setup.ok
+              ? { state: "ready", startedAt: setupStartedAt, completedAt }
+              : {
+                  state: setup.timedOut ? "timed-out" : "failed",
+                  stage: "setup-script",
+                  startedAt: setupStartedAt,
+                  completedAt,
+                  error: setup.error,
+                }
+          );
+        }
       })().catch((err) => {
         const message = formatErrorMessage(err, "createWorktree async tail failed");
         const stack = err instanceof Error ? err.stack : undefined;
         console.warn("[WorkspaceHost] createWorktree async tail failed:", err);
+        // A throw leaves the status on whichever stage was in flight, so the
+        // stage that failed is the one already recorded. Generation-guarded
+        // like the writes: a tail that outlived its worktree must not read a
+        // REPLACEMENT monitor's stage, and must not report the dead worktree's
+        // failure against the live one.
+        const live = this.monitors.get(canonicalWorktreeId);
+        if (live && setupGeneration !== undefined && live.generation !== setupGeneration) return;
+        const stage = live?.setupStatus?.stage;
+        setSetupStatus({
+          state: "failed",
+          ...(stage ? { stage } : {}),
+          startedAt: setupStartedAt,
+          completedAt: Date.now(),
+          error: message,
+        });
         this.sendEvent({
           type: "lifecycle-setup-error",
           worktreeId: canonicalWorktreeId,
@@ -3325,7 +3490,20 @@ export class WorkspaceService {
         });
       });
       markHostPerformance("wtcreate.host-end", { branch: newBranch });
-      return canonicalWorktreeId;
+      // `newBranch` is the branch the host actually landed on, which is not
+      // necessarily the one it was asked for: collision recovery can suffix it
+      // or switch to reusing a stale local branch. Reporting it is what lets a
+      // caller stop guessing — the alternative was reading it back out of the
+      // renderer store, which arrives over a DIFFERENT port than this result
+      // and therefore has no ordering relationship with it.
+      return {
+        worktreeId: canonicalWorktreeId,
+        branch: newBranch,
+        // Carried for the same reason as `branch`: the caller has no other
+        // race-free way to learn it. The stamp above happened before this
+        // return, so this is never absent for a worktree we just created.
+        setupState: this.monitors.get(canonicalWorktreeId)?.setupStatus?.state ?? "pending",
+      };
     } catch (error) {
       // Create failed — drop any pending entry so a real external change to
       // that name isn't masked, and cancel its safety valve.
@@ -3352,13 +3530,23 @@ export class WorkspaceService {
    * Not resumable across a workspace-host restart: a half-cloned module and a
    * stale `index.lock` are left as-is for the user's own git to resolve.
    */
+  /**
+   * Populate the new worktree's submodules.
+   *
+   * Reports its outcome rather than only logging one. A failure here is not
+   * fatal — the worktree exists and is checked out — but it leaves the tree
+   * unbuildable, which is exactly the condition `setupStatus` is supposed to
+   * name. Returning `void` meant the create tail had no way to learn about it
+   * and marked the worktree `ready`, and the only trace was an event nothing on
+   * the MCP surface reads.
+   */
   private async initWorktreeSubmodules(
     sourceRootPath: string,
     worktreePath: string,
     worktreeId: string,
     policy: SubmoduleInitPolicy
-  ): Promise<void> {
-    if (policy === "none") return;
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (policy === "none") return { ok: true };
     try {
       // Hardened rather than authenticated: this inherits `GIT_TERMINAL_PROMPT=0`
       // and a blanked `credential.helper`, so a private submodule fails fast
@@ -3377,11 +3565,11 @@ export class WorkspaceService {
       // in the catch below and surface as a visible error.
       if (typeof raw !== "string") throw new Error("`git ls-files` returned no readable output");
       const roster = [...new Set(parseIndexGitlinks(raw).map((entry) => entry.path))];
-      if (roster.length === 0) return;
+      if (roster.length === 0) return { ok: true };
 
       const paths =
         policy === "all" ? roster : await this.inheritedSubmodulePaths(sourceRootPath, roster);
-      if (paths.length === 0) return;
+      if (paths.length === 0) return { ok: true };
 
       // `--` (not `--end-of-options`, which `git submodule` does not accept)
       // keeps a leading-dash submodule path positional. `--recommend-shallow`
@@ -3407,6 +3595,7 @@ export class WorkspaceService {
         "--",
         ...paths,
       ]);
+      return { ok: true };
     } catch (error) {
       const message = `Submodule initialization failed: ${formatErrorMessage(error, "unknown failure")}`;
       logWarn(`[WorkspaceHost] ${message} (${worktreePath})`);
@@ -3416,6 +3605,7 @@ export class WorkspaceService {
         message,
         details: error instanceof Error ? error.stack : undefined,
       });
+      return { ok: false, error: message };
     }
   }
 
@@ -3459,13 +3649,56 @@ export class WorkspaceService {
     };
   }
 
+  /**
+   * Write a setup status onto a worktree's monitor and emit it.
+   *
+   * Silently does nothing when the monitor is gone — the create tail runs after
+   * the result has been returned, so the worktree can be deleted mid-tail and
+   * that is not an error.
+   *
+   * `expectedGeneration` guards the case that IS an error. Worktree ids are
+   * paths, and delete-then-recreate at the same path is a supported workflow,
+   * so an id alone does not identify an incarnation. Without the check, a tail
+   * still running for a deleted worktree would stamp its `running`, `failed` or
+   * `ready` onto the fresh monitor that replaced it — reporting the old
+   * worktree's setup outcome as the new one's. `generation` exists to tell the
+   * two apart.
+   */
+  private setWorktreeSetupStatus(
+    worktreeId: string,
+    status: WorktreeSetupStatus,
+    expectedGeneration?: number
+  ): void {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor) return;
+    if (expectedGeneration !== undefined && monitor.generation !== expectedGeneration) return;
+    monitor.setSetupStatus(status);
+    this.emitUpdate(monitor);
+  }
+
+  /**
+   * Run the setup script and, when configured, the auto-provision that follows
+   * it, and REPORT the outcome.
+   *
+   * The verdict is composed from what each step returns, never from reading
+   * `lifecycleStatus` back afterwards. That read is unsound as a completion
+   * signal in two ways this method exists to avoid: the field is one generic
+   * slot that a later phase overwrites (auto-provision writes
+   * `phase: "resource-provision"` over the setup result), and it is never
+   * written at all when the project declares no setup commands. Inferring
+   * "ready" from it therefore reported success both for a provision that failed
+   * and for a setup that never ran.
+   *
+   * Neither failure throws — a non-zero setup script and a failed provision both
+   * RESOLVE — so a caller that only catches learns nothing.
+   */
   private async runLifecycleSetup(
     worktreeId: string,
     worktreePath: string,
     projectRootPath: string,
     provisionResource?: boolean,
     environmentId?: string
-  ): Promise<void> {
+  ): Promise<LifecycleSetupOutcome> {
     const ctx: WorkspaceHostContext = this.getLifecycleContext() ?? {
       projectRootPath,
       projectEnvVars: this.projectEnvVars,
@@ -3481,9 +3714,34 @@ export class WorkspaceService {
       environmentId
     );
 
-    if (shouldProvision && this.projectRootPath) {
-      await this.runResourceAction(`auto-provision-${worktreeId}`, worktreeId, "provision");
+    // Read immediately, before auto-provision can overwrite the slot.
+    const settled = this.monitors.get(worktreeId)?.lifecycleStatus;
+    if (settled?.phase === "setup" && settled.state !== "success") {
+      if (settled.state === "failed" || settled.state === "timed-out") {
+        return {
+          ok: false,
+          timedOut: settled.state === "timed-out",
+          error: settled.error ?? "Setup script failed",
+        };
+      }
     }
+
+    if (shouldProvision && this.projectRootPath) {
+      const provision = await this.runResourceAction(
+        `auto-provision-${worktreeId}`,
+        worktreeId,
+        "provision"
+      );
+      if (!provision.success) {
+        return {
+          ok: false,
+          timedOut: false,
+          error: provision.error ?? "Resource provisioning failed",
+        };
+      }
+    }
+
+    return { ok: true };
   }
 
   /**
@@ -3509,14 +3767,81 @@ export class WorkspaceService {
     // request (rapid clicks, multi-window, retry-after-error) sees the in-flight
     // state and is rejected by the guard above. `runLifecycleSetup` re-sets the
     // same state with full command-progress metadata once config loads.
+    const startedAt = Date.now();
     monitor.setLifecycleStatus({
       phase: "setup",
       state: "running",
-      startedAt: Date.now(),
+      startedAt,
     });
+    // Kept in lockstep with the create tail's own transitions: a retry that
+    // left `setupStatus` reading `failed` while the script was demonstrably
+    // running again would make the readiness contract a lie the moment anyone
+    // used the retry affordance.
+    monitor.setSetupStatus({ state: "running", stage: "setup-script", startedAt });
     this.emitUpdate(monitor);
 
-    await this.runLifecycleSetup(worktreeId, monitor.path, this.projectRootPath, false);
+    let outcome: LifecycleSetupOutcome;
+    try {
+      outcome = await this.runLifecycleSetup(worktreeId, monitor.path, this.projectRootPath, false);
+    } catch (err) {
+      const message = formatErrorMessage(err, "Setup retry failed");
+      // BOTH statuses have to settle here. `runLifecycleSetup` writes the
+      // terminal `lifecycleStatus` itself on the paths it completes, but a
+      // throw skips that — and the guard above rejects a retry while
+      // `lifecycleStatus.state === "running"`, so leaving it running would make
+      // the FIRST failed retry the last one this worktree ever accepts.
+      const live = this.monitors.get(worktreeId);
+      if (live) {
+        live.setLifecycleStatus({
+          phase: "setup",
+          state: "failed",
+          startedAt,
+          completedAt: Date.now(),
+          error: message,
+        });
+      }
+      this.setWorktreeSetupStatus(worktreeId, {
+        state: "failed",
+        stage: "setup-script",
+        startedAt,
+        completedAt: Date.now(),
+        error: message,
+      });
+      throw err;
+    }
+
+    // Settle `lifecycleStatus` when the run left it running.
+    //
+    // The guard at the top of this method rejects a retry while that field
+    // reads `running`, and `lifecycleService.runLifecycleSetup` returns early
+    // WITHOUT writing any status when the project declares no setup commands —
+    // so the `running` stamped above was never replaced, and the first retry on
+    // such a project was the last one it would ever accept. The status is
+    // written here rather than by removing the pre-set, because the pre-set is
+    // what makes the guard reject a concurrent second request.
+    const live = this.monitors.get(worktreeId);
+    if (live?.lifecycleStatus?.phase === "setup" && live.lifecycleStatus.state === "running") {
+      live.setLifecycleStatus({
+        ...live.lifecycleStatus,
+        state: outcome.ok ? "success" : outcome.timedOut ? "timed-out" : "failed",
+        completedAt: Date.now(),
+        ...(outcome.ok ? {} : { error: outcome.error }),
+      });
+      this.emitUpdate(live);
+    }
+
+    this.setWorktreeSetupStatus(
+      worktreeId,
+      outcome.ok
+        ? { state: "ready", startedAt, completedAt: Date.now() }
+        : {
+            state: outcome.timedOut ? "timed-out" : "failed",
+            stage: "setup-script",
+            startedAt,
+            completedAt: Date.now(),
+            error: outcome.error,
+          }
+    );
   }
 
   private async runLifecycleTeardown(
