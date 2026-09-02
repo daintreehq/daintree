@@ -1001,8 +1001,20 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
           .array(z.number().int().positive())
           .min(FORGE_GET_PRS_MIN)
           .max(FORGE_GET_PRS_MAX)
+          // Uniqueness is enforced rather than tolerated, and it is enforced on
+          // BOTH surfaces. Without it the floor was not really a floor:
+          // `[9, 9, 9]` satisfied a minimum of 2 and then collapsed to a single
+          // lookup, so a caller could reach the plural tool with less work than
+          // the singular one does and get a one-entry answer back. `.refine`
+          // rejects it at dispatch; `.meta` puts `uniqueItems` in the generated
+          // JSON Schema, which `toWireSchema` does not strip, so a strict
+          // client refuses it before the call is ever made.
+          .refine((numbers) => new Set(numbers).size === numbers.length, {
+            message: "prNumbers must not contain duplicates",
+          })
+          .meta({ uniqueItems: true })
           .describe(
-            `The pull request numbers to fetch: at least ${FORGE_GET_PRS_MIN}, at most ${FORGE_GET_PRS_MAX}. Duplicates collapse. Use the singular lookup for one number.`
+            `The pull request numbers to fetch: at least ${FORGE_GET_PRS_MIN} DISTINCT numbers, at most ${FORGE_GET_PRS_MAX}. Use the singular lookup for one number.`
           ),
       }),
       examples: [

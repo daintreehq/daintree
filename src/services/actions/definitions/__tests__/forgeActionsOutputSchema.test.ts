@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import Ajv2020 from "ajv/dist/2020.js";
+import { z } from "zod";
 import type { ActionId } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
@@ -37,6 +38,16 @@ function registerAll(): ActionService {
     service.register(factory() as AnyActionDefinition);
   }
   return service;
+}
+
+function emitInputSchema(schema: z.ZodType): Record<string, unknown> {
+  return z.toJSONSchema(schema, {
+    io: "input",
+    unrepresentable: "any",
+    reused: "inline",
+    cycles: "ref",
+    target: "draft-2020-12",
+  }) as Record<string, unknown>;
 }
 
 function outputSchema(service: ActionService, id: string): Record<string, unknown> | undefined {
@@ -258,6 +269,42 @@ describe("forge PR read results validate against the advertised schema", () => {
         results: [{ number: 1, status: "found", pr: { ...PR, rawData: { node_id: "x" } } }],
       })
     ).toBe(false);
+  });
+});
+
+describe("forge.getPRs refuses a batch that is not really plural", () => {
+  // The DEFINITION, not the manifest entry: `service.get()` hands back the
+  // projected entry whose `inputSchema` is already JSON, and the runtime
+  // rejection lives on the zod schema behind it.
+  function argsSchema(): z.ZodType {
+    const registry: ActionRegistry = new Map();
+    registerForgeActions(registry, {} as ActionCallbacks);
+    const factory = registry.get("forge.getPRs" as ActionId);
+    if (!factory) throw new Error("forge.getPRs is not registered");
+    const def = factory() as AnyActionDefinition;
+    if (!def.argsSchema) throw new Error("forge.getPRs has no argsSchema");
+    return def.argsSchema as z.ZodType;
+  }
+
+  it("rejects duplicate numbers at dispatch", () => {
+    // Without this the floor was not a floor: `[9, 9, 9]` satisfied a minimum
+    // of 2 and then collapsed to ONE lookup, so the plural tool could be
+    // reached with less work than the singular one and answer with one entry.
+    expect(argsSchema().safeParse({ prNumbers: [9, 9, 9], cwd: "/repo" }).success).toBe(false);
+    expect(argsSchema().safeParse({ prNumbers: [9, 8, 9], cwd: "/repo" }).success).toBe(false);
+    expect(argsSchema().safeParse({ prNumbers: [9, 8], cwd: "/repo" }).success).toBe(true);
+  });
+
+  it("advertises uniqueItems, so a strict client refuses it before calling", () => {
+    // `toWireSchema` strips the value-range keywords but not `uniqueItems`, so
+    // unlike `minItems`/`maxItems` this one genuinely reaches the model's
+    // schema rather than only the prose.
+    const emitted = emitInputSchema(argsSchema()) as {
+      properties?: Record<string, { uniqueItems?: boolean; minItems?: number; maxItems?: number }>;
+    };
+    expect(emitted.properties?.prNumbers?.uniqueItems).toBe(true);
+    expect(emitted.properties?.prNumbers?.minItems).toBe(2);
+    expect(emitted.properties?.prNumbers?.maxItems).toBe(20);
   });
 });
 
