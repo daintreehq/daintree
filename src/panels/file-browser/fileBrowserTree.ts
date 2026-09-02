@@ -282,16 +282,26 @@ function matchesBasenameGlob(name: string, pattern: string): boolean {
   return p === pattern.length;
 }
 
+function createBasenameMatcher(patterns: readonly string[]): (name: string) => boolean {
+  const exact: string[] = [];
+  const globs: string[] = [];
+  for (const pattern of patterns) {
+    if (pattern.includes("*")) globs.push(pattern);
+    else exact.push(pattern);
+  }
+  return (name: string): boolean =>
+    exact.includes(name) || globs.some((pattern) => matchesBasenameGlob(name, pattern));
+}
+
 /**
  * Build the per-entry visibility predicate for one panel's current settings. A
  * `true` result means "show this entry".
  */
 export function createVisibilityFilter(visibility: FileVisibility): (name: string) => boolean {
   const { hideDotfiles, alwaysHiddenPatterns } = visibility;
+  const isJunk = createBasenameMatcher(alwaysHiddenPatterns);
   return (name: string): boolean => {
-    for (const pattern of alwaysHiddenPatterns) {
-      if (matchesBasenameGlob(name, pattern)) return false;
-    }
+    if (isJunk(name)) return false;
     if (hideDotfiles && name.startsWith(".")) return false;
     return true;
   };
@@ -332,8 +342,7 @@ export function countHiddenRows(
   let dotfiles = 0;
   let alwaysHidden = 0;
 
-  const isJunk = (name: string): boolean =>
-    alwaysHiddenPatterns.some((pattern) => matchesBasenameGlob(name, pattern));
+  const isJunk = createBasenameMatcher(alwaysHiddenPatterns);
 
   const walk = (dirPath: string, depth: number): void => {
     // The same depth bound `flattenTree` walks under, and for the same reason:
