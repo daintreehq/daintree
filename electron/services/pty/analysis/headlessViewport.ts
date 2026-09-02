@@ -27,6 +27,7 @@ interface CachedRawRow {
   hasExtendedAttrs: boolean;
   units: VisibleContentUnit[];
   collapsible: boolean[];
+  hash: number;
 }
 
 type CursorBuffer = {
@@ -214,7 +215,8 @@ function cacheRawRow(
   raw: RawBufferLine,
   cols: number,
   units: VisibleContentUnit[],
-  collapsible: boolean[]
+  collapsible: boolean[],
+  hash: number
 ): CachedRawRow {
   const cellCount = Math.min(cols, raw.length);
   const combined: Record<number, string | undefined> = {};
@@ -241,7 +243,34 @@ function cacheRawRow(
     hasExtendedAttrs,
     units,
     collapsible,
+    hash,
   };
+}
+
+function hashUnits(units: readonly VisibleContentUnit[]): number {
+  let hash = FNV_SEED;
+  for (const key of units) {
+    if (typeof key === "number") {
+      if (key <= 0xffff) {
+        hash ^= key;
+        hash = Math.imul(hash, FNV_PRIME);
+      } else {
+        const astral = key - 0x10000;
+        hash ^= 0xd800 + (astral >> 10);
+        hash = Math.imul(hash, FNV_PRIME);
+        hash ^= 0xdc00 + (astral & 0x3ff);
+        hash = Math.imul(hash, FNV_PRIME);
+      }
+    } else {
+      for (let i = 0; i < key.length; i += 1) {
+        hash ^= key.charCodeAt(i);
+        hash = Math.imul(hash, FNV_PRIME);
+      }
+    }
+    hash ^= HASH_UNIT_SEPARATOR;
+    hash = Math.imul(hash, FNV_PRIME);
+  }
+  return hash >>> 0;
 }
 
 /**
@@ -268,7 +297,8 @@ function cacheRawRow(
  */
 function buildViewportUnitsSnapshot(
   terminal: HeadlessTerminal | undefined,
-  rawRowCache?: Array<CachedRawRow | undefined>
+  rawRowCache?: Array<CachedRawRow | undefined>,
+  dirtyRows?: { start: number; end: number }
 ): VisibleContentSnapshot | undefined {
   if (!terminal) return undefined;
 
@@ -299,9 +329,17 @@ function buildViewportUnitsSnapshot(
     const cached = raw === undefined ? undefined : rawRowCache?.[rowIndex];
     let rowUnits: VisibleContentUnit[];
     let rowCollapsible: boolean[];
-    if (raw !== undefined && cached !== undefined && rawRowMatches(cached, raw, cols)) {
+    let rowHash: number;
+    const rowMayHaveChanged =
+      dirtyRows === undefined || (rowIndex >= dirtyRows.start && rowIndex <= dirtyRows.end);
+    if (
+      raw !== undefined &&
+      cached !== undefined &&
+      (!rowMayHaveChanged || rawRowMatches(cached, raw, cols))
+    ) {
       rowUnits = cached.units;
       rowCollapsible = cached.collapsible;
+      rowHash = cached.hash;
     } else {
       rowUnits = [];
       rowCollapsible = [];
@@ -420,36 +458,30 @@ function buildViewportUnitsSnapshot(
         rowCollapsible.push(collapsible);
         rowLastKey = key;
       }
+      rowHash = hashUnits(rowUnits);
       if (rawRowCache) {
         rawRowCache[rowIndex] =
-          raw === undefined ? undefined : cacheRawRow(raw, cols, rowUnits, rowCollapsible);
+          raw === undefined ? undefined : cacheRawRow(raw, cols, rowUnits, rowCollapsible, rowHash);
       }
     }
 
-    for (let index = 0; index < rowUnits.length; index += 1) {
-      const key = rowUnits[index]!;
-      if (lastKey === key && rowCollapsible[index]) continue;
-      units.push(key);
-      if (typeof key === "number") {
-        if (key <= 0xffff) {
-          hash ^= key;
-          hash = Math.imul(hash, FNV_PRIME);
-        } else {
-          const astral = key - 0x10000;
-          hash ^= 0xd800 + (astral >> 10);
-          hash = Math.imul(hash, FNV_PRIME);
-          hash ^= 0xdc00 + (astral & 0x3ff);
-          hash = Math.imul(hash, FNV_PRIME);
-        }
-      } else {
-        for (let i = 0; i < key.length; i += 1) {
-          hash ^= key.charCodeAt(i);
-          hash = Math.imul(hash, FNV_PRIME);
-        }
-      }
-      hash ^= HASH_UNIT_SEPARATOR;
-      hash = Math.imul(hash, FNV_PRIME);
-      lastKey = key;
+    // The hash is only a rejection hint: measureVisibleContentDelta confirms
+    // equal hashes with exact unit comparison. Fold cached per-row hashes so
+    // an invalidation does not re-hash every styled string in clean rows.
+    hash ^= rowHash;
+    hash = Math.imul(hash, FNV_PRIME);
+    hash ^= rowUnits.length;
+    hash = Math.imul(hash, FNV_PRIME);
+
+    const skipFirst =
+      rowUnits.length > 0 && lastKey === rowUnits[0] && rowCollapsible[0] === true ? 1 : 0;
+    if (skipFirst === 0) {
+      units.push(...rowUnits);
+    } else {
+      for (let index = 1; index < rowUnits.length; index += 1) units.push(rowUnits[index]!);
+    }
+    if (rowUnits.length > skipFirst) {
+      lastKey = rowUnits[rowUnits.length - 1];
     }
   }
 
@@ -462,13 +494,12 @@ function buildViewportUnitsSnapshot(
 
 /**
  * Generation-keyed cache over readVisibleActivitySnapshot (PERF-035). The
- * viewport can only change when the parser applies data or the terminal
- * resizes/reflows, yet the polling cycle re-extracted and re-hashed the full
- * rows×cols grid every 50ms tick per agent. Attach() subscribes to
- * onWriteParsed/onResize so any parse or resize invalidates; producers whose
- * write callbacks read the snapshot in the same job must call invalidate()
- * in that callback too, because xterm fires per-write callbacks before the
- * onWriteParsed event.
+ * viewport can only change when xterm requests rows be rendered or the
+ * terminal resizes/reflows, yet the polling cycle re-extracted and re-hashed
+ * the full rows×cols grid every 50ms tick per agent. Attach() subscribes to
+ * onRender/onResize; onRender fires before a write callback and identifies the
+ * inclusive viewport-row range that changed, so callback consumers see fresh
+ * content without a second full invalidation at onWriteParsed.
  *
  * Invalidated snapshots still reuse normalized rows whose raw xterm cell
  * words, combined strings, and extended underline styles are byte-for-byte
@@ -482,11 +513,22 @@ export class ViewportSnapshotCache {
   private snapshotN = -1;
   private snapshot: VisibleContentSnapshot | undefined;
   private rawRows: Array<CachedRawRow | undefined> = [];
+  private rawRowsBaseY = -1;
+  private rawRowsCols = -1;
+  private rawRowsViewportRows = -1;
+  private dirtyStart = 0;
+  private dirtyEnd = Number.POSITIVE_INFINITY;
   private disposables: Array<{ dispose: () => void }> = [];
 
   attach(terminal: HeadlessTerminal): void {
     this.detach();
-    this.disposables.push(terminal.onWriteParsed(() => this.invalidate()));
+    this.disposables.push(
+      terminal.onRender(({ start, end }) => {
+        this.dirtyStart = Math.min(this.dirtyStart, start);
+        this.dirtyEnd = Math.max(this.dirtyEnd, end);
+        this.invalidateSnapshot();
+      })
+    );
     this.disposables.push(terminal.onResize(() => this.invalidate()));
   }
 
@@ -500,10 +542,19 @@ export class ViewportSnapshotCache {
     }
     this.disposables = [];
     this.rawRows = [];
+    this.rawRowsBaseY = -1;
+    this.rawRowsCols = -1;
+    this.rawRowsViewportRows = -1;
     this.invalidate();
   }
 
   invalidate(): void {
+    this.dirtyStart = 0;
+    this.dirtyEnd = Number.POSITIVE_INFINITY;
+    this.invalidateSnapshot();
+  }
+
+  private invalidateSnapshot(): void {
     this.generation += 1;
     this.snapshot = undefined;
   }
@@ -516,13 +567,33 @@ export class ViewportSnapshotCache {
     ) {
       return this.snapshot;
     }
+    const buffer = terminal?.buffer.active;
+    if (
+      terminal &&
+      buffer &&
+      (this.rawRowsBaseY !== buffer.baseY ||
+        this.rawRowsCols !== terminal.cols ||
+        this.rawRowsViewportRows !== terminal.rows)
+    ) {
+      this.rawRows = [];
+      this.dirtyStart = 0;
+      this.dirtyEnd = Number.POSITIVE_INFINITY;
+      this.rawRowsBaseY = buffer.baseY;
+      this.rawRowsCols = terminal.cols;
+      this.rawRowsViewportRows = terminal.rows;
+    }
+    const dirtyRows = Number.isFinite(this.dirtyEnd)
+      ? { start: this.dirtyStart, end: this.dirtyEnd }
+      : undefined;
     const snapshot =
-      buildViewportUnitsSnapshot(terminal, this.rawRows) ??
+      buildViewportUnitsSnapshot(terminal, this.rawRows, dirtyRows) ??
       createVisibleContentSnapshot(readVisibleActivityLines(terminal, n));
     if (snapshot !== undefined) {
       this.snapshot = snapshot;
       this.snapshotGeneration = this.generation;
       this.snapshotN = n;
+      this.dirtyStart = Number.POSITIVE_INFINITY;
+      this.dirtyEnd = Number.NEGATIVE_INFINITY;
     }
     return snapshot;
   }

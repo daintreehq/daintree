@@ -162,10 +162,9 @@ export class AnalysisSession {
     }
 
     this.headlessTerminal.write(data, () => {
-      // Invalidate before noteAgentOutputActivity reads the viewport: xterm
-      // fires per-write callbacks before the onWriteParsed event the cache
-      // subscribes to, and a stale hit here would diff a pre-parse snapshot.
-      this.viewportSnapshotCache.invalidate();
+      // xterm's onRender event fires before this callback and invalidates only
+      // the viewport rows the parser changed, so the activity read below is
+      // fresh without forcing every unchanged row through comparison again.
       this.noteProcessed(data.length);
       this.noteAgentOutputActivity();
       this.scheduleDigest();
