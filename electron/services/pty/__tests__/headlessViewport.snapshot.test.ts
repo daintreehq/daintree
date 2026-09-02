@@ -308,6 +308,47 @@ describe("ViewportSnapshotCache (PERF-035)", () => {
     expect(cache.read(term, 15)).not.toBe(six);
   });
 
+  // Production runs DEFAULT_SCROLLBACK on long-lived agent terminals, so the
+  // steady state is a FULL buffer: baseY stops advancing and read()'s baseY
+  // guard never fires again, leaving the onRender dirty range as the only thing
+  // that stops scrolled-up rows being served from their old viewport slot.
+  // xterm covers it today (CoreTerminal wires bufferService.onScroll to
+  // markRangeDirty over the whole scroll region) but that is an internal, and
+  // an xterm bump could drop it without a word.
+  it("re-reads rows shifted by scrolling once the scrollback buffer is full", async () => {
+    const pinned = new HeadlessTerminal({
+      cols: 40,
+      rows: 6,
+      scrollback: 3,
+      allowProposedApi: true,
+    });
+    pinned.loadAddon(new Unicode11Addon());
+    pinned.unicode.activeVersion = "11";
+    const pinnedCache = new ViewportSnapshotCache();
+    pinnedCache.attach(pinned);
+
+    try {
+      for (let i = 0; i < 20; i += 1) {
+        await write(pinned, `row ${i} content\r\n`);
+      }
+      const pinnedBaseY = pinned.buffer.active.baseY;
+      pinnedCache.read(pinned, 200);
+
+      await write(pinned, "row 20 content\r\n");
+      expect(pinned.buffer.active.baseY).toBe(pinnedBaseY);
+
+      expect(
+        measureVisibleContentDelta(
+          pinnedCache.read(pinned, 200)!,
+          readVisibleActivitySnapshot(pinned, 200)!
+        )
+      ).toEqual({ changed: false, changedChars: 0 });
+    } finally {
+      pinnedCache.detach();
+      pinned.dispose();
+    }
+  });
+
   it("preserves the legacy delta sequence while unchanged raw rows are reused", async () => {
     let previousLegacy = legacySnapshot(term);
     let previousCached = cache.read(term, 15)!;
