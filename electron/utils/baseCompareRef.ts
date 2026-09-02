@@ -34,16 +34,25 @@ export interface BaseCompareRefGit {
 }
 
 /** `git remote` — names only, no URLs, no network. */
-export async function readRemotes(git: BaseCompareRefGit): Promise<string[]> {
+async function readRemotesWithStatus(
+  git: BaseCompareRefGit
+): Promise<{ availableRemotes: string[]; succeeded: boolean }> {
   try {
     const out = await git.raw(["remote"]);
-    return out
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
+    return {
+      availableRemotes: out
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0),
+      succeeded: true,
+    };
   } catch {
-    return [];
+    return { availableRemotes: [], succeeded: false };
   }
+}
+
+export async function readRemotes(git: BaseCompareRefGit): Promise<string[]> {
+  return (await readRemotesWithStatus(git)).availableRemotes;
 }
 
 /**
@@ -116,12 +125,29 @@ export async function gatherBaseCompareRefInputs(
   git: BaseCompareRefGit,
   baseBranch: string
 ): Promise<ResolveBaseCompareRefInputs> {
-  const availableRemotes = await readRemotes(git);
+  return (await gatherBaseCompareRefInputsWithRemoteStatus(git, baseBranch)).inputs;
+}
+
+/**
+ * The same resolver inputs plus whether an empty remote list is authoritative.
+ * Most callers intentionally fail soft and need only the inputs. Poll-loop
+ * callers may use the status to avoid an impossible remote probe without
+ * confusing a transient `git remote` failure with a repository that has no
+ * remotes.
+ */
+export async function gatherBaseCompareRefInputsWithRemoteStatus(
+  git: BaseCompareRefGit,
+  baseBranch: string
+): Promise<{ inputs: ResolveBaseCompareRefInputs; remotesReadSucceeded: boolean }> {
+  const { availableRemotes, succeeded: remotesReadSucceeded } = await readRemotesWithStatus(git);
   const trackedRef = await readSymbolicRef(git, `${baseBranch}@{upstream}`);
   const remotesWithBaseRef = trackedRef
     ? []
     : await readRemotesCarrying(git, baseBranch, availableRemotes);
-  return { baseBranch, trackedRef, remotesWithBaseRef, availableRemotes };
+  return {
+    inputs: { baseBranch, trackedRef, remotesWithBaseRef, availableRemotes },
+    remotesReadSucceeded,
+  };
 }
 
 /** A base ref that was confirmed to exist, named both ways. */
