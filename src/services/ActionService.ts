@@ -708,17 +708,19 @@ export class ActionService {
   list(ctx?: ActionContext, options?: { includeSchemas?: boolean }): ActionManifestEntry[] {
     const context = ctx ?? this.getActionContext();
     const includeSchemas = options?.includeSchemas !== false;
-    return Array.from(this.registry.values())
-      .filter((def) => def.danger !== "restricted")
-      .filter((def) => {
+    const entries: ActionManifestEntry[] = [];
+    for (const definition of this.registry.values()) {
+      if (definition.danger === "restricted") continue;
+      if (definition.isVisible) {
         try {
-          return def.isVisible?.(context) ?? true;
+          if (!(definition.isVisible(context) ?? true)) continue;
         } catch (err) {
-          logWarn("Action isVisible threw", { actionId: def.id, error: err });
-          return true;
+          logWarn("Action isVisible threw", { actionId: definition.id, error: err });
         }
-      })
-      .map((def) => this.toManifestEntry(def, context, includeSchemas));
+      }
+      entries.push(this.toManifestEntry(definition, context, includeSchemas));
+    }
+    return entries;
   }
 
   get(actionId: ActionId, ctx?: ActionContext): ActionManifestEntry | null {
@@ -815,7 +817,7 @@ export class ActionService {
     // spread only isolated the top level (issue #9569). structuredClone is safe
     // here: z.toJSONSchema finalizes through a JSON round-trip, so the cached
     // value has no cycles or non-cloneable shapes.
-    return {
+    const entry: ActionManifestEntry = {
       id: definition.id,
       name: definition.id,
       title: definition.title ?? "",
@@ -834,17 +836,18 @@ export class ActionService {
       disabledReason,
       requiresArgs,
       keywords: definition.keywords?.slice(),
-      ...(definition.mcpAnnotations ? { mcpAnnotations: { ...definition.mcpAnnotations } } : {}),
-      ...(definition.mcpVisibility ? { mcpVisibility: definition.mcpVisibility } : {}),
-      ...(definition.deprecated ? { deprecated: { ...definition.deprecated } } : {}),
-      ...(definition.pluginId ? { pluginId: definition.pluginId } : {}),
-      ...(definition.examples ? { examples: structuredClone(definition.examples) } : {}),
-      ...(definition.dangerRationale ? { dangerRationale: definition.dangerRationale } : {}),
-      ...(paletteHidden ? { paletteHidden } : {}),
-      ...(paletteRedirectTo ? { paletteRedirectTo } : {}),
-      ...(paletteDisabled ? { paletteDisabled } : {}),
-      ...(paletteDisabledReason ? { paletteDisabledReason } : {}),
     };
+    if (definition.mcpAnnotations) entry.mcpAnnotations = { ...definition.mcpAnnotations };
+    if (definition.mcpVisibility) entry.mcpVisibility = definition.mcpVisibility;
+    if (definition.deprecated) entry.deprecated = { ...definition.deprecated };
+    if (definition.pluginId) entry.pluginId = definition.pluginId;
+    if (definition.examples) entry.examples = structuredClone(definition.examples);
+    if (definition.dangerRationale) entry.dangerRationale = definition.dangerRationale;
+    if (paletteHidden) entry.paletteHidden = true;
+    if (paletteRedirectTo) entry.paletteRedirectTo = paletteRedirectTo;
+    if (paletteDisabled) entry.paletteDisabled = true;
+    if (paletteDisabledReason) entry.paletteDisabledReason = paletteDisabledReason;
+    return entry;
   }
 
   private getActionContext(): ActionContext {
