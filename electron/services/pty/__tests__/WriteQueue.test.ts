@@ -298,6 +298,41 @@ describe("WriteQueue.waitForOutputSettle", () => {
     }
     expect(resolved).toBe(true);
   });
+
+  it("caps the final poll at the remaining debounce and max-wait windows", async () => {
+    const debounceOptions = makeOptions();
+    const debounceQueue = new WriteQueue(debounceOptions.options);
+    let debounceResolved = false;
+    void debounceQueue
+      .waitForOutputSettle({ debounceMs: 100, maxWaitMs: 1000, pollMs: 60 })
+      .then(() => {
+        debounceResolved = true;
+      });
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(debounceResolved).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(debounceResolved).toBe(true);
+
+    const maxWaitOptions = makeOptions();
+    maxWaitOptions.lastOutputTime.value = Date.now();
+    const maxWaitQueue = new WriteQueue(maxWaitOptions.options);
+    let maxWaitResolved = false;
+    void maxWaitQueue
+      .waitForOutputSettle({ debounceMs: 500, maxWaitMs: 200, pollMs: 75 })
+      .then(() => {
+        maxWaitResolved = true;
+      });
+
+    for (let elapsed = 0; elapsed < 199; elapsed += 25) {
+      maxWaitOptions.lastOutputTime.value = Date.now();
+      await vi.advanceTimersByTimeAsync(Math.min(25, 199 - elapsed));
+    }
+    expect(maxWaitResolved).toBe(false);
+    maxWaitOptions.lastOutputTime.value = Date.now();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(maxWaitResolved).toBe(true);
+  });
 });
 
 // #11875. The slow-submit timer reports; it does not release the submit lane.

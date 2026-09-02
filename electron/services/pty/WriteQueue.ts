@@ -106,11 +106,18 @@ export class WriteQueue {
     const startWait = Date.now();
     while (true) {
       if (this.disposed || this.options.isExited()) return;
+      const now = Date.now();
       const settleFrom = Math.max(startWait, this.options.lastOutputTime());
-      const timeSinceOutput = Date.now() - settleFrom;
+      const timeSinceOutput = now - settleFrom;
       if (timeSinceOutput >= opts.debounceMs) return;
-      if (Date.now() - startWait > opts.maxWaitMs) return;
-      await new Promise((r) => setTimeout(r, opts.pollMs));
+      const timeSinceStart = now - startWait;
+      if (timeSinceStart >= opts.maxWaitMs) return;
+      const nextPollMs = Math.min(
+        opts.pollMs,
+        opts.debounceMs - timeSinceOutput,
+        opts.maxWaitMs - timeSinceStart
+      );
+      await new Promise((r) => setTimeout(r, nextPollMs));
     }
   }
 
