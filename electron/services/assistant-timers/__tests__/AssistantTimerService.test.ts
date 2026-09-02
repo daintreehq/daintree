@@ -82,7 +82,7 @@ describe("reading a project's timers with no engine running", () => {
       payload: { timers: [VIEW], outcomes: [], takenAtMs: 42 },
     }));
     const service = new AssistantTimerService();
-    service.rememberEndpoint("p1", { socketPath, stateDir: dir });
+    service.rememberEndpoint("p1", 0, { socketPath, stateDir: dir });
 
     const result = await service.list("p1");
     expect(result.available).toBe(true);
@@ -113,7 +113,7 @@ describe("reading a project's timers with no engine running", () => {
     // The failure this whole field exists to prevent: a socket that is not there
     // rendering as "you have no timers".
     const service = new AssistantTimerService();
-    service.rememberEndpoint("p1", { socketPath, stateDir: dir });
+    service.rememberEndpoint("p1", 0, { socketPath, stateDir: dir });
     const result = await service.list("p1");
     expect(result.available).toBe(false);
     expect(result.timers).toEqual([]);
@@ -131,7 +131,7 @@ describe("reading a project's timers with no engine running", () => {
     // answer, and the caller's cue to route there instead.
     await daemon(() => ({ ok: false, error: "this daemon is not holding the project" }));
     const service = new AssistantTimerService();
-    service.rememberEndpoint("p1", { socketPath, stateDir: dir });
+    service.rememberEndpoint("p1", 0, { socketPath, stateDir: dir });
     const result = await service.list("p1");
     expect(result.available).toBe(false);
     expect(result.reason).toContain("not holding the project");
@@ -140,7 +140,7 @@ describe("reading a project's timers with no engine running", () => {
   it("distinguishes a daemon that answers with nothing from one that cannot answer", async () => {
     await daemon(() => ({ ok: true, payload: { timers: [], outcomes: [], takenAtMs: 7 } }));
     const service = new AssistantTimerService();
-    service.rememberEndpoint("p1", { socketPath, stateDir: dir });
+    service.rememberEndpoint("p1", 0, { socketPath, stateDir: dir });
     const result = await service.list("p1");
     // Available with nothing in it: the project genuinely has no pending work.
     expect(result.available).toBe(true);
@@ -167,7 +167,7 @@ describe("cancelling with no engine running", () => {
       };
     });
     const service = new AssistantTimerService();
-    service.rememberEndpoint("p1", { socketPath, stateDir: dir });
+    service.rememberEndpoint("p1", 0, { socketPath, stateDir: dir });
 
     const result = await service.cancel("p1", "tmr_1");
     expect(seen).toEqual({ type: "timer_cancel", payload: { timerId: "tmr_1" } });
@@ -179,7 +179,7 @@ describe("cancelling with no engine running", () => {
   // occur must never settle as though it had.
   it("throws when there is no daemon to cancel through", async () => {
     const service = new AssistantTimerService();
-    service.rememberEndpoint("p1", { socketPath, stateDir: dir });
+    service.rememberEndpoint("p1", 0, { socketPath, stateDir: dir });
     await expect(service.cancel("p1", "tmr_1")).rejects.toBeInstanceOf(DaemonUnavailableError);
   });
 
@@ -192,7 +192,7 @@ describe("cancelling with no engine running", () => {
   it("throws the daemon's own refusal", async () => {
     await daemon(() => ({ ok: false, error: "no timer with id tmr_gone" }));
     const service = new AssistantTimerService();
-    service.rememberEndpoint("p1", { socketPath, stateDir: dir });
+    service.rememberEndpoint("p1", 0, { socketPath, stateDir: dir });
     await expect(service.cancel("p1", "tmr_gone")).rejects.toThrow("no timer with id tmr_gone");
   });
 });
@@ -202,14 +202,14 @@ describe("the endpoint the engine reports", () => {
     // Nothing to remember is better than a half-entry that later resolves to a path
     // that was never real.
     const service = new AssistantTimerService();
-    service.rememberEndpoint("p1", { stateDir: "/tmp/x" });
+    service.rememberEndpoint("p1", 0, { stateDir: "/tmp/x" });
     expect(service.endpointFor("p1")).toBeUndefined();
   });
 
   it("is replaced when an engine reports a new one", () => {
     const service = new AssistantTimerService();
-    service.rememberEndpoint("p1", { socketPath: "/tmp/a.sock", stateDir: "/a" });
-    service.rememberEndpoint("p1", { socketPath: "/tmp/b.sock", stateDir: "/b" });
+    service.rememberEndpoint("p1", 0, { socketPath: "/tmp/a.sock", stateDir: "/a" });
+    service.rememberEndpoint("p1", 0, { socketPath: "/tmp/b.sock", stateDir: "/b" });
     expect(service.endpointFor("p1")?.socketPath).toBe("/tmp/b.sock");
   });
 });
