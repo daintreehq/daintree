@@ -665,24 +665,33 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const workingTreeChangedAtChanged =
         workingTreeChangedAtById !== prevState.workingTreeChangedAtById;
 
+      // Replace with the complete state so Zustand does not merge into a second object.
       if (existing && snapshotsEqual(existing, merged)) {
-        set({
-          version,
-          ...(statusCheckedAtChanged ? { statusCheckedAt } : {}),
-          ...(workingTreeChangedAtChanged ? { workingTreeChangedAtById } : {}),
-          ...(tombstonesChanged ? { tombstones } : {}),
-        });
+        set(
+          {
+            ...prevState,
+            version,
+            ...(statusCheckedAtChanged ? { statusCheckedAt } : {}),
+            ...(workingTreeChangedAtChanged ? { workingTreeChangedAtById } : {}),
+            ...(tombstonesChanged ? { tombstones } : {}),
+          },
+          true
+        );
         return true;
       }
       const next = new Map(prev);
       next.set(state.id, merged);
-      set({
-        worktrees: next,
-        version,
-        ...(statusCheckedAtChanged ? { statusCheckedAt } : {}),
-        ...(workingTreeChangedAtChanged ? { workingTreeChangedAtById } : {}),
-        ...(tombstonesChanged ? { tombstones } : {}),
-      });
+      set(
+        {
+          ...prevState,
+          worktrees: next,
+          version,
+          ...(statusCheckedAtChanged ? { statusCheckedAt } : {}),
+          ...(workingTreeChangedAtChanged ? { workingTreeChangedAtById } : {}),
+          ...(tombstonesChanged ? { tombstones } : {}),
+        },
+        true
+      );
       return true;
     },
 
