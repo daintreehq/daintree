@@ -924,14 +924,17 @@ export function buildToolInputSchema(entry: ActionManifestEntry): Record<string,
     !Array.isArray(entry.inputSchema) &&
     entry.inputSchema["type"] === "object"
   ) {
-    return {
-      ...(toWireSchema(entry.inputSchema) as Record<string, unknown>),
-      additionalProperties: false,
-    };
+    const { ["$schema"]: _dialect, ...projected } = toWireSchema(entry.inputSchema) as Record<
+      string,
+      unknown
+    >;
+    // MCP already fixes the input schema dialect. Repeating its URI on every
+    // tool adds no instruction or validation, but is billed on every turn.
+    projected["additionalProperties"] = false;
+    return projected;
   }
   return {
     type: "object",
-    properties: {},
     additionalProperties: false,
   };
 }
