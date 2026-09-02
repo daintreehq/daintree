@@ -48,6 +48,19 @@ export interface AssistantHostStartPayload {
   projectId: string;
   /** Project root; the engine's working directory. */
   cwd: string;
+  /**
+   * Which parallel session this is (#12108) — a lane, in `assistantSlots` terms.
+   *
+   * Unlike the tier, this one IS the renderer's to choose: a lane is a piece of the
+   * user's own window layout, and every lane runs at the same authority under the same
+   * bearer rules. Main still validates it against the slot ceiling and resolves an
+   * out-of-range value down to the default lane, because the slot decides the engine's
+   * state namespace and a namespace outside the known set is one nothing collects.
+   *
+   * Omitted means slot 0, so a caller that predates lanes means the single session a
+   * project used to have.
+   */
+  slot?: number;
 }
 
 /**

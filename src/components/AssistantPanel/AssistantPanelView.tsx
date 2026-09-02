@@ -1582,6 +1582,10 @@ export function AssistantPanelView({
                   approval={approval}
                   onDecide={onDecideApproval}
                   onGrant={onGrantTool}
+                  // A card that mounts in a background parallel session cannot take the
+                  // keys — nothing under a hidden ancestor is focusable — so it waits
+                  // for the tab to be selected and claims them then.
+                  visible={visible}
                 />
               ))}
             </div>

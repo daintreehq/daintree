@@ -1,8 +1,10 @@
 import { useCallback, useMemo } from "react";
+import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { AssistantPanelView } from "./AssistantPanelView";
 import { useAssistantSession } from "./useAssistantSession";
-import { useAssistantStore, type AssistantSessionState } from "@/store/assistantStore";
+import { assistantStoreForSlot, type AssistantSessionState } from "@/store/assistantStore";
+import { DEFAULT_ASSISTANT_SLOT } from "@shared/config/assistantSlots";
 import type { AssistantReference } from "./AssistantMessage";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { actionService } from "@/services/ActionService";
@@ -20,6 +22,14 @@ import { useAssistantTimerNotificationsFromStore } from "./useAssistantTimerNoti
 
 export interface AssistantPanelProps {
   projectId: string | null;
+  /**
+   * Which parallel session (#12108) this panel is.
+   *
+   * One number decides everything lane-shaped: the engine's state namespace in main,
+   * the store the transcript reduces into, and the composer's draft key. Defaults to
+   * the lane every install had before parallel sessions existed.
+   */
+  slot?: number;
   /** Project root; the engine's working directory. */
   projectPath: string | null;
   /** False while the panel is closed — the engine is not started. */
@@ -50,6 +60,7 @@ export interface AssistantPanelProps {
 
 export function AssistantPanel({
   projectId,
+  slot = DEFAULT_ASSISTANT_SLOT,
   projectPath,
   active,
   visible = true,
@@ -58,6 +69,11 @@ export function AssistantPanel({
   onOperationsOpenChange,
   className,
 }: AssistantPanelProps) {
+  // This lane's store. Every read and write below goes through it rather than through
+  // a module singleton, which is what lets two sessions run side by side without either
+  // one's turns, approvals or spend landing in the other's transcript.
+  const store = assistantStoreForSlot(slot);
+
   const {
     submit,
     interrupt,
@@ -76,6 +92,7 @@ export function AssistantPanel({
     // nothing by itself; only a turn is billable, and no turn runs before the user types.
     enabled: active,
     restartNonce,
+    slot,
   });
 
   // Select the DATA half of the store. `useShallow` keeps the panel from re-rendering
@@ -88,19 +105,20 @@ export function AssistantPanel({
       // them. Storing the full count here and then approving would authorise one more
       // than the button offered.
       const remaining = uses === Number.POSITIVE_INFINITY ? uses : uses - 1;
-      if (remaining > 0) useAssistantStore.getState().grantTool(approval.grantKey, remaining);
+      if (remaining > 0) store.getState().grantTool(approval.grantKey, remaining);
       decideApproval(approval.approvalId, "approved");
     },
-    [decideApproval]
+    [decideApproval, store]
   );
 
   // Stable identity: the store's actions never change, so this cannot re-trigger the
   // composer's drain effect.
   const takeRetractedDraft = useCallback(() => {
-    useAssistantStore.getState().takeRetractedDraft();
-  }, []);
+    store.getState().takeRetractedDraft();
+  }, [store]);
 
-  const state = useAssistantStore(
+  const state = useStore(
+    store,
     useShallow((s) => ({
       sessionId: s.sessionId,
       connection: s.connection,
@@ -145,7 +163,7 @@ export function AssistantPanel({
   // Mounted here rather than in the view, because the view is replaced by the deck
   // and a timer firing must be announced whether or not anyone is looking at the
   // list. This component lives for the whole armed session.
-  useAssistantTimerNotificationsFromStore(requestTimers);
+  useAssistantTimerNotificationsFromStore(requestTimers, store);
 
   const snapshot = useMemo<AssistantSessionState>(() => state, [state]);
 
@@ -193,7 +211,7 @@ export function AssistantPanel({
         console.warn("[assistant] could not open the reference", reference, detail);
         const label = reference.kind === "pr" ? "pull request" : "issue";
         const list = reference.kind === "pr" ? "pull requests" : "issues";
-        useAssistantStore
+        store
           .getState()
           .pushNotice(
             "warning",
@@ -215,7 +233,7 @@ export function AssistantPanel({
           .catch(reportFailure)
       );
     },
-    [projectPath]
+    [projectPath, store]
   );
 
   return (
@@ -241,6 +259,12 @@ export function AssistantPanel({
       // search. Nothing failed loudly; the completion menu simply never had anything
       // to offer.
       cwd={projectPath}
+      // Per lane, so two sessions do not share one draft. Slot 0 keeps the historical
+      // id, which is what stops an in-progress message disappearing on upgrade — the
+      // draft store is keyed by this string and a renamed key reads as an empty box.
+      composerId={
+        slot === DEFAULT_ASSISTANT_SLOT ? "daintree-assistant" : `daintree-assistant-s${slot}`
+      }
       onActivateReference={activateReference}
       forgeAvailable={forgeAvailable}
       className={className}

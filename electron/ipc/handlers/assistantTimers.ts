@@ -5,6 +5,20 @@ import type {
   DaemonTimerCancelResult,
   ProjectTimersResult,
 } from "../../../shared/types/ipc/assistantTimers.js";
+import {
+  DEFAULT_ASSISTANT_SLOT,
+  isValidAssistantSlot,
+} from "../../../shared/config/assistantSlots.js";
+
+/**
+ * Which parallel lane (#12108) the caller means, defaulting to the lane every install
+ * had before lanes existed. An out-of-range value resolves DOWN to that lane rather
+ * than throwing: this route already answers "could not be asked" rather than failing,
+ * and a bad slot is the same class of answer.
+ */
+function normalizeSlot(slot: unknown): number {
+  return isValidAssistantSlot(slot) ? slot : DEFAULT_ASSISTANT_SLOT;
+}
 
 /**
  * The DETACHED route to a project's durable timers.
@@ -34,9 +48,9 @@ export const assistantTimersNamespace = defineIpcNamespace({
      */
     list: op(
       ASSISTANT_TIMERS_METHOD_CHANNELS.list,
-      async (projectId: string): Promise<ProjectTimersResult> => {
+      async (projectId: string, slot?: number): Promise<ProjectTimersResult> => {
         if (typeof projectId !== "string" || !projectId) throw new Error("Invalid projectId");
-        return assistantHostService.timers.list(projectId);
+        return assistantHostService.timers.list(projectId, normalizeSlot(slot));
       }
     ),
     /**
@@ -50,10 +64,14 @@ export const assistantTimersNamespace = defineIpcNamespace({
      */
     cancel: op(
       ASSISTANT_TIMERS_METHOD_CHANNELS.cancel,
-      async (projectId: string, timerId: string): Promise<DaemonTimerCancelResult> => {
+      async (
+        projectId: string,
+        timerId: string,
+        slot?: number
+      ): Promise<DaemonTimerCancelResult> => {
         if (typeof projectId !== "string" || !projectId) throw new Error("Invalid projectId");
         if (typeof timerId !== "string" || !timerId) throw new Error("Invalid timerId");
-        return assistantHostService.timers.cancel(projectId, timerId);
+        return assistantHostService.timers.cancel(projectId, timerId, normalizeSlot(slot));
       }
     ),
   },

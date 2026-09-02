@@ -39,6 +39,16 @@ export interface AssistantApprovalCardProps {
    * actions never are, and the panel does not get to decide otherwise.
    */
   onGrant?: (approval: AssistantApproval, uses: number) => void;
+  /**
+   * Whether this card's panel is on screen.
+   *
+   * The card takes the keyboard on sight, and a hidden element cannot be focused — so a
+   * card that mounts in a background parallel session (#12108) silently fails to claim
+   * the keys and never tries again, leaving Y/N/A/F dead on a sheet that looks live once
+   * the user switches to that tab. Defaults to true so a caller that does not know is
+   * treated as visible, which is the behaviour that shipped.
+   */
+  visible?: boolean;
 }
 
 /** Uses a bounded grant covers, matching the cockpit's own "A allow 5×". */
@@ -126,7 +136,12 @@ function approveLabel(toolId: string): string {
   }
 }
 
-export function AssistantApprovalCard({ approval, onDecide, onGrant }: AssistantApprovalCardProps) {
+export function AssistantApprovalCard({
+  approval,
+  onDecide,
+  onGrant,
+  visible = true,
+}: AssistantApprovalCardProps) {
   const [typed, setTyped] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -172,6 +187,9 @@ export function AssistantApprovalCard({ approval, onDecide, onGrant }: Assistant
   );
 
   useEffect(() => {
+    // Nothing under a hidden ancestor is focusable, so a background lane's card would
+    // spend its one attempt on a no-op. Re-run on reveal instead of trying now.
+    if (!visible) return;
     // Focus the field the decision actually depends on. Without this the keyboard
     // lands on the first button, where Enter would approve — the opposite of the
     // friction a typed confirmation exists to add.
@@ -184,7 +202,7 @@ export function AssistantApprovalCard({ approval, onDecide, onGrant }: Assistant
     // keys, where Escape DECLINES THE TOOL". Single-key controls that only work after
     // you happen to click the card are controls most people never find.
     cardRef.current?.focus();
-  }, [approval.needsTypedConfirm, approval.approvalId]);
+  }, [approval.needsTypedConfirm, approval.approvalId, visible]);
 
   /**
    * The cockpit's single-key controls (render_approval.go renderActionRows): Y approve,

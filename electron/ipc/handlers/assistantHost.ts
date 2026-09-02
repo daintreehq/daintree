@@ -18,8 +18,9 @@ export const assistantHostNamespace = defineIpcNamespace({
   name: "assistantHost",
   ops: {
     /**
-     * Starts an engine for a project, displacing any existing one, and returns the
-     * session id the renderer will see on every subsequent event.
+     * Starts an engine for one of a project's lanes, displacing any existing engine on
+     * THAT lane, and returns the session id the renderer will see on every subsequent
+     * event. Sibling lanes are untouched — that is what makes parallel sessions work.
      *
      * The owning view comes from the IPC context, not the payload — see below.
      */
@@ -46,6 +47,10 @@ export const assistantHostNamespace = defineIpcNamespace({
         return assistantHostService.start({
           projectId: payload.projectId,
           cwd: payload.cwd,
+          // The lane. Unlike the two identities below this one is the renderer's to
+          // name — it is a piece of the window's own layout, not a permission — and
+          // `startLocked` resolves anything out of range down to the default lane.
+          slot: payload.slot,
           // BOTH identities come from the IPC CONTEXT, never the payload. A renderer
           // must not be able to nominate which view an assistant session — and
           // therefore its approval prompts — gets delivered to.
