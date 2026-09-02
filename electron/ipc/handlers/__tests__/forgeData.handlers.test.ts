@@ -1200,7 +1200,9 @@ describe("registerForgeDataHandlers", () => {
       const result = await handler()({}, { cwd: "/repo", numbers: [1, 2, 3] });
       expect(result).toEqual([
         { number: 1, status: "found", pr: makePR(1) },
-        { number: 2, status: "unresolved", reason: "provider_error" },
+        // No batch capability and the per-number fallback did not land either,
+        // which is what `provider_unsupported` is advertised to mean.
+        { number: 2, status: "unresolved", reason: "provider_unsupported" },
         { number: 3, status: "found", pr: makePR(3) },
       ]);
     });

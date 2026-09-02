@@ -146,10 +146,16 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
           const result = await actionService.dispatch(
             "worktree.createWithRecipe",
             {
-              source: { kind: "newBranch" as const, branchName },
+              // `issueNumber` and `assignToSelf` belong to the source arm, not
+              // the root: the root object strips unknown keys, so anything left
+              // at the top level never reaches `run()`.
+              source: {
+                kind: "newBranch" as const,
+                branchName,
+                issueNumber,
+                assignToSelf: shouldAssign,
+              },
               recipeId: recipe.id,
-              issueNumber,
-              assignToSelf: shouldAssign,
             },
             { source: "user", confirmed: true }
           );

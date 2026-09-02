@@ -273,7 +273,7 @@ const ForgePRLookupResultSchema = z.discriminatedUnion("status", [
     reason: z
       .enum(["provider_unsupported", "provider_error"])
       .describe(
-        "Why nothing was learned. `provider_error` is a failed or rate-limited request; `provider_unsupported` means even the per-number fallback could not be attempted. Both are retriable."
+        "Why nothing was learned. `provider_error` is a failed or rate-limited request; `provider_unsupported` adds that the provider has no batch lookup at all. Both are retriable."
       ),
   }),
 ]);

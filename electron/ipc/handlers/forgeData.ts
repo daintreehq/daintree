@@ -680,7 +680,11 @@ async function handleForgeGetPRsByNumbers(payload: {
         const pr = await impl.getPR(repoRef, n);
         results.push(pr ? { number: n, status: "found", pr } : { number: n, status: "not_found" });
       } catch {
-        results.push({ number: n, status: "unresolved", reason: "provider_error" });
+        // `provider_unsupported`, not `provider_error`: this provider has no
+        // batch lookup at all and the per-number fallback did not land either,
+        // which is exactly the case the reason is defined for. Reporting it as
+        // `provider_error` here left the advertised value unreachable.
+        results.push({ number: n, status: "unresolved", reason: "provider_unsupported" });
       }
     }
     return results;
