@@ -15,6 +15,11 @@ import { FileVideoPreview } from "../FileVideoPreview";
 const fetchMock = vi.fn();
 const createObjectURL = vi.fn();
 const revokeObjectURL = vi.fn();
+// `vi.unstubAllGlobals()` does not restore a directly assigned method, and
+// `mockReset()` leaves this one handing back `undefined` — enough to poison a
+// later file sharing the fork.
+const realCreateObjectURL = URL.createObjectURL;
+const realRevokeObjectURL = URL.revokeObjectURL;
 
 function respondWith(blob: Blob, headers: Record<string, string> = {}) {
   fetchMock.mockResolvedValue({
@@ -51,6 +56,8 @@ afterEach(() => {
   fetchMock.mockReset();
   createObjectURL.mockReset();
   revokeObjectURL.mockReset();
+  URL.createObjectURL = realCreateObjectURL;
+  URL.revokeObjectURL = realRevokeObjectURL;
 });
 
 describe("FileVideoPreview", () => {
@@ -260,10 +267,34 @@ describe("FileVideoPreview", () => {
     expect(onPlayingChange).toHaveBeenLastCalledWith(false);
 
     // The spec leaves `paused` false at the end of a track, so `ended` is the
-    // only thing that says playback stopped here.
+    // only thing that says playback stopped here. Cleared first: `pause` above
+    // already left `false` as the last call, so asserting on that alone would
+    // stay green with the `onEnded` handler deleted outright.
+    onPlayingChange.mockClear();
     setPlaybackState(element, { paused: false, ended: true });
     fireEvent.ended(element);
-    expect(onPlayingChange).toHaveBeenLastCalledWith(false);
+    expect(onPlayingChange).toHaveBeenCalledTimes(1);
+    expect(onPlayingChange).toHaveBeenCalledWith(false);
+  });
+
+  it("reports nothing when no owner is listening", async () => {
+    // DiffPane renders this leaf without the prop; an unconditional call rather
+    // than optional chaining would throw the moment anyone pressed play.
+    respondWith(new Blob(["x"]));
+    const { container, unmount } = render(
+      <FileVideoPreview filePath="/repo/demo.mp4" rootPath="/repo" label="demo.mp4" />
+    );
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+    const element = container.querySelector("video")!;
+
+    setPlaybackState(element, { paused: false });
+    expect(() => {
+      fireEvent.play(element);
+      fireEvent.pause(element);
+      fireEvent.ended(element);
+      fireEvent.error(element);
+      unmount();
+    }).not.toThrow();
   });
 
   it("takes a reported play back when the source is replaced", async () => {

@@ -677,38 +677,6 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
     });
   });
 
-  it("rides the media nonce, not the surface one a paused-for-playback reveal still moves (#12165)", async () => {
-    // The whole point of the split: a reveal that finds a player running keeps
-    // the media nonce still while `revision` and `surfaceRefreshNonce` move on
-    // for the text re-read and the PDF frame. Wire media back to
-    // `surfaceRefreshNonce` and this goes red.
-    let objectUrlSequence = 0;
-    URL.createObjectURL = vi.fn(() => `blob:app://daintree/audio-split-${objectUrlSequence++}`);
-
-    const { container, rerender } = renderViewer("/repo/media/track.mp3", {
-      revision: "0:0",
-      surfaceRefreshNonce: 0,
-      mediaReloadNonce: 0,
-    });
-    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
-    const firstNode = container.querySelector("audio");
-    const firstSrc = firstNode?.getAttribute("src");
-    expect(audioFetchMock).toHaveBeenCalledTimes(1);
-
-    rerender(
-      viewerJsx("/repo/media/track.mp3", {
-        revision: "0:1",
-        surfaceRefreshNonce: 1,
-        mediaReloadNonce: 0,
-      })
-    );
-    await act(async () => {});
-
-    expect(audioFetchMock).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("audio")).toBe(firstNode);
-    expect(container.querySelector("audio")?.getAttribute("src")).toBe(firstSrc);
-  });
-
   it("recovers a failed track on refresh, which takes both halves of the signal", async () => {
     // A failed fetch unmounts the preview entirely (`status: "error"`), so
     // `reloadKey` alone can't bring it back — nothing is mounted to receive it.
@@ -740,6 +708,90 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
     expect(screen.queryByText("This audio file couldn't be played")).toBeNull();
     expect(audioFetchMock).toHaveBeenCalledTimes(2);
   });
+});
+
+// #12165: a reveal that finds a player running holds the media nonce still
+// while `revision` and `surfaceRefreshNonce` move on for the text re-read and
+// the PDF frame. Both branches, because they are wired separately — pointing
+// either one back at `surfaceRefreshNonce` recreates the bug for that kind.
+describe("FileBrowserViewer media rides its own nonce (#12165)", () => {
+  const mediaFetchMock = vi.fn();
+  const realCreateObjectURL = URL.createObjectURL;
+  const realRevokeObjectURL = URL.revokeObjectURL;
+  beforeEach(() => {
+    let objectUrlSequence = 0;
+    mediaFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      blob: () => Promise.resolve(new Blob(["x"])),
+    });
+    vi.stubGlobal("fetch", mediaFetchMock);
+    // Unique per call: a constant would let a silent remount read as continuity.
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/split-${objectUrlSequence++}`);
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    mediaFetchMock.mockReset();
+    // `vi.unstubAllGlobals` does not restore a directly assigned method.
+    URL.createObjectURL = realCreateObjectURL;
+    URL.revokeObjectURL = realRevokeObjectURL;
+  });
+
+  for (const kind of [
+    { tag: "video" as const, path: "/repo/media/demo.webm" },
+    { tag: "audio" as const, path: "/repo/media/track.mp3" },
+  ]) {
+    it(`keeps the ${kind.tag} mounted when only the surface nonce advances`, async () => {
+      const { container, rerender } = renderViewer(kind.path, {
+        revision: "0:0",
+        surfaceRefreshNonce: 0,
+        mediaReloadNonce: 0,
+      });
+      await waitFor(() => expect(container.querySelector(kind.tag)).not.toBeNull());
+      const firstNode = container.querySelector(kind.tag);
+      const firstSrc = firstNode?.getAttribute("src");
+      expect(mediaFetchMock).toHaveBeenCalledTimes(1);
+
+      rerender(
+        viewerJsx(kind.path, { revision: "0:1", surfaceRefreshNonce: 1, mediaReloadNonce: 0 })
+      );
+      await act(async () => {});
+
+      expect(mediaFetchMock).toHaveBeenCalledTimes(1);
+      expect(container.querySelector(kind.tag)).toBe(firstNode);
+      expect(container.querySelector(kind.tag)?.getAttribute("src")).toBe(firstSrc);
+    });
+
+    it(`re-fetches the ${kind.tag} when the media nonce alone advances`, async () => {
+      // The other direction, so "keeps it mounted" above can't be satisfied by a
+      // branch that simply ignores both nonces.
+      const { container, rerender } = renderViewer(kind.path, {
+        revision: "0:0",
+        surfaceRefreshNonce: 0,
+        mediaReloadNonce: 0,
+      });
+      await waitFor(() => expect(container.querySelector(kind.tag)).not.toBeNull());
+      const firstNode = container.querySelector(kind.tag);
+      const firstSrc = firstNode?.getAttribute("src");
+      expect(mediaFetchMock).toHaveBeenCalledTimes(1);
+
+      rerender(
+        viewerJsx(kind.path, { revision: "0:0", surfaceRefreshNonce: 0, mediaReloadNonce: 1 })
+      );
+
+      await waitFor(() => expect(mediaFetchMock).toHaveBeenCalledTimes(2));
+      // Both halves in one waitFor: the hook nulls its object URL while
+      // refetching, so a bare src comparison would pass on the empty gap.
+      await waitFor(() => {
+        const refreshed = container.querySelector(kind.tag);
+        expect(refreshed).not.toBeNull();
+        expect(refreshed?.getAttribute("src")).not.toBe(firstSrc);
+        expect(refreshed).not.toBe(firstNode);
+      });
+    });
+  }
 });
 
 describe("FileBrowserViewer PDF preview (#11427)", () => {

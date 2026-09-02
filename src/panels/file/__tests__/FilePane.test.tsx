@@ -2878,7 +2878,10 @@ describe("FilePane re-reads when the project view is revealed (#11588)", () => {
         blob: () => Promise.resolve(new Blob(["x"])),
       });
       vi.stubGlobal("fetch", mediaFetchMock);
-      URL.createObjectURL = vi.fn(() => "blob:app://daintree/media-preview");
+      // Unique per call: a constant would let a remount pass as continuity, and
+      // hide a stale response arriving after a newer one.
+      let objectUrlSequence = 0;
+      URL.createObjectURL = vi.fn(() => `blob:app://daintree/media-${objectUrlSequence++}`);
       URL.revokeObjectURL = vi.fn();
     });
     afterEach(() => {
@@ -2931,10 +2934,15 @@ describe("FilePane re-reads when the project view is revealed (#11588)", () => {
       setPlaybackState(video, { paused: false });
       fireEvent.play(video);
       const fetchesBefore = mediaFetchMock.mock.calls.length;
+      const srcBefore = video.getAttribute("src");
 
       await emit("revealed");
 
       expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore);
+      // The same element on the same blob. Fetch count alone would stay green
+      // for a regression that remounted the player without re-requesting it.
+      expect(container.querySelector("video")).toBe(video);
+      expect(video.getAttribute("src")).toBe(srcBefore);
     });
 
     it("leaves playing audio alone on reveal, then re-fetches once it ends (#12165)", async () => {
@@ -2946,9 +2954,12 @@ describe("FilePane re-reads when the project view is revealed (#11588)", () => {
       setPlaybackState(audio, { paused: false });
       fireEvent.play(audio);
       const fetchesBefore = mediaFetchMock.mock.calls.length;
+      const srcBefore = audio.getAttribute("src");
 
       await emit("revealed");
       expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore);
+      expect(container.querySelector("audio")).toBe(audio);
+      expect(audio.getAttribute("src")).toBe(srcBefore);
 
       // The spec leaves `paused` false at the end of a track, so `ended` is the
       // only thing that says this one stopped.

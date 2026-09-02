@@ -622,8 +622,8 @@ export function FileBrowserPane({
   // flag being right.
   const [mediaReloadNonce, setMediaReloadNonce] = useState(0);
   // Set only while a mounted player is mid-playback: the preview takes its own
-  // `true` back on unmount or a source change, so this can never name a player
-  // that has gone away.
+  // `true` back on unmount or a source change, so nothing can strand it set
+  // beyond the passive-effect pass that retires the player.
   const mediaPlayingRef = useRef(false);
   const handleMediaPlayingChange = useCallback((playing: boolean) => {
     mediaPlayingRef.current = playing;

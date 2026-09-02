@@ -37,7 +37,9 @@ interface FileAudioPreviewProps {
    * move `reloadKey` can hold off (#12165). Always taken back on unmount or a
    * source change: a fresh element starts paused and fires no `pause` of its
    * own, so an owner left holding the last `true` would suppress reloads for a
-   * player that no longer exists.
+   * player that no longer exists. That retraction goes to whichever handler is
+   * committed at the time, so the callback must belong to one stable owner
+   * rather than being swapped between independent recipients.
    */
   onPlayingChange?: (playing: boolean) => void;
 }
@@ -105,7 +107,14 @@ export function FileAudioPreview({
           onEnded={(event) =>
             onPlayingChange?.(!event.currentTarget.paused && !event.currentTarget.ended)
           }
-          onError={() => onError?.()}
+          // A decode failure stops playback without a `pause`. Every caller in
+          // tree unmounts the preview here, which would retract it anyway — but
+          // the leaf is shared, and one that merely logs must not be left
+          // holding a player that stopped.
+          onError={() => {
+            onPlayingChange?.(false);
+            onError?.();
+          }}
         />
       ) : fetching ? (
         // The whole file downloads before playback starts, so a long recording
