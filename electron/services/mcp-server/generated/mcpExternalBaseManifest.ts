@@ -218,7 +218,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         worktreeId: {
           description:
-            "Identifies the worktree to launch in, using an id from the worktree-listing capability. Required when an agent or MCP client is calling; a person driving the UI gets the active worktree by default.",
+            "The worktree to launch in, as an id from the worktree listing. Required when an agent or MCP client calls; a person driving the UI gets the active worktree.",
           type: "string",
         },
         prompt: {
