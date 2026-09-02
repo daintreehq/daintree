@@ -626,7 +626,14 @@ Available to `"scope": "project"` plugins alone. An installed plugin is bound to
 {
   "scope": "project",
   "contributes": {
-    "panels": [{ "id": "overview", "name": "Overview", "iconId": "gauge" }],
+    "panels": [
+      {
+        "id": "overview",
+        "name": "Overview",
+        "iconId": "gauge",
+        "color": "var(--theme-category-orange)"
+      }
+    ],
     "views": [{ "id": "overview", "componentPath": "dist/panel.js", "location": "panel" }],
     "surfaces": {
       "emptyCanvas": { "viewId": "overview" }

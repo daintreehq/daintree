@@ -158,7 +158,7 @@ One slot exists today.
 
 ```jsonc
 "contributes": {
-  "panels": [{ "id": "overview", "name": "Overview", "iconId": "gauge" }],
+  "panels": [{ "id": "overview", "name": "Overview", "iconId": "gauge", "color": "var(--theme-category-orange)" }],
   "views":  [{ "id": "overview", "componentPath": "dist/panel.js", "location": "panel" }],
   "surfaces": {
     "emptyCanvas": { "viewId": "overview" }
@@ -237,6 +237,7 @@ A project plugin's panel kind is qualified at runtime as `project:{projectId}/{m
 
 ## See also
 
+- [Agent brief](./agent-brief.md) — the compressed version to hand an agent, with a zero-build skeleton
 - [Manifest reference](./manifest.md) — `scope`, `contributes.surfaces`
 - [Contribution points](./contribution-points.md) — per-point project-scope status
 - [Trust model](./trust-model.md) — the capability contract and the non-guarantees
