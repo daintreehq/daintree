@@ -325,24 +325,16 @@ class AgentNotificationService {
     return true;
   }
 
-  /**
-   * Look up the renderer-owned worktreeId for a terminal from persisted app state.
-   *
-   * Backend-emitted agent events (agent:state-changed, agent:completed, etc.) no
-   * longer carry worktreeId — it's renderer-owned layout state. Main-side
-   * consumers that need worktreeId for focus/dedup/routing should resolve it
-   * here from the IPC-synced appState. May briefly lag a drag-to-worktree
-   * gesture; that is acceptable because the fallback (undefined) simply means
-   * notifications aren't suppressed, not that they fire wrongly.
-   */
   private rebuildTerminalIndex(terminals: TerminalSnapshot): void {
     this.terminalIndexById.clear();
     terminals.forEach((terminal, index) => this.terminalIndexById.set(terminal.id, index));
   }
 
-  private getTerminalSnapshot(terminalId?: string): TerminalSnapshotEntry | undefined {
+  private getTerminalSnapshotFrom(
+    terminals: TerminalSnapshot,
+    terminalId?: string
+  ): TerminalSnapshotEntry | undefined {
     if (!terminalId) return undefined;
-    const terminals = store.get("appState").terminals;
     const index = this.terminalIndexById.get(terminalId);
     if (index !== undefined) {
       const terminal = terminals[index];
@@ -351,6 +343,26 @@ class AgentNotificationService {
 
     this.rebuildTerminalIndex(terminals);
     return terminals.find((terminal) => terminal.id === terminalId);
+  }
+
+  /**
+   * Look up a terminal's persisted entry — notably its renderer-owned
+   * worktreeId — from persisted app state.
+   *
+   * Backend-emitted agent events (agent:state-changed, agent:completed, etc.) no
+   * longer carry worktreeId — it's renderer-owned layout state. Main-side
+   * consumers that need worktreeId for focus/dedup/routing should resolve it
+   * here from the IPC-synced appState. May briefly lag a drag-to-worktree
+   * gesture; that is acceptable because the fallback (undefined) simply means
+   * notifications aren't suppressed, not that they fire wrongly.
+   *
+   * Each `store.get` deep-clones the whole appState, so callers resolving more
+   * than one terminal should read `terminals` once and use
+   * `getTerminalSnapshotFrom`.
+   */
+  private getTerminalSnapshot(terminalId?: string): TerminalSnapshotEntry | undefined {
+    if (!terminalId) return undefined;
+    return this.getTerminalSnapshotFrom(store.get("appState").terminals, terminalId);
   }
 
   private handleStateChanged(payload: {
@@ -712,13 +724,15 @@ class AgentNotificationService {
       if (currentSettings.enabled === false) return;
       if (!currentSettings.waitingEscalationEnabled || !currentSettings.waitingEnabled) return;
 
-      // Re-read terminal state — skip if moved out of dock or removed
-      const currentTerminal = this.getTerminalSnapshot(terminalId);
+      // Re-read terminal state — skip if moved out of dock or removed. One
+      // appState read serves every lookup below; each `store.get` deep-clones it.
+      const currentTerminals = store.get("appState").terminals;
+      const currentTerminal = this.getTerminalSnapshotFrom(currentTerminals, terminalId);
       if (!currentTerminal || currentTerminal.location !== "dock") return;
 
       // Count all dock terminals currently waiting (for grouped escalation)
       const waitingDockTerminalIds = [...this.waitingTerminalIds].filter(
-        (id) => this.getTerminalSnapshot(id)?.location === "dock"
+        (id) => this.getTerminalSnapshotFrom(currentTerminals, id)?.location === "dock"
       );
 
       this.playNotificationSound(currentSettings.soundEnabled, currentSettings.escalationSoundFile);
