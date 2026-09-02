@@ -691,7 +691,10 @@ perfDescribe("Resilience: project-switch rotation (real UI, nonce-to-paint)", ()
       filesPerRepo: FILES_PER_REPO,
       streamLinesPerSec: STREAM_LINES_PER_SEC,
     });
-    ctx = await launchApp({ env: fixture.launchEnv });
+    // Real GPU + WebGL terminals: the default E2E launch disables both, which
+    // renders a 6K window in software at a few frames per second and makes
+    // every frame-paced interval here an artefact rather than a measurement.
+    ctx = await launchApp({ env: fixture.launchEnv, enableWebgl: true });
   });
 
   test.afterAll(async () => {
@@ -839,6 +842,18 @@ perfDescribe("Resilience: project-switch rotation (real UI, nonce-to-paint)", ()
       }
       if (!Number.isFinite(focusReadyAt)) {
         focusRescued = true;
+        const focusDiag = await targetPage
+          .evaluate(() => {
+            const el = document.activeElement;
+            return {
+              hasFocus: document.hasFocus(),
+              tag: el?.tagName ?? null,
+              cls: el?.className?.toString().slice(0, 60) ?? null,
+              panel: el?.closest("[data-panel-id]")?.getAttribute("data-panel-id") ?? null,
+            };
+          })
+          .catch((e) => ({ error: String(e) }));
+        console.log(`[rotation] focus rescue #${step.index}: ${JSON.stringify(focusDiag)}`);
         await targetPage
           .locator(`[data-panel-id="${target.workload.probePanelId}"] ${SEL.terminal.xtermRows}`)
           .first()

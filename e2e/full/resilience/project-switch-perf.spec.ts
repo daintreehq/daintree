@@ -144,7 +144,8 @@ perfDescribe("Resilience: project-switch latency measurement", () => {
     cleanups = fixtures.map((f) => f.cleanup);
     const repos = fixtures.map((f) => f.dir);
 
-    ctx = await launchApp();
+    // Real GPU + WebGL, as a user runs it; see the rotation spec for why.
+    ctx = await launchApp({ enableWebgl: true });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, repos[0]);
 
     for (let i = 1; i < repos.length; i++) {
