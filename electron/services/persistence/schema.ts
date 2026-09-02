@@ -1,10 +1,4 @@
 import { sqliteTable, text, integer, real, index } from "drizzle-orm/sqlite-core";
-import { installSqliteRunStatementCache } from "./sqliteRunStatementCache.js";
-
-// `schema` is the shared bootstrap imported before Daintree's Drizzle
-// connections are created. Install once on better-sqlite3's prototype so every
-// connection gets the same bounded write-statement reuse.
-installSqliteRunStatementCache();
 
 export const projects = sqliteTable(
   "projects",
