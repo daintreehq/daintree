@@ -136,6 +136,9 @@ export function createSwitchFixture(options: SwitchFixtureOptions = {}): SwitchF
       ...fakeAgentEnv(fakeBinDir),
       ZDOTDIR: zdotdir,
       DAINTREE_PERF_CAPTURE: "1",
+      // Keep the warm cache honest: without this a busy host can report ~1.5 GB
+      // "available" and the tier-2 pressure pass evicts every cached view mid-run.
+      DAINTREE_E2E_SYSTEM_AVAILABLE_MEMORY_MB: "40000",
       DAINTREE_PERF_METRICS_FILE: metricsPath,
     },
     cleanup: () => {

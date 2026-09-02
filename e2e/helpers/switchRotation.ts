@@ -498,9 +498,13 @@ export function summarizeSample(
   const prefetchHitRaw = group.prefetch?.meta?.hit;
 
   const orderingViolations: string[] = [];
+  // Renderer marks are rebased onto main's clock; the two clocks disagree by a
+  // few hundred microseconds, which a switch that completes in single-digit
+  // milliseconds would otherwise report as a causality violation.
+  const CLOCK_SKEW_MS = 2;
   const check = (label: string, earlier: number, later: number, strict: boolean): void => {
     if (!Number.isFinite(earlier) || !Number.isFinite(later)) return;
-    if (strict ? later <= earlier : later < earlier) {
+    if (strict ? later + CLOCK_SKEW_MS <= earlier : later + CLOCK_SKEW_MS < earlier) {
       orderingViolations.push(`${label} (${earlier} vs ${later})`);
     }
   };
