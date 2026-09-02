@@ -222,7 +222,8 @@ jobs:
               --iterations "$ITERATIONS" \
               --warmups "$WARMUPS" \
               --label "$2" \
-              --json ".tmp/opt/ab/$2.json"
+              --json ".tmp/opt/ab/$2.json" \
+              --enforce-integrity
           }
           arm "$BASE_SHA" champ1
           arm "$CAND_SHA" cand1
