@@ -76,6 +76,66 @@ const PostMigrationSanitySchema = z
   })
   .passthrough();
 
+type StoreRecord = Record<string, unknown>;
+
+function cloneStoreValue<T>(value: T): T {
+  return typeof value === "object" && value !== null ? structuredClone(value) : value;
+}
+
+function readStorePath(snapshot: StoreRecord, key: string): unknown {
+  let node: unknown = snapshot;
+  for (const part of key.split(".")) {
+    if (node === null || typeof node !== "object" || !Object.hasOwn(node, part)) {
+      return undefined;
+    }
+    node = (node as StoreRecord)[part];
+  }
+  return node;
+}
+
+function writeStorePath(snapshot: StoreRecord, key: string, value: unknown): void {
+  const parts = key.split(".");
+  let node = snapshot;
+  for (const part of parts.slice(0, -1)) {
+    const current = node[part];
+    if (current === null || typeof current !== "object" || Array.isArray(current)) {
+      node[part] = {};
+    }
+    node = node[part] as StoreRecord;
+  }
+  node[parts.at(-1)!] = cloneStoreValue(value);
+}
+
+function deleteStorePath(snapshot: StoreRecord, key: string): void {
+  const parts = key.split(".");
+  let node = snapshot;
+  for (const part of parts.slice(0, -1)) {
+    const current = node[part];
+    if (current === null || typeof current !== "object" || Array.isArray(current)) return;
+    node = current as StoreRecord;
+  }
+  delete node[parts.at(-1)!];
+}
+
+function bufferedMigrationStore(snapshot: StoreRecord): Store<StoreSchema> {
+  const facade = {
+    get(key: string, defaultValue?: unknown): unknown {
+      const value = readStorePath(snapshot, key);
+      return value === undefined ? defaultValue : cloneStoreValue(value);
+    },
+    set(key: string, value: unknown): void {
+      if (value === undefined) {
+        throw new TypeError(`Use delete() to clear migration key "${key}"`);
+      }
+      writeStorePath(snapshot, key, value);
+    },
+    delete(key: string): void {
+      deleteStorePath(snapshot, key);
+    },
+  };
+  return facade as unknown as Store<StoreSchema>;
+}
+
 export class MigrationRunner {
   constructor(
     private store: Store<StoreSchema>,
@@ -250,8 +310,23 @@ export class MigrationRunner {
       for (const migration of pending.sort((a, b) => a.version - b.version)) {
         activeMigrationVersion = migration.version;
         console.log(`[Migrations] Applying v${migration.version}: ${migration.description}`);
-        await migration.up(this.store);
-        this.store.set("_schemaVersion", migration.version);
+        // electron-store rewrites the entire JSON document on every set/delete.
+        // Buffer one migration's main-store mutations in memory, then persist
+        // its data and resume checkpoint together in one atomic write. The
+        // per-migration boundary remains crash-safe: a terminated process
+        // resumes from the last fully committed version, while sidecar-writing
+        // migrations remain idempotent as required by the migration contract.
+        // Lightweight test doubles and the in-memory recovery store keep the
+        // direct path because they have no whole-file rewrite to remove.
+        if (this.store.path !== "" && "store" in this.store) {
+          const snapshot = this.store.store as unknown as StoreRecord;
+          await migration.up(bufferedMigrationStore(snapshot));
+          snapshot._schemaVersion = migration.version;
+          this.store.store = snapshot as unknown as StoreSchema;
+        } else {
+          await migration.up(this.store);
+          this.store.set("_schemaVersion", migration.version);
+        }
         console.log(`[Migrations] Applied v${migration.version} successfully`);
       }
 

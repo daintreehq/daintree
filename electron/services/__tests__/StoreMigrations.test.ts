@@ -181,6 +181,53 @@ describe("MigrationRunner", () => {
     expect(store.data._schemaVersion).toBe(3);
   });
 
+  it("commits each migration and its resume checkpoint in one store write", async () => {
+    const store = createMockStore(storePath, {
+      _schemaVersion: 0,
+      nested: { retained: true },
+    });
+    let storeWrites = 0;
+    Object.defineProperty(store, "store", {
+      configurable: true,
+      get: () => structuredClone(store.data),
+      set: (value: MockStoreData) => {
+        storeWrites += 1;
+        store.clear();
+        Object.assign(store.data, structuredClone(value));
+      },
+    });
+    const runner = new MigrationRunner(store as never);
+
+    await runner.runMigrations([
+      {
+        version: 1,
+        description: "write two keys",
+        up: (migrationStore) => {
+          migrationStore.set("first" as never, "one" as never);
+          migrationStore.set("second" as never, "two" as never);
+          const nested = migrationStore.get("nested" as never) as { retained: boolean };
+          nested.retained = false;
+        },
+      },
+      {
+        version: 2,
+        description: "read prior checkpoint",
+        up: (migrationStore) => {
+          expect(migrationStore.get("first" as never)).toBe("one");
+          migrationStore.delete("second" as never);
+        },
+      },
+    ]);
+
+    expect(storeWrites).toBe(2);
+    expect(store.data).toMatchObject({
+      _schemaVersion: 2,
+      first: "one",
+      nested: { retained: true },
+    });
+    expect(store.data.second).toBeUndefined();
+  });
+
   it("skips migrations and preserves version when store schema is newer than supported", async () => {
     const store = createMockStore(storePath, { _schemaVersion: 5 });
     const runner = new MigrationRunner(store as never);
