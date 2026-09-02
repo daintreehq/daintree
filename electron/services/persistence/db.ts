@@ -8,10 +8,17 @@ import path from "path";
 import { getWritesSuppressed } from "../diskPressureState.js";
 import { tightenFilePermissionsSync, OWNER_RW_FILE_MODE } from "../../utils/fs.js";
 import * as schema from "./schema.js";
+import { installSqliteRunStatementCache } from "./sqliteRunStatementCache.js";
 import type { DatabaseRecovery } from "../../../shared/types/ipc/app.js";
 import type { DbProbeResult } from "./dbWorkerProtocol.js";
 
 export type AppDb = ReturnType<typeof drizzle<typeof schema>>;
+
+// Every Daintree SQLite connection is opened from this module, so patching
+// better-sqlite3's prototype here — rather than from the declarative schema
+// drizzle-kit also loads — keeps the optimisation on the connection path and
+// off the migration tooling. Idempotent.
+installSqliteRunStatementCache();
 
 let sharedInstance: { sqlite: Database.Database; db: AppDb } | null = null;
 
