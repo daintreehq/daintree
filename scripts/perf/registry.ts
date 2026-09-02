@@ -265,6 +265,20 @@ export const REGISTRY: Record<string, Command> = {
     gate: "RUN_PERF_SWITCH",
     build: "build:e2e",
   }),
+  "project-switch-rotation": playwrightBench({
+    summary:
+      "Real-UI switch rotation: intent → focused pane paints a typed nonce, per LRU depth and cache cap, plus memory",
+    kind: "journey",
+    project: "full-resilience",
+    spec: "e2e/full/resilience/project-switch-rotation-perf.spec.ts",
+    gate: "RUN_PERF_SWITCH_ROTATION",
+    build: "build:e2e",
+  }),
+  "project-switch-rotation-compare": {
+    summary: "Compare two switch-rotation results, or price one cached view with --marginal",
+    kind: "diagnostic",
+    runner: tsxScript("project-switch-rotation-compare.ts"),
+  },
   "agent-launch": playwrightBench({
     summary: "agent.launch dispatch to panel, xterm and first agent output",
     kind: "journey",

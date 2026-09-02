@@ -6,6 +6,7 @@ import {
 } from "@/lib/projectSwitcherSearch";
 import { buildDisplayPaths } from "@/lib/projectDisplayPath";
 import { useProjectStore } from "@/store/projectStore";
+import { beginSwitchTrace } from "@/utils/switchTrace";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -26,6 +27,8 @@ import { projectClient, scratchClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export type ProjectSwitcherMode = "modal" | "dropdown";
+/** How a palette row was committed — only the perf-trace entry point reads it. */
+export type ProjectSwitchSelectSource = "keyboard" | "pointer";
 
 /**
  * The agent-activity fields a switcher row's status line is derived from —
@@ -324,13 +327,13 @@ export interface UseProjectSwitcherPaletteReturn {
   setQuery: (query: string) => void;
   selectPrevious: () => void;
   selectNext: () => void;
-  selectProject: (project: SearchableProject) => void;
+  selectProject: (project: SearchableProject, source?: ProjectSwitchSelectSource) => void;
   /**
    * Commits a row of {@link results}, dispatching on its kind. The palette's
    * primary select handler — a surface that renders `results` must use this
    * rather than `selectProject`, which cannot accept a scratch row.
    */
-  selectRow: (row: ProjectSwitcherRow) => void;
+  selectRow: (row: ProjectSwitcherRow, source?: ProjectSwitchSelectSource) => void;
   /**
    * Schedule a 150ms trailing-edge hover prefetch that primes the
    * main-process hydrate cache for `projectId`. Mouse-only — touch and pen
@@ -1672,7 +1675,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const selectNext = useCallback(() => step(1), [step]);
 
   const selectProject = useCallback(
-    async (project: SearchableProject) => {
+    async (project: SearchableProject, source?: ProjectSwitchSelectSource) => {
       // Picking the project already on screen is a "never mind", not a dead
       // end: there is nothing to switch to, but leaving the palette open with
       // no feedback reads as a swallowed keypress. Mirrors `selectScratch`.
@@ -1698,13 +1701,22 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         return;
       }
 
+      // Perf-trace entry point: the anchored dropdown is the toolbar surface;
+      // the modal palette splits on how the row was committed.
+      beginSwitchTrace(
+        mode === "dropdown"
+          ? "toolbar"
+          : source === "keyboard"
+            ? "palette-keyboard"
+            : "palette-mouse"
+      );
       if (project.isBackground) {
         void reopenProject(project.id);
       } else {
         void switchProject(project.id);
       }
     },
-    [close, switchProject, reopenProject, openRelocation]
+    [close, mode, switchProject, reopenProject, openRelocation]
   );
 
   const selectScratch = useCallback(
@@ -1732,12 +1744,12 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // forget by design — each closes the palette first and reports its own
   // failure, so there is nothing here for a caller to await.
   const selectRow = useCallback(
-    (row: ProjectSwitcherRow) => {
+    (row: ProjectSwitcherRow, source?: ProjectSwitchSelectSource) => {
       if (row.kind === "scratch") {
         void selectScratch(row);
         return;
       }
-      void selectProject(row);
+      void selectProject(row, source);
     },
     [selectProject, selectScratch]
   );
@@ -1805,7 +1817,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const confirmSelection = useCallback(() => {
     if (results.length === 0) return;
-    selectRow(results[selectedIndex]!);
+    selectRow(results[selectedIndex]!, "keyboard");
   }, [results, selectedIndex, selectRow]);
 
   const addProject = useCallback(async () => {

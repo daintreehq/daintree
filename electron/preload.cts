@@ -1686,8 +1686,9 @@ function buildElectronApi(): ElectronAPI {
 
       onConfigReloaded: (callback: () => void) => _typedOn(CHANNELS.APP_CONFIG_RELOADED, callback),
 
-      onViewRevealed: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_REVEALED, callback),
-      onViewWarmActivated: (callback: () => void) =>
+      onViewRevealed: (callback: (payload?: { switchId?: string }) => void) =>
+        _typedOn(CHANNELS.APP_VIEW_REVEALED, callback),
+      onViewWarmActivated: (callback: (payload?: { switchId?: string }) => void) =>
         _typedOn(CHANNELS.APP_VIEW_WARM_ACTIVATED, callback),
       onViewCached: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_CACHED, callback),
       isViewCached: () => _viewCached,
@@ -1814,6 +1815,7 @@ function buildElectronApi(): ElectronAPI {
         outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState,
         options?: {
           focusIntent?: import("../shared/types/ipc/project.js").ProjectFocusOnActivateIntent;
+          trace?: import("../shared/types/ipc/project.js").ProjectSwitchTrace;
         }
       ) => _unwrappingInvoke(CHANNELS.PROJECT_SWITCH, projectId, outgoingState, options),
 
@@ -1874,8 +1876,9 @@ function buildElectronApi(): ElectronAPI {
 
       reopen: (
         projectId: string,
-        outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState
-      ) => _unwrappingInvoke(CHANNELS.PROJECT_REOPEN, projectId, outgoingState),
+        outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState,
+        options?: { trace?: import("../shared/types/ipc/project.js").ProjectSwitchTrace }
+      ) => _unwrappingInvoke(CHANNELS.PROJECT_REOPEN, projectId, outgoingState, options),
 
       getStats: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_GET_STATS, projectId),
 
@@ -3625,6 +3628,10 @@ contextBridge.exposeInMainWorld("__DAINTREE_SURFACE_HOST__", {
 // same runtime flag as the rest of the perf pipeline; `process.env` is polyfilled
 // in the sandboxed preload, and the flag is intentionally NOT esbuild-stripped.
 if (process.env.DAINTREE_PERF_CAPTURE === "1") {
+  // Let the renderer know a capture run is live: the launch-time env var never
+  // reaches the sandboxed renderer, so without this bridge the renderer-side
+  // flush (`isRendererPerfCaptureEnabled`) stays off for the whole session.
+  contextBridge.exposeInMainWorld("__DAINTREE_PERF_CAPTURE__", true);
   const preloadEvalEndMs = perfNowMs();
   const timestamp = new Date().toISOString();
   ipcRenderer.send(CHANNELS.PERF_FLUSH_RENDERER_MARKS, {

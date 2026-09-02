@@ -442,6 +442,9 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
   const activeProjectId = host.activeProjectId;
 
   const memoryByPid = new Map<number, number>();
+  // The GPU process is shared by every view, so it is reported once per tick
+  // beside each sample rather than attributed to any one of them.
+  let gpuKb = 0;
   try {
     // Shared TTL snapshot — telemetry tolerates staleness; per-window
     // samplers near the 30s aligned sweeps reuse them instead of stacking
@@ -451,6 +454,7 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
       if (kb > 0) {
         memoryByPid.set(proc.pid, kb);
       }
+      if (proc.type === "GPU") gpuKb += kb;
     }
   } catch {
     // app.getAppMetrics() throwing is non-fatal — skip this tick.
@@ -477,8 +481,10 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
       const guestMemoryKb = sumGuestMemoryKb(wc, memoryByPid);
       const ctx: Record<string, unknown> = {
         projectId,
+        state: entry.state,
         memoryKb,
         pid,
+        gpuKb,
       };
       if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
       logInfo("projectview.cached-memory", ctx);

@@ -6,7 +6,10 @@
  */
 
 import type { WebContentsView } from "electron";
+import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { PERF_MARKS } from "../../shared/perf/marks.js";
+import { markPerformance } from "../utils/performance.js";
 import {
   registerWebContents,
   registerAppView,
@@ -36,7 +39,10 @@ import { setupViewHandlers } from "./ProjectViewHandlers.js";
 import { evictStaleViews } from "./ProjectViewEvictionController.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
-import type { ProjectFocusOnActivateIntent } from "../../shared/types/ipc/project.js";
+import type {
+  ProjectFocusOnActivateIntent,
+  ProjectSwitchTrace,
+} from "../../shared/types/ipc/project.js";
 
 /**
  * Largest delay `setTimeout` stores as-is (INT32_MAX ms, ~24.9 days). Anything
@@ -65,8 +71,16 @@ function deliverFocusIntent(view: WebContentsView, intent: ProjectFocusOnActivat
 export async function performSwitch(
   host: ProjectViewManager,
   projectId: string,
-  projectPath: string
+  projectPath: string,
+  trace?: ProjectSwitchTrace
 ): Promise<{ view: WebContentsView; isNew: boolean }> {
+  // Callers without a renderer-minted trace (menu, tests) still get a
+  // switchId so this switch's marks and the incoming view's stay joinable.
+  const switchTrace: ProjectSwitchTrace = trace ?? { switchId: randomUUID(), entryPoint: "api" };
+  const mark = (name: string, meta?: Record<string, unknown>): void => {
+    markPerformance(name, { switchId: switchTrace.switchId, projectId, ...meta });
+  };
+  mark(PERF_MARKS.PROJECT_SWITCH_CHAIN_ENTERED);
   // A switch queued behind switchChain can land after dispose() (window
   // close mid-queue). Creating a view on a disposed manager would leak it:
   // no timer sweeps, no eviction, no dispose pass will ever reach it.
@@ -125,6 +139,11 @@ export async function performSwitch(
       // notifyViewPainted is one-shot per V8 context, so the warm path needs its
       // own re-fireable channel.
       activateView(host, cached, /* insertBehind */ true);
+      cached.switchTrace = switchTrace;
+      mark(PERF_MARKS.PROJECT_SWITCH_VIEW_ATTACHED, {
+        isNew: false,
+        webContentsId: cached.view.webContents.id,
+      });
       const warmSoftMs = host.warmPaintGateTimeoutMs;
       const warmHardMs = Math.max(host.warmPaintGateHardTimeoutMs, warmSoftMs);
       const warmGate = host.waitForPaint(
@@ -152,9 +171,16 @@ export async function performSwitch(
       // the visibility/resume listeners remain as fallbacks. Sent after the
       // gate is armed so the wake's completion signal can't slip past it.
       if (!cached.view.webContents.isDestroyed()) {
-        cached.view.webContents.send(CHANNELS.APP_VIEW_WARM_ACTIVATED);
+        cached.view.webContents.send(CHANNELS.APP_VIEW_WARM_ACTIVATED, {
+          switchId: switchTrace.switchId,
+        });
       }
       const gateResult = await warmGate;
+      mark(PERF_MARKS.PROJECT_SWITCH_GATE_RESOLVED, {
+        gateOutcome: gateResult,
+        releaseChannel: "warm-painted",
+        waitedMs: Math.round(performance.now() - warmStart),
+      });
       if (gateResult === "hard-timeout") {
         logWarn("projectview.warmpaintgate.hardtimeout", {
           projectId,
@@ -171,17 +197,26 @@ export async function performSwitch(
         } else if (unboundOutgoingView) {
           detachUnboundOutgoingView(host, unboundOutgoingView);
         }
+        mark(PERF_MARKS.PROJECT_SWITCH_REVEALED, { isNew: false });
       }
     } else {
       // No outgoing view to bridge through (e.g. first-run with no welcome
       // view) — nothing to flash past, so reveal the cached view immediately.
       activateView(host, cached);
+      cached.switchTrace = switchTrace;
+      mark(PERF_MARKS.PROJECT_SWITCH_VIEW_ATTACHED, {
+        isNew: false,
+        webContentsId: cached.view.webContents.id,
+      });
       // Same deterministic wake trigger as the bridged path: the reattach
       // emits no visibility/resume event, so the terminals' refit/repaint
       // fan-out needs an explicit signal here too.
       if (!cached.view.webContents.isDestroyed()) {
-        cached.view.webContents.send(CHANNELS.APP_VIEW_WARM_ACTIVATED);
+        cached.view.webContents.send(CHANNELS.APP_VIEW_WARM_ACTIVATED, {
+          switchId: switchTrace.switchId,
+        });
       }
+      mark(PERF_MARKS.PROJECT_SWITCH_REVEALED, { isNew: false });
     }
 
     const visibleMs = Math.round(performance.now() - warmStart);
@@ -214,7 +249,9 @@ export async function performSwitch(
       // longer the revealed foreground, so repainting it would be wasted work.
       if (host.activeProjectId === projectId) {
         cached.view.webContents.invalidate();
-        cached.view.webContents.send(CHANNELS.APP_VIEW_REVEALED);
+        cached.view.webContents.send(CHANNELS.APP_VIEW_REVEALED, {
+          switchId: switchTrace.switchId,
+        });
       }
     }
     const cachedIntent = consumePendingFocusIntent(host, projectId);
@@ -249,6 +286,8 @@ export async function performSwitch(
     state: "loading",
     crashTimestamps: [],
     cleanupHandlers: () => {},
+    switchTrace,
+    coldStartAt,
   };
   host.views.set(projectId, entry);
   host.webContentsToProject.set(view.webContents.id, projectId);
@@ -274,6 +313,10 @@ export async function performSwitch(
   } else {
     host.win.contentView.addChildView(view);
   }
+  mark(PERF_MARKS.PROJECT_SWITCH_VIEW_ATTACHED, {
+    isNew: true,
+    webContentsId: view.webContents.id,
+  });
   updateViewBounds(host, view);
   host.activeProjectId = projectId;
   entry.state = "active";
@@ -369,6 +412,7 @@ export async function performSwitch(
       ? Math.max(paintHardMs, loadSoftMs)
       : Math.min(loadHardMs + paintHardMs, MAX_TIMEOUT_MS);
 
+  const gateArmedAt = performance.now();
   const paintGatePromise = host.waitForPaint(
     view.webContents.id,
     outgoingView,
@@ -403,6 +447,10 @@ export async function performSwitch(
       hardMs: loadHardMs,
     });
     loadFinishedAt = performance.now();
+    entry.loadFinishedAt = loadFinishedAt;
+    mark(PERF_MARKS.PROJECT_SWITCH_LOAD_FINISHED, {
+      loadMs: Math.round(loadFinishedAt - coldStartAt),
+    });
 
     // The skeleton gate's tight paint bound starts HERE, not at arm time — see
     // the sizing note above. `false` on the common fast path, where the
@@ -436,6 +484,12 @@ export async function performSwitch(
     // signal.
     const gateResult = await paintGatePromise;
     visibleAt = performance.now();
+    entry.visibleAt = visibleAt;
+    mark(PERF_MARKS.PROJECT_SWITCH_GATE_RESOLVED, {
+      gateOutcome: gateResult,
+      releaseChannel: coldReleaseChannel,
+      waitedMs: Math.round(visibleAt - gateArmedAt),
+    });
     if (gateResult === "hard-timeout") {
       // The bound that actually expired: once a skeleton gate has been retimed
       // the provisional `hardMs` is dead, and reporting it would overstate the
@@ -486,6 +540,7 @@ export async function performSwitch(
     } else if (unboundOutgoingView && host.activeProjectId === projectId) {
       detachUnboundOutgoingView(host, unboundOutgoingView);
     }
+    mark(PERF_MARKS.PROJECT_SWITCH_REVEALED, { isNew: true });
 
     logInfo("projectview.coldstart", {
       projectId,

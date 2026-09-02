@@ -1,3 +1,7 @@
+import { PERF_MARKS } from "@shared/perf/marks";
+import { flushPendingPerfMarks } from "@/utils/performance";
+import { markSwitch } from "./switchTrace";
+
 /**
  * Renderer half of the warm-reactivation paint gate (#9679).
  *
@@ -19,6 +23,8 @@
  */
 export function notifyWarmReactivationComplete(): void {
   const fire = (): void => {
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_WARM_PAINT_SIGNALLED);
+    flushPendingPerfMarks();
     try {
       window.electron?.app?.notifyWarmViewPainted?.().catch(() => {
         // Main may have already released the gate via its timeout fallback —

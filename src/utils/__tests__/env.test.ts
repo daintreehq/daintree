@@ -6,6 +6,7 @@ import { getDaintreeEnv, isDaintreeEnvEnabled } from "../env";
 type WindowWithBridge = Window &
   typeof globalThis & {
     __DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__?: boolean;
+    __DAINTREE_PERF_CAPTURE__?: boolean;
   };
 
 describe("getDaintreeEnv / isDaintreeEnvEnabled", () => {
@@ -13,6 +14,7 @@ describe("getDaintreeEnv / isDaintreeEnvEnabled", () => {
 
   beforeEach(() => {
     delete (window as WindowWithBridge).__DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__;
+    delete (window as WindowWithBridge).__DAINTREE_PERF_CAPTURE__;
     vi.stubEnv("DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS", "");
     vi.stubEnv("DAINTREE_VERBOSE", "");
     vi.stubEnv("DAINTREE_PERF_CAPTURE", "");
@@ -20,6 +22,7 @@ describe("getDaintreeEnv / isDaintreeEnvEnabled", () => {
 
   afterEach(() => {
     delete (window as WindowWithBridge).__DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__;
+    delete (window as WindowWithBridge).__DAINTREE_PERF_CAPTURE__;
     vi.unstubAllEnvs();
     Object.assign(import.meta.env, originalViteEnv);
   });
@@ -39,6 +42,22 @@ describe("getDaintreeEnv / isDaintreeEnvEnabled", () => {
   it("falls back to import.meta.env when the bridge is absent", () => {
     vi.stubEnv("DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS", "1");
     expect(isDaintreeEnvEnabled("DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS")).toBe(true);
+  });
+
+  it("returns true for DAINTREE_PERF_CAPTURE when the runtime window bridge is set", () => {
+    (window as WindowWithBridge).__DAINTREE_PERF_CAPTURE__ = true;
+    expect(isDaintreeEnvEnabled("DAINTREE_PERF_CAPTURE")).toBe(true);
+    expect(getDaintreeEnv("DAINTREE_PERF_CAPTURE")).toBe("1");
+  });
+
+  it("DAINTREE_PERF_CAPTURE bridge takes precedence over import.meta.env", () => {
+    (window as WindowWithBridge).__DAINTREE_PERF_CAPTURE__ = true;
+    vi.stubEnv("DAINTREE_PERF_CAPTURE", "0");
+    expect(isDaintreeEnvEnabled("DAINTREE_PERF_CAPTURE")).toBe(true);
+  });
+
+  it("DAINTREE_PERF_CAPTURE stays off when the bridge is absent and env is unset", () => {
+    expect(isDaintreeEnvEnabled("DAINTREE_PERF_CAPTURE")).toBe(false);
   });
 
   it("returns false when neither the bridge nor import.meta.env is set to '1'", () => {

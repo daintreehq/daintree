@@ -611,7 +611,11 @@ describe("project:switch multi-window PVM routing", () => {
     await handler!(fakeEvent, "proj-new");
 
     // Window 2's PVM should have been called
-    expect(pvm2.switchTo).toHaveBeenCalledWith("proj-new", "/projects/new");
+    expect(pvm2.switchTo).toHaveBeenCalledWith(
+      "proj-new",
+      "/projects/new",
+      expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" })
+    );
     // Window 1's PVM should NOT have been called
     expect(pvm1.switchTo).not.toHaveBeenCalled();
   });
@@ -653,7 +657,11 @@ describe("project:switch multi-window PVM routing", () => {
     const fakeEvent = { sender: { id: 99 } };
     await handler!(fakeEvent, "proj-new");
 
-    expect(pvmFallback.switchTo).toHaveBeenCalledWith("proj-new", "/projects/new");
+    expect(pvmFallback.switchTo).toHaveBeenCalledWith(
+      "proj-new",
+      "/projects/new",
+      expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" })
+    );
   });
 
   it("resolves correct PVM for handleProjectGetCurrent", async () => {
@@ -747,7 +755,11 @@ describe("project:switch multi-window PVM routing", () => {
     const fakeEvent = { sender: { id: 20 } };
     await handler!(fakeEvent, "proj-reopen");
 
-    expect(pvm2.switchTo).toHaveBeenCalledWith("proj-reopen", "/projects/reopen");
+    expect(pvm2.switchTo).toHaveBeenCalledWith(
+      "proj-reopen",
+      "/projects/reopen",
+      expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" })
+    );
     expect(pvm1.switchTo).not.toHaveBeenCalled();
   });
 });

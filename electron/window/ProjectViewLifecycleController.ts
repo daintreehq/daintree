@@ -349,23 +349,36 @@ function forEachGuest(
   }
 }
 
-/** Sum the footprint of `hostWc`'s <webview> guests from a pid index. */
-export function sumGuestMemoryKb(
-  hostWc: Electron.WebContents,
-  memoryByPid: ReadonlyMap<number, number>
-): number {
-  let totalKb = 0;
+/**
+ * OS pids of `hostWc`'s live <webview> guests. Guests are separate renderer
+ * processes the host pid lookup never sees, so memory attribution has to
+ * enumerate them explicitly.
+ */
+export function collectGuestPids(hostWc: Electron.WebContents): number[] {
+  const pids: number[] = [];
   forEachGuest(hostWc, (guest) => {
     try {
       const getPid = (guest as { getOSProcessId?: () => number }).getOSProcessId;
       if (typeof getPid !== "function") return;
       const pid = getPid.call(guest);
       if (typeof pid !== "number" || pid <= 0) return;
-      totalKb += memoryByPid.get(pid) ?? 0;
+      pids.push(pid);
     } catch {
       // Guest telemetry is best-effort; keep the host sample intact.
     }
   });
+  return pids;
+}
+
+/** Sum the footprint of `hostWc`'s <webview> guests from a pid index. */
+export function sumGuestMemoryKb(
+  hostWc: Electron.WebContents,
+  memoryByPid: ReadonlyMap<number, number>
+): number {
+  let totalKb = 0;
+  for (const pid of collectGuestPids(hostWc)) {
+    totalKb += memoryByPid.get(pid) ?? 0;
+  }
   return totalKb;
 }
 

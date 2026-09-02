@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- window.electron is untyped in Playwright evaluate() */
 import { test, expect } from "@playwright/test";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import path from "node:path";
 import { launchApp, closeApp, getActiveAppWindow, type AppContext } from "../../helpers/launch";
 import { createFixtureRepos } from "../../helpers/fixtures";
@@ -26,6 +27,9 @@ const TERMINAL_PROJECTS = Number(process.env.PERF_SWITCH_TERMINALS ?? 2);
 // Idle gap between measured switches so deferred post-switch work (LRU
 // eviction, persist flushes) from one sample can't bleed into the next.
 const SETTLE_MS = 400;
+// Optional JSON output for A/B comparison; nothing is written when unset.
+const OUTPUT_PATH = process.env.PERF_SWITCH_OUT;
+const LABEL = process.env.PERF_SWITCH_LABEL ?? "run";
 
 let ctx: AppContext;
 let cleanups: Array<() => void> = [];
@@ -41,13 +45,22 @@ interface ColdReveal {
   loadToPaintMs: number;
 }
 
+interface ColdInteractive {
+  interactiveMs: number;
+  loadMs: number;
+  visibleMs: number;
+  hydrateMs: number;
+}
+
 /** Pull projectview reveal telemetry from the app's own log, scoped by time. */
 function readRevealTelemetry(logPath: string, sinceMs: number) {
   const cold: ColdReveal[] = [];
   const warm: number[] = [];
-  if (!existsSync(logPath)) return { cold, warm };
+  const interactive: ColdInteractive[] = [];
+  if (!existsSync(logPath)) return { cold, warm, interactive };
   const log = readFileSync(logPath, "utf8");
-  const re = /\[([^\]]+)\]\s+\[INFO\]\s+projectview\.(coldstart|warm-swap)\s*(\{[\s\S]*?\})/g;
+  const re =
+    /\[([^\]]+)\]\s+\[INFO\]\s+projectview\.(coldstart\.interactive|coldstart|warm-swap)\s*(\{[\s\S]*?\})/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(log)) !== null) {
     const atMs = Date.parse(m[1]);
@@ -56,6 +69,16 @@ function readRevealTelemetry(logPath: string, sinceMs: number) {
     try {
       payload = JSON.parse(m[3]);
     } catch {
+      continue;
+    }
+    if (m[2] === "coldstart.interactive") {
+      if (typeof payload?.interactiveMs !== "number") continue;
+      interactive.push({
+        interactiveMs: payload.interactiveMs,
+        loadMs: typeof payload.loadMs === "number" ? payload.loadMs : NaN,
+        visibleMs: typeof payload.visibleMs === "number" ? payload.visibleMs : NaN,
+        hydrateMs: typeof payload.hydrateMs === "number" ? payload.hydrateMs : NaN,
+      });
       continue;
     }
     if (typeof payload?.visibleMs !== "number") continue;
@@ -68,7 +91,7 @@ function readRevealTelemetry(logPath: string, sinceMs: number) {
       warm.push(payload.visibleMs);
     }
   }
-  return { cold, warm };
+  return { cold, warm, interactive };
 }
 
 function countMatches(logPath: string, sinceMs: number, needle: RegExp): number {
@@ -94,6 +117,15 @@ function pct(arr: number[], p: number): number {
 function stats(label: string, arr: number[]): string {
   if (arr.length === 0) return `${label}: n=0`;
   return `${label}: n=${arr.length} p50=${pct(arr, 50)}ms p95=${pct(arr, 95)}ms max=${Math.max(...arr)}ms`;
+}
+
+function summary(arr: number[]) {
+  return {
+    n: arr.length,
+    p50: arr.length ? pct(arr, 50) : null,
+    p95: arr.length ? pct(arr, 95) : null,
+    max: arr.length ? Math.max(...arr) : null,
+  };
 }
 
 // Opt-in only — a measurement harness for local A/B runs, not a CI gate.
@@ -269,6 +301,12 @@ perfDescribe("Resilience: project-switch latency measurement", () => {
     );
     console.log(
       stats(
+        "cold interactive (interactiveMs)",
+        coldTele.interactive.map((c) => c.interactiveMs)
+      )
+    );
+    console.log(
+      stats(
         "warm round-trip (switch IPC settled)",
         warmRoundTrips.filter((v) => v >= 0)
       )
@@ -279,6 +317,45 @@ perfDescribe("Resilience: project-switch latency measurement", () => {
     );
     console.log(`reliability: renderer-gone=${rendererGone} paint-hard-timeouts=${hardTimeouts}`);
     console.log("─────────────────────────────────────────────────");
+
+    if (OUTPUT_PATH) {
+      let commit = "unknown";
+      try {
+        commit = execSync("git rev-parse HEAD", {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
+      } catch {
+        // Not a git checkout; the label still identifies the run.
+      }
+      mkdirSync(path.dirname(OUTPUT_PATH), { recursive: true });
+      writeFileSync(
+        OUTPUT_PATH,
+        JSON.stringify(
+          {
+            label: LABEL,
+            commit,
+            createdAt: new Date().toISOString(),
+            cold: {
+              roundTrip: summary(coldRoundTrips.filter((v) => v >= 0)),
+              visible: summary(coldTele.cold.map((c) => c.visibleMs)),
+              loadToPaint: summary(
+                coldTele.cold.map((c) => c.loadToPaintMs).filter((v) => Number.isFinite(v))
+              ),
+              interactive: summary(coldTele.interactive.map((c) => c.interactiveMs)),
+            },
+            warm: {
+              roundTrip: summary(warmRoundTrips.filter((v) => v >= 0)),
+              visible: summary(warmTele.warm),
+            },
+            reliability: { rendererGone, hardTimeouts },
+          },
+          null,
+          2
+        )
+      );
+      console.log(`written: ${OUTPUT_PATH}`);
+    }
 
     // Reliability invariants only — latency itself is reported, not gated.
     expect(rendererGone, "no renderer crashes during measurement").toBe(0);

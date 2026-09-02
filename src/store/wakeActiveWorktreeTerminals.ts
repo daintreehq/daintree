@@ -6,6 +6,8 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { logWarn } from "@/utils/logger";
 import { getErrorMessage } from "@/utils/errorContext";
 import { notifyWarmReactivationComplete } from "@/utils/warmReactivationGate";
+import { PERF_MARKS } from "@shared/perf/marks";
+import { markSwitch } from "@/utils/switchTrace";
 
 const WAKE_CONCURRENCY = 2;
 
@@ -136,10 +138,14 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
   // Slot the focused panel first. It still runs inside the same worker pool, so
   // a hang on the focused panel doesn't block the other visible panels.
   prioritizeFocusedFirst(targets);
+  const focusedTarget = targets[0];
 
   const wakeOne = async (id: string): Promise<void> => {
     try {
       await terminalInstanceService.fullWakeForVisibilityRestore(id);
+      if (id === focusedTarget) {
+        markSwitch(PERF_MARKS.PROJECT_SWITCH_FOCUSED_PANE_WOKEN, { paneId: id });
+      }
     } catch (error) {
       // One broken terminal must not abort the fan-out — the next visible
       // terminal still needs its missed range pulled from the headless mirror.
@@ -169,6 +175,7 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
     workers.push(worker());
   }
   await Promise.all(workers);
+  markSwitch(PERF_MARKS.PROJECT_SWITCH_ALL_PANES_WOKEN, { paneCount: targets.length });
 }
 
 // At most this many terminals repaint on any one frame so a large grid never

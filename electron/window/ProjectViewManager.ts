@@ -14,9 +14,10 @@
  */
 
 import { BrowserWindow, type WebContentsView } from "electron";
+import { performance } from "node:perf_hooks";
 import { registerProjectView } from "./webContentsRegistry.js";
 import { isValidScratchStateId } from "../services/projectStorePaths.js";
-import { logWarn } from "../utils/logger.js";
+import { logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { freezeWebContents, unfreezeWebContents } from "../utils/webContentsLifecycle.js";
@@ -30,7 +31,13 @@ import * as EvictionController from "./ProjectViewEvictionController.js";
 import { hasActiveAgent, initAgentStateCache } from "./ProjectViewAgentStateCache.js";
 import type { PaintGate, PaintGateOutcome, ViewEntry } from "./ProjectViewManagerTypes.js";
 import type { MemoryPressurePolicy } from "../utils/cachedProjectViews.js";
-import type { ProjectFocusOnActivateIntent } from "../../shared/types/ipc/project.js";
+import type {
+  ProjectFocusOnActivateIntent,
+  ProjectSwitchTrace,
+} from "../../shared/types/ipc/project.js";
+import { PERF_MARKS } from "../../shared/perf/marks.js";
+import { markPerformance } from "../utils/performance.js";
+import { collectGuestPids } from "./ProjectViewLifecycleController.js";
 
 // Trailing-edge debounce on freeze entry: the lag-pressure path can flip
 // efficiency on/off without going through the 30 s downgrade hysteresis, so
@@ -118,6 +125,10 @@ export interface ViewInventoryEntry {
   lastUsed: number;
   /** Epoch ms of the project's most recent eviction, if it was ever evicted. */
   evictedAt?: number;
+  /** Renderer OS pid, or null if the view was destroyed mid-read or the pid is unknown. */
+  pid: number | null;
+  /** OS pids of the view's live <webview> guests (browser / dev-preview panels). */
+  guestPids: number[];
 }
 
 export interface ProjectViewManagerOptions {
@@ -493,9 +504,10 @@ export class ProjectViewManager {
    */
   async switchTo(
     projectId: string,
-    projectPath: string
+    projectPath: string,
+    trace?: ProjectSwitchTrace
   ): Promise<{ view: WebContentsView; isNew: boolean }> {
-    const task = this.switchChain.then(() => performSwitch(this, projectId, projectPath));
+    const task = this.switchChain.then(() => performSwitch(this, projectId, projectPath, trace));
     this.switchChain = task.then(
       () => undefined,
       () => undefined
@@ -705,6 +717,42 @@ export class ProjectViewManager {
     entry.preloadEvalDurationMs = durationMs;
   }
 
+  /**
+   * The view's renderer reported `app:first-interactive`. For a view whose
+   * cold start this manager drove, that closes the cold-start timeline:
+   * emit the input-ready log (and the trace mark, when the switch carried one)
+   * and clear the timing fields so a later reload can't re-report them.
+   * No-op for warm views, the startup view, and unknown ids.
+   */
+  recordFirstInteractive(webContentsId: number): void {
+    const projectId = this.webContentsToProject.get(webContentsId);
+    if (projectId === undefined) return;
+    const entry = this.views.get(projectId);
+    if (!entry || entry.coldStartAt === undefined) return;
+    const now = performance.now();
+    const { coldStartAt, loadFinishedAt, visibleAt, switchTrace } = entry;
+    delete entry.coldStartAt;
+    delete entry.loadFinishedAt;
+    delete entry.visibleAt;
+    const interactiveMs = Math.round(now - coldStartAt);
+    logInfo("projectview.coldstart.interactive", {
+      projectId,
+      interactiveMs,
+      loadMs: loadFinishedAt !== undefined ? Math.round(loadFinishedAt - coldStartAt) : null,
+      visibleMs: visibleAt !== undefined ? Math.round(visibleAt - coldStartAt) : null,
+      // React boot after the document settled: the part of the cold start the
+      // load and paint gates cannot see.
+      hydrateMs: loadFinishedAt !== undefined ? Math.round(now - loadFinishedAt) : null,
+    });
+    if (switchTrace) {
+      markPerformance(PERF_MARKS.PROJECT_SWITCH_FIRST_INTERACTIVE, {
+        switchId: switchTrace.switchId,
+        projectId,
+        interactiveMs,
+      });
+    }
+  }
+
   getAllViews(): ViewEntry[] {
     return Array.from(this.views.values());
   }
@@ -728,6 +776,21 @@ export class ProjectViewManager {
       } catch {
         // View torn down mid-read — leave webContentsId as -1.
       }
+      let pid: number | null = null;
+      let guestPids: number[] = [];
+      try {
+        if (webContentsId !== -1) {
+          const wc = entry.view.webContents;
+          const getPid = (wc as { getOSProcessId?: () => number }).getOSProcessId;
+          if (typeof getPid === "function") {
+            const raw = getPid.call(wc);
+            if (typeof raw === "number" && raw > 0) pid = raw;
+          }
+          guestPids = collectGuestPids(wc);
+        }
+      } catch {
+        // View torn down mid-read — report no pid rather than a stale one.
+      }
       const evictedAt = this.evictionTimestamps.get(entry.projectId);
       out.push({
         projectId: entry.projectId,
@@ -735,6 +798,8 @@ export class ProjectViewManager {
         webContentsId,
         state: entry.state,
         lastUsed: entry.lastUsed,
+        pid,
+        guestPids,
         ...(evictedAt !== undefined ? { evictedAt } : {}),
       });
     }

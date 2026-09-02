@@ -126,6 +126,34 @@ describe("markRendererPerformance", () => {
     expect(buffer[buffer.length - 1]!.mark).toBe("mark-2104");
   });
 
+  it("exposes __daintreeMarkPerf only under the E2E flag, routing through the mark buffer", async () => {
+    vi.resetModules();
+    const w = window as Window & { __DAINTREE_E2E_MODE__?: boolean };
+    delete w.__daintreeMarkPerf;
+    delete w.__DAINTREE_E2E_MODE__;
+    await import("../performance");
+    expect(w.__daintreeMarkPerf).toBeUndefined();
+
+    vi.resetModules();
+    w.__DAINTREE_E2E_MODE__ = true;
+    try {
+      await import("../performance");
+      expect(typeof w.__daintreeMarkPerf).toBe("function");
+      window.__DAINTREE_PERF_MARKS__ = [];
+      w.__daintreeMarkPerf!("project_switch.nonce_painted", { switchId: "s1" });
+      expect(window.__DAINTREE_PERF_MARKS__).toEqual([
+        expect.objectContaining({
+          mark: "project_switch.nonce_painted",
+          meta: { switchId: "s1" },
+        }),
+      ]);
+    } finally {
+      delete w.__DAINTREE_E2E_MODE__;
+      delete w.__daintreeMarkPerf;
+      vi.resetModules();
+    }
+  });
+
   it("steady-state flush drains buffered marks on the interval during capture runs", () => {
     vi.useFakeTimers();
     try {

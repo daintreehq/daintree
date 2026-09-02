@@ -97,9 +97,9 @@ export const JOURNEYS: readonly JourneyDefinition[] = [
     usableEndBoundary:
       "the target view is the visible top child, the old project intercepts nothing, the right terminal is attached at sane geometry, and input reaches the target PTY and no other",
     coverage: "partial",
-    commands: ["project-switch"],
+    commands: ["project-switch", "project-switch-rotation"],
     coverageNote:
-      "The spec measures a real switch round trip and the app's own reveal telemetry, which is genuinely user-facing. It does not send an input probe to the target PTY, so 'visible' is proven and 'input-ready' is not — and #11900 showed a terminal can hold the right text at a geometry that makes its history unusable.",
+      "project-switch-rotation drives the real MRU shortcut, palette and toolbar, then types a nonce into the target's focused shell pane and reads the frame xterm painted it, across LRU depths and cache caps — so both 'visible' and 'input-ready' are proven end to end. Still partial: cross-PTY exclusivity is only checked for views still cached at run end (evicted views cannot be scanned), and geometry is only bounded by the pane accepting the nonce, not proven sane — #11900 showed a terminal can hold the right text at a geometry that makes its history unusable.",
     linkedScenarios: [
       "PERF-010",
       "PERF-011",
@@ -124,6 +124,8 @@ export const JOURNEYS: readonly JourneyDefinition[] = [
       "src/services/terminal/**",
       "src/store/**",
       "src/components/Terminal/**",
+      "src/hooks/useProjectMruSwitcher.ts",
+      "src/lib/projectHistoryNav.ts",
     ],
   },
   {

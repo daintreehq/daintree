@@ -19,6 +19,8 @@ import { scheduleOpenWindowsSave } from "../../../window/openWindowsTracker.js";
 import { notificationService } from "../../../services/NotificationService.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { logInfo } from "../../../utils/logger.js";
+import { isPerformanceCaptureEnabled, markPerformance } from "../../../utils/performance.js";
+import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import {
   sanitizeTerminals,
   sanitizeTerminalSizes,
@@ -34,7 +36,10 @@ import {
 } from "../../../../shared/utils/layoutMerge.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { Project } from "../../../types/index.js";
-import type { ProjectSwitchOutgoingState } from "../../../../shared/types/ipc/project.js";
+import type {
+  ProjectSwitchOutgoingState,
+  ProjectSwitchTrace,
+} from "../../../../shared/types/ipc/project.js";
 import type { TabGroup } from "../../../../shared/types/panel.js";
 import type { ProjectFocusOnActivateIntent } from "../../../../shared/types/ipc/project.js";
 
@@ -47,7 +52,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     ctx: IpcContext,
     projectId: string,
     outgoingState?: ProjectSwitchOutgoingState,
-    options?: { focusIntent?: ProjectFocusOnActivateIntent }
+    options?: { focusIntent?: ProjectFocusOnActivateIntent; trace?: ProjectSwitchTrace }
   ) => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
@@ -59,6 +64,8 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     }
 
     const operation = captureSwitchOperation(deps, ctx, projectId, "project:switch");
+    const trace = resolveSwitchTrace(options?.trace);
+    markMainReceived(trace, operation);
 
     // After the capture but before anything acts on it. The capture is a pure
     // synchronous snapshot and has to stay one: read after an await, the
@@ -86,10 +93,12 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       // Rapid switch-back: a cold-start hydrate of the target must not read
       // its state file while a previous switch's persist is still writing it.
       await awaitPendingOutgoingPersist(projectId);
+      markPerformance(PERF_MARKS.PROJECT_SWITCH_PENDING_PERSIST_DONE, { switchId: trace.switchId });
       try {
         await activateProjectView(deps, operation, pvm, project, {
           logPrefix: "[ProjectSwitch]",
           resumeWorkspace: true,
+          trace,
         });
         await persistOutgoing;
       } finally {
@@ -129,7 +138,8 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
   const handleProjectReopen = async (
     ctx: IpcContext,
     projectId: string,
-    outgoingState?: ProjectSwitchOutgoingState
+    outgoingState?: ProjectSwitchOutgoingState,
+    options?: { trace?: ProjectSwitchTrace }
   ) => {
     if (typeof projectId !== "string" || !projectId) {
       throw new Error("Invalid project ID");
@@ -149,6 +159,8 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     }
 
     const operation = captureSwitchOperation(deps, ctx, projectId, "project:reopen");
+    const trace = resolveSwitchTrace(options?.trace);
+    markMainReceived(trace, operation);
 
     await assertProjectRepositoryIntact(project);
 
@@ -166,11 +178,13 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
 
     if (pvm) {
       await awaitPendingOutgoingPersist(projectId);
+      markPerformance(PERF_MARKS.PROJECT_SWITCH_PENDING_PERSIST_DONE, { switchId: trace.switchId });
       try {
         await activateProjectView(deps, operation, pvm, project, {
           logPrefix: "[ProjectReopen]",
           markActive: true,
           resumeWorkspace: true,
+          trace,
         });
         await persistOutgoing;
       } finally {
@@ -194,6 +208,58 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_REOPEN, handleProjectReopen));
 
   return () => handlers.forEach((cleanup) => cleanup());
+}
+
+function resolveSwitchTrace(trace: ProjectSwitchTrace | undefined): ProjectSwitchTrace {
+  if (trace && typeof trace.switchId === "string" && trace.switchId) {
+    return { switchId: trace.switchId, entryPoint: trace.entryPoint ?? "api" };
+  }
+  return { switchId: randomUUID(), entryPoint: "api" };
+}
+
+/**
+ * First main-side mark of a switch trace. Reads the target's cache state and
+ * LRU position at arrival — before anything acts on the switch — and arms a
+ * `setImmediate` whose delay measures how backed up the main loop is right
+ * now (the event-loop lag monitor samples at 1 s and would miss it). Only
+ * evaluated under capture, so the inventory walk never runs in production.
+ */
+function markMainReceived(trace: ProjectSwitchTrace, operation: SwitchOperation): void {
+  if (!isPerformanceCaptureEnabled()) return;
+  const {
+    incomingProjectId: targetProjectId,
+    outgoingProjectId,
+    projectViewManager,
+    windowId,
+  } = operation;
+  let cacheState: "warm" | "cold" = "cold";
+  let lruDepth = -1;
+  try {
+    const live = projectViewManager
+      ?.getAllViews()
+      .some((v) => v.projectId === targetProjectId && !v.view.webContents.isDestroyed());
+    if (live) cacheState = "warm";
+    if (windowId !== undefined) {
+      lruDepth = getProjectHistory(windowId).snapshot().entries.indexOf(targetProjectId);
+    }
+  } catch {
+    // Diagnostics only — never let an inventory read fail the switch.
+  }
+  markPerformance(PERF_MARKS.PROJECT_SWITCH_MAIN_RECEIVED, {
+    switchId: trace.switchId,
+    entryPoint: trace.entryPoint,
+    outgoingProjectId,
+    targetProjectId,
+    cacheState,
+    lruDepth,
+  });
+  const armedAt = performance.now();
+  setImmediate(() => {
+    markPerformance(PERF_MARKS.PROJECT_SWITCH_MAIN_LOOP_PROBE, {
+      switchId: trace.switchId,
+      lagMs: Math.round((performance.now() - armedAt) * 100) / 100,
+    });
+  });
 }
 
 // Monotonic per-window switch epoch. A swap-failure restore (below) is
@@ -455,6 +521,7 @@ type ActivateOptions = {
   logPrefix: string;
   markActive?: boolean;
   resumeWorkspace?: boolean;
+  trace: ProjectSwitchTrace;
 };
 
 async function activateProjectView(
@@ -466,6 +533,10 @@ async function activateProjectView(
 ): Promise<void> {
   const activateStart = performance.now();
   const { incomingProjectId: projectId, outgoingProjectId, senderWindow, windowId } = operation;
+  const { trace } = options;
+  const mark = (name: string, meta?: Record<string, unknown>): void => {
+    markPerformance(name, { switchId: trace.switchId, projectId, ...meta });
+  };
 
   let switchEpoch = 0;
   if (windowId !== undefined) {
@@ -497,7 +568,7 @@ async function activateProjectView(
   // Multi-view path: swap WebContentsViews instead of resetting stores
   let swapResult: { view: Electron.WebContentsView; isNew: boolean };
   try {
-    swapResult = await pvm.switchTo(projectId, project.path);
+    swapResult = await pvm.switchTo(projectId, project.path, trace);
   } catch (error) {
     // The swap failed and rolled back to the previous view, but the early
     // loadProject may have already pointed windowToProject at the failed
@@ -545,6 +616,7 @@ async function activateProjectView(
   }
   const { view, isNew } = swapResult;
   const swapMs = Math.round(performance.now() - activateStart);
+  mark(PERF_MARKS.PROJECT_SWITCH_SWAP_DONE, { isNew, swapMs });
 
   // Fold the completed switch into this window's workspace history. Recorded
   // here — after the view swap has actually committed — because this is the path
@@ -625,7 +697,9 @@ async function activateProjectView(
     const switchedProject = projectStore.getProjectById(projectId) ?? project;
     view.webContents.send(CHANNELS.PROJECT_ON_SWITCH, {
       project: switchedProject,
-      switchId: randomUUID(),
+      switchId: trace.switchId,
+      entryPoint: trace.entryPoint,
+      cacheHit: !isNew,
     });
   }
 
@@ -657,6 +731,7 @@ async function activateProjectView(
         const ctx = deps.windowRegistry.getByWindowId(win.id);
         if (ctx) {
           distributePortsToView(win, ctx, view.webContents, deps.ptyClient ?? null);
+          mark(PERF_MARKS.PROJECT_SWITCH_PTY_PORT_SENT, { isNew: false });
         }
       }
     } catch (err) {
@@ -680,6 +755,7 @@ async function activateProjectView(
       let worktreeLoadError: string | null = null;
       try {
         await loadWorktrees;
+        mark(PERF_MARKS.PROJECT_SWITCH_WORKTREES_LOADED);
 
         // Always attach a direct MessagePort.  For new views this is the
         // first port; for cached views it re-establishes the relay after a
@@ -714,10 +790,12 @@ async function activateProjectView(
   // Switch-settle telemetry: `swapMs` is the view swap (reveal path), the
   // remainder to `totalMs` is the post-swap tail — now dominated by however
   // much of the concurrent worktree load outlived the swap.
+  const totalMs = Math.round(performance.now() - activateStart);
   logInfo("projectswitch.settled", {
     projectId,
     isNew,
     swapMs,
-    totalMs: Math.round(performance.now() - activateStart),
+    totalMs,
   });
+  mark(PERF_MARKS.PROJECT_SWITCH_SETTLED, { swapMs, totalMs, isNew });
 }

@@ -84,6 +84,45 @@ export const PERF_MARKS = {
    */
   WORKTREE_SWITCH_PAINTED: "worktree_switch_painted",
 
+  /**
+   * End-to-end project-switch trace on the real ProjectViewManager path. Every
+   * mark carries `switchId` in meta so one switch can be stitched across the
+   * outgoing renderer, main, and the incoming renderer. Ordered as they fire.
+   */
+  // Outgoing renderer
+  PROJECT_SWITCH_KEYDOWN: "project_switch.keydown",
+  PROJECT_SWITCH_INTENT: "project_switch.intent",
+  PROJECT_SWITCH_BUSY_PAINTED: "project_switch.busy_painted",
+  PROJECT_SWITCH_PERSIST_IDLE: "project_switch.persist_idle",
+  PROJECT_SWITCH_SNAPSHOT_BUILT: "project_switch.snapshot_built",
+  PROJECT_SWITCH_IPC_SENT: "project_switch.ipc_sent",
+  // Main
+  PROJECT_SWITCH_MAIN_RECEIVED: "project_switch.main_received",
+  PROJECT_SWITCH_MAIN_LOOP_PROBE: "project_switch.main_loop_probe",
+  PROJECT_SWITCH_PENDING_PERSIST_DONE: "project_switch.pending_persist_done",
+  PROJECT_SWITCH_CHAIN_ENTERED: "project_switch.chain_entered",
+  PROJECT_SWITCH_VIEW_ATTACHED: "project_switch.view_attached",
+  PROJECT_SWITCH_LOAD_FINISHED: "project_switch.load_finished",
+  PROJECT_SWITCH_GATE_RESOLVED: "project_switch.gate_resolved",
+  PROJECT_SWITCH_REVEALED: "project_switch.revealed",
+  PROJECT_SWITCH_SWAP_DONE: "project_switch.swap_done",
+  PROJECT_SWITCH_PTY_PORT_SENT: "project_switch.pty_port_sent",
+  PROJECT_SWITCH_WORKTREES_LOADED: "project_switch.worktrees_loaded",
+  PROJECT_SWITCH_SETTLED: "project_switch.settled",
+  PROJECT_SWITCH_FIRST_INTERACTIVE: "project_switch.first_interactive",
+  // Incoming renderer
+  PROJECT_SWITCH_ON_SWITCH_RECEIVED: "project_switch.on_switch_received",
+  PROJECT_SWITCH_WARM_ACTIVATED_RECEIVED: "project_switch.warm_activated_received",
+  PROJECT_SWITCH_FOCUSED_PANE_WOKEN: "project_switch.focused_pane_woken",
+  PROJECT_SWITCH_ALL_PANES_WOKEN: "project_switch.all_panes_woken",
+  PROJECT_SWITCH_WARM_PAINT_SIGNALLED: "project_switch.warm_paint_signalled",
+  PROJECT_SWITCH_REVEALED_RECEIVED: "project_switch.revealed_received",
+  PROJECT_SWITCH_REVEAL_REPAINT_DONE: "project_switch.reveal_repaint_done",
+  PROJECT_SWITCH_PTY_PORT_READY: "project_switch.pty_port_ready",
+  // Spec-driven: emitted by the E2E harness through `__daintreeMarkPerf`.
+  PROJECT_SWITCH_NONCE_PAINTED: "project_switch.nonce_painted",
+  PROJECT_SWITCH_NONCE_FRAME: "project_switch.nonce_frame",
+
   PROJECT_STATE_WRITE: "project_state_write",
   PROJECT_STATE_READ: "project_state_read",
   PROJECT_STATE_QUARANTINE: "project_state_quarantine",
