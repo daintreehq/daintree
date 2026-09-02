@@ -1685,10 +1685,15 @@ export function assistantStoreForSlot(slot: number): AssistantStoreApi {
  * gets a fresh one.
  */
 export function releaseAssistantStore(slot: number): void {
-  if (slot === DEFAULT_ASSISTANT_SLOT) {
-    useAssistantStore.getState().reset(null);
-    return;
-  }
+  // Emptied as well as dropped. Dropping alone only decides what the NEXT caller gets;
+  // anything already rendered is still subscribed to the old object and goes on painting
+  // its transcript until something re-renders it. That gap is visible on a workspace
+  // change, which releases every lane and then has no reason to render again — leaving
+  // the outgoing workspace's conversation on screen under the incoming one.
+  storesBySlot.get(slot)?.getState().reset(null);
+  // Slot 0 keeps its identity: it is the module-level store, and everything outside this
+  // registry reads it directly.
+  if (slot === DEFAULT_ASSISTANT_SLOT) return;
   storesBySlot.delete(slot);
 }
 

@@ -927,13 +927,25 @@ export function AssistantPanelView({
   }, []);
 
   useLayoutEffect(() => {
+    // A hidden lane has no layout: `scrollHeight` and `clientHeight` are both 0 under a
+    // `display: none` ancestor, so this would write `scrollTop = 0` on every frame a
+    // background parallel session streamed — and then, with nothing arriving after the
+    // tab was selected, leave the reader at the top of an answer that had finished
+    // without them. `onScroll` cannot correct it either: a scroll that never happened
+    // fires no event, so `pinnedRef` still says pinned and this is the only thing that
+    // can act on it.
+    if (!visible) return;
     if (!pinnedRef.current) return;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
+    // `visible` is a dependency as well as a guard, so becoming visible re-runs this and
+    // lands a revealed lane where it was: at the bottom, on what arrived while it was
+    // away.
+    //
     // `toolCalls` included: a progress line or a settling row changes the transcript's
     // height without touching turns, so leaving it out lets content grow below a
     // reader who is pinned to the bottom and expects to stay there.
-  }, [state.turns, state.approvals, state.notices, state.toolCalls]);
+  }, [visible, state.turns, state.approvals, state.notices, state.toolCalls]);
 
   // A follow-up the engine handed back lands in the composer for editing. Taken once
   // and cleared at the source, so a later render cannot re-fill the box over whatever
