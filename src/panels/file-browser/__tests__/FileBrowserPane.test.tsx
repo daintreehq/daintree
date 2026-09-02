@@ -2502,6 +2502,136 @@ describe("FileBrowserPane re-reads when the project view is revealed (#11588)", 
     expect(lifecycleListeners.size).toBe(0);
   });
 
+  // #12165: the media nonce is split from `surfaceRefreshNonce` so a reveal can
+  // hold it still without also stalling the text re-read, the PDF frame, or the
+  // reclassification that revives a failed preview.
+  describe("playing media (#12165)", () => {
+    const AUDIO_ROW = {
+      path: "media/track.mp3",
+      name: "track.mp3",
+      isDirectory: false,
+      depth: 1,
+      isExpanded: false,
+      isLoading: false,
+    };
+    const OTHER_AUDIO_ROW = { ...AUDIO_ROW, path: "media/other.mp3", name: "other.mp3" };
+
+    const mediaFetchMock = vi.fn();
+    const realCreateObjectURL = URL.createObjectURL;
+    const realRevokeObjectURL = URL.revokeObjectURL;
+
+    beforeEach(() => {
+      let objectUrlSequence = 0;
+      mediaFetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        blob: () => Promise.resolve(new Blob(["x"])),
+      });
+      vi.stubGlobal("fetch", mediaFetchMock);
+      // Unique per call: a constant would let a stale response satisfy an
+      // assertion that a fresh one arrived.
+      URL.createObjectURL = vi.fn(() => `blob:app://daintree/pane-play-${objectUrlSequence++}`);
+      URL.revokeObjectURL = vi.fn();
+      treeState.rows = [...defaultRows, AUDIO_ROW, OTHER_AUDIO_ROW];
+      mockPanel.browserSelectedPath = AUDIO_ROW.path;
+      mockPanel.browserSidebarCollapsed = true;
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      mediaFetchMock.mockReset();
+      // `vi.unstubAllGlobals` does not restore a directly assigned method.
+      URL.createObjectURL = realCreateObjectURL;
+      URL.revokeObjectURL = realRevokeObjectURL;
+    });
+
+    // jsdom neither decodes media nor tracks playback: `fireEvent.play` fires
+    // the event but leaves `paused` true, so the preview's own paused/ended
+    // read would see the opposite of what the test just said happened.
+    function setPlaybackState(
+      element: HTMLMediaElement,
+      state: { paused: boolean; ended?: boolean }
+    ): void {
+      Object.defineProperty(element, "paused", { configurable: true, value: state.paused });
+      Object.defineProperty(element, "ended", { configurable: true, value: state.ended ?? false });
+    }
+
+    async function renderPlaying() {
+      const view = renderPane();
+      await waitFor(() => expect(view.container.querySelector("audio")).not.toBeNull());
+      const audio = view.container.querySelector("audio")!;
+      setPlaybackState(audio, { paused: false });
+      fireEvent.play(audio);
+      return { ...view, audio };
+    }
+
+    it("leaves the player alone on reveal while still re-listing the tree", async () => {
+      // Both halves matter: a re-fetch mints a new object URL and drops the
+      // listener back to zero, while the tree has nothing to protect and must
+      // still catch up on what changed while the project sat cached.
+      const { audio, container } = await renderPlaying();
+      const fetchesBefore = mediaFetchMock.mock.calls.length;
+      const srcBefore = audio.getAttribute("src");
+
+      await emit("revealed");
+
+      expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore);
+      // The same element, still pointed at the same blob — a src comparison
+      // alone would go green on the empty gap while a replacement loads.
+      expect(container.querySelector("audio")).toBe(audio);
+      expect(audio.getAttribute("src")).toBe(srcBefore);
+      expect(treeState.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-fetches on the next reveal once the track ends", async () => {
+      // The suppression is scoped to playback, not permanent — and the spec
+      // leaves `paused` false at the end, so `ended` is what says it stopped.
+      const { audio } = await renderPlaying();
+      const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+      await emit("revealed");
+      expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore);
+
+      setPlaybackState(audio, { paused: false, ended: true });
+      fireEvent.ended(audio);
+      await emit("revealed");
+
+      await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+    });
+
+    it("still re-fetches the player when Refresh is pressed", async () => {
+      // A gesture outranks playback: someone pressing Refresh mid-track is
+      // asking for the rewritten bytes and accepts losing their place.
+      await renderPlaying();
+      const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+      act(() => {
+        fireEvent.click(screen.getByTestId("file-browser-refresh"));
+      });
+
+      await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+    });
+
+    it("does not carry playing state to the next selected media file", async () => {
+      // The stale-flag failure this would otherwise invite: a track left
+      // playing, a different file selected, and every later reveal silently
+      // refusing to refresh a player that was never running.
+      const { rerender, container } = await renderPlaying();
+
+      mockPanel.browserSelectedPath = OTHER_AUDIO_ROW.path;
+      await act(async () => {
+        rerender(paneElement());
+      });
+      await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+      const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+      await emit("revealed");
+
+      await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+    });
+  });
+
   describe("dock parking", () => {
     it("defers the refresh while parked offscreen, then runs it once on activation", async () => {
       // A dock panel stays mounted in the offscreen parking container whether

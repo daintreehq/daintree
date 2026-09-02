@@ -194,6 +194,13 @@ interface ViewerOpts {
   onToggleSidebar?: () => void;
   revision?: string;
   surfaceRefreshNonce?: number;
+  /**
+   * Defaulted independently of `surfaceRefreshNonce`, never derived from it: the
+   * two are split precisely so a reveal can move one without the other (#12165),
+   * and a test that could not tell them apart would go green on the merge.
+   */
+  mediaReloadNonce?: number;
+  onMediaPlayingChange?: (playing: boolean) => void;
   onRefresh?: () => void;
   isRefreshing?: boolean;
   /**
@@ -246,6 +253,8 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         relativePath={filePath ? fileName : null}
         revision={opts.revision ?? "r1"}
         surfaceRefreshNonce={opts.surfaceRefreshNonce ?? 0}
+        mediaReloadNonce={opts.mediaReloadNonce ?? 0}
+        onMediaPlayingChange={opts.onMediaPlayingChange ?? vi.fn()}
         onRefresh={opts.onRefresh ?? vi.fn()}
         isRefreshing={opts.isRefreshing ?? false}
         sidebarCollapsed={opts.sidebarCollapsed ?? false}
@@ -529,6 +538,7 @@ describe("FileBrowserViewer video preview (#11382)", () => {
     const { container, rerender } = renderViewer("/repo/media/demo.webm", {
       revision: "r1",
       surfaceRefreshNonce: 0,
+      mediaReloadNonce: 0,
     });
     await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
     const firstNode = container.querySelector("video");
@@ -536,7 +546,13 @@ describe("FileBrowserViewer video preview (#11382)", () => {
     expect(videoFetchMock).toHaveBeenCalledTimes(1);
 
     // A worktree write elsewhere: the player must be left completely alone.
-    rerender(viewerJsx("/repo/media/demo.webm", { revision: "r2", surfaceRefreshNonce: 0 }));
+    rerender(
+      viewerJsx("/repo/media/demo.webm", {
+        revision: "r2",
+        surfaceRefreshNonce: 0,
+        mediaReloadNonce: 0,
+      })
+    );
     await act(async () => {});
     expect(container.querySelector("video")).toBe(firstNode);
     expect(container.querySelector("video")?.getAttribute("src")).toBe(firstSrc);
@@ -544,7 +560,13 @@ describe("FileBrowserViewer video preview (#11382)", () => {
 
     // Refresh pressed: exactly one more request, aimed at a different URL —
     // proof the nonce reached it, without pinning the leaf's `v=` spelling.
-    rerender(viewerJsx("/repo/media/demo.webm", { revision: "r2", surfaceRefreshNonce: 1 }));
+    rerender(
+      viewerJsx("/repo/media/demo.webm", {
+        revision: "r2",
+        surfaceRefreshNonce: 1,
+        mediaReloadNonce: 1,
+      })
+    );
     await waitFor(() => expect(videoFetchMock).toHaveBeenCalledTimes(2));
     expect(String(videoFetchMock.mock.calls[1]?.[0])).not.toBe(
       String(videoFetchMock.mock.calls[0]?.[0])
@@ -628,13 +650,14 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
 
     const { container, rerender } = renderViewer("/repo/media/track.mp3", {
       surfaceRefreshNonce: 0,
+      mediaReloadNonce: 0,
     });
     await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
     const firstNode = container.querySelector("audio");
     const firstSrc = firstNode?.getAttribute("src");
     expect(audioFetchMock).toHaveBeenCalledTimes(1);
 
-    rerender(viewerJsx("/repo/media/track.mp3", { surfaceRefreshNonce: 1 }));
+    rerender(viewerJsx("/repo/media/track.mp3", { surfaceRefreshNonce: 1, mediaReloadNonce: 1 }));
     await waitFor(() => expect(audioFetchMock).toHaveBeenCalledTimes(2));
 
     // A different URL, so the nonce genuinely reached the request rather than
@@ -654,6 +677,38 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
     });
   });
 
+  it("rides the media nonce, not the surface one a paused-for-playback reveal still moves (#12165)", async () => {
+    // The whole point of the split: a reveal that finds a player running keeps
+    // the media nonce still while `revision` and `surfaceRefreshNonce` move on
+    // for the text re-read and the PDF frame. Wire media back to
+    // `surfaceRefreshNonce` and this goes red.
+    let objectUrlSequence = 0;
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/audio-split-${objectUrlSequence++}`);
+
+    const { container, rerender } = renderViewer("/repo/media/track.mp3", {
+      revision: "0:0",
+      surfaceRefreshNonce: 0,
+      mediaReloadNonce: 0,
+    });
+    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+    const firstNode = container.querySelector("audio");
+    const firstSrc = firstNode?.getAttribute("src");
+    expect(audioFetchMock).toHaveBeenCalledTimes(1);
+
+    rerender(
+      viewerJsx("/repo/media/track.mp3", {
+        revision: "0:1",
+        surfaceRefreshNonce: 1,
+        mediaReloadNonce: 0,
+      })
+    );
+    await act(async () => {});
+
+    expect(audioFetchMock).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("audio")).toBe(firstNode);
+    expect(container.querySelector("audio")?.getAttribute("src")).toBe(firstSrc);
+  });
+
   it("recovers a failed track on refresh, which takes both halves of the signal", async () => {
     // A failed fetch unmounts the preview entirely (`status: "error"`), so
     // `reloadKey` alone can't bring it back — nothing is mounted to receive it.
@@ -667,12 +722,19 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
     const { container, rerender } = renderViewer("/repo/media/track.mp3", {
       revision: "0:0",
       surfaceRefreshNonce: 0,
+      mediaReloadNonce: 0,
     });
     await screen.findByText("This audio file couldn't be played");
     expect(container.querySelector("audio")).toBeNull();
 
-    // Exactly what the pane emits for one Refresh press: both values move.
-    rerender(viewerJsx("/repo/media/track.mp3", { revision: "0:1", surfaceRefreshNonce: 1 }));
+    // Exactly what the pane emits for one Refresh press: all three values move.
+    rerender(
+      viewerJsx("/repo/media/track.mp3", {
+        revision: "0:1",
+        surfaceRefreshNonce: 1,
+        mediaReloadNonce: 1,
+      })
+    );
 
     await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
     expect(screen.queryByText("This audio file couldn't be played")).toBeNull();

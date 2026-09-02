@@ -86,6 +86,16 @@ export interface FileBrowserViewerProps {
    * restarting playback on every background write.
    */
   surfaceRefreshNonce: number;
+  /**
+   * The media half of `surfaceRefreshNonce`, held back when the player on
+   * screen is mid-playback (#12165). Split from it rather than gated inside it
+   * so a stale playback flag can at worst skip a media re-fetch — never stall
+   * the text re-read, the PDF re-navigation, or the reclassification that
+   * brings a failed preview back.
+   */
+  mediaReloadNonce: number;
+  /** Reports the media preview's play state up to the pane that owns the nonce above. */
+  onMediaPlayingChange: (playing: boolean) => void;
   /** Runs the pane's manual refresh — re-reads the tree and the open file. */
   onRefresh: () => void;
   /** Whether that refresh is still draining; spins the Refresh icon. */
@@ -202,6 +212,8 @@ export function FileBrowserViewer({
   relativePath,
   revision,
   surfaceRefreshNonce,
+  mediaReloadNonce,
+  onMediaPlayingChange,
   onRefresh,
   isRefreshing,
   onCollapseAll,
@@ -802,17 +814,18 @@ export function FileBrowserViewer({
       case "video":
         return (
           <div className="h-full w-full overflow-auto">
-            {/* Reloaded on `surfaceRefreshNonce`, never on `revision`: that
-                ticks on every worktree write, and re-fetching would reset
-                playback whenever an agent touches any file. Only a foreground
-                refresh outranks continuity — pressing Refresh (#11586), or
-                coming back to this project (#11588) — so only those pull the
-                rewritten bytes. */}
+            {/* Reloaded on `mediaReloadNonce`, never on `revision`: that ticks
+                on every worktree write, and re-fetching would reset playback
+                whenever an agent touches any file. Only a foreground refresh
+                outranks continuity — pressing Refresh (#11586), or coming back
+                to this project while nothing is playing (#11588, #12165) — so
+                only those pull the rewritten bytes. */}
             <FileVideoPreview
               filePath={filePath}
               rootPath={rootPath}
               label={fileName}
-              reloadKey={surfaceRefreshNonce}
+              reloadKey={mediaReloadNonce}
+              onPlayingChange={onMediaPlayingChange}
               onError={(error) =>
                 setState({
                   status: "error",
@@ -834,7 +847,8 @@ export function FileBrowserViewer({
               filePath={filePath}
               rootPath={rootPath}
               label={fileName}
-              reloadKey={surfaceRefreshNonce}
+              reloadKey={mediaReloadNonce}
+              onPlayingChange={onMediaPlayingChange}
               onError={(error) =>
                 setState({
                   status: "error",

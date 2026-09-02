@@ -25,6 +25,18 @@ function respondWith(blob: Blob, headers: Record<string, string> = {}) {
   });
 }
 
+// jsdom neither decodes media nor tracks playback: `fireEvent.play` dispatches
+// the event but leaves `paused` true and `ended` false, so a handler reading
+// them off the element would see the opposite of what it was told. Set the
+// state the real element would be in before firing.
+function setPlaybackState(
+  element: HTMLMediaElement,
+  state: { paused: boolean; ended?: boolean }
+): void {
+  Object.defineProperty(element, "paused", { configurable: true, value: state.paused });
+  Object.defineProperty(element, "ended", { configurable: true, value: state.ended ?? false });
+}
+
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
   let nextUrl = 0;
@@ -219,5 +231,93 @@ describe("FileVideoPreview", () => {
     await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
     fireEvent.error(container.querySelector("video")!);
     expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports playing state through play, pause and ended", async () => {
+    // The signal an owner gates its reload key on: without it, coming back to a
+    // project remounts the element and drops the listener's place (#12165).
+    respondWith(new Blob(["x"]));
+    const onPlayingChange = vi.fn();
+    const { container } = render(
+      <FileVideoPreview
+        filePath="/repo/demo.mp4"
+        rootPath="/repo"
+        label="demo.mp4"
+        onPlayingChange={onPlayingChange}
+      />
+    );
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+    const element = container.querySelector("video")!;
+
+    setPlaybackState(element, { paused: false });
+    fireEvent.play(element);
+    expect(onPlayingChange).toHaveBeenLastCalledWith(true);
+
+    // Buffering drops readyState while `paused` stays false, which is why the
+    // component reads paused/ended and never readiness.
+    setPlaybackState(element, { paused: true });
+    fireEvent.pause(element);
+    expect(onPlayingChange).toHaveBeenLastCalledWith(false);
+
+    // The spec leaves `paused` false at the end of a track, so `ended` is the
+    // only thing that says playback stopped here.
+    setPlaybackState(element, { paused: false, ended: true });
+    fireEvent.ended(element);
+    expect(onPlayingChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("takes a reported play back when the source is replaced", async () => {
+    // The replacement element mounts paused and fires no `pause` of its own, so
+    // an owner left holding the last `true` would suppress reloads forever.
+    respondWith(new Blob(["x"]));
+    const onPlayingChange = vi.fn();
+    const { container, rerender } = render(
+      <FileVideoPreview
+        filePath="/repo/demo.mp4"
+        rootPath="/repo"
+        label="demo.mp4"
+        reloadKey={1}
+        onPlayingChange={onPlayingChange}
+      />
+    );
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+    const element = container.querySelector("video")!;
+    setPlaybackState(element, { paused: false });
+    fireEvent.play(element);
+    expect(onPlayingChange).toHaveBeenLastCalledWith(true);
+
+    rerender(
+      <FileVideoPreview
+        filePath="/repo/demo.mp4"
+        rootPath="/repo"
+        label="demo.mp4"
+        reloadKey={2}
+        onPlayingChange={onPlayingChange}
+      />
+    );
+
+    expect(onPlayingChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("takes a reported play back when it unmounts", async () => {
+    respondWith(new Blob(["x"]));
+    const onPlayingChange = vi.fn();
+    const { container, unmount } = render(
+      <FileVideoPreview
+        filePath="/repo/demo.mp4"
+        rootPath="/repo"
+        label="demo.mp4"
+        onPlayingChange={onPlayingChange}
+      />
+    );
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+    const element = container.querySelector("video")!;
+    setPlaybackState(element, { paused: false });
+    fireEvent.play(element);
+    expect(onPlayingChange).toHaveBeenLastCalledWith(true);
+
+    unmount();
+
+    expect(onPlayingChange).toHaveBeenLastCalledWith(false);
   });
 });

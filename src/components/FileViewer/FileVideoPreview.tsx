@@ -1,3 +1,4 @@
+import { useEffect, useEffectEvent } from "react";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useMediaBlobUrl } from "./useMediaBlobUrl";
 import type { MediaPreviewError } from "./useMediaBlobUrl";
@@ -31,6 +32,14 @@ interface FileVideoPreviewProps {
   reloadKey?: string | number;
   /** Called when the video can't be fetched or played; an error overrides the caller's generic copy. */
   onError?: (error?: VideoPreviewError) => void;
+  /**
+   * Reports whether this preview is mid-playback, so an owner that would
+   * otherwise move `reloadKey` can hold off (#12165). Always taken back on
+   * unmount or a source change: a fresh element starts paused and fires no
+   * `pause` of its own, so an owner left holding the last `true` would suppress
+   * reloads for a player that no longer exists.
+   */
+  onPlayingChange?: (playing: boolean) => void;
   /** Height cap for the preview surface — dialogs and panes want different ones. */
   maxHeightClassName?: string;
 }
@@ -49,6 +58,7 @@ export function FileVideoPreview({
   label,
   reloadKey,
   onError,
+  onPlayingChange,
   maxHeightClassName = "max-h-[70vh]",
 }: FileVideoPreviewProps) {
   const { objectUrl, fetching } = useMediaBlobUrl({
@@ -59,6 +69,16 @@ export function FileVideoPreview({
     tooLargeError: VIDEO_TOO_LARGE_ERROR,
     onError,
   });
+
+  // Effect event so this keys on the source alone — callers pass inline
+  // closures, and re-running on every parent render would report a stop the
+  // element never made.
+  const reportPlaying = useEffectEvent((playing: boolean) => onPlayingChange?.(playing));
+  // Scoped to the same identity the fetch is: whatever moves the source
+  // replaces the element, and the replacement starts paused.
+  useEffect(() => {
+    return () => reportPlaying(false);
+  }, [filePath, rootPath, reloadKey]);
 
   return (
     <div className="flex items-center justify-center p-6 min-h-[300px]">
@@ -76,6 +96,18 @@ export function FileVideoPreview({
           preload="metadata"
           aria-label={label}
           className={`max-w-full ${maxHeightClassName} rounded`}
+          // `paused` alone would call a buffering stall a stop; `ended` alone
+          // would call a finished video still playing (the spec leaves `paused`
+          // false at the end). Both, on all three events, or neither is right.
+          onPlay={(event) =>
+            onPlayingChange?.(!event.currentTarget.paused && !event.currentTarget.ended)
+          }
+          onPause={(event) =>
+            onPlayingChange?.(!event.currentTarget.paused && !event.currentTarget.ended)
+          }
+          onEnded={(event) =>
+            onPlayingChange?.(!event.currentTarget.paused && !event.currentTarget.ended)
+          }
           onError={() => onError?.()}
         />
       ) : fetching ? (
