@@ -13,6 +13,10 @@ import { AppError } from "../../../utils/errorTypes.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { ProjectSwitchService } from "../../../services/ProjectSwitchService.js";
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
+import {
+  buildTerminalInventory,
+  prefetchTerminalInventory,
+} from "../../../services/terminalInventoryPrefetch.js";
 import { broadcastProjectSwitchUpdates } from "../../projectSwitchBroadcast.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import { scheduleOpenWindowsSave } from "../../../window/openWindowsTracker.js";
@@ -208,6 +212,19 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
   handlers.push(typedHandleWithContext(CHANNELS.PROJECT_REOPEN, handleProjectReopen));
 
   return () => handlers.forEach((cleanup) => cleanup());
+}
+
+function hasLiveView(
+  pvm: ReturnType<typeof resolveProjectViewManager>,
+  projectId: string
+): boolean {
+  try {
+    return Boolean(
+      pvm?.getAllViews().some((v) => v.projectId === projectId && !v.view.webContents.isDestroyed())
+    );
+  } catch {
+    return false;
+  }
 }
 
 function resolveSwitchTrace(trace: ProjectSwitchTrace | undefined): ProjectSwitchTrace {
@@ -568,6 +585,13 @@ async function activateProjectView(
   // Multi-view path: swap WebContentsViews instead of resetting stores
   let swapResult: { view: Electron.WebContentsView; isNew: boolean };
   try {
+    // A target with no live view is about to hydrate from scratch and will ask
+    // for its backend terminal inventory ~240 ms from now, once React is up.
+    // Start that pty-host fetch here so the answer is waiting when it does.
+    if (deps.ptyClient && !hasLiveView(pvm, projectId)) {
+      const ptyClient = deps.ptyClient;
+      void prefetchTerminalInventory(projectId, (id) => buildTerminalInventory(ptyClient, id));
+    }
     swapResult = await pvm.switchTo(projectId, project.path, trace);
   } catch (error) {
     // The swap failed and rolled back to the previous view, but the early

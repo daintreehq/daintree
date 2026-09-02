@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { _resetTerminalInventoryPrefetchForTests } from "../../../services/terminalInventoryPrefetch.js";
 import os from "os";
 
 vi.mock("electron", () => ({
@@ -1723,6 +1724,8 @@ describe("project:switch PTY port ordering (#10075)", () => {
     const pvm = {
       switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: opts.isNew }),
       getProjectIdForWebContents: vi.fn(),
+      // A warm target has a live entry before the swap; a cold one has none.
+      getAllViews: vi.fn(() => (opts.isNew ? [] : [{ projectId: "proj-new", view: mockView }])),
     };
 
     mockGetWindowForWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
@@ -1735,7 +1738,15 @@ describe("project:switch PTY port ordering (#10075)", () => {
     });
     projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
 
-    const ptyClient = { onProjectSwitch: vi.fn() };
+    const ptyClient = {
+      onProjectSwitch: vi.fn(),
+      getTerminalsForProjectAsync: vi.fn(async () => ["t1"]),
+      getTerminalAsync: vi.fn(async (id: string) => ({
+        id,
+        projectId: "proj-new",
+        kind: "terminal",
+      })),
+    };
     const worktreeService = {
       loadProject: vi.fn(opts.loadProject),
       attachDirectPort: vi.fn(),
@@ -2079,5 +2090,82 @@ describe("project:switch outgoing project is the sender's, not the global (#1110
       expect(worktreeService.loadProject).toHaveBeenCalledWith("/projects/p2", WINDOW_B)
     );
     expect(worktreeService.loadProject).not.toHaveBeenCalledWith("/projects/p1", WINDOW_B);
+  });
+});
+
+describe("project:switch terminal inventory prefetch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetTerminalInventoryPrefetchForTests();
+  });
+
+  function setupWith(isNew: boolean) {
+    const sendMock = vi.fn();
+    const mockView = {
+      webContents: { id: 300, isDestroyed: () => false, send: sendMock },
+    };
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew }),
+      getProjectIdForWebContents: vi.fn(),
+      getAllViews: vi.fn(() => (isNew ? [] : [{ projectId: "proj-new", view: mockView }])),
+    };
+    mockGetWindowForWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New Project",
+      path: "/projects/new",
+    });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+    const ptyClient = {
+      onProjectSwitch: vi.fn(),
+      getTerminalsForProjectAsync: vi.fn(async () => ["t1"]),
+      getTerminalAsync: vi.fn(async (id: string) => ({
+        id,
+        projectId: "proj-new",
+        kind: "terminal",
+      })),
+    };
+    const worktreeService = {
+      loadProject: vi.fn(async () => undefined),
+      attachDirectPort: vi.fn(),
+      getHostForProject: vi.fn(() => null),
+      resumeProject: vi.fn(),
+      pauseProject: vi.fn(),
+    };
+    const windowRegistry = makeWindowRegistry([makeWindowContext(7, 300)]);
+    (
+      windowRegistry as unknown as { registerAppViewWebContents: unknown }
+    ).registerAppViewWebContents = vi.fn();
+    const deps = {
+      mainWindow: { id: 7 } as unknown,
+      projectViewManager: pvm,
+      worktreeService: worktreeService as never,
+      ptyClient: ptyClient as never,
+      windowRegistry,
+    } as unknown as HandlerDependencies;
+    registerProjectCrudHandlers(deps);
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+    const invoke = () =>
+      handleMap.get(CHANNELS.PROJECT_SWITCH)!({ sender: { id: 300 } }, "proj-new");
+    return { invoke, ptyClient, pvm };
+  }
+
+  it("starts the pty-host inventory fetch for a cold target before the swap", async () => {
+    const { invoke, ptyClient, pvm } = setupWith(true);
+    await invoke();
+    expect(ptyClient.getTerminalsForProjectAsync).toHaveBeenCalledWith("proj-new");
+    expect(ptyClient.getTerminalsForProjectAsync.mock.invocationCallOrder[0]).toBeLessThan(
+      pvm.switchTo.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("does not fetch the inventory for a target that already has a live view", async () => {
+    const { invoke, ptyClient } = setupWith(false);
+    await invoke();
+    expect(ptyClient.getTerminalsForProjectAsync).not.toHaveBeenCalled();
   });
 });

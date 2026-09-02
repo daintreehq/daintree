@@ -138,6 +138,12 @@ export const PERF_MARKS = {
   TERMINAL_DATA_PARSED: "terminal_data_parsed",
   TERMINAL_DATA_RENDERED: "terminal_data_rendered",
   /**
+   * Whether a cold switch's `terminal:get-for-project` was served from the
+   * inventory main prefetched when the switch arrived, or paid the pty-host
+   * round trip on the hydration critical path.
+   */
+  TERMINAL_INVENTORY_PREFETCH: "terminal_inventory_prefetch",
+  /**
    * Sampled keystroke→echo delta: time from a MessagePort terminal write to
    * the next port data chunk for the same terminal id (~1/32 writes; pairs
    * older than 250ms are discarded so unrelated output isn't counted as
