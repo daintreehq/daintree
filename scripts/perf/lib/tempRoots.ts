@@ -33,7 +33,7 @@ type TerminationSignal = (typeof TERMINATION_SIGNALS)[number];
 /** Returns whether the directory is gone. Never throws; see the module comment. */
 function remove(root: string): boolean {
   try {
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     return true;
   } catch {
     return false;
@@ -41,8 +41,13 @@ function remove(root: string): boolean {
 }
 
 function removeAll(): void {
-  for (const root of roots) remove(root);
-  roots.clear();
+  // Keep a failed removal registered. Liveness children call cleanup before
+  // process.exit and the exit hook calls it again, giving transient writers or
+  // native watcher teardown a second bounded chance instead of forgetting the
+  // root after the first ENOTEMPTY/EBUSY result.
+  for (const root of [...roots]) {
+    if (remove(root)) roots.delete(root);
+  }
 }
 
 function onSignal(signal: TerminationSignal): void {

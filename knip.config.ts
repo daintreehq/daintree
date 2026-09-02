@@ -39,7 +39,15 @@ const config: KnipConfig = {
     "scripts/perf/launch-ab.ts",
     "scripts/perf/memory-bench-compare.ts",
     "scripts/perf/memory-growth-compare.ts",
+    "scripts/perf/project-switch-rotation-compare.ts",
     "scripts/perf/verify-baselines.ts",
+    "scripts/perf/diagnose.ts",
+    "scripts/perf/journeys/report.ts",
+
+    // The liveness and module-hook guards launch these drivers by string path
+    // in isolated Node processes, so Knip cannot follow the spawn edge.
+    "scripts/perf/__tests__/moduleHookProbe.ts",
+    "scripts/perf/__tests__/scenarioSmokeDriver.ts",
 
     // why: bench-only classic script inlined by vite.config.ts via readFileSync
     // when DAINTREE_RENDER_PROBE=1 (`npm run build:e2e:bench`). Knip cannot
@@ -50,6 +58,13 @@ const config: KnipConfig = {
     // Playwright discovers specs by filesystem glob; knip has no visibility
     // into the test runner, so tests appear unused without these roots.
     "e2e/**/*.spec.ts",
+
+    // Standalone visual-review harnesses loaded from root HTML files via
+    // <script type="module">. Knip does not follow HTML module-script edges,
+    // so declare the TypeScript roots directly and retain analysis of their
+    // imported shims and fixtures.
+    "src/components/HelpPanel/__preview__/preview.tsx",
+    "src/components/Worktree/__preview__/preview.tsx",
   ],
 
   // Project files Knip considers part of the graph. Includes root-level
@@ -136,6 +151,7 @@ const config: KnipConfig = {
     "ditto",
     "du",
     "gnome-control-center",
+    "mkfifo",
     "osascript",
     "pgrep",
     "pkill",

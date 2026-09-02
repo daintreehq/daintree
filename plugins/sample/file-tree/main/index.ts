@@ -24,7 +24,7 @@ interface ListDirectoryArgs {
 }
 
 export async function activate(host: PluginHostApi): Promise<void> {
-  await host.registerHandler("list-directory", async (args: unknown) => {
+  await host.registerHandler("list-directory", async (_ctx, args: unknown) => {
     const { dirPath } = (args ?? {}) as Partial<ListDirectoryArgs>;
     if (typeof dirPath !== "string" || dirPath.length === 0) {
       throw new Error("list-directory requires a dirPath");

@@ -395,7 +395,7 @@ export const ipcEnvelopeScenarios: PerfScenario[] = [
     id: "PERF-361",
     name: "IPC Invoke Envelope Cost by Payload Shape",
     description:
-      "The same 64 KiB of payload through the real wrapper in four structures — one flat string, 1,500 shallow keys, a 2,000-level plain-object chain, and a 900-row array — padded to byte-identical size so the only variable is shape. This is the reading the comment at security.ts:115-125 asks for: the old containsBinary pre-walk bailed out past depth 32 and SKIPPED the byte gate, so deep plain objects were never measured, and folding detection into sizeGuardReplacer means they now are. Each shape's byte count is reasserted against this fixture's own arithmetic every iteration, so a corpus that quietly shrank is a miss rather than a faster number.",
+      "The same 64 KiB of payload through the real wrapper in four structures — one flat string, 1,500 shallow keys, a 1,000-level plain-object chain, and a 900-row array — padded to byte-identical size so the only variable is shape. This is the reading the comment at security.ts:115-125 asks for: the old containsBinary pre-walk bailed out past depth 32 and SKIPPED the byte gate, so deep plain objects were never measured, and folding detection into sizeGuardReplacer means they now are. Each shape's byte count is reasserted against this fixture's own arithmetic every iteration, so a corpus that quietly shrank is a miss rather than a faster number.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     warmups: WARMUPS,

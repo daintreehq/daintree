@@ -418,6 +418,19 @@ describe("buildSubmoduleDeleteRisk", () => {
     );
   });
 
+  it.skipIf(process.platform === "win32")(
+    "binds Git's canonical core.worktree when the caller uses a path alias",
+    async () => {
+      const alias = path.join(tmp, "wt1-alias");
+      symlinkSync(worktree, alias, "dir");
+
+      const risk = await buildSubmoduleDeleteRisk(alias);
+
+      expect(risk.incomplete).toBe(false);
+      expect(risk.entries.map((entry) => entry.path)).toEqual(["vendor/lib"]);
+    }
+  );
+
   it("lists real nested paths prefixed with the submodule path", async () => {
     const risk = await buildSubmoduleDeleteRisk(worktree);
     expect(risk.dirtyFiles).toContain("vendor/lib/a.txt");

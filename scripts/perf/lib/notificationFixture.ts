@@ -425,10 +425,11 @@ let hooksInstalled = false;
 /**
  * Remap `electron` and the six collaborator modules named in the header, so the
  * main-process notification graph loads outside Electron. `registerHooks` is
- * synchronous and in-thread but landed in Node 22.15 while `.nvmrc` pins 22.13,
- * so `module.register` — whose hooks run in a worker and therefore resolve
- * asynchronously — is the fallback. Under Vitest neither fires, which is why
- * the unit test exercises the oracles rather than the loaded graph.
+ * synchronous and in-thread on supported runtimes; `module.register` — whose
+ * hooks run in a worker and therefore resolve asynchronously — remains a
+ * defensive fallback for older Node 22 installations. Under Vitest neither
+ * fires, which is why the unit test exercises the oracles rather than the
+ * loaded graph.
  */
 function installModuleStubs(): void {
   if (hooksInstalled) return;

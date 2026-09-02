@@ -449,7 +449,7 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
         }
         return measured(surfaced.atMs - addDoneAt);
       } finally {
-        harness.dispose();
+        await harness.dispose();
       }
     },
   },

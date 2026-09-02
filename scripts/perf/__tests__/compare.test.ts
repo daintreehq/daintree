@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { buildComparison, loadSummary, renderComparison, UsageError } from "../compare";
+import { createPerfTempRoot, releasePerfTempRoot } from "../lib/tempRoots";
 import type { MetricStat, PerfRunSummary, RunEnvironment, ScenarioAggregate } from "../types";
 
 const perfDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -544,7 +544,9 @@ describe("warnings", () => {
 });
 
 describe("loadSummary", () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "perf-compare-"));
+  const dir = createPerfTempRoot("perf-compare-");
+
+  afterAll(() => releasePerfTempRoot(dir));
 
   function fixture(name: string, data: unknown): string {
     const filePath = path.join(dir, name);
@@ -602,21 +604,25 @@ describe("cli", () => {
     // The suite never fails a build for a number, so a refusal cannot use the
     // exit code. That makes the *output* the whole signal, and a caller that
     // checks only the status must not be able to mistake this for a comparison.
-    const dir = mkdtempSync(path.join(tmpdir(), "perf-compare-cli-"));
-    const write = (name: string, data: PerfRunSummary) => {
-      const filePath = path.join(dir, name);
-      writeFileSync(filePath, JSON.stringify(data), "utf8");
-      return filePath;
-    };
-    const filtered = summary("after", MAC, [scenario("PERF-105", 150, {})], {
-      protocol: { iterations: null, warmups: null, scenarioSelection: ["PERF-105"] },
-    });
-    const result = run(write("before.json", beforeMac), write("after.json", filtered));
+    const dir = createPerfTempRoot("perf-compare-cli-");
+    try {
+      const write = (name: string, data: PerfRunSummary) => {
+        const filePath = path.join(dir, name);
+        writeFileSync(filePath, JSON.stringify(data), "utf8");
+        return filePath;
+      };
+      const filtered = summary("after", MAC, [scenario("PERF-105", 150, {})], {
+        protocol: { iterations: null, warmups: null, scenarioSelection: ["PERF-105"] },
+      });
+      const result = run(write("before.json", beforeMac), write("after.json", filtered));
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Machine-dependent comparison REFUSED");
-    expect(result.stdout).toContain("different scenario selections");
-    expect(result.stdout).toContain("REFUSED");
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("Machine-dependent comparison REFUSED");
+      expect(result.stdout).toContain("different scenario selections");
+      expect(result.stdout).toContain("REFUSED");
+    } finally {
+      releasePerfTempRoot(dir);
+    }
   });
 });
 

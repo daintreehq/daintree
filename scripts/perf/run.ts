@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { closeAllParcelWatcherSubscriptions } from "../../electron/utils/parcelWatcherBackend";
 import { loadBudgetConfig, getScenarioBudget } from "./lib/budgets";
 import {
   BASELINE_FRESHNESS_DAYS,
@@ -1365,7 +1366,8 @@ const isEntrypoint =
  * `process.exit` truncates whatever is still queued, and in CI stderr is a pipe
  * — which is exactly where the measurement-issue block goes.
  */
-function exitAfterFlush(code: number): Promise<never> {
+async function exitAfterFlush(code: number): Promise<never> {
+  await closeAllParcelWatcherSubscriptions();
   return new Promise<never>((resolve) => {
     let pending = 2;
     const done = () => {

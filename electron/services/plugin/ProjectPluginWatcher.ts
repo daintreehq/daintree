@@ -2,11 +2,11 @@ import path from "path";
 import { createHash } from "crypto";
 import { existsSync, promises as fsp, watch as fsWatch, type FSWatcher } from "fs";
 
-import parcelWatcher, { type AsyncSubscription } from "@parcel/watcher";
+import type { AsyncSubscription } from "@parcel/watcher";
 
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { createLogger } from "../../utils/logger.js";
-import { parcelWatcherBackendOption } from "../../utils/parcelWatcherBackend.js";
+import { subscribeParcelWatcher } from "../../utils/parcelWatcherBackend.js";
 import { getGitDir } from "../../utils/gitUtils.js";
 import {
   PROJECT_PLUGINS_DIR_SEGMENTS,
@@ -240,7 +240,7 @@ export function attributeProjectPluginEvent(pluginsRoot: string, eventPath: stri
 /**
  * Hot reload for project-local plugins (§7.10).
  *
- * One `@parcel/watcher` subscription per trusted project, over
+ * One recursive watcher subscription per trusted project, over
  * `<projectRoot>/.daintree/plugins`. A settled burst is treated as "rescan the
  * plugin dir", never as "these exact files changed", and the rescan is handed
  * to the ordinary project-open reconcile rather than to a second loader — which
@@ -414,7 +414,7 @@ export class ProjectPluginWatcher {
 
     let subscription: AsyncSubscription;
     try {
-      subscription = await parcelWatcher.subscribe(
+      subscription = await subscribeParcelWatcher(
         pluginsRoot,
         (err, events) => {
           if (state.generation !== generation || state.stopped || this.disposed) return;
@@ -447,7 +447,6 @@ export class ProjectPluginWatcher {
           // decides. `src/` is the one that matters: a plugin's sources churn
           // on every keystroke and say nothing about its built artifact.
           ignore: ["**/src/**", "**/node_modules/**", "**/.git/**"],
-          ...parcelWatcherBackendOption(),
         }
       );
     } catch (err) {

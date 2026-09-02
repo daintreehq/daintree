@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
+import path from "node:path";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
@@ -1002,8 +1003,11 @@ describe("WorkspaceService.deleteWorktree", () => {
   });
 
   describe("submodule delete gate", () => {
-    const MODULES_DIR = "/test/worktree/.git/modules";
-    const SURVIVING_STORE = `${MODULES_DIR}/vendor-lib`;
+    // WorkspaceService resolves filesystem probes before calling them. On
+    // Windows an apparent `/test/...` path acquires the current drive, so the
+    // mocks must compare with that same host-resolved spelling.
+    const MODULES_DIR = n(path.resolve("/test/worktree", ".git", "modules"));
+    const SURVIVING_STORE = n(path.resolve("/test/worktree", ".git", "modules", "vendor-lib"));
     /** Field separator in the surviving-store rev walk's `--format`. */
     const US = "\u001f";
 

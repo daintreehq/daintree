@@ -46,7 +46,15 @@ const ALLOWED_EXTERNALS = new Set([
 ]);
 
 function run(command, args) {
-  return execFileSync(command, args, { cwd: root, encoding: "utf-8", stdio: "pipe" });
+  return execFileSync(command, args, {
+    cwd: root,
+    encoding: "utf-8",
+    stdio: "pipe",
+    // npm is exposed through npm.cmd on Windows. execFileSync does not launch
+    // command shims through cmd.exe unless a shell is requested, so a direct
+    // `npm` lookup reports ENOENT even though setup-node installed it.
+    shell: process.platform === "win32",
+  });
 }
 
 function fail(message) {

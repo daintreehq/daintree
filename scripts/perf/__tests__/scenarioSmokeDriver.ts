@@ -25,6 +25,8 @@
  */
 import { allScenarios } from "../scenarios";
 import type { PerfMode } from "../types";
+import { cleanupPerfTempRoots } from "../lib/tempRoots";
+import { closeAllParcelWatcherSubscriptions } from "../../../electron/utils/parcelWatcherBackend";
 
 /** The cheapest mode a scenario declares, preferred smoke-first. */
 const MODE_PREFERENCE: readonly PerfMode[] = ["smoke", "ci", "nightly", "soak"];
@@ -113,12 +115,18 @@ async function main(): Promise<void> {
 }
 
 main().then(
-  () => {
+  async () => {
+    await closeAllParcelWatcherSubscriptions();
+    // Run once while the event loop is still alive; the process exit hook is a
+    // second attempt for roots whose native handles were still settling.
+    cleanupPerfTempRoots();
     process.exit(0);
   },
-  (error: unknown) => {
+  async (error: unknown) => {
     const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
     process.stdout.write(`${JSON.stringify({ ok: false, id: process.argv[2], message })}\n`);
+    await closeAllParcelWatcherSubscriptions();
+    cleanupPerfTempRoots();
     process.exit(1);
   }
 );

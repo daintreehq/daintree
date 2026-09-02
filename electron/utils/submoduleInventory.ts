@@ -619,6 +619,22 @@ export async function buildSubmoduleDeleteRisk(
     for (const gitlink of indexGitlinks) rosterPaths.add(gitlink.path);
     for (const treePath of headGitlinks?.keys() ?? []) rosterPaths.add(treePath);
 
+    // Git canonicalises paths independently of the caller. On macOS that is
+    // commonly `/private/tmp/...` versus `/tmp/...`; on Windows it can be a
+    // long temp path versus its 8.3 spelling. Comparing a store's
+    // `core.worktree` against the lexical caller path therefore makes the same
+    // checkout look external and turns an otherwise complete inventory into a
+    // refusal. Resolve the root once and use that identity for both store
+    // binding and the containment check below.
+    let realRoot: string | null = null;
+    if (rosterPaths.size > 0 || scannedModules.length > 0) {
+      try {
+        realRoot = await realpathOrMissing(root);
+      } catch (error) {
+        markIncomplete("worktree path could not be resolved", error);
+      }
+    }
+
     // A scanned module's directory name is its LOGICAL name, which only equals
     // the checkout path by default convention — `--name` decouples them. Bind
     // each one to a real path before it can enter the roster, and keep EVERY
@@ -634,7 +650,14 @@ export async function buildSubmoduleDeleteRisk(
       if (module.hasNestedModules) {
         markIncomplete(`module store ${module.name} holds nested submodules`);
       }
-      const binding = await resolveModuleCheckoutPath(git, root, module, stanzas, timeoutMs);
+      const binding = await resolveModuleCheckoutPath(
+        git,
+        root,
+        realRoot,
+        module,
+        stanzas,
+        timeoutMs
+      );
       if (binding.kind !== "bound") {
         markIncomplete(`module ${module.name}: ${binding.reason}`, binding.error);
         unboundStores.push(module);
@@ -646,17 +669,6 @@ export async function buildSubmoduleDeleteRisk(
       const bucket = scannedByPath.get(binding.checkoutPath);
       if (bucket) bucket.push(module);
       else scannedByPath.set(binding.checkoutPath, [module]);
-    }
-
-    // Resolved once, and only past the cost gate, so a submodule-free
-    // repository still pays nothing for it.
-    let realRoot: string | null = null;
-    if (rosterPaths.size > 0) {
-      try {
-        realRoot = await realpathOrMissing(root);
-      } catch (error) {
-        markIncomplete("worktree path could not be resolved", error);
-      }
     }
 
     const entries: SubmoduleEntry[] = [];
@@ -732,12 +744,22 @@ export async function buildSubmoduleDeleteRisk(
       }
 
       const candidateGitDirs: string[] = [];
-      const addCandidate = (dir: string): void => {
+      const candidateIdentities = new Set<string>();
+      const addCandidate = async (dir: string): Promise<void> => {
         const resolved = path.resolve(dir);
-        if (!candidateGitDirs.includes(resolved)) candidateGitDirs.push(resolved);
+        let identity = resolved;
+        try {
+          identity = (await realpathOrMissing(resolved)) ?? resolved;
+        } catch (error) {
+          markIncomplete(`${submodulePath}: module git directory could not be resolved`, error);
+        }
+        if (candidateIdentities.has(identity)) return;
+        candidateIdentities.add(identity);
+        candidateGitDirs.push(resolved);
       };
-      if (pointerGitDir) addCandidate(pointerGitDir);
-      for (const module of scannedByPath.get(submodulePath) ?? []) addCandidate(module.gitDir);
+      if (pointerGitDir) await addCandidate(pointerGitDir);
+      for (const module of scannedByPath.get(submodulePath) ?? [])
+        await addCandidate(module.gitDir);
       if (candidateGitDirs.length > 1) {
         // Preferring the checkout's own pointer and dropping the rest is
         // precisely how a worktree-owned store gets skipped: `worktree remove`
@@ -1140,6 +1162,7 @@ type ModuleBinding =
 async function resolveModuleCheckoutPath(
   git: SimpleGit,
   root: string,
+  realRoot: string | null,
   module: ScannedModule,
   stanzas: Map<string, GitmodulesStanza>,
   timeoutMs: number
@@ -1163,8 +1186,25 @@ async function resolveModuleCheckoutPath(
   const stanzaPath = toRosterPath(stanzas.get(module.name)?.path);
 
   if (declared !== null) {
-    const resolved = path.resolve(module.gitDir, declared);
-    const relative = path.relative(root, resolved).split(path.sep).join("/");
+    let resolved = path.resolve(module.gitDir, declared);
+    if (realRoot) {
+      try {
+        // Existing checkouts are compared by filesystem identity, not by the
+        // spelling Git and the caller happened to use. A missing checkout has
+        // no canonical path, so it deliberately keeps the lexical fallback.
+        resolved = (await realpathOrMissing(resolved)) ?? resolved;
+      } catch (error) {
+        return {
+          kind: "unbound",
+          reason: `core.worktree could not be resolved (${declared})`,
+          error,
+        };
+      }
+    }
+    const relative = path
+      .relative(realRoot ?? root, resolved)
+      .split(path.sep)
+      .join("/");
     const bound = toRosterPath(relative);
     if (!bound) {
       return { kind: "unbound", reason: `core.worktree points outside the worktree (${declared})` };

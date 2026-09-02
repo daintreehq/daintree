@@ -41,14 +41,21 @@ async function dispatchAction<Result = unknown>(
   args?: unknown
 ): Promise<ActionDispatchResult<Result>> {
   return page.evaluate(
-    async (payload) =>
-      (
+    async (payload) => {
+      const dispatch = (
         window as unknown as {
-          __daintreeE2E: {
-            dispatch: (id: string, a?: unknown) => Promise<ActionDispatchResult<Result>>;
-          };
+          __daintreeDispatchAction?: (
+            id: string,
+            a?: unknown,
+            opts?: { source: string }
+          ) => Promise<ActionDispatchResult<Result>>;
         }
-      ).__daintreeE2E.dispatch(payload.actionId, payload.args),
+      ).__daintreeDispatchAction;
+      if (typeof dispatch !== "function") {
+        throw new Error("__daintreeDispatchAction is not available");
+      }
+      return dispatch(payload.actionId, payload.args, { source: "menu" });
+    },
     { actionId, args }
   );
 }

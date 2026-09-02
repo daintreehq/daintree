@@ -194,8 +194,8 @@ let hooksInstalled = false;
 /**
  * Remap `electron` and `TelemetryService` so the main-process security and IPC
  * modules load outside Electron. `module.registerHooks` is synchronous and
- * in-thread but landed in Node 22.15 while `.nvmrc` pins 22.13, so
- * `module.register` — whose hooks run in a worker — is the fallback. Under
+ * in-thread on supported runtimes; `module.register` — whose hooks run in a
+ * worker — remains a defensive fallback for older Node 22 installations. Under
  * Vitest neither fires because Vite resolves imports itself, which is why the
  * unit test hands {@link perfIpcEnvelopeElectronStub} to `vi.mock` instead.
  *
@@ -627,7 +627,11 @@ export const WIDE_KEY_COUNT = 1_500;
  * which `JSON.stringify` WITH a replacer overflows the stack (measured at
  * between 5,000 and 20,000 on this runtime). PERF-364 owns the overflow case.
  */
-export const DEEP_CHAIN_DEPTH = 2_000;
+// Windows' V8 stack is shallower than macOS/Linux: the product's replacer and
+// even plain JSON.stringify can overflow at 2,000 levels there. One thousand
+// is verified below the cross-platform ceiling while remaining far beyond the
+// old depth-32 fail-open boundary this shape is designed to exercise.
+export const DEEP_CHAIN_DEPTH = 1_000;
 export const ARRAY_ROW_COUNT = 900;
 
 /**

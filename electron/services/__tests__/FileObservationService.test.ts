@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fingerprintPaths = vi.hoisted(() => vi.fn());
@@ -8,11 +9,29 @@ vi.mock("fs", () => ({ watch: fsWatch }));
 
 const {
   sampleCoalesced,
-  watchShared,
+  watchShared: watchSharedImpl,
   sharedWatcherCount,
   sharedWatcherListenerCount,
   __resetSampleCacheForTests,
 } = await import("../FileObservationService.js");
+
+// Keep every native-watcher registration owned by its test. If an assertion
+// fails before the explicit disposer at the bottom of a case, afterEach still
+// tears the watcher down instead of cascading shared state into later cases.
+const activeDisposers = new Set<() => void>();
+
+function watchShared(resolvedPath: string, listener: (changedPath: string) => void): () => void {
+  const release = watchSharedImpl(resolvedPath, listener);
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    activeDisposers.delete(dispose);
+    release();
+  };
+  activeDisposers.add(dispose);
+  return dispose;
+}
 
 /** A watcher stub that records its close and exposes its registered handlers. */
 function makeWatcherStub() {
@@ -48,6 +67,8 @@ describe("FileObservationService", () => {
   });
 
   afterEach(() => {
+    for (const dispose of activeDisposers) dispose();
+    activeDisposers.clear();
     consoleError.mockRestore();
   });
 
@@ -199,8 +220,9 @@ describe("FileObservationService", () => {
 
       emitFor(0, "change", "child.txt");
 
-      expect(first).toHaveBeenCalledExactlyOnceWith("/root/dir/child.txt");
-      expect(second).toHaveBeenCalledExactlyOnceWith("/root/dir/child.txt");
+      const changedPath = path.join("/root/dir", "child.txt");
+      expect(first).toHaveBeenCalledExactlyOnceWith(changedPath);
+      expect(second).toHaveBeenCalledExactlyOnceWith(changedPath);
 
       disposeOne();
       disposeTwo();
@@ -349,7 +371,7 @@ describe("FileObservationService", () => {
       expect(sharedWatcherListenerCount()).toBe(1);
 
       emitFor(1, "change", "after.txt");
-      expect(listener).toHaveBeenCalledExactlyOnceWith("/root/dir/after.txt");
+      expect(listener).toHaveBeenCalledExactlyOnceWith(path.join("/root/dir", "after.txt"));
 
       // The original disposer still governs the rebound subscription.
       dispose();
