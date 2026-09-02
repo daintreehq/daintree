@@ -2502,6 +2502,165 @@ describe("FileBrowserPane re-reads when the project view is revealed (#11588)", 
     expect(lifecycleListeners.size).toBe(0);
   });
 
+  // #12165: the media nonce is split from `surfaceRefreshNonce` so a reveal can
+  // hold it still without also stalling the text re-read, the PDF frame, or the
+  // reclassification that revives a failed preview.
+  describe("playing media (#12165)", () => {
+    // Both kinds, because FileBrowserViewer wires them in two separate branches:
+    // an audio-only suite would let the video one drift back to the surface
+    // nonce with everything still green.
+    const KINDS = [
+      { tag: "audio" as const, path: "media/track.mp3", next: "media/other.mp3" },
+      { tag: "video" as const, path: "media/demo.mp4", next: "media/other.mp4" },
+    ];
+    const row = (path: string) => ({
+      path,
+      name: path.split("/").pop()!,
+      isDirectory: false,
+      depth: 1,
+      isExpanded: false,
+      isLoading: false,
+    });
+
+    const mediaFetchMock = vi.fn();
+    const realCreateObjectURL = URL.createObjectURL;
+    const realRevokeObjectURL = URL.revokeObjectURL;
+
+    beforeEach(() => {
+      let objectUrlSequence = 0;
+      mediaFetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        blob: () => Promise.resolve(new Blob(["x"])),
+      });
+      vi.stubGlobal("fetch", mediaFetchMock);
+      // Unique per call: a constant would let a stale response satisfy an
+      // assertion that a fresh one arrived.
+      URL.createObjectURL = vi.fn(() => `blob:app://daintree/pane-play-${objectUrlSequence++}`);
+      URL.revokeObjectURL = vi.fn();
+      treeState.rows = [
+        ...defaultRows,
+        ...KINDS.flatMap((kind) => [row(kind.path), row(kind.next)]),
+      ];
+      mockPanel.browserSidebarCollapsed = true;
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      mediaFetchMock.mockReset();
+      // `vi.unstubAllGlobals` does not restore a directly assigned method.
+      URL.createObjectURL = realCreateObjectURL;
+      URL.revokeObjectURL = realRevokeObjectURL;
+    });
+
+    // jsdom neither decodes media nor tracks playback: `fireEvent.play` fires
+    // the event but leaves `paused` true, so the preview's own paused/ended
+    // read would see the opposite of what the test just said happened.
+    function setPlaybackState(
+      element: HTMLMediaElement,
+      state: { paused: boolean; ended?: boolean }
+    ): void {
+      Object.defineProperty(element, "paused", { configurable: true, value: state.paused });
+      Object.defineProperty(element, "ended", { configurable: true, value: state.ended ?? false });
+    }
+
+    async function renderPlaying(kind: (typeof KINDS)[number]) {
+      mockPanel.browserSelectedPath = kind.path;
+      const view = renderPane();
+      await waitFor(() => expect(view.container.querySelector(kind.tag)).not.toBeNull());
+      const player = view.container.querySelector<HTMLMediaElement>(kind.tag)!;
+      setPlaybackState(player, { paused: false });
+      fireEvent.play(player);
+      return { ...view, player };
+    }
+
+    for (const kind of KINDS) {
+      it(`leaves a playing ${kind.tag} alone on reveal while still re-listing the tree`, async () => {
+        // Both halves matter: a re-fetch mints a new object URL and drops the
+        // listener back to zero, while the tree has nothing to protect and must
+        // still catch up on what changed while the project sat cached.
+        const { player, container } = await renderPlaying(kind);
+        const fetchesBefore = mediaFetchMock.mock.calls.length;
+        const srcBefore = player.getAttribute("src");
+
+        await emit("revealed");
+
+        expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore);
+        // The same element, still pointed at the same blob — a src comparison
+        // alone would go green on the empty gap while a replacement loads.
+        expect(container.querySelector(kind.tag)).toBe(player);
+        expect(player.getAttribute("src")).toBe(srcBefore);
+        expect(treeState.refresh).toHaveBeenCalledTimes(1);
+      });
+
+      it(`re-fetches the ${kind.tag} on the next reveal once it ends`, async () => {
+        // The suppression is scoped to playback, not permanent — and the spec
+        // leaves `paused` false at the end, so `ended` is what says it stopped.
+        const { player } = await renderPlaying(kind);
+        const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+        await emit("revealed");
+        expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore);
+
+        setPlaybackState(player, { paused: false, ended: true });
+        fireEvent.ended(player);
+        await emit("revealed");
+
+        await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+      });
+
+      it(`still re-fetches the ${kind.tag} when Refresh is pressed`, async () => {
+        // A gesture outranks playback: someone pressing Refresh mid-track is
+        // asking for the rewritten bytes and accepts losing their place.
+        await renderPlaying(kind);
+        const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+        act(() => {
+          fireEvent.click(screen.getByTestId("file-browser-refresh"));
+        });
+
+        await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+      });
+
+      it(`does not carry ${kind.tag} playing state to the next selected file`, async () => {
+        // The stale-flag failure this would otherwise invite: a track left
+        // playing, a different file selected, and every later reveal silently
+        // refusing to refresh a player that was never running.
+        const { rerender, container } = await renderPlaying(kind);
+
+        mockPanel.browserSelectedPath = kind.next;
+        await act(async () => {
+          rerender(paneElement());
+        });
+        await waitFor(() => expect(container.querySelector(kind.tag)).not.toBeNull());
+        const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+        await emit("revealed");
+
+        await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+      });
+
+      it(`re-reads a text file revealed after a played ${kind.tag}`, async () => {
+        // The player is gone by the time this reveal lands, so the flag must be
+        // too. It is retracted when the preview unmounts, not by anything the
+        // pane does — leave that out of the leaf and the open file goes stale
+        // for the rest of the session.
+        const { rerender } = await renderPlaying(kind);
+
+        mockPanel.browserSelectedPath = "src/app.ts";
+        await act(async () => {
+          rerender(paneElement());
+        });
+        await waitFor(() => expect(readMock).toHaveBeenCalledTimes(1));
+
+        await emit("revealed");
+
+        await waitFor(() => expect(readMock).toHaveBeenCalledTimes(2));
+      });
+    }
+  });
+
   describe("dock parking", () => {
     it("defers the refresh while parked offscreen, then runs it once on activation", async () => {
       // A dock panel stays mounted in the offscreen parking container whether

@@ -1,3 +1,4 @@
+import { useEffect, useEffectEvent } from "react";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useMediaBlobUrl } from "./useMediaBlobUrl";
 import type { MediaPreviewError } from "./useMediaBlobUrl";
@@ -31,6 +32,18 @@ interface FileAudioPreviewProps {
   reloadKey?: string | number;
   /** Called when the audio can't be fetched or played; an error overrides the caller's generic copy. */
   onError?: (error?: AudioPreviewError) => void;
+  /**
+   * Reports whether this preview is mid-track, so an owner that would otherwise
+   * move `reloadKey` can hold off (#12165). Always taken back on unmount or a
+   * source change: a fresh element starts paused and fires no `pause` of its
+   * own, so an owner left holding the last `true` would suppress reloads for a
+   * player that no longer exists. That retraction goes to whichever handler is
+   * committed at the time, so the callback must belong to one stable owner
+   * rather than being swapped between independent recipients.
+   * Each call is a snapshot rather than a transition — the same value may
+   * arrive twice (an error retracts, then the unmount retracts again).
+   */
+  onPlayingChange?: (playing: boolean) => void;
 }
 
 /**
@@ -47,6 +60,7 @@ export function FileAudioPreview({
   label,
   reloadKey,
   onError,
+  onPlayingChange,
 }: FileAudioPreviewProps) {
   const { objectUrl, fetching } = useMediaBlobUrl({
     filePath,
@@ -56,6 +70,16 @@ export function FileAudioPreview({
     tooLargeError: AUDIO_TOO_LARGE_ERROR,
     onError,
   });
+
+  // Effect event so this keys on the source alone — callers pass inline
+  // closures, and re-running on every parent render would report a stop the
+  // element never made.
+  const reportPlaying = useEffectEvent((playing: boolean) => onPlayingChange?.(playing));
+  // Scoped to the same identity the fetch is: whatever moves the source
+  // replaces the element, and the replacement starts paused.
+  useEffect(() => {
+    return () => reportPlaying(false);
+  }, [filePath, rootPath, reloadKey]);
 
   return (
     // Chromium's native audio control drops its scrubber and volume slider
@@ -73,7 +97,26 @@ export function FileAudioPreview({
           preload="metadata"
           aria-label={label}
           className="w-full max-w-md min-w-[300px]"
-          onError={() => onError?.()}
+          // `paused` alone would call a buffering stall a stop; `ended` alone
+          // would call a finished track still playing (the spec leaves `paused`
+          // false at the end). Both, on all three events, or neither is right.
+          onPlay={(event) =>
+            onPlayingChange?.(!event.currentTarget.paused && !event.currentTarget.ended)
+          }
+          onPause={(event) =>
+            onPlayingChange?.(!event.currentTarget.paused && !event.currentTarget.ended)
+          }
+          onEnded={(event) =>
+            onPlayingChange?.(!event.currentTarget.paused && !event.currentTarget.ended)
+          }
+          // A decode failure stops playback without a `pause`. Every caller in
+          // tree unmounts the preview here, which would retract it anyway — but
+          // the leaf is shared, and one that merely logs must not be left
+          // holding a player that stopped.
+          onError={() => {
+            onPlayingChange?.(false);
+            onError?.();
+          }}
         />
       ) : fetching ? (
         // The whole file downloads before playback starts, so a long recording

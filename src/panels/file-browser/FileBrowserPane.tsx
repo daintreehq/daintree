@@ -609,14 +609,34 @@ export function FileBrowserPane({
   // The foreground half of the refresh signal, counted apart from the ambient
   // change tick so Refresh also re-reads the open file, not just the tree. It
   // then travels to the viewer BOTH ways, and both are load-bearing: merged
-  // into `viewerRevision` below, and handed over on its own as the media
-  // previews' reload key (#11586). Dropping the direct handoff makes Refresh
-  // inert for media again; substituting the merged value there restarts
-  // playback on every ambient write. Keep both.
+  // into `viewerRevision` below, and handed over on its own to drive the PDF
+  // frame (#11586). Dropping the direct handoff makes Refresh inert for PDFs
+  // again; substituting the merged value there re-navigates the frame on every
+  // ambient write. Keep both.
   const [surfaceRefreshNonce, setSurfaceRefreshNonce] = useState(0);
+  // The media half of that signal, split off rather than gated inside it
+  // (#12165). Returning to a project while a track is playing is a catch-up,
+  // not a request for fresh bytes, so this one holds still — but the nonce
+  // above keeps moving, so the text re-read, the PDF re-navigation and the
+  // reclassification that revives a failed preview never depend on a playback
+  // flag being right.
+  const [mediaReloadNonce, setMediaReloadNonce] = useState(0);
+  // Set only while a mounted player is mid-playback: the preview takes its own
+  // `true` back on unmount or a source change, so nothing can strand it set
+  // beyond the passive-effect pass that retires the player.
+  const mediaPlayingRef = useRef(false);
+  const handleMediaPlayingChange = useCallback((playing: boolean) => {
+    mediaPlayingRef.current = playing;
+  }, []);
   const refreshAll = useCallback(
     (options?: { manual?: boolean }) => {
       setSurfaceRefreshNonce((nonce) => nonce + 1);
+      // A gesture outranks playback — someone pressing Refresh mid-track is
+      // asking for the rewritten bytes and accepts losing their place. A
+      // reveal is not a gesture, so it yields to a running player.
+      if (options?.manual || !mediaPlayingRef.current) {
+        setMediaReloadNonce((nonce) => nonce + 1);
+      }
       refresh(options);
     },
     [refresh]
@@ -1293,10 +1313,12 @@ export function FileBrowserPane({
               relativePath={isSelectedReadableFile ? (selectedPath ?? null) : null}
               revision={viewerRevision}
               // Handed over separately from `revision` rather than pulled back
-              // out of it: the media previews may only re-fetch on the explicit
+              // out of it: the PDF frame may only re-navigate on the explicit
               // half of that pair, and a merged string can't say which half
               // moved (#11586).
               surfaceRefreshNonce={surfaceRefreshNonce}
+              mediaReloadNonce={mediaReloadNonce}
+              onMediaPlayingChange={handleMediaPlayingChange}
               onRefresh={handleRefresh}
               isRefreshing={isRefreshing}
               onCollapseAll={handleCollapseAll}
