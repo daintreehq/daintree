@@ -450,7 +450,30 @@ vi.mock("@/types", () => ({
 // children (XtermAdapter, ConfirmDialog) — its own suite is FigureRail.test.tsx.
 vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
+/**
+ * The native panel, stubbed down to the two props these suites read.
+ *
+ * Inert for every PTY suite in this file — they reset to a terminal-backed agent, so
+ * no native lane is ever open — and it keeps the real one's engine start, its 94KB of
+ * transcript view and its `window.electron` reach out of a harness that models none of
+ * them. `restartNonce` is recorded because it is the only observable of a native
+ * restart: there is no controller call to spy on, the whole act is a nonce the lane's
+ * session effect depends on.
+ */
+const nativePanelProps: Array<{ slot: number; active: boolean; restartNonce: number }> = [];
+vi.mock("@/components/AssistantPanel", () => ({
+  AssistantPanel: (props: { slot?: number; active: boolean; restartNonce?: number }) => {
+    nativePanelProps.push({
+      slot: props.slot ?? 0,
+      active: props.active,
+      restartNonce: props.restartNonce ?? 0,
+    });
+    return <div data-testid={`native-lane-${props.slot ?? 0}`} />;
+  },
+}));
+
 import { HelpPanel } from "../HelpPanel";
+import { assistantStoreForSlot, releaseAssistantStore } from "@/store/assistantStore";
 import {
   __resetHelpSessionControllersForTests,
   acquireHelpSessionController,
@@ -1342,5 +1365,187 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     expect(mockRevokeSession).not.toHaveBeenCalled();
     expect(panelStoreState.removePanel).not.toHaveBeenCalled();
     expect(helpPanelState.closeSlot).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The native assistant's destructive controls (#12108).
+ *
+ * "+ New session" and "Stop assistant" discard a conversation exactly as their PTY
+ * counterparts do, and for a long time they were the only two that did it in one click:
+ * both branches returned before reaching the gate, under a comment that said the gate
+ * was the point. The transcript lives only in the lane's own store, so "something to
+ * lose" is whether anything has been said in it — the same test the tab's own close
+ * already applied, which is what made the omission visible.
+ */
+describe("HelpPanel — the native assistant's destructive controls", () => {
+  function nativeMode() {
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    // No bound terminal and no preference: the panel's default, which is native.
+    helpPanelState.terminalId = null;
+    helpPanelState.agentId = null;
+    helpPanelState.preferredAgentId = null;
+  }
+
+  function seedConversation() {
+    assistantStoreForSlot(0).getState().reset("ses_native");
+    assistantStoreForSlot(0).getState().appendUserTurn("something worth keeping");
+  }
+
+  function queryStopItem(container: HTMLElement): HTMLButtonElement | null {
+    return (
+      [
+        ...container.querySelectorAll<HTMLButtonElement>("[data-testid='overflow-menu'] button"),
+      ].find((b) => b.textContent?.includes("Stop assistant")) ?? null
+    );
+  }
+
+  afterEach(() => {
+    releaseAssistantStore(0);
+    nativePanelProps.length = 0;
+  });
+
+  it("keeps a running native lane when the agent preference changes", () => {
+    nativeMode();
+    const { rerender } = render(<HelpPanel width={380} />);
+    // Armed by opening the panel — which is the only record that this lane took the
+    // native path, because a native lane never launches a terminal and so never binds
+    // an agent id.
+    expect(nativePanelProps.at(-1)?.active).toBe(true);
+
+    nativePanelProps.length = 0;
+    helpPanelState.preferredAgentId = "claude";
+    act(() => {
+      rerender(<HelpPanel width={380} />);
+    });
+
+    // Read through the global preference alone, an unbound native lane reclassifies to a
+    // terminal the moment that preference moves — its panel unmounts and its engine
+    // stops through the same cleanup a project switch uses. The user changed a setting;
+    // they did not ask to end the conversation they were having.
+    expect(nativePanelProps.at(-1)?.active).toBe(true);
+  });
+
+  it("converts the lane on screen when the agent preference moves to a terminal agent", () => {
+    nativeMode();
+    helpPanelState.openSlots = [0, 1];
+    helpPanelState.activeSlot = 0;
+    const { rerender } = render(<HelpPanel width={380} />);
+    // Both lanes armed native by the panel opening on each of them in turn.
+    helpPanelState.activeSlot = 1;
+    act(() => {
+      rerender(<HelpPanel width={380} />);
+    });
+    helpPanelState.activeSlot = 0;
+    act(() => {
+      rerender(<HelpPanel width={380} />);
+    });
+    expect(nativePanelProps.filter((p) => p.slot === 1).at(-1)?.active).toBe(true);
+
+    helpPanelState.preferredAgentId = "claude";
+    act(() => {
+      rerender(<HelpPanel width={380} />);
+    });
+
+    // Lane 0 — the one on screen — follows the choice and leaves the native set
+    // entirely: #8353's contract is that picking another agent replaces the live
+    // session rather than silently doing nothing.
+    expect(document.querySelector('[data-testid="native-lane-0"]')).toBe(null);
+    // Lane 1 is still mounted and still armed. The user changed a setting while looking
+    // at another tab; that is not an instruction to end this conversation.
+    expect(document.querySelector('[data-testid="native-lane-1"]')).not.toBe(null);
+    expect(nativePanelProps.filter((p) => p.slot === 1).at(-1)?.active).toBe(true);
+  });
+
+  it("asks before a new session discards a native conversation", () => {
+    nativeMode();
+    seedConversation();
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    nativePanelProps.length = 0;
+
+    fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+
+    expect(getByTestId("dialog-title").textContent).toBe("Start a new session?");
+    // And nothing has happened yet: the restart is a nonce bump, so an unasked restart
+    // shows up as the lane re-rendering with a higher one.
+    expect(nativePanelProps.every((p) => p.restartNonce === 0)).toBe(true);
+  });
+
+  it("restarts the lane once the new session is confirmed", () => {
+    nativeMode();
+    seedConversation();
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+
+    fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+    nativePanelProps.length = 0;
+    act(() => {
+      fireEvent.click(getByTestId("dialog-confirm"));
+    });
+
+    expect(nativePanelProps.some((p) => p.slot === 0 && p.restartNonce === 1)).toBe(true);
+  });
+
+  it("starts a new session without asking when nothing has been said", () => {
+    nativeMode();
+    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    nativePanelProps.length = 0;
+
+    act(() => {
+      fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+    });
+
+    // An empty lane has nothing to lose, so the confirm would be pure friction.
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    expect(nativePanelProps.some((p) => p.slot === 0 && p.restartNonce === 1)).toBe(true);
+  });
+
+  it("asks before Stop discards a native conversation, and disarms once confirmed", () => {
+    nativeMode();
+    seedConversation();
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    const stop = queryStopItem(container);
+    expect(stop).not.toBe(null);
+
+    fireEvent.click(stop!);
+    expect(getByTestId("dialog-title").textContent).toBe("Stop assistant?");
+    // Still armed — the engine must not go before the answer does.
+    expect(nativePanelProps.at(-1)?.active).toBe(true);
+
+    nativePanelProps.length = 0;
+    act(() => {
+      fireEvent.click(getByTestId("dialog-confirm"));
+    });
+    // Disarming is what stops the engine: the lane re-renders inactive, and its own
+    // effect cleanup detaches from there.
+    expect(nativePanelProps.at(-1)?.active).toBe(false);
+  });
+
+  it("asks before Stop interrupts a lane that is working with nothing said yet", () => {
+    nativeMode();
+    // A wake's first phase arrives BEFORE its turn opens, so the lane is genuinely
+    // working while `turns` is still empty. A transcript-only test waved this through
+    // and stopped an engine mid-flight without a word.
+    assistantStoreForSlot(0).getState().reset("ses_native");
+    assistantStoreForSlot(0).getState().applyEvent({
+      type: "turn:phase",
+      sessionId: "ses_native",
+      seq: 2,
+      phase: "Waking",
+      wake: true,
+    });
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+
+    fireEvent.click(queryStopItem(container)!);
+    expect(getByTestId("dialog-title").textContent).toBe("Stop assistant?");
+  });
+
+  it("stops without asking when nothing has been said", () => {
+    nativeMode();
+    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    act(() => {
+      fireEvent.click(queryStopItem(container)!);
+    });
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    expect(nativePanelProps.at(-1)?.active).toBe(false);
   });
 });
