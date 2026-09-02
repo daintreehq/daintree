@@ -109,6 +109,20 @@ function createMockStore(storePath: string, initialData: MockStoreData = {}): Mo
   };
 }
 
+/** A mock store carrying a `store` accessor, so the runner takes the buffered-facade branch. */
+function createBufferedMockStore(storePath: string, initialData: MockStoreData = {}): MockStore {
+  const store = createMockStore(storePath, initialData);
+  Object.defineProperty(store, "store", {
+    configurable: true,
+    get: () => structuredClone(store.data),
+    set: (value: MockStoreData) => {
+      store.clear();
+      Object.assign(store.data, structuredClone(value));
+    },
+  });
+  return store;
+}
+
 describe("MigrationRunner", () => {
   let tempDir: string;
   let storePath: string;
@@ -179,6 +193,101 @@ describe("MigrationRunner", () => {
 
     expect(applied).toEqual([2, 3]);
     expect(store.data._schemaVersion).toBe(3);
+  });
+
+  it("commits each migration and its resume checkpoint in one store write", async () => {
+    const store = createMockStore(storePath, {
+      _schemaVersion: 0,
+      nested: { retained: true },
+    });
+    let storeWrites = 0;
+    Object.defineProperty(store, "store", {
+      configurable: true,
+      get: () => structuredClone(store.data),
+      set: (value: MockStoreData) => {
+        storeWrites += 1;
+        store.clear();
+        Object.assign(store.data, structuredClone(value));
+      },
+    });
+    const runner = new MigrationRunner(store as never);
+
+    await runner.runMigrations([
+      {
+        version: 1,
+        description: "write two keys",
+        up: (migrationStore) => {
+          migrationStore.set("first" as never, "one" as never);
+          migrationStore.set("second" as never, "two" as never);
+          const nested = migrationStore.get("nested" as never) as { retained: boolean };
+          nested.retained = false;
+        },
+      },
+      {
+        version: 2,
+        description: "read prior checkpoint",
+        up: (migrationStore) => {
+          expect(migrationStore.get("first" as never)).toBe("one");
+          migrationStore.delete("second" as never);
+        },
+      },
+    ]);
+
+    expect(storeWrites).toBe(2);
+    expect(store.data).toMatchObject({
+      _schemaVersion: 2,
+      first: "one",
+      nested: { retained: true },
+    });
+    expect(store.data.second).toBeUndefined();
+  });
+
+  it("serves has/get/delete on dot-path keys through the buffered facade", async () => {
+    const store = createBufferedMockStore(storePath, {
+      _schemaVersion: 0,
+      userConfig: { githubToken: "ghp_legacy", locale: "en" },
+    });
+    const seen: boolean[] = [];
+
+    await new MigrationRunner(store as never).runMigrations([
+      {
+        version: 1,
+        description: "drop the legacy token",
+        up: (migrationStore) => {
+          seen.push(migrationStore.has("userConfig.githubToken" as never));
+          seen.push(migrationStore.has("userConfig.missing" as never));
+          expect(migrationStore.get("userConfig.githubToken" as never)).toBe("ghp_legacy");
+          migrationStore.delete("userConfig.githubToken" as never);
+          seen.push(migrationStore.has("userConfig.githubToken" as never));
+        },
+      },
+    ]);
+
+    expect(seen).toEqual([true, false, false]);
+    expect(store.data).toMatchObject({ _schemaVersion: 1, userConfig: { locale: "en" } });
+    expect((store.data.userConfig as Record<string, unknown>).githubToken).toBeUndefined();
+  });
+
+  it("refuses reserved path segments in buffered writes and deletes", async () => {
+    const store = createBufferedMockStore(storePath, { _schemaVersion: 0 });
+
+    await new MigrationRunner(store as never).runMigrations([
+      {
+        version: 1,
+        description: "attempt prototype pollution",
+        up: (migrationStore) => {
+          migrationStore.set("__proto__.polluted" as never, true as never);
+          migrationStore.set("a.constructor.polluted" as never, true as never);
+          migrationStore.set("prototype" as never, true as never);
+          migrationStore.delete("__proto__" as never);
+        },
+      },
+    ]);
+
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(store.data, "prototype")).toBe(false);
+    expect(store.data.a).toBeUndefined();
+    expect(store.data._schemaVersion).toBe(1);
   });
 
   it("skips migrations and preserves version when store schema is newer than supported", async () => {
