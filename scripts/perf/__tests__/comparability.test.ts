@@ -225,3 +225,58 @@ describe("durationsComparable", () => {
     expect(describeIncomparability(env(), env({ arch: "x64" }))).toContain("architectures");
   });
 });
+
+describe("bystander metric classification", () => {
+  /**
+   * `lib/bystander.ts` emits blocked-time percentages, and a percentage over a
+   * runtime base is machine-dependent no matter how portable it looks. Without a
+   * base token these fell through to structural `ratio` and were marked "compare
+   * freely" — so "Windows 60% blocked, macOS 12%" would have been presented as a
+   * portable finding about the code rather than about two machines.
+   */
+  it("treats blocked-time percentages as machine-dependent", () => {
+    for (const name of [
+      "loadBlockedPct",
+      "idleBlockedPct",
+      "inThreadBlockedPct",
+      "workerBlockedPct",
+    ]) {
+      expect(classifyMetric(name)).toBe("derived-ratio");
+      expect(isMachineIndependent(classifyMetric(name))).toBe(false);
+    }
+  });
+
+  it("keeps the stall readings themselves as durations", () => {
+    for (const name of [
+      "loadLongestStallMs",
+      "loadBlockedMs",
+      "excessLongestStallMs",
+      "stallReductionMs",
+      "blockedReductionMs",
+    ]) {
+      expect(classifyMetric(name)).toBe("duration");
+    }
+  });
+
+  it("catches the lowercase-leading spellings too", () => {
+    // The base tokens are `[Bb]locked` and `[Ss]tall`, matched anywhere, so a
+    // metric named without a camelCase prefix classifies the same way. Pinned
+    // because a reviewer read the pattern as requiring a preceding lowercase
+    // character — as `[a-z0-9]Load([A-Z0-9]|$)` genuinely does — and a
+    // false negative here silently grants a runtime percentage a cross-machine
+    // comparison.
+    expect(classifyMetric("blockedPct")).toBe("derived-ratio");
+    expect(classifyMetric("stallFraction")).toBe("derived-ratio");
+    expect(classifyMetric("stalledPercent")).toBe("derived-ratio");
+  });
+
+  it("does not grant the new base tokens a free ride to any percentage", () => {
+    // The base group is a CONJUNCTION with a proportional form. A base alone
+    // must not turn a plain reading into a derived ratio, or `blockedMs` would
+    // stop being a duration.
+    expect(classifyMetric("blockedMs")).toBe("duration");
+    expect(classifyMetric("stalledWriteCount")).toBe("count");
+    // And an unrelated percentage keeps its structural comparison.
+    expect(classifyMetric("hiddenFilePct")).toBe("ratio");
+  });
+});

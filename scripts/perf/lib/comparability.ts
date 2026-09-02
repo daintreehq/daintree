@@ -117,6 +117,15 @@ const RULES: ReadonlyArray<{ cls: ComparabilityClass; pattern: RegExp }> = [
   // independent under one name and machine-dependent under the other. That is
   // how "Windows idle ELU 12%, macOS 3%" gets reported as a finding.
   //
+  // `Blocked` and `Stall` are in the base group for the same reason as `Elu`,
+  // and were added when the bystander probe (`lib/bystander.ts`) started
+  // emitting `loadBlockedPct` and `workerBlockedPct`. Those divide time the main
+  // thread was unavailable by the length of the window — two runtime durations —
+  // yet without a base token they fell through to structural `ratio` and were
+  // marked "compare freely". A slower CPU raises blocked-time percentage for
+  // identical work, so "Windows 60% blocked, macOS 12%" would have been
+  // presented as a portable finding about the code.
+  //
   // Speedups, overheads and cold/warm comparisons are here for the same reason
   // one rule up: their operands are two measured DURATIONS. `coldToWarmRatio`
   // divides two `p99SearchMs` readings and `batchSpeedupRatio` divides two
@@ -129,7 +138,7 @@ const RULES: ReadonlyArray<{ cls: ComparabilityClass; pattern: RegExp }> = [
   {
     cls: "derived-ratio",
     pattern:
-      /[Uu]tili[sz]ation|[Dd]egradationX?$|[Ss]peedup|[Oo]verhead|[Cc]oldToWarm|[Bb]locking[Rr]atio|[Dd]etectionToInterval|((?=.*([Cc]pu|[Hh]eap|[Rr]ss|[Mm]emory|[Ff]ootprint|[Ll]oadAvg|[a-z0-9]Load([A-Z0-9]|$)|^elu|[a-z0-9]Elu([A-Z0-9]|$)))(?=.*([Pp]ct$|[Pp]ercent|[Ff]raction|[a-z0-9]Ratio|[a-z0-9]Per[A-Z])).*)/,
+      /[Uu]tili[sz]ation|[Dd]egradationX?$|[Ss]peedup|[Oo]verhead|[Cc]oldToWarm|[Bb]locking[Rr]atio|[Dd]etectionToInterval|((?=.*([Cc]pu|[Hh]eap|[Rr]ss|[Mm]emory|[Ff]ootprint|[Ll]oadAvg|[a-z0-9]Load([A-Z0-9]|$)|^elu|[a-z0-9]Elu([A-Z0-9]|$)|[Bb]locked|[Ss]tall))(?=.*([Pp]ct$|[Pp]ercent|[Ff]raction|[a-z0-9]Ratio|[a-z0-9]Per[A-Z])).*)/,
   },
   // Structural proportions and per-unit rates over deterministic quantities.
   // `Ratio` is capitalised or leading, never the substring inside "decorations".

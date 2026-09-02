@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   allScenarios,
   assertMatrixCoverage,
+  CORRECTNESS_EXEMPT_SCENARIO_IDS,
   EXPECTED_SCENARIO_IDS,
   getScenariosForMode,
 } from "../scenarios";
@@ -18,6 +19,10 @@ import { classifyMetric } from "../lib/comparability";
  * a new scenario is required to declare `correctness` or to be added here on
  * purpose.
  *
+ * It is the SAME list `evaluateCorrectness` reads at run time — imported rather
+ * than copied, because an exemption honoured at build time and ignored under
+ * `--enforce-integrity` is a contract nothing can satisfy.
+ *
  * It is now empty. It previously held fifteen scenarios whose oracles lived in
  * fixture modules (`workloads.ts`, `agentAnalysisSim.ts`, `packagedLaunch.ts`)
  * rather than in the scenario; those modules now report what each subject
@@ -26,7 +31,7 @@ import { classifyMetric } from "../lib/comparability";
  * never an oracle here: nothing compared it to an expected value, so a subject
  * reduced to `return { checksum: 0 }` posted the best sample on record.
  */
-const NO_COUNT_CLASS_METRICS: ReadonlySet<string> = new Set<string>([]);
+const NO_COUNT_CLASS_METRICS = CORRECTNESS_EXEMPT_SCENARIO_IDS;
 
 describe("perf scenario matrix", () => {
   it("covers full PERF matrix in both directions", () => {

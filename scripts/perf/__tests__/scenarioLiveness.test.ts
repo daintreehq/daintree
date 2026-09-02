@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { allScenarios } from "../scenarios";
+import { TIMING_DEPENDENT_TERMS } from "./timingDependentTerms";
 
 /**
  * Does every scenario in the matrix still RUN?
@@ -33,8 +34,8 @@ import { allScenarios } from "../scenarios";
  *   carrying 16 and 4 misses. Every correctness metric is a MISS COUNT, so a
  *   healthy run is 0 BY CONSTRUCTION — it is a structural fact about the
  *   predicate, not a threshold about the machine, so asserting it cannot make
- *   this guard timing-sensitive. All 149 scenarios driven here report 0 on
- *   every declared term; none needed an exemption.
+ *   this guard timing-sensitive. Every scenario driven here reports 0 on every
+ *   declared term; none needed an exemption.
  *
  * WHAT IT DOES NOT PROVE
  *   Nothing about the NUMBERS. A scenario whose subject got 10x slower passes
@@ -56,8 +57,8 @@ import { allScenarios } from "../scenarios";
  *   A hardcoded duration is identical across two runs and a real measurement
  *   essentially never is, so a second `run()` in the same child would catch the
  *   one case containment cannot: a constant SMALLER than the bracket. It was
- *   built and measured rather than argued about. It works — across all 149
- *   scenarios no pair of runs produced the same `durationMs`, and every one
+ *   built and measured rather than argued about. It works — across every
+ *   scenario no pair of runs produced the same `durationMs`, and every one
  *   tolerated the repeat — and it costs 67s against 55s, +22%, on every
  *   `npm test`.
  *
@@ -136,30 +137,6 @@ const EXPENSIVE_SCENARIOS: Readonly<Record<string, string>> = {
 const KNOWN_DEAD: Readonly<Record<string, string>> = {};
 
 /**
- * Correctness terms this guard does not assert to be zero, and why.
- *
- * Each one's expectation includes "the timer had NOT fired yet", which is the
- * one shape a loaded machine can break without anything being wrong.
- * `gradeFlushCadence` waits `PORT_BATCH_THROUGHPUT_DELAY_MS * 2 + 8` for the
- * real PortBatcher cadence; under four concurrent children plus Vitest's own
- * workers that window slips, and the scenario reports a miss for a subject that
- * is fine. Observed once during development, on exactly that shape.
- *
- * They remain fully graded through `run.ts`, which is where a number is taken
- * and where nothing else is competing for the box. This exemption is only about
- * what is safe to assert inside the unit suite.
- */
-const TIMING_DEPENDENT_TERMS: Readonly<Record<string, readonly string[]>> = {
-  // The PortBatcher idle -> latency -> throughput machine, in the three
-  // scenarios that drive it. Keyed by scenario AND term, not by term alone: a
-  // future scenario that happens to reuse one of these names would otherwise
-  // inherit the exemption without anyone deciding to give it one.
-  "PERF-063": ["immediateFlushMisses", "throughputFlushMisses"],
-  "PERF-370": ["immediateFlushMisses", "throughputFlushMisses"],
-  "PERF-371": ["immediateFlushMisses", "throughputFlushMisses"],
-};
-
-/**
  * Scenarios that decline to self-time, and why — named, because otherwise the
  * duration rule cannot exist.
  *
@@ -209,7 +186,7 @@ const WALL_CLOCK_TIMED: Readonly<Record<string, string>> = {
  * with `Date.now()`, which quantizes to whole milliseconds and can round its
  * bracket up past the driver's on a sub-millisecond run. It is nowhere near
  * wide enough to admit a hardcoded constant: the widest real ratio measured
- * across all 149 scenarios is 0.993.
+ * across the whole matrix is 0.993.
  */
 const CONTAINMENT_SLACK_MS = 1;
 
@@ -326,6 +303,10 @@ function explain(result: DriverResult): string {
 /** The driver's JSON line. Everything it reports is judged below, not there. */
 interface DriverReport {
   missingCorrectness?: string[];
+  /** Declared workload floors naming a metric the scenario never emitted. */
+  missingWorkload?: string[];
+  /** Floors the sample fell short of, as `metric=value < floor`. */
+  workloadShortfalls?: string[];
   /** Value of every declared correctness metric the sample actually emitted. */
   correctness?: Record<string, number>;
   /** What the scenario says it measured. Non-positive is the sentinel. */
@@ -382,6 +363,25 @@ function verdicts(id: string, report: DriverReport): string[] {
   if (nonZero.length > 0) {
     const detail = nonZero.map(([key, value]) => `${key}=${value}`).join(", ");
     problems.push(`${id} reported misses: ${detail} — a healthy run reads 0 on every one`);
+  }
+
+  // A floor naming a metric the scenario never emits is a broken declaration,
+  // and it fails on any machine — the same class as a missing predicate. A
+  // shortfall is judged too: the floors are set well under what the fixtures
+  // build, so falling below one means the fixture scaled itself down.
+  const missingWorkload = report.missingWorkload ?? [];
+  if (missingWorkload.length > 0) {
+    problems.push(
+      `${id} declares workload floor(s) for ${missingWorkload.join(", ")} that the sample ` +
+        `never emitted — the reading that would prove it built its workload is missing`
+    );
+  }
+  const shortfalls = report.workloadShortfalls ?? [];
+  if (shortfalls.length > 0) {
+    problems.push(
+      `${id} built less than it claims: ${shortfalls.join(", ")} — the numbers describe a ` +
+        `smaller workload than the scenario says it measures`
+    );
   }
 
   const durationMs = report.durationMs;

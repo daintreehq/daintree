@@ -12,16 +12,24 @@ import {
   describeForeignReference,
   readBaselineEntries,
 } from "./lib/baselineCoverage";
-import { evaluateCorrectness, evaluateScenarioBudget } from "./lib/gate";
+import { classifyBenchmark } from "./config/benchmarkClasses";
+import { evaluateCorrectness, evaluateScenarioBudget, evaluateWorkload } from "./lib/gate";
+import { hashHarnessSources } from "./lib/harnessHash";
 import { appendJsonLine, appendText, readJson, writeJson, writeText, ensureDir } from "./lib/io";
 import { aggregateMetrics, averageMetrics, mean, percentile, round, stdDev } from "./lib/stats";
 import { buildMarkdownReport } from "./report/generate";
-import { assertMatrixCoverage, getScenariosForMode } from "./scenarios";
+import {
+  assertMatrixCoverage,
+  CORRECTNESS_EXEMPT_SCENARIO_IDS,
+  getScenariosForMode,
+} from "./scenarios";
 import type {
   BaselineEntry,
   BaselineMachine,
   BaselineSummary,
+  IntegrityResult,
   PerfMode,
+  RunPurpose,
   PerfRunSummary,
   PerfScenario,
   PlatformApplicability,
@@ -36,6 +44,14 @@ export interface CliOptions {
   mode: PerfMode;
   outDir: string;
   baselinePath: string;
+  /**
+   * Reference-value config. Overridable for the same reason `--baseline` is:
+   * without it, nothing outside this repository's own committed budgets can
+   * exercise the paths that read them — including the one where a configured
+   * metric has stopped being emitted, which is the measurement issue the runner
+   * most needs to be provably able to report.
+   */
+  budgetsPath: string;
   updateBaseline: boolean;
   /** The one scenario this run measures. Always exactly one; see resolveScenarioIds. */
   scenarioIds: string[];
@@ -47,6 +63,32 @@ export interface CliOptions {
   jsonPath?: string;
   label?: string;
   machineLabel?: string;
+  /**
+   * Exit non-zero when the run produced invalid EVIDENCE — a missing or
+   * partially-emitted correctness predicate, a predicate reporting misses, a
+   * configured metric that stopped being emitted, a non-finite measurement.
+   *
+   * Deliberately NOT a performance gate: a valid, correct, slower number still
+   * exits 0 under this flag. The distinction is the whole point — the suite's
+   * refusal to fail on drift was being read as a refusal to fail on anything,
+   * so a run whose oracle had died looked exactly like a clean one.
+   */
+  enforceIntegrity: boolean;
+  /**
+   * Keep this run out of the machine's trend history.
+   *
+   * For a run whose numbers are real but not representative — the profiled
+   * rerun `diagnose.ts` drives is the case that prompted it. Its durations are
+   * inflated by the instrumentation, and history has no column to say so, so a
+   * profiled entry would sit in the trend looking exactly like a regression.
+   */
+  noHistory: boolean;
+  /**
+   * What this run is for. `diagnostic` marks numbers that are real but not
+   * representative, and is what keeps a profiled rerun structurally out of the
+   * trend history rather than relying on the caller to remember a flag.
+   */
+  purpose: RunPurpose;
 }
 
 interface RawSample {
@@ -78,9 +120,11 @@ const VALUE_FLAGS = [
   "machine",
   "out-dir",
   "baseline",
+  "budgets",
+  "purpose",
 ] as const;
 
-const BOOLEAN_FLAGS = ["update-baseline"] as const;
+const BOOLEAN_FLAGS = ["update-baseline", "enforce-integrity", "no-history"] as const;
 
 const perfDir = path.dirname(fileURLToPath(import.meta.url));
 const HISTORY_DIR = path.join(perfDir, "history");
@@ -123,6 +167,16 @@ function defaultOutDir(): string {
 
 function defaultBaselinePath(mode: PerfMode): string {
   return path.resolve(process.cwd(), `scripts/perf/config/baseline.${mode}.json`);
+}
+
+function defaultBudgetsPath(): string {
+  return path.resolve(process.cwd(), "scripts/perf/config/budgets.json");
+}
+
+function parsePurpose(raw: string | undefined): RunPurpose {
+  if (raw === undefined) return "benchmark";
+  if (raw === "benchmark" || raw === "diagnostic") return raw;
+  throw new UsageError(`--purpose expects "benchmark" or "diagnostic", got "${raw}"`);
 }
 
 function parsePositiveInt(flag: string, raw: string, min: number): number {
@@ -214,6 +268,7 @@ export function parseArgs(argv: string[]): CliOptions {
     mode,
     outDir: values.get("out-dir") ?? defaultOutDir(),
     baselinePath: values.get("baseline") ?? defaultBaselinePath(mode),
+    budgetsPath: values.get("budgets") ?? defaultBudgetsPath(),
     updateBaseline: flags.has("update-baseline"),
     scenarioIds,
     iterations:
@@ -222,6 +277,9 @@ export function parseArgs(argv: string[]): CliOptions {
     jsonPath: values.get("json"),
     label: values.get("label"),
     machineLabel: values.get("machine"),
+    enforceIntegrity: flags.has("enforce-integrity"),
+    noHistory: flags.has("no-history"),
+    purpose: parsePurpose(values.get("purpose")),
   };
 }
 
@@ -232,12 +290,13 @@ export function parseArgs(argv: string[]): CliOptions {
  * way to run the matrix: this harness exists for targeted optimisation work,
  * driven a benchmark at a time by `.agents/skills/optimize`, and a
  * whole-matrix run serves no purpose it has. Nothing gates on these numbers,
- * nothing schedules them, and a sweep of 112 scenarios produces a wall of
+ * nothing schedules them, and a sweep of the whole matrix produces a wall of
  * figures nobody reads while taking the machine away from the one measurement
  * somebody actually wanted.
  *
  * It is also the load-bearing half of the optimiser's own comparability check:
- * a scenario measured alone and the same scenario measured beside 111 others
+ * a scenario measured alone and the same scenario measured beside the rest of
+ * the matrix
  * ran under different heap, JIT and thermal conditions, and `perf compare`
  * refuses the pair. Making the filter mandatory means every result this harness
  * produces is comparable with every other result for that scenario.
@@ -598,7 +657,13 @@ function buildRerunCommand(cli: CliOptions): string {
   if (cli.baselinePath !== defaultBaselinePath(cli.mode)) {
     parts.push("--baseline", quoteArg(cli.baselinePath));
   }
+  if (cli.budgetsPath !== defaultBudgetsPath()) {
+    parts.push("--budgets", quoteArg(cli.budgetsPath));
+  }
   if (cli.updateBaseline) parts.push("--update-baseline");
+  if (cli.enforceIntegrity) parts.push("--enforce-integrity");
+  if (cli.noHistory) parts.push("--no-history");
+  if (cli.purpose !== "benchmark") parts.push("--purpose", cli.purpose);
 
   // Nothing but the mode survived, so `--` would dangle.
   if (parts.length === optionCount) parts.pop();
@@ -713,13 +778,58 @@ export function mergeBaselineEntries(input: BaselineMergeInput): Record<string, 
   return Object.fromEntries(Object.entries(merged).sort(([a], [b]) => a.localeCompare(b)));
 }
 
-async function run(): Promise<void> {
+/**
+ * Everything that makes a run's EVIDENCE untrustworthy, as distinct from slow.
+ *
+ * Exported and pure so the rule can be asserted directly. Driving it only
+ * through a subprocess would leave the empty-result case testable on one
+ * platform at a time, since it needs a scenario that declares itself
+ * unsupported on the machine running the test.
+ */
+export function collectIntegrityIssues(
+  aggregates: ReadonlyArray<Pick<ScenarioAggregate, "id" | "measurementIssues" | "runs">>,
+  skippedCount: number,
+  platform: NodeJS.Platform
+): string[] {
+  const issues = aggregates.flatMap((aggregate) =>
+    aggregate.measurementIssues.map((issue) => `${aggregate.id}: ${issue}`)
+  );
+
+  // An aggregate that measured zero iterations is the same emptiness as a run
+  // with no aggregates, one level down: every per-metric check passes over an
+  // empty sample set, and the row renders as an ordinary result. Unreachable
+  // today — `--iterations` is validated at 1 or more and the loop always runs
+  // once — which is exactly why it is worth stating rather than relying on.
+  for (const aggregate of aggregates) {
+    if (aggregate.runs <= 0) {
+      issues.push(
+        `${aggregate.id}: produced ${aggregate.runs} iteration(s) — nothing was measured`
+      );
+    }
+  }
+
+  // A run that measured NOTHING has flawless evidence the way an empty page has
+  // no typos. It happens legitimately — every selected scenario can be
+  // `unsupported` here, which exits 0 by design — but a caller who asked for
+  // enforcement wants "this ran and the evidence is good", and an empty result
+  // satisfies every other check above it vacuously.
+  if (aggregates.length === 0) {
+    issues.push(
+      `no scenario produced a measurement (${skippedCount} skipped as unsupported on ` +
+        `${platform}) — there is no evidence here to be sound`
+    );
+  }
+
+  return issues;
+}
+
+async function run(): Promise<number> {
   const cli = parseArgs(process.argv.slice(2));
   assertMatrixCoverage();
 
   ensureDir(cli.outDir);
 
-  const budgetConfig = loadBudgetConfig();
+  const budgetConfig = loadBudgetConfig(cli.budgetsPath);
   const baseline = readJson<BaselineSummary>(cli.baselinePath);
   const baselineEntries = readBaselineEntries(baseline);
 
@@ -777,6 +887,7 @@ async function run(): Promise<void> {
       description: string;
       tier: ScenarioTier;
       correctness: readonly string[] | undefined;
+      workloadFloors: Readonly<Record<string, number>> | undefined;
       durations: number[];
       metrics: Array<Record<string, number>>;
       notes: string[];
@@ -846,6 +957,7 @@ async function run(): Promise<void> {
         description: scenario.description,
         tier: scenario.tier,
         correctness: scenario.correctness,
+        workloadFloors: scenario.workloadFloors,
         durations: [],
         metrics: [],
         notes: [],
@@ -890,9 +1002,12 @@ async function run(): Promise<void> {
     const foreignReference =
       baselineEntry === undefined ? null : describeForeignReference(baselineEntry, environment);
     const baselineP95 = foreignReference === null ? baselineEntry?.p95Ms : undefined;
+    const runs = aggregate.durations.length;
+
     const { outsideReference, measurementIssues, reasons } = evaluateScenarioBudget({
       scenarioId,
       p95Ms,
+      runs,
       metricStats,
       budget,
       baselineP95,
@@ -911,13 +1026,22 @@ async function run(): Promise<void> {
           ]
         : reasons;
 
-    const runs = aggregate.durations.length;
-
     // The predicate check is a measurement issue, never a gate: it says the
     // numbers beside it cannot be trusted, which is a louder statement than
     // "this number is worse" and a different one from `outsideReference`.
     const correctnessIssues = evaluateCorrectness({
       correctness: aggregate.correctness,
+      metricStats,
+      runs,
+      exempt: CORRECTNESS_EXEMPT_SCENARIO_IDS.has(scenarioId),
+    });
+
+    // Separate from the predicates on purpose: a predicate says the subject did
+    // its work, and this says the subject was GIVEN the work. A scenario that
+    // built nine of the twelve terminals it claims reports a better number with
+    // every predicate at zero, and nothing else here can see it.
+    const workloadIssues = evaluateWorkload({
+      floors: aggregate.workloadFloors,
       metricStats,
       runs,
     });
@@ -933,12 +1057,20 @@ async function run(): Promise<void> {
       scenariosOutsideReference.push(scenarioId);
     }
 
+    // Absent only for a scenario missing from `config/benchmarkClasses.ts`,
+    // which the matrix test refuses — so the fallback is a hole in the table
+    // rather than an ordinary state. It is left undefined rather than defaulted
+    // to `mechanism`: a silent default hands every unclassified scenario the
+    // most flattering label available without anyone deciding it should have it.
+    const benchmarkClass = classifyBenchmark(scenarioId);
+
     aggregates.push({
       id: scenarioId,
       name: aggregate.name,
       description: aggregate.description,
       tier: aggregate.tier,
       ...(isDiagnostic ? { applicability: "diagnostic" as const } : {}),
+      ...(benchmarkClass ? { kind: benchmarkClass.kind, claim: benchmarkClass.claim } : {}),
       runs,
       p50Ms: round(p50Ms),
       p95Ms: round(p95Ms),
@@ -969,7 +1101,7 @@ async function run(): Promise<void> {
       ),
       outsideReference: reportedOutsideReference,
       referenceNotes: referenceReasons.length > 0 ? referenceReasons.join("; ") : undefined,
-      measurementIssues: [...measurementIssues, ...correctnessIssues],
+      measurementIssues: [...measurementIssues, ...correctnessIssues, ...workloadIssues],
       // The diagnostic marker leads, ahead of the scenario's own notes and
       // outside the slice that trims them, so a platform caveat can never be
       // pushed out of the row by three ordinary notes.
@@ -982,6 +1114,17 @@ async function run(): Promise<void> {
 
   aggregates.sort((a, b) => a.id.localeCompare(b.id));
 
+  const integrityIssues = collectIntegrityIssues(
+    aggregates,
+    skippedScenarios.length,
+    process.platform
+  );
+  const integrity: IntegrityResult = {
+    enforced: cli.enforceIntegrity,
+    valid: integrityIssues.length === 0,
+    issues: integrityIssues,
+  };
+
   const summary: PerfRunSummary = {
     generatedAt: new Date().toISOString(),
     mode: cli.mode,
@@ -993,10 +1136,25 @@ async function run(): Promise<void> {
       iterations: cli.iterations ?? null,
       warmups: cli.warmups ?? null,
       scenarioSelection: cli.scenarioIds,
+      // The budgets file is folded in only when it is NOT the default, because
+      // the default already lives inside the hashed tree and hashing it twice
+      // would change the value for every existing run without changing what it
+      // means.
+      harnessHash: hashHarnessSources(
+        undefined,
+        cli.budgetsPath === defaultBudgetsPath() ? [] : [cli.budgetsPath]
+      ),
+      purpose: cli.purpose,
+      // A diagnostic run's instrumentation inflates every timing, and the
+      // summary has to carry that where a consumer reading it directly will
+      // see it rather than only in a bundle manifest they may never open.
+      durationsComparable: cli.purpose === "benchmark",
+      enforceIntegrity: cli.enforceIntegrity,
     },
     scenarioCount: aggregates.length,
     scenariosOutsideReference,
     scenariosSkipped: skippedScenarios.map((scenario) => scenario.id),
+    integrity,
     aggregates,
   };
 
@@ -1021,6 +1179,24 @@ async function run(): Promise<void> {
   }
 
   if (cli.updateBaseline) {
+    // A reference is what every later run is read against, so promoting one
+    // from a run whose oracle failed does not just record a bad number — it
+    // silently re-bases every future comparison on it. A diagnostic p95 is
+    // already excluded below for the same reason; this extends the rule to the
+    // measurement-issue case, which is the louder of the two.
+    const invalidForBaseline = new Set(
+      aggregates
+        .filter((aggregate) => aggregate.measurementIssues.length > 0)
+        .map((aggregate) => aggregate.id)
+    );
+    if (invalidForBaseline.size > 0) {
+      console.warn(
+        `[perf:${cli.mode}] NOT updating the baseline for ${[...invalidForBaseline].join(", ")}: ` +
+          "the run reported measurement issues, and a reference taken from broken evidence " +
+          "re-bases every later comparison on it."
+      );
+    }
+
     const mergedScenarios = mergeBaselineEntries({
       existing: baselineEntries,
       // A diagnostic p95 is a signal, not a measurement, so it never becomes a
@@ -1029,7 +1205,9 @@ async function run(): Promise<void> {
       // CAN measure the scenario. Unsupported scenarios and every scenario this
       // run did not select are inherited by the same route.
       measured: aggregates
-        .filter((aggregate) => !diagnosticIds.has(aggregate.id))
+        .filter(
+          (aggregate) => !diagnosticIds.has(aggregate.id) && !invalidForBaseline.has(aggregate.id)
+        )
         .map((aggregate) => ({ id: aggregate.id, p95Ms: aggregate.p95Ms })),
       measuredAt: summary.generatedAt,
       machine: {
@@ -1058,8 +1236,18 @@ async function run(): Promise<void> {
   // The scenario filter is no longer part of this test: every run is filtered.
   // What still disqualifies a run from the trend record is a sampling override,
   // because a 3-iteration spot check is not comparable with the 8 the mode
-  // normally takes.
-  const isCanonicalRun = cli.iterations === undefined && cli.warmups === undefined;
+  // normally takes — or `--no-history`, which is how a profiled rerun keeps its
+  // inflated durations out of a trend that has no column to explain them.
+  // `purpose` is the STRUCTURAL half and leads deliberately: a diagnostic run
+  // cannot enter the trend even if a caller forgets `--no-history`, because the
+  // history file has no column to say a duration was instrumented and an entry
+  // there reads exactly like a regression. The sampling-override test and the
+  // explicit flag are the other two, both of which a caller has to opt into.
+  const isCanonicalRun =
+    cli.purpose === "benchmark" &&
+    cli.iterations === undefined &&
+    cli.warmups === undefined &&
+    !cli.noHistory;
   const historyPath = isCanonicalRun ? writeHistory(summary) : null;
 
   // The step summary is a convenience, not a result. A run whose numbers are
@@ -1145,6 +1333,24 @@ async function run(): Promise<void> {
   if (cli.jsonPath) console.log(`[perf:${cli.mode}] json: ${cli.jsonPath}`);
   if (historyPath) console.log(`[perf:${cli.mode}] history: ${historyPath}`);
   console.log(`[perf:${cli.mode}] rerun: ${buildRerunCommand(cli)}`);
+
+  // The one place a NUMBER never moves the exit code but EVIDENCE does. Without
+  // the flag this is the same loud warning it has always been; with it, a run
+  // whose oracle failed stops being indistinguishable from a clean one.
+  if (!integrity.enforced) return 0;
+  if (integrity.valid) {
+    console.log(
+      `[perf:${cli.mode}] integrity: ok — every declared predicate was emitted on every ` +
+        "iteration and read 0, and every configured metric is still being emitted"
+    );
+    return 0;
+  }
+  console.error(
+    `\n[perf:${cli.mode}] INTEGRITY FAILURE — ${integrity.issues.length} broken ` +
+      "measurement(s) under --enforce-integrity. This is not a slow result; it is not a " +
+      "result. Numeric drift is still advisory and did not contribute to this exit code."
+  );
+  return 1;
 }
 
 // Vitest imports this module for the arg-parser tests, so the harness only
@@ -1173,10 +1379,11 @@ function exitAfterFlush(code: number): Promise<never> {
 
 if (isEntrypoint) {
   run()
-    // Hardcoded 0, not `process.exitCode`: this is the whole stance in one
-    // line. A measurement being worse than a reference value is reported and
-    // never failed on, so the only way out with a non-zero code is a throw.
-    .then(() => exitAfterFlush(0))
+    // `run` returns 0 unless `--enforce-integrity` was passed AND the evidence
+    // is broken. The stance is unchanged for every other caller: a measurement
+    // being worse than a reference value is reported and never failed on, so
+    // without that flag the only way out with a non-zero code is still a throw.
+    .then((code) => exitAfterFlush(code))
     .catch((error) => {
       if (error instanceof UsageError) {
         console.error(`[perf] ${error.message}`);

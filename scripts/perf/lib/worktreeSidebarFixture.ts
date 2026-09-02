@@ -552,6 +552,16 @@ export function getScaleTopologyHarness(existingWorktrees: number): Promise<Topo
 type StoreLike = {
   getState: () => {
     worktrees: Map<string, WorktreeSnapshot>;
+    /**
+     * The two side maps the File Browser's refresh signal is built from.
+     *
+     * Read by identity, not by value: the store rebuilds each one and keeps
+     * the previous object when every stamp matches, precisely so a subscriber
+     * sees no tick. That identity IS the signal, which is why PERF-142 reads
+     * the maps rather than the numbers inside them.
+     */
+    statusCheckedAt: Map<string, number>;
+    workingTreeChangedAtById: Map<string, number>;
     applySnapshot: (
       states: WorktreeSnapshot[],
       version: WorktreeEventVersion,
@@ -672,6 +682,15 @@ export interface BenchSnapshotOptions {
   changedFileCount?: number;
   lastUpdated?: number;
   checkedAt?: number;
+  /**
+   * The raw filesystem-write stamp, independent of git status.
+   *
+   * This is the #11334 signal. A write into a gitignored folder moves it while
+   * `worktreeChanges` stays content-identical and its `lastUpdated` does not,
+   * so a File Browser watching only the git tick never refreshes. PERF-142
+   * drives the two apart.
+   */
+  workingTreeChangedAt?: number;
 }
 
 /**
@@ -703,6 +722,7 @@ export function makeBenchSnapshot(
       lastUpdated: options.lastUpdated ?? 1_000_000,
     },
     lastGitStatusCheckedAt: options.checkedAt ?? 1_000_000,
+    workingTreeChangedAt: options.workingTreeChangedAt ?? 1_000_000,
     lastActivityTimestamp: null,
   } as WorktreeSnapshot;
 }

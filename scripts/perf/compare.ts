@@ -396,6 +396,67 @@ export function buildComparison(before: PerfRunSummary, after: PerfRunSummary): 
         "same --scenario filter"
     );
   }
+  // A benchmark whose subject is emulated, simulated or a deliberate floor
+  // produces a number that is reproducible and comparable against itself — so
+  // the delta below is real — but it is not a statement about the product. The
+  // classification lives on the aggregate, and without saying so here a reader
+  // meets "PERF-196 improved 18%" with nothing indicating that PERF-196 is a
+  // parser floor which production does not take.
+  //
+  // Deliberately NOT extended to withholding the row or blocking
+  // `--update-baseline`, which was the stronger recommendation. A `diagnostic`
+  // KIND is not the same failure as a `diagnostic` PLATFORM: the platform case
+  // means the observer is blind here and another machine can measure the thing
+  // properly, so promoting its number would record a reading nothing produced.
+  // A floor is a floor everywhere, measured the same way every time, and its
+  // reference is genuinely useful for catching a parser regression. Removing it
+  // would cost a real signal to enforce a label.
+  const diagnosticIds = [
+    ...new Set(
+      [...before.aggregates, ...after.aggregates]
+        .filter((aggregate) => aggregate.kind === "diagnostic")
+        .map((aggregate) => aggregate.id)
+    ),
+  ].sort();
+  if (diagnosticIds.length > 0) {
+    warnings.push(
+      `${diagnosticIds.join(", ")} ${diagnosticIds.length === 1 ? "is" : "are"} classified ` +
+        "`diagnostic`: the subject inside the timed bracket is emulated, simulated or a " +
+        "deliberate floor, so a delta here is a signal about the harness's model of the " +
+        "product and not a product-level claim (see scripts/perf/config/benchmarkClasses.ts)"
+    );
+  }
+
+  // A WARNING rather than a refusal, and the line is drawn deliberately. The
+  // hash covers `scripts/perf/**` code and reference values, which genuinely
+  // change what the number means — but it also moves for an edit that could not
+  // possibly affect this scenario, and refusing every comparison across an
+  // unrelated harness change would make the check something people work around.
+  // `.agents/skills/optimize` already fails its own gate on this condition when
+  // a CLAIM is being made; here the reader is handed the fact and the judgement.
+  const beforeHarness = before.protocol?.harnessHash;
+  const afterHarness = after.protocol?.harnessHash;
+  if (beforeHarness === undefined || afterHarness === undefined) {
+    // A summary written before `harnessHash` existed has no field at all, which
+    // is the ordinary case for a comparison against a stored baseline — exactly
+    // what the field was added for. Staying silent here would fail the check
+    // open in the one situation it was meant to speak up in.
+    warnings.push(
+      "one side predates harness recording, so it cannot be shown that both runs were measured " +
+        "by the same instrument"
+    );
+  } else if (beforeHarness === null || afterHarness === null) {
+    warnings.push(
+      "one side could not record a harness hash, so it cannot be shown that both runs were " +
+        "measured by the same instrument"
+    );
+  } else if (beforeHarness !== afterHarness) {
+    warnings.push(
+      `the harness itself differs between the two runs (${beforeHarness} vs ${afterHarness}) — ` +
+        "scripts/perf changed, so part of any delta below may be the measuring instrument " +
+        "rather than the code; re-measure both sides on one harness before claiming a result"
+    );
+  }
   if (before.mode !== after.mode) {
     warnings.push(
       `run modes differ (${before.mode} vs ${after.mode}) — iteration counts and scenario ` +

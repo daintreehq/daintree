@@ -105,6 +105,7 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-033",
   "PERF-034",
   "PERF-035",
+  "PERF-036",
   "PERF-042",
   "PERF-043",
   "PERF-044",
@@ -154,11 +155,13 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-139",
   "PERF-140",
   "PERF-141",
+  "PERF-142",
   "PERF-150",
   "PERF-151",
   "PERF-160",
   "PERF-161",
   "PERF-162",
+  "PERF-163",
   "PERF-170",
   "PERF-171",
   "PERF-190",
@@ -237,12 +240,29 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-392",
   "PERF-393",
   "PERF-394",
+  "PERF-395",
   "PERF-400",
   "PERF-401",
   "PERF-402",
   "PERF-403",
   "PERF-404",
 ]);
+
+/**
+ * Scenarios deliberately excused from declaring a correctness predicate.
+ *
+ * EMPTY, and the emptiness is the point — it previously held fifteen scenarios
+ * whose oracles lived in fixture modules, and all fifteen now declare one. It
+ * survives as a mechanism because a legitimate exception is imaginable: a timer
+ * calibration, an intentional no-op control, a purely observational diagnostic.
+ *
+ * It lives HERE rather than in the matrix test because both readers must agree.
+ * The test enforces the declaration at build time and `evaluateCorrectness`
+ * enforces it at run time under `--enforce-integrity`; an exemption honoured by
+ * one and ignored by the other is a contract that cannot be satisfied — the
+ * scenario passes the suite and fails every enforced run.
+ */
+export const CORRECTNESS_EXEMPT_SCENARIO_IDS: ReadonlySet<string> = new Set<string>([]);
 
 /**
  * Enforce the matrix contract in BOTH directions at runtime, so a scenario

@@ -33,6 +33,9 @@ const WINDOWS: RunEnvironment = {
   osRelease: "10.0.22631",
 };
 
+/** Stands for "both fixtures came off the same harness"; identity is all that matters. */
+const HARNESS = "0000000000000000";
+
 function stat(overrides: Partial<MetricStat> & Pick<MetricStat, "max" | "sum">): MetricStat {
   return {
     mean: overrides.sum / (overrides.count ?? 8),
@@ -84,8 +87,11 @@ function summary(
     environment,
     // Both sides default to the same protocol so a fixture pair is comparable
     // unless a test deliberately overrides it — the machine/protocol refusals
-    // are what several of these cases are about.
-    protocol: { iterations: null, warmups: null, scenarioSelection: null },
+    // are what several of these cases are about. The harness hash is part of
+    // that default: a summary with no hash at all predates the field, which is
+    // its own warning, and every fixture here stands for a run this harness
+    // wrote.
+    protocol: { iterations: null, warmups: null, scenarioSelection: null, harnessHash: HARNESS },
     scenarioCount: aggregates.length,
     scenariosOutsideReference: [],
     scenariosSkipped: [],
@@ -298,7 +304,12 @@ describe("scenario-selection refusal", () => {
   // pairable, which is what makes this one worth refusing rather than noting.
   const selected = (label: string, p50: number, selection: string[] | null) =>
     summary(label, MAC, [scenario("PERF-105", p50, { gitSpawns: stat({ max: 6, sum: 24 }) })], {
-      protocol: { iterations: null, warmups: null, scenarioSelection: selection },
+      protocol: {
+        iterations: null,
+        warmups: null,
+        scenarioSelection: selection,
+        harnessHash: HARNESS,
+      },
     });
 
   it("refuses machine-dependent rows when a filtered run meets a full one", () => {
@@ -606,5 +617,102 @@ describe("cli", () => {
     expect(result.stdout).toContain("Machine-dependent comparison REFUSED");
     expect(result.stdout).toContain("different scenario selections");
     expect(result.stdout).toContain("REFUSED");
+  });
+});
+
+describe("harness identity", () => {
+  /**
+   * Two runs of one scenario on one machine at one iteration count are still
+   * not comparable if `scripts/perf` changed between them, and every field a
+   * reader would check matches. The hash is the only evidence, so the warning
+   * built on it has to appear — and has to stay a warning, because refusing
+   * every comparison across an unrelated harness edit is how a check becomes
+   * something people route around.
+   */
+  const withHarness = (label: string, hash: string | null | undefined) =>
+    summary(label, MAC, [scenario("PERF-105", 200, {})], {
+      protocol: {
+        iterations: null,
+        warmups: null,
+        scenarioSelection: null,
+        ...(hash === undefined ? {} : { harnessHash: hash }),
+      },
+    });
+
+  it("warns when the two runs were measured by different harnesses", () => {
+    const output = render(
+      withHarness("before", "aaaaaaaaaaaaaaaa"),
+      withHarness("after", "bbbbbbbbbbbbbbbb")
+    );
+    expect(output).toContain("the harness itself differs between the two runs");
+    expect(output).toContain("aaaaaaaaaaaaaaaa");
+    // A warning, not a refusal: the durations are still shown and judged.
+    expect(output).not.toContain("Machine-dependent comparison REFUSED");
+  });
+
+  it("says nothing when both sides carry the same hash", () => {
+    const output = render(
+      withHarness("before", "aaaaaaaaaaaaaaaa"),
+      withHarness("after", "aaaaaaaaaaaaaaaa")
+    );
+    expect(output).not.toContain("the harness itself differs");
+    expect(output).not.toContain("could not record a harness hash");
+  });
+
+  it("distinguishes a hash that failed from one that was never recorded", () => {
+    // null means the harness tried and could not; absent means the summary
+    // predates the field. Both leave the same fact unproven, so both get a
+    // line — they differ in what it says, not in whether it appears.
+    expect(render(withHarness("before", null), withHarness("after", "aaaaaaaaaaaaaaaa"))).toContain(
+      "could not record a harness hash"
+    );
+    const absent = render(withHarness("before", undefined), withHarness("after", undefined));
+    expect(absent).toContain("predates harness recording");
+    expect(absent).not.toContain("could not record a harness hash");
+  });
+
+  it("still warns when only the stored side predates the field", () => {
+    // The case the hash was added for: a baseline written before this PR
+    // compared against a run written after it. Staying silent here would fail
+    // the provenance check open in its most common situation.
+    const output = render(
+      withHarness("before", undefined),
+      withHarness("after", "aaaaaaaaaaaaaaaa")
+    );
+    expect(output).toContain("predates harness recording");
+    expect(output).not.toContain("the harness itself differs");
+  });
+});
+
+describe("benchmark class in a comparison", () => {
+  it("says when a compared scenario is a floor or a simulation", () => {
+    // "PERF-196 improved 18%" is true and is not a product claim: PERF-196 is a
+    // declared parser floor that production does not take. Nothing else in the
+    // comparison output carries that.
+    const withKind = (label: string) =>
+      summary(label, MAC, [{ ...scenario("PERF-196", 200, {}), kind: "diagnostic" as const }]);
+    const output = render(withKind("before"), withKind("after"));
+    expect(output).toContain("PERF-196");
+    expect(output).toContain("classified `diagnostic`");
+  });
+
+  it("says nothing for an ordinary mechanism benchmark", () => {
+    const withKind = (label: string) =>
+      summary(label, MAC, [{ ...scenario("PERF-105", 200, {}), kind: "mechanism" as const }]);
+    expect(render(withKind("before"), withKind("after"))).not.toContain("classified `diagnostic`");
+  });
+
+  it("does not withhold the diagnostic row", () => {
+    // A floor's delta is still worth reading — it catches a parser regression.
+    // The warning is a label on the number, not a refusal of it.
+    const withKind = (label: string, p50: number) =>
+      summary(label, MAC, [{ ...scenario("PERF-196", p50, {}), kind: "diagnostic" as const }]);
+    const output = render(withKind("before", 200), withKind("after", 100));
+    // Asserted on the ROW, not on the whole document: the reading guide
+    // explains what a refusal looks like, so the word appears either way.
+    const cells = rowCells(output, "PERF-196")[0];
+    expect(cells).toBeDefined();
+    expect(cells!.join(" ")).not.toContain("REFUSED");
+    expect(cells!.join(" ")).toContain("-50");
   });
 });

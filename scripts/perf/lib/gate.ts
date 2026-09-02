@@ -31,6 +31,11 @@ export interface GateParams {
   scenarioId: string;
   p95Ms: number;
   /**
+   * Measured iterations. A configured metric has to have been emitted on all of
+   * them, for the same reason a correctness predicate does.
+   */
+  runs: number;
+  /**
    * Full per-metric spread, not the mean. A ceiling read against the mean is
    * not a ceiling: 20 spawns in one iteration among fifteen quiet ones averages
    * to 1.25 and slides under a limit of 1.5, which is precisely the storm the
@@ -70,7 +75,7 @@ export interface GateResult {
  * the code is slow.
  */
 export function evaluateScenarioBudget(params: GateParams): GateResult {
-  const { p95Ms, metricStats, budget, baselineP95, hasBaselineFile } = params;
+  const { p95Ms, runs, metricStats, budget, baselineP95, hasBaselineFile } = params;
 
   let outsideReference = false;
   const reasons: string[] = [];
@@ -117,6 +122,21 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
       if (!Number.isFinite(stat.max)) {
         measurementIssues.push(`${metricName} produced a non-finite value (${stat.max})`);
         reasons.push(`${metricName} non-finite (${stat.max})`);
+        continue;
+      }
+      // Present is not the same as present on every iteration. `MetricStat.count`
+      // tallies the iterations that emitted the metric, so a ceiling read
+      // against one sample out of sixteen is a ceiling with fifteen blind
+      // iterations behind it — and it passes, quietly, looking exactly like a
+      // clean result. Correctness predicates have always been checked this way;
+      // configured metrics were not, which left the louder of the two cases
+      // enforced and the other one open.
+      if (runs > 0 && stat.count !== runs) {
+        measurementIssues.push(
+          `${metricName} has a configured reference but was emitted on ${stat.count} of ` +
+            `${runs} iteration(s) — its ceiling was checked against a partial measurement`
+        );
+        reasons.push(`${metricName} emitted on ${stat.count}/${runs} iterations`);
         continue;
       }
       // The worst iteration, not the average of them. Mean and sum ride along
@@ -172,12 +192,95 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
   return { outsideReference, measurementIssues, reasons };
 }
 
+export interface WorkloadParams {
+  /** Declared minimums, keyed by metric name. */
+  floors: Readonly<Record<string, number>> | undefined;
+  metricStats: Record<string, MetricStat>;
+  /** Measured iterations — a floor has to hold on every one. */
+  runs: number;
+}
+
+/**
+ * Did the fixture actually build the workload the scenario claims to measure?
+ *
+ * The distinct failure this catches: a scenario that asked for twelve
+ * background terminals and started nine is measuring a lighter workload than it
+ * says, and reports a BETTER number for it. Every correctness predicate stays
+ * at zero, because the nine that started behaved perfectly. Nothing else in the
+ * harness can see it, which is why the floor is declared separately from the
+ * predicates and checked separately from them.
+ *
+ * Read against `min`, not `mean`: one starved iteration among fifteen healthy
+ * ones averages away, and that iteration is in the aggregate the run reports.
+ */
+export function evaluateWorkload(params: WorkloadParams): string[] {
+  const { floors, metricStats, runs } = params;
+  if (!floors) return [];
+
+  const issues: string[] = [];
+  for (const [metricName, floor] of Object.entries(floors)) {
+    // A NaN floor makes every comparison below false, so the declaration reads
+    // as satisfied while checking nothing — the same shape as a predicate that
+    // stopped being emitted, and just as quiet.
+    if (!Number.isFinite(floor)) {
+      issues.push(
+        `workload floor for "${metricName}" is not a finite number (${floor}), so it compares ` +
+          `against nothing`
+      );
+      continue;
+    }
+    const stat = metricStats[metricName];
+    if (stat === undefined) {
+      issues.push(
+        `declared workload floor "${metricName}" >= ${floor} was never emitted — the reading ` +
+          `that would prove this scenario built the workload it measures is the one missing`
+      );
+      continue;
+    }
+    if (!Number.isFinite(stat.min)) {
+      issues.push(`workload metric "${metricName}" produced a non-finite value (${stat.min})`);
+      continue;
+    }
+    // `MetricStat.count` tallies the SAMPLES that carried the key, and a sample
+    // is one iteration's metric object, so a key cannot be counted twice for
+    // one iteration. `count === runs` therefore does mean one emission each.
+    if (stat.count !== runs) {
+      issues.push(
+        `workload metric "${metricName}" was emitted on ${stat.count} of ${runs} iteration(s), ` +
+          `so the iterations that did not report it are unaccounted for`
+      );
+      continue;
+    }
+    if (stat.min < floor) {
+      issues.push(
+        `workload shortfall: "${metricName}" fell to ${round(stat.min)} against a declared ` +
+          `floor of ${floor} (max ${round(stat.max)} over ${stat.count}) — this run measured ` +
+          `less work than the scenario claims, so its numbers describe a smaller workload`
+      );
+    }
+  }
+  return issues;
+}
+
 export interface CorrectnessParams {
   /** Metric keys the scenario declares as miss counts, or undefined if none. */
   correctness: readonly string[] | undefined;
   metricStats: Record<string, MetricStat>;
   /** Measured iterations — the denominator every predicate has to match. */
   runs: number;
+  /**
+   * Whether this scenario is on the deliberate exemption list
+   * (`CORRECTNESS_EXEMPT_SCENARIO_IDS` in `scenarios/index.ts`).
+   *
+   * The same list the matrix test reads. An exemption honoured at build time
+   * and ignored here would be a contract nothing can satisfy: the scenario
+   * passes the suite and fails every `--enforce-integrity` run.
+   *
+   * Optional, and deliberately so despite being a safety input: the default
+   * direction is the STRICT one. A caller that forgets it gets the predicate
+   * enforced, not waived, which is the harmless half of the mistake.
+   */
+  exempt?: boolean;
 }
 
 /**
@@ -190,23 +293,36 @@ export interface CorrectnessParams {
  * numbers around it mean nothing — a measurement issue, never a gate.
  */
 export function evaluateCorrectness(params: CorrectnessParams): string[] {
-  const { correctness, metricStats, runs } = params;
+  const { correctness, metricStats, runs, exempt } = params;
   const issues: string[] = [];
 
   const declared = correctness ?? [];
   if (declared.length === 0) {
-    // Counts only. A duration falling to zero is visible as a duration, whereas
-    // a count falling to zero is indistinguishable from the counted work never
-    // having happened — which is the entire reason the predicate exists.
+    // A deliberate exemption, recorded in the one list both the matrix test and
+    // this function read. Nothing is on it today.
+    if (exempt) return issues;
+    // Every scenario declares a predicate: `__tests__/scenarioMatrix.test.ts`
+    // enforces it and its exemption list is empty. So an absent declaration
+    // reaching here is not a scenario that legitimately has nothing to grade —
+    // it is a declaration that was deleted, and deleting it is the cheapest way
+    // to make a failing predicate stop failing.
+    //
+    // This used to fire only when some surviving metric still classified as a
+    // count, which meant removing the declaration AND the emission together
+    // produced no issue at all. `assertMatrixCoverage()` checks ids at runtime,
+    // not predicates, so nothing else stood in the way and `--enforce-integrity`
+    // did not uphold what it documents.
     const counts = Object.keys(metricStats)
       .filter((name) => classifyMetric(name) === "count")
       .sort();
-    if (counts.length > 0) {
-      issues.push(
-        `reports count-class metric(s) ${counts.join(", ")} but declares no correctness ` +
-          `predicate — nothing here can tell a real 0 from a subject that stopped running`
-      );
-    }
+    issues.push(
+      counts.length > 0
+        ? `declares no correctness predicate while reporting count-class metric(s) ` +
+            `${counts.join(", ")} — nothing here can tell a real 0 from a subject that ` +
+            `stopped running`
+        : `declares no correctness predicate — every scenario must name what proves its ` +
+            `subject ran, and the matrix exemption list is empty`
+    );
     return issues;
   }
 

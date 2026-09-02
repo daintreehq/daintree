@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
-import { parseDiff, type HunkData } from "react-diff-view";
+import { parseDiff, type HunkData, type HunkTokens } from "react-diff-view";
+import { armBystanderProbe, bystanderMetrics } from "../lib/bystander";
 import type { PerfScenario } from "../types";
 import {
   runDiffTokenize,
@@ -80,7 +81,7 @@ function generateUnifiedDiff(spec: DiffSpec): string {
   return lines.join("\n");
 }
 
-function hunksFor(spec: DiffSpec): { hunks: HunkData[]; changedLines: number } {
+export function hunksFor(spec: DiffSpec): { hunks: HunkData[]; changedLines: number } {
   const files = parseDiff(generateUnifiedDiff(spec));
   const hunks = files[0]?.hunks ?? [];
   let changedLines = 0;
@@ -90,6 +91,721 @@ function hunksFor(spec: DiffSpec): { hunks: HunkData[]; changedLines: number } {
     }
   }
   return { hunks, changedLines };
+}
+
+/**
+ * The multi-file review PERF-162 and PERF-163 both open.
+ *
+ * Shared rather than duplicated so the two never drift: PERF-163's number is
+ * only readable beside PERF-162's, and a changeset that differed between them
+ * would make the pair uninterpretable.
+ */
+const REVIEW_CHANGESET: ReadonlyArray<{
+  spec: DiffSpec;
+  language: string;
+  /**
+   * Whether this language is required to yield syntax tokens over THIS corpus.
+   *
+   * Declared by the fixture rather than read back from the tokenizer, which is
+   * the difference between an oracle and a self-report. The generated diff is
+   * code-shaped for every entry, so markdown correctly produces no tokens over
+   * it today — and requiring them everywhere would make the predicate nonzero
+   * on a perfectly healthy run, which always ends in weakening it until it
+   * means nothing.
+   *
+   * `"unchecked"` rather than `false`, because "must not highlight" is not
+   * something the fixture knows: a future grammar that tokenized this content
+   * would not be a defect. The file is still graded — the line-count and
+   * content terms apply to every entry — so an unchecked file cannot be served
+   * by an implementation that does nothing.
+   */
+  syntaxTokens: SyntaxTokenExpectation;
+  /**
+   * Reserved words this entry's generated content contains, which its grammar
+   * must recognise. Empty where the language has none — JSON and CSS see
+   * `const` and `return` as ordinary text, correctly.
+   */
+  reservedWords: readonly string[];
+}> = [
+  {
+    spec: { path: "src/a.ts", changedLines: 320, seed: 1 },
+    language: "typescript",
+    syntaxTokens: "required",
+    reservedWords: ["const", "return"],
+  },
+  {
+    spec: { path: "src/b.tsx", changedLines: 320, seed: 2 },
+    language: "tsx",
+    syntaxTokens: "required",
+    reservedWords: ["const", "return"],
+  },
+  {
+    spec: { path: "config/c.json", changedLines: 320, seed: 3 },
+    language: "json",
+    syntaxTokens: "required",
+    reservedWords: [],
+  },
+  {
+    spec: { path: "styles/d.css", changedLines: 320, seed: 4 },
+    language: "css",
+    syntaxTokens: "required",
+    reservedWords: [],
+  },
+  {
+    spec: { path: "docs/e.md", changedLines: 320, seed: 5 },
+    language: "markdown",
+    syntaxTokens: "unchecked",
+    reservedWords: [],
+  },
+];
+
+/**
+ * Reserved words the generator plants in every TypeScript file it writes.
+ *
+ * PERF-160 and PERF-161 build their own single-file diffs rather than using
+ * REVIEW_CHANGESET, and the generator emits `const` and `return` on every hunk,
+ * so they carry the same declaration.
+ */
+const TYPESCRIPT_RESERVED = ["const", "return"] as const;
+
+/** Roughly one frame. Below this the probe is measuring the probe. */
+const PROBE_CADENCE_MS = 8;
+
+/**
+ * The idle calibration window, in milliseconds.
+ *
+ * Fixed rather than matched to the workload's own duration, and taken BEFORE
+ * the workload rather than after it. Both choices were forced by measurement:
+ * run afterwards, the calibration inherits the tokenizer's garbage collection
+ * and reported 10-45ms of "idle" stall on an untouched loop, which put the
+ * headline `excessLongestStallMs` anywhere between 8ms and 72ms across three
+ * iterations of identical work. The workload's own GC is legitimately part of
+ * what it costs the foreground and belongs in the load window; it does not
+ * belong in the window that is supposed to describe the machine.
+ *
+ * Long enough to see a scheduler hiccup, short enough that it is not most of
+ * the scenario's cost.
+ */
+const IDLE_CALIBRATION_MS = 150;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Hand the loop back so pending timers, including the probe's, can run.
+ *
+ * `setTimeout(0)` rather than a microtask OR `setImmediate`, and the difference
+ * between the last two is the whole reason this is a named function. A resolved
+ * promise is a microtask and never leaves the current phase at all. But
+ * `setImmediate` lands in the CHECK phase, and an `await` continuation is a
+ * microtask drained at the end of that callback — so the next file's
+ * synchronous tokenize runs still inside the check phase, before the timer
+ * phase gets another turn. The probe's pending ticks would then be at the mercy
+ * of whatever the tokenizer happens to await internally, which makes the tick
+ * count a property of an implementation detail rather than of the yield.
+ *
+ * `setTimeout(0)` is queued in the timers phase behind the probe's own pending
+ * ticks, so every tick owed from the block that just finished is paid before
+ * the next file starts. That is what makes the measured stall the cost of ONE
+ * file. Node clamps it to 1ms, so five files cost ~5ms against a workload of
+ * ~200ms.
+ */
+function yieldToLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
+ * Grade what the tokenizer actually produced, against the fixture's own input.
+ *
+ * `result.tokens !== null` was the whole oracle here, and it is not one. The
+ * tokenizer catches its own errors and returns `{ tokens: null }` for a genuine
+ * failure — but an implementation returning an empty or plaintext tree for every
+ * language would skip parsing, highlighting and edit marking, come back truthy,
+ * and post a much faster number at zero misses. That is the "still doing most of
+ * its work" shape the harness's own rule warns about: which operation inside the
+ * timed bracket has no term in the predicate?
+ *
+ * Three terms, all read from the OUTPUT and compared against the parsed hunks:
+ *
+ * - `tokenLineMisses` — `HunkTokens.old` and `.new` are indexed by ABSOLUTE file
+ *   line, not by change position, so each side's length must equal the highest
+ *   line number that side touches.
+ * - `tokenContentMisses` — the text of every changed line, reconstructed from
+ *   its token nodes, must equal that line's source content. This is the term
+ *   that closes the obvious hole in the other two: an implementation returning
+ *   correctly-sized SPARSE arrays with one fabricated `className: ["token"]`
+ *   node somewhere satisfies both of them and preserves none of the real
+ *   output.
+ * - `tokenHighlightMisses` — each side must carry at least two categorised
+ *   tokens per source line across at least three distinct categories, where the
+ *   fixture declares highlighting is expected. Graded per side, so one
+ *   highlighted side cannot average its way past an unhighlighted one.
+ * - `tokenCategoryMisses` — every token naming a universal category must carry
+ *   text that category could describe, and enough of them must exist. This is
+ *   consistent with the vocabulary a grammar produces: the real tokenizer is
+ *   perfectly consistent over this corpus and a category-cycling wrapper is 56%
+ *   inconsistent.
+ * - `tokenLexicalMisses` — graded both ways: no identifier the fixture planted
+ *   may be labelled a keyword, AND every reserved word it planted must be. This
+ *   is the only term a grammar-free implementation cannot satisfy, because
+ *   telling `const` from `compute` needs lexical knowledge and nothing about
+ *   their characters supplies it. One direction alone is not enough: a
+ *   classifier calling every word run `function` mislabels no identifier.
+ * - `tokenStringMisses` — every quoted literal the fixture wrote must come back
+ *   as ONE token spanning its quotes. This is the term a spelling-based fake
+ *   cannot reach at all: it requires matching a multi-character span, and an
+ *   implementation that matches spans is a lexer.
+ *
+ * Grading is deliberately done OUTSIDE every timed bracket. It walks the whole
+ * tree, which is comparable to the work being measured.
+ */
+export interface TokenGrade {
+  tokenLineMisses: number;
+  tokenContentMisses: number;
+  tokenHighlightMisses: number;
+  tokenCategoryMisses: number;
+  tokenLexicalMisses: number;
+  tokenStringMisses: number;
+}
+
+/**
+ * Whether a corpus entry's language yields syntax tokens over THIS content.
+ *
+ * Named states rather than a boolean, because a boolean read as "expects none"
+ * would assert something the fixture does not know: the generated diff is
+ * code-shaped for every entry, so markdown correctly produces no tokens today,
+ * but a future grammar that tokenized it would not be a defect. `"unchecked"`
+ * says the fixture declines to assert, which is what it actually means; the
+ * content term still grades that file.
+ */
+export type SyntaxTokenExpectation = "required" | "unchecked";
+
+/** The highest line number each side of the diff reaches. */
+function expectedLineCounts(hunks: readonly HunkData[]): { old: number; new: number } {
+  let oldLines = 0;
+  let newLines = 0;
+  for (const change of hunks.flatMap((hunk) => hunk.changes)) {
+    const record = change as {
+      oldLineNumber?: number;
+      newLineNumber?: number;
+      lineNumber?: number;
+    };
+    if (change.type !== "insert") {
+      oldLines = Math.max(oldLines, record.oldLineNumber ?? record.lineNumber ?? 0);
+    }
+    if (change.type !== "delete") {
+      newLines = Math.max(newLines, record.newLineNumber ?? record.lineNumber ?? 0);
+    }
+  }
+  return { old: oldLines, new: newLines };
+}
+
+/** Concatenate the text nodes of one tokenized line back into its source text. */
+function lineText(node: unknown): string {
+  if (Array.isArray(node)) return node.map(lineText).join("");
+  if (typeof node !== "object" || node === null) return "";
+  const candidate = node as { type?: unknown; value?: unknown; children?: unknown };
+  if (candidate.type === "text") return String(candidate.value ?? "");
+  return lineText(candidate.children);
+}
+
+/**
+ * What a running grammar leaves behind, as distinct from a wrapper.
+ *
+ * Four progressively weaker versions were rejected on the way here, each
+ * defeated by a cheaper fake than the last:
+ *
+ * - "the tree contains a token element somewhere" — one planted node covers a
+ *   whole file.
+ * - "…spanning non-empty text" — one `<span class="token">` around one line.
+ * - "…on a share of lines" — still satisfied by wrapping whole lines.
+ * - "…whose className carries a second entry" — satisfied by `["token", "x"]`,
+ *   or by wrapping each line's first lexeme as a `keyword`. A second class name
+ *   is not evidence that anything parsed.
+ *
+ * So the test is on the SHAPE of the output rather than on any single node,
+ * measured against what the real tokenizer produces over this exact corpus:
+ *
+ *   typescript  12.5 tokens/line   6 categories
+ *   tsx         12.5 tokens/line   6 categories
+ *   json         5.9 tokens/line   4 categories
+ *   css          9.4 tokens/line   5 categories
+ *   markdown     0                 0            (declared "unchecked")
+ *
+ * Every wrapper fake above produces exactly 1 token per line and exactly 1
+ * category, so the floors below sit an order of magnitude clear of them while
+ * leaving room for a grammar upgrade to rename or merge categories. This is
+ * deliberately NOT a golden digest of the output: that would pin the reading to
+ * one version of refractor and turn an ordinary dependency bump into a
+ * correctness failure, which is how a predicate gets weakened until it means
+ * nothing.
+ *
+ * These floors detect SPARSE output. They cannot, on their own, tell a grammar
+ * from a dense wrapper — that is what `CATEGORY_CONTRACTS` below is for.
+ */
+interface TokenShape {
+  tokens: number;
+  categories: Set<string>;
+}
+
+function tokenShape(
+  node: unknown,
+  into: TokenShape = { tokens: 0, categories: new Set() }
+): TokenShape {
+  if (Array.isArray(node)) {
+    for (const child of node) tokenShape(child, into);
+    return into;
+  }
+  if (typeof node !== "object" || node === null) return into;
+  const candidate = node as {
+    type?: unknown;
+    properties?: { className?: unknown };
+    children?: unknown;
+  };
+  if (candidate.type === "element") {
+    const className = candidate.properties?.className;
+    if (
+      Array.isArray(className) &&
+      className.includes("token") &&
+      lineText(candidate).trim().length > 0
+    ) {
+      into.tokens += 1;
+      for (const name of className) if (name !== "token") into.categories.add(String(name));
+    }
+  }
+  return tokenShape(candidate.children, into);
+}
+
+/**
+ * Categorised tokens per source line a real grammar must beat.
+ *
+ * Two, against a measured worst case of 5.9 for JSON. Every wrapper fake
+ * produces exactly one.
+ */
+const MIN_TOKENS_PER_SOURCE_LINE = 2;
+
+/**
+ * Distinct syntax categories a real grammar must name.
+ *
+ * Three, against a measured worst case of four for JSON. A wrapper names one,
+ * and `["token", "token"]` names none.
+ */
+const MIN_DISTINCT_CATEGORIES = 3;
+
+/**
+ * What each syntax category MEANS, as a contract its text must satisfy.
+ *
+ * This is the term that establishes a grammar ran, and it is the one thing the
+ * density and diversity floors cannot do. A reviewer's final objection was that
+ * a wrapper emitting a categorised token around every character, cycling
+ * category names, clears both floors without parsing anything. It does — and it
+ * fails here, because it assigns `operator` to `const` and `keyword` to `(`.
+ *
+ * Measured over this corpus: the real tokenizer commits ZERO violations across
+ * 13,000+ contracted tokens in four languages, while that exact cycling wrapper
+ * commits 56%. The asymmetry is not a threshold anyone tuned — it falls out of
+ * the fact that a lexer assigns categories BY content and a wrapper cannot.
+ *
+ * Only categories whose meaning is language-independent are contracted.
+ * `function`, `selector`, `property` and `class-name` mean different things per
+ * grammar, and `string` is dropped because intra-line edit marking can split a
+ * literal so a fragment carries no quote. Each contract is also written to
+ * survive fragmentation: a piece of a keyword is still letters, a piece of
+ * punctuation is still punctuation.
+ */
+const CATEGORY_CONTRACTS: Readonly<Record<string, (text: string) => boolean>> = {
+  punctuation: (text) => !/[A-Za-z0-9]/.test(text),
+  operator: (text) => !/[A-Za-z0-9]/.test(text),
+  // Digits, with hex letters and exponent markers tolerated; nothing else.
+  number: (text) => /[0-9]/.test(text) && !/[G-WYZg-wyz_$]/.test(text),
+  keyword: (text) => /[A-Za-z]/.test(text) && !/[(){}[\];,]/.test(text),
+};
+
+/**
+ * Contracted tokens per source line a real grammar must produce.
+ *
+ * Without a floor here, a wrapper could dodge the contracts entirely by cycling
+ * only uncontracted category names — three of those satisfy the diversity floor
+ * and nothing would ever check their content. Requiring the output to actually
+ * USE the universal vocabulary is what forces a fake onto ground where it fails.
+ *
+ * One, against a measured worst case of 4.5 for CSS and JSON.
+ */
+const MIN_CONTRACTED_TOKENS_PER_LINE = 1;
+
+interface CategoryAudit {
+  contracted: number;
+  violations: number;
+}
+
+function auditCategories(
+  node: unknown,
+  into: CategoryAudit = { contracted: 0, violations: 0 }
+): CategoryAudit {
+  if (Array.isArray(node)) {
+    for (const child of node) auditCategories(child, into);
+    return into;
+  }
+  if (typeof node !== "object" || node === null) return into;
+  const candidate = node as {
+    type?: unknown;
+    properties?: { className?: unknown };
+    children?: unknown;
+  };
+  if (candidate.type === "element") {
+    const className = candidate.properties?.className;
+    if (Array.isArray(className) && className.includes("token")) {
+      const text = lineText(candidate).trim();
+      if (text.length > 0) {
+        for (const name of className) {
+          const contract = CATEGORY_CONTRACTS[String(name)];
+          if (!contract) continue;
+          into.contracted += 1;
+          if (!contract(text)) into.violations += 1;
+        }
+      }
+    }
+  }
+  return auditCategories(candidate.children, into);
+}
+
+/**
+ * Identifiers the generator plants, which no grammar may call a keyword.
+ *
+ * THIS is the term that establishes a grammar ran, and it is the only one that
+ * cannot be satisfied without lexical knowledge. Everything above it —
+ * line count, content, density, category-to-content consistency — is satisfiable
+ * by a per-character classifier: digit becomes `number`, letter becomes
+ * `keyword`, anything else becomes `punctuation`. That classifier is a real
+ * construction, a reviewer named it, and it clears every other check here.
+ *
+ * What it cannot do is tell a reserved word from an identifier. `const` is a
+ * keyword and `compute` is not, and nothing about their characters says so —
+ * only a lexer that knows the language does. Measured over this corpus, the
+ * real tokenizer labels exactly `const` and `return` as keywords, 28% of word
+ * tokens in TypeScript and none at all in JSON or CSS, and mislabels ZERO of
+ * the identifiers below. A letter-run classifier labels every one of them.
+ *
+ * The list is the FIXTURE's own record of what it wrote, not a vocabulary
+ * borrowed from the grammar — which is what keeps it an oracle rather than a
+ * second implementation of the thing it grades.
+ *
+ * BOTH DIRECTIONS ARE REQUIRED, and the one-sided version was a real hole. A
+ * classifier that labels every word run `function` — including `const` and
+ * `return` — mislabels no identifier and passes a false-positive check
+ * outright. So each corpus entry also declares the reserved words it planted,
+ * and every occurrence of one must come back as a keyword. Scoped per entry
+ * because JSON and CSS legitimately have no keywords at all: measured over this
+ * corpus, TypeScript and TSX match exactly at every scale (208, 520 and 2,730
+ * occurrences, delta 0) while JSON and CSS observe none and declare none.
+ *
+ * WHERE THE ESCALATION STOPS
+ *   These five terms were built against a reviewer producing successively
+ *   better fakes, and each one closed the fake before it: a null tree, an empty
+ *   tree, sparse arrays, a planted token, whole-line spans, `["token","token"]`,
+ *   one lexeme per line, a category-cycling per-character wrapper, a
+ *   character-class classifier, and a classifier calling every word a
+ *   non-keyword. The unit test contains every one of them.
+ *
+ *   The next fake is a classifier that hardcodes this language's reserved
+ *   words. It is not closed, and it is not going to be: any check on a property
+ *   P is satisfied by an impostor that encodes P, so the escalation has no
+ *   fixed point. What ends it is the threat model rather than another term.
+ *   This predicate exists to catch a subject that got FASTER by doing LESS — a
+ *   stub, a silent fallback, a plaintext downgrade — because that is the only
+ *   direction a performance benchmark can be gamed from. Every fake above is
+ *   cheaper than tokenizing and every one now fails. A classifier carrying a
+ *   keyword table is more expensive than the real path and would report a worse
+ *   number, so nothing pushes an implementation toward it.
+ *
+ *   `README.md` states the general form of this limit: an oracle cannot be
+ *   mechanically proven independent, and whether a predicate is real rather
+ *   than decorative is a review obligation. This is where that obligation was
+ *   discharged, and this comment is the record of how far it was taken.
+ */
+const PLANTED_IDENTIFIERS: ReadonlySet<string> = new Set([
+  "resolve",
+  "legacyCompute",
+  "compute",
+  "aggregate",
+  "retries",
+  "backoff",
+]);
+
+/**
+ * Quoted literals the fixture wrote, which only a lexer can reassemble.
+ *
+ * This is the term that ends the escalation, and it ends it on a property
+ * rather than on a judgement call. Every fake before it classified by SPELLING:
+ * look at a word or a character, emit a category. `"expo"` cannot be produced
+ * that way. It is one token spanning the quotes — and the quote characters are
+ * non-alphanumeric, so any character-class rule calls them punctuation and
+ * splits the literal into three. Emitting it whole means recognising an opening
+ * quote and consuming to the closing one as a unit. That is recognition of a
+ * multi-character lexical SPAN — not necessarily an explicit quote mode; a
+ * scanner whose alternation leads with `"[^"]*"` clears it too. Either way the
+ * implementation has stopped classifying by spelling and started lexing, which
+ * is the point: the thing that passes this term is a tokenizer, so a benchmark
+ * that passes it is measuring one.
+ *
+ * Measured over this corpus, expected against observed, per side: TypeScript,
+ * TSX, JSON and CSS all match exactly at every scale the family uses — 160, 400
+ * and 2,100 literals, delta 0 — while markdown produces none and declares
+ * itself unchecked.
+ */
+function countQuotedLiterals(hunks: readonly HunkData[], side: "old" | "new"): number {
+  let count = 0;
+  for (const change of hunks.flatMap((hunk) => hunk.changes)) {
+    if (side === "old" && change.type === "insert") continue;
+    if (side === "new" && change.type === "delete") continue;
+    const content = (change as { content?: string }).content ?? "";
+    count += (content.match(/"[^"]*"/g) ?? []).length;
+  }
+  return count;
+}
+
+/** Tokens categorised `string` whose text spans a complete quoted literal. */
+function countStringTokens(node: unknown): number {
+  if (Array.isArray(node)) {
+    return node.reduce<number>((sum, child) => sum + countStringTokens(child), 0);
+  }
+  if (typeof node !== "object" || node === null) return 0;
+  const candidate = node as {
+    type?: unknown;
+    properties?: { className?: unknown };
+    children?: unknown;
+  };
+  let found = 0;
+  if (candidate.type === "element") {
+    const className = candidate.properties?.className;
+    if (
+      Array.isArray(className) &&
+      className.includes("token") &&
+      className.includes("string") &&
+      /^".*"$/s.test(lineText(candidate).trim())
+    ) {
+      found += 1;
+    }
+  }
+  return found + countStringTokens(candidate.children);
+}
+
+/** Words the fixture planted, as a lexer would find them. */
+function wordsIn(text: string): string[] {
+  return text.match(/[A-Za-z_$][\w$]*/g) ?? [];
+}
+
+/** Occurrences of the entry's declared reserved words in the source it wrote. */
+function countPlantedReservedWords(
+  hunks: readonly HunkData[],
+  side: "old" | "new",
+  reservedWords: ReadonlySet<string>
+): number {
+  if (reservedWords.size === 0) return 0;
+  let count = 0;
+  for (const change of hunks.flatMap((hunk) => hunk.changes)) {
+    if (side === "old" && change.type === "insert") continue;
+    if (side === "new" && change.type === "delete") continue;
+    const content = (change as { content?: string }).content ?? "";
+    for (const word of wordsIn(content)) if (reservedWords.has(word)) count += 1;
+  }
+  return count;
+}
+
+/** Tokens the tokenizer labelled `keyword` whose text is a declared reserved word. */
+function countKeywordTokens(node: unknown, reservedWords: ReadonlySet<string>): number {
+  if (Array.isArray(node)) {
+    return node.reduce<number>((sum, child) => sum + countKeywordTokens(child, reservedWords), 0);
+  }
+  if (typeof node !== "object" || node === null) return 0;
+  const candidate = node as {
+    type?: unknown;
+    properties?: { className?: unknown };
+    children?: unknown;
+  };
+  let found = 0;
+  if (candidate.type === "element") {
+    const className = candidate.properties?.className;
+    if (
+      Array.isArray(className) &&
+      className.includes("token") &&
+      className.includes("keyword") &&
+      reservedWords.has(lineText(candidate).trim())
+    ) {
+      found += 1;
+    }
+  }
+  return found + countKeywordTokens(candidate.children, reservedWords);
+}
+
+/** Tokens that called one of the fixture's own identifiers a reserved word. */
+function countKeywordMislabels(node: unknown): number {
+  if (Array.isArray(node))
+    return node.reduce<number>((sum, child) => sum + countKeywordMislabels(child), 0);
+  if (typeof node !== "object" || node === null) return 0;
+  const candidate = node as {
+    type?: unknown;
+    properties?: { className?: unknown };
+    children?: unknown;
+  };
+  let misses = 0;
+  if (candidate.type === "element") {
+    const className = candidate.properties?.className;
+    if (
+      Array.isArray(className) &&
+      className.includes("token") &&
+      className.includes("keyword") &&
+      PLANTED_IDENTIFIERS.has(lineText(candidate).trim())
+    ) {
+      misses += 1;
+    }
+  }
+  return misses + countKeywordMislabels(candidate.children);
+}
+
+/** Source lines each side of the diff actually contains. */
+function sourceLineCounts(hunks: readonly HunkData[]): { old: number; new: number } {
+  let old = 0;
+  let now = 0;
+  for (const change of hunks.flatMap((hunk) => hunk.changes)) {
+    if (change.type !== "insert") old += 1;
+    if (change.type !== "delete") now += 1;
+  }
+  return { old, new: now };
+}
+
+export function gradeTokens(
+  tokens: HunkTokens | null,
+  hunks: readonly HunkData[],
+  syntaxTokens: SyntaxTokenExpectation,
+  /**
+   * Reserved words this corpus entry planted, which the grammar for its
+   * language must recognise. Empty for languages that have none.
+   */
+  reservedWords: readonly string[] = []
+): TokenGrade {
+  if (!tokens) {
+    // A null tree is already counted by `tokenizeMisses`; charging the line and
+    // content counts here as well would report one failure hundreds of times.
+    return {
+      tokenLineMisses: 0,
+      tokenContentMisses: 0,
+      tokenHighlightMisses: 0,
+      tokenCategoryMisses: 0,
+      tokenLexicalMisses: 0,
+      tokenStringMisses: 0,
+    };
+  }
+
+  const expected = expectedLineCounts(hunks);
+  let tokenContentMisses = 0;
+  for (const change of hunks.flatMap((hunk) => hunk.changes)) {
+    const record = change as {
+      oldLineNumber?: number;
+      newLineNumber?: number;
+      lineNumber?: number;
+      content?: string;
+    };
+    const content = record.content ?? "";
+    if (change.type !== "insert") {
+      const at = (record.oldLineNumber ?? record.lineNumber ?? 0) - 1;
+      if (lineText(tokens.old[at]) !== content) tokenContentMisses += 1;
+    }
+    if (change.type !== "delete") {
+      const at = (record.newLineNumber ?? record.lineNumber ?? 0) - 1;
+      if (lineText(tokens.new[at]) !== content) tokenContentMisses += 1;
+    }
+  }
+
+  const sources = sourceLineCounts(hunks);
+  const shortOfFloor = (side: readonly unknown[], sourceLines: number): boolean => {
+    if (sourceLines <= 0) return false;
+    const shape = tokenShape(side);
+    return (
+      shape.tokens < sourceLines * MIN_TOKENS_PER_SOURCE_LINE ||
+      shape.categories.size < MIN_DISTINCT_CATEGORIES
+    );
+  };
+  // One miss per SIDE that fell short, so a tree highlighting only `old`
+  // reports half a failure rather than none.
+  const highlightMisses =
+    (shortOfFloor(tokens.old, sources.old) ? 1 : 0) +
+    (shortOfFloor(tokens.new, sources.new) ? 1 : 0);
+
+  // Category-to-content consistency, per side. A shortfall in contracted
+  // tokens counts as one miss (the output never used the vocabulary a grammar
+  // produces); every inconsistent token counts as one more.
+  const auditSide = (side: readonly unknown[], sourceLines: number): number => {
+    if (sourceLines <= 0) return 0;
+    const audit = auditCategories(side);
+    const coverageShortfall =
+      audit.contracted < sourceLines * MIN_CONTRACTED_TOKENS_PER_LINE ? 1 : 0;
+    return coverageShortfall + audit.violations;
+  };
+  const categoryMisses =
+    syntaxTokens === "required"
+      ? auditSide(tokens.old, sources.old) + auditSide(tokens.new, sources.new)
+      : 0;
+
+  // Graded on BOTH sides regardless of `syntaxTokens`: an entry the fixture
+  // declines to assert highlighting for may still not rename the fixture's
+  // identifiers into keywords, and markdown produces no keyword tokens at all,
+  // so this reads 0 there rather than being skipped.
+  const reserved = new Set(reservedWords);
+  const lexicalMisses =
+    // False positives: an identifier the fixture planted, called a keyword.
+    countKeywordMislabels(tokens.old) +
+    countKeywordMislabels(tokens.new) +
+    // False negatives: a reserved word the fixture planted, NOT called a
+    // keyword. Without this, labelling every word run `function` passes.
+    Math.abs(
+      countPlantedReservedWords(hunks, "old", reserved) - countKeywordTokens(tokens.old, reserved)
+    ) +
+    Math.abs(
+      countPlantedReservedWords(hunks, "new", reserved) - countKeywordTokens(tokens.new, reserved)
+    );
+
+  // Multi-character lexical SPANS, as distinct from lexical knowledge. A
+  // spelling-based classifier can carry a keyword table; it cannot emit
+  // `"expo"` as one token, because that means matching a span rather than
+  // classifying a character.
+  const stringMisses =
+    syntaxTokens === "required"
+      ? Math.abs(countQuotedLiterals(hunks, "old") - countStringTokens(tokens.old)) +
+        Math.abs(countQuotedLiterals(hunks, "new") - countStringTokens(tokens.new))
+      : 0;
+
+  return {
+    tokenLineMisses:
+      Math.abs(expected.old - tokens.old.length) + Math.abs(expected.new - tokens.new.length),
+    tokenContentMisses,
+    tokenHighlightMisses: syntaxTokens === "required" ? highlightMisses : 0,
+    tokenCategoryMisses: categoryMisses,
+    tokenLexicalMisses: lexicalMisses,
+    tokenStringMisses: stringMisses,
+  };
+}
+
+function emptyTokenGrade(): TokenGrade {
+  return {
+    tokenLineMisses: 0,
+    tokenContentMisses: 0,
+    tokenHighlightMisses: 0,
+    tokenCategoryMisses: 0,
+    tokenLexicalMisses: 0,
+    tokenStringMisses: 0,
+  };
+}
+
+function addTokenGrade(into: TokenGrade, from: TokenGrade): TokenGrade {
+  into.tokenLineMisses += from.tokenLineMisses;
+  into.tokenContentMisses += from.tokenContentMisses;
+  into.tokenHighlightMisses += from.tokenHighlightMisses;
+  into.tokenCategoryMisses += from.tokenCategoryMisses;
+  into.tokenLexicalMisses += from.tokenLexicalMisses;
+  into.tokenStringMisses += from.tokenStringMisses;
+  return into;
 }
 
 export const diffTokenizeScenarios: PerfScenario[] = [
@@ -106,7 +822,15 @@ export const diffTokenizeScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 8, ci: 14, nightly: 20 },
     warmups: 1,
-    correctness: ["tokenizeMisses"],
+    correctness: [
+      "tokenizeMisses",
+      "tokenLineMisses",
+      "tokenContentMisses",
+      "tokenHighlightMisses",
+      "tokenCategoryMisses",
+      "tokenLexicalMisses",
+      "tokenStringMisses",
+    ],
     async run() {
       const { hunks, changedLines } = hunksFor({
         path: "src/service.ts",
@@ -129,6 +853,7 @@ export const diffTokenizeScenarios: PerfScenario[] = [
           hunks: hunks.length,
           tokensProduced: 1 - tokenizeMisses,
           tokenizeMisses,
+          ...gradeTokens(result.tokens, hunks, "required", TYPESCRIPT_RESERVED),
         },
         notes: tokenizeMisses > 0 ? "runDiffTokenize returned null tokens" : undefined,
       };
@@ -146,7 +871,15 @@ export const diffTokenizeScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 12 },
     warmups: 1,
-    correctness: ["tokenizeMisses"],
+    correctness: [
+      "tokenizeMisses",
+      "tokenLineMisses",
+      "tokenContentMisses",
+      "tokenHighlightMisses",
+      "tokenCategoryMisses",
+      "tokenLexicalMisses",
+      "tokenStringMisses",
+    ],
     async run() {
       // Size from the real threshold with margin so the fixture is over-budget
       // regardless of what MAX_INTRALINE_CHANGES is set to in production.
@@ -180,6 +913,7 @@ export const diffTokenizeScenarios: PerfScenario[] = [
           markedIntraLine: changedLines <= MAX_INTRALINE_CHANGES ? 1 : 0,
           tokensProduced: 1 - tokenizeMisses,
           tokenizeMisses,
+          ...gradeTokens(result.tokens, hunks, "required", TYPESCRIPT_RESERVED),
         },
         notes: tokenizeMisses > 0 ? "runDiffTokenize returned null tokens" : undefined,
       };
@@ -197,20 +931,30 @@ export const diffTokenizeScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 12 },
     warmups: 1,
-    correctness: ["tokenizeMisses"],
+    correctness: [
+      "tokenizeMisses",
+      "tokenLineMisses",
+      "tokenContentMisses",
+      "tokenHighlightMisses",
+      "tokenCategoryMisses",
+      "tokenLexicalMisses",
+      "tokenStringMisses",
+    ],
     async run() {
-      const files: Array<{ spec: DiffSpec; language: string }> = [
-        { spec: { path: "src/a.ts", changedLines: 320, seed: 1 }, language: "typescript" },
-        { spec: { path: "src/b.tsx", changedLines: 320, seed: 2 }, language: "tsx" },
-        { spec: { path: "config/c.json", changedLines: 320, seed: 3 }, language: "json" },
-        { spec: { path: "styles/d.css", changedLines: 320, seed: 4 }, language: "css" },
-        { spec: { path: "docs/e.md", changedLines: 320, seed: 5 }, language: "markdown" },
-      ];
-      const prepared = files.map((f) => ({ ...hunksFor(f.spec), language: f.language }));
+      const prepared = REVIEW_CHANGESET.map((file) => ({
+        ...hunksFor(file.spec),
+        language: file.language,
+        syntaxTokens: file.syntaxTokens,
+        reservedWords: file.reservedWords,
+      }));
 
       const start = performance.now();
       let filesTokenized = 0;
       let changedLines = 0;
+      // The trees are RETAINED and graded after the bracket closes. Grading
+      // walks every token node, which is comparable to the work being measured,
+      // so doing it inside the loop would put the oracle in the number.
+      const produced: Array<HunkTokens | null> = [];
       for (const file of prepared) {
         const result = await runDiffTokenize({
           hunks: file.hunks,
@@ -218,11 +962,23 @@ export const diffTokenizeScenarios: PerfScenario[] = [
           highlight: true,
           extraRanges: null,
         });
+        produced.push(result.tokens);
         if (result.tokens) filesTokenized += 1;
         changedLines += file.changedLines;
       }
       const durationMs = performance.now() - start;
       const tokenizeMisses = prepared.length - filesTokenized;
+
+      // Accumulated PER FILE. One summed grade over the whole changeset would
+      // let four healthy files cover for one that came back empty.
+      const tokenGrade = prepared.reduce(
+        (into, file, index) =>
+          addTokenGrade(
+            into,
+            gradeTokens(produced[index]!, file.hunks, file.syntaxTokens, file.reservedWords)
+          ),
+        emptyTokenGrade()
+      );
 
       return {
         durationMs,
@@ -231,11 +987,139 @@ export const diffTokenizeScenarios: PerfScenario[] = [
           fileCount: prepared.length,
           changedLines,
           tokenizeMisses,
+          ...tokenGrade,
         },
         notes:
           tokenizeMisses > 0
             ? `only ${filesTokenized}/${prepared.length} files tokenized`
             : undefined,
+      };
+    },
+  },
+  {
+    id: "PERF-163",
+    name: "Diff Tokenize - Foreground Cost of a Review Open",
+    description:
+      "The same five-file changeset as PERF-162, tokenized with a fixed-cadence probe watching the " +
+      "main thread — preceded by the same probe over a fixed idle window on a settled heap, so the " +
+      "reported cost is the DIFFERENCE rather than a property of the machine. A Node timer cannot fire while " +
+      "synchronous work holds the loop, so the gap between probe observations IS main-thread " +
+      "starvation in milliseconds. This answers the question PERF-160..162 cannot: opening a review " +
+      "20% faster is not an improvement if the longest single block the user's terminal waits " +
+      "behind is unchanged. It is main-thread AVAILABILITY, not keystroke-to-paint — there is no " +
+      "Chromium scheduler or xterm here. A workload that did nothing would post perfect stall " +
+      "numbers, so the tokenizer's own output is graded alongside probeMisses: the tree must carry " +
+      "one entry per old and new line (counted from the fixture's hunks, not from the tokenizer) " +
+      "and must contain real syntax-token elements. A plaintext passthrough satisfies the line " +
+      "count exactly and fails the highlight term; an empty tree fails the line count. probeMisses " +
+      "proves only that the probe stayed alive.",
+    tier: "heavy",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 4, ci: 8, nightly: 12 },
+    warmups: 1,
+    correctness: [
+      "tokenizeMisses",
+      "tokenLineMisses",
+      "tokenContentMisses",
+      "tokenHighlightMisses",
+      "tokenCategoryMisses",
+      "tokenLexicalMisses",
+      "tokenStringMisses",
+      "probeMisses",
+    ],
+    // The changeset is the workload. Four files instead of five, or a
+    // generator that shrank its hunks, would report a shorter block and a
+    // cleaner loop with every predicate at zero.
+    workloadFloors: { fileCount: 5, filesTokenized: 5, changedLines: 1_500 },
+    async run() {
+      const prepared = REVIEW_CHANGESET.map((file) => ({
+        ...hunksFor(file.spec),
+        language: file.language,
+        syntaxTokens: file.syntaxTokens,
+        reservedWords: file.reservedWords,
+      }));
+
+      // Calibrate first, on a settled heap. Anything measured here is the
+      // machine, not the tokenizer.
+      //
+      // The forced collection also puts this scenario's own bracket on a
+      // cleaner heap than PERF-162's, which pays whatever collection falls due
+      // inside it. The two durations are therefore NOT comparable to each other
+      // even though the changeset is identical; each is comparable to itself.
+      globalThis.gc?.();
+      const idleProbe = await armBystanderProbe({ cadenceMs: PROBE_CADENCE_MS });
+      try {
+        await sleep(IDLE_CALIBRATION_MS);
+      } finally {
+        idleProbe.stop();
+      }
+      const idle = idleProbe.stop();
+
+      let filesTokenized = 0;
+      let changedLines = 0;
+      // Retained and graded after the bracket — grading walks every token node,
+      // and this scenario's whole subject is what the loop was doing during it.
+      const produced: Array<HunkTokens | null> = [];
+
+      const workloadProbe = await armBystanderProbe({ cadenceMs: PROBE_CADENCE_MS });
+      const start = performance.now();
+      // The probe's timer is REFERENCED while it is live — an unref'd one lets
+      // the process exit before it has ever fired, which is a deadlock rather
+      // than a leak. So a workload that throws must not leave one running.
+      // `stop()` is idempotent, so the finally is safe on the success path too.
+      try {
+        for (const file of prepared) {
+          const result = await runDiffTokenize({
+            hunks: file.hunks,
+            language: file.language,
+            highlight: true,
+            extraRanges: null,
+          });
+          produced.push(result.tokens);
+          if (result.tokens) filesTokenized += 1;
+          changedLines += file.changedLines;
+          // Production tokenizes one file per component render, so the loop is
+          // free between files. Yielding here is what makes the measured stall
+          // the cost of ONE file rather than of the whole changeset — the frame
+          // the user actually loses.
+          await yieldToLoop();
+        }
+      } finally {
+        workloadProbe.stop();
+      }
+      const durationMs = performance.now() - start;
+      const underLoad = workloadProbe.stop();
+
+      const tokenizeMisses = prepared.length - filesTokenized;
+      const tokenGrade = prepared.reduce(
+        (into, file, index) =>
+          addTokenGrade(
+            into,
+            gradeTokens(produced[index]!, file.hunks, file.syntaxTokens, file.reservedWords)
+          ),
+        emptyTokenGrade()
+      );
+
+      return {
+        durationMs,
+        metrics: {
+          filesTokenized,
+          fileCount: prepared.length,
+          changedLines,
+          ...bystanderMetrics("load", underLoad),
+          ...bystanderMetrics("idle", idle),
+          // The headline: how much longer the worst block was with the
+          // tokenizer on the loop than without it. Subtraction, not a ratio —
+          // an idle stall near zero makes a ratio meaningless.
+          excessLongestStallMs: Math.max(0, underLoad.longestStallMs - idle.longestStallMs),
+          tokenizeMisses,
+          ...tokenGrade,
+          probeMisses: underLoad.probeMisses + idle.probeMisses,
+        },
+        notes:
+          tokenizeMisses > 0
+            ? `only ${filesTokenized}/${prepared.length} files tokenized`
+            : `longest block ${underLoad.longestStallMs.toFixed(1)}ms vs ${idle.longestStallMs.toFixed(1)}ms idle`,
       };
     },
   },
