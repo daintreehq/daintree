@@ -405,6 +405,14 @@ Every scenario inherits `maxRegressionPct` from `defaultBudget`. A scenario with
 
 The `calibrating` flag is gone. It existed to suppress the regression gate until a runner-generated baseline landed; with no gate left to suppress it did nothing but hide the coverage note for the scenarios it was applied to.
 
+## File Browser refresh signal (PERF-142)
+
+The store keeps two side maps behind the File Browser's "re-read the tree" signal, and preserves each one's object identity when every stamp matches, so a subscriber sees no tick. That identity IS the signal, which is why PERF-142 reads it rather than the numbers inside.
+
+#11334 lived here: a write into a gitignored folder leaves `worktreeChanges` content identical, so its stamp never advances, so a browser watching only the git tick never refreshes. Four cases are graded in every direction: an ignored-only write must move the working-tree map and not the status map, a status poll that found nothing must do the reverse, an edit must move both, and a re-applied identical snapshot must move neither, because a spurious tick re-reads the whole tree for nothing. A store that rebuilt unconditionally passes the first three and fails the fourth.
+
+PERF-242 performs the refresh an ignored-only write triggers and says outright that it cannot prove the refresh was triggered. This is that proof, one layer down. What remains unmeasured above it is whether the React hook reads the signal and whether a row is painted, which is why JOURNEY-004 is still a `gap`.
+
 ## Sidebar list derivation (PERF-400..402)
 
 The four pure functions `SidebarContent` re-runs over the WHOLE worktree set on every render and every filter keystroke: `matchesFilters` per row, `sortWorktreesByRelevance`, `groupByType`, and `computeChipCounts`. PERF-140/141 cover the store apply that produces that set; nothing covered what the component then does with it. All four load with a plain import — they are pure and reach nothing renderer-only, so no esbuild bundle and no stubs are involved, unlike `lib/worktreeSidebarFixture.ts` next door.

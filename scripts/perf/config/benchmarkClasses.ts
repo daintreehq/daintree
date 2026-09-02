@@ -208,6 +208,7 @@ const FAMILIES: readonly Family[] = [
       "PERF-139",
       "PERF-140",
       "PERF-141",
+      "PERF-142",
     ],
     kind: "mechanism",
     fidelity: withFidelity({ processTopology: "partial" }),

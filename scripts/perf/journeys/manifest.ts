@@ -178,7 +178,7 @@ export const JOURNEYS: readonly JourneyDefinition[] = [
     coverage: "gap",
     commands: [],
     coverageNote:
-      "Nothing measures the last mile. PERF-100..106 and PERF-130..141 prove the signal reaches the store, and PERF-240..246 prove the sweep runs, but no benchmark carries a mutation through React, virtualization and paint. This is the largest single hole in the suite, and #11334, #12087 and #12094 are all failures that lived inside it.",
+      "Nothing measures the last mile. PERF-100..106 and PERF-130..142 prove the signal reaches the store, and PERF-240..246 prove the sweep runs, but no benchmark carries a mutation through React, virtualization and paint. This is the largest single hole in the suite, and #11334, #12087 and #12094 are all failures that lived inside it. PERF-142 closes the part of #11334 that is reachable without a renderer: it proves the store distinguishes an ignored-only write from a status poll, which is the signal the File Browser refreshes on. What is still unmeasured above it is whether the React hook reads that signal and whether a row is painted.",
     linkedScenarios: [
       "PERF-100",
       "PERF-101",
@@ -193,6 +193,7 @@ export const JOURNEYS: readonly JourneyDefinition[] = [
       "PERF-135",
       "PERF-140",
       "PERF-141",
+      "PERF-142",
       "PERF-240",
       "PERF-241",
       "PERF-242",

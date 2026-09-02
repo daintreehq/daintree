@@ -94,6 +94,9 @@ function measured(
   return { durationMs, metrics: { ...metrics, timeoutMisses: 0 }, notes };
 }
 
+/** Worktrees seeded before PERF-142 drives the refresh signal. */
+const SIGNAL_SEED_COUNT = 200;
+
 export const worktreeSidebarScenarios: PerfScenario[] = [
   {
     id: "PERF-130",
@@ -789,6 +792,121 @@ export const worktreeSidebarScenarios: PerfScenario[] = [
           notifiesPerApply: notifies / STORE_APPLY_BATCH,
           perApplyUs: (elapsed * 1000) / STORE_APPLY_BATCH,
           freshnessMisses,
+        },
+      };
+    },
+  },
+
+  {
+    id: "PERF-142",
+    name: "File Browser Refresh Signal - Ignored-Only Change Detection",
+    description:
+      "The real createWorktreeStore's two side maps at 200 worktrees, driven through the four " +
+      "cases the File Browser's refresh signal is built from. #11334: a write into a gitignored " +
+      "folder moves the working-tree stamp while worktreeChanges stays content-identical, so a " +
+      "browser watching only the git tick never refreshes. The store keeps each side map's " +
+      "OBJECT IDENTITY when every stamp matches, and that identity is the signal, so the oracle " +
+      "reads identity rather than the numbers inside. Graded in all four directions: an " +
+      "ignored-only write must move the working-tree map and not the status map; a status poll " +
+      "with no content change must move the status map and not the other; a real edit moves " +
+      "both; and a re-applied identical snapshot must move neither, because a spurious tick " +
+      "re-reads the whole tree. Each map's contents are read back too, since a rebuild with the " +
+      "wrong stamps changes identity and would satisfy every case otherwise. PERF-242 performs " +
+      "the refresh an ignored-only write triggers but cannot prove it was triggered; this is " +
+      "that proof, one layer down. It proves the STORE-side signal only: whether the React hook " +
+      "consumes it and whether a row is painted are still unmeasured, which is why JOURNEY-004 " +
+      "stays a gap.",
+    tier: "fast",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 8, ci: 16, nightly: 24 },
+    warmups: 1,
+    correctness: [
+      "ignoredOnlyMisses",
+      "statusOnlyMisses",
+      "bothMovedMisses",
+      "spuriousTickMisses",
+      "stampValueMisses",
+    ],
+    async run() {
+      const { createWorktreeStore } = await loadWorktreeStoreModule();
+      const store = createWorktreeStore();
+      let seq = 0;
+
+      const seed = Array.from({ length: SIGNAL_SEED_COUNT }, (_, i) => makeBenchSnapshot(i));
+      seq += 1;
+      store.getState().applySnapshot(seed, { epoch: "bench", seq });
+
+      // Identity before and after each apply. The store rebuilds both maps on
+      // every apply and returns the PREVIOUS object when nothing moved, so a
+      // changed reference is the tick a subscriber would see.
+      // Identity answers "did a subscriber see a tick". It cannot answer "is the
+      // map right": a store that rebuilt with the wrong stamps changes identity
+      // and passes every case below. So the value fed in is read back too.
+      let stampValueMisses = 0;
+      const apply = (options: Parameters<typeof makeBenchSnapshot>[1]) => {
+        const before = store.getState();
+        const beforeFs = before.workingTreeChangedAtById;
+        const beforeGit = before.statusCheckedAt;
+        seq += 1;
+        const snapshot = makeBenchSnapshot(0, options);
+        store.getState().applyUpdate(snapshot, { epoch: "bench", seq });
+        const after = store.getState();
+        const id = snapshot.id;
+        if (after.workingTreeChangedAtById.get(id) !== snapshot.workingTreeChangedAt) {
+          stampValueMisses += 1;
+        }
+        if (after.statusCheckedAt.get(id) !== snapshot.lastGitStatusCheckedAt) {
+          stampValueMisses += 1;
+        }
+        return {
+          fsMoved: after.workingTreeChangedAtById !== beforeFs,
+          gitMoved: after.statusCheckedAt !== beforeGit,
+        };
+      };
+
+      const start = performance.now();
+
+      // 1. The #11334 case. A gitignored write: the filesystem stamp advances,
+      //    the git status is content-identical so its stamp does not.
+      const ignoredOnly = apply({ workingTreeChangedAt: 2_000_000 });
+
+      // 2. A status poll that found nothing. The mirror image, and the reason
+      //    the two maps are separate at all.
+      const statusOnly = apply({ workingTreeChangedAt: 2_000_000, checkedAt: 2_000_000 });
+
+      // 3. An ordinary edit moves both.
+      const bothMoved = apply({
+        workingTreeChangedAt: 3_000_000,
+        checkedAt: 3_000_000,
+        changedFileCount: 1,
+        lastUpdated: 3_000_000,
+      });
+
+      // 4. The same snapshot again. Neither may move: a spurious tick makes the
+      //    browser re-read the whole tree for nothing, which is the cost this
+      //    identity-preserving rebuild exists to avoid.
+      const repeated = apply({
+        workingTreeChangedAt: 3_000_000,
+        checkedAt: 3_000_000,
+        changedFileCount: 1,
+        lastUpdated: 3_000_000,
+      });
+
+      const durationMs = performance.now() - start;
+
+      return {
+        durationMs,
+        metrics: {
+          seededWorktrees: SIGNAL_SEED_COUNT,
+          // Each term is one direction of one case, so a store that moved
+          // everything and one that moved nothing fail different terms.
+          ignoredOnlyMisses: (ignoredOnly.fsMoved ? 0 : 1) + (ignoredOnly.gitMoved ? 1 : 0),
+          statusOnlyMisses: (statusOnly.gitMoved ? 0 : 1) + (statusOnly.fsMoved ? 1 : 0),
+          bothMovedMisses: (bothMoved.fsMoved ? 0 : 1) + (bothMoved.gitMoved ? 0 : 1),
+          spuriousTickMisses: (repeated.fsMoved ? 1 : 0) + (repeated.gitMoved ? 1 : 0),
+          // Read back across all four applies: identity says a tick happened,
+          // this says the map that ticked holds the right numbers.
+          stampValueMisses,
         },
       };
     },
