@@ -31,6 +31,7 @@ import type {
   PluginWorktreesResult,
   PluginAgentSnapshot,
   PluginPanelLifecycleEvent,
+  PluginSystemWakeEvent,
   PluginFsDirEntry,
   PluginFsStat,
   PluginGitStatus,
@@ -473,6 +474,17 @@ export class PluginDevWorkerHostProxy {
         // hold for every user-installed plugin, which all run in a worker.
         const dispose = this.subscribe("panel-lifecycle", (payload) =>
           callback(Object.freeze(payload as PluginPanelLifecycleEvent))
+        );
+        return Promise.resolve(dispose);
+      },
+      onDidWake: (callback) => {
+        this.assertActivationOpen("onDidWake");
+        // Subscription wired synchronously; only the disposer is async. Same
+        // re-freeze as panel-lifecycle above: the port's structured clone hands
+        // back a plain mutable object, so main's freeze does not survive the
+        // hop and the documented contract has to be re-established here.
+        const dispose = this.subscribe("system-wake", (payload) =>
+          callback(Object.freeze(payload as PluginSystemWakeEvent))
         );
         return Promise.resolve(dispose);
       },

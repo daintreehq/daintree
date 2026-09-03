@@ -314,6 +314,35 @@ export interface PluginPanelLifecycleEvent {
 }
 
 /**
+ * One machine wake observation delivered to a plugin (#12175). Frozen before
+ * delivery, and carries only timing — never what the machine was doing while
+ * suspended.
+ *
+ * Emitted once per resume, after the host's own settle delay, so the pty and
+ * workspace hosts have already been resynced by the time a plugin reacts.
+ * Suspend has no counterpart event: a plugin cannot reliably run work between
+ * the OS signalling suspend and the process freezing, so only the wake edge is
+ * exposed.
+ */
+export interface PluginSystemWakeEvent {
+  /**
+   * Milliseconds the machine spent suspended.
+   *
+   * Measured from the observed suspend to the moment the wake is published, so
+   * it includes the host's settle delay — a coarse "how stale is my state"
+   * figure, not a precise hardware sleep time.
+   *
+   * `0` is a sentinel, not a measurement: it means the matching suspend edge
+   * was never observed (the host started mid-sleep, or the OS delivered resume
+   * without a preceding suspend). Treat `0` as "unknown duration" — do not
+   * compare it against a staleness threshold and conclude the sleep was short.
+   */
+  readonly sleepDuration: number;
+  /** `Date.now()` at the moment the wake was published. */
+  readonly timestamp: number;
+}
+
+/**
  * Lazily-spawned MCP server contribution (#9235). The declared `command` is
  * launched as a real subprocess the first time its tools are enumerated (not at
  * load time), inheriting `args` and `env`. `${settings:*}` templates inside
@@ -2407,6 +2436,41 @@ export interface PluginActivationApi {
   onDidChangePanelLifecycle(
     callback: (event: PluginPanelLifecycleEvent) => void
   ): Promise<() => void>;
+  /**
+   * Subscribe to the machine waking from sleep (#12175). No capability is
+   * required — the event describes the machine's own suspend/resume timing and
+   * carries nothing about the workspace, the user, or any other plugin.
+   *
+   * This is the signal background work has no other way to get.
+   * {@link onDidChangePanelLifecycle} gives a *view* a re-validation point, but
+   * a plugin's timers, forge providers, and reconciliation passes keep running
+   * against state frozen at suspend. The host's own resume path only re-enables
+   * workspace polling if a window is focused, so a machine that wakes while the
+   * app is blurred leaves that state stale until the user comes back — for an
+   * unbounded stretch, with nothing else announcing the wake.
+   *
+   * Delivered once per resume, after the host has resynced its pty and
+   * workspace hosts, so a plugin that re-reads worktree state from the callback
+   * sees post-wake data rather than racing the host's own recovery. Nothing is
+   * replayed on subscribe: a wake is a one-shot pulse with no resting state, so
+   * a plugin that subscribes after a wake simply waits for the next one.
+   *
+   * The event is machine-scoped, not project-scoped: every loaded instance of
+   * the plugin receives it, including one bound to a project whose window is
+   * not focused.
+   *
+   * Callbacks receive a frozen {@link PluginSystemWakeEvent}. Resolves to a
+   * disposer; calling it more than once is a no-op, and all subscriptions are
+   * disposed automatically when the plugin is unloaded.
+   *
+   * Subscribing is revoke-guarded — call it during `activate()`. The callback
+   * itself fires for the plugin's whole lifetime; only the act of subscribing
+   * is restricted to the activation window.
+   *
+   * @throws {Error} If called after activation resolves or times out — the host
+   *   is revoked and the subscription is rejected.
+   */
+  onDidWake(callback: (event: PluginSystemWakeEvent) => void): Promise<() => void>;
 }
 
 /**

@@ -8,6 +8,7 @@ import type { IdleTerminalNotificationService } from "../services/IdleTerminalNo
 import { CHANNELS } from "../ipc/channels.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import { getForgeProviderImplEntries } from "../services/forgeProviderRegistry.js";
+import { events } from "../services/events.js";
 import {
   setDiskSpaceMonitorPollInterval,
   refreshDiskSpaceMonitor,
@@ -112,6 +113,7 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
         // expired during a long laptop sleep would otherwise sit undetected
         // until the provider's next scheduled probe.
         refreshForgeTokenHealth({ force: true });
+        const wakeTimestamp = Date.now();
         BrowserWindow.getAllWindows().forEach((win) => {
           if (win && !win.isDestroyed()) {
             const wc = getAppWebContents(win);
@@ -121,7 +123,7 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
                   name: "system:wake",
                   payload: {
                     sleepDuration,
-                    timestamp: Date.now(),
+                    timestamp: wakeTimestamp,
                   },
                 });
               } catch {
@@ -130,6 +132,16 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
             }
           }
         });
+        // Same wake, same numbers, on the internal bus — this is what reaches
+        // main-process listeners the renderer push cannot serve, plugins via
+        // `host.onDidWake` above all (#12175). Emitted last and guarded: a
+        // throwing bus subscriber must not swallow the renderer broadcast that
+        // has always happened here.
+        try {
+          events.emit("sys:wake", { sleepDuration, timestamp: wakeTimestamp });
+        } catch (error) {
+          console.error("[MAIN] sys:wake listener threw during resume:", error);
+        }
       } catch (error) {
         console.error("[MAIN] Error during resume:", error);
       }

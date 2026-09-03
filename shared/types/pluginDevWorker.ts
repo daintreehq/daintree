@@ -96,7 +96,8 @@ export type PluginHostNotifyMethod =
  * process's lifecycle and output callbacks back to the worker, keyed by the
  * handle id carried in `processId`. `panel-lifecycle` streams this plugin's
  * own panel transitions (#11301) — the host replays each live panel's current
- * phase at subscribe time.
+ * phase at subscribe time. `system-wake` streams machine resume pulses
+ * (#12175); nothing is replayed for it, since a pulse has no resting state.
  */
 export type PluginWorkerSubscriptionKind =
   | "active-worktree"
@@ -105,6 +106,7 @@ export type PluginWorkerSubscriptionKind =
   | "storage"
   | "agent-state"
   | "panel-lifecycle"
+  | "system-wake"
   | "process-exit"
   | "process-crash"
   | "process-data";

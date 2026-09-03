@@ -939,6 +939,44 @@ export function createHost(
       teardown.dispose = dispose;
       return Promise.resolve(dispose);
     },
+    onDidWake: (callback) => {
+      if (revoked) {
+        throw new Error(
+          `Plugin "${pluginId}" host revoked: onDidWake called after activate() returned or timed out`
+        );
+      }
+      // No capability gate: the payload is the machine's own suspend/resume
+      // timing and nothing else — no workspace, user, or cross-plugin data. It
+      // is also strictly less than every renderer window already receives
+      // unconditionally on the same wake (#12175).
+      const failures = createListenerFailureState();
+      const handler = (payload: { sleepDuration: number; timestamp: number }): void => {
+        // Deliberately NOT filtered by the host's project binding, unlike
+        // `onDidChangeAgentState`: a wake is machine-scoped, so every loaded
+        // instance of the plugin must hear it, including one bound to a project
+        // whose window is not focused — which is exactly the stale-state case
+        // this event exists for.
+        if (!deps.plugins.has(pluginId)) return;
+        invokeTrackedListener(
+          failures,
+          pluginId,
+          "onDidWake",
+          () =>
+            callback(
+              Object.freeze({
+                sleepDuration: payload.sleepDuration,
+                timestamp: payload.timestamp,
+              })
+            ),
+          () => dispose()
+        );
+      };
+      // No replay on subscribe: a wake is a one-shot pulse with no resting
+      // state to hand a late subscriber.
+      const unsub = events.on("sys:wake", handler);
+      const dispose = trackPluginDisposer(deps.pluginEventCleanups, pluginId, () => unsub());
+      return Promise.resolve(dispose);
+    },
     registerForgeProvider: (descriptor, impl) => {
       if (revoked) {
         throw new Error(

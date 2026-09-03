@@ -123,6 +123,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "Repo's git remotes changed — forge provider must be re-resolved",
   },
+  "sys:wake": {
+    category: "system",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "Machine resumed from sleep, after the host's settle delay",
+  },
 
   // File events
   "file:open": {
@@ -559,6 +565,18 @@ export type DaintreeEventMap = {
    * worktree update must not.
    */
   "sys:forge:remote-changed": {
+    timestamp: number;
+  };
+
+  /**
+   * Machine resumed from sleep, emitted from the same debounced resume handler
+   * that pushes `system:wake` to the renderer — after the pty and workspace
+   * hosts have been resynced, so a listener that re-reads state sees post-wake
+   * data. `sleepDuration` is `0` when the matching suspend edge was never
+   * observed, which means "unknown", not "a short sleep".
+   */
+  "sys:wake": {
+    sleepDuration: number;
     timestamp: number;
   };
 
@@ -1012,6 +1030,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "sys:pr:detection-state",
   "sys:issue:detected",
   "sys:issue:not-found",
+  "sys:wake",
   "agent:spawned",
   "agent:state-changed",
   "agent:state-transition-dropped",

@@ -774,6 +774,8 @@ export class PluginDevWorkerMainBridge {
         dispose = await this.host.onDidChangeAgentState((snapshot) => push(snapshot));
       } else if (kind === "panel-lifecycle") {
         dispose = await this.host.onDidChangePanelLifecycle((event) => push(event));
+      } else if (kind === "system-wake") {
+        dispose = await this.host.onDidWake((event) => push(event));
       } else if (kind === "process-exit" || kind === "process-crash" || kind === "process-data") {
         if (!msg.processId) {
           logger.warn(`[${this.pluginId}] ${kind} subscribe missing processId`);

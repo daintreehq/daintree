@@ -47,6 +47,7 @@ function createMockWorkspaceClient(overrides: Partial<WorkspaceClient> = {}): Wo
 
 let setupPowerMonitor: typeof import("../powerMonitor.js").setupPowerMonitor;
 let clearResumeTimeout: typeof import("../powerMonitor.js").clearResumeTimeout;
+let events: typeof import("../../services/events.js").events;
 
 describe("setupPowerMonitor", () => {
   beforeEach(async () => {
@@ -85,10 +86,15 @@ describe("setupPowerMonitor", () => {
     const mod = await import("../powerMonitor.js");
     setupPowerMonitor = mod.setupPowerMonitor;
     clearResumeTimeout = mod.clearResumeTimeout;
+    // Imported after `resetModules` + the powerMonitor import so this is the
+    // same bus instance powerMonitor closed over; the top-level singleton from
+    // a previous registry would silently never receive the emit.
+    events = (await import("../../services/events.js")).events;
   });
 
   afterEach(() => {
     clearResumeTimeout();
+    events.removeAllListeners();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -366,5 +372,91 @@ describe("setupPowerMonitor", () => {
     await vi.advanceTimersByTimeAsync(2000);
 
     expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("emits sys:wake on the internal bus with the same values as the renderer push (#12175)", async () => {
+    const workspaceClient = createMockWorkspaceClient();
+    const { win, wc } = createMockWindow();
+    mockGetAllWindows.mockReturnValue([win]);
+    const onWake = vi.fn();
+    events.on("sys:wake", onWake);
+
+    setupPowerMonitor({
+      getPtyClient: () => createMockPtyClient(),
+      getWorkspaceClient: () => workspaceClient,
+    });
+
+    powerHandlers.get("suspend")!();
+    await vi.advanceTimersByTimeAsync(5_000);
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(onWake).toHaveBeenCalledTimes(1);
+    const busPayload = onWake.mock.calls[0]?.[0];
+    // One wake, one set of numbers: a plugin reacting to the bus and a renderer
+    // reacting to the push must not disagree about when it happened or how long
+    // the machine slept.
+    const pushPayload = wc.send.mock.calls[0]?.[1]?.payload;
+    expect(busPayload).toEqual(pushPayload);
+    expect(busPayload.sleepDuration).toBeGreaterThanOrEqual(5_000);
+  });
+
+  it("emits sys:wake even with no window to broadcast to", async () => {
+    const workspaceClient = createMockWorkspaceClient();
+    mockGetAllWindows.mockReturnValue([]);
+    mockGetFocusedWindow.mockReturnValue(null);
+    const onWake = vi.fn();
+    events.on("sys:wake", onWake);
+
+    setupPowerMonitor({
+      getPtyClient: () => createMockPtyClient(),
+      getWorkspaceClient: () => workspaceClient,
+    });
+
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // The blurred, windowless wake is precisely the case the renderer push
+    // cannot serve — a plugin must still hear it.
+    expect(onWake).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not emit sys:wake when the resume is cancelled by a re-suspend", async () => {
+    const workspaceClient = createMockWorkspaceClient();
+    const onWake = vi.fn();
+    events.on("sys:wake", onWake);
+
+    setupPowerMonitor({
+      getPtyClient: () => createMockPtyClient(),
+      getWorkspaceClient: () => workspaceClient,
+    });
+
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(1000);
+    powerHandlers.get("suspend")!();
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(onWake).not.toHaveBeenCalled();
+  });
+
+  it("still broadcasts to windows when a sys:wake subscriber throws", async () => {
+    const workspaceClient = createMockWorkspaceClient();
+    const { win, wc } = createMockWindow();
+    mockGetAllWindows.mockReturnValue([win]);
+    events.on("sys:wake", () => {
+      throw new Error("listener boom");
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    setupPowerMonitor({
+      getPtyClient: () => createMockPtyClient(),
+      getWorkspaceClient: () => workspaceClient,
+    });
+
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(wc.send).toHaveBeenCalledTimes(1);
+    expect(workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
   });
 });

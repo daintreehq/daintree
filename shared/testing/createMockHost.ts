@@ -47,6 +47,7 @@ import type {
   PluginWorktreesResult,
   PluginAgentSnapshot,
   PluginPanelLifecycleEvent,
+  PluginSystemWakeEvent,
   PluginGitCommitResult,
   PluginPanelBadge,
   SettingDefinition,
@@ -207,6 +208,13 @@ export interface MockHostState {
    * `disposeSignal` could not express (#11301).
    */
   simulatePanelLifecycleChange(event: PluginPanelLifecycleEvent): void;
+
+  /**
+   * Push a machine wake to every `onDidWake` subscriber (#12175). Use it to
+   * prove a plugin re-validates state it cached before a sleep, rather than
+   * waiting for a window to regain focus.
+   */
+  simulateSystemWake(event: PluginSystemWakeEvent): void;
 
   /**
    * Pre-seed a deterministic `dispatch()` result for one action id. Overrides
@@ -506,6 +514,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   let lastAgentSnapshot: PluginAgentSnapshot | null = null;
   const agentStateSubs = new Set<(snapshot: PluginAgentSnapshot) => void>();
   const panelLifecycleSubs = new Set<(event: PluginPanelLifecycleEvent) => void>();
+  const systemWakeSubs = new Set<(event: PluginSystemWakeEvent) => void>();
 
   // Capability gating + active-agent presence for the agent APIs (#10617).
   // Default permissive so manifest-free tests are unaffected; restrict to assert
@@ -954,6 +963,18 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       };
       return Promise.resolve(dispose);
     },
+    onDidWake(callback) {
+      // No capability gate and no replay, matching production: a wake is a
+      // one-shot pulse, so tests drive it explicitly via `simulateSystemWake`.
+      systemWakeSubs.add(callback);
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        systemWakeSubs.delete(callback);
+      };
+      return Promise.resolve(dispose);
+    },
     registerForgeProvider(descriptor, impl) {
       // Mirrors PluginService.createHost L1738-L1817. Validation order matches
       // production: non-object descriptor, non-empty string id, non-object impl.
@@ -1368,6 +1389,11 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       // fails in tests rather than in the wild.
       const frozen = Object.freeze({ ...event });
       for (const cb of [...panelLifecycleSubs]) cb(frozen);
+    },
+    simulateSystemWake(event) {
+      // Frozen like production delivery, for the same reason.
+      const frozen = Object.freeze({ ...event });
+      for (const cb of [...systemWakeSubs]) cb(frozen);
     },
     setDispatchResult(actionId, result) {
       dispatchOverrides.set(actionId, result);

@@ -493,6 +493,58 @@ describe("PluginDevWorkerHostProxy panel lifecycle (#11301)", () => {
   });
 });
 
+describe("PluginDevWorkerHostProxy system wake (#12175)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("opens a system-wake subscription and routes events to the callback", async () => {
+    const { proxy, sent } = makeProxy();
+    const onEvent = vi.fn();
+    const dispose = await proxy.host.onDidWake(onEvent);
+
+    // The kind is the routing key on main — a wrong or missing one would fall
+    // through the bridge's chain and be wired to an unrelated host event.
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "system-wake");
+    expect(sub).toBeDefined();
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { sleepDuration: 42_000, timestamp: 1234 },
+    } as any);
+
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ sleepDuration: 42_000, timestamp: 1234 })
+    );
+
+    dispose();
+    expect(
+      sent.find((m) => m.type === "unsubscribe" && m.subscriptionId === sub.subscriptionId)
+    ).toBeDefined();
+  });
+
+  it("freezes the delivered event even though the port hop strips main's freeze", async () => {
+    const { proxy, sent } = makeProxy();
+    const received: any[] = [];
+    await proxy.host.onDidWake((e) => received.push(e));
+    const sub = sent.find((m) => m.type === "subscribe" && m.kind === "system-wake");
+
+    proxy.handleMessage({
+      type: "subscription-event",
+      subscriptionId: sub.subscriptionId,
+      payload: { sleepDuration: 0, timestamp: 7 },
+    } as any);
+
+    expect(Object.isFrozen(received[0])).toBe(true);
+  });
+
+  it("rejects a subscription opened after the activation window closes", async () => {
+    const { proxy } = makeProxy();
+    proxy.revoke();
+    expect(() => proxy.host.onDidWake(vi.fn())).toThrow(/onDidWake/);
+  });
+});
+
 describe("PluginDevWorkerHostProxy host.fs.watch (#10526)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());
