@@ -623,7 +623,7 @@ const storeOptions = {
       enabled: true,
       completedEnabled: false,
       waitingEnabled: true,
-      soundEnabled: true,
+      soundEnabled: false,
       completedSoundFile: "complete.wav",
       waitingSoundFile: "waiting.wav",
       escalationSoundFile: "ping.wav",

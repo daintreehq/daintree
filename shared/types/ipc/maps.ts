@@ -1447,7 +1447,7 @@ export interface IpcEventMap {
   // Agent events
   "agent:state-changed": AgentStateChangePayload;
   "agent:state-transition-dropped": AgentStateTransitionDroppedPayload;
-  "agent:all-clear": { timestamp: number };
+  "agent:all-clear": { timestamp: number; shouldFlash: boolean };
   "agent:detected": AgentDetectedPayload;
   "agent:exited": AgentExitedPayload;
   "agent:fallback-triggered": AgentFallbackTriggeredPayload;

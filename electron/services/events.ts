@@ -662,6 +662,8 @@ export type DaintreeEventMap = {
    */
   "agent:all-clear": {
     timestamp: number;
+    /** Computed main-process-side from the freshest settings; see AgentNotificationService.checkAllClear. */
+    shouldFlash: boolean;
   };
 
   /**

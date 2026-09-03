@@ -5,10 +5,12 @@ interface NotificationSettingsState {
   hydrated: boolean;
   // Per-kind toggles, mirrored from IPC settings so the notification center can
   // compute a "what will fire right now" summary without a per-open IPC round
-  // trip. `completedEnabled`/`waitingEnabled`/`workingPulseEnabled`/
-  // `uiFeedbackSoundEnabled` gate main-process notifications and sounds and
-  // are display-only here; `flashEnabled` is read directly by
-  // AllClearOverlay to gate the all-clear screen flash (#12185).
+  // trip. These gate main-process notifications, sounds, and (for
+  // `flashEnabled`) the all-clear screen flash — all display-only here. The
+  // flash's actual eligibility is decided main-process-side and carried on
+  // the `agent:all-clear` event payload, not read from this mirror — a
+  // per-project-view store can go stale the moment another view changes
+  // settings (#12185).
   completedEnabled: boolean;
   waitingEnabled: boolean;
   workingPulseEnabled: boolean;

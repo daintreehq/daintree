@@ -1307,6 +1307,23 @@ describe("AgentNotificationService", () => {
 
       expect(soundServiceMock.play).not.toHaveBeenCalled();
     });
+
+    it("suppresses agent-spawned sound while OS Do-Not-Disturb is active (#12185)", () => {
+      mockStore({ soundEnabled: true, uiFeedbackSoundEnabled: true });
+      osDndServiceMock.getState.mockReturnValue(true);
+
+      // Advance past boot grace period
+      vi.advanceTimersByTime(10_000);
+
+      events.emit("agent:spawned", {
+        terminalId: "term-1",
+        agentId: "claude",
+        worktreeId: "wt-1",
+        timestamp: Date.now(),
+      });
+
+      expect(soundServiceMock.play).not.toHaveBeenCalled();
+    });
   });
 
   // #5139 follow-up: backend-emitted events no longer carry worktreeId.

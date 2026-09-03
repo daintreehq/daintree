@@ -1,54 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useShallow } from "zustand/react/shallow";
-import { isScheduledQuietNow } from "@shared/utils/quietHours";
-import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 
 export function AllClearOverlay() {
   const [visible, setVisible] = useState(false);
   const safetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const {
-    notificationsEnabled,
-    flashEnabled,
-    quietUntil,
-    quietHoursEnabled,
-    quietHoursStartMin,
-    quietHoursEndMin,
-    quietHoursWeekdays,
-    osDndActive,
-  } = useNotificationSettingsStore(
-    useShallow((s) => ({
-      notificationsEnabled: s.enabled,
-      flashEnabled: s.flashEnabled,
-      quietUntil: s.quietUntil,
-      quietHoursEnabled: s.quietHoursEnabled,
-      quietHoursStartMin: s.quietHoursStartMin,
-      quietHoursEndMin: s.quietHoursEndMin,
-      quietHoursWeekdays: s.quietHoursWeekdays,
-      osDndActive: s.osDndActive,
-    }))
-  );
-
   useEffect(() => {
-    const cleanup = window.electron.terminal.onAllAgentsClear(() => {
-      // The flash is the visual half of the same paired all-clear moment as
-      // the sound (#12185) — it must obey the same gate and suppression
-      // chain as AgentNotificationService.isInformationalAudioSuppressed.
-      if (!notificationsEnabled || !flashEnabled) return;
-      if (quietUntil > Date.now()) return;
-      if (
-        isScheduledQuietNow({
-          quietHoursEnabled,
-          quietHoursStartMin,
-          quietHoursEndMin,
-          quietHoursWeekdays,
-        })
-      ) {
-        return;
-      }
-      if (osDndActive === true) return;
+    const cleanup = window.electron.terminal.onAllAgentsClear((data) => {
+      // `shouldFlash` is computed main-process-side, from the single
+      // freshest copy of settings (flashEnabled, the master enabled toggle,
+      // and the same suppression chain as the sound — quiet hours, session
+      // mute, OS DND). See AgentNotificationService.checkAllClear (#12185).
+      // Recomputing this from a per-project-view renderer store would go
+      // stale the moment a second open view's settings changed elsewhere.
+      if (!data.shouldFlash) return;
 
+      // These three remain renderer-only concerns — CSS media queries and
+      // DOM attributes the main process has no way to observe.
       if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
       if (document.body.getAttribute("data-reduce-animations") === "true") return;
       if (document.body.getAttribute("data-performance-mode") === "true") return;
@@ -56,16 +24,7 @@ export function AllClearOverlay() {
       setVisible(true);
     });
     return cleanup;
-  }, [
-    notificationsEnabled,
-    flashEnabled,
-    quietUntil,
-    quietHoursEnabled,
-    quietHoursStartMin,
-    quietHoursEndMin,
-    quietHoursWeekdays,
-    osDndActive,
-  ]);
+  }, []);
 
   const handleAnimationEnd = useCallback((event: React.AnimationEvent) => {
     if (event.animationName === "all-clear-flash") {

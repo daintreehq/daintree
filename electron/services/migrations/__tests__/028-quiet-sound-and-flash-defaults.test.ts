@@ -67,6 +67,14 @@ describe("migration028 — quiet sound and flash defaults", () => {
     expect(store.set).not.toHaveBeenCalled();
   });
 
+  it("no-op when notificationSettings is malformed (string, array, or number)", () => {
+    for (const malformed of ["corrupted", ["not", "an", "object"], 42]) {
+      const store = makeStoreMock({ notificationSettings: malformed });
+      migration028.up(store);
+      expect(store.set).not.toHaveBeenCalled();
+    }
+  });
+
   it("preserves unrelated fields, including a user's other customized settings", () => {
     const data: Record<string, unknown> = {
       notificationSettings: {

@@ -252,14 +252,17 @@ class AgentNotificationService {
         this.agentSpawnTimestamps.set(agentKey, Date.now());
       }
       const settings = projectStore.getEffectiveNotificationSettings();
+      // isInformationalAudioSuppressed covers quiet hours, session mute, and
+      // OS DND — the same chain the sound and the all-clear flash use.
+      // Boot grace is a separate, spawn-specific condition (avoids a flood
+      // of sounds when many terminals restore at once) that chain doesn't
+      // cover, so it stays a standalone check.
       if (
         shouldPlayUiFeedbackSound(settings) &&
         !this.isWithinBootGrace() &&
-        !this.isSessionMuted()
+        !this.isInformationalAudioSuppressed(settings)
       ) {
-        if (!isScheduledQuietNow(settings)) {
-          soundService.play("agent-spawned");
-        }
+        soundService.play("agent-spawned");
       }
     });
 
@@ -576,18 +579,20 @@ class AgentNotificationService {
       const currentActive = this.countActiveAgents(store.get("appState").terminals);
       if (currentActive > 0) return;
 
-      // Fire the all-clear. The sound obeys the same suppression chain as every
-      // other informational audio cue; the event does not — it drives renderer
-      // state (the all-clear overlay), which must still settle while silent.
+      // Fire the all-clear. The event itself is unconditional — it drives
+      // renderer state (the all-clear overlay), which must still settle even
+      // when silent — but it carries a `shouldFlash` verdict computed here,
+      // from the single freshest copy of settings, rather than leaving each
+      // renderer to recompute it from its own (possibly stale, per-view)
+      // settings mirror: a second project view left open across a settings
+      // change would otherwise flash on stale eligibility.
       const settings = projectStore.getEffectiveNotificationSettings();
-      if (
-        settings.enabled !== false &&
-        settings.soundEnabled &&
-        !this.isInformationalAudioSuppressed(settings)
-      ) {
+      const isSuppressed = this.isInformationalAudioSuppressed(settings);
+      if (settings.enabled !== false && settings.soundEnabled && !isSuppressed) {
         soundService.play("all-clear");
       }
-      events.emit("agent:all-clear", { timestamp: Date.now() });
+      const shouldFlash = settings.enabled !== false && settings.flashEnabled && !isSuppressed;
+      events.emit("agent:all-clear", { timestamp: Date.now(), shouldFlash });
 
       // Reset for next multi-agent session
       this.peakConcurrentWorking = 0;

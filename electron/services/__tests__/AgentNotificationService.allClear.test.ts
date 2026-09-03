@@ -69,7 +69,7 @@ const DEFAULT_SETTINGS = {
   workingPulseEnabled: false,
   workingPulseSoundFile: "pulse.wav",
   uiFeedbackSoundEnabled: false,
-  flashEnabled: false,
+  flashEnabled: true,
   quietHoursEnabled: false,
   quietHoursStartMin: 22 * 60,
   quietHoursEndMin: 6 * 60,
@@ -149,6 +149,7 @@ describe("AgentNotificationService – all-clear", () => {
     expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
     expect(emitSpy).toHaveBeenCalledWith("agent:all-clear", {
       timestamp: expect.any(Number),
+      shouldFlash: true,
     });
 
     emitSpy.mockRestore();
@@ -209,7 +210,8 @@ describe("AgentNotificationService – all-clear", () => {
     expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
   });
 
-  it("does not play sound when soundEnabled is false", () => {
+  it("does not play sound when soundEnabled is false, but still flashes (#12185: independent toggles)", () => {
+    const emitSpy = vi.spyOn(events, "emit");
     projectStoreMock.getEffectiveNotificationSettings.mockReturnValue({
       ...DEFAULT_SETTINGS,
       soundEnabled: false,
@@ -231,6 +233,41 @@ describe("AgentNotificationService – all-clear", () => {
 
     vi.advanceTimersByTime(600);
     expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
+    expect(emitSpy).toHaveBeenCalledWith("agent:all-clear", {
+      timestamp: expect.any(Number),
+      shouldFlash: true,
+    });
+    emitSpy.mockRestore();
+  });
+
+  it("does not flash when flashEnabled is false, but still plays the sound (#12185: independent toggles)", () => {
+    const emitSpy = vi.spyOn(events, "emit");
+    projectStoreMock.getEffectiveNotificationSettings.mockReturnValue({
+      ...DEFAULT_SETTINGS,
+      flashEnabled: false,
+    });
+
+    mockTerminals([
+      { id: "term-1", agentState: "working" },
+      { id: "term-2", agentState: "working" },
+    ]);
+    emitStateChange("working", "idle", "term-1");
+    emitStateChange("working", "idle", "term-2");
+
+    mockTerminals([
+      { id: "term-1", agentState: "completed" },
+      { id: "term-2", agentState: "completed" },
+    ]);
+    emitStateChange("completed", "working", "term-1");
+    emitStateChange("completed", "working", "term-2");
+
+    vi.advanceTimersByTime(600);
+    expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+    expect(emitSpy).toHaveBeenCalledWith("agent:all-clear", {
+      timestamp: expect.any(Number),
+      shouldFlash: false,
+    });
+    emitSpy.mockRestore();
   });
 
   it("resets after firing so next multi-agent session can fire again", () => {
@@ -344,11 +381,13 @@ describe("AgentNotificationService – all-clear", () => {
     expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
   });
 
-  it("does not play sound when master enabled toggle is false", () => {
+  it("does not play sound or flash when master enabled toggle is false", () => {
+    const emitSpy = vi.spyOn(events, "emit");
     projectStoreMock.getEffectiveNotificationSettings.mockReturnValue({
       ...DEFAULT_SETTINGS,
       enabled: false,
       soundEnabled: true,
+      flashEnabled: true,
     });
 
     mockTerminals([
@@ -367,6 +406,11 @@ describe("AgentNotificationService – all-clear", () => {
 
     vi.advanceTimersByTime(600);
     expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
+    expect(emitSpy).toHaveBeenCalledWith("agent:all-clear", {
+      timestamp: expect.any(Number),
+      shouldFlash: false,
+    });
+    emitSpy.mockRestore();
   });
 
   it("does not fire when no working transition ever occurs (empty session)", () => {
@@ -459,6 +503,12 @@ describe("AgentNotificationService – all-clear", () => {
       return calls.filter((call) => call[0] === "agent:all-clear").length;
     }
 
+    /** The `shouldFlash` verdict carried on the (first) emitted all-clear event. */
+    function allClearShouldFlash(calls: readonly unknown[][]): boolean | undefined {
+      const call = calls.find((c) => c[0] === "agent:all-clear");
+      return (call?.[1] as { shouldFlash?: boolean } | undefined)?.shouldFlash;
+    }
+
     it("suppresses the sound during scheduled quiet hours but still emits the event", () => {
       // Monday 23:00 falls inside the 22:00 -> 06:00 window
       vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
@@ -473,6 +523,7 @@ describe("AgentNotificationService – all-clear", () => {
 
       expect(soundServiceMock.play).not.toHaveBeenCalled();
       expect(countAllClearEvents(emitSpy.mock.calls)).toBe(1);
+      expect(allClearShouldFlash(emitSpy.mock.calls)).toBe(false);
       emitSpy.mockRestore();
     });
 
@@ -482,12 +533,15 @@ describe("AgentNotificationService – all-clear", () => {
         ...DEFAULT_SETTINGS,
         quietHoursEnabled: true,
       });
+      const emitSpy = vi.spyOn(events, "emit");
 
       runTwoAgentSession();
       vi.advanceTimersByTime(600);
 
       expect(soundServiceMock.play).toHaveBeenCalledTimes(1);
       expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+      expect(allClearShouldFlash(emitSpy.mock.calls)).toBe(true);
+      emitSpy.mockRestore();
     });
 
     it("suppresses the sound during a session mute but still emits the event", () => {
@@ -500,6 +554,7 @@ describe("AgentNotificationService – all-clear", () => {
 
       expect(soundServiceMock.play).not.toHaveBeenCalled();
       expect(countAllClearEvents(emitSpy.mock.calls)).toBe(1);
+      expect(allClearShouldFlash(emitSpy.mock.calls)).toBe(false);
       emitSpy.mockRestore();
     });
 
@@ -508,12 +563,15 @@ describe("AgentNotificationService – all-clear", () => {
       // active when the timer is armed and lapses during the 500ms window.
       vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
       agentNotificationService.setSessionMuteUntil(Date.now() + 250);
+      const emitSpy = vi.spyOn(events, "emit");
 
       runTwoAgentSession();
       vi.advanceTimersByTime(600);
 
       expect(soundServiceMock.play).toHaveBeenCalledTimes(1);
       expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+      expect(allClearShouldFlash(emitSpy.mock.calls)).toBe(true);
+      emitSpy.mockRestore();
     });
 
     it("suppresses the sound when OS Do-Not-Disturb turns on during the debounce", () => {
@@ -529,6 +587,7 @@ describe("AgentNotificationService – all-clear", () => {
 
       expect(soundServiceMock.play).not.toHaveBeenCalled();
       expect(countAllClearEvents(emitSpy.mock.calls)).toBe(1);
+      expect(allClearShouldFlash(emitSpy.mock.calls)).toBe(false);
       emitSpy.mockRestore();
     });
 
@@ -541,29 +600,36 @@ describe("AgentNotificationService – all-clear", () => {
 
       expect(soundServiceMock.play).not.toHaveBeenCalled();
       expect(countAllClearEvents(emitSpy.mock.calls)).toBe(1);
+      expect(allClearShouldFlash(emitSpy.mock.calls)).toBe(false);
       emitSpy.mockRestore();
     });
 
     it("plays the sound when OS Do-Not-Disturb is explicitly inactive", () => {
       osDndServiceMock.getState.mockReturnValue(false);
+      const emitSpy = vi.spyOn(events, "emit");
 
       runTwoAgentSession();
       vi.advanceTimersByTime(600);
 
       expect(soundServiceMock.play).toHaveBeenCalledTimes(1);
       expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+      expect(allClearShouldFlash(emitSpy.mock.calls)).toBe(true);
+      emitSpy.mockRestore();
     });
 
     it("plays the sound when the OS Do-Not-Disturb state is unknown", () => {
       // Windows and Linux have no detection at all and always report
       // `undefined` — fail open, never gate.
       osDndServiceMock.getState.mockReturnValue(undefined);
+      const emitSpy = vi.spyOn(events, "emit");
 
       runTwoAgentSession();
       vi.advanceTimersByTime(600);
 
       expect(soundServiceMock.play).toHaveBeenCalledTimes(1);
       expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+      expect(allClearShouldFlash(emitSpy.mock.calls)).toBe(true);
+      emitSpy.mockRestore();
     });
 
     it("never raises an OS notification for the all-clear, suppressed or not", () => {
