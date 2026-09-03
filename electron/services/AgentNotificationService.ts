@@ -571,9 +571,15 @@ class AgentNotificationService {
       const currentActive = this.countActiveAgents(store.get("appState").terminals);
       if (currentActive > 0) return;
 
-      // Fire the all-clear
+      // Fire the all-clear. The sound obeys the same suppression chain as every
+      // other informational audio cue; the event does not — it drives renderer
+      // state (the all-clear overlay), which must still settle while silent.
       const settings = projectStore.getEffectiveNotificationSettings();
-      if (settings.enabled !== false && settings.soundEnabled) {
+      if (
+        settings.enabled !== false &&
+        settings.soundEnabled &&
+        !this.isInformationalAudioSuppressed(settings)
+      ) {
         soundService.play("all-clear");
       }
       events.emit("agent:all-clear", { timestamp: Date.now() });
@@ -830,12 +836,9 @@ class AgentNotificationService {
         this.clearWorkingPulse(terminalId);
         return;
       }
-      // During scheduled quiet hours, an active session mute, or OS-level
-      // Do-Not-Disturb / Focus, skip this tick's sound but keep the loop alive
-      // so pulses resume automatically after. Treat an `undefined` OS state
-      // (unsupported platform / detection failed) as "do not gate".
-      const osDndActive = getOsDndService().getState() === true;
-      if (isScheduledQuietNow(currentSettings) || this.isSessionMuted() || osDndActive) {
+      // Skip this tick's sound but keep the loop alive so pulses resume
+      // automatically once the suppression lifts.
+      if (this.isInformationalAudioSuppressed(currentSettings)) {
         const jitter =
           WORKING_PULSE_MIN_INTERVAL_MS +
           Math.random() * (WORKING_PULSE_MAX_INTERVAL_MS - WORKING_PULSE_MIN_INTERVAL_MS);
@@ -869,6 +872,23 @@ class AgentNotificationService {
       this.workingPulseIntervalTimers.delete(terminalId);
     }
     soundService.cancelPulse();
+  }
+
+  /**
+   * Whether a non-urgent audio cue should stay silent right now: scheduled
+   * quiet hours, an active session mute, or OS-level Do-Not-Disturb / Focus.
+   * An `undefined` OS state (unsupported platform, detection failed) means
+   * "do not gate".
+   *
+   * Audio only. OS DND must never suppress a native notification — the OS
+   * already silences its own banners — so `drainQueue` keeps its own gate.
+   */
+  private isInformationalAudioSuppressed(settings: NotificationSettings): boolean {
+    return (
+      isScheduledQuietNow(settings) ||
+      this.isSessionMuted() ||
+      getOsDndService().getState() === true
+    );
   }
 
   private enqueue(

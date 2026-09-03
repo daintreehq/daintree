@@ -26,9 +26,9 @@ type StateCallback = (osDndActive: boolean | undefined) => void;
  * Electron-exposed event subscription — failing soft is the correct choice
  * for both.
  *
- * The state is consumed in two places only: the working-pulse audio gate in
- * `AgentNotificationService` and the read-only toolbar tooltip display. It
- * must NEVER be used to suppress in-app toasts.
+ * The state is consumed in two places only: the informational-audio gate in
+ * `AgentNotificationService` (working pulse and all-clear) and the read-only
+ * toolbar tooltip display. It must NEVER be used to suppress in-app toasts.
  */
 class OsDndService {
   private state: boolean | undefined = undefined;
