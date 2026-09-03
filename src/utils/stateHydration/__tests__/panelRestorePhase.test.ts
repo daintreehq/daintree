@@ -2240,4 +2240,15 @@ describe("restorePanelsPhase — naming the resume-latest session (#12178)", () 
     expect(resolvedIdById(ctx).get("a")).toBe("sess-a");
     expect(resolvedIdById(ctx).get("b")).toBe("sess-b");
   });
+
+  it("does not ask for a pane that carries its own CODEX_HOME", async () => {
+    // The app-server answers from main's profile while the pane spawns against
+    // its own, so an id from here is one the pane cannot open — and it would be
+    // recorded and replayed, where `--last` just falls through.
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("solo", { env: { CODEX_HOME: "/custom/home" } })], ctx);
+
+    expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
+  });
 });

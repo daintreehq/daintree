@@ -57,6 +57,14 @@ type CodexSubagentMatch = "session-id" | "spawn-time";
 
 /** How many root threads in the cwd are considered as parent candidates. */
 const PARENT_CANDIDATE_LIMIT = 25;
+
+/**
+ * Whole budget for the restore-time resume-latest lookup, well under the
+ * transport's 15s default. Restore waits on this before it can launch the pane,
+ * and the answer is an optimisation over an already-working fallback — so it
+ * has to give up long before a user would notice the pane is late.
+ */
+const RESUME_LATEST_LOOKUP_TIMEOUT_MS = 2_000;
 /**
  * A session whose last activity is older than this at the moment the terminal
  * launched cannot be the one the terminal is running — it went quiet before the
@@ -557,11 +565,16 @@ export function selectResumeLatestThread(threads: readonly RawThread[]): ResumeL
  */
 export async function resolveCodexResumeLatestSession(cwd: string): Promise<string | null> {
   try {
-    const cwds = await resolveCwdSpellings(cwd);
-    return await runCodexAppServerSession(async (call) => {
-      const threads = await listThreadsInCwd(call, cwds);
-      return selectResumeLatestThread(threads).sessionId;
-    });
+    return await runCodexAppServerSession(
+      async (call) => {
+        // Resolved inside the session so the transport's deadline covers it
+        // too: realpath hangs indefinitely on a dead network mount, and this
+        // runs on the restore path.
+        const threads = await listThreadsInCwd(call, await resolveCwdSpellings(cwd));
+        return selectResumeLatestThread(threads).sessionId;
+      },
+      { timeoutMs: RESUME_LATEST_LOOKUP_TIMEOUT_MS }
+    );
   } catch {
     // Degrading to `--last` loses the id capture; failing the restore would lose
     // the pane. The pane is worth more.

@@ -43,7 +43,7 @@ export function isAllowedCodexAppServerMethod(method: string): boolean {
   return (ALLOWED_METHODS as readonly string[]).includes(method);
 }
 
-/** Whole-session budget: spawn, handshake, every query, teardown. */
+/** Whole-session budget: the wait for a slot, spawn, handshake, every query, teardown. */
 const SESSION_TIMEOUT_MS = 15_000;
 /** Per-request budget, so one wedged call can't eat the whole session. */
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -80,16 +80,38 @@ const MAX_CONCURRENT_SESSIONS = 2;
 let activeSessions = 0;
 const sessionQueue: Array<() => void> = [];
 
-function acquireSessionSlot(): Promise<void> {
+/**
+ * The wait for a slot counts against the caller's budget, not on top of it.
+ * A restore-time lookup queued behind two wedged sessions would otherwise sit
+ * here for as long as they take, which is precisely when the gate is busiest —
+ * the cap above exists because a restore mounts every Codex pane at once.
+ */
+function acquireSessionSlot(deadlineAt: number): Promise<void> {
   if (activeSessions < MAX_CONCURRENT_SESSIONS) {
     activeSessions++;
     return Promise.resolve();
   }
-  return new Promise<void>((resolve) => {
-    sessionQueue.push(() => {
+  return new Promise<void>((resolve, reject) => {
+    // Whichever of these two runs first disarms the other: the waiter clears
+    // the timer, and the timer drops the waiter from the queue. So a slot can
+    // never be handed to a caller that already gave up and left it leaked.
+    // `waiter` closes over `timer` before it is assigned, which is safe — it
+    // only ever runs from the queue, long after this function has returned.
+    const waiter = (): void => {
+      clearTimeout(timer);
       activeSessions++;
       resolve();
-    });
+    };
+    const timer = setTimeout(
+      () => {
+        const index = sessionQueue.indexOf(waiter);
+        if (index !== -1) sessionQueue.splice(index, 1);
+        reject(new CodexAppServerError("timeout", "Codex app-server timed out awaiting a slot"));
+      },
+      Math.max(0, deadlineAt - Date.now())
+    );
+    timer.unref?.();
+    sessionQueue.push(waiter);
   });
 }
 
@@ -145,9 +167,14 @@ export async function runCodexAppServerSession<T>(
   run: (call: CodexAppServerCall) => Promise<T>,
   options: CodexAppServerSessionOptions = {}
 ): Promise<T> {
-  await acquireSessionSlot();
+  const deadlineAt = Date.now() + (options.timeoutMs ?? SESSION_TIMEOUT_MS);
+  await acquireSessionSlot(deadlineAt);
   try {
-    return await spawnCodexAppServerSession(run, options);
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      throw new CodexAppServerError("timeout", "Codex app-server timed out awaiting a slot");
+    }
+    return await spawnCodexAppServerSession(run, { ...options, timeoutMs: remainingMs });
   } finally {
     releaseSessionSlot();
   }

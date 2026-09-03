@@ -352,6 +352,14 @@ const CODEX_AGENT_ID = "codex";
  * election suppressed must not learn what the winner is holding, since the
  * whole point of suppressing it was to keep a second writer off that transcript.
  * Every failure is answered with `undefined`, which is today's behaviour.
+ *
+ * Which is also why a pane with its own `CODEX_HOME` is skipped outright. The
+ * app-server answers from MAIN's profile while the pane spawns against its own
+ * (the captured launch env is replayed on respawn, #10922), so a hit there
+ * names a session the pane cannot open — and unlike `--last`, which resolves to
+ * nothing and falls through, that id would be recorded and replayed on every
+ * later restore. It is the one case where naming the session could be worse
+ * than leaving it anonymous, so it does not run at all.
  */
 async function resolveNamedResumeLatestSession(
   saved: TerminalState,
@@ -365,6 +373,11 @@ async function resolveNamedResumeLatestSession(
   // The same capability probe the election and the respawn builder use, so a
   // Codex build whose config drops the fallback can't be queried for one.
   if (buildResumeLatestCommand(agentId) === undefined) return undefined;
+  // The launch env is captured and persisted (#10922), so a pane that ever ran
+  // under a redirected profile still carries it here — preset envs included.
+  if (Object.keys(saved.env ?? {}).some((key) => key.toUpperCase() === "CODEX_HOME")) {
+    return undefined;
+  }
   const cwd = saved.cwd || projectRoot;
   if (!cwd) return undefined;
 

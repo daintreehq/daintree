@@ -608,3 +608,16 @@ describe("resolveCodexResumeLatestSession", () => {
     await expect(resolveCodexResumeLatestSession("/repo")).resolves.toBeNull();
   });
 });
+
+describe("resolveCodexResumeLatestSession budget", () => {
+  it("runs on a restore-sized budget rather than the transport default", async () => {
+    // Restore blocks on this before it can launch the pane, so it has to give
+    // up long before the transport's 15s whole-session default would.
+    scriptSession(() => ({ data: [] }));
+
+    await resolveCodexResumeLatestSession("/repo");
+
+    const options = runSession.mock.calls[0]?.[1] as { timeoutMs?: number } | undefined;
+    expect(options?.timeoutMs).toBe(2_000);
+  });
+});
