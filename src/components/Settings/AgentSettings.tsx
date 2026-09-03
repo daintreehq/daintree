@@ -17,7 +17,11 @@ import {
   type AgentCliDetails,
 } from "@shared/types";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
-import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
+import {
+  isAssistantOnlyAgentId,
+  isBuiltInAgentId,
+  type BuiltInAgentId,
+} from "@shared/config/agentIds";
 import { RotateCcw, ExternalLink } from "lucide-react";
 import { Plug } from "@/components/icons";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
@@ -240,8 +244,6 @@ export function AgentSettings({
   const lastAddTimeRef = useRef(0);
   const lastEditTimeRef = useRef(0);
 
-  const helpShortcut = useKeybindingDisplay("help.launchAgent");
-
   // Preset editing state
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
@@ -340,6 +342,11 @@ export function AgentSettings({
     [agentIds, effectiveSettings, cliAvailability]
   );
 
+  const defaultAgentOptions = useMemo(
+    () => agentOptions.filter((agent) => !isAssistantOnlyAgentId(agent.id)),
+    [agentOptions]
+  );
+
   const activeAgent = activeAgentId ? agentOptions.find((a) => a.id === activeAgentId) : null;
   const activeEntry = activeAgent
     ? getAgentSettingsEntry(effectiveSettings, activeAgent.id)
@@ -404,17 +411,21 @@ export function AgentSettings({
                 className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
               >
                 <option value="">None (first available)</option>
-                {agentOptions.map((agent) => (
+                {/* Launchable agents only. This preference names what a DIRECT launch
+                    spawns, and the Daintree Assistant has no terminal form to spawn —
+                    offering it here persisted a default every launch path then refused.
+                    Which agent the assistant itself runs lives on the assistant tab. */}
+                {defaultAgentOptions.map((agent) => (
                   <option key={agent.id} value={agent.id}>
                     {agent.name}
                   </option>
                 ))}
               </select>
               <p className="text-xs text-text-secondary select-text">
-                Agent used for the help dock button
-                {helpShortcut && ` (${helpShortcut})`} and automated workflows ("What's Next?",
-                onboarding, project explanations). Distinct from the Portal "Default New Tab Agent"
-                which controls the browser panel opened by the + button.
+                Agent used for automated workflows ("What's Next?", onboarding, project
+                explanations) and wherever a launch doesn't name an agent. The Daintree Assistant
+                picks its own agent on the Assistant tab. Distinct from the Portal "Default New Tab
+                Agent" which controls the browser panel opened by the + button.
               </p>
             </div>
             <div id="agents-skip-permissions">

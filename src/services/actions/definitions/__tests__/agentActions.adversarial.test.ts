@@ -1298,9 +1298,10 @@ describe("agent.listAvailable", () => {
   });
 
   it("never names an assistant-only agent as the default", async () => {
-    // `daintree-assistant` is selectable in the settings dropdown but is absent from
-    // this listing's rows, and choosing it means "open the assistant", not "delegate
-    // work to it" — so a caller asking which agent to spawn has no pick to honour.
+    // `daintree-assistant` is absent from this listing's rows, and naming it would mean
+    // "open the assistant", not "delegate work to it" — so a caller asking which agent
+    // to spawn has no pick to honour. A stale persisted value can still arrive here:
+    // the settings dropdown no longer offers it, but rehydration is what drops it.
     const result = await listAvailable("daintree-assistant", {
       claude: "ready",
       "daintree-assistant": "ready",
