@@ -19,6 +19,8 @@ import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { pruneWindowStateForPath } from "../../../windowState.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
+import { helpSessionService } from "../../../services/HelpSessionService.js";
+import { logError } from "../../../utils/logger.js";
 
 /**
  * Rejection copy for a destructive teardown (close+kill / remove) the pty-host
@@ -317,6 +319,20 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
 
     try {
       if (killTerminals) {
+        // Capture the assistant's session before the project-wide teardown:
+        // `revokeSession` reads its resume id off a still-live PTY, and the
+        // generic kill below would already have taken it, so a reopen would
+        // start the assistant cold instead of resuming (#12181). Only this
+        // branch needs it — the background branch leaves terminals running.
+        //
+        // Best-effort: an uncaught rejection would be relabelled INTERNAL by
+        // the catch below and abort a close the user asked for.
+        try {
+          await helpSessionService.revokeByProjectId(projectId);
+        } catch (revokeError) {
+          logError("project-close-help-revoke-failed", revokeError, { projectId });
+        }
+
         // Gracefully tear down and journal each agent session before wiping the
         // project's restoration state, so agent conversations stay resumable
         // from the picker. Fail closed: if the host can't confirm the kills,

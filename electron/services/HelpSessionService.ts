@@ -1109,6 +1109,15 @@ export class HelpSessionService {
     // resume entry. A best-effort capture is strictly an improvement over
     // the previous behaviour of always losing the conversation.
     let capturedAgentSessionId: string | null = null;
+    // Whether THIS call claimed the lane's capture below. `revoked` is only set
+    // after the gracefulKill await, so a concurrent revoke of the same session —
+    // the renderer's no-capture `handleTerminalPanelMissing` path, which now
+    // races us whenever the project view outlives the kill (project sleep and
+    // close+kill both keep it alive) — passes the guard at the top and reaches
+    // the finalize block below. Without this flag it would release OUR ownership
+    // and the real resume id would be dropped for the empty-sentinel placeholder,
+    // silently demoting the resume to latest-conversation.
+    let ownsCapture = false;
     if (opts?.captureHibernation && terminalId && this.ptyClient) {
       // #9639: write a placeholder resume entry SYNCHRONOUSLY (memory-first
       // via `set`) before the gracefulKill round-trip. The eviction path that
@@ -1121,6 +1130,7 @@ export class HelpSessionService {
       // placeholder with the agent's real resume ID (below).
       if (this.pendingHibernationStore) {
         this.pendingCapturesBySlotKey.set(slotKey, sessionId);
+        ownsCapture = true;
         const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
           .set(slotKey, {
@@ -1204,7 +1214,11 @@ export class HelpSessionService {
     // took the lane. When we still own it: overwrite with the real resume ID
     // if gracefulKill yielded one, otherwise leave the empty-sentinel in place
     // (resume-latest beats a fresh launch). Then release ownership.
-    if (this.pendingHibernationStore && this.pendingCapturesBySlotKey.get(slotKey) === sessionId) {
+    if (
+      ownsCapture &&
+      this.pendingHibernationStore &&
+      this.pendingCapturesBySlotKey.get(slotKey) === sessionId
+    ) {
       if (capturedAgentSessionId) {
         const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
@@ -1514,19 +1528,24 @@ export class HelpSessionService {
   }
 
   /**
-   * Idle-background auto-close (#10830): the sweep capture-revokes a project's
-   * help sessions before reclaiming it — the same conversation-preserving path
-   * as LRU eviction, so the next open resumes where the user left off. The
-   * renderer's own hibernate timer can't do this itself, because a parked
-   * project view freezes timers (the #10739 class).
+   * Three entry points capture-revoke a project's help sessions ahead of a
+   * project-wide teardown: the idle-background auto-close sweep (#10830),
+   * `project:sleep`, and `project:close` with `killTerminals` (#12181). All
+   * three take the same conversation-preserving path as LRU eviction, so the
+   * next open resumes where the user left off. The renderer's own hibernate
+   * timer can't do this itself, because a parked project view freezes timers
+   * (the #10739 class).
    *
-   * A LIVE assistant no longer reaches here: since #11807 the sweep treats one
-   * as a hard floor and skips the project entirely, because nothing tells main
+   * The sweep never hands us a LIVE assistant: since #11807 it treats one as a
+   * hard floor and skips the project entirely, because nothing tells main
    * whether an idle-looking assistant is merely at its prompt or sitting on a
-   * scheduled wakeup. So the records this settles are the non-live ones — a
-   * terminal that exited under its own steam (nothing drops that binding), or
-   * a session provisioned but never bound. Only the former has a conversation
-   * to capture; an unbound record writes no pending-hibernation entry.
+   * scheduled wakeup. Its records are the non-live ones — a terminal that
+   * exited under its own steam (nothing drops that binding), or a session
+   * provisioned but never bound. Sleep and close are the opposite: the user
+   * asked for the teardown, so a live assistant behind a still-live project
+   * view is the normal case and the capture path really runs. That is what
+   * makes the renderer's own no-capture revoke of the same session racing us
+   * reachable, and why `revokeSession` finalizes only under the ownership flag.
    */
   async revokeByProjectId(projectId: string): Promise<void> {
     const targets = [...this.sessionsById.values()].filter(

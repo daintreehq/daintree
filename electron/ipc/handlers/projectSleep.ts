@@ -6,6 +6,7 @@ import { getHibernationService } from "../../services/HibernationService.js";
 import { logError } from "../../utils/logger.js";
 import { writeHibernatedMarker } from "../../services/pty/terminalSessionPersistence.js";
 import { gracefulTeardownAndJournalProject } from "../../services/pty/projectSessionJournal.js";
+import { helpSessionService } from "../../services/HelpSessionService.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { defineIpcNamespace, op } from "../define.js";
@@ -67,6 +68,23 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
           }
 
           try {
+            // Capture the assistant's session BEFORE the project-wide teardown,
+            // the same order the idle-background sweep uses: `revokeSession`
+            // needs the assistant's PTY still alive to read its resume id, and
+            // the generic kill below would already have taken it. Deliberately
+            // ahead of the `confirmed` gate too — an unconfirmed teardown leaves
+            // the row open, and a captured pending entry is what lets a panel
+            // that reopens there resume rather than start cold (#12181).
+            //
+            // Best-effort: losing the resume entry must not fail the sleep, and
+            // an uncaught rejection here would surface as an INTERNAL error from
+            // the catch below.
+            try {
+              await helpSessionService.revokeByProjectId(projectId);
+            } catch (revokeError) {
+              logError("project-sleep-help-revoke-failed", revokeError, { projectId });
+            }
+
             // Graceful, session-preserving kill + snapshot writeback + journal, in
             // that order — the same three steps a quit performs per project, via
             // the shared helper rather than a fourth copy of them.
