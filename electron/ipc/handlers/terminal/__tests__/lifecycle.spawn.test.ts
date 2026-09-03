@@ -1222,6 +1222,54 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
+  it("stamps isAssistantTerminal on the spawn so teardown paths can recognise it", async () => {
+    // #12183: the spawn handler already knew this was the assistant (it is
+    // what gates MCP command mutation) but threw the answer away, so the
+    // session journal and hydration's orphan adoption treated the overlay's
+    // PTY as an ordinary agent pane. Sealing it onto the record is what lets
+    // those paths recognise it from a pre-kill snapshot.
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude",
+        launchAgentId: "claude",
+        env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn.mock.calls[0][1].isAssistantTerminal).toBe(true);
+  });
+
+  it("does not stamp isAssistantTerminal on an ordinary agent launch", async () => {
+    // The same agent binary, launched by the user into the grid, must stay
+    // journalable and adoptable — `launchAgentId` alone cannot tell them apart.
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude",
+        launchAgentId: "claude",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn.mock.calls[0][1].isAssistantTerminal).toBe(false);
+  });
+
   it("appends --dangerously-skip-permissions when help session bypassPermissions is true", async () => {
     mockValidateToken.mockImplementation((token) => (token === "bypass-token" ? "system" : false));
     mockGetBypassPermissions.mockImplementation((token) => token === "bypass-token");

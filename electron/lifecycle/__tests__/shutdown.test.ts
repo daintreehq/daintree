@@ -67,6 +67,7 @@ vi.mock("../../utils/quitWarning.js", () => quitWarningMock);
 
 const agentStoreMock = vi.hoisted(() => ({
   getAgentsByAvailability: vi.fn(() => []),
+  isHelpTerminal: vi.fn(() => false),
 }));
 
 vi.mock("../../services/AgentAvailabilityStore.js", () => ({
@@ -1195,6 +1196,31 @@ describe("registerShutdownHandler", () => {
       expect(record.agentId).toBe("claude");
       expect(record.cwd).toBe("/repo");
       expect(record.branch).toBe("feature/x");
+    });
+
+    it("skips the assistant's overlay terminal but journals the pane beside it", async () => {
+      // #12183: a quit journaled the assistant as an ordinary AgentSessionRecord,
+      // so it could surface in the resume picker and reopen the assistant's
+      // conversation as a grid pane running the underlying CLI.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [
+          agentTerminal,
+          { ...agentTerminal, id: "assistant", isAssistantTerminal: true },
+        ]),
+        gracefulKillByProject: vi.fn(async () => [
+          { id: "t1", agentSessionId: "sess-1" },
+          { id: "assistant", agentSessionId: "sess-assistant" },
+        ]),
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
+      const record = persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>;
+      expect(record.sessionId).toBe("sess-1");
     });
 
     it("still captures and journals when the rate-limit drain import fails", async () => {

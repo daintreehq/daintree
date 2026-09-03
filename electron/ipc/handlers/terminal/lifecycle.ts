@@ -12,6 +12,7 @@ import { projectStore } from "../../../services/ProjectStore.js";
 import type * as McpServerServiceModule from "../../../services/McpServerService.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
+import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import {
   TerminalSpawnOptionsSchema,
@@ -781,6 +782,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         projectId,
         restore: validatedOptions.restore,
         isEphemeral: validatedOptions.isEphemeral,
+        // Seal the assistant's identity onto the record itself. Derived from
+        // the validated help token above, never from a renderer-supplied
+        // field: a pane that could assert this would opt itself out of the
+        // session journal. The generic terminal paths read it back through
+        // `isAssistantTerminalRecord`.
+        isAssistantTerminal: isHelpLaunch,
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
         agentSessionId: validatedOptions.agentSessionId,
@@ -849,6 +856,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     generation?: number
   ): Promise<void> => {
     if (!sessionId || !info?.launchAgentId) return;
+    // The Daintree Assistant's overlay terminal must never surface in the
+    // resume picker as an ordinary agent pane (#12183). Both callers snapshot
+    // `info` before the kill, so the record still carries the stamp here.
+    if (isAssistantTerminalRecord(info)) return;
     try {
       const branch = await resolveBranchForMain(info.worktreeId, deps.worktreeService);
       // journalAgentSession is the exactly-once funnel: it gates on the

@@ -13,8 +13,8 @@ import {
   prefetchTerminalInventory,
 } from "../terminalInventoryPrefetch.js";
 
-function terminal(id: string, kind = "terminal") {
-  return { id, projectId: "p1", kind, title: id, hasPty: true } as never;
+function terminal(id: string, kind = "terminal", extra: Record<string, unknown> = {}) {
+  return { id, projectId: "p1", kind, title: id, hasPty: true, ...extra } as never;
 }
 
 describe("buildTerminalInventory", () => {
@@ -28,6 +28,23 @@ describe("buildTerminalInventory", () => {
     const inventory = await buildTerminalInventory(ptyClient, "p1");
     expect(inventory.map((t) => t.id)).toEqual(["t1"]);
     expect(ptyClient.getTerminalAsync).toHaveBeenCalledTimes(4);
+  });
+
+  it("drops an assistant PTY the renderer has not marked yet", async () => {
+    // #12183: the availability-store mark arrives on a fire-and-forget renderer
+    // round trip that lands AFTER the spawn IPC returned, so between "PTY
+    // exists" and "help.markTerminal processed" this inventory used to report
+    // the assistant — and `restorePanelsPhase` appends anything here with no
+    // saved panel as a grid orphan. The spawn-time record stamp closes that
+    // window, since it is on the record before the PTY is reachable at all.
+    const ptyClient = {
+      getTerminalsForProjectAsync: vi.fn(async () => ["t1", "assistant"]),
+      getTerminalAsync: vi.fn(async (id: string) =>
+        terminal(id, "terminal", id === "assistant" ? { isAssistantTerminal: true } : {})
+      ),
+    };
+    const inventory = await buildTerminalInventory(ptyClient, "p1");
+    expect(inventory.map((t) => t.id)).toEqual(["t1"]);
   });
 });
 

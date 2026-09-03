@@ -7,7 +7,7 @@ import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import { TerminalReplayHistoryPayloadSchema } from "../../../schemas/index.js";
 import { logDebug, logInfo, logWarn } from "../../../utils/logger.js";
-import { getAgentAvailabilityStore } from "../../../services/AgentAvailabilityStore.js";
+import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.js";
 import {
   buildTerminalInventory,
   consumeTerminalInventoryPrefetch,
@@ -410,8 +410,8 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         return { exists: false, conflict: true };
       }
 
-      if (getAgentAvailabilityStore().isHelpTerminal(terminal.id)) {
-        logInfo(`terminal:reconnect: Skipping help terminal ${terminalId}`);
+      if (isAssistantTerminalRecord(terminal)) {
+        logInfo(`terminal:reconnect: Skipping assistant terminal ${terminalId}`);
         return { exists: false };
       }
 

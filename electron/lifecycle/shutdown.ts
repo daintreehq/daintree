@@ -4,6 +4,7 @@ import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { journalAgentSession } from "../services/pty/agentSessionJournal.js";
+import { isAssistantTerminalRecord } from "../services/assistantTerminal.js";
 import { getLifecycleLedger } from "../services/pty/lifecycleLedger.js";
 import { getActiveAgentCount, showQuitWarning } from "../utils/quitWarning.js";
 import {
@@ -335,7 +336,11 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         .map((r) => ({ result: r, info: terminalInfoById.get(r.id) }))
         .filter((c): c is { result: typeof c.result; info: NonNullable<typeof c.info> } =>
           Boolean(c.info?.launchAgentId)
-        );
+        )
+        // The assistant's overlay terminal is not a resumable grid pane
+        // (#12183). Read off the pre-kill snapshot above, which is the only
+        // place its identity still survives once the PTY is gone.
+        .filter((c) => !isAssistantTerminalRecord(c.info));
 
       if (capturedAgents.length > 0) {
         const uniqueWorktreeIds = [

@@ -63,6 +63,16 @@ export interface PtyHostSpawnOptions {
   restore?: boolean;
   /** Whether to kill the PTY when the frontend disconnects (no terminal registry entry) */
   isEphemeral?: boolean;
+  /**
+   * This PTY backs the Daintree Assistant overlay rather than a grid pane.
+   *
+   * Stamped by Main from the spawn handler's already-validated `isHelpLaunch`
+   * — never from a renderer-supplied field, which would let any pane claim
+   * assistant status and opt itself out of journaling. Durable on the record
+   * so the generic terminal paths can still recognise it from a pre-kill
+   * snapshot, long after the live help-session binding has been torn down.
+   */
+  isAssistantTerminal?: boolean;
   /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
@@ -856,6 +866,8 @@ export interface PtyHostTerminalInfo {
   id: string;
   projectId?: string;
   kind?: PanelKind;
+  /** This PTY backs the Daintree Assistant overlay, not a grid pane. */
+  isAssistantTerminal?: boolean;
   /** Launch hint — agent this terminal was launched to run. Not identity. */
   launchAgentId?: AgentId;
   title?: string;
