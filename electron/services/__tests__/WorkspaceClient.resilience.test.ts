@@ -579,10 +579,13 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
     });
 
-    it("reports project-unavailable when a window maps to no host", async () => {
+    it("reports workspace-unavailable when no host serves the window yet", async () => {
+      // Not project-unavailable: the window->project mapping is established at
+      // the end of loadProject, so a window mid-open lands here and "the
+      // workspace cannot answer yet" is the honest reason.
       expect(await client.getAllStatesResultAsync(99)).toEqual({
         status: "unavailable",
-        reason: "project-unavailable",
+        reason: "workspace-unavailable",
       });
     });
 
@@ -603,6 +606,46 @@ describe("WorkspaceClient multi-process manager", () => {
         projectId: idFor("/project-a"),
         states: [{ id: "wt-a" }],
       });
+    });
+
+    it("keeps a window read labelled with the project it started on across a switch", async () => {
+      // The race #12174 is really about. Start a read while window 1 is on A,
+      // complete the switch to B with the state RPC still pending, then answer
+      // it. The captured entry must still label the answer A — re-resolving the
+      // window after the await would mislabel A's worktrees as B's, which is
+      // strictly worse than the [] the old surface returned.
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const promise = client.getAllStatesResultAsync(1);
+      await tick();
+      const req = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      expect(req).toBeDefined();
+
+      const loadB = client.loadProject("/project-b", 1);
+      await readyAndResolveLoad(1);
+      await loadB;
+
+      h(0).resolveRequest(req.requestId, { states: [{ id: "wt-a" }] });
+      expect(await promise).toEqual({
+        status: "ok",
+        projectId: idFor("/project-a"),
+        states: [{ id: "wt-a" }],
+      });
+
+      // And the switch invalidated the cache, so the next read reaches B rather
+      // than replaying A's coalesced answer.
+      const after = client.getAllStatesResultAsync(1);
+      await tick();
+      const reqB = h(1)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      expect(reqB).toBeDefined();
+      h(1).resolveRequest(reqB.requestId, { states: [{ id: "wt-b" }] });
+      expect(await after).toMatchObject({ projectId: idFor("/project-b") });
     });
 
     it("reports workspace-unavailable when readiness fails, and never reads a partial map", async () => {

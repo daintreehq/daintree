@@ -350,11 +350,28 @@ describe("createMockHost", () => {
       status: "unavailable",
       reason: "scope-unresolved",
     });
-    // Deliberately untouched: the ambiguity of the old surface is the point.
-    expect(await host.getWorktrees()).toEqual([sampleSnapshot]);
+    // Coupled, as production is: one unavailable read cannot leave the legacy
+    // getters handing back a list the real host would have flattened to [].
+    expect(await host.getWorktrees()).toEqual([]);
+    expect(await host.getActiveWorktree()).toBeNull();
 
     host.simulateWorktreesResult(null);
-    expect(await host.getWorktreesResult()).toMatchObject({ status: "ok" });
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "ok",
+      projectId: "test-project",
+      worktrees: [sampleSnapshot],
+    });
+    expect(await host.getWorktrees()).toEqual([sampleSnapshot]);
+  });
+
+  it("keeps the derived result in step with simulateWorktreesChange", async () => {
+    const host = createMockHost({ worktrees: [sampleSnapshot] });
+    host.simulateWorktreesChange([]);
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "ok",
+      projectId: "test-project",
+      worktrees: [],
+    });
   });
 
   it("delivers active-worktree updates and supports idempotent disposal", async () => {

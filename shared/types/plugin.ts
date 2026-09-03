@@ -1516,7 +1516,8 @@ export interface PluginWorktreeSnapshot {
  * - `plugin-unloaded` — the plugin unloaded (or was replaced by a same-id
  *   reload) before or during the read; a stale timer sees this
  * - `workspace-unavailable` — the workspace subsystem cannot answer yet: no
- *   client wired, or the owning workspace host never finished populating
+ *   client wired, no host serving the resolved window (a project still opening),
+ *   or a host that never finished populating
  * - `scope-unresolved` — an unbound host found no focused project view to read
  *   on behalf of (common mid-project-switch)
  * - `project-unavailable` — a bound host's project cannot be resolved: the

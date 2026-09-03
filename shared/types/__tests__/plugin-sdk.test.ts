@@ -288,6 +288,16 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<"project-unavailable">().toMatchTypeOf<PluginWorktreesUnavailableReason>();
       expectTypeOf<"fetch-failed">().toMatchTypeOf<PluginWorktreesUnavailableReason>();
       expectTypeOf<"whatever">().not.toMatchTypeOf<PluginWorktreesUnavailableReason>();
+      // Exact, not merely inclusive: an unintended sixth literal would widen the
+      // public vocabulary plugins have to switch on, and membership checks alone
+      // would not notice.
+      expectTypeOf<PluginWorktreesUnavailableReason>().toEqualTypeOf<
+        | "plugin-unloaded"
+        | "workspace-unavailable"
+        | "scope-unresolved"
+        | "project-unavailable"
+        | "fetch-failed"
+      >();
     });
 
     it("PluginHostApi.getWorktreeStatus takes a path and returns the status projection or null", () => {

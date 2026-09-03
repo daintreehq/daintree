@@ -265,9 +265,11 @@ export interface CreateMockHostOptions {
    * {@link MockHostState.simulateWorktreesResult} to exercise the guards a
    * plugin should have around an unavailable read.
    *
-   * Deliberately does not feed `getWorktrees()` / `getActiveWorktree()`: those
-   * keep their `[]`/`null` contract off `worktrees` / `activeWorktree`, which
-   * is exactly the ambiguity this result shape exists to sit beside.
+   * While an override is set the legacy `getWorktrees()` / `getActiveWorktree()`
+   * project from it too — the real host derives all three from one read, so a
+   * mock that answered `unavailable` here while still handing back a populated
+   * list there would let a plugin's fallback pass a test it cannot pass in
+   * production.
    */
   worktreesResult?: PluginWorktreesResult;
   settings?: {
@@ -851,9 +853,21 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       return Promise.resolve();
     },
     async getActiveWorktree() {
+      if (worktreesResult) {
+        return worktreesResult.status === "ok"
+          ? (worktreesResult.worktrees.find((w) => w.isCurrent) ?? null)
+          : null;
+      }
       return activeWorktree;
     },
     async getWorktrees() {
+      // Projected from the override when one is set: the real host derives all
+      // three getters from a single read, so a mock that let `getWorktrees()`
+      // stay populated while the result says `unavailable` would bless a
+      // fallback that cannot work in production.
+      if (worktreesResult) {
+        return worktreesResult.status === "ok" ? worktreesResult.worktrees : [];
+      }
       return worktrees;
     },
     async getWorktreesResult() {

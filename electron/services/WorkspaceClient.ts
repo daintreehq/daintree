@@ -698,8 +698,14 @@ export class WorkspaceClient extends EventEmitter {
         return Promise.resolve({ status: "unavailable", reason: "workspace-unavailable" as const });
       }
       const entry = this.pool.resolveEntryForWindow(windowId);
+      // No host serves this window *yet* — the mapping is established at the end
+      // of `loadProject`, so a window mid-open lands here. That is the workspace
+      // layer not being ready, not a project that has gone away.
       if (!entry) {
-        return Promise.resolve({ status: "unavailable", reason: "project-unavailable" as const });
+        return Promise.resolve({
+          status: "unavailable",
+          reason: "workspace-unavailable" as const,
+        });
       }
       return this._readStatesResultWhenReady(entry);
     });
@@ -740,16 +746,21 @@ export class WorkspaceClient extends EventEmitter {
   ): Promise<WorkspaceStatesResult> {
     const existing = this._statesResultInflight.get(key);
     if (existing) return existing;
-    const promise = read().then(
+    // Identity-guarded: a project switch (or any other invalidation) can delete
+    // this key and a fresh read insert its own promise under it before this
+    // one's eviction fires, and the old promise must not drop the new entry.
+    const evict = (): void => {
+      if (this._statesResultInflight.get(key) === promise) {
+        this._statesResultInflight.delete(key);
+      }
+    };
+    const promise: Promise<WorkspaceStatesResult> = read().then(
       (result) => {
-        setTimeout(
-          () => this._statesResultInflight.delete(key),
-          STATES_INFLIGHT_COALESCE_WINDOW_MS
-        );
+        setTimeout(evict, STATES_INFLIGHT_COALESCE_WINDOW_MS);
         return result;
       },
       (error: unknown) => {
-        this._statesResultInflight.delete(key);
+        evict();
         throw error;
       }
     );

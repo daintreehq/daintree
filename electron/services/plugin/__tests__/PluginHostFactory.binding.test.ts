@@ -226,14 +226,18 @@ describe("createHost worktree surfaces", () => {
     expect(h.projectFetch).not.toHaveBeenCalled();
   });
 
-  it("degrades to null/[] once the bound project is gone", async () => {
+  it("degrades every worktree surface once the bound project is gone", async () => {
     const h = makeHarness();
-    h.projectFetch.mockResolvedValue(okFetch([]));
+    h.projectFetch.mockResolvedValue({ status: "unavailable", reason: "project-unavailable" });
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
 
     expect(await host.getActiveWorktree()).toBeNull();
     expect(await host.getWorktrees()).toEqual([]);
     expect(await host.getWorktreeStatus(path.join(ROOT_A, "feature"))).toBeNull();
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "project-unavailable",
+    });
   });
 
   it("names the project a successful read describes", async () => {
@@ -329,6 +333,52 @@ describe("createHost worktree surfaces", () => {
     expect(await host.getWorktreesResult()).toEqual({
       status: "unavailable",
       reason: "project-unavailable",
+    });
+    expect(await host.getWorktrees()).toEqual([]);
+  });
+
+  it("keeps a foreign-project answer out of getWorktreeStatus, not just the getters", async () => {
+    const h = makeHarness();
+    // The refusal lives in the shared fetch, so every surface downstream of it
+    // fails closed — a getter-only guard would let B's status through here.
+    const foreign = path.join(ROOT_B, "feature");
+    h.projectFetch.mockResolvedValue(
+      okFetch([worktree({ id: "wt-b", isCurrent: true, path: foreign })], "project-b")
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect(await host.getWorktreeStatus(foreign)).toBeNull();
+    expect(await host.getActiveWorktree()).toBeNull();
+    expect(await host.getWorktrees()).toEqual([]);
+  });
+
+  it("treats a same-id reload as unloaded, not as the same plugin", async () => {
+    const h = makeHarness();
+    let release: (value: PluginWorktreeSnapshotFetchResult) => void = () => {};
+    h.projectFetch.mockReturnValue(
+      new Promise<PluginWorktreeSnapshotFetchResult>((resolve) => {
+        release = resolve;
+      })
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    const pending = host.getWorktreesResult();
+    // Identity, not membership: the id is still in the map, but it now names a
+    // different instance, so this host's read belongs to the previous one.
+    h.plugins.set(PLUGIN_ID, fakePlugin());
+    release(okFetch([worktree({ id: "wt-a", isCurrent: true })]));
+
+    expect(await pending).toEqual({ status: "unavailable", reason: "plugin-unloaded" });
+  });
+
+  it("answers fetch-failed rather than rejecting when the read throws", async () => {
+    const h = makeHarness();
+    h.projectFetch.mockRejectedValue(new Error("dependency blew up"));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "fetch-failed",
     });
     expect(await host.getWorktrees()).toEqual([]);
   });

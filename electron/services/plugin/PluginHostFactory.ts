@@ -385,15 +385,27 @@ export function createHost(
    * argument-less getters can mean — which is exactly why the result names the
    * project it landed on, so a plugin can notice when focus moved under it.
    */
-  const fetchWorktreeSnapshotsResult = (): Promise<PluginWorktreeSnapshotFetchResult> => {
+  const fetchWorktreeSnapshotsResult = async (): Promise<PluginWorktreeSnapshotFetchResult> => {
     if (boundProjectId === null) return deps.fetchWorktreeSnapshotsResult();
     // Bound with no root is a malformed binding. Fail closed rather than fall
     // back to the ambient read, which would hand this plugin whichever project
     // happens to be focused — the confused-deputy bug the binding exists for.
     if (boundProjectRoot === null) {
-      return Promise.resolve({ status: "unavailable", reason: "project-unavailable" });
+      return { status: "unavailable", reason: "project-unavailable" };
     }
-    return deps.fetchWorktreeSnapshotsForProjectResult(boundProjectId, boundProjectRoot);
+    const result = await deps.fetchWorktreeSnapshotsForProjectResult(
+      boundProjectId,
+      boundProjectRoot
+    );
+    // Belt and braces on the binding, enforced here rather than in one getter so
+    // every surface downstream of this read inherits it: a dependency answering
+    // for another project would be the confused deputy (#11297) wearing the new
+    // shape, and it must not reach `getWorktreeStatus`, the worktree
+    // subscriptions or the default spawn cwd either.
+    if (result.status === "ok" && result.projectId !== boundProjectId) {
+      return { status: "unavailable", reason: "project-unavailable" };
+    }
+    return result;
   };
 
   /**
@@ -490,19 +502,24 @@ export function createHost(
    */
   const getWorktreesResult = async (): Promise<PluginWorktreesResult> => {
     if (!isBound()) return { status: "unavailable", reason: "plugin-unloaded" };
-    const result = await fetchWorktreeSnapshotsResult();
+    let result: PluginWorktreeSnapshotFetchResult;
+    try {
+      result = await fetchWorktreeSnapshotsResult();
+    } catch {
+      // The documented contract is that this method answers with data and never
+      // throws, so an unexpected rejection (a dependency that escaped its own
+      // catch, a malformed snapshot) becomes a reason rather than an unhandled
+      // rejection in whatever timer called it.
+      return isBound()
+        ? { status: "unavailable", reason: "fetch-failed" }
+        : { status: "unavailable", reason: "plugin-unloaded" };
+    }
     // Re-checked after the await: an unload (or a same-id reload) that landed
     // while the read was in flight makes these snapshots the previous
     // instance's, so they are discarded rather than handed to whatever still
     // holds this stale host.
     if (!isBound()) return { status: "unavailable", reason: "plugin-unloaded" };
     if (result.status !== "ok") return { status: "unavailable", reason: result.reason };
-    // Belt and braces on the binding: a dependency answering for some other
-    // project would be the confused deputy (#11297) arriving through the new
-    // shape, so refuse it rather than relabel it.
-    if (boundProjectId !== null && result.projectId !== boundProjectId) {
-      return { status: "unavailable", reason: "project-unavailable" };
-    }
     return {
       status: "ok",
       projectId: result.projectId,

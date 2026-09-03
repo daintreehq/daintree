@@ -609,10 +609,14 @@ describe("a bound plugin's ${project}/${worktree} allowlist roots", () => {
       }),
       getAllStatesForProjectAsync: forProject,
       getAllStatesForProjectResultAsync: async (root: string, projectId: string) => {
-        const states = await forProject(root, projectId);
-        return states.length > 0
-          ? { status: "ok", projectId, states }
-          : { status: "unavailable", reason: "project-unavailable" };
+        // Availability is entry existence, NOT list length — the real client
+        // answers `ok` with `states: []` for a live project that has no
+        // worktrees, and only reports unavailable when the pool entry is
+        // missing or its immutable id mismatches.
+        if (!(projectId in perProject)) {
+          return { status: "unavailable", reason: "project-unavailable" };
+        }
+        return { status: "ok", projectId, states: await forProject(root, projectId) };
       },
       on: vi.fn(),
       off: vi.fn(),

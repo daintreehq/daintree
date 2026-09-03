@@ -160,6 +160,18 @@ describe("PluginDevWorkerHostProxy getWorktreesResult (#12174)", () => {
     await expect(promise).resolves.toEqual(envelope);
   });
 
+  it("resolves to plugin-unloaded for a call made after disposal", async () => {
+    // The other callWithGrace branch: nothing is in flight, so the grace value
+    // is returned without anything crossing the port.
+    const { proxy, sent } = makeProxy();
+    proxy.dispose();
+    await expect(proxy.host.getWorktreesResult()).resolves.toEqual({
+      status: "unavailable",
+      reason: "plugin-unloaded",
+    });
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+
   it("resolves an in-flight call to plugin-unloaded when the proxy is disposed", async () => {
     // The real host degrades rather than throwing once the plugin unloads, so a
     // dev-hosted plugin must observe the same contract.

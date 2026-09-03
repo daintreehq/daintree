@@ -3145,9 +3145,12 @@ export class PluginService {
   private async fetchAllWorktreeSnapshotsResult(): Promise<PluginWorktreeSnapshotFetchResult> {
     const client = this.workspaceClient;
     if (!client) return { status: "unavailable", reason: "workspace-unavailable" };
-    const windowId = this.resolveScopeWindowId();
-    if (windowId === undefined) return { status: "unavailable", reason: "scope-unresolved" };
     try {
+      // Inside the try: scope resolution walks the live window/view registries,
+      // and a throw there must degrade like any other failed read rather than
+      // reject into a plugin's timer.
+      const windowId = this.resolveScopeWindowId();
+      if (windowId === undefined) return { status: "unavailable", reason: "scope-unresolved" };
       const result = await client.getAllStatesResultAsync(windowId);
       return result.status === "ok"
         ? { status: "ok", projectId: result.projectId, snapshots: result.states }

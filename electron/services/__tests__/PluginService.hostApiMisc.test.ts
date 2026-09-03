@@ -860,6 +860,11 @@ describe("Plugin worktree host API", () => {
     ).createHost("acme.wt-nowsc");
     expect(await host.getActiveWorktree()).toBeNull();
     expect(await host.getWorktrees()).toEqual([]);
+    // …and the result surface says which of the seven collapses this is.
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "workspace-unavailable",
+    });
   });
 
   it("onDidChangeActiveWorktree fires with the new active snapshot", async () => {
