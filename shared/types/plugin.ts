@@ -2038,11 +2038,12 @@ export interface PluginFsSymlink {
    * `"file"` and `"directory"` are the resolved, in-scope cases — the only two
    * where `isDirectory` describes the target and descending is allowed.
    * `"broken"` is a target that does not exist. `"external"` is a target that
-   * resolves outside the plugin's declared `scopes.fs.allowedPaths`, so the
-   * host will refuse to read it. `"unknown"` is a target that could not be
-   * classified at all (a link loop, permission denied) — kept distinct from
-   * `"external"` so a UI never reports a link as leaving scope when the truth
-   * is that it could not be read.
+   * resolves outside the allowed root that contains the listed directory, so
+   * the host will refuse to read it through that listing. Conservative: a link
+   * into a different allowed root also reads as `"external"`. `"unknown"` is a
+   * target that could not be classified at all (a link loop, permission
+   * denied) — kept distinct from `"external"` so a UI never reports a link as
+   * leaving scope when the truth is that it could not be read.
    */
   targetKind: "file" | "directory" | "broken" | "external" | "unknown";
 }

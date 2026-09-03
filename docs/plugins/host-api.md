@@ -701,7 +701,7 @@ What the detailed read adds beyond the flags:
 | `symlink` | Present only on links: `target` (absolute, resolved the way the kernel would) and `targetKind`. |
 | ordering | Directories first, then a numeric-aware name collation — so `file2` sorts before `file10`, and ties break deterministically regardless of host locale. |
 
-`targetKind` is one of `"file"`, `"directory"`, `"broken"`, `"external"`, `"unknown"`. `"external"` means the target resolves **outside your declared `scopes.fs.allowedPaths`**, so the host will refuse to read it — the classification is scoped to what _your_ plugin may reach, not to some global notion of the workspace. It is kept distinct from `"unknown"` (a link loop, permission denied) so your UI never tells someone a link points out of scope when the truth is that it could not be read. `isDirectory` is true for a link only when `targetKind` is `"directory"`, so code routing on `isDirectory` alone stays correct and can ignore `symlink` entirely.
+`targetKind` is one of `"file"`, `"directory"`, `"broken"`, `"external"`, `"unknown"`. `"external"` means the target resolves **outside the allowed root that contains the listed directory**, so the host will refuse to read it through that listing — the classification is scoped to what _your_ plugin may reach, not to some global notion of the workspace. It is conservative: a link into a _different_ one of your allowed roots also reads as `"external"`. It is kept distinct from `"unknown"` (a link loop, permission denied) so your UI never tells someone a link points out of scope when the truth is that it could not be read. `isDirectory` is true for a link only when `targetKind` is `"directory"`, so code routing on `isDirectory` alone stays correct and can ignore `symlink` entirely.
 
 Reach for `{ detail: true }` rather than calling `stat` per entry: that costs one host round trip **per entry**, and it still would not reproduce the link classification or the ordering. Both paths apply identical containment and capability checks; `detail` changes what is read, never what is allowed.
 
@@ -830,12 +830,11 @@ What it gives you:
 
 | Area | Exports |
 | --- | --- |
-| Tree model | `flattenTree` (a lazily-expanded directory map → the flat row list a virtualised list renders), `buildFolderListingRows`, `findNodeInListings`, `sortFileNodes`, `MAX_TREE_DEPTH` |
+| Tree model | `flattenTree` (a lazily-expanded directory map → the flat row list a virtualised list renders), `buildFolderListingRows`, `findNodeInListings`, `sortFileNodes` |
 | Sorting | `DEFAULT_FILE_SORT`, `isDefaultFileSort`, and the `FileBrowserSortOrder` shape — name/modified/size/type, ascending or descending |
 | Hidden entries | `createVisibilityFilter`, `countHiddenRows`, `isRowPathVisible`, `NO_HIDDEN_ROWS` — dotfiles plus a caller-supplied always-hidden pattern list, with the counts a "N hidden" affordance needs |
 | Keyboard | `resolveTypeahead`, `resolveTreeKey`, `TYPEAHEAD_RESET_MS` — type-to-select and arrow/expand/collapse resolution over the flat rows |
-| Changed files | `buildFileBrowserGitStatusIndex`, `getFileBrowserRowGitStatus`, `isReadableRelativePath` — per-row status plus the folder roll-up, so a collapsed directory can show that something under it changed |
-| Persistence | `snapshotFromListings`, `snapshotMatchesSource`, `pruneListings` and their bounds — capture a structure-only tree snapshot so a reopened panel paints before its first read returns |
+| Changed files | `buildFileBrowserGitStatusIndex`, `getFileBrowserRowGitStatus` — per-row status plus the folder roll-up, so a collapsed directory can show that something under it changed |
 | Classification | `getFileTypeCategory` — several hundred curated extensions and basenames, plus the patterns that catch `.eslintrc.json`, `Dockerfile.dev` and `compose.override.yaml`, resolved most-specific-first |
 
 **It is headless on purpose.** No components, no icons, no styling. A plugin building its own browser wants its own chrome, and exporting Daintree's would freeze the app's internal component contract into the plugin API — the mistake that made Obsidian's CodeMirror upgrade an ecosystem break. `getFileTypeCategory` returns a category name, not an icon, so you map it to whatever glyph set you already ship.
