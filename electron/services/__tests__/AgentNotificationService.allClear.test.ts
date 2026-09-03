@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentState } from "../../../shared/types/agent.js";
+import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
 
 const storeMock = vi.hoisted(() => ({
   get: vi.fn(),
@@ -14,6 +15,10 @@ const notificationServiceMock = vi.hoisted(() => ({
   showWatchNotification: vi.fn(),
   showNativeNotification: vi.fn(),
   isWindowFocused: vi.fn(() => false),
+}));
+
+const osDndServiceMock = vi.hoisted(() => ({
+  getState: vi.fn<() => boolean | undefined>(() => undefined),
 }));
 
 const soundServiceMock = vi.hoisted(() => ({
@@ -45,7 +50,7 @@ vi.mock("../SoundService.js", () => ({
 }));
 
 vi.mock("../OsDndService.js", () => ({
-  getOsDndService: () => ({ getState: () => undefined }),
+  getOsDndService: () => osDndServiceMock,
 }));
 
 import { events } from "../events.js";
@@ -61,7 +66,14 @@ const DEFAULT_SETTINGS = {
   escalationSoundFile: "ping.wav",
   waitingEscalationEnabled: false,
   waitingEscalationDelayMs: 180_000,
-};
+  workingPulseEnabled: false,
+  workingPulseSoundFile: "pulse.wav",
+  uiFeedbackSoundEnabled: false,
+  quietHoursEnabled: false,
+  quietHoursStartMin: 22 * 60,
+  quietHoursEndMin: 6 * 60,
+  quietHoursWeekdays: [] as number[],
+} satisfies NotificationSettings;
 
 function mockTerminals(terminals: Array<{ id: string; agentState?: string }>) {
   storeMock.get.mockImplementation((key: string) => {
@@ -86,6 +98,7 @@ function emitStateChange(state: AgentState, previousState: AgentState, terminalI
 describe("AgentNotificationService – all-clear", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    osDndServiceMock.getState.mockReturnValue(undefined);
     projectStoreMock.getEffectiveNotificationSettings.mockReturnValue(DEFAULT_SETTINGS);
     mockTerminals([]);
     agentNotificationService.initialize();
@@ -258,6 +271,7 @@ describe("AgentNotificationService – all-clear", () => {
   });
 
   it("dispose cancels pending all-clear timer", () => {
+    const emitSpy = vi.spyOn(events, "emit");
     mockTerminals([
       { id: "term-1", agentState: "working" },
       { id: "term-2", agentState: "working" },
@@ -277,6 +291,10 @@ describe("AgentNotificationService – all-clear", () => {
 
     vi.advanceTimersByTime(600);
     expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
+    // Silence alone cannot prove the timer died — a suppressed cue is silent
+    // too. The event is unconditional, so its absence is the real proof.
+    expect(emitSpy).not.toHaveBeenCalledWith("agent:all-clear", expect.anything());
+    emitSpy.mockRestore();
   });
 
   it("re-checks active count after debounce to prevent false fires", () => {
@@ -416,5 +434,206 @@ describe("AgentNotificationService – all-clear", () => {
 
     vi.advanceTimersByTime(600);
     expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
+  });
+
+  describe("suppression chain", () => {
+    /** Two agents work then both complete — the standard all-clear trigger, undebounced. */
+    function runTwoAgentSession(a = "term-1", b = "term-2"): void {
+      mockTerminals([
+        { id: a, agentState: "working" },
+        { id: b, agentState: "working" },
+      ]);
+      emitStateChange("working", "idle", a);
+      emitStateChange("working", "idle", b);
+
+      mockTerminals([
+        { id: a, agentState: "completed" },
+        { id: b, agentState: "completed" },
+      ]);
+      emitStateChange("completed", "working", a);
+      emitStateChange("completed", "working", b);
+    }
+
+    function countAllClearEvents(calls: readonly unknown[][]): number {
+      return calls.filter((call) => call[0] === "agent:all-clear").length;
+    }
+
+    it("suppresses the sound during scheduled quiet hours but still emits the event", () => {
+      // Monday 23:00 falls inside the 22:00 -> 06:00 window
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+      projectStoreMock.getEffectiveNotificationSettings.mockReturnValue({
+        ...DEFAULT_SETTINGS,
+        quietHoursEnabled: true,
+      });
+      const emitSpy = vi.spyOn(events, "emit");
+
+      runTwoAgentSession();
+      vi.advanceTimersByTime(600);
+
+      expect(soundServiceMock.play).not.toHaveBeenCalled();
+      expect(countAllClearEvents(emitSpy.mock.calls)).toBe(1);
+      emitSpy.mockRestore();
+    });
+
+    it("plays the sound outside the quiet-hours window", () => {
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      projectStoreMock.getEffectiveNotificationSettings.mockReturnValue({
+        ...DEFAULT_SETTINGS,
+        quietHoursEnabled: true,
+      });
+
+      runTwoAgentSession();
+      vi.advanceTimersByTime(600);
+
+      expect(soundServiceMock.play).toHaveBeenCalledTimes(1);
+      expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+    });
+
+    it("suppresses the sound during a session mute but still emits the event", () => {
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      agentNotificationService.setSessionMuteUntil(Date.now() + 60 * 60 * 1000);
+      const emitSpy = vi.spyOn(events, "emit");
+
+      runTwoAgentSession();
+      vi.advanceTimersByTime(600);
+
+      expect(soundServiceMock.play).not.toHaveBeenCalled();
+      expect(countAllClearEvents(emitSpy.mock.calls)).toBe(1);
+      emitSpy.mockRestore();
+    });
+
+    it("plays the sound when the session mute expires before the debounce fires", () => {
+      // Suppression is read at fire time, not schedule time: the mute is still
+      // active when the timer is armed and lapses during the 500ms window.
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      agentNotificationService.setSessionMuteUntil(Date.now() + 250);
+
+      runTwoAgentSession();
+      vi.advanceTimersByTime(600);
+
+      expect(soundServiceMock.play).toHaveBeenCalledTimes(1);
+      expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+    });
+
+    it("suppresses the sound when OS Do-Not-Disturb turns on during the debounce", () => {
+      // The mirror of the case above — a snapshot taken at schedule time would
+      // wrongly play here.
+      osDndServiceMock.getState.mockReturnValue(false);
+      const emitSpy = vi.spyOn(events, "emit");
+
+      runTwoAgentSession();
+      vi.advanceTimersByTime(499);
+      osDndServiceMock.getState.mockReturnValue(true);
+      vi.advanceTimersByTime(1);
+
+      expect(soundServiceMock.play).not.toHaveBeenCalled();
+      expect(countAllClearEvents(emitSpy.mock.calls)).toBe(1);
+      emitSpy.mockRestore();
+    });
+
+    it("suppresses the sound while OS Do-Not-Disturb is active but still emits the event", () => {
+      osDndServiceMock.getState.mockReturnValue(true);
+      const emitSpy = vi.spyOn(events, "emit");
+
+      runTwoAgentSession();
+      vi.advanceTimersByTime(600);
+
+      expect(soundServiceMock.play).not.toHaveBeenCalled();
+      expect(countAllClearEvents(emitSpy.mock.calls)).toBe(1);
+      emitSpy.mockRestore();
+    });
+
+    it("plays the sound when OS Do-Not-Disturb is explicitly inactive", () => {
+      osDndServiceMock.getState.mockReturnValue(false);
+
+      runTwoAgentSession();
+      vi.advanceTimersByTime(600);
+
+      expect(soundServiceMock.play).toHaveBeenCalledTimes(1);
+      expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+    });
+
+    it("plays the sound when the OS Do-Not-Disturb state is unknown", () => {
+      // Windows and Linux have no detection at all and always report
+      // `undefined` — fail open, never gate.
+      osDndServiceMock.getState.mockReturnValue(undefined);
+
+      runTwoAgentSession();
+      vi.advanceTimersByTime(600);
+
+      expect(soundServiceMock.play).toHaveBeenCalledTimes(1);
+      expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+    });
+
+    it("never raises an OS notification for the all-clear, suppressed or not", () => {
+      osDndServiceMock.getState.mockReturnValue(true);
+      runTwoAgentSession();
+      vi.advanceTimersByTime(600);
+      expect(soundServiceMock.play).not.toHaveBeenCalled();
+
+      osDndServiceMock.getState.mockReturnValue(undefined);
+      runTwoAgentSession();
+      vi.advanceTimersByTime(600);
+
+      expect(soundServiceMock.play).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("drops the suppressed sound rather than replaying it once suppression lifts", () => {
+      osDndServiceMock.getState.mockReturnValue(true);
+      runTwoAgentSession();
+      vi.advanceTimersByTime(600);
+      expect(soundServiceMock.play).not.toHaveBeenCalled();
+
+      osDndServiceMock.getState.mockReturnValue(false);
+      vi.advanceTimersByTime(5000);
+
+      expect(soundServiceMock.play).not.toHaveBeenCalled();
+    });
+
+    it("resets peak tracking after a suppressed all-clear", () => {
+      osDndServiceMock.getState.mockReturnValue(true);
+      runTwoAgentSession();
+      vi.advanceTimersByTime(600);
+      osDndServiceMock.getState.mockReturnValue(false);
+
+      // A single-agent session must not inherit the previous session's peak.
+      mockTerminals([{ id: "term-3", agentState: "working" }]);
+      emitStateChange("working", "idle", "term-3");
+      mockTerminals([{ id: "term-3", agentState: "completed" }]);
+      emitStateChange("completed", "working", "term-3");
+      vi.advanceTimersByTime(600);
+
+      expect(soundServiceMock.play).not.toHaveBeenCalled();
+    });
+
+    it("restores first-transition snapshot counting after a suppressed all-clear", () => {
+      // Pins `hasEverGoneWorking` specifically. The first active transition of
+      // a session rescans the persisted fleet, so a lone `working` event with
+      // two working terminals in the store still reaches a peak of 2. Leave the
+      // flag set and that rescan is skipped, the peak stops at 1, and no
+      // all-clear ever fires again.
+      osDndServiceMock.getState.mockReturnValue(true);
+      runTwoAgentSession();
+      vi.advanceTimersByTime(600);
+      osDndServiceMock.getState.mockReturnValue(false);
+
+      mockTerminals([
+        { id: "term-3", agentState: "working" },
+        { id: "term-4", agentState: "working" },
+      ]);
+      emitStateChange("working", "idle", "term-3");
+
+      mockTerminals([
+        { id: "term-3", agentState: "completed" },
+        { id: "term-4", agentState: "completed" },
+      ]);
+      emitStateChange("completed", "working", "term-3");
+      vi.advanceTimersByTime(600);
+
+      expect(soundServiceMock.play).toHaveBeenCalledTimes(1);
+      expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+    });
   });
 });
