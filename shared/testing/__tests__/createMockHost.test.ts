@@ -332,6 +332,51 @@ describe("createMockHost", () => {
     expect(await host.getWorktrees()).toEqual([sampleSnapshot]);
   });
 
+  it("derives an authoritative worktrees result from the seeded snapshots", async () => {
+    const host = createMockHost({ worktrees: [sampleSnapshot] });
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "ok",
+      projectId: "test-project",
+      worktrees: [sampleSnapshot],
+    });
+  });
+
+  it("can be driven to an unavailable result without disturbing the legacy getters", async () => {
+    const host = createMockHost({
+      // Both seeded, so the assertions below fail if the override stops driving
+      // the legacy getters rather than passing on an already-null default.
+      activeWorktree: sampleSnapshot,
+      worktrees: [sampleSnapshot],
+      worktreesResult: { status: "unavailable", reason: "scope-unresolved" },
+    });
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "scope-unresolved",
+    });
+    // Coupled, as production is: one unavailable read cannot leave the legacy
+    // getters handing back a list the real host would have flattened to [].
+    expect(await host.getWorktrees()).toEqual([]);
+    expect(await host.getActiveWorktree()).toBeNull();
+
+    host.simulateWorktreesResult(null);
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "ok",
+      projectId: "test-project",
+      worktrees: [sampleSnapshot],
+    });
+    expect(await host.getWorktrees()).toEqual([sampleSnapshot]);
+  });
+
+  it("keeps the derived result in step with simulateWorktreesChange", async () => {
+    const host = createMockHost({ worktrees: [sampleSnapshot] });
+    host.simulateWorktreesChange([]);
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "ok",
+      projectId: "test-project",
+      worktrees: [],
+    });
+  });
+
   it("delivers active-worktree updates and supports idempotent disposal", async () => {
     const host = createMockHost();
     const cb = vi.fn();

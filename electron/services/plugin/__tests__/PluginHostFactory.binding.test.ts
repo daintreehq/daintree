@@ -41,7 +41,11 @@ vi.mock("../../forge/forgeCredentialUtils.js", () => ({
   buildStoredCredentials: vi.fn(() => null),
 }));
 
-import { createHost, type PluginHostFactoryDeps } from "../PluginHostFactory.js";
+import {
+  createHost,
+  type PluginHostFactoryDeps,
+  type PluginWorktreeSnapshotFetchResult,
+} from "../PluginHostFactory.js";
 import { CHANNELS } from "../../../ipc/channels.js";
 import { events } from "../../events.js";
 import { AppError } from "../../../utils/errorTypes.js";
@@ -51,6 +55,12 @@ import type { WorktreeSnapshot } from "../../../../shared/types/workspace-host.j
 import type { LoadedPlugin } from "../PluginServiceTypes.js";
 
 const PLUGIN_ID = "acme";
+
+/** An available, project-scoped read — the shape the factory deps now return. */
+const okFetch = (
+  snapshots: WorktreeSnapshot[],
+  projectId = PROJECT_A
+): PluginWorktreeSnapshotFetchResult => ({ status: "ok", projectId, snapshots });
 const PROJECT_A = "project-a";
 const ROOT_A = path.join(path.sep, "repos", "alpha");
 const ROOT_B = path.join(path.sep, "repos", "beta");
@@ -85,6 +95,7 @@ type WorktreeHandler = (payload?: { projectPath?: string }) => void;
 
 interface Harness {
   deps: PluginHostFactoryDeps;
+  plugins: Map<string, LoadedPlugin>;
   ambientFetch: ReturnType<typeof vi.fn>;
   projectFetch: ReturnType<typeof vi.fn>;
   recordPluginLog: ReturnType<typeof vi.fn>;
@@ -99,8 +110,8 @@ function makeHarness(): Harness {
   const plugins = new Map<string, LoadedPlugin>([[PLUGIN_ID, fakePlugin()]]);
   const handlers = new Map<string, WorktreeHandler[]>();
 
-  const ambientFetch = vi.fn(async (): Promise<WorktreeSnapshot[]> => []);
-  const projectFetch = vi.fn(async (): Promise<WorktreeSnapshot[]> => []);
+  const ambientFetch = vi.fn(async (): Promise<PluginWorktreeSnapshotFetchResult> => okFetch([]));
+  const projectFetch = vi.fn(async (): Promise<PluginWorktreeSnapshotFetchResult> => okFetch([]));
   const recordPluginLog = vi.fn();
   const sendDispatchToRenderer = vi.fn(async () => ({ ok: true, data: undefined }));
   const sendActionsListToRenderer = vi.fn(async () => []);
@@ -129,8 +140,8 @@ function makeHarness(): Harness {
     getHostGitFactory: () => undefined,
     getProcessManager: vi.fn(),
     declaredCapabilities: () => new Set(["agent:input", "agent:read"]),
-    fetchAllWorktreeSnapshots: ambientFetch,
-    fetchWorktreeSnapshotsForProject: projectFetch,
+    fetchWorktreeSnapshotsResult: ambientFetch,
+    fetchWorktreeSnapshotsForProjectResult: projectFetch,
     recordPluginLog,
     serializePluginBadges: () => ({}),
     pluginDataDir: () => path.join(path.sep, "tmp", "data"),
@@ -150,6 +161,7 @@ function makeHarness(): Harness {
 
   return {
     deps,
+    plugins,
     ambientFetch,
     projectFetch,
     recordPluginLog,
@@ -180,9 +192,9 @@ beforeEach(() => {
 describe("createHost worktree surfaces", () => {
   it("reads the bound project's worktrees, never the focus-resolved set", async () => {
     const h = makeHarness();
-    h.projectFetch.mockResolvedValue([
-      worktree({ id: "wt-a", isCurrent: true, path: path.join(ROOT_A, "feature") }),
-    ]);
+    h.projectFetch.mockResolvedValue(
+      okFetch([worktree({ id: "wt-a", isCurrent: true, path: path.join(ROOT_A, "feature") })])
+    );
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
 
     expect((await host.getActiveWorktree())?.id).toBe("wt-a");
@@ -195,7 +207,7 @@ describe("createHost worktree surfaces", () => {
 
   it("leaves the unbound path on the ambient read", async () => {
     const h = makeHarness();
-    h.ambientFetch.mockResolvedValue([worktree({ id: "wt-focus", isCurrent: true })]);
+    h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-focus", isCurrent: true })]));
     const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
 
     expect((await host.getActiveWorktree())?.id).toBe("wt-focus");
@@ -205,7 +217,7 @@ describe("createHost worktree surfaces", () => {
 
   it("fails closed rather than widening when a binding has no root", async () => {
     const h = makeHarness();
-    h.ambientFetch.mockResolvedValue([worktree({ id: "wt-focus", isCurrent: true })]);
+    h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-focus", isCurrent: true })]));
     const { host } = createHost(h.deps, PLUGIN_ID, { projectId: PROJECT_A, projectRoot: null });
 
     expect(await host.getActiveWorktree()).toBeNull();
@@ -214,21 +226,207 @@ describe("createHost worktree surfaces", () => {
     expect(h.projectFetch).not.toHaveBeenCalled();
   });
 
-  it("degrades to null/[] once the bound project is gone", async () => {
+  it("degrades every worktree surface once the bound project is gone", async () => {
     const h = makeHarness();
-    h.projectFetch.mockResolvedValue([]);
+    h.projectFetch.mockResolvedValue({ status: "unavailable", reason: "project-unavailable" });
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
 
     expect(await host.getActiveWorktree()).toBeNull();
     expect(await host.getWorktrees()).toEqual([]);
     expect(await host.getWorktreeStatus(path.join(ROOT_A, "feature"))).toBeNull();
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "project-unavailable",
+    });
+  });
+
+  it("names the project a successful read describes", async () => {
+    const h = makeHarness();
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a", isCurrent: true })]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "ok",
+      projectId: PROJECT_A,
+      worktrees: [expect.objectContaining({ id: "wt-a" })],
+    });
+  });
+
+  it("reports an authoritative empty project, not an unavailable one", async () => {
+    const h = makeHarness();
+    h.projectFetch.mockResolvedValue(okFetch([]));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    // The distinction #12174 exists for: this project really has no worktrees,
+    // and says so, while the legacy surface still answers the ambiguous [].
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "ok",
+      projectId: PROJECT_A,
+      worktrees: [],
+    });
+    expect(await host.getWorktrees()).toEqual([]);
+    expect(await host.getActiveWorktree()).toBeNull();
+  });
+
+  it("reports project-unavailable for a rootless binding without reading anything", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, { projectId: PROJECT_A, projectRoot: null });
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "project-unavailable",
+    });
+    expect(h.ambientFetch).not.toHaveBeenCalled();
+    expect(h.projectFetch).not.toHaveBeenCalled();
+  });
+
+  it("passes a closed project's unavailability through instead of flattening it", async () => {
+    const h = makeHarness();
+    h.projectFetch.mockResolvedValue({ status: "unavailable", reason: "project-unavailable" });
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "project-unavailable",
+    });
+    expect(await host.getWorktrees()).toEqual([]);
+  });
+
+  it("reports plugin-unloaded before it reads anything", async () => {
+    const h = makeHarness();
+    h.plugins.delete(PLUGIN_ID);
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "plugin-unloaded",
+    });
+    expect(h.projectFetch).not.toHaveBeenCalled();
+  });
+
+  it("discards snapshots that arrive after the plugin unloaded", async () => {
+    const h = makeHarness();
+    let release: (value: PluginWorktreeSnapshotFetchResult) => void = () => {};
+    h.projectFetch.mockReturnValue(
+      new Promise<PluginWorktreeSnapshotFetchResult>((resolve) => {
+        release = resolve;
+      })
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    const pending = host.getWorktreesResult();
+    h.plugins.delete(PLUGIN_ID);
+    release(okFetch([worktree({ id: "wt-a", isCurrent: true })]));
+
+    expect(await pending).toEqual({ status: "unavailable", reason: "plugin-unloaded" });
+  });
+
+  it("refuses a successful read that names another project", async () => {
+    const h = makeHarness();
+    // The confused deputy arriving through the new shape: a dependency that
+    // answered for B must not be relabelled as A's.
+    h.projectFetch.mockResolvedValue(
+      okFetch([worktree({ id: "wt-b", isCurrent: true })], "project-b")
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "project-unavailable",
+    });
+    expect(await host.getWorktrees()).toEqual([]);
+  });
+
+  it("keeps a foreign-project answer out of getWorktreeStatus, not just the getters", async () => {
+    const h = makeHarness();
+    // The refusal lives in the shared fetch, so every surface downstream of it
+    // fails closed — a getter-only guard would let B's status through here.
+    const foreign = path.join(ROOT_B, "feature");
+    h.projectFetch.mockResolvedValue(
+      okFetch([worktree({ id: "wt-b", isCurrent: true, path: foreign })], "project-b")
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect(await host.getWorktreeStatus(foreign)).toBeNull();
+    expect(await host.getActiveWorktree()).toBeNull();
+    expect(await host.getWorktrees()).toEqual([]);
+  });
+
+  it("treats a same-id reload as unloaded, not as the same plugin", async () => {
+    const h = makeHarness();
+    let release: (value: PluginWorktreeSnapshotFetchResult) => void = () => {};
+    h.projectFetch.mockReturnValue(
+      new Promise<PluginWorktreeSnapshotFetchResult>((resolve) => {
+        release = resolve;
+      })
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    const pending = host.getWorktreesResult();
+    // Identity, not membership: the id is still in the map, but it now names a
+    // different instance, so this host's read belongs to the previous one.
+    h.plugins.set(PLUGIN_ID, fakePlugin());
+    release(okFetch([worktree({ id: "wt-a", isCurrent: true })]));
+
+    expect(await pending).toEqual({ status: "unavailable", reason: "plugin-unloaded" });
+  });
+
+  it("answers fetch-failed rather than rejecting when the read throws", async () => {
+    const h = makeHarness();
+    h.projectFetch.mockRejectedValue(new Error("dependency blew up"));
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "fetch-failed",
+    });
+    expect(await host.getWorktrees()).toEqual([]);
+  });
+
+  it("answers fetch-failed when projecting a malformed snapshot throws", async () => {
+    const h = makeHarness();
+    // `worktreeChanges` present but with no `changes` array — toPluginWorktree
+    // Snapshot iterates it and throws. The projection sits inside the boundary,
+    // so this is data, not a rejection into whatever timer called it.
+    h.projectFetch.mockResolvedValue(
+      okFetch([
+        {
+          ...worktree({ id: "wt-a", isCurrent: true }),
+          worktreeChanges: {} as never,
+        },
+      ])
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "fetch-failed",
+    });
+    expect(await host.getWorktrees()).toEqual([]);
+    expect(await host.getActiveWorktree()).toBeNull();
+  });
+
+  it("names the focus-resolved project on the unbound path", async () => {
+    const h = makeHarness();
+    // Mid-switch the focused view can still be the outgoing project's, so an
+    // unbound host is told which project its populated list actually belongs to.
+    h.ambientFetch.mockResolvedValue(
+      okFetch([worktree({ id: "wt-outgoing", isCurrent: true })], "project-outgoing")
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "ok",
+      projectId: "project-outgoing",
+      worktrees: [expect.objectContaining({ id: "wt-outgoing" })],
+    });
   });
 });
 
 describe("createHost worktree subscriptions", () => {
   it("fires onDidChangeActiveWorktree only for the bound project", async () => {
     const h = makeHarness();
-    h.projectFetch.mockResolvedValue([worktree({ id: "wt-a", isCurrent: true })]);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a", isCurrent: true })]));
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
     const callback = vi.fn();
     await host.onDidChangeActiveWorktree(callback);
@@ -245,7 +443,7 @@ describe("createHost worktree subscriptions", () => {
 
   it("fires onDidChangeWorktrees only for the bound project", async () => {
     const h = makeHarness();
-    h.projectFetch.mockResolvedValue([worktree({ id: "wt-a" })]);
+    h.projectFetch.mockResolvedValue(okFetch([worktree({ id: "wt-a" })]));
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
     const callback = vi.fn();
     await host.onDidChangeWorktrees(callback);
@@ -262,7 +460,7 @@ describe("createHost worktree subscriptions", () => {
 
   it("keeps an unbound subscription firing for every project", async () => {
     const h = makeHarness();
-    h.ambientFetch.mockResolvedValue([worktree({ id: "wt-focus" })]);
+    h.ambientFetch.mockResolvedValue(okFetch([worktree({ id: "wt-focus" })]));
     const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
     const callback = vi.fn();
     await host.onDidChangeWorktrees(callback);

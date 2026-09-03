@@ -3,6 +3,8 @@ import type {
   PluginManifest,
   PluginHostApi,
   PluginActivationApi,
+  PluginWorktreesResult,
+  PluginWorktreesUnavailableReason,
   PluginSettingsScope,
   PluginStorageScope,
   PluginHostCallOptions,
@@ -253,6 +255,51 @@ describe("plugin-sdk boundary", () => {
       >();
     });
 
+    it("PluginHostApi.getWorktreesResult returns the availability-aware result (#12174)", () => {
+      const host = {} as PluginHostApi;
+      expectTypeOf(host.getWorktreesResult).toEqualTypeOf<() => Promise<PluginWorktreesResult>>();
+      // The ambiguous siblings keep their shape — the result method sits beside
+      // them rather than replacing them.
+      expectTypeOf(host.getWorktrees).toEqualTypeOf<() => Promise<PluginWorktreeSnapshot[]>>();
+    });
+
+    it("PluginWorktreesResult narrows on status", () => {
+      const result = {} as PluginWorktreesResult;
+      if (result.status === "ok") {
+        expectTypeOf(result.projectId).toEqualTypeOf<string>();
+        expectTypeOf(result.worktrees).toEqualTypeOf<PluginWorktreeSnapshot[]>();
+        // No `reason` on the authoritative branch.
+        expectTypeOf<Extract<PluginWorktreesResult, { status: "ok" }>>().not.toHaveProperty(
+          "reason"
+        );
+      } else {
+        expectTypeOf(result.reason).toEqualTypeOf<PluginWorktreesUnavailableReason>();
+        // …and no project identity on the branch that has no authoritative answer.
+        expectTypeOf<
+          Extract<PluginWorktreesResult, { status: "unavailable" }>
+        >().not.toHaveProperty("projectId");
+      }
+    });
+
+    it("PluginWorktreesUnavailableReason names every collapse the sentinel hid", () => {
+      expectTypeOf<"plugin-unloaded">().toMatchTypeOf<PluginWorktreesUnavailableReason>();
+      expectTypeOf<"workspace-unavailable">().toMatchTypeOf<PluginWorktreesUnavailableReason>();
+      expectTypeOf<"scope-unresolved">().toMatchTypeOf<PluginWorktreesUnavailableReason>();
+      expectTypeOf<"project-unavailable">().toMatchTypeOf<PluginWorktreesUnavailableReason>();
+      expectTypeOf<"fetch-failed">().toMatchTypeOf<PluginWorktreesUnavailableReason>();
+      expectTypeOf<"whatever">().not.toMatchTypeOf<PluginWorktreesUnavailableReason>();
+      // Exact, not merely inclusive: an unintended sixth literal would widen the
+      // public vocabulary plugins have to switch on, and membership checks alone
+      // would not notice.
+      expectTypeOf<PluginWorktreesUnavailableReason>().toEqualTypeOf<
+        | "plugin-unloaded"
+        | "workspace-unavailable"
+        | "scope-unresolved"
+        | "project-unavailable"
+        | "fetch-failed"
+      >();
+    });
+
     it("PluginHostApi.getWorktreeStatus takes a path and returns the status projection or null", () => {
       const host = {} as PluginHostApi;
       expectTypeOf(host.getWorktreeStatus).toEqualTypeOf<
@@ -393,6 +440,8 @@ describe("plugin-sdk boundary", () => {
       const _getActive = activation.getActiveWorktree;
       // @ts-expect-error — getWorktrees (the accessor) is not on the slice
       const _getAll = activation.getWorktrees;
+      // @ts-expect-error — getWorktreesResult (the accessor) is not on the slice
+      const _getAllResult = activation.getWorktreesResult;
       // @ts-expect-error — settings accessor is not on the slice
       const _settings = activation.settings;
       // @ts-expect-error — storage accessor is not on the slice
@@ -407,10 +456,11 @@ describe("plugin-sdk boundary", () => {
         _pluginId,
         _getActive,
         _getAll,
+        _getAllResult,
         _settings,
         _storage,
         _process,
-      ]).toHaveLength(10);
+      ]).toHaveLength(11);
     });
 
     it("PluginProcessHandle carries the lifecycle controls", () => {

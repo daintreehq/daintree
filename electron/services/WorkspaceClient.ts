@@ -113,6 +113,20 @@ export interface HostWorktreeStates {
   gitBacked: boolean | null;
 }
 
+/**
+ * A states read that keeps *why* it has nothing to say (#12174).
+ *
+ * The array-shaped reads collapse "no host for this project", "the host never
+ * became ready" and "this project has no worktrees" all to `[]`, which is the
+ * right sentinel for callers that must fail closed but leaves a plugin unable
+ * to tell an unavailable answer from an authoritative empty one. This shape
+ * keeps the distinction, and names the project from the entry that actually
+ * served the read so an in-flight project switch cannot relabel it.
+ */
+export type WorkspaceStatesResult =
+  | { status: "ok"; projectId: string; states: WorktreeSnapshot[] }
+  | { status: "unavailable"; reason: "workspace-unavailable" | "project-unavailable" };
+
 export class WorkspaceClient extends EventEmitter {
   private isDisposed = false;
   private pool: WorkspaceHostPool;
@@ -121,6 +135,7 @@ export class WorkspaceClient extends EventEmitter {
 
   private readonly _statesInflight = new Map<string, Promise<WorktreeSnapshot[]>>();
   private readonly _statesWithGitBackedInflight = new Map<string, Promise<HostWorktreeStates>>();
+  private readonly _statesResultInflight = new Map<string, Promise<WorkspaceStatesResult>>();
 
   constructor(config: WorkspaceClientConfig = {}) {
     super();
@@ -130,6 +145,7 @@ export class WorkspaceClient extends EventEmitter {
       emit: this.emit.bind(this),
       onProjectSwitch: (windowId) => {
         this._statesInflight.delete(`w:${windowId}`);
+        this._statesResultInflight.delete(`w:${windowId}`);
       },
     });
 
@@ -655,6 +671,122 @@ export class WorkspaceClient extends EventEmitter {
     );
     this._statesInflight.set(key, promise);
     return promise;
+  }
+
+  /**
+   * {@link getAllStatesAsync} for one window, keeping *why* it has no states
+   * and which project the states it does have belong to (#12174).
+   *
+   * The array-shaped read answers `[]` for a window that maps to no host, a
+   * host that never became ready, and a project with no worktrees alike. The
+   * plugin host API needs those apart: a plugin that reads "not in the list" as
+   * "deleted" false-positives during a project switch, when the focused view
+   * this window resolves through can still be the outgoing project's.
+   *
+   * `projectId` comes from the entry captured for this read, so a switch that
+   * lands mid-flight cannot relabel an already-captured answer as the incoming
+   * project's.
+   *
+   * Coalesced through its own map for the same reason
+   * {@link getAllStatesWithGitBackedForProjectAsync} is: callers of the
+   * array-shaped methods rely on getting the same promise object back for
+   * concurrent equivalent calls, which deriving one from the other would break.
+   */
+  getAllStatesResultAsync(windowId: number): Promise<WorkspaceStatesResult> {
+    return this._coalesceStatesResult(`w:${windowId}`, () => {
+      if (this.isDisposed) {
+        return Promise.resolve({ status: "unavailable", reason: "workspace-unavailable" as const });
+      }
+      const entry = this.pool.resolveEntryForWindow(windowId);
+      // No host serves this window *yet* — the mapping is established at the end
+      // of `loadProject`, so a window mid-open lands here. That is the workspace
+      // layer not being ready, not a project that has gone away.
+      if (!entry) {
+        return Promise.resolve({
+          status: "unavailable",
+          reason: "workspace-unavailable" as const,
+        });
+      }
+      return this._readStatesResultWhenReady(entry);
+    });
+  }
+
+  /**
+   * {@link getAllStatesForProjectAsync} in the {@link WorkspaceStatesResult}
+   * shape (#12174). Same entry resolution and same `expectedProjectId` guard —
+   * a missing pool entry and an id mismatch both report `project-unavailable`
+   * rather than the `[]` that reads as "this project has no worktrees".
+   */
+  getAllStatesForProjectResultAsync(
+    projectPath: string,
+    expectedProjectId: string
+  ): Promise<WorkspaceStatesResult> {
+    const normalized = this.pool.normalizeProjectPath(projectPath);
+    return this._coalesceStatesResult(`p:${expectedProjectId}:${normalized}`, () => {
+      if (this.isDisposed) {
+        return Promise.resolve({ status: "unavailable", reason: "workspace-unavailable" as const });
+      }
+      const entry = this.pool.entries.get(normalized);
+      if (entry === undefined || entry.projectId !== expectedProjectId) {
+        return Promise.resolve({ status: "unavailable", reason: "project-unavailable" as const });
+      }
+      return this._readStatesResultWhenReady(entry);
+    });
+  }
+
+  /**
+   * Shared coalescing for the result-shaped reads, mirroring the array-shaped
+   * methods: a resolved entry lingers for the short overlap window so a burst
+   * of equivalent calls shares one host round trip, a rejected one is evicted
+   * immediately so the next call retries rather than replaying the failure.
+   */
+  private _coalesceStatesResult(
+    key: string,
+    read: () => Promise<WorkspaceStatesResult>
+  ): Promise<WorkspaceStatesResult> {
+    const existing = this._statesResultInflight.get(key);
+    if (existing) return existing;
+    // Identity-guarded: a project switch (or any other invalidation) can delete
+    // this key and a fresh read insert its own promise under it before this
+    // one's eviction fires, and the old promise must not drop the new entry.
+    const evict = (): void => {
+      if (this._statesResultInflight.get(key) === promise) {
+        this._statesResultInflight.delete(key);
+      }
+    };
+    const promise: Promise<WorkspaceStatesResult> = read().then(
+      (result) => {
+        setTimeout(evict, STATES_INFLIGHT_COALESCE_WINDOW_MS);
+        return result;
+      },
+      (error: unknown) => {
+        evict();
+        throw error;
+      }
+    );
+    this._statesResultInflight.set(key, promise);
+    return promise;
+  }
+
+  /**
+   * {@link _readStatesWhenReady} keeping the readiness verdict instead of
+   * flattening it into the same `[]` a genuinely empty host returns.
+   *
+   * A host that failed or hung past the ready gate reports
+   * `workspace-unavailable` — "unknown, ask again" — never an empty list, which
+   * a plugin would read as "this project has no worktrees". The RPC itself is
+   * left to reject so the caller can log and report it separately.
+   */
+  private async _readStatesResultWhenReady(entry: ProcessEntry): Promise<WorkspaceStatesResult> {
+    if (!(await this._awaitHostReady(entry))) {
+      return { status: "unavailable", reason: "workspace-unavailable" };
+    }
+    const requestId = entry.host.generateRequestId();
+    const result = await entry.host.sendWithResponse<{ states: WorktreeSnapshot[] }>({
+      type: "get-all-states",
+      requestId,
+    });
+    return { status: "ok", projectId: entry.projectId, states: result.states };
   }
 
   /**
@@ -1221,6 +1353,7 @@ export class WorkspaceClient extends EventEmitter {
     this.pool.dispose();
     this._statesInflight.clear();
     this._statesWithGitBackedInflight.clear();
+    this._statesResultInflight.clear();
     this.removeAllListeners();
   }
 }

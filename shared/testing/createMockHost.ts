@@ -44,6 +44,7 @@ import type {
   PluginToastOptions,
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
+  PluginWorktreesResult,
   PluginAgentSnapshot,
   PluginPanelLifecycleEvent,
   PluginGitCommitResult,
@@ -242,6 +243,11 @@ export interface MockHostState {
   simulateQuickPickResponse(result: PluginQuickPickItem | PluginQuickPickItem[] | undefined): void;
   /** Configure what `showInputBox` resolves to (default `undefined` = dismissed). */
   simulateInputBoxResponse(result: string | undefined): void;
+  /**
+   * Force what `getWorktreesResult()` answers, or pass `null` to go back to the
+   * `ok` result derived from the mock's current worktrees.
+   */
+  simulateWorktreesResult(result: PluginWorktreesResult | null): void;
   /** Configure what `showConfirm` resolves to (default `false` = cancelled). */
   simulateConfirmResponse(result: boolean): void;
 }
@@ -250,6 +256,22 @@ export interface CreateMockHostOptions {
   pluginId?: string;
   activeWorktree?: PluginWorktreeSnapshot | null;
   worktrees?: PluginWorktreeSnapshot[];
+  /**
+   * Seed `getWorktreesResult()` with a specific outcome (#12174) — an
+   * `unavailable` reason, or an `ok` result naming a particular project. Omit
+   * it and the mock derives `{ status: "ok", projectId: "test-project" }` from
+   * `worktrees`, so an author who only cares about the happy path gets the
+   * authoritative answer for free. Override it with
+   * {@link MockHostState.simulateWorktreesResult} to exercise the guards a
+   * plugin should have around an unavailable read.
+   *
+   * While an override is set the legacy `getWorktrees()` / `getActiveWorktree()`
+   * project from it too — the real host derives all three from one read, so a
+   * mock that answered `unavailable` here while still handing back a populated
+   * list there would let a plugin's fallback pass a test it cannot pass in
+   * production.
+   */
+  worktreesResult?: PluginWorktreesResult;
   settings?: {
     user?: Record<string, unknown>;
     project?: Record<string, unknown>;
@@ -452,6 +474,7 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const pluginId = options.pluginId ?? "test.mock";
   let activeWorktree: PluginWorktreeSnapshot | null = options.activeWorktree ?? null;
   let worktrees: PluginWorktreeSnapshot[] = options.worktrees ?? [];
+  let worktreesResult: PluginWorktreesResult | null = options.worktreesResult ?? null;
 
   const registeredActions: RegisteredActionRecord[] = [];
   const registeredHandlers: RegisteredHandlerRecord[] = [];
@@ -830,10 +853,25 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
       return Promise.resolve();
     },
     async getActiveWorktree() {
+      if (worktreesResult) {
+        return worktreesResult.status === "ok"
+          ? (worktreesResult.worktrees.find((w) => w.isCurrent) ?? null)
+          : null;
+      }
       return activeWorktree;
     },
     async getWorktrees() {
+      // Projected from the override when one is set: the real host derives all
+      // three getters from a single read, so a mock that let `getWorktrees()`
+      // stay populated while the result says `unavailable` would bless a
+      // fallback that cannot work in production.
+      if (worktreesResult) {
+        return worktreesResult.status === "ok" ? worktreesResult.worktrees : [];
+      }
       return worktrees;
+    },
+    async getWorktreesResult() {
+      return worktreesResult ?? { status: "ok", projectId: "test-project", worktrees };
     },
     async getWorktreeStatus(path, options) {
       options?.signal?.throwIfAborted();
@@ -1317,6 +1355,9 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     simulateWorktreesChange(snapshots) {
       worktrees = snapshots;
       for (const cb of worktreesSubs) cb(snapshots);
+    },
+    simulateWorktreesResult(result) {
+      worktreesResult = result;
     },
     simulateAgentStateChange(snapshot) {
       lastAgentSnapshot = snapshot;
