@@ -1,6 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
-import { watch as fsWatch, type FSWatcher } from "node:fs";
+import { watchShared } from "../FileObservationService.js";
 import { clipboard, shell } from "electron";
 import { decodeClipboardPng, MAX_CLIPBOARD_IMAGE_BYTES } from "../../utils/clipboardImage.js";
 import { assertExtensionAllowed } from "../../utils/executablePathGuard.js";
@@ -1992,14 +1992,19 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       for (const c of contained) requireReadCapForClass("watch", c.rootClass);
       const resolvedTargets = contained.map((c) => c.resolved);
 
-      const watchers: FSWatcher[] = [];
+      // One native watcher per resolved path, shared across every plugin (and
+      // every other subscriber) that wants it — five plugins watching one
+      // worktree previously meant five `fs.watch` handles for identical events.
+      // Containment and capability checks above still run per plugin; only the
+      // watcher underneath is shared.
+      const releases: Array<() => void> = [];
       let disposed = false;
       const dispose = (): void => {
         if (disposed) return;
         disposed = true;
-        for (const w of watchers) {
+        for (const release of releases) {
           try {
-            w.close();
+            release();
           } catch {
             // best-effort
           }
@@ -2009,31 +2014,25 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
 
       try {
         for (const resolved of resolvedTargets) {
-          const watcher = fsWatch(resolved, { persistent: false }, (_event, filename) => {
-            if (disposed || !deps.plugins.has(pluginId)) return;
-            const changed =
-              typeof filename === "string" && filename.length > 0
-                ? path.join(resolved, filename)
-                : resolved;
-            try {
-              callback(changed);
-            } catch (err) {
-              console.error(`[PluginService] plugin "${pluginId}" fs.watch callback threw:`, err);
-            }
-          });
-          watcher.on("error", (err) => {
-            console.error(`[PluginService] plugin "${pluginId}" fs.watch error:`, err);
-          });
-          watchers.push(watcher);
+          releases.push(
+            watchShared(resolved, (changed) => {
+              if (disposed || !deps.plugins.has(pluginId)) return;
+              try {
+                callback(changed);
+              } catch (err) {
+                console.error(`[PluginService] plugin "${pluginId}" fs.watch callback threw:`, err);
+              }
+            })
+          );
         }
       } catch (err) {
-        // A later path's fsWatch threw (e.g. ENOENT) after earlier watchers
-        // were created — close them so a partial failure doesn't leak FDs
-        // (dispose isn't registered in pluginFsWatchers yet, so teardown
-        // wouldn't catch them).
-        for (const w of watchers) {
+        // A later path's watch threw (e.g. ENOENT) after earlier subscriptions
+        // were taken — release them so a partial failure doesn't leak a
+        // reference and pin a shared watcher open (dispose isn't registered in
+        // pluginFsWatchers yet, so teardown wouldn't catch them).
+        for (const release of releases) {
           try {
-            w.close();
+            release();
           } catch {
             // best-effort
           }

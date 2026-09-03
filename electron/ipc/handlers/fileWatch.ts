@@ -2,7 +2,7 @@ import { defineIpcNamespace, opValidated } from "../define.js";
 import { checkRateLimit } from "../utils.js";
 import { FILE_WATCH_METHOD_CHANNELS } from "./fileWatch.preload.js";
 import { FileWatchFingerprintPayloadSchema } from "../../schemas/ipc.js";
-import { fingerprintPaths } from "../../services/pathFingerprint.js";
+import { sampleCoalesced } from "../../services/FileObservationService.js";
 import type {
   FileWatchFingerprintPayload,
   FileWatchFingerprintResult,
@@ -36,7 +36,12 @@ export function buildFileWatchNamespace() {
     // would have to tell apart from "nothing changed". Schema validation and the
     // rate limiter above still reject — those are transport failures, and the
     // caller treats them as a skipped sample.
-    return fingerprintPaths(payload.rootPath, payload.paths);
+    //
+    // Coalesced rather than read directly: every visible pane polls on its own
+    // 2s timer, so a window showing several panes over one project asks for the
+    // same roots repeatedly within a few milliseconds. The shared sampler folds
+    // those onto one read without changing what any caller observes.
+    return sampleCoalesced(payload.rootPath, payload.paths);
   };
 
   return defineIpcNamespace({
