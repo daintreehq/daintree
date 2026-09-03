@@ -1978,8 +1978,10 @@ export class PtyClient extends EventEmitter {
     options?: { preserveSession?: boolean }
   ): Promise<GracefulKillByProjectOutcome> {
     const shard = this.shardForProjectQuery(projectId);
-    const inFlight: { requestId: string | null; results: Array<{ id: string; agentSessionId: string | null }> } =
-      { requestId: null, results: [] };
+    const inFlight: {
+      requestId: string | null;
+      results: Array<{ id: string; agentSessionId: string | null }>;
+    } = { requestId: null, results: [] };
     this.partialGracefulKills.set(projectId, inFlight);
     try {
       const sessions = await sendPtyHostRpc<Array<{ id: string; agentSessionId: string | null }>>(
