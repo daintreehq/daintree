@@ -17,8 +17,22 @@ import { stripAnsiCodes } from "../../../shared/utils/artifactParser.js";
 export interface SessionIdMatchOptions {
   occurrence: "first" | "last";
   boundary: "stream" | "eof";
-  /** Restrict the scan to the last N non-blank logical lines. */
+  /**
+   * Restrict the scan to the last N non-blank lines. Only bites on text whose
+   * newlines are real line breaks — rendered terminal rows, or plain
+   * line-oriented output. Raw PTY bytes from a full-screen TUI do not qualify:
+   * `stripAnsiCodes` deletes cursor-positioning escapes with no replacement, so
+   * a whole repaint strips to ONE enormous line and this bound degrades to the
+   * entire text. Pair it with {@link tailChars}, which has the opposite
+   * blind spot.
+   */
   tailLines?: number;
+  /**
+   * Restrict the scan to the last N characters. Immune to how the text is
+   * broken into lines, so this is the bound that still holds against a
+   * collapsed TUI frame. Both windows apply; the shorter one wins.
+   */
+  tailChars?: number;
 }
 
 /**
@@ -55,6 +69,17 @@ function tailWindow(text: string, lines: number): string {
 }
 
 /**
+ * Every `sessionIdPattern` captures with `[\w-]+`, which also matches a CLI
+ * flag. Daintree types the launch command into the shell, so a pane launched
+ * with `resumeLatestArgs` echoes `codex resume --last` into its own output — and
+ * an agent that then exits without printing a hint would otherwise be journaled
+ * under the session id `--last`. No agent mints an id that opens with a dash.
+ */
+function isPlausibleSessionId(captured: string | undefined): captured is string {
+  return !!captured && !captured.startsWith("-");
+}
+
+/**
  * Compile an agent's `sessionIdPattern` into a reusable matcher, or `null` when
  * the agent declares none. Every call site strips ANSI the same way and applies
  * the same truncation guard, so the policy lives here rather than being
@@ -66,7 +91,10 @@ export function createSessionIdMatcher(patternSource: string | undefined): Sessi
 
   return (raw, options) => {
     const stripped = stripAnsiCodes(raw);
-    const text = options.tailLines ? tailWindow(stripped, options.tailLines) : stripped;
+    let text = options.tailLines ? tailWindow(stripped, options.tailLines) : stripped;
+    if (options.tailChars && text.length > options.tailChars) {
+      text = text.slice(-options.tailChars);
+    }
 
     pattern.lastIndex = 0;
     let chosen: RegExpExecArray | null = null;
@@ -75,11 +103,9 @@ export function createSessionIdMatcher(patternSource: string | undefined): Sessi
       // scan can't spin. Real session-id patterns can't match empty, so this
       // only guards against a malformed one in agent config.
       if (match[0].length === 0) pattern.lastIndex += 1;
-      if (options.occurrence === "first") {
-        chosen = match;
-        break;
-      }
-      if (match[1]) chosen = match;
+      if (!isPlausibleSessionId(match[1])) continue;
+      chosen = match;
+      if (options.occurrence === "first") break;
     }
     if (!chosen?.[1]) return { kind: "none" };
 

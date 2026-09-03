@@ -11,7 +11,7 @@ import type { TerminalInfo } from "./types.js";
 import { computeDefaultTitle } from "./terminalTitle.js";
 import { logIdentityDebug } from "./identityDebug.js";
 import { buildPatternConfig } from "./terminalActivityPatterns.js";
-import { captureAgentEndSession } from "./agentEndCapture.js";
+import { CAPTURE_SCAN_ROWS, captureAgentEndSession } from "./agentEndCapture.js";
 
 export interface TerminalAgentDetectionHost {
   readonly id: string;
@@ -21,6 +21,7 @@ export interface TerminalAgentDetectionHost {
   readonly semanticBufferManager: SemanticBufferManager;
   readonly forensicsBuffer: TerminalForensicsBuffer;
   readonly hasActivityMonitor: boolean;
+  getLastNLines(n: number): string[];
   lastDetectedProcessIconId: string | undefined;
   reconfigureActivityMonitor(agentId: string, patternConfig?: PatternDetectionConfig): void;
   startActivityMonitor(): void;
@@ -184,6 +185,7 @@ export function handleAgentDetection(
         terminal,
         agentId: previousAgent,
         boundary: "demotion",
+        renderedLines: host.getLastNLines(CAPTURE_SCAN_ROWS),
         recentOutput: host.forensicsBuffer.getRecentOutput(),
       });
       host.agentStateService.updateAgentState(terminal, { type: "exit", code: 0 });

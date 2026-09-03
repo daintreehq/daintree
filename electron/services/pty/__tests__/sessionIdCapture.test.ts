@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createSessionIdMatcher } from "../sessionIdCapture.js";
 import { getAgentConfig } from "../../../../shared/config/agentRegistry.js";
+import { BUILT_IN_AGENT_IDS } from "../../../../shared/config/agentIds.js";
 
 /**
  * Read Codex's real pattern rather than copying it: a matcher that only works
@@ -133,6 +134,54 @@ describe("createSessionIdMatcher", () => {
         kind: "match",
         sessionId: ID,
       });
+    });
+  });
+
+  it("rejects a capture that is really a CLI flag", () => {
+    // `[\w-]+` matches `--last`, and Daintree echoes the launch command into the
+    // pane, so `codex resume --last` sits in the output of every resume-latest
+    // launch. No agent mints an id that opens with a dash.
+    expect(
+      match("$ codex resume --last\nerror: no sessions found\n", {
+        occurrence: "last",
+        boundary: "eof",
+      })
+    ).toEqual({ kind: "none" });
+  });
+
+  it("still finds a real id when a flag echo follows it", () => {
+    const raw = `codex resume ${ID}\n$ codex resume --last\n`;
+    expect(match(raw, { occurrence: "last", boundary: "eof" })).toEqual({
+      kind: "match",
+      sessionId: ID,
+    });
+  });
+
+  describe("every agent that declares a sessionIdPattern", () => {
+    const patterns = BUILT_IN_AGENT_IDS.flatMap((agentId) => {
+      const resume = getAgentConfig(agentId)?.resume;
+      return resume?.kind === "session-id" && resume.sessionIdPattern
+        ? [{ agentId, source: resume.sessionIdPattern }]
+        : [];
+    });
+
+    it("finds more than one, so the loop below is not vacuous", () => {
+      expect(patterns.length).toBeGreaterThan(1);
+    });
+
+    it.each(patterns)("$agentId captures its own id and holds a truncated one", ({ source }) => {
+      const matcher = createSessionIdMatcher(source);
+      if (!matcher) throw new Error("pattern must compile");
+      // Build a hint line from the pattern's own literal prefix so each agent is
+      // exercised against the text it actually prints, not a Codex-shaped one.
+      const line = source.replace(/\\s\*/g, " ").replace(/\(\[\\w-\]\+\)$/, ID);
+      expect(matcher(`${line}\n`, { occurrence: "last", boundary: "eof" })).toEqual({
+        kind: "match",
+        sessionId: ID,
+      });
+      expect(
+        matcher(line.replace(ID, ID.slice(0, 12)), { occurrence: "last", boundary: "stream" })
+      ).toEqual({ kind: "needs-boundary" });
     });
   });
 

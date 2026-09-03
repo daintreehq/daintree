@@ -1,5 +1,6 @@
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { supportsSessionIdAssignment } from "../../../shared/types/agentSettings.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { getGitBranch } from "../../utils/gitUtils.js";
 import { createLogger } from "../../utils/logger.js";
 import { events } from "../events.js";
@@ -9,17 +10,35 @@ import type { TerminalInfo } from "./types.js";
 const logger = createLogger("pty:AgentEndCapture");
 
 /**
- * Non-blank trailing lines of rolling output the passive scrape will trust.
+ * Non-blank trailing ROWS of rendered output the passive scrape will trust.
  *
- * The forensic buffer is a purpose-agnostic 4000-char tail that keeps filling
- * after the agent is gone, so the same `codex resume <id>` text can sit in it as
- * ordinary conversation. Taking the last match is not enough on its own: with no
- * real hint printed, the last match would still be that conversational mention.
- * Four lines is the same evidence horizon `IdentityWatcher` already trusts for
- * prompt-return detection (`SHELL_IDENTITY_FALLBACK_SCAN_LINES`), and it
- * comfortably spans an exit hint plus the shell prompt that follows it.
+ * Taking the last match is not enough on its own: with no real hint printed, the
+ * last match would be whatever `codex resume <id>` text the conversation
+ * happened to contain. The window is what makes the scrape mean "the agent's
+ * farewell", and it has to be measured in rendered rows — the raw PTY tail is
+ * useless for this, because `stripAnsiCodes` deletes cursor-positioning escapes
+ * with no replacement and a ratatui repaint collapses into one giant line.
+ *
+ * Eight rows, not the four `IdentityWatcher` uses for prompt-return
+ * (`SHELL_IDENTITY_FALLBACK_SCAN_LINES`): that scan only has to reach the prompt
+ * itself, while this one has to reach PAST the prompt to the hint printed before
+ * it. A direnv banner plus a two-line powerlevel10k prompt is four rows on its
+ * own. Blank rows are free, so trailing viewport padding costs nothing.
  */
-const CAPTURE_SCAN_LINES = 4;
+export const CAPTURE_SCAN_ROWS = 8;
+
+/**
+ * The same window expressed in characters, applied alongside the row budget.
+ *
+ * The row budget alone is not enough, because the scrape cannot count on the
+ * text having real line breaks: `stripAnsiCodes` deletes cursor-positioning
+ * escapes with no replacement, so a ratatui repaint arrives as one enormous
+ * line and a row budget over it bounds nothing. What a farewell hint always is,
+ * whatever the line structure, is CLOSE TO THE END — everything legitimately
+ * printed after it (alt-screen restore, a direnv banner, a multi-line prompt)
+ * runs to a few hundred characters at most.
+ */
+const CAPTURE_SCAN_CHARS = 400;
 
 /**
  * Which lifecycle boundary is asking. `exit` is the agent's PTY going away;
@@ -36,7 +55,18 @@ interface AgentEndCaptureArgs {
   /** Agent that just ended — the one whose hint is in the output. */
   agentId: string;
   boundary: AgentEndBoundary;
-  /** Forensic tail, snapshotted before any teardown that would clear it. */
+  /**
+   * Tail of the headless mirror's RENDERED rows — alt-screen, cursor moves and
+   * erases already resolved into real lines. The scrape's preferred input.
+   */
+  renderedLines: string[];
+  /**
+   * Raw forensic tail, snapshotted before any teardown that would clear it.
+   * Fallback only: `kill()` tears the mirror down, so a graceful teardown that
+   * failed to capture leaves this as the sole surviving evidence. The row window
+   * degrades to roughly the whole tail here, which is what the graceful scrape
+   * itself does.
+   */
   recentOutput: string;
 }
 
@@ -55,7 +85,7 @@ interface AgentEndCaptureArgs {
  * record. Never logs the captured id itself, which is a resume credential.
  */
 export function captureAgentEndSession(args: AgentEndCaptureArgs): void {
-  const { terminalId, terminal, agentId, boundary, recentOutput } = args;
+  const { terminalId, terminal, agentId, boundary, renderedLines, recentOutput } = args;
 
   const logOutcome = (outcome: AgentEndCaptureOutcome): void => {
     logger.info("Passive agent session capture outcome", {
@@ -95,13 +125,26 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): void {
     return;
   }
 
-  const match = matcher(recentOutput, {
-    occurrence: "last",
-    // An exited PTY can deliver nothing further, so its end-of-output is a real
-    // token boundary. A demoted pane is still live and still writing.
-    boundary: boundary === "exit" ? "eof" : "stream",
-    tailLines: CAPTURE_SCAN_LINES,
-  });
+  // An exited PTY can deliver nothing further, so its end-of-output is a real
+  // token boundary. A demoted pane is still live and still writing.
+  const scan = (text: string) =>
+    matcher(text, {
+      occurrence: "last",
+      boundary: boundary === "exit" ? "eof" : "stream",
+      tailLines: CAPTURE_SCAN_ROWS,
+      tailChars: CAPTURE_SCAN_CHARS,
+    });
+
+  // Rendered rows first: alt-screen, cursor moves and erases are already
+  // resolved there, so the row budget means what it says. The mirror is not
+  // guaranteed to be current though — xterm parses asynchronously and an exit
+  // fires in the same breath as the final chunk, and in worker mode the rows
+  // arrive on this thread only as a pushed cache — so the raw tail stays as the
+  // fallback. The character budget is what keeps that fallback honest.
+  let match = scan(renderedLines.join("\n"));
+  if (match.kind !== "match") {
+    match = scan(recentOutput);
+  }
   if (match.kind !== "match") {
     logOutcome(match.kind === "needs-boundary" ? "needs-boundary" : "no-match");
     return;
@@ -147,14 +190,27 @@ function emitCapture(args: AgentEndCaptureArgs, sessionId: string): void {
   const launchGeneration = boundary === "exit" ? terminal.launchGeneration : null;
 
   void (async () => {
-    // Best-effort branch stamp for resume sanity checks, mirroring the
-    // trash-expiry capture: the pty-host has FS access but no WorkspaceClient,
-    // and getGitBranch is bounded and never throws.
-    const branch = cwd ? await getGitBranch(cwd) : null;
-    events.emit("agent-session:captured", {
-      terminalId,
-      launchGeneration,
-      record: { ...record, ...(branch ? { branch } : {}) },
-    });
+    try {
+      // Best-effort branch stamp for resume sanity checks, mirroring the
+      // trash-expiry capture: the pty-host has FS access but no WorkspaceClient,
+      // and getGitBranch is bounded and never throws.
+      const branch = cwd ? await getGitBranch(cwd) : null;
+      events.emit("agent-session:captured", {
+        terminalId,
+        launchGeneration,
+        record: { ...record, ...(branch ? { branch } : {}) },
+      });
+    } catch (error) {
+      // `events.emit` fans out synchronously with no per-listener guard, so a
+      // throwing subscriber lands here as an unhandled rejection — which the
+      // pty-host turns into process.exit(1), taking every terminal on the shard
+      // with it. Losing one resume record is the cheaper failure.
+      logger.warn("Passive agent session capture failed to ship its record", {
+        terminalId,
+        agentId,
+        boundary,
+        error: formatErrorMessage(error, "capture emit threw a non-Error"),
+      });
+    }
   })();
 }

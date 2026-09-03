@@ -185,7 +185,8 @@ describe("passive agent session capture", () => {
   });
 
   afterEach(() => {
-    unsubscribe();
+    // Dispose before unsubscribing: a capture emitted during teardown should be
+    // attributable to the test that caused it rather than silently dropped.
     for (const terminal of terminals) {
       try {
         terminal.dispose();
@@ -193,6 +194,7 @@ describe("passive agent session capture", () => {
         // Already torn down by the test.
       }
     }
+    unsubscribe();
     vi.clearAllMocks();
   });
 
@@ -201,18 +203,25 @@ describe("passive agent session capture", () => {
     return terminal;
   }
 
-  async function settle(): Promise<void> {
-    await vi.waitFor(() => expect(captured.length).toBeGreaterThan(0));
+  /**
+   * Drain `emitCapture`'s unawaited branch-probe IIFE. `setImmediate` runs after
+   * the whole microtask queue, so this stays sound if the emit path ever grows
+   * another `await` — a single-microtask flush would silently turn every
+   * "stays silent" assertion below into an unconditional pass.
+   */
+  async function flushCapture(): Promise<void> {
+    await new Promise((resolve) => setImmediate(resolve));
   }
 
   describe("natural PTY exit", () => {
     it("captures the resume hint the agent printed on its way out", async () => {
       const terminal = track(createTerminal());
       promoteCodex(terminal);
+      terminal.getInfo().lastObservedTitle = "Fixing the parser";
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
       mockPty(terminal).__emitExit(0);
 
-      await settle();
+      await flushCapture();
       expect(captured).toHaveLength(1);
       expect(captured[0].terminalId).toBe("t-passive");
       // A PTY exit is one close per incarnation, so it keeps the ledger gate.
@@ -221,7 +230,7 @@ describe("passive agent session capture", () => {
         sessionId: SESSION_ID,
         agentId: "codex",
         worktreeId: "wt-1",
-        title: expect.anything(),
+        title: "Fixing the parser",
         projectId: "proj-1",
         agentLaunchFlags: ["--yolo"],
         agentModelId: "gpt-5",
@@ -236,7 +245,7 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData(codexHint(SESSION_ID));
       mockPty(terminal).__emitExit(0);
 
-      await settle();
+      await flushCapture();
       expect(captured[0].record.sessionId).toBe(SESSION_ID);
     });
 
@@ -247,7 +256,7 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
       mockPty(terminal).__emitExit(0);
 
-      await settle();
+      await flushCapture();
       expect(captured[0].record.sessionId).toBe(SESSION_ID);
     });
 
@@ -257,19 +266,37 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData(`\x1b[2m${codexHint(SESSION_ID)}\x1b[0m\r\n`);
       mockPty(terminal).__emitExit(0);
 
-      await settle();
+      await flushCapture();
       expect(captured[0].record.sessionId).toBe(SESSION_ID);
     });
 
-    it("stays silent when the terminal was killed — teardown already captured", async () => {
+    it("stays silent when the graceful teardown already holds the id", async () => {
       const terminal = track(createTerminal());
       promoteCodex(terminal);
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
+      // What gracefulShutdown's finish() does on a successful capture.
+      terminal.getInfo().agentSessionId = SESSION_ID;
       terminal.kill("graceful-shutdown");
       mockPty(terminal).__emitExit(0);
 
-      await vi.waitFor(() => expect(true).toBe(true));
+      await flushCapture();
       expect(captured).toHaveLength(0);
+    });
+
+    it("still captures when a graceful teardown ran but captured nothing", async () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
+      // gracefulShutdown kills on EVERY outcome but writes agentSessionId only
+      // on a real capture, so a swallowed quit signal lands here — the case this
+      // backstop exists for. kill() tears the mirror down, leaving the raw
+      // forensic tail as the only surviving evidence.
+      terminal.kill("graceful-shutdown");
+      mockPty(terminal).__emitExit(0);
+
+      await flushCapture();
+      expect(captured).toHaveLength(1);
+      expect(captured[0].record.sessionId).toBe(SESSION_ID);
     });
 
     it("stays silent when the agent printed no hint", async () => {
@@ -278,7 +305,7 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData("goodbye\n$ \n");
       mockPty(terminal).__emitExit(0);
 
-      await vi.waitFor(() => expect(true).toBe(true));
+      await flushCapture();
       expect(captured).toHaveLength(0);
     });
 
@@ -287,7 +314,7 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
       mockPty(terminal).__emitExit(0);
 
-      await vi.waitFor(() => expect(true).toBe(true));
+      await flushCapture();
       expect(captured).toHaveLength(0);
     });
   });
@@ -299,7 +326,7 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n\nuser@host project % `);
       demote(terminal);
 
-      await settle();
+      await flushCapture();
       expect(captured).toHaveLength(1);
       expect(captured[0].record.sessionId).toBe(SESSION_ID);
       // Deliberately ungated: a surviving shell can host several agent runs in
@@ -316,7 +343,7 @@ describe("passive agent session capture", () => {
         mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
         demote(terminal);
 
-        await settle();
+        await flushCapture();
         expect(terminal.getInfo().detectedAgentId).toBeUndefined();
         expect(exited).toHaveLength(1);
       } finally {
@@ -334,12 +361,16 @@ describe("passive agent session capture", () => {
           "  ok 1 - first",
           "  ok 2 - second",
           "  ok 3 - third",
+          "  ok 4 - fourth",
+          "  ok 5 - fifth",
+          "  ok 6 - sixth",
+          "  ok 7 - seventh",
           "user@host project % ",
         ].join("\n")
       );
       demote(terminal);
 
-      await vi.waitFor(() => expect(true).toBe(true));
+      await flushCapture();
       expect(captured).toHaveLength(0);
     });
 
@@ -351,7 +382,7 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData(codexHint(SESSION_ID.slice(0, 18)));
       demote(terminal);
 
-      await vi.waitFor(() => expect(true).toBe(true));
+      await flushCapture();
       expect(captured).toHaveLength(0);
     });
 
@@ -360,13 +391,13 @@ describe("passive agent session capture", () => {
       promoteCodex(terminal);
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
       demote(terminal);
-      await settle();
+      await flushCapture();
 
       promoteCodex(terminal);
       mockPty(terminal).__emitData(`${codexHint("second-run-session-id")}\n$ `);
       demote(terminal);
 
-      await vi.waitFor(() => expect(captured).toHaveLength(2));
+      await flushCapture();
       expect(captured.map((c) => c.record.sessionId)).toEqual([
         SESSION_ID,
         "second-run-session-id",
@@ -380,7 +411,7 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
       demote(terminal);
 
-      await vi.waitFor(() => expect(true).toBe(true));
+      await flushCapture();
       expect(captured).toHaveLength(0);
     });
 
@@ -394,8 +425,82 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\nthinking...\n`);
       detect(terminal, makeNoAgentResult({ evidenceSource: "shell_command" }), 1);
 
-      await vi.waitFor(() => expect(true).toBe(true));
+      await flushCapture();
       expect(terminal.getInfo().detectedAgentId).toBe("codex");
+      expect(captured).toHaveLength(0);
+    });
+  });
+
+  describe("preassigned session ids", () => {
+    it("journals the launch-assigned id without scraping", async () => {
+      const terminal = track(
+        createTerminal({ launchAgentId: "claude", agentSessionId: "assigned-at-launch" })
+      );
+      detect(terminal, makeAgentResult({ agentType: "claude", processIconId: "claude" }));
+      // Deliberately no hint in the output — the assigned id needs no scrape.
+      mockPty(terminal).__emitData("bye\n$ ");
+      demote(terminal);
+
+      await flushCapture();
+      expect(captured).toHaveLength(1);
+      expect(captured[0].record.sessionId).toBe("assigned-at-launch");
+      expect(captured[0].record.agentId).toBe("claude");
+    });
+
+    it("does not file the launch agent's id under a different agent", async () => {
+      // Claude was launched and assigned an id; the user quit it and ran Codex
+      // by hand. The assigned id belongs to the previous conversation.
+      const terminal = track(
+        createTerminal({ launchAgentId: "claude", agentSessionId: "assigned-at-launch" })
+      );
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
+      demote(terminal);
+
+      await flushCapture();
+      expect(captured).toHaveLength(1);
+      expect(captured[0].record.sessionId).toBe(SESSION_ID);
+      expect(captured[0].record.agentId).toBe("codex");
+    });
+  });
+
+  describe("false-positive resistance", () => {
+    it("rejects the echoed launch command of a resume-latest pane", async () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      // Daintree types the launch command into the shell, so `resumeLatestArgs`
+      // puts a literal `codex resume --last` in the pane's own output. `[\w-]+`
+      // matches `--last`, and the agent then exited without printing a hint.
+      mockPty(terminal).__emitData("$ codex resume --last\nerror: no sessions found\n$ ");
+      demote(terminal);
+
+      await flushCapture();
+      expect(captured).toHaveLength(0);
+    });
+
+    it("rejects a mention buried in a full-screen TUI repaint", async () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      // A ratatui frame positions each row with CUP instead of writing newlines.
+      // stripAnsiCodes deletes those escapes with no replacement, so the whole
+      // frame is ONE logical line in the raw byte stream — the rendered mirror
+      // is what turns it back into rows the window can actually bound.
+      const rows = [
+        "  Sure — you can pick that back up with:",
+        `      codex resume ${SESSION_ID}`,
+        "  Anything else?",
+        ...Array.from(
+          { length: 14 },
+          (_, i) => `  and then it explained step ${i + 1} of the migration plan`
+        ),
+      ];
+      const frame = rows.map((row, i) => `\x1b[${i + 1};1H\x1b[K${row}`).join("");
+      mockPty(terminal).__emitData(frame);
+      // Agent crashes without printing a hint; alt screen closes, prompt returns.
+      mockPty(terminal).__emitData("\x1b[?1049l\r\n$ ");
+      demote(terminal);
+
+      await flushCapture();
       expect(captured).toHaveLength(0);
     });
   });
@@ -408,13 +513,26 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
       demote(terminal);
 
-      await settle();
+      await flushCapture();
       expect(captured[0].record.agentId).toBe("codex");
       expect(captured[0].record.agentLaunchFlags).toBeUndefined();
       expect(captured[0].record.agentModelId).toBeUndefined();
     });
 
-    it("prefers the observed task title unless the user locked the title", async () => {
+    it("keeps the user's locked title instead of the observed one", async () => {
+      const terminal = track(createTerminal({ titleMode: "user" }));
+      promoteCodex(terminal);
+      const info = terminal.getInfo();
+      info.title = "My pinned pane";
+      info.lastObservedTitle = "Fixing the parser";
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
+      demote(terminal);
+
+      await flushCapture();
+      expect(captured[0].record.title).toBe("My pinned pane");
+    });
+
+    it("prefers the observed task title when the title is not locked", async () => {
       const terminal = track(createTerminal());
       promoteCodex(terminal);
       const info = terminal.getInfo();
@@ -422,7 +540,7 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
       demote(terminal);
 
-      await settle();
+      await flushCapture();
       expect(captured[0].record.title).toBe("Fixing the parser");
     });
   });
@@ -434,9 +552,12 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
       demote(terminal);
 
-      await settle();
+      await flushCapture();
       const { logBuffer } = await import("../../LogBuffer.js");
       const serialized = JSON.stringify(logBuffer.getAll());
+      // Positive control: without it this assertion cannot tell "the id was
+      // never logged" from "nothing was logged at all".
+      expect(serialized).toContain("Passive agent session capture outcome");
       expect(serialized).not.toContain(SESSION_ID);
     });
   });

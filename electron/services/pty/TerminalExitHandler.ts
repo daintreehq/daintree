@@ -6,7 +6,7 @@ import type { IdentityWatcher } from "./IdentityWatcher.js";
 import type { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
 import type { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
 import type { SessionSnapshotter } from "./SessionSnapshotter.js";
-import { captureAgentEndSession } from "./agentEndCapture.js";
+import { CAPTURE_SCAN_ROWS, captureAgentEndSession } from "./agentEndCapture.js";
 import { computeDefaultTitle } from "./terminalTitle.js";
 
 export interface TerminalExitHandlerHost {
@@ -17,6 +17,7 @@ export interface TerminalExitHandlerHost {
   readonly forensicsBuffer: TerminalForensicsBuffer;
   readonly lifecycle: TerminalProcessLifecycle;
   readonly sessionSnapshotter: SessionSnapshotter;
+  getLastNLines(n: number): string[];
   lastDetectedProcessIconId: string | undefined;
   teardown(reason: ExitReason): boolean;
   emitTerminalExited(args: TerminalExitArgs): void;
@@ -70,15 +71,23 @@ export class TerminalExitHandler {
     // teardown scrapes its own id (`gracefulShutdown`), but a user quitting the
     // agent — Ctrl-C twice, or the process ending on its own — left the session
     // unrecorded and invisible to the resume palette (#12179). Runs before the
-    // title and identity rewrites below, which the record reads. `wasKilled`
-    // excludes the teardown path: it has already captured and journaled through
-    // its own funnel.
-    if (previousAgent && !terminal.wasKilled) {
+    // title and identity rewrites below, which the record reads.
+    //
+    // Skipped only when a Daintree teardown ALREADY HOLDS the id, not merely
+    // because one ran: `gracefulShutdown` kills on every outcome but writes
+    // `agentSessionId` only on a real capture, so gating on `wasKilled` alone
+    // would switch this backstop off over exactly the teardowns whose scrape
+    // failed — a quit signal swallowed by a running turn or an approval modal,
+    // which is the documented common failure for Codex.
+    if (previousAgent && !(terminal.wasKilled && terminal.agentSessionId)) {
       captureAgentEndSession({
         terminalId: this.host.id,
         terminal,
         agentId: previousAgent,
         boundary: "exit",
+        // Empty once kill() has torn the mirror down, which is the failed-
+        // teardown case above; `recentOutput` is the surviving evidence there.
+        renderedLines: this.host.getLastNLines(CAPTURE_SCAN_ROWS),
         recentOutput,
       });
     }
