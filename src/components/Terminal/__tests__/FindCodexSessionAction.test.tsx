@@ -209,4 +209,34 @@ describe("FindCodexSessionAction", () => {
     // Picking a session closes the popover — its content leaves the document.
     await waitFor(() => expect(screen.queryByText("pick me")).toBeNull());
   });
+
+  it("reopens the session in the pane's own worktree and env", async () => {
+    findSessions.mockResolvedValue(ok([{ id: "sess-1", preview: "pick me", updatedAt: 1 }]));
+    seed(
+      panel("t-1", {
+        worktreeId: "wt-1",
+        env: { CODEX_HOME: "/pane/.codex" },
+        agentPresetId: "preset-1",
+        agentPresetColor: "#123456",
+        agentModelId: "o3",
+      })
+    );
+
+    render(<FindCodexSessionAction panelId="t-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Find session" }));
+    fireEvent.click(await screen.findByText("pick me"));
+
+    await waitFor(() => expect(addPanel).toHaveBeenCalledOnce());
+    // Without `worktreeId` the new pane lands in the "__none__" bucket and is
+    // never rendered while a worktree is active; without `env` Codex resumes
+    // under main's default profile and can't find a session listed under the
+    // pane's own CODEX_HOME.
+    expect(addPanel.mock.calls[0]?.[0]).toMatchObject({
+      worktreeId: "wt-1",
+      env: { CODEX_HOME: "/pane/.codex" },
+      agentPresetId: "preset-1",
+      agentPresetColor: "#123456",
+      agentModelId: "o3",
+    });
+  });
 });

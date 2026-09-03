@@ -58,7 +58,17 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
   const showSpinner = useDohertyGate(isLoading);
   const addPanel = usePanelStore((state) => state.addPanel);
 
-  const { agentId, cwd, codexHome, agentLaunchFlags } = usePanelStore(
+  const {
+    agentId,
+    cwd,
+    codexHome,
+    worktreeId,
+    env,
+    agentLaunchFlags,
+    agentModelId,
+    agentPresetId,
+    agentPresetColor,
+  } = usePanelStore(
     useShallow((state) => {
       const panel = state.panelsById[panelId];
       const pty = panel && isPtyPanel(panel) ? panel : undefined;
@@ -73,7 +83,17 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
         agentId: pty?.runtimeIdentity?.agentId ?? pty?.launchAgentId,
         cwd: pty?.cwd,
         codexHome: codexHomeKey ? env?.[codexHomeKey] : undefined,
+        // The reopened pane inherits this pane's launch shape: `worktreeId`
+        // because the grid only renders the active worktree's bucket, so a
+        // worktree-less pane is invisible whenever one is active (#11290),
+        // and `env` because the sessions were listed under this pane's
+        // CODEX_HOME — resuming under main's default profile wouldn't find them.
+        worktreeId: pty?.worktreeId,
+        env,
         agentLaunchFlags: pty?.agentLaunchFlags,
+        agentModelId: pty?.agentModelId,
+        agentPresetId: pty?.agentPresetId,
+        agentPresetColor: pty?.agentPresetColor,
       };
     })
   );
@@ -127,9 +147,15 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
       await addPanel({
         kind: "terminal",
         cwd,
+        worktreeId,
         launchAgentId: "codex",
         agentSessionId: session.id,
         command,
+        agentLaunchFlags,
+        agentModelId,
+        agentPresetId,
+        agentPresetColor,
+        env,
       });
     } catch (error) {
       logError("[FindCodexSessionAction] failed to open session", error);
