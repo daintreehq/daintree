@@ -1259,6 +1259,10 @@ describe("diffMarkdownRendered (v20 migration, #12171)", () => {
     const migrated = store.persist.getOptions().migrate?.({ dockDensity: "compact" }, 19);
 
     expect(migrated).toMatchObject({ diffMarkdownRendered: false, dockDensity: "compact" });
+    // Same pin the v18 branch carries: `migrate` only runs for a blob below the
+    // configured version, so a version that fell back to 18 would skip the
+    // branch above and hydration's sanitizer would quietly supply the default.
+    expect(store.persist.getOptions().version).toBeGreaterThan(18);
   });
 
   it("keeps an existing choice through the migration", async () => {

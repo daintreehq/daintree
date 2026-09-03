@@ -42,12 +42,19 @@ export interface RenderedMarkdownDiffProps {
   cacheBust?: string;
   fontSize?: MarkdownFontSize;
   /**
-   * Reports whether the engine could build a rendered view from these inputs,
-   * stamped with the diff it judged. The host cannot know in advance — a patch
-   * that won't reconstruct looks like any other — so it keeps the segment live
-   * and falls back to the source diff on the verdict.
+   * Opaque identity of this rendering attempt, echoed back with the verdict.
+   * The host derives it from every input the engine consumes, so a verdict can
+   * never outlive the inputs that produced it — stamping the patch text alone
+   * left a failure applying to a later attempt that shared it.
    */
-  onVerdict?: (reason: MarkdownDiffFailure | null, forDiff: string) => void;
+  attemptKey: string;
+  /**
+   * Reports whether the engine could build a rendered view from these inputs.
+   * The host cannot know in advance — a patch that won't reconstruct looks like
+   * any other — so it keeps the segment live and falls back to the source diff
+   * on the verdict.
+   */
+  onVerdict?: (reason: MarkdownDiffFailure | null, forAttempt: string) => void;
 }
 
 type BlockKind = "unchanged" | "added" | "removed";
@@ -90,6 +97,12 @@ function collectTextNodes(tree: HastNodes): {
     if (!children) return;
     children.forEach((child, index) => {
       if (child.type === "text") {
+        // mdast-util-to-hast inserts its own whitespace text nodes to lay out
+        // the markup — between list items, around table sections, after a
+        // <br>. They carry no source position, and counting them made every
+        // list, table, blockquote and task list disagree with the mdast
+        // flattening and so lose its inline marks entirely.
+        if (!child.position && !/\S/.test(child.value)) return;
         if (wrappable)
           entries.push({ parent: node, index, start: text.length, value: child.value });
         text += child.value;
@@ -222,6 +235,7 @@ export function RenderedMarkdownDiff({
   rootPath,
   cacheBust,
   fontSize,
+  attemptKey,
   onVerdict,
 }: RenderedMarkdownDiffProps) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -238,8 +252,8 @@ export function RenderedMarkdownDiff({
 
   const reason = result.ok ? null : result.reason;
   useEffect(() => {
-    onVerdict?.(reason, diff);
-  }, [onVerdict, reason, diff]);
+    onVerdict?.(reason, attemptKey);
+  }, [onVerdict, reason, attemptKey]);
 
   // Removed blocks resolve their relative links and images against the current
   // path too. On a rename that is the wrong directory for the old side, and a

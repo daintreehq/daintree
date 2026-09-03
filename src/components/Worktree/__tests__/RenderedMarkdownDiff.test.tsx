@@ -43,6 +43,7 @@ function renderDiff(
       status="modified"
       filePath={FILE}
       rootPath={ROOT}
+      attemptKey="attempt-1"
       {...overrides}
     />
   );
@@ -195,21 +196,57 @@ describe("RenderedMarkdownDiff", () => {
     expect(container.querySelector("img")?.getAttribute("src")).toContain("daintree-file://");
   });
 
-  it("reports its refusal to the host, stamped with the diff it judged", () => {
+  it("reports its refusal to the host, stamped with the attempt it judged", () => {
     const onVerdict = vi.fn();
     const diff = patch(["@@ -1,2 +1,2 @@", " intro", "-old", "+new"]);
 
-    renderDiff(diff, "intro\ndrifted\n", { onVerdict });
+    renderDiff(diff, "intro\ndrifted\n", { onVerdict, attemptKey: "attempt-7" });
 
-    expect(onVerdict).toHaveBeenCalledWith("source-mismatch", diff);
+    expect(onVerdict).toHaveBeenCalledWith("source-mismatch", "attempt-7");
   });
 
   it("reports a clean verdict when the document rebuilt", () => {
     const onVerdict = vi.fn();
 
-    renderDiff(EDITED_DIFF, EDITED_SOURCE, { onVerdict });
+    renderDiff(EDITED_DIFF, EDITED_SOURCE, { onVerdict, attemptKey: "attempt-7" });
 
-    expect(onVerdict).toHaveBeenCalledWith(null, EDITED_DIFF);
+    expect(onVerdict).toHaveBeenCalledWith(null, "attempt-7");
+  });
+
+  it("marks changed words inside a list item, not just a bare paragraph", () => {
+    // mdast-util-to-hast pads list markup with its own whitespace text nodes;
+    // counting them made the two flattenings disagree and every list, table and
+    // blockquote silently lose its inline marks.
+    const source = "- The quick brown fox leaps over the lazy dog.\n";
+    const diff = patch([
+      "@@ -1,1 +1,1 @@",
+      "-- The quick brown fox jumps over the lazy dog.",
+      "+- The quick brown fox leaps over the lazy dog.",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(container.querySelector("li .rendered-markdown-diff__inline--added")?.textContent).toBe(
+      "leaps"
+    );
+  });
+
+  it("keeps a footnote's text in the rendered output", () => {
+    const source = "Text[^1].\n\n[^1]: The new note.\n";
+    const diff = patch([
+      "@@ -1,3 +1,3 @@",
+      " Text[^1].",
+      " ",
+      "-[^1]: The old note.",
+      "+[^1]: The new note.",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+
+    // The note rides with the block that cites it; rendered alone it would emit
+    // nothing and the paragraph would show a literal "[^1]".
+    expect(container.textContent).toContain("The new note.");
+    expect(container.textContent).not.toContain("[^1].");
   });
 
   it("rebuilds a deleted document from the patch with no source on disk", () => {

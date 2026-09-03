@@ -52,18 +52,24 @@
 .rendered-markdown-diff__block--removed {
   background: var(--color-diff-delete-background);
   border-inline-start-color: var(--color-diff-gutter-delete);
-  /* GitHub's rich-diff treatment: a removed block reads as struck-out prose,
-     which is what makes it legible as "this text is gone" without recoloring
-     the text itself and losing contrast over the fill. */
+}
+
+/* GitHub's rich-diff treatment: a removed block reads as struck-out prose,
+   which is what makes it legible as "this text is gone" without recoloring the
+   text itself and losing contrast over the fill.
+
+   Declared on the text-bearing descendants rather than on the block wrapper,
+   which is the only way to keep it off code fences and table grids: a text
+   decoration propagates to every descendant of the element that declares it and
+   CANNOT be switched off further down — `text-decoration: none` on the <pre>
+   would be silently ignored. The :has() exclusion drops the line from a
+   container holding a fence or table (a list item wrapping a code block), where
+   the block fill and the marker still carry the state. */
+.rendered-markdown-diff__block--removed
+  :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, dt, dd):not(:has(pre, table)) {
   text-decoration: line-through;
   text-decoration-color: color-mix(in oklab, var(--color-text-primary) 45%, transparent);
   text-decoration-thickness: 1px;
-}
-
-/* Strikethrough belongs on prose, not on a code fence or a table grid, where it
-   cuts through characters that have to stay readable. */
-.rendered-markdown-diff__block--removed :where(pre, table) {
-  text-decoration: none;
 }
 
 /* The status marker. Sits in the inline-start padding so it never displaces the
@@ -145,7 +151,8 @@
     border-inline-start-width: 4px;
   }
 
-  .rendered-markdown-diff__block--removed {
+  .rendered-markdown-diff__block--removed
+    :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, dt, dd):not(:has(pre, table)) {
     text-decoration-color: var(--color-text-primary);
   }
 }

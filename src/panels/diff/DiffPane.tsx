@@ -529,7 +529,15 @@ export function DiffPane({
   // onto the current file, so it needs the same whole-file read the full-file
   // scope does. A deleted file is the exception: its patch already carries every
   // line of the old document, and there is nothing on disk to read.
-  const renderedNeedsSource = renderedRequested && fileStatus !== "deleted";
+  //
+  // Gated on `hasDiff` and `!stale` for the same reason `wantsFullFile` is, and
+  // that gate is what makes Refresh work: clearing the diff drops `hasDiff`,
+  // which disables the read and invalidates whatever it held, so a new patch
+  // can never be paired with the file snapshot the old one was measured
+  // against. Without it, a Refresh after a partial revert would verify the one
+  // surviving hunk and then copy the reverted text out of the stale snapshot as
+  // trusted context.
+  const renderedNeedsSource = renderedRequested && hasDiff && !stale && fileStatus !== "deleted";
   const { source, errorCode: sourceErrorCode } = useDiffFileSource(
     sourceSubject,
     wantsFullFile || renderedNeedsSource
@@ -554,21 +562,33 @@ export function DiffPane({
   const activeViewerFallback =
     viewerVerdict && viewerVerdict.source === source ? viewerVerdict.reason : null;
 
-  // The rendered engine's verdict, stamped with the diff it judged for the same
-  // reason the viewer's is stamped with its source: a stale "this patch can't be
-  // rebuilt" must not disqualify the next file's perfectly good one.
+  // The whole input the engine consumes. The verdict is stamped with this
+  // rather than with the patch text alone, because a verdict outliving its
+  // inputs is a latch: two attempts on one file can share a patch and differ in
+  // the source, and a failure recorded against the patch would then disqualify
+  // every later attempt that reused it.
+  const renderedAttemptKey = `${filePath ?? ""}\u0000${fileStatus ?? ""}\u0000${content ?? ""}\u0000${source ?? ""}`;
+
   const [renderedVerdict, setRenderedVerdict] = useState<{
-    diff: string;
+    attempt: string;
     reason: MarkdownDiffFailure | null;
   } | null>(null);
   const handleRenderedVerdict = useCallback(
-    (reason: MarkdownDiffFailure | null, forDiff: string) => {
-      setRenderedVerdict({ diff: forDiff, reason });
+    (reason: MarkdownDiffFailure | null, forAttempt: string) => {
+      setRenderedVerdict({ attempt: forAttempt, reason });
     },
     []
   );
   const renderedEngineFailure =
-    renderedVerdict && renderedVerdict.diff === content ? renderedVerdict.reason : null;
+    renderedVerdict && renderedVerdict.attempt === renderedAttemptKey
+      ? renderedVerdict.reason
+      : null;
+
+  // The whole-file read hasn't landed yet. Handing the engine an absent source
+  // would make it report `source-required` — a failure the availability verdict
+  // latches onto, disabling the segment over a read that was merely in flight.
+  // This is a loading state, so the body shows a skeleton instead.
+  const renderedSourcePending = renderedNeedsSource && source === undefined && !sourceErrorCode;
 
   const renderedAvailability = getRenderedMarkdownAvailability({
     filePath,
@@ -657,6 +677,15 @@ export function DiffPane({
           {fullFileAvailability.reason}
         </span>
       )}
+    </div>
+  );
+
+  const renderedSkeleton = (
+    <div className="p-4 space-y-3">
+      <Skeleton label="Loading rendered Markdown">
+        <SkeletonBone className="h-7 w-3/4" />
+        <SkeletonText lines={8} />
+      </Skeleton>
     </div>
   );
 
@@ -1001,26 +1030,22 @@ export function DiffPane({
               !isPdfMode &&
               content &&
               (showRendered ? (
-                <Suspense
-                  fallback={
-                    <div className="p-4 space-y-3">
-                      <Skeleton label="Loading rendered Markdown">
-                        <SkeletonBone className="h-7 w-3/4" />
-                        <SkeletonText lines={8} />
-                      </Skeleton>
-                    </div>
-                  }
-                >
-                  <LazyRenderedMarkdownDiff
-                    diff={content}
-                    newSource={renderedNeedsSource ? source : undefined}
-                    status={fileStatus ?? "modified"}
-                    filePath={absolutePath ?? filePath}
-                    rootPath={worktreePath}
-                    cacheBust={String(previewReloadNonce)}
-                    fontSize={markdownFontSize}
-                    onVerdict={handleRenderedVerdict}
-                  />
+                <Suspense fallback={renderedSkeleton}>
+                  {renderedSourcePending ? (
+                    renderedSkeleton
+                  ) : (
+                    <LazyRenderedMarkdownDiff
+                      diff={content}
+                      newSource={renderedNeedsSource ? source : undefined}
+                      status={fileStatus ?? "modified"}
+                      filePath={absolutePath ?? filePath}
+                      rootPath={worktreePath}
+                      cacheBust={String(previewReloadNonce)}
+                      fontSize={markdownFontSize}
+                      attemptKey={renderedAttemptKey}
+                      onVerdict={handleRenderedVerdict}
+                    />
+                  )}
                 </Suspense>
               ) : (
                 <DiffViewer

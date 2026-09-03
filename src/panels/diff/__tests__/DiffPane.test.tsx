@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
-import { render, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, render, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitStatus } from "@shared/types/git";
 import type { DiffChangeSetEntry } from "@shared/types/git";
@@ -40,11 +40,12 @@ vi.mock("@/components/Worktree/DiffViewer", () => ({
 // The rendered layout pulls react-markdown behind a lazy boundary; these tests
 // exercise the toolbar's plumbing, not the renderer, so it stays a stub.
 vi.mock("@/components/Worktree/RenderedMarkdownDiff", () => ({
-  RenderedMarkdownDiff: (props: { newSource?: string; status: string }) => (
+  RenderedMarkdownDiff: (props: { newSource?: string; status: string; attemptKey: string }) => (
     <div
       data-testid="rendered-markdown-mock"
       data-has-source={String(props.newSource !== undefined)}
       data-status={props.status}
+      data-attempt-key={props.attemptKey}
     />
   ),
 }));
@@ -136,14 +137,19 @@ vi.mock("../useDiffContent", () => ({
   useDiffContent: useDiffContentMock,
 }));
 
-// The full-file read is a real IPC call; these tests never exercise the scope,
-// so it stays inert rather than reaching for `window.electron`.
-vi.mock("../useDiffFileSource", () => ({
-  useDiffFileSource: () => ({
-    source: undefined,
-    errorCode: null,
-  }),
+// The full-file read is a real IPC call, so it is stubbed rather than reaching
+// for `window.electron`. Its `enabled` argument is captured: whether the read is
+// even requested is the contract the rendered layout depends on.
+const { useDiffFileSourceMock } = vi.hoisted(() => ({
+  useDiffFileSourceMock: vi.fn(),
 }));
+vi.mock("../useDiffFileSource", () => ({
+  useDiffFileSource: useDiffFileSourceMock,
+}));
+
+function sourceEnabledCalls(): boolean[] {
+  return useDiffFileSourceMock.mock.calls.map((call) => Boolean(call[1]));
+}
 
 import { DiffPane } from "../DiffPane";
 
@@ -189,6 +195,8 @@ function positionText(): string {
 beforeEach(() => {
   setDiffPanelFileMock.mockReset();
   toggleViewedMock.mockReset();
+  useDiffFileSourceMock.mockReset();
+  useDiffFileSourceMock.mockReturnValue({ source: undefined, errorCode: null });
   useDiffContentMock.mockReset();
   useDiffContentMock.mockReturnValue({
     content: "diff --git a/a.ts b/a.ts",
@@ -1086,12 +1094,15 @@ describe("DiffPane — rendered Markdown layout (#12171)", () => {
     expect(preferences.setDiffViewType).toHaveBeenCalledWith("split");
   });
 
-  it("swaps the body for the rendered layout and drops the source-only controls", () => {
+  it("swaps the body for the rendered layout and drops the source-only controls", async () => {
     preferences.diffMarkdownRendered = true;
+    useDiffFileSourceMock.mockReturnValue({ source: "# Guide\n", errorCode: null });
     seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
     renderPane();
 
-    expect(screen.getByTestId("rendered-markdown-mock")).toBeTruthy();
+    // The rendered body is behind a lazy() boundary; asserting synchronously
+    // would only ever see the Suspense fallback.
+    expect(await screen.findByTestId("rendered-markdown-mock")).toBeTruthy();
     expect(screen.queryByTestId("diff-viewer-mock")).toBe(null);
     expect(screen.queryByRole("group", { name: "Diff content" })).toBe(null);
     expect(screen.queryByLabelText("Wrap long lines")).toBe(null);
@@ -1148,13 +1159,96 @@ describe("DiffPane — rendered Markdown layout (#12171)", () => {
     expect(useDiffContentMock.mock.calls.at(-1)?.[2]).toEqual({ ignoreWhitespace: false });
   });
 
-  it("reads no source for a deleted file, whose patch already carries the old document", () => {
+  it("reads no source for a deleted file, whose patch already carries the old document", async () => {
     preferences.diffMarkdownRendered = true;
     seedPanel({ filePath: "docs/guide.md", fileStatus: "deleted" });
     renderPane();
 
-    const rendered = screen.getByTestId("rendered-markdown-mock");
+    const rendered = await screen.findByTestId("rendered-markdown-mock");
     expect(rendered.getAttribute("data-status")).toBe("deleted");
     expect(rendered.getAttribute("data-has-source")).toBe("false");
+    // The read must not merely be unused — it must never be requested.
+    expect(sourceEnabledCalls().some(Boolean)).toBe(false);
+  });
+
+  it("requests the whole-file read for a modified file even with Full file off", () => {
+    preferences.diffMarkdownRendered = true;
+    preferences.diffFullFile = false;
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    renderPane();
+
+    expect(sourceEnabledCalls().some(Boolean)).toBe(true);
+  });
+
+  it("holds the body on a skeleton until the whole-file read lands", async () => {
+    preferences.diffMarkdownRendered = true;
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    renderPane();
+
+    // Flushed past the lazy boundary first, so this proves the pending-source
+    // gate rather than just catching the Suspense fallback. Mounting the engine
+    // with no source would make it report `source-required` — a failure the
+    // availability verdict latches onto, disabling the segment over a read that
+    // was merely in flight.
+    await act(async () => {});
+    expect(screen.queryByTestId("rendered-markdown-mock")).toBe(null);
+    expect(screen.getByLabelText("Loading rendered Markdown")).toBeTruthy();
+  });
+
+  it("mounts the engine once the source is there", async () => {
+    preferences.diffMarkdownRendered = true;
+    useDiffFileSourceMock.mockReturnValue({ source: "# Guide\n", errorCode: null });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    renderPane();
+
+    const rendered = await screen.findByTestId("rendered-markdown-mock");
+    expect(rendered.getAttribute("data-has-source")).toBe("true");
+  });
+
+  it("stops requesting the source while the diff is stale, so Refresh re-reads it", () => {
+    // Without this the source hook's inputs never change across a Refresh, and
+    // the new patch would be paired with the file snapshot the old one was
+    // measured against — reconstructing text that is no longer on disk.
+    preferences.diffMarkdownRendered = true;
+    useDiffContentMock.mockReturnValue({
+      content: "diff --git a/docs/guide.md b/docs/guide.md",
+      stale: true,
+      retry: vi.fn(),
+    });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    renderPane();
+
+    expect(sourceEnabledCalls().some(Boolean)).toBe(false);
+  });
+
+  it("stops requesting the source while the diff is reloading", () => {
+    preferences.diffMarkdownRendered = true;
+    useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry: vi.fn() });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    renderPane();
+
+    expect(sourceEnabledCalls().some(Boolean)).toBe(false);
+  });
+
+  it("stops applying an engine failure once the inputs it judged have changed", async () => {
+    preferences.diffMarkdownRendered = true;
+    useDiffFileSourceMock.mockReturnValue({ source: "# Guide\n", errorCode: null });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    const { unmount } = renderPane();
+
+    const firstAttempt = (await screen.findByTestId("rendered-markdown-mock")).getAttribute(
+      "data-attempt-key"
+    );
+    expect(firstAttempt).toBeTruthy();
+    unmount();
+
+    // A different source is a different attempt, so a verdict stamped against
+    // the first one can no longer disqualify it.
+    useDiffFileSourceMock.mockReturnValue({ source: "# Guide edited\n", errorCode: null });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    renderPane();
+
+    const second = await screen.findByTestId("rendered-markdown-mock");
+    expect(second.getAttribute("data-attempt-key")).not.toBe(firstAttempt);
   });
 });

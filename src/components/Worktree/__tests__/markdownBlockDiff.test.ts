@@ -41,8 +41,8 @@ describe("reconstructMarkdownDocuments", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.documents.old).toBe("# Title\n\nSecond line original.\n\nTail.");
-    expect(result.documents.new).toBe("# Title\n\nSecond line rewritten.\n\nTail.");
+    expect(result.documents.old).toBe("# Title\n\nSecond line original.\n\nTail.\n");
+    expect(result.documents.new).toBe("# Title\n\nSecond line rewritten.\n\nTail.\n");
   });
 
   it("carries the unchanged gap between two hunks through from the new file", () => {
@@ -89,23 +89,47 @@ describe("reconstructMarkdownDocuments", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.documents.old).toBe("intro\nold line");
-    expect(result.documents.new).toBe("intro\nnew line");
+    expect(result.documents.old).toBe("intro\nold line\n");
+    expect(result.documents.new).toBe("intro\nnew line\n");
   });
 
   it("treats an addition as all-inserts over an empty old side", () => {
-    const diff = patch(["@@ -0,0 +1,3 @@", "+# New", "+", "+Body."]);
+    // Built exactly the way WorkspaceService's added/untracked path builds it —
+    // `content.split("\n").map(l => "+" + l)` — so a newline-terminated file
+    // contributes a final `+` with nothing after it. Reconstructing against a
+    // line array that had dropped that element failed every added file.
+    const newSource = "# New\n\nBody.\n";
+    const lines = newSource.split("\n");
+    const diff = patch([`@@ -0,0 +1,${lines.length} @@`, ...lines.map((line) => `+${line}`)]);
 
-    const result = reconstructMarkdownDocuments({
-      diff,
-      newSource: "# New\n\nBody.\n",
-      status: "added",
-    });
+    const result = reconstructMarkdownDocuments({ diff, newSource, status: "added" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.documents.old).toBe("");
-    expect(result.documents.new).toBe("# New\n\nBody.");
+    expect(result.documents.new).toBe(newSource);
+  });
+
+  it("reconstructs an added file whose checkout is CRLF", () => {
+    const newSource = "# New\r\n\r\nBody.\r\n";
+    const lines = newSource.split("\n");
+    const diff = patch([`@@ -0,0 +1,${lines.length} @@`, ...lines.map((line) => `+${line}`)]);
+
+    const result = reconstructMarkdownDocuments({ diff, newSource, status: "added" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.documents.new).toBe("# New\n\nBody.\n");
+  });
+
+  it("refuses a partial deletion presented as a deleted file", () => {
+    // Contiguous from line 1, but it keeps a context line — accepting it would
+    // show "# Kept" as deleted prose when the patch says it survives.
+    const diff = patch(["@@ -1,2 +1,1 @@", " # Kept", "-Removed"]);
+
+    expect(reconstructMarkdownDocuments({ diff, newSource: undefined, status: "deleted" })).toEqual(
+      { ok: false, reason: "unsupported-patch" }
+    );
   });
 
   it("rebuilds a deleted file from the patch alone, with no disk read", () => {
@@ -128,8 +152,8 @@ describe("reconstructMarkdownDocuments", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.documents.old).toBe("# Same");
-    expect(result.documents.new).toBe("# Same");
+    expect(result.documents.old).toBe("# Same\n");
+    expect(result.documents.new).toBe("# Same\n");
   });
 
   it("needs the new side for anything that is not a deletion", () => {
@@ -152,18 +176,49 @@ describe("reconstructMarkdownDocuments", () => {
     });
   });
 
-  it("reconstructs from the hunk body, not the header's declared counts", () => {
-    // The header claims three old lines and lists one. react-diff-view also
-    // normalizes a zero-length side to a count of 1, so the counts are not a
-    // trustworthy gate — the body plus the file on disk is what decides.
+  it("refuses a hunk whose real header counts disagree with its body", () => {
+    // Claims three old lines and lists one. Accepting it would let the next
+    // hunk land at an offset nothing checked.
     const diff = patch(["@@ -1,3 +1,1 @@", "-a", "+b"]);
 
-    const result = reconstructMarkdownDocuments({ diff, newSource: "b\n", status: "modified" });
+    expect(reconstructMarkdownDocuments({ diff, newSource: "b\n", status: "modified" })).toEqual({
+      ok: false,
+      reason: "source-mismatch",
+    });
+  });
+
+  it("refuses declared new-side ranges that overlap", () => {
+    // Each body is internally consistent, but the two hunks claim overlapping
+    // new-side spans — the second starts inside the first.
+    const diff = patch(["@@ -1,3 +1,3 @@", "-a", "+b", "@@ -2,1 +2,1 @@", "-c", "+d"]);
+
+    expect(reconstructMarkdownDocuments({ diff, newSource: "b\nd\n", status: "modified" })).toEqual(
+      { ok: false, reason: "source-mismatch" }
+    );
+  });
+
+  it("places a zero-length new side after the line its header names", () => {
+    // Under `diff.context=0` a pure deletion reads `@@ -2,1 +1,0 @@`: the new
+    // side names the line BEFORE the removal, not the first line of it.
+    const diff = patch(["@@ -2,1 +1,0 @@", "-old"]);
+
+    const result = reconstructMarkdownDocuments({ diff, newSource: "keep\n", status: "modified" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.documents.old).toBe("a");
-    expect(result.documents.new).toBe("b");
+    expect(result.documents.old).toBe("keep\nold\n");
+    expect(result.documents.new).toBe("keep\n");
+  });
+
+  it("reconstructs a modified file emptied to nothing", () => {
+    const diff = patch(["@@ -1,2 +0,0 @@", "-one", "-two"]);
+
+    const result = reconstructMarkdownDocuments({ diff, newSource: "", status: "modified" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.documents.old).toBe("one\ntwo");
+    expect(result.documents.new).toBe("");
   });
 
   it("still refuses a hunk positioned before the lines already consumed", () => {
@@ -216,6 +271,25 @@ describe("parseMarkdownBlocks", () => {
     const { blocks } = parseMarkdownBlocks("Before.\n\n<div>hidden</div>\n\nAfter.\n");
 
     expect(blocks.map((block) => block.type)).toEqual(["paragraph", "paragraph"]);
+  });
+
+  it("collects footnote definitions with the link definitions, not as blocks", () => {
+    // A footnote definition rendered as its own block produces nothing visible,
+    // and the paragraph citing it would render a literal `[^1]`.
+    const { blocks, definitions } = parseMarkdownBlocks("Text[^1].\n\n[^1]: The note.\n");
+
+    expect(blocks.map((block) => block.type)).toEqual(["paragraph"]);
+    expect(definitions).toBe("[^1]: The note.");
+  });
+
+  it("flags the blocks that resolve through a definition", () => {
+    // remark only produces a linkReference when the definition resolves;
+    // without it the brackets are literal text.
+    const { blocks } = parseMarkdownBlocks(
+      "Plain text.\n\nSee [docs][d].\n\n[d]: https://example.com\n"
+    );
+
+    expect(blocks.map((block) => block.hasReference)).toEqual([false, true]);
   });
 
   it("collects link reference definitions apart from the visible blocks", () => {
@@ -423,6 +497,44 @@ describe("buildMarkdownDiff", () => {
     if (!result.ok) return;
     expect(result.model.oldDefinitions).toBe("[d]: https://example.com/old");
     expect(result.model.newDefinitions).toBe("[d]: https://example.com/new");
+  });
+
+  it("reports a definition-only change as a change to the block that resolves it", () => {
+    // The paragraph's source is byte-identical on both sides, but the image it
+    // renders is a different file — reporting "no rendered content changes"
+    // here would be actively wrong.
+    const newSource = "![diagram][d]\n\n[d]: https://example.com/new.png\n";
+    const diff = patch([
+      "@@ -1,3 +1,3 @@",
+      " ![diagram][d]",
+      " ",
+      "-[d]: https://example.com/old.png",
+      "+[d]: https://example.com/new.png",
+    ]);
+
+    const result = buildMarkdownDiff({ diff, newSource, status: "modified" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.model.identical).toBe(false);
+    expect(kinds(result.model.changes)).toEqual(["modified"]);
+  });
+
+  it("leaves blocks alone when the definition that moved is unreferenced", () => {
+    const newSource = "Plain paragraph.\n\n[unused]: https://example.com/new\n";
+    const diff = patch([
+      "@@ -1,3 +1,3 @@",
+      " Plain paragraph.",
+      " ",
+      "-[unused]: https://example.com/old",
+      "+[unused]: https://example.com/new",
+    ]);
+
+    const result = buildMarkdownDiff({ diff, newSource, status: "modified" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.model.identical).toBe(true);
   });
 
   it("passes the engine's refusal through rather than rendering a guess", () => {

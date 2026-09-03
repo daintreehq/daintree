@@ -37,6 +37,14 @@ export type MarkdownDiffFailure =
 export const MARKDOWN_DIFF_MAX_LINES = 5000;
 export const MARKDOWN_DIFF_MAX_BLOCKS = 500;
 export const MARKDOWN_DIFF_MAX_INLINE_TOKENS = 2000;
+/**
+ * Total word-LCS cells one document may spend. The per-pair token cap alone
+ * bounds one matrix at ~16MB but says nothing about how many get built: a
+ * document at the block ceiling can hold 250 modified pairs, which would run
+ * ~1e9 cell updates synchronously inside a single render. Pairs past the budget
+ * keep their whole-block treatment and lose only the finer emphasis.
+ */
+export const MARKDOWN_DIFF_MAX_INLINE_CELLS = 4_000_000;
 
 /** Below this the two blocks are too different in length to be the same block. */
 const PAIR_LENGTH_RATIO_FLOOR = 0.25;
@@ -60,6 +68,12 @@ export interface MarkdownBlock {
   source: string;
   /** Visible text, flattened for similarity scoring and the word diff. */
   text: string;
+  /**
+   * The block resolves a link, image or footnote through a document-level
+   * definition, so a change to those definitions changes what it renders even
+   * when its own source is byte-identical.
+   */
+  hasReference: boolean;
 }
 
 /** Half-open character range into a block's `text`. */
@@ -104,17 +118,51 @@ export type MarkdownDiffResult =
   { ok: true; model: MarkdownDiffModel } | { ok: false; reason: MarkdownDiffFailure };
 
 /**
- * Split file content into lines, dropping the phantom trailing element a
- * newline-terminated file splits with and the carriage returns a CRLF checkout
- * carries but git's patch text does not. Same normalization `DiffViewer` does
- * for full-file expansion — kept local so the lazy Markdown chunk doesn't pull
- * the diff viewer component in behind it.
+ * Split file content for comparison against a patch body.
+ *
+ * Unlike `DiffViewer`'s equivalent this KEEPS the empty trailing element a
+ * newline-terminated file splits with, because the patch it is compared against
+ * keeps it too: the added/untracked path in `WorkspaceService` builds its patch
+ * by hand as `content.split("\n").map(l => "+" + l)`, so a file ending in a
+ * newline contributes a final `+` line with nothing after it. Dropping the
+ * element made every newline-terminated added Markdown file fail to
+ * reconstruct.
+ *
+ * Carriage returns are stripped on both sides rather than one, so a CRLF file
+ * matches whether or not the producer normalized them.
  */
-function toSourceLines(source: string): string[] {
+function toComparableLines(source: string): string[] {
   if (source === "") return [];
-  const lines = source.split("\n");
-  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-  return lines.map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+  return source.split("\n").map(stripCarriageReturn);
+}
+
+function stripCarriageReturn(line: string): string {
+  return line.endsWith("\r") ? line.slice(0, -1) : line;
+}
+
+/** Logical line count, ignoring the phantom element a trailing newline adds. */
+function logicalLineCount(lines: readonly string[]): number {
+  return lines.length > 1 && lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
+}
+
+/**
+ * The hunk header's REAL line counts.
+ *
+ * `parseDiff` normalizes an omitted or zero count to 1, which erases the
+ * difference between "one line" and "no lines on this side" — the shape every
+ * addition, whole-file deletion and zero-context edit takes. The raw header
+ * survives on the hunk, so read the counts from there and take only positions
+ * from the parsed fields.
+ */
+const HUNK_HEADER_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+
+function rawHunkCounts(hunk: HunkData): { old: number; new: number } | null {
+  const match = HUNK_HEADER_RE.exec(hunk.content ?? "");
+  if (!match) return null;
+  return {
+    old: match[2] === undefined ? 1 : Number(match[2]),
+    new: match[4] === undefined ? 1 : Number(match[4]),
+  };
 }
 
 /**
@@ -136,29 +184,42 @@ function reverseApplyHunks(
   // 1-based index of the next new-side line still to be consumed.
   let newCursor = 1;
   for (const hunk of hunks) {
-    if (hunk.newStart < newCursor) return null;
-    for (let line = newCursor; line < hunk.newStart; line++) {
+    const counts = rawHunkCounts(hunk);
+    if (!counts || !hunk.changes.length) return null;
+
+    // Structural validation against the REAL counts, which the parsed fields
+    // could not support. Without it a header may claim a span its body doesn't
+    // fill, and the next hunk lands at an offset nothing checked — assembling a
+    // document that never existed and presenting it as history.
+    let bodyOld = 0;
+    let bodyNew = 0;
+    for (const change of hunk.changes) {
+      if (change.type !== "insert") bodyOld++;
+      if (change.type !== "delete") bodyNew++;
+    }
+    if (bodyOld !== counts.old || bodyNew !== counts.new) return null;
+
+    // A zero-length side names the line BEFORE the range rather than its first
+    // line, so a pure deletion under `diff.context=0` starts one line later
+    // than its header reads, and a hunk emptying the file starts at 0.
+    const start = counts.new === 0 ? hunk.newStart + 1 : hunk.newStart;
+    if (start < newCursor) return null;
+    for (let line = newCursor; line < start; line++) {
       const content = newLines[line - 1];
       if (content === undefined) return null;
       oldLines.push(content);
     }
-    newCursor = hunk.newStart;
+    newCursor = start;
     for (const change of hunk.changes) {
+      const content = stripCarriageReturn(change.content);
       if (change.type === "delete") {
-        oldLines.push(change.content);
+        oldLines.push(content);
         continue;
       }
-      if (newLines[newCursor - 1] !== change.content) return null;
-      if (change.type === "normal") oldLines.push(change.content);
+      if (newLines[newCursor - 1] !== content) return null;
+      if (change.type === "normal") oldLines.push(content);
       newCursor++;
     }
-    // The header's declared line counts are deliberately not asserted against
-    // the body: react-diff-view normalizes a zero-length side (`@@ -0,0` on an
-    // added file) to a count of 1, so the two legitimately disagree. The real
-    // guard is above — every new-side line a hunk names is matched against the
-    // file on disk, which catches drift the counts never would, and a hunk that
-    // consumed the wrong number of lines is caught by the monotonic newStart
-    // check on the next one.
   }
   for (let line = newCursor; line <= newLines.length; line++) {
     oldLines.push(newLines[line - 1] as string);
@@ -166,15 +227,25 @@ function reverseApplyHunks(
   return oldLines;
 }
 
-/** Rebuild a deleted file's content from the patch alone — every line is there. */
+/**
+ * Rebuild a deleted file's content from the patch alone — every line is there.
+ *
+ * Held to the shape a real deletion has rather than merely to contiguity: every
+ * change must be a delete and the new side must be genuinely empty. A patch
+ * that only removes some lines from a still-present file satisfies contiguity,
+ * and accepting it would present its surviving context lines as deleted prose.
+ */
 function oldSourceFromHunks(hunks: readonly HunkData[]): string[] | null {
-  if (!hunks.length || hunks[0]?.oldStart !== 1) return null;
+  if (!hunks.length) return null;
   const oldLines: string[] = [];
   for (const hunk of hunks) {
+    const counts = rawHunkCounts(hunk);
+    if (!counts || counts.new !== 0 || !hunk.changes.length) return null;
     if (hunk.oldStart !== oldLines.length + 1) return null;
+    if (hunk.changes.length !== counts.old) return null;
     for (const change of hunk.changes) {
-      if (change.type === "insert") return null;
-      oldLines.push(change.content);
+      if (change.type !== "delete") return null;
+      oldLines.push(stripCarriageReturn(change.content));
     }
   }
   return oldLines;
@@ -221,8 +292,10 @@ export function reconstructMarkdownDocuments(
   }
 
   if (input.newSource === undefined) return { ok: false, reason: "source-required" };
-  const newLines = toSourceLines(input.newSource);
-  if (newLines.length > MARKDOWN_DIFF_MAX_LINES) return { ok: false, reason: "too-large" };
+  const newLines = toComparableLines(input.newSource);
+  if (logicalLineCount(newLines) > MARKDOWN_DIFF_MAX_LINES) {
+    return { ok: false, reason: "too-large" };
+  }
 
   // A pure rename, copy or mode change carries no hunks: the content is
   // identical on both sides, and the rename is the whole story.
@@ -233,20 +306,48 @@ export function reconstructMarkdownDocuments(
   // reconstruct as "both sides equal the file on disk" and render a clean,
   // entirely fictional no-op diff.
   if (!hunks.length) {
-    if (!/^diff --git /m.test(input.diff)) return { ok: false, reason: "unsupported-patch" };
+    if (!input.diff.trimStart().startsWith("diff --git ")) {
+      return { ok: false, reason: "unsupported-patch" };
+    }
     const content = newLines.join("\n");
     return { ok: true, documents: { old: content, new: content } };
   }
 
   const oldLines = reverseApplyHunks(newLines, hunks);
   if (!oldLines) return { ok: false, reason: "source-mismatch" };
-  if (oldLines.length > MARKDOWN_DIFF_MAX_LINES) return { ok: false, reason: "too-large" };
+  if (logicalLineCount(oldLines) > MARKDOWN_DIFF_MAX_LINES) {
+    return { ok: false, reason: "too-large" };
+  }
   return { ok: true, documents: { old: oldLines.join("\n"), new: newLines.join("\n") } };
 }
 
 // Frozen once: building the processor per parse re-runs plugin attachment for
 // every document, and both sides of every file go through it.
 const markdownProcessor = unified().use(remarkParse).use(remarkGfm).freeze();
+
+const REFERENCE_TYPES: ReadonlySet<string> = new Set([
+  "linkReference",
+  "imageReference",
+  "footnoteReference",
+]);
+
+/** Whether the block resolves anything through a document-level definition. */
+function hasReferenceNode(node: RootContent): boolean {
+  let found = false;
+  const walk = (current: unknown): void => {
+    if (found || typeof current !== "object" || current === null) return;
+    const candidate = current as { type?: string; children?: unknown };
+    if (candidate.type !== undefined && REFERENCE_TYPES.has(candidate.type)) {
+      found = true;
+      return;
+    }
+    if (Array.isArray(candidate.children)) {
+      for (const child of candidate.children) walk(child);
+    }
+  };
+  walk(node);
+  return found;
+}
 
 /**
  * Concatenate every visible character a node contributes, in document order.
@@ -317,14 +418,23 @@ export function parseMarkdownBlocks(source: string): ParsedMarkdown {
     const end = node.position?.end.offset;
     if (start === undefined || end === undefined) continue;
     const slice = source.slice(start, end);
-    if (node.type === "definition") {
+    // Footnote definitions ride with link definitions rather than standing as
+    // blocks of their own. A footnote definition rendered alone produces no
+    // visible output, and the paragraph citing it would render a literal
+    // `[^1]` — between them the note's text would vanish from the diff.
+    if (node.type === "definition" || node.type === "footnoteDefinition") {
       definitions.push(slice);
       continue;
     }
     if (node.type === "html") continue;
-    blocks.push({ type: node.type, source: slice, text: flattenText(node) });
+    blocks.push({
+      type: node.type,
+      source: slice,
+      text: flattenText(node),
+      hasReference: hasReferenceNode(node),
+    });
   }
-  return { blocks, definitions: definitions.join("\n") };
+  return { blocks, definitions: definitions.join("\n\n") };
 }
 
 /**
@@ -371,15 +481,22 @@ function tokenize(text: string): string[] {
   return text.match(WORD_TOKEN_RE) ?? [];
 }
 
+interface TokenStats {
+  bag: Map<string, number>;
+  count: number;
+}
+
 /** Multiset of lowercased non-whitespace tokens, for the similarity score. */
-function tokenBag(text: string): Map<string, number> {
+function tokenStats(text: string): TokenStats {
   const bag = new Map<string, number>();
+  let count = 0;
   for (const token of tokenize(text)) {
     if (!/\S/.test(token)) continue;
     const key = token.toLowerCase();
     bag.set(key, (bag.get(key) ?? 0) + 1);
+    count++;
   }
-  return bag;
+  return { bag, count };
 }
 
 function commonAffixLength(a: string, b: string, fromEnd: boolean): number {
@@ -405,24 +522,32 @@ function commonAffixLength(a: string, b: string, fromEnd: boolean): number {
  * still pairs while one that grew tenfold does not.
  */
 export function blockSimilarity(oldText: string, newText: string): number {
+  return similarityFrom(oldText, newText, tokenStats(oldText), tokenStats(newText));
+}
+
+/**
+ * The scoring itself, taking token stats the caller already holds. `pairGap`
+ * compares every candidate against every other, so recomputing both bags per
+ * comparison would re-tokenize each block once per counterpart.
+ */
+function similarityFrom(
+  oldText: string,
+  newText: string,
+  oldStats: TokenStats,
+  newStats: TokenStats
+): number {
   if (oldText === "" || newText === "") return 0;
   const minLength = Math.min(oldText.length, newText.length);
   const maxLength = Math.max(oldText.length, newText.length);
   const lengthRatio = minLength / maxLength;
   if (lengthRatio < PAIR_LENGTH_RATIO_FLOOR) return 0;
 
-  const oldBag = tokenBag(oldText);
-  const newBag = tokenBag(newText);
-  let oldCount = 0;
-  for (const count of oldBag.values()) oldCount += count;
-  let newCount = 0;
-  for (const count of newBag.values()) newCount += count;
-  if (oldCount === 0 || newCount === 0) return 0;
+  if (oldStats.count === 0 || newStats.count === 0) return 0;
   let overlap = 0;
-  for (const [token, count] of oldBag) {
-    overlap += Math.min(count, newBag.get(token) ?? 0);
+  for (const [token, count] of oldStats.bag) {
+    overlap += Math.min(count, newStats.bag.get(token) ?? 0);
   }
-  const dice = (2 * overlap) / (oldCount + newCount);
+  const dice = (2 * overlap) / (oldStats.count + newStats.count);
 
   const prefix = commonAffixLength(oldText, newText, false);
   const suffix = Math.min(commonAffixLength(oldText, newText, true), minLength - prefix);
@@ -440,14 +565,28 @@ export function blockSimilarity(oldText: string, newText: string): number {
  * insertion side is a wash. That is the same per-side independence
  * `suppressFullLineEdits` applies.
  */
-export function inlineWordRanges(oldText: string, newText: string): InlineRanges {
+export interface InlineCellBudget {
+  remaining: number;
+}
+
+const NO_RANGES: InlineRanges = { old: [], new: [] };
+
+export function inlineWordRanges(
+  oldText: string,
+  newText: string,
+  budget?: InlineCellBudget
+): InlineRanges {
   const oldTokens = tokenize(oldText);
   const newTokens = tokenize(newText);
-  // Both matrices are bounded by the same budget the line tokenizer applies to
-  // intra-line marks: past it the pair keeps its whole-block treatment and
-  // loses only the finer emphasis.
-  if (oldTokens.length > MARKDOWN_DIFF_MAX_INLINE_TOKENS) return { old: [], new: [] };
-  if (newTokens.length > MARKDOWN_DIFF_MAX_INLINE_TOKENS) return { old: [], new: [] };
+  // Per-pair cap, then the document-wide one: past either the pair keeps its
+  // whole-block treatment and loses only the finer emphasis.
+  if (oldTokens.length > MARKDOWN_DIFF_MAX_INLINE_TOKENS) return NO_RANGES;
+  if (newTokens.length > MARKDOWN_DIFF_MAX_INLINE_TOKENS) return NO_RANGES;
+  const cells = (oldTokens.length + 1) * (newTokens.length + 1);
+  if (budget) {
+    if (cells > budget.remaining) return NO_RANGES;
+    budget.remaining -= cells;
+  }
 
   const matches = longestCommonSubsequence(oldTokens, newTokens);
   const oldMatched = new Set<number>();
@@ -504,7 +643,8 @@ export function inlineWordRanges(oldText: string, newText: string): InlineRanges
  */
 function pairGap(
   oldBlocks: readonly MarkdownBlock[],
-  newBlocks: readonly MarkdownBlock[]
+  newBlocks: readonly MarkdownBlock[],
+  budget: InlineCellBudget
 ): MarkdownBlockChange[] {
   if (!oldBlocks.length) return newBlocks.map((block) => ({ kind: "added" as const, block }));
   if (!newBlocks.length) return oldBlocks.map((block) => ({ kind: "removed" as const, block }));
@@ -513,12 +653,24 @@ function pairGap(
   const cols = newBlocks.length + 1;
   const scores = new Float64Array(rows * cols);
   const candidate = new Float64Array(oldBlocks.length * newBlocks.length);
+  // Tokenized once per block rather than once per comparison — the matrix is
+  // quadratic, so the difference is a block's tokens counted once against being
+  // counted for every counterpart it is measured against.
+  const oldStats = oldBlocks.map((block) => tokenStats(block.text));
+  const newStats = newBlocks.map((block) => tokenStats(block.text));
   for (let i = 0; i < oldBlocks.length; i++) {
     for (let j = 0; j < newBlocks.length; j++) {
       const oldBlock = oldBlocks[i] as MarkdownBlock;
       const newBlock = newBlocks[j] as MarkdownBlock;
       const score =
-        oldBlock.type === newBlock.type ? blockSimilarity(oldBlock.text, newBlock.text) : 0;
+        oldBlock.type === newBlock.type
+          ? similarityFrom(
+              oldBlock.text,
+              newBlock.text,
+              oldStats[i] as TokenStats,
+              newStats[j] as TokenStats
+            )
+          : 0;
       candidate[i * newBlocks.length + j] = score >= PAIR_SIMILARITY_THRESHOLD ? score : 0;
     }
   }
@@ -556,8 +708,8 @@ function pairGap(
         // its removed/added treatment, which is the readable signal there.
         inline:
           oldBlock.type === "code"
-            ? { old: [], new: [] }
-            : inlineWordRanges(oldBlock.text, newBlock.text),
+            ? NO_RANGES
+            : inlineWordRanges(oldBlock.text, newBlock.text, budget),
       });
       i++;
       j++;
@@ -581,7 +733,14 @@ function pairGap(
 /** Match blocks exactly, then pair what's left in each gap by similarity. */
 export function diffMarkdownBlocks(
   oldBlocks: readonly MarkdownBlock[],
-  newBlocks: readonly MarkdownBlock[]
+  newBlocks: readonly MarkdownBlock[],
+  /**
+   * The document's link/image/footnote definitions differ between the two
+   * sides. A block whose own source is byte-identical still renders differently
+   * when a definition it resolves through has moved, so those blocks cannot
+   * anchor as unchanged.
+   */
+  definitionsChanged = false
 ): { ok: true; changes: MarkdownBlockChange[] } | { ok: false; reason: MarkdownDiffFailure } {
   if (oldBlocks.length > MARKDOWN_DIFF_MAX_BLOCKS || newBlocks.length > MARKDOWN_DIFF_MAX_BLOCKS) {
     return { ok: false, reason: "too-large" };
@@ -590,18 +749,28 @@ export function diffMarkdownBlocks(
     oldBlocks.map((block) => block.source),
     newBlocks.map((block) => block.source)
   );
+  const budget: InlineCellBudget = { remaining: MARKDOWN_DIFF_MAX_INLINE_CELLS };
   const changes: MarkdownBlockChange[] = [];
   let oldCursor = 0;
   let newCursor = 0;
   for (const [oldIndex, newIndex] of anchors) {
     changes.push(
-      ...pairGap(oldBlocks.slice(oldCursor, oldIndex), newBlocks.slice(newCursor, newIndex))
+      ...pairGap(oldBlocks.slice(oldCursor, oldIndex), newBlocks.slice(newCursor, newIndex), budget)
     );
-    changes.push({ kind: "unchanged", block: newBlocks[newIndex] as MarkdownBlock });
+    const oldBlock = oldBlocks[oldIndex] as MarkdownBlock;
+    const newBlock = newBlocks[newIndex] as MarkdownBlock;
+    // Identical source, but it renders through a definition that moved — so the
+    // block really did change and must not be reported as untouched. The word
+    // marks stay empty: the text is the same, the target behind it is not.
+    changes.push(
+      definitionsChanged && newBlock.hasReference
+        ? { kind: "modified", old: oldBlock, new: newBlock, inline: NO_RANGES }
+        : { kind: "unchanged", block: newBlock }
+    );
     oldCursor = oldIndex + 1;
     newCursor = newIndex + 1;
   }
-  changes.push(...pairGap(oldBlocks.slice(oldCursor), newBlocks.slice(newCursor)));
+  changes.push(...pairGap(oldBlocks.slice(oldCursor), newBlocks.slice(newCursor), budget));
   return { ok: true, changes };
 }
 
@@ -612,7 +781,8 @@ export function buildMarkdownDiff(input: ReconstructInput): MarkdownDiffResult {
 
   const oldParsed = parseMarkdownBlocks(reconstructed.documents.old);
   const newParsed = parseMarkdownBlocks(reconstructed.documents.new);
-  const diffed = diffMarkdownBlocks(oldParsed.blocks, newParsed.blocks);
+  const definitionsChanged = oldParsed.definitions !== newParsed.definitions;
+  const diffed = diffMarkdownBlocks(oldParsed.blocks, newParsed.blocks, definitionsChanged);
   if (!diffed.ok) return diffed;
 
   return {

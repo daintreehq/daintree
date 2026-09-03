@@ -3,7 +3,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import {
   diffCacheKey,
-  purgeOtherWhitespaceEntries,
+  purgeWhitespaceEntriesExcept,
   requestDiff,
   selectDiffFreshnessKey,
   type DiffSubject,
@@ -81,11 +81,12 @@ export function useDiffContent(
   // Toggling ignore-whitespace strands every entry built under the other flag
   // (their keys can no longer be requested this session unless the user
   // toggles back, and a long review can hold 20 stale diffs). Purge them.
-  // Purged against the preference, not the effective flag: an override is a
-  // transient second view of the same file, and letting it evict the
-  // preference's entries would make every toggle back a refetch.
+  // Both variants are live now, so the purge keeps both: the preference's, and
+  // the exact patches the rendered Markdown layout overrides to. Purging
+  // against one flag would have every mount of any pane — this hook also backs
+  // the file panel — evict whichever set it isn't currently asking for.
   useEffect(() => {
-    purgeOtherWhitespaceEntries(preferredIgnoreWhitespace);
+    purgeWhitespaceEntriesExcept([preferredIgnoreWhitespace, false]);
   }, [preferredIgnoreWhitespace]);
 
   const subjectKey = subject === null ? null : diffCacheKey(subject, ignoreWhitespace);
