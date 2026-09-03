@@ -563,7 +563,6 @@ export class TerminalProcess {
       get sessionSnapshotter() {
         return self.sessionSnapshotter;
       },
-      getLastNLines: (n) => self.getLastNLines(n),
       get lastDetectedProcessIconId() {
         return self.lastDetectedProcessIconId;
       },
@@ -2020,7 +2019,6 @@ export class TerminalProcess {
         get hasActivityMonitor() {
           return self.analysis.hasMonitor();
         },
-        getLastNLines: (n) => self.getLastNLines(n),
         reconfigureActivityMonitor: (agentId, patternConfig) =>
           this.analysis.reconfigureMonitor(agentId, patternConfig),
         get lastDetectedProcessIconId() {

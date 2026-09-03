@@ -10,33 +10,43 @@ import type { TerminalInfo } from "./types.js";
 const logger = createLogger("pty:AgentEndCapture");
 
 /**
- * Non-blank trailing ROWS of rendered output the passive scrape will trust.
+ * Non-blank trailing lines of output the passive scrape will trust.
  *
  * Taking the last match is not enough on its own: with no real hint printed, the
  * last match would be whatever `codex resume <id>` text the conversation
  * happened to contain. The window is what makes the scrape mean "the agent's
- * farewell". This bound only bites on text with real line breaks — rendered
- * rows, or plain line-oriented output — so {@link CAPTURE_SCAN_CHARS} carries
- * the raw fallback, where a ratatui repaint has collapsed into one giant line.
+ * farewell".
  *
- * Eight rows, not the four `IdentityWatcher` uses for prompt-return
+ * Eight lines, not the four `IdentityWatcher` uses for prompt-return
  * (`SHELL_IDENTITY_FALLBACK_SCAN_LINES`): that scan only has to reach the prompt
  * itself, while this one has to reach PAST the prompt to the hint printed before
- * it. A direnv banner plus a two-line powerlevel10k prompt is four rows on its
- * own. Blank rows are free, so trailing viewport padding costs nothing.
+ * it. A direnv banner plus a two-line powerlevel10k prompt is four lines on its
+ * own. Blank lines are free, so trailing padding costs nothing.
+ *
+ * This bound only bites on output that actually carries line breaks, which is
+ * why {@link CAPTURE_SCAN_CHARS} applies alongside it.
  */
-export const CAPTURE_SCAN_ROWS = 8;
+const CAPTURE_SCAN_LINES = 8;
 
 /**
- * The same window expressed in characters, applied alongside the row budget.
+ * The same window expressed in characters, applied alongside the line budget.
  *
- * The row budget alone is not enough, because the scrape cannot count on the
- * text having real line breaks: `stripAnsiCodes` deletes cursor-positioning
- * escapes with no replacement, so a ratatui repaint arrives as one enormous
- * line and a row budget over it bounds nothing. What a farewell hint always is,
- * whatever the line structure, is CLOSE TO THE END — everything legitimately
- * printed after it (alt-screen restore, a direnv banner, a multi-line prompt)
- * runs to a few hundred characters at most.
+ * The line budget alone is not enough, because the scrape cannot count on the
+ * text having line breaks at all: `stripAnsiCodes` deletes cursor-positioning
+ * escapes with no replacement, so a full-screen TUI repaint arrives as one
+ * enormous line and a line budget over it bounds nothing. What a farewell hint
+ * always is, whatever the line structure, is CLOSE TO THE END — everything
+ * legitimately printed after it (alt-screen restore, a direnv banner, a
+ * multi-line prompt) runs to a few hundred characters at most.
+ *
+ * Deliberately scanned against the RAW pty tail rather than the headless
+ * mirror's rendered rows. The mirror looks like the better source — it resolves
+ * alt-screen and cursor moves into real rows — but it is wrong twice over here:
+ * its rows are physical, with no wrap reflow, so a hint longer than the pane
+ * splits mid-id and gets journaled truncated; and xterm parses on a deferred
+ * task, so at an exit the mirror is reliably missing the very chunk the farewell
+ * arrived in. The raw tail has neither problem: a soft wrap emits no byte, and
+ * the forensic buffer is fed synchronously on every chunk.
  */
 const CAPTURE_SCAN_CHARS = 400;
 
@@ -44,7 +54,7 @@ const CAPTURE_SCAN_CHARS = 400;
  * Which lifecycle boundary is asking. `exit` is the agent's PTY going away;
  * `demotion` is the agent process ending while the pane survives as a shell.
  */
-export type AgentEndBoundary = "exit" | "demotion";
+type AgentEndBoundary = "exit" | "demotion";
 
 type AgentEndCaptureOutcome =
   "captured" | "preassigned" | "no-resume-config" | "no-pattern" | "no-match" | "needs-boundary";
@@ -55,18 +65,7 @@ interface AgentEndCaptureArgs {
   /** Agent that just ended — the one whose hint is in the output. */
   agentId: string;
   boundary: AgentEndBoundary;
-  /**
-   * Tail of the headless mirror's RENDERED rows — alt-screen, cursor moves and
-   * erases already resolved into real lines. The scrape's preferred input.
-   */
-  renderedLines: string[];
-  /**
-   * Raw forensic tail, snapshotted before any teardown that would clear it.
-   * Fallback only: `kill()` tears the mirror down, so a graceful teardown that
-   * failed to capture leaves this as the sole surviving evidence. The row window
-   * degrades to roughly the whole tail here, which is what the graceful scrape
-   * itself does.
-   */
+  /** Raw forensic tail, snapshotted before any teardown that would clear it. */
   recentOutput: string;
 }
 
@@ -85,7 +84,7 @@ interface AgentEndCaptureArgs {
  * record. Never logs the captured id itself, which is a resume credential.
  */
 export function captureAgentEndSession(args: AgentEndCaptureArgs): void {
-  const { terminalId, terminal, agentId, boundary, renderedLines, recentOutput } = args;
+  const { terminalId, terminal, agentId, boundary, recentOutput } = args;
 
   const logOutcome = (outcome: AgentEndCaptureOutcome): void => {
     logger.info("Passive agent session capture outcome", {
@@ -125,26 +124,14 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): void {
     return;
   }
 
-  // An exited PTY can deliver nothing further, so its end-of-output is a real
-  // token boundary. A demoted pane is still live and still writing.
-  const scan = (text: string) =>
-    matcher(text, {
-      occurrence: "last",
-      boundary: boundary === "exit" ? "eof" : "stream",
-      tailLines: CAPTURE_SCAN_ROWS,
-      tailChars: CAPTURE_SCAN_CHARS,
-    });
-
-  // Rendered rows first: alt-screen, cursor moves and erases are already
-  // resolved there, so the row budget means what it says. The mirror is not
-  // guaranteed to be current though — xterm parses asynchronously and an exit
-  // fires in the same breath as the final chunk, and in worker mode the rows
-  // arrive on this thread only as a pushed cache — so the raw tail stays as the
-  // fallback. The character budget is what keeps that fallback honest.
-  let match = scan(renderedLines.join("\n"));
-  if (match.kind !== "match") {
-    match = scan(recentOutput);
-  }
+  const match = matcher(recentOutput, {
+    occurrence: "last",
+    // An exited PTY can deliver nothing further, so its end-of-output is a real
+    // token boundary. A demoted pane is still live and still writing.
+    boundary: boundary === "exit" ? "eof" : "stream",
+    tailLines: CAPTURE_SCAN_LINES,
+    tailChars: CAPTURE_SCAN_CHARS,
+  });
   if (match.kind !== "match") {
     logOutcome(match.kind === "needs-boundary" ? "needs-boundary" : "no-match");
     return;

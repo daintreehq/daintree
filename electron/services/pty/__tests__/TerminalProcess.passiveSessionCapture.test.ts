@@ -283,6 +283,24 @@ describe("passive agent session capture", () => {
       expect(captured).toHaveLength(0);
     });
 
+    it("captures for a hand-started agent even though a launch id is on file", async () => {
+      // Claude was launched with an assigned id and quit; the user ran Codex by
+      // hand; Daintree closed the pane and the quit signal was swallowed. The
+      // stale Claude id must not be read as "the teardown already has this one".
+      const terminal = track(
+        createTerminal({ launchAgentId: "claude", agentSessionId: "assigned-at-launch" })
+      );
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
+      terminal.kill("graceful-shutdown");
+      mockPty(terminal).__emitExit(0);
+
+      await flushCapture();
+      expect(captured).toHaveLength(1);
+      expect(captured[0].record.sessionId).toBe(SESSION_ID);
+      expect(captured[0].record.agentId).toBe("codex");
+    });
+
     it("still captures when a graceful teardown ran but captured nothing", async () => {
       const terminal = track(createTerminal());
       promoteCodex(terminal);
@@ -372,6 +390,20 @@ describe("passive agent session capture", () => {
 
       await flushCapture();
       expect(captured).toHaveLength(0);
+    });
+
+    it("captures a hint that soft-wrapped in a narrow pane", async () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      // A soft wrap is a rendering artifact — the pty emits no byte for it — so
+      // the id must survive intact. Scanning rendered terminal rows instead
+      // would split it here and journal a truncated id.
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
+      demote(terminal);
+
+      await flushCapture();
+      expect(captured[0].record.sessionId).toBe(SESSION_ID);
+      expect(captured[0].record.sessionId).toHaveLength(SESSION_ID.length);
     });
 
     it("holds a hint that is still mid-arrival on a live PTY", async () => {
@@ -483,8 +515,8 @@ describe("passive agent session capture", () => {
       promoteCodex(terminal);
       // A ratatui frame positions each row with CUP instead of writing newlines.
       // stripAnsiCodes deletes those escapes with no replacement, so the whole
-      // frame is ONE logical line in the raw byte stream — the rendered mirror
-      // is what turns it back into rows the window can actually bound.
+      // frame is ONE logical line and the line budget bounds nothing here — the
+      // character budget is what rejects this.
       const rows = [
         "  Sure — you can pick that back up with:",
         `      codex resume ${SESSION_ID}`,

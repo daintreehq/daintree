@@ -87,7 +87,17 @@ function isPlausibleSessionId(captured: string | undefined): captured is string 
  */
 export function createSessionIdMatcher(patternSource: string | undefined): SessionIdMatcher | null {
   if (!patternSource) return null;
-  const pattern = new RegExp(patternSource, "g");
+  // Plugin- and user-registered agents are merged into the effective registry,
+  // so the pattern is not necessarily a compilable one this repo wrote. Both
+  // call sites are synchronous PTY lifecycle handlers — a throw here would
+  // unwind into node-pty's emitter and cost the terminal its `terminal:exited`.
+  // Precedent: buildPatternConfig in terminalActivityPatterns.
+  let pattern: RegExp;
+  try {
+    pattern = new RegExp(patternSource, "g");
+  } catch {
+    return null;
+  }
 
   return (raw, options) => {
     const stripped = stripAnsiCodes(raw);

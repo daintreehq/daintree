@@ -185,6 +185,43 @@ describe("createSessionIdMatcher", () => {
     });
   });
 
+  it("returns null rather than throwing on a pattern that will not compile", () => {
+    // Plugin- and user-registered agents can supply any string here, and both
+    // call sites are synchronous PTY lifecycle handlers.
+    expect(createSessionIdMatcher("codex resume ([\\w-]+")).toBeNull();
+    expect(createSessionIdMatcher("(?<=")).toBeNull();
+  });
+
+  describe("tailChars window", () => {
+    it("rejects a hint pushed beyond the character budget", () => {
+      const trailing = "x".repeat(120);
+      const raw = `codex resume ${ID}\n${trailing}\n${trailing}\n`;
+      expect(match(raw, { occurrence: "last", boundary: "eof", tailChars: 100 })).toEqual({
+        kind: "none",
+      });
+      expect(match(raw, { occurrence: "last", boundary: "eof", tailChars: 400 })).toEqual({
+        kind: "match",
+        sessionId: ID,
+      });
+    });
+
+    it("bounds a collapsed TUI frame that carries no line breaks at all", () => {
+      // What stripAnsiCodes leaves behind once CUP moves are deleted: one line.
+      const collapsed = `you can resume with codex resume ${ID}${"  and then more output".repeat(20)}`;
+      expect(
+        match(collapsed, { occurrence: "last", boundary: "eof", tailLines: 8, tailChars: 400 })
+      ).toEqual({ kind: "none" });
+    });
+
+    it("applies whichever of the two windows is more restrictive", () => {
+      const raw = `codex resume ${ID}\n${"y".repeat(500)}\n`;
+      // Only two lines, so the line budget admits it; the char budget does not.
+      expect(
+        match(raw, { occurrence: "last", boundary: "eof", tailLines: 8, tailChars: 400 })
+      ).toEqual({ kind: "none" });
+    });
+  });
+
   it("does not leak regex lastIndex between calls", () => {
     const matcher = createSessionIdMatcher(PATTERN);
     if (!matcher) throw new Error("matcher must compile");
