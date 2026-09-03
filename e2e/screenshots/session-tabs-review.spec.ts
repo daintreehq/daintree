@@ -113,6 +113,43 @@ async function snap(target: Locator, file: string): Promise<string> {
   return out;
 }
 
+/**
+ * Serve an inert `@vite/client`, so no page in this sweep opens an HMR socket.
+ *
+ * This harness does about 22 navigations against one dev server, and it used to go blank
+ * from roughly the twenty-second onwards — permanently, for every load after it, whatever
+ * the fixture or width. The chain is worth writing down, because none of its links is
+ * visible from the failure:
+ *
+ * Vite's HMR client opens a WebSocket per page load. Chromium throttles repeated
+ * handshakes to one host with an escalating delay — measured here at 2ms for the first,
+ * ~1.1s by the fourteenth and ~4s by the twenty-second — and because each navigation
+ * arrives about 1.2s after the last, the pending handshake is torn down before it
+ * completes, so the throttle never resets. Once the delay outruns the load, the client
+ * gives up and enters its recovery path, which constructs a `SharedWorker` from a blob
+ * URL. That is refused outright: `cspTransformPlugin` stamps the renderer's dev CSP,
+ * `require-trusted-types-for 'script'` included, onto every dev HTML entry — this
+ * standalone harness among them, even though it ships an empty CSP meta of its own. The
+ * throw aborts the module graph, `#root` stays empty, and nothing recovers.
+ *
+ * Stubbing the client removes the socket, and with it the whole chain. Verified over 30
+ * consecutive loads. HMR is worthless to a screenshot run that navigates for every shot
+ * anyway.
+ *
+ * The unscoped CSP is the deeper half of this and is left alone deliberately: it is a
+ * dev-server security control shared by the whole app, and narrowing which pages receive
+ * it is not a change that belongs to a review of one tab strip.
+ */
+async function stubViteHmrClient(page: Page): Promise<void> {
+  await page.route("**/@vite/client", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/javascript",
+      body: `const noop=()=>{};export const createHotContext=()=>({accept:noop,acceptExports:noop,dispose:noop,prune:noop,decline:noop,invalidate:noop,on:noop,off:noop,send:noop,data:{}});export const injectQuery=u=>u;export const updateStyle=noop;export const removeStyle=noop;`,
+    })
+  );
+}
+
 /** Load one fixture in one theme at one width, and settle it. */
 async function open(
   page: Page,
@@ -129,18 +166,13 @@ async function open(
   const url = `${baseURL}/session-tabs-preview.html?theme=${theme}&fixture=${fixture}&width=${width}`;
   const panel = page.locator("[data-preview-panel]").first();
 
-  // Load, and give it one more go if the app never mounted.
+  // Load, and give it one more go if the app never mounted. A backstop only — the cause
+  // is dealt with by `stubViteHmrClient` below.
   //
-  // Not defensive padding — this reproduces. A full sweep is ~22 page loads against one
-  // dev server, and somewhere past the twentieth the mount stops arriving within 30s;
-  // the same load in a shorter sweep is fine, which is what rules out the fixture and
-  // the width and points at the accumulated context. These machines are also usually
-  // busy running the very agent fleet this app orchestrates.
-  //
-  // A single reload is the right shape of fix because the failure mode it covers is
-  // indistinguishable, from the outside, from the surface genuinely failing to render —
-  // both surface as `element(s) not found`. So the retry is bounded and loud: if the
-  // second attempt also comes up empty, that IS the product, and it throws.
+  // Bounded and loud on purpose: the failure it covers is indistinguishable from the
+  // outside from the surface genuinely failing to render, since both arrive as
+  // `element(s) not found`. If the second attempt is also empty, that IS the product,
+  // and it throws.
   const timeout = 30_000;
   try {
     await page.goto(url);
@@ -167,6 +199,9 @@ test("assistant session tabs — states, widths and themes", async ({ page }) =>
     description: "DAINTREE_SHOT_SESSIONTABS is required for the session-tab capture",
   });
   test.skip(!ENABLED, "set DAINTREE_SHOT_SESSIONTABS=1 to run the capture");
+
+  // Once, before any navigation — see the note on the helper.
+  await stubViteHmrClient(page);
 
   const written: string[] = [];
 
