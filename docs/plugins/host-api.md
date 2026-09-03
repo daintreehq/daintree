@@ -281,7 +281,7 @@ type PluginWorktreesUnavailableReason =
   | "fetch-failed"; // a live host was asked and the read threw
 ```
 
-`status: "ok"` is the only authoritative answer, and it names the project it describes. That second half matters as much as the first: an app-global (unbound) plugin reads whichever project is focused, and mid-switch that can still be the *outgoing* project — so a populated list that omits the worktree you are looking for may simply belong to a different project rather than confirm a mismatch. Compare `projectId` before drawing any conclusion from the contents.
+`status: "ok"` is the only authoritative answer, and it names the project it describes. That second half matters as much as the first: an app-global (unbound) plugin reads whichever project is focused, and mid-switch that can still be the _outgoing_ project — so a populated list that omits the worktree you are looking for may simply belong to a different project rather than confirm a mismatch. Compare `projectId` before drawing any conclusion from the contents.
 
 Guard a binding validator like this:
 
