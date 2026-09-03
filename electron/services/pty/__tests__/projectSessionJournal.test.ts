@@ -599,7 +599,13 @@ describe("gracefulTeardownAndJournalProject", () => {
       // the only signal there is.
       const { client } = makePtyClient({
         terminals: [
-          { id: "marked-help", projectId: "proj", launchAgentId: "claude", cwd: "/r", spawnedAt: 1 },
+          {
+            id: "marked-help",
+            projectId: "proj",
+            launchAgentId: "claude",
+            cwd: "/r",
+            spawnedAt: 1,
+          },
         ],
         outcome: { confirmed: true, sessions: [{ id: "marked-help", agentSessionId: "s1" }] },
       });

@@ -303,7 +303,9 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         // Same assistant skip as the journal below, keeping this block a true
         // mirror of `gracefulTeardownAndJournalProject`'s writeback.
         const captured = results.filter(
-          (r) => r.agentSessionId && !isAssistantTerminalRecord(terminalInfoById.get(r.id) ?? { id: r.id })
+          (r) =>
+            r.agentSessionId &&
+            !isAssistantTerminalRecord(terminalInfoById.get(r.id) ?? { id: r.id })
         );
         if (captured.length === 0) continue;
 

@@ -414,10 +414,7 @@ describe("PtyManager lifecycle ledger", () => {
       expect(shared.created[0]!.gracefulShutdownCalled).toBe(true);
     });
 
-    expect(shared.eventsEmit).not.toHaveBeenCalledWith(
-      "agent-session:captured",
-      expect.anything()
-    );
+    expect(shared.eventsEmit).not.toHaveBeenCalledWith("agent-session:captured", expect.anything());
   });
 
   it("stamps terminalId and launchGeneration on trash-expiry session captures", async () => {
