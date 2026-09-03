@@ -79,6 +79,7 @@ import type {
   ProjectSwitchOutgoingState,
   ProjectWorktreeLoadStatusPayload,
   ProjectFocusOnActivateIntent,
+  ProjectSwitchTrace,
 } from "./project.js";
 import type { FleetSnapshot } from "./fleet.js";
 import type {
@@ -612,7 +613,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { focusIntent?: ProjectFocusOnActivateIntent },
+      options?: { focusIntent?: ProjectFocusOnActivateIntent; trace?: ProjectSwitchTrace },
     ];
     result: Project;
   };
@@ -641,7 +642,11 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: ProjectCloseResult;
   };
   "project:reopen": {
-    args: [projectId: string, outgoingState?: ProjectSwitchOutgoingState];
+    args: [
+      projectId: string,
+      outgoingState?: ProjectSwitchOutgoingState,
+      options?: { trace?: ProjectSwitchTrace },
+    ];
     result: Project;
   };
   "project:get-stats": {
@@ -1863,12 +1868,14 @@ export interface IpcEventMap {
   // renderer re-runs its terminal redraw here — the wake fan-out driven by
   // visibilitychange/resume ran while the view was still occluded, where
   // Chromium culls the paint, so it can fail to stick until the user clicks.
-  "app:view-revealed": void;
+  // Carries the switch trace id so the incoming renderer's perf marks join the
+  // same `project_switch.*` trace main is emitting; absent on the rollback send.
+  "app:view-revealed": { switchId?: string } | undefined;
   // Fired by ProjectViewManager the moment it re-attaches a cached view (warm
   // switch). A detached setVisible(false) view receives no visibilitychange or
   // resume event on reattach, so this is the renderer's deterministic trigger
   // to run the wake fan-out whose completion releases the warm paint gate.
-  "app:view-warm-activated": void;
+  "app:view-warm-activated": { switchId?: string } | undefined;
   "app:view-cached": void;
 
   // Privacy events

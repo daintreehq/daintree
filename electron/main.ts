@@ -53,6 +53,7 @@ import {
 } from "./window/windowRef.js";
 import { WindowRegistry } from "./window/WindowRegistry.js";
 import { ProjectViewManager } from "./window/ProjectViewManager.js";
+import { buildMemoryAttribution } from "./utils/memoryAttribution.js";
 import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
@@ -471,6 +472,20 @@ if (!gotTheLock) {
         const wCtx = windowRegistry.getByWindowId(win.id);
         if (wCtx) {
           distributePortsToView(win, wCtx, wc, getPtyClient());
+          // A cold-started view gets its first PTY port here, not from the
+          // switch handler — mark it under the switch's trace while the entry
+          // still carries its cold-start timeline (cleared at first-interactive,
+          // so a later crash reload does not re-report under a stale id).
+          const readyEntry = pvm
+            .getAllViews()
+            .find((v) => !v.view.webContents.isDestroyed() && v.view.webContents.id === wc.id);
+          if (readyEntry?.switchTrace && readyEntry.coldStartAt !== undefined) {
+            markPerformance(PERF_MARKS.PROJECT_SWITCH_PTY_PORT_SENT, {
+              switchId: readyEntry.switchTrace.switchId,
+              projectId: readyEntry.projectId,
+              isNew: true,
+            });
+          }
         }
         // Refresh workspace direct port (preload context is reset on reload)
         getWorkspaceClientRef()?.attachDirectPort(win.id, wc);
@@ -563,6 +578,10 @@ if (!gotTheLock) {
       (globalThis as Record<string, unknown>).__daintreeGetPvm = getProjectViewManager;
       (globalThis as Record<string, unknown>).__daintreeWriteHeapSnapshot = (filePath: string) =>
         nodeV8.writeHeapSnapshot(filePath);
+      // Fresh process-tree sweep joined to every window's view inventory, so
+      // the switch benchmark can attribute renderer memory per cached view.
+      (globalThis as Record<string, unknown>).__daintreeGetMemoryAttribution = () =>
+        buildMemoryAttribution(windowRegistry);
     }
 
     // E2E hook: crash a window's workspace host to exercise the

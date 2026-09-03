@@ -341,7 +341,7 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     const input = screen.getByTestId("palette-input");
     fireEvent.keyDown(input, { key: "Enter", altKey: true });
     expect(defaultProps.onSelect).toHaveBeenCalledTimes(1);
-    expect(defaultProps.onSelect).toHaveBeenCalledWith(defaultProps.results[0]);
+    expect(defaultProps.onSelect).toHaveBeenCalledWith(defaultProps.results[0], "keyboard");
     expect(onSelectNewWindow).not.toHaveBeenCalled();
   });
 
@@ -515,7 +515,7 @@ describe("ProjectSwitcherPalette keyboard on a scratch row", () => {
     render(<ProjectSwitcherPalette {...scratchProps} />);
     fireEvent.keyDown(screen.getByTestId("palette-input"), { key: "Enter" });
 
-    expect(scratchProps.onSelect).toHaveBeenCalledWith(scratchRow);
+    expect(scratchProps.onSelect).toHaveBeenCalledWith(scratchRow, "keyboard");
   });
 
   it("falls back to a plain switch on Meta+Enter instead of swallowing it", () => {
@@ -526,7 +526,7 @@ describe("ProjectSwitcherPalette keyboard on a scratch row", () => {
     fireEvent.keyDown(screen.getByTestId("palette-input"), { key: "Enter", metaKey: true });
 
     expect(onSelectNewWindow).not.toHaveBeenCalled();
-    expect(scratchProps.onSelect).toHaveBeenCalledWith(scratchRow);
+    expect(scratchProps.onSelect).toHaveBeenCalledWith(scratchRow, "keyboard");
   });
 
   it("leaves Meta+Backspace inert rather than removing by scratch id", () => {

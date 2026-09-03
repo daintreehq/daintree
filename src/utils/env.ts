@@ -26,6 +26,9 @@ function getRuntimeBridgeValue(key: DaintreeEnvKey): string | undefined {
   if (key === "DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS") {
     return window.__DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS__ === true ? "1" : undefined;
   }
+  if (key === "DAINTREE_PERF_CAPTURE") {
+    return window.__DAINTREE_PERF_CAPTURE__ === true ? "1" : undefined;
+  }
   return undefined;
 }
 

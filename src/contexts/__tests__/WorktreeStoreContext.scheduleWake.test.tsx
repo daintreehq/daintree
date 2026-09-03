@@ -10,6 +10,7 @@ import type { Project } from "@shared/types/project";
 const wakeMock = vi.fn<() => Promise<void>>(() => Promise.resolve());
 const repaintMock = vi.fn<() => Promise<void>>(() => Promise.resolve());
 vi.mock("@/store/wakeActiveWorktreeTerminals", () => ({
+  restoreTerminalFocusOnReveal: () => false,
   wakeActiveWorktreeTerminals: () => wakeMock(),
   repaintActiveWorktreeTerminals: () => repaintMock(),
 }));
@@ -405,7 +406,7 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
     expect(repaintMock).toHaveBeenCalledTimes(1);
   });
 
-  it("runs the wake fan-out on the warm-activation signal through the double-rAF gate", async () => {
+  it("runs the wake fan-out synchronously on the warm-activation signal", async () => {
     await renderProvider();
     // Drain the mount-scheduled missed-event wake first.
     act(() => flushFrame());
@@ -415,11 +416,13 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
 
     // A detached setVisible(false) view receives no visibilitychange/resume on
     // reattach, so main's explicit warm-activation send is the only trigger
-    // this path can rely on — it must drive the same deferred wake fan-out.
+    // this path can rely on. It must NOT wait for animation frames: the view is
+    // undrawn behind the bridge and its frames are throttled, and main holds
+    // the bridge until the fan-out reports back.
     act(() => viewWarmActivatedCb?.());
-    act(() => flushFrame());
-    expect(wakeMock).not.toHaveBeenCalled();
+    expect(wakeMock).toHaveBeenCalledTimes(1);
 
+    act(() => flushFrame());
     act(() => flushFrame());
     expect(wakeMock).toHaveBeenCalledTimes(1);
   });
@@ -445,25 +448,22 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
     expect(wakeMock).toHaveBeenCalledTimes(1);
   });
 
-  it("skips a warm-activation wake when the view is hidden by execution time", async () => {
+  it("runs the warm-activation wake even while the document reports hidden", async () => {
     await renderProvider();
     act(() => flushFrame());
     act(() => flushFrame());
     wakeMock.mockClear();
     expect(viewWarmActivatedCb).not.toBeNull();
 
-    // The trigger itself has no entry-time visibility guard (main asserts the
-    // activation), but scheduleWake's execution-time re-check still applies:
-    // a view hidden again before the second frame must not run the fan-out.
+    // Main asserts the activation and is holding the anti-flash bridge on the
+    // reply, so a visibility guard here would only trade a fan-out for a stall.
     setVisibilityState("hidden");
     act(() => viewWarmActivatedCb?.());
-    act(() => flushFrame());
-    act(() => flushFrame());
 
-    expect(wakeMock).not.toHaveBeenCalled();
+    expect(wakeMock).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels a pending warm-activation wake when the view is cached mid-schedule", async () => {
+  it("folds a pending frame-deferred wake into the warm-activation wake and runs nothing more once cached", async () => {
     await renderProvider();
     act(() => flushFrame());
     act(() => flushFrame());
@@ -471,15 +471,17 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
     expect(viewWarmActivatedCb).not.toBeNull();
     expect(viewCachedCb).not.toBeNull();
 
-    // Rapid A→B→A→B: the warm activation schedules a wake, but the view is
-    // cached again (superseding switch) before the second frame — the pending
-    // rAF must be cancelled so the fan-out can't run against an occluded view.
+    // A lifecycle event queued a frame-deferred wake; the warm activation runs
+    // the fan-out immediately and absorbs that pending frame. Rapid A→B→A→B
+    // then caches the view again before any frame fires: nothing further runs.
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
     act(() => viewWarmActivatedCb?.());
-    act(() => flushFrame());
+    expect(wakeMock).toHaveBeenCalledTimes(1);
+
     act(() => viewCachedCb?.());
     act(() => flushFrame());
-
-    expect(wakeMock).not.toHaveBeenCalled();
+    act(() => flushFrame());
+    expect(wakeMock).toHaveBeenCalledTimes(1);
   });
 
   it("ignores visibilitychange dispatched while hidden", async () => {

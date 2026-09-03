@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { beginSwitchTrace } from "@/utils/switchTrace";
 
 import { switchToLastWorkspace } from "@/lib/projectHistoryNav";
 
@@ -41,6 +42,7 @@ export function useProjectMruSwitcher(): UseProjectMruSwitcherReturn {
 
       consumeEvent(event);
       if (event.repeat) return;
+      beginSwitchTrace("mru-shortcut");
       void switchToLastWorkspace();
     };
 

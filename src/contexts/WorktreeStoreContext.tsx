@@ -21,8 +21,12 @@ import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import {
   repaintActiveWorktreeTerminals,
   wakeActiveWorktreeTerminals,
+  restoreTerminalFocusOnReveal,
 } from "@/store/wakeActiveWorktreeTerminals";
 import { worktreeClient } from "@/clients/worktreeClient";
+import { PERF_MARKS } from "@shared/perf/marks";
+import { flushPendingPerfMarks } from "@/utils/performance";
+import { markSwitch, setActiveSwitchTrace } from "@/utils/switchTrace";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 
@@ -997,6 +1001,32 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       if (wakeRafId !== null) cancelAnimationFrame(wakeRafId);
     });
 
+    // Warm reactivation runs the fan-out NOW rather than through scheduleWake's
+    // double-rAF settle. Main has just re-attached this view beneath the
+    // outgoing one and is holding that bridge until the fan-out reports back;
+    // an undrawn view's frames are throttled to ~2 Hz, so each deferred frame
+    // cost ~500 ms and the gate (1.5 s hard) expired on every switch that had
+    // panes to wake. The wake's repairs are synchronous and the post-reveal
+    // repaint (#10362) redoes the paint at full rate once the view is on top.
+    // A pending frame-deferred wake is folded in, and one frame of
+    // `wakePending` absorbs the same-turn `resume`/`visibilitychange` echoes.
+    function runWakeNow() {
+      if (wakeRafId !== null) {
+        cancelAnimationFrame(wakeRafId);
+        wakeRafId = null;
+      }
+      wakePending = true;
+      void wakeActiveWorktreeTerminals();
+      if (typeof requestAnimationFrame !== "function") {
+        wakePending = false;
+        return;
+      }
+      wakeRafId = requestAnimationFrame(() => {
+        wakeRafId = null;
+        wakePending = false;
+      });
+    }
+
     function handleVisibilityChange() {
       if (document.visibilityState !== "visible") return;
       scheduleWake();
@@ -1028,7 +1058,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // vice versa); the repaint skips the byte-pull the wake already did.
     let repaintPending = false;
     let repaintRafId: number | null = null;
-    function scheduleRepaint() {
+    // `pass` only labels the perf mark — it says which reveal-repaint pass
+    // (initial or a timed backstop) actually landed, and changes nothing else.
+    function scheduleRepaint(pass: "initial" | "backstop-1000" | "backstop-3000") {
       if (repaintPending) return;
       repaintPending = true;
       repaintRafId = requestAnimationFrame(() => {
@@ -1036,7 +1068,10 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           repaintRafId = null;
           repaintPending = false;
           if (document.visibilityState === "visible") {
-            void repaintActiveWorktreeTerminals();
+            void repaintActiveWorktreeTerminals().then(() => {
+              markSwitch(PERF_MARKS.PROJECT_SWITCH_REVEAL_REPAINT_DONE, { pass });
+              flushPendingPerfMarks();
+            });
           }
         });
       });
@@ -1076,20 +1111,29 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // WebContentsView, and `resume` needs an actual freeze), so on most warm
     // switches the wake fan-out — whose completion releases main's warm paint
     // gate via notifyWarmViewPainted — had no trigger and the gate always ran
-    // to its hard timeout. Routed through scheduleWake so it coalesces with any
-    // visibility/resume-triggered wake and inherits the same double-rAF settle.
-    // Deliberately NO entry-time visibility guard: this is the one trigger main
-    // asserts is valid, and dropping it here would re-open the hard-timeout
-    // stall; scheduleWake re-checks visibility at execution and APP_VIEW_CACHED
-    // cancels a pending wake if the view is switched away mid-schedule.
-    const offViewWarmActivated = window.electron?.app?.onViewWarmActivated?.(() => {
-      scheduleWake();
+    // to its hard timeout. Runs the fan-out synchronously (see runWakeNow) and
+    // deliberately has NO visibility guard: main asserts the activation and is
+    // holding the bridge on the reply, so skipping the wake would only trade a
+    // fan-out for a 1.5 s stall.
+    const offViewWarmActivated = window.electron?.app?.onViewWarmActivated?.((payload) => {
+      // First signal the incoming view gets on a warm switch: adopt the trace
+      // so the wake fan-out marks below join it (`project:on-switch` fills in
+      // the entry point later).
+      if (payload?.switchId) setActiveSwitchTrace({ switchId: payload.switchId });
+      markSwitch(PERF_MARKS.PROJECT_SWITCH_WARM_ACTIVATED_RECEIVED);
+      runWakeNow();
     });
     if (offViewWarmActivated) cleanups.push(offViewWarmActivated);
 
-    const offViewRevealed = window.electron?.app?.onViewRevealed?.(() => {
+    const offViewRevealed = window.electron?.app?.onViewRevealed?.((payload) => {
+      markSwitch(PERF_MARKS.PROJECT_SWITCH_REVEALED_RECEIVED, {
+        ...(payload?.switchId ? { switchId: payload.switchId } : {}),
+      });
       if (document.visibilityState !== "visible") return;
-      scheduleRepaint();
+      // Main has just focused this webContents; put DOM focus back on the
+      // working terminal if the round trip left it on a button or the body.
+      restoreTerminalFocusOnReveal();
+      scheduleRepaint("initial");
       // Cancel any backstops still pending from a prior switch so rapid
       // back-and-forth switching can't stack passes, then arm this switch's.
       clearRevealBackstops();
@@ -1098,7 +1142,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           setTimeout(() => {
             // Re-checked here AND inside scheduleRepaint's rAF: if the user
             // switched away again the view is hidden and this no-ops.
-            if (document.visibilityState === "visible") scheduleRepaint();
+            if (document.visibilityState === "visible") {
+              scheduleRepaint(delay === 1000 ? "backstop-1000" : "backstop-3000");
+            }
           }, delay)
         );
       }
@@ -1106,6 +1152,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     if (offViewRevealed) cleanups.push(offViewRevealed);
 
     const offViewCached = window.electron?.app?.onViewCached?.(() => {
+      // Last chance to drain this view's outgoing-side marks before it is
+      // parked (and possibly frozen) in the LRU cache.
+      flushPendingPerfMarks();
       clearRevealBackstops();
       if (wakeRafId !== null) {
         cancelAnimationFrame(wakeRafId);

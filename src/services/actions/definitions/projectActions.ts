@@ -1,4 +1,5 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import { beginSwitchTrace } from "@/utils/switchTrace";
 import type { ActionContext } from "@shared/types/actions";
 import type { AgentVisibleProjectSettingsKey, ProjectSettings } from "@shared/types";
 import { pickAgentVisibleProjectSettings } from "@shared/types";
@@ -390,7 +391,10 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: () => switchToLastWorkspace(),
+    run: () => {
+      beginSwitchTrace("mru-shortcut");
+      return switchToLastWorkspace();
+    },
   }));
 
   actions.set("project.add", () => ({

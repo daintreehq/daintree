@@ -38,7 +38,13 @@ import {
   getWorktreeSelectionSnapshot,
   getWorktreeIdSet,
 } from "./storeAccessors";
-import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
+import type {
+  ProjectSwitchEntryPoint,
+  ProjectSwitchOutgoingState,
+} from "@shared/types/ipc/project";
+import { PERF_MARKS } from "@shared/perf/marks";
+import { flushPendingPerfMarks } from "@/utils/performance";
+import { beginSwitchTrace, consumeSwitchTrace, markSwitch } from "@/utils/switchTrace";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { isEphemeralPanel } from "./slices/panelRegistry/panelCount";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -246,7 +252,11 @@ interface ProjectState {
   createProjectFolder: (parentPath: string, folderName: string, emoji?: string) => Promise<void>;
   switchProject: (
     projectId: string,
-    options?: { focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent }
+    options?: {
+      focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent;
+      /** Perf-trace entry point when no gesture site minted a trace first. */
+      entryPoint?: ProjectSwitchEntryPoint;
+    }
   ) => Promise<void>;
   setWorktreeLoadError: (error: string | null) => void;
   clearSwitching: () => void;
@@ -272,7 +282,10 @@ interface ProjectState {
    * this one is showing.
    */
   dropToNoProject: () => void;
-  reopenProject: (projectId: string) => Promise<void>;
+  reopenProject: (
+    projectId: string,
+    options?: { entryPoint?: ProjectSwitchEntryPoint }
+  ) => Promise<void>;
   checkMissingProjects: () => Promise<void>;
   locateProject: (projectId: string) => Promise<void>;
   openGitInitDialog: (
@@ -809,6 +822,11 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   switchProject: async (projectId, options) => {
     if (get().currentProject?.id === projectId) return;
     const requestId = ++projectTransitionRequestId;
+    // Adopt the trace the gesture site minted (keydown/click instant), else
+    // start one here so every switch is traceable, API-driven ones included.
+    const trace = consumeSwitchTrace() ?? beginSwitchTrace(options?.entryPoint ?? "api");
+    const traceMeta: Record<string, unknown> = { ...trace };
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_INTENT, { ...traceMeta, targetProjectId: projectId });
 
     // Drop fleet arming selections synchronously — the outgoing view's armed
     // set is project-scoped and must not leak if the view is later restored
@@ -834,6 +852,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     });
 
     await yieldToPaint();
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_BUSY_PAINTED, traceMeta);
     // A newer transition started while we yielded — let it own the switch so a
     // stale snapshot/IPC can't clobber it.
     if (requestId !== projectTransitionRequestId) return;
@@ -846,6 +865,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     if (currentProjectId) {
       panelPersistence.flush();
       await panelPersistence.whenIdle().catch(() => {});
+      markSwitch(PERF_MARKS.PROJECT_SWITCH_PERSIST_IDLE, traceMeta);
       if (requestId !== projectTransitionRequestId) return;
     }
 
@@ -853,11 +873,21 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // view is not detached until the main process handles the IPC, so the panel
     // store still reflects the outgoing project here.
     const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_SNAPSHOT_BUILT, {
+      ...traceMeta,
+      terminalCount: outgoingState?.terminals?.length ?? 0,
+      tabGroupCount: outgoingState?.tabGroups?.length ?? 0,
+    });
 
     // Fire-and-forget: the main process swaps WebContentsViews, so this
     // renderer gets detached. Don't write the response into stores — the
     // new view handles its own state independently.
-    projectClient.switch(projectId, outgoingState, options).catch((error) => {
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_IPC_SENT, traceMeta);
+    // Drain now: this view is about to be detached and its steady-state flush
+    // may never tick again before it is cached or evicted.
+    flushPendingPerfMarks();
+    const { entryPoint: _entryPoint, ...switchOptions } = options ?? {};
+    projectClient.switch(projectId, outgoingState, { ...switchOptions, trace }).catch((error) => {
       if (requestId !== projectTransitionRequestId) {
         return;
       }
@@ -1133,9 +1163,12 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     }
   },
 
-  reopenProject: async (projectId) => {
+  reopenProject: async (projectId, options) => {
     const requestId = ++projectTransitionRequestId;
     const currentProjectId = get().currentProject?.id;
+    const trace = consumeSwitchTrace() ?? beginSwitchTrace(options?.entryPoint ?? "api");
+    const traceMeta: Record<string, unknown> = { ...trace };
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_INTENT, { ...traceMeta, targetProjectId: projectId });
 
     // Flip the busy/switch flags first, then yield so the click stays responsive
     // before the heavy outgoing-state snapshot + IPC (see switchProject for the why).
@@ -1148,6 +1181,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     });
 
     await yieldToPaint();
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_BUSY_PAINTED, traceMeta);
     if (requestId !== projectTransitionRequestId) return;
 
     // Settle pending/in-flight layout autosave so the outgoing delta is
@@ -1155,11 +1189,19 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     if (currentProjectId) {
       panelPersistence.flush();
       await panelPersistence.whenIdle().catch(() => {});
+      markSwitch(PERF_MARKS.PROJECT_SWITCH_PERSIST_IDLE, traceMeta);
       if (requestId !== projectTransitionRequestId) return;
     }
 
     const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
-    projectClient.reopen(projectId, outgoingState).catch((error) => {
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_SNAPSHOT_BUILT, {
+      ...traceMeta,
+      terminalCount: outgoingState?.terminals?.length ?? 0,
+      tabGroupCount: outgoingState?.tabGroups?.length ?? 0,
+    });
+    markSwitch(PERF_MARKS.PROJECT_SWITCH_IPC_SENT, traceMeta);
+    flushPendingPerfMarks();
+    projectClient.reopen(projectId, outgoingState, { trace }).catch((error) => {
       if (requestId !== projectTransitionRequestId) {
         return;
       }

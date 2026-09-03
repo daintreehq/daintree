@@ -40,7 +40,7 @@ Alongside the class, each family carries a **fidelity record** — entry point, 
 
 Three families are `diagnostic` on evidence, and the test pins each so a silent upgrade back to `mechanism` fails:
 
-- **PERF-074..077** run real `ProjectViewManager` control flow against inert Electron and Chromium stand-ins. The structural counts (creates, reactivations, evictions) are trustworthy. The **durations are not a switch latency** — no navigation, GPU work, paint or real renderer failure happens inside the bracket. `npm run perf project-switch` is where switch latency lives.
+- **PERF-074..077** run real `ProjectViewManager` control flow against inert Electron and Chromium stand-ins. The structural counts (creates, reactivations, evictions) are trustworthy. The **durations are not a switch latency** — no navigation, GPU work, paint or real renderer failure happens inside the bracket. `npm run perf project-switch` (round trip and reveal telemetry) and `npm run perf project-switch-rotation` (real UI to a typed nonce painted in the target's focused pane) are where switch latency lives.
 - **PERF-196** is a declared parser floor. Production chunks payloads this size at 32 KiB with UI yields through `TerminalRestoreController`, which is not in the bracket, so real restore is slower by construction.
 - **PERF-035** drives the real detection FSM under a substituted virtual clock. Its CPU-per-MB is a real reading; its flip latencies are simulated time.
 
@@ -570,6 +570,34 @@ npm run perf memory-growth-compare -- .tmp/perf-results/memory-growth/before.jso
 ```
 
 Controls: `MEM_GROWTH_PROJECTS` (default `2`), `MEM_GROWTH_TERMINALS` (default `2` per project), `MEM_GROWTH_WARMUPS` (default `3`), `MEM_GROWTH_CYCLES` (default `10`), `MEM_GROWTH_SEED_OUTPUT_LINES` (default `5500` per terminal), `MEM_GROWTH_OUTPUT_LINES` (default `750` per terminal per cycle), `MEM_GROWTH_SETTLE_MS` (default `4000`), `MEM_GROWTH_EPHEMERAL` (`0` disables transient-terminal churn for diagnosis), `MEM_GROWTH_LABEL`, `MEM_GROWTH_OUTPUT`, and `MEM_GROWTH_TIMEOUT_MS`.
+
+## Project switch rotation (`perf project-switch-rotation`)
+
+`npm run perf project-switch-rotation` builds the E2E bundle, launches one Daintree with five seeded projects (three worktrees, one focused shell pane and three fake agents each — one streaming, one working, one waiting) and rotates through them with the real UI: the MRU shortcut for stack distance 1, the palette by keyboard for deeper targets, plus palette-by-mouse and toolbar strata. For every isolated sample it arms an `onRender` probe on the target's shell pane, drives the switch, waits for the target view to attach and its pane to hold focus, types a nonce, and reads the moment xterm painted it. The headline is **intent → nonce painted**: the outgoing renderer decided to switch, and the user's next keystroke is visibly on screen in the right pane. Everything between — busy paint, IPC, main receive, chain entry, view attach, gate resolve, reveal, pane wake, PTY port, hydrate, settle — is carried per sample from the `project_switch.*` NDJSON marks, joined by `switchId` and by `webContentsId` for the incoming renderer.
+
+Fidelity: real keyboard and pointer entry points, real WebContentsViews, real PTYs and xterm, production process topology; the agents are the fake `claude` from `e2e/helpers/fakeAgent.ts`. Cache state is predicted from an MRU-stack model before each switch and the app is held to it, so warm and cold numbers cannot mix. The apparatus asserts: the attached view is the target, marks arrive in causal order, the nonce painted exactly once in the probe pane and nowhere else that is still cached, no paint-gate hard timeouts, no renderer crashes, and the requested samples per depth. Latency, lag and memory are reported and written, never asserted.
+
+The two arms are cache caps. Cap 3 (the default) makes depths 3 and 4 cold; cap 5 keeps every target warm. Run both, then price a cached view with `--marginal`.
+
+```bash
+PERF_SWITCH_CAP=3 npm run perf project-switch-rotation
+PERF_SWITCH_CAP=5 npm run perf project-switch-rotation
+npm run perf project-switch-rotation-compare -- .tmp/perf-results/project-switch-rotation/before.json .tmp/perf-results/project-switch-rotation/after.json
+npm run perf project-switch-rotation-compare -- --marginal .tmp/perf-results/project-switch-rotation/cap5.json .tmp/perf-results/project-switch-rotation/cap3.json
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PERF_SWITCH_CAP` | `3` | Cached-view limit (3, 4 or 5); one fresh app per run |
+| `PERF_SWITCH_LABEL` | `cap<N>` | Result label |
+| `PERF_SWITCH_ROTATION_OUT` | `.tmp/perf-results/project-switch-rotation/<label>.json` | Output path |
+| `PERF_SWITCH_SAMPLES_PER_DEPTH` | `20` | Isolated samples at each stack distance 1..4 |
+| `PERF_SWITCH_SEED` | `1` | Shuffle seed for the depth sequence |
+| `PERF_SWITCH_EXTRA_STRATA` | `5` | Extra palette-mouse and toolbar samples each |
+| `PERF_SWITCH_RAPID_BURSTS` | `3` | Bursts of six queued switches at 150 ms gaps |
+| `PERF_SWITCH_INCLUDE_MARKS` | `0` | Embed the raw `project_switch.*` marks in the JSON |
+
+The compare refuses (exit 2) when the two runs' configs differ in anything but label or seed; `--marginal` refuses unless they differ only in cap, and prints the footprint per extra cached view alongside the per-depth latency it buys. Weighted quantiles use depth weights 1:0.55, 2:0.25, 3:0.12, 4:0.08. A bare run is a reading, not a result: a claim that switching got faster goes through `.agents/skills/optimize`, which re-measures the champion arm in the same session.
 
 ## GPU/compositor traces (`--trace`)
 

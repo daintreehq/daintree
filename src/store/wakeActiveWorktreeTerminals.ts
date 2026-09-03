@@ -6,6 +6,8 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { logWarn } from "@/utils/logger";
 import { getErrorMessage } from "@/utils/errorContext";
 import { notifyWarmReactivationComplete } from "@/utils/warmReactivationGate";
+import { PERF_MARKS } from "@shared/perf/marks";
+import { markSwitch } from "@/utils/switchTrace";
 
 const WAKE_CONCURRENCY = 2;
 
@@ -136,10 +138,14 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
   // Slot the focused panel first. It still runs inside the same worker pool, so
   // a hang on the focused panel doesn't block the other visible panels.
   prioritizeFocusedFirst(targets);
+  const focusedTarget = targets[0];
 
   const wakeOne = async (id: string): Promise<void> => {
     try {
       await terminalInstanceService.fullWakeForVisibilityRestore(id);
+      if (id === focusedTarget) {
+        markSwitch(PERF_MARKS.PROJECT_SWITCH_FOCUSED_PANE_WOKEN, { paneId: id });
+      }
     } catch (error) {
       // One broken terminal must not abort the fan-out — the next visible
       // terminal still needs its missed range pulled from the headless mirror.
@@ -169,6 +175,91 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
     workers.push(worker());
   }
   await Promise.all(workers);
+  markSwitch(PERF_MARKS.PROJECT_SWITCH_ALL_PANES_WOKEN, { paneCount: targets.length });
+}
+
+/**
+ * Put keyboard focus back on the working terminal when a warm view is revealed
+ * and nothing that takes typed input holds focus.
+ *
+ * Switching away through the toolbar switcher leaves the outgoing document's
+ * focus on the switcher pill (Radix returns focus to the trigger on close), and
+ * a document can be left on `body` by an unmounted overlay. Neither survives a
+ * round trip usefully: the user comes back, types, and the keystrokes land on
+ * a button. Focus is only moved off a button or the body — never off an input,
+ * a textarea, a combobox, editable content or anything inside an open dialog —
+ * and only onto the panel store's focused terminal when that pane is in the
+ * active worktree's grid. Returns whether focus was moved.
+ */
+export function restoreTerminalFocusOnReveal(): boolean {
+  const outcome = restoreTerminalFocusOnRevealInner();
+  const active = typeof document === "undefined" ? null : document.activeElement;
+  markSwitch(PERF_MARKS.PROJECT_SWITCH_FOCUS_RESTORE, {
+    outcome,
+    activeTag: active?.tagName ?? null,
+    activeRole: active?.getAttribute("role") ?? null,
+    activeLabel: active?.getAttribute("aria-label") ?? null,
+    activeTestId: active?.getAttribute("data-testid") ?? null,
+    activeClass: active instanceof HTMLElement ? active.className.toString().slice(0, 60) : null,
+  });
+  return outcome === "moved";
+}
+
+type FocusRestoreOutcome =
+  | "moved"
+  | "no-document"
+  | "already-in-pane"
+  | "input-has-focus"
+  | "overlay-open"
+  | "non-button-focused"
+  | "no-terminal";
+
+function restoreTerminalFocusOnRevealInner(): FocusRestoreOutcome {
+  if (typeof document === "undefined") return "no-document";
+  const targets = collectActiveWorktreeTerminalTargets();
+  const { focusedId, previousFocusedId, panelsById } = usePanelStore.getState();
+  const isGridTerminal = (id: string | null): id is string =>
+    Boolean(id) && (panelsById[id!]?.kind ?? "terminal") === "terminal" && targets.includes(id!);
+  // The store's focused pane, else the pane focus last left (a click on the
+  // toolbar clears the store's focus), else the first pane in the grid.
+  const targetId = isGridTerminal(focusedId)
+    ? focusedId
+    : isGridTerminal(previousFocusedId)
+      ? previousFocusedId
+      : (targets.find((id) => isGridTerminal(id)) ?? null);
+  if (!targetId) return "no-terminal";
+
+  const active = document.activeElement;
+  if (active instanceof HTMLElement) {
+    if (active.closest("[data-panel-id]")) return "already-in-pane";
+    // The switcher that committed the switch is still mid-close when the view
+    // was parked (its exit never got a frame), so its search box can hold
+    // focus here; that close is suppressed from bouncing to the pill, and the
+    // terminal is where the user expects to type.
+    const insideClosingSwitcher = Boolean(
+      active.closest('[data-testid="project-switcher-palette"], [aria-label="Project switcher"]')
+    );
+    const tag = active.tagName;
+    if (!insideClosingSwitcher) {
+      if (active.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) {
+        return "overlay-open";
+      }
+      // A button never takes typed text, whatever ARIA role it wears — the
+      // toolbar switcher pill is a button with role="combobox".
+      if (tag !== "BUTTON" && tag !== "BODY") {
+        const takesInput =
+          tag === "INPUT" ||
+          tag === "TEXTAREA" ||
+          tag === "SELECT" ||
+          active.isContentEditable ||
+          active.getAttribute("role") === "combobox" ||
+          active.getAttribute("role") === "textbox";
+        return takesInput ? "input-has-focus" : "non-button-focused";
+      }
+    }
+  }
+  terminalInstanceService.focus(targetId);
+  return "moved";
 }
 
 // At most this many terminals repaint on any one frame so a large grid never

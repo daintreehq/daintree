@@ -1022,6 +1022,15 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         webContentsId: ctx.webContentsId,
       });
       signalFirstInteractive(ctx.webContentsId);
+      // Close the cold-start timeline for a view this window's manager
+      // cold-started (input-ready log + trace mark); no-op for warm views.
+      // Same per-window resolution as APP_VIEW_PAINTED below.
+      const senderWindow = getWindowForWebContents(ctx.event.sender);
+      const pvm =
+        (senderWindow &&
+          deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??
+        deps?.projectViewManager;
+      pvm?.recordFirstInteractive?.(ctx.webContentsId);
     })
   );
 

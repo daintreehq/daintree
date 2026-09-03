@@ -924,7 +924,10 @@ export async function handleDirectoryOpen(
       // project row to be the current project of (#11936).
       const departingWorkspaceId = pvm.getActiveProjectId();
 
-      const { view, isNew } = await pvm.switchTo(project.id, project.path);
+      const { view, isNew } = await pvm.switchTo(project.id, project.path, {
+        switchId: randomUUID(),
+        entryPoint: "menu",
+      });
       // Capture the outgoing project id before the pointer flips so we can
       // broadcast its bumped `lastOpened` to every cached view (#8561).
       const previousProjectId = projectStore.getCurrentProjectId();

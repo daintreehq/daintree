@@ -80,6 +80,7 @@ import type {
   ProjectSwitcherProjectRow,
   ProjectSwitcherRow,
   ProjectSwitcherScratchRow,
+  ProjectSwitchSelectSource,
   SearchableProject,
   SearchableScratch,
 } from "@/hooks/useProjectSwitcherPalette";
@@ -122,7 +123,7 @@ export interface ProjectSwitcherPaletteProps {
   onSelectPrevious: () => void;
   onSelectNext: () => void;
   /** Commits any row. Project-only callbacks below stay typed to projects. */
-  onSelect: (row: ProjectSwitcherRow) => void;
+  onSelect: (row: ProjectSwitcherRow, source?: ProjectSwitchSelectSource) => void;
   onClose: () => void;
   mode?: ProjectSwitcherMode;
   onAddProject?: () => void;
@@ -158,6 +159,8 @@ export interface ProjectSwitcherPaletteProps {
    * reopening on the refocused trigger after a project switch. Dropdown-only.
    */
   onDropdownCloseAutoFocus?: () => void;
+  /** Dropdown only: whether this close must not return focus to the trigger. */
+  consumeCloseAutoFocusSuppression?: () => boolean;
   children?: React.ReactNode;
   removeConfirmProject?: SearchableProject | null;
   onRemoveConfirmClose?: () => void;
@@ -232,7 +235,7 @@ interface ProjectListItemProps {
    * to it — source-level, because vitest cannot see the freeze.
    */
   nowMs: number;
-  onSelect: (row: ProjectSwitcherProjectRow) => void;
+  onSelect: (row: ProjectSwitcherProjectRow, source?: ProjectSwitchSelectSource) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onSleepProject?: (projectId: string) => void;
@@ -640,7 +643,7 @@ function ProjectListItem({
       // The current project is selectable too: picking where you already are is
       // a "never mind", and the handler closes the palette rather than sitting
       // there doing nothing.
-      onClick={() => onSelect(project)}
+      onClick={() => onSelect(project, "pointer")}
       onPointerEnter={onHoverProject ? (e) => onHoverProject(project.id, e.pointerType) : undefined}
       onPointerLeave={onHoverProjectEnd ? (e) => onHoverProjectEnd(e.pointerType) : undefined}
     >
@@ -1152,7 +1155,7 @@ interface ProjectListContentProps {
   browseBands?: ProjectSwitcherBrowseBand[];
   selectedIndex: number;
   query: string;
-  onSelect: (row: ProjectSwitcherRow) => void;
+  onSelect: (row: ProjectSwitcherRow, source?: ProjectSwitchSelectSource) => void;
   listRef: React.RefObject<HTMLDivElement | null>;
   /** Whether this surface offers "Add project…" — decides what the empty state can name. */
   canAddProject: boolean;
@@ -2102,7 +2105,7 @@ interface ProjectPaletteInnerProps {
   selectedIndex: number;
   mode?: ProjectSwitcherMode;
   onQueryChange: (query: string) => void;
-  onSelect: (row: ProjectSwitcherRow) => void;
+  onSelect: (row: ProjectSwitcherRow, source?: ProjectSwitchSelectSource) => void;
   onSelectNewWindow?: (project: SearchableProject) => void;
   onClose: () => void;
   onSelectPrevious: () => void;
@@ -2216,7 +2219,7 @@ function ProjectPaletteInner({
             ) {
               onSelectNewWindow(selected);
             } else {
-              onSelect(selected);
+              onSelect(selected, "keyboard");
             }
           }
           break;
@@ -2510,6 +2513,7 @@ function DropdownContent({
   children,
   mode,
   onDropdownCloseAutoFocus,
+  consumeCloseAutoFocusSuppression,
   paletteInputRef: inputRef,
   onQueryChange,
   ...innerProps
@@ -2547,6 +2551,7 @@ function DropdownContent({
         inputRef={inputRef}
         onClearQuery={handleClearQuery}
         onCloseAutoFocus={onDropdownCloseAutoFocus}
+        consumeCloseAutoFocusSuppression={consumeCloseAutoFocusSuppression}
         // Keeps the trigger's focus ring on a pointer dismissal, which is what
         // this palette has always done. The shell's default (suppress) is the
         // better behaviour and worth adopting — but as its own change, not

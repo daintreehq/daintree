@@ -363,6 +363,10 @@ describe("ProjectViewManager — eviction safety", () => {
       expect(inventory.find((v) => v.projectId === "proj-b")!.state).toBe("cached");
       // Never-evicted views carry no eviction timestamp.
       expect(invC.evictedAt).toBeUndefined();
+      // Memory-attribution fields are always present: the pid is the live
+      // renderer's OS pid, and guests are an empty list rather than undefined.
+      expect(invC.pid).toBe(liveC.view.webContents.getOSProcessId());
+      expect(invC.guestPids).toEqual([]);
       // The live WebContentsView must never leak through the projection.
       expect(invC).not.toHaveProperty("view");
     });

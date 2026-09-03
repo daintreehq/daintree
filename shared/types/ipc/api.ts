@@ -516,7 +516,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * re-runs its terminal redraw then, since the wake fan-out driven by
      * visibilitychange/resume ran while the view was still occluded.
      */
-    onViewRevealed(callback: () => void): () => void;
+    onViewRevealed(callback: (payload?: { switchId?: string }) => void): () => void;
     /**
      * Subscribe to the warm-activation wake signal. Main fires this the moment
      * it re-attaches a cached view behind the anti-flash bridge (or reveals it
@@ -527,7 +527,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * lifecycle event (the Efficiency-profile freeze path), and every other
      * warm swap stalled until the warm paint gate's hard timeout.
      */
-    onViewWarmActivated(callback: () => void): () => void;
+    onViewWarmActivated(callback: (payload?: { switchId?: string }) => void): () => void;
     onViewCached(callback: () => void): () => void;
     /**
      * Whether main currently has this view cached. The three signals above are
@@ -600,7 +600,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     switch(
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { focusIntent?: import("./project.js").ProjectFocusOnActivateIntent }
+      options?: {
+        focusIntent?: import("./project.js").ProjectFocusOnActivateIntent;
+        trace?: import("./project.js").ProjectSwitchTrace;
+      }
     ): Promise<Project>;
     /**
      * Hover-prefetch trigger for the project switcher palette. Fire-and-forget:
@@ -610,14 +613,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     prefetchHydrate(projectId: string): Promise<void>;
     openDialog(): Promise<string | null>;
-    onSwitch(
-      callback: (payload: {
-        project: Project;
-        switchId: string;
-        worktreeLoadError?: string;
-        hydrateResult?: import("./app.js").HydrateResult;
-      }) => void
-    ): () => void;
+    onSwitch(callback: (payload: import("./project.js").ProjectSwitchPayload) => void): () => void;
     onWorktreeLoadStatus(
       callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
     ): () => void;
@@ -659,7 +655,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * Reopen a background project, making it the active project.
      * Terminals that were running in the background will be reconnected.
      */
-    reopen(projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project>;
+    reopen(
+      projectId: string,
+      outgoingState?: ProjectSwitchOutgoingState,
+      options?: { trace?: import("./project.js").ProjectSwitchTrace }
+    ): Promise<Project>;
     getStats(projectId: string): Promise<ProjectStats>;
     getBulkStats(projectIds: string[]): Promise<BulkProjectStats>;
     getNotificationOverrides(

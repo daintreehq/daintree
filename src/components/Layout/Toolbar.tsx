@@ -2135,6 +2135,9 @@ export function Toolbar({
                       fleetLiveness={projectSwitcher.fleetLiveness}
                       onClose={handlePillDropdownClose}
                       onDropdownCloseAutoFocus={suppressPillTooltipForFocusRestore}
+                      consumeCloseAutoFocusSuppression={
+                        projectSwitcher.consumeCloseAutoFocusSuppression
+                      }
                       onAddProject={projectSwitcher.addProject}
                       onCloneRepo={projectSwitcher.cloneRepo}
                       onStopProject={handleStopProject}

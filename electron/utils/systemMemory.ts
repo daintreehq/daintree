@@ -1,5 +1,5 @@
 import os from "node:os";
-import { getIsE2EFaultMode } from "../setup/runtimeFlags.js";
+import { getIsE2EFaultMode, getIsE2EMode } from "../setup/runtimeFlags.js";
 
 const CRITICAL_FRACTION = 0.1;
 const WARNING_FRACTION = 0.2;
@@ -96,7 +96,10 @@ export function readSystemMemorySnapshot(): SystemMemorySnapshot | null {
   const totalMb = os.totalmem() / 1024 / 1024;
   if (!Number.isFinite(totalMb) || totalMb <= 0) return null;
 
-  if (getIsE2EFaultMode()) {
+  // Pinned in E2E too, not only fault mode: a perf harness that keeps five
+  // renderers resident must not have its warm cache evicted because macOS
+  // reports a low free figure on a loaded machine.
+  if (getIsE2EFaultMode() || getIsE2EMode()) {
     const availableMb = Number(process.env.DAINTREE_E2E_SYSTEM_AVAILABLE_MEMORY_MB);
     if (Number.isFinite(availableMb) && availableMb > 0) {
       return { totalMb, freeMb: availableMb, purgeableMb: 0, availableMb };

@@ -23,6 +23,7 @@ import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
+import { markSwitch } from "@/utils/switchTrace";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 let messagePort: MessagePort | null = null;
@@ -235,6 +236,7 @@ function activatePort(port: MessagePort): void {
   pendingPortAckBytes.clear();
   messagePort = port;
   installPortDataHandler(port);
+  markSwitch(PERF_MARKS.PROJECT_SWITCH_PTY_PORT_READY);
   port.addEventListener("close", () => {
     if (messagePort === port) {
       messagePort = null;

@@ -8,6 +8,12 @@ import type { HandlerDependencies, IpcContext } from "../../types.js";
 import { TerminalReplayHistoryPayloadSchema } from "../../../schemas/index.js";
 import { logDebug, logInfo, logWarn } from "../../../utils/logger.js";
 import { getAgentAvailabilityStore } from "../../../services/AgentAvailabilityStore.js";
+import {
+  buildTerminalInventory,
+  consumeTerminalInventoryPrefetch,
+} from "../../../services/terminalInventoryPrefetch.js";
+import { markPerformance } from "../../../utils/performance.js";
+import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import { getProjectIdFromSenderUrl } from "../../senderIdentity.js";
 import { defineIpcNamespace, op, opValidated } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
@@ -168,65 +174,21 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         throw new Error("Invalid project ID: must be a non-empty string");
       }
 
-      const terminalIds = await ptyClient.getTerminalsForProjectAsync(projectId);
-
-      const infos = await Promise.all(terminalIds.map((id) => ptyClient.getTerminalAsync(id)));
-
-      const terminals: import("../../../../shared/types/ipc.js").BackendTerminalInfo[] = [];
-      for (const terminal of infos) {
-        // Dev preview and help PTYs should not be rehydrated as generic terminal
-        // panels during project switching/hydration.
-        if (
-          terminal &&
-          terminal.kind !== "dev-preview" &&
-          !getAgentAvailabilityStore().isHelpTerminal(terminal.id)
-        ) {
-          terminals.push({
-            id: terminal.id,
-            projectId: terminal.projectId,
-            kind: terminal.kind,
-
-            launchAgentId: terminal.launchAgentId,
-            title: terminal.title,
-            titleMode: terminal.titleMode,
-            cwd: terminal.cwd,
-            // Restore builds each pane's xterm on this grid instead of 80×24,
-            // so a reconnected pane never parses its live PTY at the wrong
-            // width (#11718).
-            ptyCols: terminal.ptyCols,
-            ptyRows: terminal.ptyRows,
-            agentState: terminal.agentState,
-            waitingReason: terminal.waitingReason,
-            lastStateChange: terminal.lastStateChange,
-            spawnedAt: terminal.spawnedAt,
-            isTrashed: terminal.isTrashed,
-            trashExpiresAt: terminal.trashExpiresAt,
-            activityTier: terminal.activityTier,
-            hasPty: terminal.hasPty,
-            agentSessionId: terminal.agentSessionId,
-            agentLaunchFlags: terminal.agentLaunchFlags,
-            agentModelId: terminal.agentModelId,
-            agentPresetId: terminal.agentPresetId,
-            agentPresetColor: terminal.agentPresetColor,
-            originalAgentPresetId: terminal.originalAgentPresetId,
-            everDetectedAgent: terminal.everDetectedAgent,
-            detectedAgentId: terminal.detectedAgentId,
-            detectedProcessId: terminal.detectedProcessId,
-          });
+      // A cold switch starts this fetch the moment it reaches main; serving
+      // the in-flight result here keeps the pty-host round trip off the
+      // hydration critical path. A rejected prefetch falls back to a live one.
+      const prefetched = consumeTerminalInventoryPrefetch(projectId);
+      if (prefetched) {
+        try {
+          const terminals = await prefetched;
+          markPerformance(PERF_MARKS.TERMINAL_INVENTORY_PREFETCH, { projectId, hit: true });
+          return terminals;
+        } catch {
+          // fall through to a live fetch
         }
       }
-
-      logInfo(
-        `terminal:getForProject(${projectId.slice(0, 8)}): found ${terminals.length} terminals`,
-        {
-          terminals: terminals.map((t) => ({
-            id: t.id.slice(0, 12),
-            kind: t.kind,
-            projectId: t.projectId?.slice(0, 8),
-          })),
-        }
-      );
-      return terminals;
+      markPerformance(PERF_MARKS.TERMINAL_INVENTORY_PREFETCH, { projectId, hit: false });
+      return await buildTerminalInventory(ptyClient, projectId);
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to get terminals for project");
       throw new Error(`Failed to get terminals for project: ${errorMessage}`);
