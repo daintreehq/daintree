@@ -55,6 +55,21 @@ describe("agentPreferencesStore persistence migration", () => {
     expect(store.getState().defaultAgent).toBe("claude");
   });
 
+  it("drops a persisted assistant-only agent on rehydration", async () => {
+    // `daintree-assistant` used to be a selectable default here, from when it was an
+    // installable CLI. It is now a headless engine with no PTY form — `useAgentLauncher`
+    // refuses it — so a stored one is a default every launch path quietly declines.
+    // Dropping it to undefined falls back to "first available", which can actually run.
+    const legacyBlob = JSON.stringify({
+      state: { defaultAgent: "daintree-assistant" },
+    });
+    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
+
+    const { useAgentPreferencesStore: store } = await import("../agentPreferencesStore");
+
+    expect(store.getState().defaultAgent).toBeUndefined();
+  });
+
   it("preserves an explicit undefined defaultAgent from a legacy blob", async () => {
     const legacyBlob = JSON.stringify({
       state: {},

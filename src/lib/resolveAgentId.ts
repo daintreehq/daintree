@@ -1,12 +1,23 @@
 import type { CliAvailability } from "@shared/types";
-import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
+import {
+  BUILT_IN_AGENT_IDS,
+  isAssistantOnlyAgentId,
+  type BuiltInAgentId,
+} from "@shared/config/agentIds";
 import { isAgentLaunchable } from "../../shared/utils/agentAvailability";
 
 /**
  * Resolve which agent to use given a user preference, an optional secondary
  * default, and the current CLI-availability map.  Returns the first usable
- * agent in priority order: defaultAgent → defaultSelection →
- * daintree-assistant (when installed) → registry order.
+ * agent in priority order: defaultAgent → defaultSelection → registry order.
+ *
+ * Assistant-only agents are never returned, from any branch. This answers "which
+ * agent would a launch spawn", and the Daintree Assistant has no PTY form to spawn —
+ * `useAgentLauncher` refuses it outright — so naming it here hands every caller an id
+ * that cannot be launched. It used to be FAVOURED above the registry order, from when
+ * it was an installable CLI; once the engine went native that soft default only ever
+ * misrouted. Which agent the assistant panel runs is a different setting entirely
+ * (`helpPanelStore.preferredAgentId`), and `help.launchAgent` reads that one.
  */
 export function getDefaultAgentId(
   defaultAgent: string | undefined,
@@ -15,6 +26,7 @@ export function getDefaultAgentId(
   selectedAgents?: Set<string>
 ): BuiltInAgentId | null {
   const isUsable = (id: string) =>
+    !isAssistantOnlyAgentId(id) &&
     isAgentLaunchable(availability[id as keyof CliAvailability]) &&
     (!selectedAgents || selectedAgents.has(id));
 
@@ -32,16 +44,6 @@ export function getDefaultAgentId(
     isUsable(defaultSelection)
   ) {
     return defaultSelection as BuiltInAgentId;
-  }
-
-  // Favour the Daintree assistant when it's installed and the user hasn't set
-  // an explicit preference. This is a live availability check at call time —
-  // never persisted — so uninstalling the CLI immediately reverts the default.
-  if (
-    (BUILT_IN_AGENT_IDS as readonly string[]).includes("daintree-assistant") &&
-    isUsable("daintree-assistant")
-  ) {
-    return "daintree-assistant" as BuiltInAgentId;
   }
 
   for (const agentId of BUILT_IN_AGENT_IDS) {
