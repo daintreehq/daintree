@@ -435,10 +435,10 @@ export async function activate(host: PluginHostApi) {
 
 | Field | Meaning |
 | --- | --- |
-| `sleepDuration` | Milliseconds from the observed suspend to the moment the wake was published, so it includes the host's settle delay — a coarse staleness figure, not a precise hardware sleep time. `0` is a sentinel meaning the matching suspend edge was never observed; treat it as *unknown*, not as a short sleep. |
+| `sleepDuration` | Milliseconds from the observed suspend to the moment the wake was published, so it includes the host's settle delay — a coarse staleness figure, not a precise hardware sleep time. `0` is a sentinel meaning the matching suspend edge was never observed; treat it as _unknown_, not as a short sleep. |
 | `timestamp` | `Date.now()` at the moment the wake was published. |
 
-**This is the signal background work has no other way to get.** `onDidChangePanelLifecycle` gives a *view* a re-validation point, but your timers, forge providers, and reconciliation passes keep running against state frozen at suspend. The host's own resume path only re-enables workspace polling if a window is focused, so a machine that wakes while Daintree is blurred — lid opened, user not back at the desk — leaves that state stale for an unbounded stretch with nothing else announcing the wake.
+**This is the signal background work has no other way to get.** `onDidChangePanelLifecycle` gives a _view_ a re-validation point, but your timers, forge providers, and reconciliation passes keep running against state frozen at suspend. The host's own resume path only re-enables workspace polling if a window is focused, so a machine that wakes while Daintree is blurred — lid opened, user not back at the desk — leaves that state stale for an unbounded stretch with nothing else announcing the wake.
 
 Delivered once per resume, after the host has resynced its pty and workspace hosts, so re-reading worktree state from the callback sees post-wake data rather than racing the host's own recovery. A rapid suspend during that settle window cancels the wake entirely rather than emitting a spurious one.
 
