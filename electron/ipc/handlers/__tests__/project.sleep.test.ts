@@ -37,6 +37,13 @@ const teardownMock = vi.hoisted(() => ({
 }));
 vi.mock("../../../services/pty/projectSessionJournal.js", () => teardownMock);
 
+const helpSessionServiceMock = vi.hoisted(() => ({
+  revokeByProjectId: vi.fn<(projectId: string) => Promise<void>>(async () => {}),
+}));
+vi.mock("../../../services/HelpSessionService.js", () => ({
+  helpSessionService: helpSessionServiceMock,
+}));
+
 const hibernationMock = vi.hoisted(() => ({
   evictProjectRenderer: vi.fn<(projectId: string) => number>(),
 }));
@@ -162,6 +169,7 @@ describe("project:sleep", () => {
         workspaceEvicted: false,
       });
       expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
       expect(persistenceMock.writeHibernatedMarker).not.toHaveBeenCalled();
       expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
@@ -179,6 +187,33 @@ describe("project:sleep", () => {
       const [scopeId, , , options] = teardownMock.gracefulTeardownAndJournalProject.mock.calls[0]!;
       expect(scopeId).toBe("proj-1");
       expect(options).toEqual({ preserveSession: true, writeBackSessionIds: true });
+    });
+
+    it("capture-revokes the assistant's session before tearing the project down", async () => {
+      const { invoke } = setup();
+
+      await invoke("proj-1");
+
+      // The generic teardown kills the assistant's PTY along with everything
+      // else, and `revokeSession` needs it alive to read the resume id — so the
+      // capture has to land first or there is nothing left to capture (#12181).
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledTimes(1);
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
+      expect(helpSessionServiceMock.revokeByProjectId.mock.invocationCallOrder[0]!).toBeLessThan(
+        teardownMock.gracefulTeardownAndJournalProject.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("still sleeps when the assistant capture fails", async () => {
+      helpSessionServiceMock.revokeByProjectId.mockRejectedValueOnce(new Error("no pty host"));
+      const { invoke } = setup();
+
+      await expect(invoke("proj-1")).resolves.toMatchObject({ terminalsKilled: 2 });
+
+      // A lost resume entry costs the assistant its conversation, nothing more —
+      // it must never turn the user's sleep into an INTERNAL failure.
+      expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed");
     });
 
     it("marks every killed terminal hibernated, agent or not", async () => {
@@ -287,6 +322,11 @@ describe("project:sleep", () => {
       const { invoke } = setup();
 
       await expect(invoke("proj-1")).rejects.toBeInstanceOf(AppError);
+
+      // The capture runs ahead of the confirmation gate on purpose: the row
+      // stays open, and the pending entry is what lets an assistant panel that
+      // reopens there resume instead of starting cold.
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
 
       // Nothing downstream may run: marking it closed would hide still-running
       // agents behind a "reopen to resume" that has nothing to resume.
