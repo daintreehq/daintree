@@ -369,7 +369,7 @@ export function NotificationSettingsTab() {
         <SettingsSection
           icon={Zap}
           title="Screen flash"
-          description="Flash the screen once every agent has finished and gone idle."
+          description="Flash the screen once a working fleet of agents goes fully idle."
         >
           <SettingsSwitchCard
             variant="compact"
