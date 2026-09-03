@@ -206,9 +206,23 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         const pid = ptyManager.getTerminal(id)?.ptyProcess.pid;
         if (isValidPid(pid)) pids.push(pid);
       }
-      const results = await ptyManager.gracefulKillByProject(msg.projectId, {
-        preserveSession: msg.preserveSession,
-      });
+      const results = await ptyManager.gracefulKillByProject(
+        msg.projectId,
+        { preserveSession: msg.preserveSession },
+        // Streamed per terminal so the main process already holds every capture
+        // that landed before its own deadline: the aggregate reply below waits
+        // on the slowest pane in the project, and a caller that gave up waiting
+        // used to throw the finished captures away with the unfinished ones
+        // (#12180).
+        (result) => {
+          sendEvent({
+            type: "graceful-kill-by-project-progress",
+            requestId: msg.requestId,
+            projectId: msg.projectId,
+            result,
+          });
+        }
+      );
       for (const pid of pids) {
         resourceGovernor.trackKilledPid(pid);
       }

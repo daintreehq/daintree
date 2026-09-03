@@ -31,6 +31,7 @@ import {
   type PtyManagerEvents,
   MAX_PRESERVED_TERMINAL_SNAPSHOTS,
 } from "./pty/index.js";
+import { GRACEFUL_KILL_TERMINAL_BUDGET_MS } from "./pty/types.js";
 import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
@@ -1119,10 +1120,22 @@ export class PtyManager extends EventEmitter {
 
   /**
    * Gracefully kill all terminals for a project, capturing session IDs.
+   *
+   * Each terminal is bounded on its own rather than the batch sharing one
+   * deadline. `Promise.all` doesn't settle until the slowest member does, so a
+   * pane whose teardown drifts past its internal budget used to hold every
+   * sibling's already-captured id hostage until the caller gave up and threw
+   * the whole project's results away (#12180). A pane that runs out of time now
+   * costs its own capture and nothing else.
+   *
+   * `onTerminalSettled` reports each result the moment it lands. The aggregate
+   * below is all-or-nothing across an IPC boundary; a caller on the far side
+   * uses this to keep whatever arrived before its own deadline.
    */
   async gracefulKillByProject(
     projectId: string,
-    options?: { preserveSession?: boolean }
+    options?: { preserveSession?: boolean },
+    onTerminalSettled?: (result: { id: string; agentSessionId: string | null }) => void
   ): Promise<Array<{ id: string; agentSessionId: string | null }>> {
     const terminalIds = this.registry.getForProject(projectId);
     if (terminalIds.length === 0) return [];
@@ -1131,22 +1144,60 @@ export class PtyManager extends EventEmitter {
 
     const results = await Promise.all(
       terminalIds.map(async (terminalId) => {
+        const result = await this.gracefulKillWithinBudget(terminalId, options);
         try {
-          const { sessionId } = await this.gracefulKill(terminalId, options);
-          return { id: terminalId, agentSessionId: sessionId };
+          onTerminalSettled?.(result);
         } catch (error) {
-          logError(`Failed to graceful-kill terminal ${terminalId}`, error);
-          try {
-            this.kill(terminalId, "graceful-kill-fallback", options);
-          } catch {
-            // already dead
-          }
-          return { id: terminalId, agentSessionId: null };
+          // A throwing reporter must not cost the capture it was reporting.
+          logError(`Graceful-kill progress report failed for terminal ${terminalId}`, error);
         }
+        return result;
       })
     );
 
     return results;
+  }
+
+  /**
+   * One terminal's slot in {@link gracefulKillByProject}, capped at
+   * GRACEFUL_KILL_TERMINAL_BUDGET_MS.
+   *
+   * Timing out abandons the wait, not the teardown: the losing chain keeps
+   * running and still tears the terminal down — `gracefulShutdown` kills on its
+   * own timeout, and the fallback below covers the terminals it returns without
+   * killing — so giving up on a capture never leaves a live pane behind.
+   */
+  private gracefulKillWithinBudget(
+    terminalId: string,
+    options?: { preserveSession?: boolean }
+  ): Promise<{ id: string; agentSessionId: string | null }> {
+    const settled: Promise<{ id: string; agentSessionId: string | null }> = this.gracefulKill(
+      terminalId,
+      options
+    )
+      .then(({ sessionId }) => ({ id: terminalId, agentSessionId: sessionId }))
+      .catch((error: unknown) => {
+        logError(`Failed to graceful-kill terminal ${terminalId}`, error);
+        try {
+          this.kill(terminalId, "graceful-kill-fallback", options);
+        } catch {
+          // already dead
+        }
+        return { id: terminalId, agentSessionId: null };
+      });
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+      settled,
+      new Promise<{ id: string; agentSessionId: string | null }>((resolve) => {
+        timer = setTimeout(
+          () => resolve({ id: terminalId, agentSessionId: null }),
+          GRACEFUL_KILL_TERMINAL_BUDGET_MS
+        );
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
   }
 
   /**

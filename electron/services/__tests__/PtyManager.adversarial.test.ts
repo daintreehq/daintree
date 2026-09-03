@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 
@@ -244,6 +244,7 @@ vi.mock("../../utils/logger.js", () => ({
 }));
 
 const { PtyManager } = await import("../PtyManager.js");
+const { GRACEFUL_KILL_TERMINAL_BUDGET_MS } = await import("../pty/types.js");
 
 function createPtyProcess(): MockPtyProcess {
   return {
@@ -625,5 +626,125 @@ describe("PtyManager adversarial", () => {
     expect(shared.created[0]!.info.cols).toBe(80);
     expect(shared.created[0]!.info.rows).toBe(24);
     expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("invalid dims"));
+  });
+});
+
+describe("PtyManager gracefulKillByProject partial capture (#12180)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    shared.terminals.clear();
+    shared.created.length = 0;
+    shared.computeSpawnContext.mockReturnValue({ env: {}, shell: "/bin/zsh", args: ["-l"] });
+    shared.acquirePtyProcess.mockImplementation(() => createPtyProcess());
+    shared.agentTransitionState.mockReturnValue(true);
+    shared.deleteSessionFile.mockResolvedValue(undefined);
+    shared.persistAgentSession.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Two panes in one project: the first captures at once, the second hangs. */
+  function spawnFastAndHung(manager: InstanceType<typeof PtyManager>): void {
+    manager.spawn("fast", spawnOptions({ projectId: "project-a" }));
+    manager.spawn("hung", spawnOptions({ projectId: "project-a" }));
+    shared.created[0]!.gracefulShutdown = () => Promise.resolve("sess-fast");
+    shared.created[1]!.gracefulShutdown = () => new Promise<string | null>(() => {});
+  }
+
+  it("keeps a fast pane's capture when a sibling outruns the per-terminal budget", async () => {
+    vi.useFakeTimers();
+    const manager = new PtyManager();
+    spawnFastAndHung(manager);
+
+    const promise = manager.gracefulKillByProject("project-a");
+    await vi.advanceTimersByTimeAsync(GRACEFUL_KILL_TERMINAL_BUDGET_MS);
+
+    // The whole point of #12180: the hung pane costs its own id and nothing
+    // more. Before the per-terminal budget, `Promise.all` held "sess-fast"
+    // until the caller gave up and discarded the project wholesale.
+    await expect(promise).resolves.toEqual([
+      { id: "fast", agentSessionId: "sess-fast" },
+      { id: "hung", agentSessionId: null },
+    ]);
+  });
+
+  it("does not resolve a hung pane before its budget elapses", async () => {
+    vi.useFakeTimers();
+    const manager = new PtyManager();
+    spawnFastAndHung(manager);
+
+    let settled = false;
+    void manager.gracefulKillByProject("project-a").then(() => {
+      settled = true;
+    });
+
+    // One tick short: the budget must not be truncating captures early.
+    await vi.advanceTimersByTimeAsync(GRACEFUL_KILL_TERMINAL_BUDGET_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+  });
+
+  it("reports the fast pane through onTerminalSettled before the batch resolves", async () => {
+    vi.useFakeTimers();
+    const manager = new PtyManager();
+    spawnFastAndHung(manager);
+
+    const reported: Array<{ id: string; agentSessionId: string | null }> = [];
+    const promise = manager.gracefulKillByProject("project-a", undefined, (result) => {
+      reported.push(result);
+    });
+
+    // Nothing advanced yet, so the batch is still waiting on the hung pane —
+    // this is exactly the window in which the quit chain's deadline fires, and
+    // the capture has to already be out.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reported).toEqual([{ id: "fast", agentSessionId: "sess-fast" }]);
+
+    await vi.advanceTimersByTimeAsync(GRACEFUL_KILL_TERMINAL_BUDGET_MS);
+    await promise;
+    expect(reported).toEqual([
+      { id: "fast", agentSessionId: "sess-fast" },
+      { id: "hung", agentSessionId: null },
+    ]);
+  });
+
+  it("keeps the capture when the progress reporter throws", async () => {
+    vi.useFakeTimers();
+    const manager = new PtyManager();
+    manager.spawn("fast", spawnOptions({ projectId: "project-a" }));
+    shared.created[0]!.gracefulShutdown = () => Promise.resolve("sess-fast");
+
+    const promise = manager.gracefulKillByProject("project-a", undefined, () => {
+      throw new Error("transport gone");
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    await expect(promise).resolves.toEqual([{ id: "fast", agentSessionId: "sess-fast" }]);
+    expect(logError).toHaveBeenCalledWith(
+      expect.stringContaining("progress report failed"),
+      expect.any(Error)
+    );
+  });
+
+  it("isolates a rejecting pane from its siblings and still falls back to kill", async () => {
+    vi.useFakeTimers();
+    const manager = new PtyManager();
+    manager.spawn("ok", spawnOptions({ projectId: "project-a" }));
+    manager.spawn("bad", spawnOptions({ projectId: "project-a" }));
+    shared.created[0]!.gracefulShutdown = () => Promise.resolve("sess-ok");
+    shared.created[1]!.gracefulShutdown = () => Promise.reject(new Error("pty gone"));
+
+    const promise = manager.gracefulKillByProject("project-a");
+    await vi.advanceTimersByTimeAsync(0);
+
+    await expect(promise).resolves.toEqual([
+      { id: "ok", agentSessionId: "sess-ok" },
+      { id: "bad", agentSessionId: null },
+    ]);
+    expect(shared.created[1]!.kill).toHaveBeenCalled();
   });
 });

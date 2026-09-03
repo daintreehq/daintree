@@ -722,6 +722,16 @@ export type PtyHostEvent =
       results: Array<{ id: string; agentSessionId: string | null }>;
     }
   | {
+      // One terminal's capture, streamed the moment it lands. The aggregate
+      // result above only arrives once every terminal in the project has
+      // settled, so a main-process caller that stops waiting for it reads these
+      // instead of discarding the project's finished captures too (#12180).
+      type: "graceful-kill-by-project-progress";
+      requestId: string;
+      projectId: string;
+      result: { id: string; agentSessionId: string | null };
+    }
+  | {
       type: "fd-leak-warning";
       fdCount: number;
       activeTerminals: number;

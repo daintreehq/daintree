@@ -452,6 +452,79 @@ describe("PtyClient adversarial", () => {
     expect(killByProjectCall).toBeUndefined();
   });
 
+  it("GRACEFUL_KILL_BY_PROJECT_EXPOSES_STREAMED_CAPTURES_WHILE_IN_FLIGHT", async () => {
+    const client = createReadyClient();
+
+    expect(client.getPartialGracefulKillResults("proj-a")).toEqual([]);
+
+    const promise = client.gracefulKillByProjectConfirmed("proj-a");
+    const request = mockChild.postMessage.mock.calls
+      .map((call: unknown[]) => call[0] as { type?: string; requestId?: string })
+      .find((msg) => msg?.type === "graceful-kill-by-project");
+
+    // #12180: the quit chain races this call against a deadline shorter than
+    // the RPC timeout. When that deadline fires the call is still open, so the
+    // captures that already landed have to be readable right here.
+    mockChild.emit("message", {
+      type: "graceful-kill-by-project-progress",
+      requestId: request!.requestId,
+      projectId: "proj-a",
+      result: { id: "t1", agentSessionId: "sess-1" },
+    });
+
+    expect(client.getPartialGracefulKillResults("proj-a")).toEqual([
+      { id: "t1", agentSessionId: "sess-1" },
+    ]);
+
+    mockChild.emit("message", {
+      type: "graceful-kill-by-project-result",
+      requestId: request!.requestId,
+      results: [{ id: "t1", agentSessionId: "sess-1" }],
+    });
+    await promise;
+
+    // Dropped once the call settles, so the next quit can't read this one's ids.
+    expect(client.getPartialGracefulKillResults("proj-a")).toEqual([]);
+  });
+
+  it("GRACEFUL_KILL_BY_PROJECT_IGNORES_PROGRESS_WITH_NO_CALL_IN_FLIGHT", async () => {
+    const client = createReadyClient();
+
+    mockChild.emit("message", {
+      type: "graceful-kill-by-project-progress",
+      requestId: "stale",
+      projectId: "proj-a",
+      result: { id: "t1", agentSessionId: "sess-stale" },
+    });
+
+    // A late event from an abandoned request must not seed the next call.
+    expect(client.getPartialGracefulKillResults("proj-a")).toEqual([]);
+  });
+
+  it("GRACEFUL_KILL_BY_PROJECT_CONFIRMED_RETURNS_STREAMED_SESSIONS_ON_TIMEOUT", async () => {
+    const client = createReadyClient();
+
+    const promise = client.gracefulKillByProjectConfirmed("proj-a");
+    const request = mockChild.postMessage.mock.calls
+      .map((call: unknown[]) => call[0] as { type?: string; requestId?: string })
+      .find((msg) => msg?.type === "graceful-kill-by-project");
+    mockChild.emit("message", {
+      type: "graceful-kill-by-project-progress",
+      requestId: request!.requestId,
+      projectId: "proj-a",
+      result: { id: "t1", agentSessionId: "sess-1" },
+    });
+
+    await vi.advanceTimersByTimeAsync(11000);
+
+    // `confirmed` still reports the unacknowledged teardown; the id the host
+    // did stream is real and is kept anyway (#12180).
+    await expect(promise).resolves.toEqual({
+      confirmed: false,
+      sessions: [{ id: "t1", agentSessionId: "sess-1" }],
+    });
+  });
+
   it("GRACEFUL_KILL_BY_PROJECT_CONFIRMED_TREATS_HOST_EXIT_AS_CONFIRMED", async () => {
     const client = createReadyClient();
     // A fresh child for the restart so the exited emitter isn't reused.

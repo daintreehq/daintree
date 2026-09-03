@@ -336,6 +336,13 @@ export class PtyClient extends EventEmitter {
   private pendingSpawns: Map<string, PtyHostSpawnOptions> = new Map();
   private ipcDataMirrorIds = new Set<string>();
   private pendingKillCount: Map<string, number> = new Map();
+  // Captures streamed back for a graceful kill that is still in flight, keyed
+  // by project. Seeded when the call starts and dropped when it settles, so an
+  // entry existing IS the "in flight" signal the router checks (#12180).
+  private partialGracefulKills = new Map<
+    string,
+    Array<{ id: string; agentSessionId: string | null }>
+  >();
   private activeProjectId: string | null = null;
   private windowProjectContexts = new Map<
     number,
@@ -580,6 +587,13 @@ export class PtyClient extends EventEmitter {
           if (generation !== undefined && ledger.currentGeneration(id) !== undefined) {
             ledger.recordClose(id, generation, "exit", exitCode);
           }
+        },
+        // Per-terminal captures streamed while a graceful kill is still
+        // running (#12180). Recorded only while a call for that project is in
+        // flight, so a late event from an abandoned request can't seed a stale
+        // entry for the next one.
+        onGracefulKillProgress: (projectId, result) => {
+          this.partialGracefulKills.get(projectId)?.push(result);
         },
         onSpawnResult: (id, result) => {
           const ledger = getLifecycleLedger();
@@ -1936,11 +1950,15 @@ export class PtyClient extends EventEmitter {
    *
    * Mirrors the single-terminal {@link gracefulKill} triage: a typed
    * BrokerError of HOST_EXITED/APP_SHUTDOWN (or a locally-observed dead/disposed
-   * client) means the host is gone and teardown is real — confirmed, just with
-   * no sessions to capture. A per-request TIMEOUT with a live host means the
+   * client) means the host is gone and teardown is real — confirmed, with
+   * nothing further to capture. A per-request TIMEOUT with a live host means the
    * teardown is NOT confirmed: agents may still be running, so the caller must
    * keep the project's restoration state and let the user retry. Unexpected
    * errors reject; callers treat that as fail-closed too.
+   *
+   * Both failure paths still return whatever the host streamed before it went
+   * quiet (#12180) — `sessions` says what was captured, `confirmed` says whether
+   * the teardown was acknowledged, and the two are independent.
    *
    * Contract of `confirmed: true`: the host acknowledged and ran the teardown
    * (graceful shutdown + a fallback hard kill per terminal, see
@@ -1955,6 +1973,7 @@ export class PtyClient extends EventEmitter {
     options?: { preserveSession?: boolean }
   ): Promise<GracefulKillByProjectOutcome> {
     const shard = this.shardForProjectQuery(projectId);
+    this.partialGracefulKills.set(projectId, []);
     try {
       const sessions = await sendPtyHostRpc<Array<{ id: string; agentSessionId: string | null }>>(
         shard,
@@ -1971,18 +1990,40 @@ export class PtyClient extends EventEmitter {
       );
       return { confirmed: true, sessions };
     } catch (error) {
+      // Whatever the host streamed before it stopped answering are real ids:
+      // the failure says the teardown wasn't acknowledged, not that nothing was
+      // captured. Returning them costs nothing (`confirmed` is reported
+      // separately and unchanged) and saves a resume (#12180).
+      const streamed = this.getPartialGracefulKillResults(projectId);
       const isHostGoneBrokerError = error instanceof BrokerError && error.code !== "TIMEOUT";
       if (isHostGoneBrokerError || !shard.lifecycle.child || this.isDisposed) {
         // Host is gone: its terminals are gone with it. Teardown is confirmed;
-        // no sessions were capturable.
-        return { confirmed: true, sessions: [] };
+        // nothing further was capturable.
+        return { confirmed: true, sessions: streamed };
       }
       if (error instanceof BrokerError && error.code === "TIMEOUT") {
         // Live host, per-request timeout — the kill was not acknowledged.
-        return { confirmed: false, sessions: [] };
+        return { confirmed: false, sessions: streamed };
       }
       throw error;
+    } finally {
+      this.partialGracefulKills.delete(projectId);
     }
+  }
+
+  /**
+   * Per-terminal captures the host has streamed for a `gracefulKillByProject`
+   * that is still in flight.
+   *
+   * The aggregate reply waits on the slowest pane in the project, so a caller
+   * that races it against a shorter deadline — the quit chain does, per project
+   * — reads this on timeout rather than discarding the captures that did land
+   * (#12180). Empty once the call settles, and when none is running.
+   */
+  getPartialGracefulKillResults(
+    projectId: string
+  ): Array<{ id: string; agentSessionId: string | null }> {
+    return [...(this.partialGracefulKills.get(projectId) ?? [])];
   }
 
   async gracefulKillByProject(
