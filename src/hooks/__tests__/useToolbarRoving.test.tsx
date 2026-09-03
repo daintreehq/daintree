@@ -131,6 +131,23 @@ describe("useToolbarRoving", () => {
     expect(tabIndexes().filter((t) => t === 0)).toHaveLength(1);
   });
 
+  it("moves the tab stop to a clicked control even with no re-render", () => {
+    // The repair cannot wait for a commit: a descendant can re-render alone, so
+    // clicking a control the row marks `tabindex="-1"` would otherwise leave
+    // focus on an untabbable element — the exact state that lets Tab escape a
+    // focus trap, which excludes negative tabindex when computing its boundary.
+    render(<Toolbar labels={["a", "b", "c"]} />);
+    const c = screen.getByText("c");
+    expect(c.tabIndex).toBe(-1);
+
+    fireEvent.focus(c, { target: c });
+    c.focus();
+
+    expect(c.tabIndex).toBe(0);
+    expect(screen.getByText("a").tabIndex).toBe(-1);
+    expect(tabIndexes().filter((t) => t === 0)).toHaveLength(1);
+  });
+
   it("leaves the tab stop on the control that holds focus after a click", () => {
     // Clicking focuses without going through the arrow handler, so the
     // remembered index is stale by the time the re-render's effect runs. Handing

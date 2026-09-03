@@ -49,6 +49,14 @@ export function useToolbarRoving(
     );
   }, [ref]);
 
+  // Give the row's single tab stop to `active` and take it from everyone else.
+  const applyStop = useCallback((items: HTMLElement[], active: number): void => {
+    activeIndexRef.current = active;
+    items.forEach((item, index) => {
+      item.tabIndex = index === active ? 0 : -1;
+    });
+  }, []);
+
   // Re-applied after every render, because the control set is conditional: the
   // root anchor becomes a button when the tree is scoped, Up one level appears
   // with it, and the viewer's actions come and go with the selection. An effect
@@ -60,24 +68,41 @@ export function useToolbarRoving(
     if (items.length === 0) return;
 
     // Focus wins over the remembered index whenever it is already inside the
-    // row. A pointer click moves focus without telling us, and a control
-    // appearing ahead of the focused one shifts every index after it — so
-    // trusting the index alone would hand the tab stop to a different control
-    // and set `tabindex="-1"` on the one that actually holds focus. That is not
-    // merely untidy: `TABBABLE_SELECTOR` excludes negative tabindex, so a focus
-    // trap computing its boundary (AppDialog) stops recognising the focused
-    // element as first or last and lets Tab walk straight out of the modal.
+    // row: a control appearing ahead of the focused one shifts every index
+    // after it, so trusting the index alone would hand the tab stop to a
+    // different control and mark the focused one `tabindex="-1"`.
     //
     // Clamp for the rest: a control disappearing from the middle of the row
     // should leave the tab stop near where it was, not throw it back to the
     // start of the toolbar.
     const focused = items.findIndex((item) => item === document.activeElement);
-    const active = focused === -1 ? Math.min(activeIndexRef.current, items.length - 1) : focused;
-    activeIndexRef.current = active;
-    items.forEach((item, index) => {
-      item.tabIndex = index === active ? 0 : -1;
-    });
+    applyStop(items, focused === -1 ? Math.min(activeIndexRef.current, items.length - 1) : focused);
   });
+
+  // Repairing on commit alone is not enough, because focus moves on its own
+  // schedule. A pointer click focuses whichever control was hit — routinely one
+  // the row currently marks `tabindex="-1"` — and nothing guarantees the
+  // toolbar's owner re-renders afterwards, since a descendant can re-render
+  // alone. Leaving focus on an untabbable control is what lets Tab escape a
+  // focus trap: `TABBABLE_SELECTOR` excludes negative tabindex, so AppDialog
+  // stops recognising the focused element as the row's first or last and never
+  // wraps. `focusin` rather than `focus` because only the former bubbles, so one
+  // listener on the container covers every control the row will ever hold.
+  useEffect(() => {
+    if (!enabled) return;
+    const root = ref.current;
+    if (!root) return;
+
+    const handleFocusIn = (event: FocusEvent): void => {
+      const items = controls();
+      const index = items.findIndex((item) => item === event.target);
+      if (index === -1) return;
+      applyStop(items, index);
+    };
+
+    root.addEventListener("focusin", handleFocusIn);
+    return () => root.removeEventListener("focusin", handleFocusIn);
+  }, [applyStop, controls, enabled, ref]);
 
   return useCallback(
     (event: React.KeyboardEvent<HTMLElement>) => {
@@ -118,12 +143,9 @@ export function useToolbarRoving(
       // its default behaviour, which for a toolbar includes Tab leaving it.
       event.preventDefault();
       event.stopPropagation();
-      activeIndexRef.current = next;
-      items.forEach((item, index) => {
-        item.tabIndex = index === next ? 0 : -1;
-      });
+      applyStop(items, next);
       items[next]?.focus();
     },
-    [controls, enabled]
+    [applyStop, controls, enabled]
   );
 }

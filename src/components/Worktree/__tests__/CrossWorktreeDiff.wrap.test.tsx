@@ -195,17 +195,23 @@ describe("CrossWorktreeDiff wrap toggle (#12170)", () => {
     expect(wrapButton().getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("keeps the roving tab stop on the wrap button after it is clicked", async () => {
-    // The toolbar applies roving tabindex over every descendant button. Moving
-    // the stop off the focused control would set `tabindex="-1"` on it, and
-    // AppDialog's trap excludes negative tabindex when computing its boundary.
-    await setupComparison([{ path: "docs/spec.md", status: "M" }]);
+  it("hands the roving tab stop to the wrap button when it takes focus", async () => {
+    // Two files on purpose: with one, Wrap is the toolbar's only control and
+    // already owns the stop, so the assertion would hold no matter what the
+    // hook did. Behind the stepper it starts at `tabindex="-1"`, and leaving it
+    // there while focused is what lets Tab out of AppDialog, whose trap skips
+    // negative tabindex when computing its first/last boundary.
+    await setupComparison([
+      { path: "docs/spec.md", status: "M" },
+      { path: "src/a.ts", status: "M" },
+    ]);
     const button = wrapButton();
-    button.focus();
+    expect(button.tabIndex).toBe(-1);
 
-    fireEvent.click(button);
+    button.focus();
 
     expect(document.activeElement).toBe(button);
     expect(button.tabIndex).toBe(0);
+    expect(screen.getByLabelText("Next file").tabIndex).toBe(-1);
   });
 });
