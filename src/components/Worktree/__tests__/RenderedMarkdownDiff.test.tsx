@@ -250,7 +250,16 @@ describe("RenderedMarkdownDiff", () => {
   });
 
   it("rebuilds a deleted document from the patch with no source on disk", () => {
-    const diff = patch(["@@ -1,3 +0,0 @@", "-# Gone", "-", "-Body text here."]);
+    const diff = [
+      "diff --git a/docs/guide.md b/docs/guide.md",
+      "deleted file mode 100644",
+      "--- a/docs/guide.md",
+      "+++ /dev/null",
+      "@@ -1,3 +0,0 @@",
+      "-# Gone",
+      "-",
+      "-Body text here.",
+    ].join("\n");
 
     const { container } = renderDiff(diff, undefined, { status: "deleted" });
 

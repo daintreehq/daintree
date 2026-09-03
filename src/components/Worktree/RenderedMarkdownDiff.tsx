@@ -189,10 +189,12 @@ function DiffBlock({
   components: ReturnType<typeof useMarkdownRenderPolicy>["components"];
   urlTransform: ReturnType<typeof useMarkdownRenderPolicy>["urlTransform"];
 }) {
-  // Definitions live anywhere in the document but are referenced from a block,
-  // so a block rendered on its own would lose its link targets. They render to
-  // nothing, so appending them unconditionally is cheaper than tracking which
-  // block referenced which.
+  // Definitions live anywhere in the document but are cited from a block, so a
+  // block rendered on its own would lose its link targets. Appended only to the
+  // blocks that actually cite one: a footnote definition renders a whole
+  // footnote section, so attaching them to every block put one under every
+  // paragraph. Two blocks citing different footnotes still mint the same
+  // generated ids, which is a cosmetic duplicate rather than a wrong render.
   const content = definitions ? `${source}\n\n${definitions}` : source;
   const rehypePlugins = useMemo<PluggableList>(
     () => (ranges.length ? [inlineRangePlugin(ranges, expectedText, kind)] : []),
@@ -331,7 +333,7 @@ function BlockChange({
         <DiffBlock
           kind="removed"
           source={change.old.source}
-          definitions={oldDefinitions}
+          definitions={change.old.referenceIds.length ? oldDefinitions : ""}
           ranges={change.inline.old}
           expectedText={change.old.text}
           {...shared}
@@ -339,7 +341,7 @@ function BlockChange({
         <DiffBlock
           kind="added"
           source={change.new.source}
-          definitions={newDefinitions}
+          definitions={change.new.referenceIds.length ? newDefinitions : ""}
           ranges={change.inline.new}
           expectedText={change.new.text}
           {...shared}
@@ -348,11 +350,16 @@ function BlockChange({
     );
   }
   const kind = change.kind === "unchanged" ? "unchanged" : change.kind;
+  const definitions = change.block.referenceIds.length
+    ? change.kind === "removed"
+      ? oldDefinitions
+      : newDefinitions
+    : "";
   return (
     <DiffBlock
       kind={kind}
       source={change.block.source}
-      definitions={change.kind === "removed" ? oldDefinitions : newDefinitions}
+      definitions={definitions}
       ranges={[]}
       expectedText={change.block.text}
       {...shared}

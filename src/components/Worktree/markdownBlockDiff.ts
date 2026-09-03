@@ -69,11 +69,13 @@ export interface MarkdownBlock {
   /** Visible text, flattened for similarity scoring and the word diff. */
   text: string;
   /**
-   * The block resolves a link, image or footnote through a document-level
-   * definition, so a change to those definitions changes what it renders even
-   * when its own source is byte-identical.
+   * Normalized identifiers this block resolves through document-level
+   * definitions. A change to one of those definitions changes what the block
+   * renders even when its own source is byte-identical, so they are tracked
+   * per-block: comparing the document's definitions wholesale would mark every
+   * referencing block as edited whenever any unrelated definition moved.
    */
-  hasReference: boolean;
+  referenceIds: readonly string[];
 }
 
 /** Half-open character range into a block's `text`. */
@@ -132,7 +134,9 @@ export type MarkdownDiffResult =
  * matches whether or not the producer normalized them.
  */
 function toComparableLines(source: string): string[] {
-  if (source === "") return [];
+  // No empty-string special case: `"".split("\n")` is `[""]`, which is exactly
+  // what the added-file producer emits for an empty file (one `+` line with
+  // nothing after it). Returning no lines made every empty addition mismatch.
   return source.split("\n").map(stripCarriageReturn);
 }
 
@@ -282,9 +286,17 @@ export function reconstructMarkdownDocuments(
     return { ok: false, reason: "unsupported-patch" };
   }
   if (files.length !== 1) return { ok: false, reason: "unsupported-patch" };
-  const hunks = files[0]?.hunks ?? [];
+  const file = files[0];
+  const hunks = file?.hunks ?? [];
 
   if (input.status === "deleted") {
+    // The patch must agree that this is a deletion, not just the caller. A
+    // panel holds the status it was opened with, and a zero-context patch that
+    // merely strips a file's opening lines has the same hunk shape as a whole
+    // file removed — accepting it would present surviving prose as deleted.
+    if (file?.type !== "delete") return { ok: false, reason: "unsupported-patch" };
+    // An empty file's deletion is metadata only; there is no hunk to rebuild.
+    if (!hunks.length) return { ok: true, documents: { old: "", new: "" } };
     const oldLines = oldSourceFromHunks(hunks);
     if (!oldLines) return { ok: false, reason: "unsupported-patch" };
     if (oldLines.length > MARKDOWN_DIFF_MAX_LINES) return { ok: false, reason: "too-large" };
@@ -331,22 +343,25 @@ const REFERENCE_TYPES: ReadonlySet<string> = new Set([
   "footnoteReference",
 ]);
 
-/** Whether the block resolves anything through a document-level definition. */
-function hasReferenceNode(node: RootContent): boolean {
-  let found = false;
+/** Every definition identifier this block resolves through. */
+function referenceIdsOf(node: RootContent): string[] {
+  const ids = new Set<string>();
   const walk = (current: unknown): void => {
-    if (found || typeof current !== "object" || current === null) return;
-    const candidate = current as { type?: string; children?: unknown };
-    if (candidate.type !== undefined && REFERENCE_TYPES.has(candidate.type)) {
-      found = true;
-      return;
+    if (typeof current !== "object" || current === null) return;
+    const candidate = current as { type?: string; identifier?: unknown; children?: unknown };
+    if (
+      candidate.type !== undefined &&
+      REFERENCE_TYPES.has(candidate.type) &&
+      typeof candidate.identifier === "string"
+    ) {
+      ids.add(candidate.identifier);
     }
     if (Array.isArray(candidate.children)) {
       for (const child of candidate.children) walk(child);
     }
   };
   walk(node);
-  return found;
+  return [...ids];
 }
 
 /**
@@ -388,7 +403,10 @@ function flattenText(node: RootContent): string {
 
 export interface ParsedMarkdown {
   blocks: readonly MarkdownBlock[];
+  /** Every definition's source, for appending to the blocks that cite them. */
   definitions: string;
+  /** Definition source by normalized identifier, for detecting what moved. */
+  definitionsById: ReadonlyMap<string, string>;
 }
 
 /**
@@ -409,10 +427,11 @@ export function parseMarkdownBlocks(source: string): ParsedMarkdown {
     tree = markdownProcessor.parse(source);
   } catch (error) {
     console.warn("[markdownBlockDiff] failed to parse markdown", error);
-    return { blocks: [], definitions: "" };
+    return { blocks: [], definitions: "", definitionsById: new Map() };
   }
   const blocks: MarkdownBlock[] = [];
   const definitions: string[] = [];
+  const definitionsById = new Map<string, string>();
   for (const node of tree.children) {
     const start = node.position?.start.offset;
     const end = node.position?.end.offset;
@@ -424,6 +443,7 @@ export function parseMarkdownBlocks(source: string): ParsedMarkdown {
     // `[^1]` — between them the note's text would vanish from the diff.
     if (node.type === "definition" || node.type === "footnoteDefinition") {
       definitions.push(slice);
+      definitionsById.set(node.identifier, slice);
       continue;
     }
     if (node.type === "html") continue;
@@ -431,10 +451,10 @@ export function parseMarkdownBlocks(source: string): ParsedMarkdown {
       type: node.type,
       source: slice,
       text: flattenText(node),
-      hasReference: hasReferenceNode(node),
+      referenceIds: referenceIdsOf(node),
     });
   }
-  return { blocks, definitions: definitions.join("\n\n") };
+  return { blocks, definitions: definitions.join("\n\n"), definitionsById };
 }
 
 /**
@@ -735,12 +755,11 @@ export function diffMarkdownBlocks(
   oldBlocks: readonly MarkdownBlock[],
   newBlocks: readonly MarkdownBlock[],
   /**
-   * The document's link/image/footnote definitions differ between the two
-   * sides. A block whose own source is byte-identical still renders differently
-   * when a definition it resolves through has moved, so those blocks cannot
-   * anchor as unchanged.
+   * Identifiers whose definition differs between the two sides. A block whose
+   * own source is byte-identical still renders differently when a definition it
+   * resolves through has moved, so those blocks cannot anchor as unchanged.
    */
-  definitionsChanged = false
+  changedDefinitionIds: ReadonlySet<string> = new Set()
 ): { ok: true; changes: MarkdownBlockChange[] } | { ok: false; reason: MarkdownDiffFailure } {
   if (oldBlocks.length > MARKDOWN_DIFF_MAX_BLOCKS || newBlocks.length > MARKDOWN_DIFF_MAX_BLOCKS) {
     return { ok: false, reason: "too-large" };
@@ -762,8 +781,16 @@ export function diffMarkdownBlocks(
     // Identical source, but it renders through a definition that moved — so the
     // block really did change and must not be reported as untouched. The word
     // marks stay empty: the text is the same, the target behind it is not.
+    //
+    // Both sides' identifiers count. Removing a definition outright makes the
+    // new side parse `[docs][d]` as literal text with no reference at all, so
+    // testing the new block alone would miss exactly the case where the
+    // rendered output changed most.
+    const touchesMovedDefinition =
+      oldBlock.referenceIds.some((id) => changedDefinitionIds.has(id)) ||
+      newBlock.referenceIds.some((id) => changedDefinitionIds.has(id));
     changes.push(
-      definitionsChanged && newBlock.hasReference
+      touchesMovedDefinition
         ? { kind: "modified", old: oldBlock, new: newBlock, inline: NO_RANGES }
         : { kind: "unchanged", block: newBlock }
     );
@@ -781,8 +808,16 @@ export function buildMarkdownDiff(input: ReconstructInput): MarkdownDiffResult {
 
   const oldParsed = parseMarkdownBlocks(reconstructed.documents.old);
   const newParsed = parseMarkdownBlocks(reconstructed.documents.new);
-  const definitionsChanged = oldParsed.definitions !== newParsed.definitions;
-  const diffed = diffMarkdownBlocks(oldParsed.blocks, newParsed.blocks, definitionsChanged);
+  const changedDefinitionIds = new Set<string>();
+  for (const id of new Set([
+    ...oldParsed.definitionsById.keys(),
+    ...newParsed.definitionsById.keys(),
+  ])) {
+    if (oldParsed.definitionsById.get(id) !== newParsed.definitionsById.get(id)) {
+      changedDefinitionIds.add(id);
+    }
+  }
+  const diffed = diffMarkdownBlocks(oldParsed.blocks, newParsed.blocks, changedDefinitionIds);
   if (!diffed.ok) return diffed;
 
   return {

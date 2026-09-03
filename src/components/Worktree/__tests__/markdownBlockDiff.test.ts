@@ -20,6 +20,17 @@ function patch(hunks: string[], path = "doc.md"): string {
   return [`diff --git a/${path} b/${path}`, `--- a/${path}`, `+++ b/${path}`, ...hunks].join("\n");
 }
 
+/** A deletion the way git emits one — the metadata is what marks it a deletion. */
+function deletionPatch(hunks: string[], path = "doc.md"): string {
+  return [
+    `diff --git a/${path} b/${path}`,
+    "deleted file mode 100644",
+    `--- a/${path}`,
+    "+++ /dev/null",
+    ...hunks,
+  ].join("\n");
+}
+
 function kinds(changes: readonly MarkdownBlockChange[]): string[] {
   return changes.map((change) => change.kind);
 }
@@ -125,7 +136,17 @@ describe("reconstructMarkdownDocuments", () => {
   it("refuses a partial deletion presented as a deleted file", () => {
     // Contiguous from line 1, but it keeps a context line — accepting it would
     // show "# Kept" as deleted prose when the patch says it survives.
-    const diff = patch(["@@ -1,2 +1,1 @@", " # Kept", "-Removed"]);
+    const diff = deletionPatch(["@@ -1,2 +1,1 @@", " # Kept", "-Removed"]);
+
+    expect(reconstructMarkdownDocuments({ diff, newSource: undefined, status: "deleted" })).toEqual(
+      { ok: false, reason: "unsupported-patch" }
+    );
+  });
+
+  it("refuses a zero-context head deletion the patch doesn't call a deletion", () => {
+    // Same hunk shape as a whole-file removal, but the metadata says the file
+    // survives — a panel holding a stale "deleted" status must not be enough.
+    const diff = patch(["@@ -1,2 +0,0 @@", "-a", "-b"]);
 
     expect(reconstructMarkdownDocuments({ diff, newSource: undefined, status: "deleted" })).toEqual(
       { ok: false, reason: "unsupported-patch" }
@@ -133,7 +154,7 @@ describe("reconstructMarkdownDocuments", () => {
   });
 
   it("rebuilds a deleted file from the patch alone, with no disk read", () => {
-    const diff = patch(["@@ -1,3 +0,0 @@", "-# Gone", "-", "-Body."]);
+    const diff = deletionPatch(["@@ -1,3 +0,0 @@", "-# Gone", "-", "-Body."]);
 
     const result = reconstructMarkdownDocuments({ diff, newSource: undefined, status: "deleted" });
 
@@ -217,7 +238,19 @@ describe("reconstructMarkdownDocuments", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.documents.old).toBe("one\ntwo");
+    expect(result.documents.old).toBe("one\ntwo\n");
+    expect(result.documents.new).toBe("");
+  });
+
+  it("reconstructs an added file that is empty", () => {
+    // `"".split("\n")` is `[""]`, so the producer emits one empty insert.
+    const diff = patch(["@@ -0,0 +1,1 @@", "+"]);
+
+    const result = reconstructMarkdownDocuments({ diff, newSource: "", status: "added" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.documents.old).toBe("");
     expect(result.documents.new).toBe("");
   });
 
@@ -282,14 +315,15 @@ describe("parseMarkdownBlocks", () => {
     expect(definitions).toBe("[^1]: The note.");
   });
 
-  it("flags the blocks that resolve through a definition", () => {
+  it("records which definition each block resolves through", () => {
     // remark only produces a linkReference when the definition resolves;
     // without it the brackets are literal text.
-    const { blocks } = parseMarkdownBlocks(
+    const { blocks, definitionsById } = parseMarkdownBlocks(
       "Plain text.\n\nSee [docs][d].\n\n[d]: https://example.com\n"
     );
 
-    expect(blocks.map((block) => block.hasReference)).toEqual([false, true]);
+    expect(blocks.map((block) => block.referenceIds)).toEqual([[], ["d"]]);
+    expect(definitionsById.get("d")).toBe("[d]: https://example.com");
   });
 
   it("collects link reference definitions apart from the visible blocks", () => {
@@ -535,6 +569,42 @@ describe("buildMarkdownDiff", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.model.identical).toBe(true);
+  });
+
+  it("only touches the blocks citing the definition that moved", () => {
+    // A wholesale comparison of the document's definitions would mark the
+    // `[keep]` paragraph as edited too, purely because a sibling moved.
+    const newSource =
+      "Uses [keep][keep].\n\nUses [moved][moved].\n\n[keep]: /same\n[moved]: /new\n";
+    const diff = patch([
+      "@@ -1,6 +1,6 @@",
+      " Uses [keep][keep].",
+      " ",
+      " Uses [moved][moved].",
+      " ",
+      " [keep]: /same",
+      "-[moved]: /old",
+      "+[moved]: /new",
+    ]);
+
+    const result = buildMarkdownDiff({ diff, newSource, status: "modified" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(kinds(result.model.changes)).toEqual(["unchanged", "modified"]);
+  });
+
+  it("catches a definition being removed outright", () => {
+    // The new side parses `[docs][d]` as literal text with no reference at all,
+    // so testing only the new block would miss the case that changed most.
+    const newSource = "See [docs][d].\n";
+    const diff = patch(["@@ -1,3 +1,1 @@", " See [docs][d].", "-", "-[d]: https://example.com"]);
+
+    const result = buildMarkdownDiff({ diff, newSource, status: "modified" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.model.identical).toBe(false);
   });
 
   it("passes the engine's refusal through rather than rendering a guess", () => {
