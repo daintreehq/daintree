@@ -454,8 +454,8 @@ describe("AgentNotificationService – all-clear", () => {
       emitStateChange("completed", "working", b);
     }
 
-    function countAllClearEvents(spy: ReturnType<typeof vi.spyOn>): number {
-      return spy.mock.calls.filter((call) => call[0] === "agent:all-clear").length;
+    function countAllClearEvents(calls: readonly unknown[][]): number {
+      return calls.filter((call) => call[0] === "agent:all-clear").length;
     }
 
     it("suppresses the sound during scheduled quiet hours but still emits the event", () => {
@@ -471,7 +471,7 @@ describe("AgentNotificationService – all-clear", () => {
       vi.advanceTimersByTime(600);
 
       expect(soundServiceMock.play).not.toHaveBeenCalled();
-      expect(countAllClearEvents(emitSpy)).toBe(1);
+      expect(countAllClearEvents(emitSpy.mock.calls)).toBe(1);
       emitSpy.mockRestore();
     });
 
@@ -498,7 +498,7 @@ describe("AgentNotificationService – all-clear", () => {
       vi.advanceTimersByTime(600);
 
       expect(soundServiceMock.play).not.toHaveBeenCalled();
-      expect(countAllClearEvents(emitSpy)).toBe(1);
+      expect(countAllClearEvents(emitSpy.mock.calls)).toBe(1);
       emitSpy.mockRestore();
     });
 
@@ -527,7 +527,7 @@ describe("AgentNotificationService – all-clear", () => {
       vi.advanceTimersByTime(1);
 
       expect(soundServiceMock.play).not.toHaveBeenCalled();
-      expect(countAllClearEvents(emitSpy)).toBe(1);
+      expect(countAllClearEvents(emitSpy.mock.calls)).toBe(1);
       emitSpy.mockRestore();
     });
 
@@ -539,7 +539,7 @@ describe("AgentNotificationService – all-clear", () => {
       vi.advanceTimersByTime(600);
 
       expect(soundServiceMock.play).not.toHaveBeenCalled();
-      expect(countAllClearEvents(emitSpy)).toBe(1);
+      expect(countAllClearEvents(emitSpy.mock.calls)).toBe(1);
       emitSpy.mockRestore();
     });
 
