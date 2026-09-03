@@ -49,6 +49,13 @@ export interface PluginViewContentProps {
   panelId: string;
   initialArgs?: Record<string, unknown>;
   /**
+   * Writes back into the same `extensionState` bag `initialArgs` was read
+   * from, so the next mount of this panel restores what the view had. Supplied
+   * by the host rather than reached for by the view: a plugin bundle cannot
+   * import the panel store, and should not learn how panel persistence works.
+   */
+  persistState?: (patch: Record<string, unknown>) => boolean;
+  /**
    * Close this panel, supplied by whichever host is presenting it (#11301).
    * The diagnostics fallback surfaces it as "Close panel" — without it a broken
    * view is a dead end, because `panel.openPluginPanel` defaults to
@@ -345,10 +352,20 @@ export function makePluginViewContent(
   function PluginViewContent({
     panelId,
     initialArgs,
+    persistState,
     onRequestClose,
     worktreeId,
     panelRemovedSignal: panelRemovedSignalOverride,
   }: PluginViewContentProps) {
+    // Frozen at the first render of this mount rather than forwarded live.
+    // `extensionState` reaches this component straight off the panel record, so
+    // once a view can WRITE that record through `persistState` the prop would
+    // otherwise change underneath it on every save — turning a documented
+    // "arguments you were opened with" snapshot into a live channel, and
+    // handing any view that persists state derived from `initialArgs` a render
+    // loop. The bag exists to restore a view on its NEXT mount; within one
+    // mount the view owns its state.
+    const [mountArgs] = useState(() => initialArgs);
     // Store the lazy component in state so retries can swap in a fresh ref
     // without a useMemo dependency array. Each `lazy()` wrapper caches its
     // import result on its own payload, so a chunk-load failure is sticky for
@@ -488,7 +505,8 @@ export function makePluginViewContent(
                 pluginId={pluginId}
                 disposeSignal={controller.signal}
                 panelRemovedSignal={panelRemovedSignal}
-                initialArgs={initialArgs}
+                initialArgs={mountArgs}
+                persistState={persistState}
                 worktreeId={worktreeId}
               />
               <PluginViewMountReporter panelId={panelId} />

@@ -4,6 +4,7 @@ import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { makePluginViewContent } from "@/components/Plugin/PluginViewContent";
 import { logWarn } from "@/utils/logger";
+import { persistPanelExtensionStateThroughAccessor } from "@/store/storeAccessors";
 
 /**
  * Plugin panels are ordinary grid panels: `ContentPanel` owns their chrome and
@@ -79,6 +80,17 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
     // `ContentPanel`'s `force` argument — the fallback's button is the ordinary
     // recoverable close, never a forced one.
     const handleRequestClose = useCallback(() => onClose(), [onClose]);
+    // The view's write path back into `extensionState`. Routed through the
+    // cross-store accessor rather than the store itself: this component is a
+    // leaf by design, and it never subscribes to what it writes — the value is
+    // only ever read back on the NEXT mount, so persisting cannot re-render the
+    // panel that just persisted.
+    const panelId = panelProps.id;
+    const persistState = useCallback(
+      (patch: Record<string, unknown>): boolean =>
+        persistPanelExtensionStateThroughAccessor(panelId, patch),
+      [panelId]
+    );
     return (
       // ContentPanel owns click-to-focus, the focus-registry entry, and the pane
       // chrome, exactly as it does for every other non-PTY kind (#11228). It sits
@@ -101,6 +113,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
         <PluginViewContent
           panelId={panelProps.id}
           initialArgs={extensionState}
+          persistState={persistState}
           onRequestClose={handleRequestClose}
           worktreeId={panelProps.worktreeId}
         />

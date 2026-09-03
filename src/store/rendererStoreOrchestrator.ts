@@ -23,6 +23,7 @@ import { removeArtifactsForTerminal } from "@/hooks/useArtifacts";
 import {
   setPanelStoreAccessor,
   setPanelStoreClearForSwitchAccessor,
+  setPanelExtensionStateAccessor,
   setWorktreeSelectionAccessor,
   setWorktreeIdSetAccessor,
   setWorktreeGitDirAccessor,
@@ -69,6 +70,9 @@ export function initStoreOrchestrator(): () => void {
   setPanelStoreClearForSwitchAccessor(() => {
     usePanelStore.getState().clearTerminalStoreForSwitch();
   });
+  setPanelExtensionStateAccessor((panelId, patch) =>
+    usePanelStore.getState().setPanelExtensionState(panelId, patch)
+  );
   setWorktreeSelectionAccessor(() => ({
     activeWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId,
     restoreWorktreeId: useWorktreeSelectionStore.getState().restoreWorktreeId,
