@@ -316,9 +316,11 @@ describe("lifecycle kill handlers — trackKilledPid", () => {
 
     await dispatch({ type: "graceful-kill-by-project", projectId: "proj-1", requestId: "r1" });
 
-    expect(ctx.ptyManager.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
-      preserveSession: undefined,
-    });
+    expect(ctx.ptyManager.gracefulKillByProject).toHaveBeenCalledWith(
+      "proj-1",
+      { preserveSession: undefined },
+      expect.any(Function)
+    );
     expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledTimes(2);
     expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledWith(300);
     expect(ctx.resourceGovernor.trackKilledPid).toHaveBeenCalledWith(400);
@@ -337,9 +339,55 @@ describe("lifecycle kill handlers — trackKilledPid", () => {
       preserveSession: true,
     });
 
-    expect(ctx.ptyManager.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
-      preserveSession: true,
-    });
+    expect(ctx.ptyManager.gracefulKillByProject).toHaveBeenCalledWith(
+      "proj-1",
+      { preserveSession: true },
+      expect.any(Function)
+    );
+  });
+
+  it("graceful-kill-by-project streams a progress event per terminal (#12180)", async () => {
+    const ctx = makeCtx();
+    (ctx.ptyManager.getTerminalsForProject as ReturnType<typeof vi.fn>).mockReturnValue(["t1"]);
+    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue(termInfo(300));
+    // Report both terminals through the callback, then resolve with only the
+    // aggregate — the main process has to be able to act on the streamed ones
+    // without ever seeing this return value.
+    (ctx.ptyManager.gracefulKillByProject as ReturnType<typeof vi.fn>).mockImplementation(
+      async (
+        _projectId: string,
+        _options: unknown,
+        onTerminalSettled?: (result: { id: string; agentSessionId: string | null }) => void
+      ) => {
+        onTerminalSettled?.({ id: "t1", agentSessionId: "s1" });
+        onTerminalSettled?.({ id: "t2", agentSessionId: null });
+        return [
+          { id: "t1", agentSessionId: "s1" },
+          { id: "t2", agentSessionId: null },
+        ];
+      }
+    );
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    await dispatch({ type: "graceful-kill-by-project", projectId: "proj-1", requestId: "r1" });
+
+    const progress = (ctx.sendEvent as ReturnType<typeof vi.fn>).mock.calls
+      .map(([event]) => event)
+      .filter((e) => e.type === "graceful-kill-by-project-progress");
+    expect(progress).toEqual([
+      {
+        type: "graceful-kill-by-project-progress",
+        requestId: "r1",
+        projectId: "proj-1",
+        result: { id: "t1", agentSessionId: "s1" },
+      },
+      {
+        type: "graceful-kill-by-project-progress",
+        requestId: "r1",
+        projectId: "proj-1",
+        result: { id: "t2", agentSessionId: null },
+      },
+    ]);
   });
 
   it("graceful-kill-by-project handles empty project", async () => {

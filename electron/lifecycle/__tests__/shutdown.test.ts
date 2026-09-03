@@ -274,6 +274,7 @@ vi.mock("../../utils/performanceTrace.js", () => performanceTraceMock);
 import type { ShutdownDeps } from "../shutdown.js";
 import {
   CLEANUP_TIMEOUT_MS,
+  PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
   SHUTDOWN_DEADLINE_MS,
   SHUTDOWN_TAIL_TIMEOUT_MS,
 } from "../shutdownConfig.js";
@@ -1149,6 +1150,7 @@ describe("registerShutdownHandler", () => {
     function makePtyClient(overrides?: Record<string, unknown>) {
       return {
         gracefulKillByProject: vi.fn(async () => []),
+        getPartialGracefulKillResults: vi.fn(() => []),
         getAllTerminalsAsync: vi.fn(async () => []),
         dispose: vi.fn(),
         ...overrides,
@@ -1347,6 +1349,59 @@ describe("registerShutdownHandler", () => {
       expect((persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>).sessionId).toBe(
         "sess-2"
       );
+    });
+
+    it("keeps a project's streamed captures when its graceful kill outruns the deadline", async () => {
+      // #12180. One pane running its full budget used to push the project's
+      // whole kill past the 4s race, which resolved to `[]` — so the ids that
+      // HAD been captured were dropped from both the snapshot writeback and the
+      // journal, and those panes came back unreachable on the next launch.
+      vi.useFakeTimers();
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const getPartialGracefulKillResults = vi.fn(() => [{ id: "t1", agentSessionId: "sess-1" }]);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [agentTerminal]),
+        // Never settles: the slow pane is still going when the deadline fires.
+        gracefulKillByProject: vi.fn(() => new Promise(() => {})),
+        getPartialGracefulKillResults,
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      const quit = beforeQuitCb(makeEvent());
+      await vi.advanceTimersByTimeAsync(PROJECT_GRACEFUL_KILL_TIMEOUT_MS);
+      await vi.runAllTimersAsync();
+      await quit;
+
+      expect(getPartialGracefulKillResults).toHaveBeenCalledWith("proj-1");
+      expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalledWith(
+        "proj-1",
+        expect.any(Function)
+      );
+      expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
+      expect((persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>).sessionId).toBe(
+        "sess-1"
+      );
+      vi.useRealTimers();
+    });
+
+    it("writes nothing for a project that outran the deadline with no streamed captures", async () => {
+      vi.useFakeTimers();
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [agentTerminal]),
+        gracefulKillByProject: vi.fn(() => new Promise(() => {})),
+        getPartialGracefulKillResults: vi.fn(() => []),
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      const quit = beforeQuitCb(makeEvent());
+      await vi.advanceTimersByTimeAsync(PROJECT_GRACEFUL_KILL_TIMEOUT_MS);
+      await vi.runAllTimersAsync();
+      await quit;
+
+      expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+      expect(persistAgentSessionMock).not.toHaveBeenCalled();
+      vi.useRealTimers();
     });
 
     it("still journals when persisting a project's captures rejects", async () => {

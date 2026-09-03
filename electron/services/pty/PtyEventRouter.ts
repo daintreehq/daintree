@@ -73,6 +73,17 @@ export interface PtyEventRouterCallbacks {
    */
   onTerminalExit?: (id: string, exitCode: number, launchGeneration?: number) => void;
   /**
+   * Optional. Fires for each terminal a `graceful-kill-by-project` captures, as
+   * it settles rather than when the whole project has. Lets PtyClient answer
+   * with partial results for a call that is still in flight (#12180). Pure side
+   * effect.
+   */
+  onGracefulKillProgress?: (
+    projectId: string,
+    requestId: string,
+    result: { id: string; agentSessionId: string | null }
+  ) => void;
+  /**
    * Optional. Fires on every `spawn-result` (after `pendingSpawns` cleanup on
    * failure) so the lifecycle ledger can record spawn resolution. Pure side
    * effect.
@@ -246,6 +257,15 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
 
     case "graceful-kill-by-project-result":
       broker.resolve(event.requestId, event.results ?? []);
+      return true;
+
+    case "graceful-kill-by-project-progress":
+      // Not a broker resolve: the request stays open until the aggregate result
+      // arrives. This only records the capture so a caller that abandons the
+      // wait still has it (#12180).
+      if (callbacks.onGracefulKillProgress) {
+        callbacks.onGracefulKillProgress(event.projectId, event.requestId, event.result);
+      }
       return true;
 
     case "project-stats": {

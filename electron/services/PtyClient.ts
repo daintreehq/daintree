@@ -336,6 +336,16 @@ export class PtyClient extends EventEmitter {
   private pendingSpawns: Map<string, PtyHostSpawnOptions> = new Map();
   private ipcDataMirrorIds = new Set<string>();
   private pendingKillCount: Map<string, number> = new Map();
+  // Captures streamed back for a graceful kill that is still in flight, keyed
+  // by project. Seeded when the call starts and dropped when it settles, so an
+  // entry existing IS the "in flight" signal the router checks (#12180). The
+  // owning `requestId` rides along so a straggling event from an abandoned
+  // earlier kill of the same project can't file a dead terminal's id against
+  // the current one.
+  private partialGracefulKills = new Map<
+    string,
+    { requestId: string | null; results: Array<{ id: string; agentSessionId: string | null }> }
+  >();
   private activeProjectId: string | null = null;
   private windowProjectContexts = new Map<
     number,
@@ -580,6 +590,14 @@ export class PtyClient extends EventEmitter {
           if (generation !== undefined && ledger.currentGeneration(id) !== undefined) {
             ledger.recordClose(id, generation, "exit", exitCode);
           }
+        },
+        // Per-terminal captures streamed while a graceful kill is still
+        // running (#12180). Recorded only while a call for that project is in
+        // flight, so a late event from an abandoned request can't seed a stale
+        // entry for the next one.
+        onGracefulKillProgress: (projectId, requestId, result) => {
+          const inFlight = this.partialGracefulKills.get(projectId);
+          if (inFlight?.requestId === requestId) inFlight.results.push(result);
         },
         onSpawnResult: (id, result) => {
           const ledger = getLifecycleLedger();
@@ -1936,17 +1954,22 @@ export class PtyClient extends EventEmitter {
    *
    * Mirrors the single-terminal {@link gracefulKill} triage: a typed
    * BrokerError of HOST_EXITED/APP_SHUTDOWN (or a locally-observed dead/disposed
-   * client) means the host is gone and teardown is real — confirmed, just with
-   * no sessions to capture. A per-request TIMEOUT with a live host means the
+   * client) means the host is gone and teardown is real — confirmed, with
+   * nothing further to capture. A per-request TIMEOUT with a live host means the
    * teardown is NOT confirmed: agents may still be running, so the caller must
    * keep the project's restoration state and let the user retry. Unexpected
    * errors reject; callers treat that as fail-closed too.
    *
+   * Both failure paths still return whatever the host streamed before it went
+   * quiet (#12180) — `sessions` says what was captured, `confirmed` says whether
+   * the teardown was acknowledged, and the two are independent.
+   *
    * Contract of `confirmed: true`: the host acknowledged and ran the teardown
-   * (graceful shutdown + a fallback hard kill per terminal, see
-   * PtyManager.gracefulKillByProject), or the host is gone. It is NOT a
-   * guarantee that every OS process was reaped, and it does not reconcile with
-   * pty-host crash recovery, which can replay an in-flight `pendingSpawns`
+   * (graceful shutdown + a hard kill per terminal, issued for every terminal
+   * before the aggregate resolves — including a terminal that outran its own
+   * budget, see PtyManager.gracefulKillByProject), or the host is gone. It is
+   * NOT a guarantee that every OS process was reaped, and it does not reconcile
+   * with pty-host crash recovery, which can replay an in-flight `pendingSpawns`
    * terminal as a fresh incarnation after a host exit — that race is owned by
    * the crash-recovery path (#11339), not this method.
    */
@@ -1955,34 +1978,75 @@ export class PtyClient extends EventEmitter {
     options?: { preserveSession?: boolean }
   ): Promise<GracefulKillByProjectOutcome> {
     const shard = this.shardForProjectQuery(projectId);
+    const inFlight: {
+      requestId: string | null;
+      results: Array<{ id: string; agentSessionId: string | null }>;
+    } = { requestId: null, results: [] };
+    this.partialGracefulKills.set(projectId, inFlight);
     try {
       const sessions = await sendPtyHostRpc<Array<{ id: string; agentSessionId: string | null }>>(
         shard,
         `graceful-kill-by-project-${projectId}`,
-        (requestId) => ({
-          type: "graceful-kill-by-project",
-          projectId,
-          requestId,
-          ...(options?.preserveSession !== undefined
-            ? { preserveSession: options.preserveSession }
-            : {}),
-        }),
+        (requestId) => {
+          // Set before the request goes out, so no progress event can arrive
+          // uncorrelated. `sendPtyHostRpc` builds exactly once.
+          inFlight.requestId = requestId;
+          return {
+            type: "graceful-kill-by-project",
+            projectId,
+            requestId,
+            ...(options?.preserveSession !== undefined
+              ? { preserveSession: options.preserveSession }
+              : {}),
+          };
+        },
         { method: "graceful-kill-by-project", timeoutMs: PTY_TIMEOUTS["graceful-kill-by-project"] }
       );
       return { confirmed: true, sessions };
     } catch (error) {
+      // Whatever the host streamed before it stopped answering are real ids:
+      // the failure says the teardown wasn't acknowledged, not that nothing was
+      // captured. Returning them costs nothing (`confirmed` is reported
+      // separately and unchanged) and saves a resume (#12180).
+      const streamed = this.getPartialGracefulKillResults(projectId);
       const isHostGoneBrokerError = error instanceof BrokerError && error.code !== "TIMEOUT";
       if (isHostGoneBrokerError || !shard.lifecycle.child || this.isDisposed) {
         // Host is gone: its terminals are gone with it. Teardown is confirmed;
-        // no sessions were capturable.
-        return { confirmed: true, sessions: [] };
+        // nothing further was capturable.
+        return { confirmed: true, sessions: streamed };
       }
       if (error instanceof BrokerError && error.code === "TIMEOUT") {
         // Live host, per-request timeout — the kill was not acknowledged.
-        return { confirmed: false, sessions: [] };
+        return { confirmed: false, sessions: streamed };
       }
+      // Genuinely unexpected — not a broker outcome at all. Rejecting is the
+      // fail-closed contract callers are written against, and it costs
+      // `streamed`, which has nowhere to ride out on this path.
       throw error;
+    } finally {
+      // Only our own entry: a second kill of the same project (hibernation or
+      // idle auto-close racing the quit) has already replaced it, and dropping
+      // its captures here would hand it the empty array this fix exists to
+      // avoid.
+      if (this.partialGracefulKills.get(projectId) === inFlight) {
+        this.partialGracefulKills.delete(projectId);
+      }
     }
+  }
+
+  /**
+   * Per-terminal captures the host has streamed for a `gracefulKillByProject`
+   * that is still in flight.
+   *
+   * The aggregate reply waits on the slowest pane in the project, so a caller
+   * that races it against a shorter deadline — the quit chain does, per project
+   * — reads this on timeout rather than discarding the captures that did land
+   * (#12180). Empty once the call settles, and when none is running.
+   */
+  getPartialGracefulKillResults(
+    projectId: string
+  ): Array<{ id: string; agentSessionId: string | null }> {
+    return [...(this.partialGracefulKills.get(projectId)?.results ?? [])];
   }
 
   async gracefulKillByProject(

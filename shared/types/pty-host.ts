@@ -722,6 +722,16 @@ export type PtyHostEvent =
       results: Array<{ id: string; agentSessionId: string | null }>;
     }
   | {
+      // One terminal's capture, streamed the moment it lands. The aggregate
+      // result above only arrives once every terminal in the project has
+      // settled, so a main-process caller that stops waiting for it reads these
+      // instead of discarding the project's finished captures too (#12180).
+      type: "graceful-kill-by-project-progress";
+      requestId: string;
+      projectId: string;
+      result: { id: string; agentSessionId: string | null };
+    }
+  | {
       type: "fd-leak-warning";
       fdCount: number;
       activeTerminals: number;
@@ -766,8 +776,17 @@ export interface FdLeakWarningPayload {
  * without `as any` casts: the discriminant union of `PtyHostEvent` already types
  * `requestId` on every response member, but a switch case can't reach it without
  * narrowing first.
+ *
+ * A `requestId` is a correlation token, not a response marker: progress events
+ * carry one to say which call they belong to while that call is still open.
+ * Resolving the broker off one would settle the request on its FIRST terminal
+ * and drop every sibling's id — #12180 with a wider blast radius — so they are
+ * excluded here rather than left to a future caller to notice.
  */
-export type PtyHostResponseEvent = Extract<PtyHostEvent, { requestId: string }>;
+export type PtyHostResponseEvent = Exclude<
+  Extract<PtyHostEvent, { requestId: string }>,
+  { type: "graceful-kill-by-project-progress" }
+>;
 
 /**
  * Result of a graceful kill: the captured resume `sessionId` (null when there is
@@ -825,7 +844,11 @@ export interface TrimStateSummary extends TrimStateResult {
 }
 
 export function isPtyHostResponseEvent(event: PtyHostEvent): event is PtyHostResponseEvent {
-  return "requestId" in event && typeof (event as { requestId?: unknown }).requestId === "string";
+  return (
+    "requestId" in event &&
+    typeof (event as { requestId?: unknown }).requestId === "string" &&
+    event.type !== "graceful-kill-by-project-progress"
+  );
 }
 
 /** Terminal info sent from Host → Main for getTerminal queries */

@@ -452,6 +452,154 @@ describe("PtyClient adversarial", () => {
     expect(killByProjectCall).toBeUndefined();
   });
 
+  it("GRACEFUL_KILL_BY_PROJECT_EXPOSES_STREAMED_CAPTURES_WHILE_IN_FLIGHT", async () => {
+    const client = createReadyClient();
+
+    expect(client.getPartialGracefulKillResults("proj-a")).toEqual([]);
+
+    const promise = client.gracefulKillByProjectConfirmed("proj-a");
+    const request = mockChild.postMessage.mock.calls
+      .map((call: unknown[]) => call[0] as { type?: string; requestId?: string })
+      .find((msg) => msg?.type === "graceful-kill-by-project");
+
+    // #12180: the quit chain races this call against a deadline shorter than
+    // the RPC timeout. When that deadline fires the call is still open, so the
+    // captures that already landed have to be readable right here.
+    mockChild.emit("message", {
+      type: "graceful-kill-by-project-progress",
+      requestId: request!.requestId,
+      projectId: "proj-a",
+      result: { id: "t1", agentSessionId: "sess-1" },
+    });
+
+    expect(client.getPartialGracefulKillResults("proj-a")).toEqual([
+      { id: "t1", agentSessionId: "sess-1" },
+    ]);
+
+    mockChild.emit("message", {
+      type: "graceful-kill-by-project-result",
+      requestId: request!.requestId,
+      results: [{ id: "t1", agentSessionId: "sess-1" }],
+    });
+    await promise;
+
+    // Dropped once the call settles, so the next quit can't read this one's ids.
+    expect(client.getPartialGracefulKillResults("proj-a")).toEqual([]);
+  });
+
+  it("GRACEFUL_KILL_BY_PROJECT_IGNORES_PROGRESS_WITH_NO_CALL_IN_FLIGHT", async () => {
+    const client = createReadyClient();
+
+    mockChild.emit("message", {
+      type: "graceful-kill-by-project-progress",
+      requestId: "stale",
+      projectId: "proj-a",
+      result: { id: "t1", agentSessionId: "sess-stale" },
+    });
+
+    // A late event from an abandoned request must not seed the next call.
+    expect(client.getPartialGracefulKillResults("proj-a")).toEqual([]);
+  });
+
+  it("GRACEFUL_KILL_BY_PROJECT_IGNORES_PROGRESS_FROM_A_STALE_REQUEST", async () => {
+    const client = createReadyClient();
+
+    void client.gracefulKillByProjectConfirmed("proj-a");
+
+    // A straggler from an earlier, abandoned kill of the same project. Filing
+    // it against the live call would resume a dead terminal's conversation.
+    mockChild.emit("message", {
+      type: "graceful-kill-by-project-progress",
+      requestId: "some-earlier-request",
+      projectId: "proj-a",
+      result: { id: "t1", agentSessionId: "sess-stale" },
+    });
+
+    expect(client.getPartialGracefulKillResults("proj-a")).toEqual([]);
+  });
+
+  it("GRACEFUL_KILL_BY_PROJECT_OVERLAPPING_CALLS_KEEP_THEIR_OWN_CAPTURES", async () => {
+    const client = createReadyClient();
+
+    function requestIds() {
+      return mockChild.postMessage.mock.calls
+        .map((call: unknown[]) => call[0] as { type?: string; requestId?: string })
+        .filter((msg) => msg?.type === "graceful-kill-by-project")
+        .map((msg) => msg.requestId!);
+    }
+
+    // Two teardowns of one project overlap in practice — a quit landing on top
+    // of an idle auto-close sweep, or a double-clicked sleep. Neither may
+    // silently take over or clear the other's accumulator.
+    const first = client.gracefulKillByProjectConfirmed("proj-a");
+    const [firstRequest] = requestIds();
+    const second = client.gracefulKillByProjectConfirmed("proj-a");
+    const secondRequest = requestIds()[1]!;
+    expect(secondRequest).not.toBe(firstRequest);
+
+    mockChild.emit("message", {
+      type: "graceful-kill-by-project-progress",
+      requestId: secondRequest,
+      projectId: "proj-a",
+      result: { id: "t2", agentSessionId: "sess-2" },
+    });
+    // Addressed to the first call, which is no longer the live record — it must
+    // not be filed against the second.
+    mockChild.emit("message", {
+      type: "graceful-kill-by-project-progress",
+      requestId: firstRequest,
+      projectId: "proj-a",
+      result: { id: "t1", agentSessionId: "sess-1" },
+    });
+
+    expect(client.getPartialGracefulKillResults("proj-a")).toEqual([
+      { id: "t2", agentSessionId: "sess-2" },
+    ]);
+
+    // The first call settling must leave the second's captures readable.
+    mockChild.emit("message", {
+      type: "graceful-kill-by-project-result",
+      requestId: firstRequest,
+      results: [],
+    });
+    await first;
+    expect(client.getPartialGracefulKillResults("proj-a")).toEqual([
+      { id: "t2", agentSessionId: "sess-2" },
+    ]);
+
+    mockChild.emit("message", {
+      type: "graceful-kill-by-project-result",
+      requestId: secondRequest,
+      results: [{ id: "t2", agentSessionId: "sess-2" }],
+    });
+    await second;
+    expect(client.getPartialGracefulKillResults("proj-a")).toEqual([]);
+  });
+
+  it("GRACEFUL_KILL_BY_PROJECT_CONFIRMED_RETURNS_STREAMED_SESSIONS_ON_TIMEOUT", async () => {
+    const client = createReadyClient();
+
+    const promise = client.gracefulKillByProjectConfirmed("proj-a");
+    const request = mockChild.postMessage.mock.calls
+      .map((call: unknown[]) => call[0] as { type?: string; requestId?: string })
+      .find((msg) => msg?.type === "graceful-kill-by-project");
+    mockChild.emit("message", {
+      type: "graceful-kill-by-project-progress",
+      requestId: request!.requestId,
+      projectId: "proj-a",
+      result: { id: "t1", agentSessionId: "sess-1" },
+    });
+
+    await vi.advanceTimersByTimeAsync(11000);
+
+    // `confirmed` still reports the unacknowledged teardown; the id the host
+    // did stream is real and is kept anyway (#12180).
+    await expect(promise).resolves.toEqual({
+      confirmed: false,
+      sessions: [{ id: "t1", agentSessionId: "sess-1" }],
+    });
+  });
+
   it("GRACEFUL_KILL_BY_PROJECT_CONFIRMED_TREATS_HOST_EXIT_AS_CONFIRMED", async () => {
     const client = createReadyClient();
     // A fresh child for the restart so the exited emitter isn't reused.
