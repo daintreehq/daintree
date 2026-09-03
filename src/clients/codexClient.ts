@@ -1,6 +1,7 @@
 import type {
   AgentSubagentsResult,
   AgentSubagentTranscriptResult,
+  CodexFolderSessionsResult,
 } from "@shared/types/ipc/agentSubagents";
 
 /**
@@ -27,5 +28,19 @@ export const codexClient = {
    */
   resolveResumeLatestSession: (payload: { cwd: string }): Promise<string | null> => {
     return window.electron.codex.resolveResumeLatestSession(payload);
+  },
+
+  /**
+   * Codex sessions recorded for a folder, for the "Find session" action on
+   * the lost-session banner (#12182). Pass `codexHome` when the pane carries
+   * its own launch env (`panel.env.CODEX_HOME`) — this asks main's own
+   * profile otherwise, which is wrong for a pane that ran under a redirected
+   * one.
+   */
+  findSessions: (payload: {
+    cwd: string;
+    codexHome?: string;
+  }): Promise<CodexFolderSessionsResult> => {
+    return window.electron.codex.findSessions(payload);
   },
 } as const;

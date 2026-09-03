@@ -23,6 +23,7 @@ vi.mock("fs/promises", () => ({
 import { CodexAppServerError } from "../CodexAppServerClient.js";
 import {
   listCodexSubagents,
+  listCodexSessionsForCwd,
   readCodexSubagentTranscript,
   resolveCodexResumeLatestSession,
   selectParentThread,
@@ -619,5 +620,129 @@ describe("resolveCodexResumeLatestSession budget", () => {
 
     const options = runSession.mock.calls[0]?.[1] as { timeoutMs?: number } | undefined;
     expect(options?.timeoutMs).toBe(2_000);
+  });
+});
+
+// issue #12182 — "Find session" on the lost-session banner.
+describe("listCodexSessionsForCwd", () => {
+  it("queries the folder's root threads and maps them for the picker", async () => {
+    let listParams: QueryParams = {};
+    scriptSession((method, params) => {
+      if (method === "thread/list") {
+        listParams = params;
+        return {
+          data: [
+            { id: "root-1", sessionId: "root-1", preview: "fix the flaky test", recencyAt: 20 },
+            { id: "root-2", preview: "add the banner", updatedAt: 10 },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const result = await listCodexSessionsForCwd("/repo");
+
+    expect(result).toEqual({
+      status: "ok",
+      sessions: [
+        { id: "root-1", preview: "fix the flaky test", updatedAt: 20_000 },
+        { id: "root-2", preview: "add the banner", updatedAt: 10_000 },
+      ],
+    });
+    expect(listParams.cwd).toEqual(["/repo"]);
+    expect(listParams.sortKey).toBe("recency_at");
+    expect(listParams.sortDirection).toBe("desc");
+    expect(listParams.useStateDbOnly).toBe(true);
+    // Same non-archived, interactive-only default the resume-latest lookup
+    // and picker share — naming either would broaden the filter, not restate it.
+    expect(listParams).not.toHaveProperty("sourceKinds");
+    expect(listParams).not.toHaveProperty("archived");
+  });
+
+  it("excludes subagent threads — a picker only offers root conversations", async () => {
+    scriptSession((method) => {
+      if (method === "thread/list") {
+        return {
+          data: [
+            { id: "root", sessionId: "root", recencyAt: 5 },
+            { id: "child", parentThreadId: "root", recencyAt: 6 },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const result = await listCodexSessionsForCwd("/repo");
+
+    expect(result).toEqual({
+      status: "ok",
+      sessions: [{ id: "root", preview: "", updatedAt: 5_000 }],
+    });
+  });
+
+  it("orders sessions most-recently-active first", async () => {
+    scriptSession((method) => {
+      if (method === "thread/list") {
+        return {
+          data: [
+            { id: "older", sessionId: "older", recencyAt: 1 },
+            { id: "newer", sessionId: "newer", recencyAt: 99 },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const result = await listCodexSessionsForCwd("/repo");
+
+    expect(result.status).toBe("ok");
+    expect(result.status === "ok" ? result.sessions.map((s) => s.id) : []).toEqual([
+      "newer",
+      "older",
+    ]);
+  });
+
+  it("drops a thread with no usable id rather than throwing", async () => {
+    scriptSession((method) => {
+      if (method === "thread/list") {
+        return { data: [{ preview: "no id at all", recencyAt: 1 }] };
+      }
+      return {};
+    });
+
+    await expect(listCodexSessionsForCwd("/repo")).resolves.toEqual({ status: "ok", sessions: [] });
+  });
+
+  it("asks under both spellings of a symlinked path, since the cwd filter is exact", async () => {
+    let listParams: QueryParams = {};
+    scriptSession((method, params) => {
+      if (method === "thread/list") {
+        listParams = params;
+        return { data: [] };
+      }
+      return {};
+    });
+
+    await listCodexSessionsForCwd("/tmp/repo");
+
+    expect(listParams.cwd).toEqual(["/tmp/repo", "/private/tmp/repo"]);
+  });
+
+  it("forwards codexHome to the session so the query runs against the pane's own profile", async () => {
+    scriptSession(() => ({ data: [] }));
+
+    await listCodexSessionsForCwd("/repo", "/pane/.codex");
+
+    const options = runSession.mock.calls[0]?.[1] as { codexHome?: string } | undefined;
+    expect(options?.codexHome).toBe("/pane/.codex");
+  });
+
+  it("reports unavailable rather than throwing when Codex cannot be reached", async () => {
+    runSession.mockRejectedValue(new CodexAppServerError("cli-missing", "no codex"));
+
+    await expect(listCodexSessionsForCwd("/repo")).resolves.toMatchObject({
+      status: "unavailable",
+      reason: "cli-missing",
+    });
   });
 });

@@ -17,6 +17,7 @@ import type {
   TabGroup,
 } from "@/types";
 import type { WaitingReason } from "@shared/types/agent";
+import type { SessionLostReason } from "@shared/types/panel";
 import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types/ipc/terminal";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isGitBackedProject } from "@shared/types";
@@ -109,7 +110,7 @@ export interface HydrationOptions {
     originalPresetId?: string;
     isUsingFallback?: boolean;
     fallbackChainIndex?: number;
-    sessionLostOnRestore?: boolean;
+    sessionLostOnRestore?: SessionLostReason;
     env?: Record<string, string>;
     extensionState?: Record<string, unknown>;
     pluginId?: string;

@@ -648,7 +648,7 @@ describe("buildArgsForRespawn", () => {
         "/tmp"
       );
       expect(result.command).toBe("claude --generated");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("no-resume-command");
     });
 
     it("is set when no session was captured and resume-latest is unavailable (branch 3)", () => {
@@ -666,7 +666,7 @@ describe("buildArgsForRespawn", () => {
       // that flags the session lost without trying to recover it first.
       expect(buildResumeLatestCommandMock).toHaveBeenCalledWith("claude", undefined);
       expect(result.command).toBe("claude --generated");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("no-resume-path");
     });
 
     it("is left unset when agent settings are unavailable (no fresh launch produced)", () => {
@@ -718,9 +718,15 @@ describe("buildArgsForRespawn", () => {
         undefined,
         { allowResumeLatest: false }
       );
-      expect(buildResumeLatestCommandMock).not.toHaveBeenCalled();
+      // The bare single-arg call is the reason-classification probe (#12182) —
+      // it never builds a usable command, only names why the pane fell
+      // through. The fallback must still never be genuinely ATTEMPTED: no
+      // call carries flags/baseCommand, and its return value never reaches
+      // `result.command` below — that's the suppression #11461 exists for.
+      expect(buildResumeLatestCommandMock).toHaveBeenCalledTimes(1);
+      expect(buildResumeLatestCommandMock).toHaveBeenCalledWith("claude");
       expect(result.command).toBe("claude --generated");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("sibling-owns-resume-latest-slot");
     });
 
     it("does not inherit a persisted resume-latest command when suppressed (#11461)", () => {
@@ -746,7 +752,7 @@ describe("buildArgsForRespawn", () => {
         { allowResumeLatest: false }
       );
       expect(result.command).toBe("claude");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("sibling-owns-resume-latest-slot");
     });
 
     it("still resumes an exact session id when resume-latest is suppressed (#11461)", () => {
@@ -793,7 +799,7 @@ describe("buildArgsForRespawn", () => {
         { allowResumeLatest: false }
       );
       expect(result.command).toBe("claude --flagged");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("sibling-owns-resume-latest-slot");
     });
 
     it("leaves an agent with no resume-latest fallback untouched when suppressed (#11461)", () => {
@@ -847,7 +853,7 @@ describe("buildArgsForRespawn", () => {
         { allowSessionIdResume: false, allowResumeLatest: false }
       );
       expect(result.command).toBe("claude --generated");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("sibling-owns-session-id");
     });
 
     it("does not inherit a persisted --resume command when the id is withheld (#11461)", () => {
@@ -877,7 +883,7 @@ describe("buildArgsForRespawn", () => {
         { allowSessionIdResume: false, allowResumeLatest: false }
       );
       expect(result.command).toBe("claude");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("sibling-owns-session-id");
     });
 
     it("does not fall back to resume-latest when the session id is withheld (#11461)", () => {
@@ -904,7 +910,7 @@ describe("buildArgsForRespawn", () => {
         { allowSessionIdResume: false }
       );
       expect(result.command).toBe("claude --generated");
-      expect(result.sessionLostOnRestore).toBe(true);
+      expect(result.sessionLostOnRestore).toBe("sibling-owns-session-id");
     });
 
     it("resumes its own session id by default when no allowance is passed (#11461)", () => {
@@ -2447,7 +2453,7 @@ describe("buildArgsForRespawn — persisted launch env (#10922)", () => {
       false,
       "/tmp"
     );
-    expect(result.sessionLostOnRestore).toBe(true);
+    expect(result.sessionLostOnRestore).toBe("no-resume-command");
     expect(result.env).toEqual({ ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" });
   });
 });
@@ -3326,7 +3332,7 @@ describe("buildArgsForRespawn — assigned session id", () => {
       "/tmp"
     );
 
-    expect(result.sessionLostOnRestore).toBe(true);
+    expect(result.sessionLostOnRestore).toBe("no-resume-command");
     expect(result.agentSessionId).not.toBe("sess-expired");
     // Must be a real UUID — the CLI rejects anything else — and, crucially, the
     // SAME id the rebuilt command was given. A record holding an id the command
@@ -3494,7 +3500,7 @@ describe("buildArgsForRespawn — a named resume-latest session (#12178)", () =>
 
     expect(result.command).toBe("codex --generated");
     expect(result.agentSessionId).not.toBe("sess-9");
-    expect(result.sessionLostOnRestore).toBe(true);
+    expect(result.sessionLostOnRestore).toBe("sibling-owns-resume-latest-slot");
   });
 
   it("never displaces the exact id a snapshot already carries", () => {

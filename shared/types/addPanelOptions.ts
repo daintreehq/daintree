@@ -9,6 +9,7 @@ import type {
   FileBrowserSortDirection,
   FileBrowserSortKey,
   FileBrowserTreeSnapshot,
+  SessionLostReason,
 } from "./panel.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
@@ -166,17 +167,18 @@ export interface AddPanelOptionsBase {
   /** Chain index consumed so far from the primary preset's fallback list. */
   fallbackChainIndex?: number;
   /**
-   * PTY-only, transient. True when session restore fell through to a fresh
+   * PTY-only, transient. Set when session restore fell through to a fresh
    * agent launch because no resume command was usable — either none was
    * available (neither exact-session nor resume-latest), or resume-latest was
    * suppressed because a sibling pane owns this agent+cwd's single slot
-   * (#11461) — so the prior conversation is unreachable for this pane.
+   * (#11461) — so the prior conversation is unreachable for this pane. The
+   * value names which of those it was (#12182).
    * Drives the "Session no longer reachable" restart banner, and doubles as the
    * "not yet acknowledged" gate: dismissing the banner consumes this flag
    * (#11589), as does the next restart. Never persisted — see
    * `serializePtyPanel` (intentionally omitted).
    */
-  sessionLostOnRestore?: boolean;
+  sessionLostOnRestore?: SessionLostReason;
   /**
    * User-initiated focus timestamp from the saved snapshot, propagated
    * from the hydration boundary (`statePatcher.ts:buildArgsFor*` →

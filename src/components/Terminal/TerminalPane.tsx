@@ -32,6 +32,7 @@ import { useUnmountVisibilityCleanup } from "./useUnmountVisibilityCleanup";
 import { useTerminalVisibilityObserver } from "./useTerminalVisibilityObserver";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
+import { FindCodexSessionAction } from "./FindCodexSessionAction";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
 import { useContextInjection } from "@/hooks/useContextInjection";
@@ -1429,6 +1430,12 @@ function TerminalPaneComponent({
             restartBannerVariant.type === "session-resume-unavailable"
               ? sessionLostBanner.dismissAll
               : undefined
+          }
+          findSessionSlot={
+            restartBannerVariant.type === "session-resume-unavailable" &&
+            effectiveAgentId === "codex" ? (
+              <FindCodexSessionAction panelId={id} />
+            ) : undefined
           }
         />
       </BannerSlot>

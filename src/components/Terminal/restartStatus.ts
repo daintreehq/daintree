@@ -1,11 +1,11 @@
-import type { PanelExitBehavior } from "@shared/types/panel";
+import type { PanelExitBehavior, SessionLostReason } from "@shared/types/panel";
 import type { TerminalRestartError, SpawnError, TerminalReconnectError } from "@/types";
 import type { BackendStatus } from "@/store/panelStore";
 
 export type RestartBannerVariant =
   | { type: "auto-restarting" }
   | { type: "restarting" }
-  | { type: "session-resume-unavailable" }
+  | { type: "session-resume-unavailable"; reason: SessionLostReason }
   | { type: "exit-error"; exitCode: number }
   | { type: "none" };
 
@@ -29,7 +29,7 @@ export interface RestartBannerInput {
    * lost session never suppresses a later exit-error banner for a crash of the
    * fresh session (issue #10823).
    */
-  sessionLostOnRestore?: boolean;
+  sessionLostOnRestore?: SessionLostReason;
 }
 
 export function getRestartBannerVariant(input: RestartBannerInput): RestartBannerVariant {
@@ -65,7 +65,7 @@ export function getRestartBannerVariant(input: RestartBannerInput): RestartBanne
     !input.reconnectError &&
     !input.spawnError
   ) {
-    return { type: "session-resume-unavailable" };
+    return { type: "session-resume-unavailable", reason: input.sessionLostOnRestore };
   }
 
   if (

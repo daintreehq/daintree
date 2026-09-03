@@ -10,6 +10,7 @@ const serviceMock = vi.hoisted(() => ({
   listCodexSubagents: vi.fn(),
   readCodexSubagentTranscript: vi.fn(),
   resolveCodexResumeLatestSession: vi.fn(),
+  listCodexSessionsForCwd: vi.fn(),
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
@@ -31,6 +32,7 @@ function fakeEvent(): Electron.IpcMainInvokeEvent {
 }
 
 const resolveChannel = CHANNELS.CODEX_RESOLVE_RESUME_LATEST_SESSION;
+const findSessionsChannel = CHANNELS.CODEX_FIND_SESSIONS;
 
 describe("codex IPC handlers", () => {
   let cleanup: () => void;
@@ -90,9 +92,55 @@ describe("codex IPC handlers", () => {
     });
   });
 
+  // issue #12182 — "Find session" on the lost-session banner.
+  describe("findSessions", () => {
+    it("passes cwd and an optional codexHome through to the service", async () => {
+      serviceMock.listCodexSessionsForCwd.mockResolvedValue({ status: "ok", sessions: [] });
+
+      const result = await getHandler(findSessionsChannel)(fakeEvent(), {
+        cwd: "/repo/worktree",
+        codexHome: "/repo/.codex-home",
+      });
+
+      expect(result).toEqual({ status: "ok", sessions: [] });
+      expect(serviceMock.listCodexSessionsForCwd).toHaveBeenCalledWith(
+        "/repo/worktree",
+        "/repo/.codex-home"
+      );
+    });
+
+    it("omits codexHome when the caller doesn't supply one", async () => {
+      serviceMock.listCodexSessionsForCwd.mockResolvedValue({ status: "ok", sessions: [] });
+
+      await getHandler(findSessionsChannel)(fakeEvent(), { cwd: "/repo" });
+
+      expect(serviceMock.listCodexSessionsForCwd).toHaveBeenCalledWith("/repo", undefined);
+    });
+
+    it.each([
+      ["a relative cwd", { cwd: "relative/path" }],
+      ["a relative codexHome", { cwd: "/repo", codexHome: "relative" }],
+      ["a NUL byte in cwd", { cwd: "/repo\0" }],
+      ["a non-string codexHome", { cwd: "/repo", codexHome: 42 }],
+    ])("rejects %s before reaching the service", async (_label, payload) => {
+      await expect(getHandler(findSessionsChannel)(fakeEvent(), payload)).rejects.toThrow();
+
+      expect(serviceMock.listCodexSessionsForCwd).not.toHaveBeenCalled();
+    });
+
+    it("propagates a service failure", async () => {
+      serviceMock.listCodexSessionsForCwd.mockRejectedValue(new Error("app-server down"));
+
+      await expect(getHandler(findSessionsChannel)(fakeEvent(), { cwd: "/repo" })).rejects.toThrow(
+        "app-server down"
+      );
+    });
+  });
+
   it("removes every codex handler on cleanup", () => {
     expect(ipcHandlers.has(resolveChannel)).toBe(true);
     expect(ipcHandlers.has(CHANNELS.CODEX_LIST_SUBAGENTS)).toBe(true);
+    expect(ipcHandlers.has(findSessionsChannel)).toBe(true);
 
     cleanup();
 

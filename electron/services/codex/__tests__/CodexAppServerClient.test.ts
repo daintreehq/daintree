@@ -392,6 +392,54 @@ describe("runCodexAppServerSession", () => {
   });
 });
 
+// issue #12182 — "Find session" asks on behalf of a specific pane, which may
+// have launched under a redirected CODEX_HOME. This client has no other way
+// to learn that, so the caller must be able to hand it over per session.
+describe("CODEX_HOME override (#12182)", () => {
+  const originalCodexHome = process.env.CODEX_HOME;
+
+  afterEach(() => {
+    if (originalCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = originalCodexHome;
+    }
+  });
+
+  it("spawns with the caller-supplied codexHome, not main's own", async () => {
+    process.env.CODEX_HOME = "/main/.codex";
+
+    const promise = runCodexAppServerSession(async () => "done", {
+      command: "codex-test",
+      codexHome: "/pane/.codex",
+    });
+    await flush();
+    child.respondTo("initialize", { userAgent: "codex" });
+    await promise;
+
+    const spawnEnv = spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv | undefined;
+    expect(spawnEnv?.CODEX_HOME).toBe("/pane/.codex");
+  });
+
+  it("falls back to main's own CODEX_HOME when no override is given", async () => {
+    process.env.CODEX_HOME = "/main/.codex";
+
+    await startSession(async () => "done");
+
+    const spawnEnv = spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv | undefined;
+    expect(spawnEnv?.CODEX_HOME).toBe("/main/.codex");
+  });
+
+  it("omits CODEX_HOME entirely when neither the caller nor main's env has one", async () => {
+    delete process.env.CODEX_HOME;
+
+    await startSession(async () => "done");
+
+    const spawnEnv = spawnMock.mock.calls[0]?.[2]?.env as NodeJS.ProcessEnv | undefined;
+    expect(spawnEnv?.CODEX_HOME).toBeUndefined();
+  });
+});
+
 describe("session slot queue", () => {
   it("counts the wait for a slot against the caller's own budget", async () => {
     // Two sessions hold the gate. A third must not sit here unbounded: at
