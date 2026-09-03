@@ -6,10 +6,12 @@ import type { PatternDetectionConfig } from "./AgentPatternDetector.js";
 import type { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import type { AgentStateService } from "./AgentStateService.js";
 import type { SemanticBufferManager } from "./SemanticBufferManager.js";
+import type { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
 import type { TerminalInfo } from "./types.js";
 import { computeDefaultTitle } from "./terminalTitle.js";
 import { logIdentityDebug } from "./identityDebug.js";
 import { buildPatternConfig } from "./terminalActivityPatterns.js";
+import { captureAgentEndSession } from "./agentEndCapture.js";
 
 export interface TerminalAgentDetectionHost {
   readonly id: string;
@@ -17,6 +19,7 @@ export interface TerminalAgentDetectionHost {
   readonly agentStateService: AgentStateService;
   readonly headlineGenerator: ActivityHeadlineGenerator;
   readonly semanticBufferManager: SemanticBufferManager;
+  readonly forensicsBuffer: TerminalForensicsBuffer;
   readonly hasActivityMonitor: boolean;
   lastDetectedProcessIconId: string | undefined;
   reconfigureActivityMonitor(agentId: string, patternConfig?: PatternDetectionConfig): void;
@@ -172,6 +175,17 @@ export function handleAgentDetection(
           `reason=${result.evidenceSource === "shell_command" ? "prompt-return" : "no-agent-detected"} ` +
           `agent=${previousAgent} runtime=${terminal.launchAgentId ? "launch-anchored" : "runtime-promoted"}`
       );
+      // The agent ended on its own but the pane survives as a shell, so no close
+      // path ever sees this session — quitting Codex by hand left it invisible to
+      // the resume palette (#12179). Runs before the identity and title rewrites
+      // below, which the record reads.
+      captureAgentEndSession({
+        terminalId: host.id,
+        terminal,
+        agentId: previousAgent,
+        boundary: "demotion",
+        recentOutput: host.forensicsBuffer.getRecentOutput(),
+      });
       host.agentStateService.updateAgentState(terminal, { type: "exit", code: 0 });
       terminal.detectedAgentId = undefined;
       justClearedDetection = true;

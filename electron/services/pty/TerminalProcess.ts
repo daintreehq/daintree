@@ -2013,6 +2013,9 @@ export class TerminalProcess {
         agentStateService: this.deps.agentStateService,
         headlineGenerator: this.headlineGenerator,
         semanticBufferManager: this.semanticBufferManager,
+        get forensicsBuffer() {
+          return self.forensicsBuffer;
+        },
         get hasActivityMonitor() {
           return self.analysis.hasMonitor();
         },

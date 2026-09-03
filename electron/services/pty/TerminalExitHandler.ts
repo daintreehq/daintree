@@ -6,6 +6,7 @@ import type { IdentityWatcher } from "./IdentityWatcher.js";
 import type { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
 import type { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
 import type { SessionSnapshotter } from "./SessionSnapshotter.js";
+import { captureAgentEndSession } from "./agentEndCapture.js";
 import { computeDefaultTitle } from "./terminalTitle.js";
 
 export interface TerminalExitHandlerHost {
@@ -64,6 +65,24 @@ export class TerminalExitHandler {
       previousAgent !== undefined ||
       terminal.detectedProcessIconId !== undefined ||
       this.host.lastDetectedProcessIconId !== undefined;
+
+    // The agent printed its resume hint on the way out. Daintree-initiated
+    // teardown scrapes its own id (`gracefulShutdown`), but a user quitting the
+    // agent — Ctrl-C twice, or the process ending on its own — left the session
+    // unrecorded and invisible to the resume palette (#12179). Runs before the
+    // title and identity rewrites below, which the record reads. `wasKilled`
+    // excludes the teardown path: it has already captured and journaled through
+    // its own funnel.
+    if (previousAgent && !terminal.wasKilled) {
+      captureAgentEndSession({
+        terminalId: this.host.id,
+        terminal,
+        agentId: previousAgent,
+        boundary: "exit",
+        recentOutput,
+      });
+    }
+
     if (hadDetectedIdentity && !terminal.wasKilled) {
       terminal.detectedAgentId = undefined;
       terminal.detectedProcessIconId = undefined;
