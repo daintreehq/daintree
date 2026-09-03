@@ -26,11 +26,14 @@ const reconnectWithTimeoutMock = vi.hoisted(() => vi.fn());
 // Restore asks Codex which session `--last` would open before it builds the
 // respawn command (#12178). Defaults to "no answer", which is the fallback every
 // pre-existing case here already expects.
-const resolveResumeLatestSessionMock = vi.hoisted(() => vi.fn(async () => null));
+const resolveResumeLatestSessionMock = vi.hoisted(() =>
+  vi.fn(async (_payload: { cwd: string }): Promise<string | null> => null)
+);
 
 vi.mock("@/clients/codexClient", () => ({
   codexClient: {
-    resolveResumeLatestSession: (...args: unknown[]) => resolveResumeLatestSessionMock(...args),
+    resolveResumeLatestSession: (payload: { cwd: string }) =>
+      resolveResumeLatestSessionMock(payload),
   },
 }));
 
@@ -2197,20 +2200,44 @@ describe("restorePanelsPhase — naming the resume-latest session (#12178)", () 
 
   it("resolves before the pane is added, so the id is never a later patch", async () => {
     let released: (value: string) => void = () => {};
-    resolveResumeLatestSessionMock.mockReturnValue(
-      new Promise<string>((resolve) => {
+    let markAsked: () => void = () => {};
+    // Waiting on the lookup actually being reached, rather than ticking the
+    // microtask queue: `addPanel` is several awaits past the reconnect probe, so
+    // a bare tick would assert nothing and pass with the feature deleted.
+    const asked = new Promise<void>((resolve) => {
+      markAsked = resolve;
+    });
+    resolveResumeLatestSessionMock.mockImplementation(() => {
+      markAsked();
+      return new Promise<string>((resolve) => {
         released = resolve;
-      })
-    );
+      });
+    });
     const ctx = makeContext();
 
     const phase = restorePanelsPhase([codexPanel("a", { cwd: "/repo" })], ctx);
-    await Promise.resolve();
+    await asked;
     expect(ctx.addPanel).not.toHaveBeenCalled();
 
     released("sess-9");
     await phase;
 
     expect(resolvedIdById(ctx).get("a")).toBe("sess-9");
+  });
+
+  it("asks once per directory, so panes in separate worktrees each get their own", async () => {
+    resolveResumeLatestSessionMock.mockImplementation(async ({ cwd }: { cwd: string }) =>
+      cwd === "/repo-a" ? "sess-a" : "sess-b"
+    );
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [codexPanel("a", { cwd: "/repo-a" }), codexPanel("b", { cwd: "/repo-b" })],
+      ctx
+    );
+
+    expect(resolveResumeLatestSessionMock).toHaveBeenCalledTimes(2);
+    expect(resolvedIdById(ctx).get("a")).toBe("sess-a");
+    expect(resolvedIdById(ctx).get("b")).toBe("sess-b");
   });
 });

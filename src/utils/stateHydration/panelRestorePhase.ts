@@ -890,22 +890,25 @@ export async function restorePanelsPhase(
                 // other, so they overlap rather than queue. The election already
                 // ran synchronously over the saved array — nothing awaited here
                 // can change who won a resume slot (#11052).
-                const [resolvedAgentBaseCommand, resolvedResumeLatestSessionId] = await Promise.all([
-                  savedAgentId
-                    ? getCurrentLaunchCliDetail(savedAgentId).then((detail) =>
-                        resolveAgentLaunchBaseCommand(
-                          getAgentConfig(savedAgentId)?.command ?? savedAgentId,
-                          detail
-                        )
+                const baseCommandPromise = savedAgentId
+                  ? getCurrentLaunchCliDetail(savedAgentId).then((detail) =>
+                      resolveAgentLaunchBaseCommand(
+                        getAgentConfig(savedAgentId)?.command ?? savedAgentId,
+                        detail
                       )
-                    : Promise.resolve(undefined),
-                  resolveNamedResumeLatestSession(
-                    saved,
-                    kind,
-                    projectRoot || "",
-                    allowResumeLatest
-                  ),
-                ]);
+                    )
+                  : Promise.resolve(undefined);
+                const [resolvedAgentBaseCommand, resolvedResumeLatestSessionId] = await Promise.all(
+                  [
+                    baseCommandPromise,
+                    resolveNamedResumeLatestSession(
+                      saved,
+                      kind,
+                      projectRoot || "",
+                      allowResumeLatest
+                    ),
+                  ]
+                );
                 const respawnArgs = buildArgsForRespawn(
                   saved,
                   kind,
