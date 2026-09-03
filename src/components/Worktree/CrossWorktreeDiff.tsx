@@ -401,7 +401,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                       disabled={selectedFileIndex <= 0}
                       aria-label="Previous file"
                       title="Previous file ([)"
-                      className="toolbar-icon-button p-1.5 rounded-md text-text-secondary disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                      className="toolbar-icon-button p-1.5 rounded-lg text-text-secondary disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                     >
                       <ChevronLeft className="w-3.5 h-3.5" />
                     </button>
@@ -417,7 +417,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                       disabled={selectedFileIndex >= files.length - 1}
                       aria-label="Next file"
                       title="Next file (])"
-                      className="toolbar-icon-button p-1.5 rounded-md text-text-secondary disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                      className="toolbar-icon-button p-1.5 rounded-lg text-text-secondary disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                     >
                       <ChevronRight className="w-3.5 h-3.5" />
                     </button>
