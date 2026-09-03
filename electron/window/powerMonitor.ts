@@ -45,6 +45,40 @@ function refreshForgeTokenHealth(options?: { force?: boolean }): void {
   }
 }
 
+/**
+ * Announce one completed wake to every renderer window and to the internal
+ * bus, with a single shared timestamp so no two consumers disagree about when
+ * the machine came back.
+ */
+function publishWake(sleepDuration: number): void {
+  const timestamp = Date.now();
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      if (!win || win.isDestroyed()) continue;
+      const wc = getAppWebContents(win);
+      if (wc.isDestroyed()) continue;
+      wc.send(CHANNELS.EVENTS_PUSH, {
+        name: "system:wake",
+        payload: { sleepDuration, timestamp },
+      });
+    } catch {
+      // A window tearing down mid-broadcast must not cost the others theirs —
+      // the whole lookup is guarded, not just the send.
+    }
+  }
+  // Same wake, same numbers, on the internal bus — this is what reaches
+  // main-process listeners the renderer push cannot serve, plugins via
+  // `host.onDidWake` above all (#12175). Emitted after the renderer fan-out so
+  // a throwing bus subscriber cannot cost a window its push. A throw still
+  // aborts the remaining bus listeners, which is why every plugin-facing
+  // listener contains its own callback rather than relying on this guard.
+  try {
+    events.emit("sys:wake", { sleepDuration, timestamp });
+  } catch (error) {
+    console.error("[MAIN] sys:wake listener threw during resume:", error);
+  }
+}
+
 export interface PowerMonitorDeps {
   getPtyClient: () => PtyClient | null;
   getWorkspaceClient: () => WorkspaceClient | null;
@@ -113,38 +147,15 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
         // expired during a long laptop sleep would otherwise sit undetected
         // until the provider's next scheduled probe.
         refreshForgeTokenHealth({ force: true });
-        const wakeTimestamp = Date.now();
-        BrowserWindow.getAllWindows().forEach((win) => {
-          if (win && !win.isDestroyed()) {
-            const wc = getAppWebContents(win);
-            if (!wc.isDestroyed()) {
-              try {
-                wc.send(CHANNELS.EVENTS_PUSH, {
-                  name: "system:wake",
-                  payload: {
-                    sleepDuration,
-                    timestamp: wakeTimestamp,
-                  },
-                });
-              } catch {
-                // Silently ignore send failures during window disposal.
-              }
-            }
-          }
-        });
-        // Same wake, same numbers, on the internal bus — this is what reaches
-        // main-process listeners the renderer push cannot serve, plugins via
-        // `host.onDidWake` above all (#12175). Emitted last and guarded: a
-        // throwing bus subscriber must not swallow the renderer broadcast that
-        // has always happened here.
-        try {
-          events.emit("sys:wake", { sleepDuration, timestamp: wakeTimestamp });
-        } catch (error) {
-          console.error("[MAIN] sys:wake listener threw during resume:", error);
-        }
       } catch (error) {
         console.error("[MAIN] Error during resume:", error);
       }
+      // Announced whether or not the recovery above succeeded. A failed or
+      // partial recovery is exactly when a listener most needs to know the
+      // machine woke: suppressing the signal there would strand every renderer
+      // and every plugin on suspend-era state with nothing to tell them, which
+      // is the unbounded staleness this event exists to end (#12175).
+      publishWake(sleepDuration);
     }, 2000);
   });
 }

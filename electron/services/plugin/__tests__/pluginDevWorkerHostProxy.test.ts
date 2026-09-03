@@ -535,6 +535,9 @@ describe("PluginDevWorkerHostProxy system wake (#12175)", () => {
       payload: { sleepDuration: 0, timestamp: 7 },
     } as any);
 
+    // Length first: `Object.isFrozen(undefined)` is `true`, so a callback that
+    // never fired would pass the freeze assertion on its own.
+    expect(received).toHaveLength(1);
     expect(Object.isFrozen(received[0])).toBe(true);
   });
 

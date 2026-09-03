@@ -428,19 +428,20 @@ export async function activate(host: PluginHostApi) {
   await host.onDidWake(({ sleepDuration }) => {
     // Anything cached before the sleep is now suspect.
     void refreshIssueCache();
-    if (sleepDuration > 60 * 60 * 1000) void reauthenticate();
+    // `0` means "unknown", so it must reauthenticate too — not be read as short.
+    if (sleepDuration === 0 || sleepDuration > 60 * 60 * 1000) void reauthenticate();
   });
 }
 ```
 
 | Field | Meaning |
 | --- | --- |
-| `sleepDuration` | Milliseconds from the observed suspend to the moment the wake was published, so it includes the host's settle delay — a coarse staleness figure, not a precise hardware sleep time. `0` is a sentinel meaning the matching suspend edge was never observed; treat it as _unknown_, not as a short sleep. |
+| `sleepDuration` | Milliseconds from the observed suspend to the start of the host's post-wake recovery, so it includes the settle delay but not however long recovery itself took — a coarse staleness figure, not a precise hardware sleep time. `0` is a sentinel meaning the matching suspend edge was never observed; treat it as _unknown_, not as a short sleep. |
 | `timestamp` | `Date.now()` at the moment the wake was published. |
 
 **This is the signal background work has no other way to get.** `onDidChangePanelLifecycle` gives a _view_ a re-validation point, but your timers, forge providers, and reconciliation passes keep running against state frozen at suspend. The host's own resume path only re-enables workspace polling if a window is focused, so a machine that wakes while Daintree is blurred — lid opened, user not back at the desk — leaves that state stale for an unbounded stretch with nothing else announcing the wake.
 
-Delivered once per resume, after the host has resynced its pty and workspace hosts, so re-reading worktree state from the callback sees post-wake data rather than racing the host's own recovery. A rapid suspend during that settle window cancels the wake entirely rather than emitting a spurious one.
+Delivered at most once per resume, after the host has attempted to resync its pty and workspace hosts, so re-reading worktree state from the callback is not racing the host's own recovery. That recovery is best-effort — the wake is announced even when part of it failed, because a half-recovered host is exactly when you need to revalidate. Rapid resumes coalesce into one delivery, and a re-suspend during the settle window cancels the wake outright rather than emitting a spurious one.
 
 Nothing is replayed on subscribe: a wake is a one-shot pulse with no resting state. The event is machine-scoped, not project-scoped — every loaded instance of your plugin receives it, including one bound to a project whose window is not focused.
 

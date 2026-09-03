@@ -318,19 +318,20 @@ export interface PluginPanelLifecycleEvent {
  * delivery, and carries only timing — never what the machine was doing while
  * suspended.
  *
- * Emitted once per resume, after the host's own settle delay, so the pty and
- * workspace hosts have already been resynced by the time a plugin reacts.
- * Suspend has no counterpart event: a plugin cannot reliably run work between
- * the OS signalling suspend and the process freezing, so only the wake edge is
+ * Emitted at most once per resume, after the host's own settle delay and after
+ * it has attempted to resync its pty and workspace hosts. Suspend has no
+ * counterpart event: a plugin cannot reliably run work between the OS
+ * signalling suspend and the process freezing, so only the wake edge is
  * exposed.
  */
 export interface PluginSystemWakeEvent {
   /**
    * Milliseconds the machine spent suspended.
    *
-   * Measured from the observed suspend to the moment the wake is published, so
-   * it includes the host's settle delay — a coarse "how stale is my state"
-   * figure, not a precise hardware sleep time.
+   * Measured from the observed suspend to the start of the host's post-wake
+   * recovery, so it includes the settle delay but not however long recovery
+   * itself took — a coarse "how stale is my state" figure, not a precise
+   * hardware sleep time.
    *
    * `0` is a sentinel, not a measurement: it means the matching suspend edge
    * was never observed (the host started mid-sleep, or the OS delivered resume
@@ -2449,11 +2450,17 @@ export interface PluginActivationApi {
    * app is blurred leaves that state stale until the user comes back — for an
    * unbounded stretch, with nothing else announcing the wake.
    *
-   * Delivered once per resume, after the host has resynced its pty and
-   * workspace hosts, so a plugin that re-reads worktree state from the callback
-   * sees post-wake data rather than racing the host's own recovery. Nothing is
-   * replayed on subscribe: a wake is a one-shot pulse with no resting state, so
-   * a plugin that subscribes after a wake simply waits for the next one.
+   * Delivered at most once per resume, after the host has attempted to resync
+   * its pty and workspace hosts, so a plugin re-reading worktree state from the
+   * callback is not racing the host's own recovery. That recovery is
+   * best-effort: the wake is announced even when part of it failed, because a
+   * half-recovered host is when a plugin most needs to revalidate. Rapid
+   * resumes coalesce into one delivery, and a re-suspend during the settle
+   * window cancels the wake outright rather than emitting a spurious one.
+   *
+   * Nothing is replayed on subscribe: a wake is a one-shot pulse with no
+   * resting state, so a plugin that subscribes after a wake waits for the next
+   * one.
    *
    * The event is machine-scoped, not project-scoped: every loaded instance of
    * the plugin receives it, including one bound to a project whose window is

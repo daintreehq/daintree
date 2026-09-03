@@ -429,6 +429,7 @@ describe("createMockHost", () => {
     const dispose = await host.onDidWake(cb);
 
     host.simulateSystemWake({ sleepDuration: 42_000, timestamp: 1234 });
+    expect(cb).toHaveBeenCalledTimes(1);
     expect(cb).toHaveBeenCalledWith({ sleepDuration: 42_000, timestamp: 1234 });
     expect(Object.isFrozen(cb.mock.calls[0]?.[0])).toBe(true);
 

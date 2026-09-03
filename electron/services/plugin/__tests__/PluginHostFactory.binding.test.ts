@@ -710,8 +710,13 @@ describe("createHost onDidWake (#12175)", () => {
   const WAKE = { sleepDuration: 42_000, timestamp: 1234 };
 
   // Subscriptions live on the module-level bus, so a listener left behind by
-  // one case would still be attached when the next emits.
-  afterEach(() => events.removeAllListeners());
+  // one case would still be attached when the next emits. Spies are restored
+  // here too: this file's `beforeEach` only clears mocks, so a console spy
+  // would otherwise stay installed for every later test.
+  afterEach(() => {
+    events.removeAllListeners();
+    vi.restoreAllMocks();
+  });
 
   it("delivers a frozen wake to a project-bound host", async () => {
     const h = makeHarness();
@@ -793,18 +798,37 @@ describe("createHost onDidWake (#12175)", () => {
     expect(callback).not.toHaveBeenCalled();
   });
 
+  it("registers its teardown in pluginEventCleanups and clears it on dispose", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const dispose = await host.onDidWake(vi.fn());
+
+    // The membership guard alone would keep the "unloaded" test above green
+    // even if the subscription stopped being tracked — at which point a
+    // same-id reload would revive the stale listener. Assert the tracking.
+    expect(h.deps.pluginEventCleanups.get(PLUGIN_ID)).toHaveLength(1);
+
+    dispose();
+
+    expect(h.deps.pluginEventCleanups.get(PLUGIN_ID)).toBeUndefined();
+  });
+
   it("keeps delivering to a sibling listener when one throws", async () => {
     const h = makeHarness();
     const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
     vi.spyOn(console, "error").mockImplementation(() => {});
     const healthy = vi.fn();
-    await host.onDidWake(() => {
+    const thrower = vi.fn(() => {
       throw new Error("plugin boom");
     });
+    await host.onDidWake(thrower);
     await host.onDidWake(healthy);
 
     events.emit("sys:wake", WAKE);
 
+    // Assert the thrower ran: without it, a first subscription that silently
+    // never registered would leave this test green.
+    expect(thrower).toHaveBeenCalledTimes(1);
     expect(healthy).toHaveBeenCalledTimes(1);
   });
 

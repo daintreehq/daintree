@@ -398,7 +398,9 @@ describe("setupPowerMonitor", () => {
     // the machine slept.
     const pushPayload = wc.send.mock.calls[0]?.[1]?.payload;
     expect(busPayload).toEqual(pushPayload);
-    expect(busPayload.sleepDuration).toBeGreaterThanOrEqual(5_000);
+    // Exactly the 5s sleep plus the 2s settle debounce: pins the documented
+    // "includes the settle delay" claim, which a `>=` assertion would not.
+    expect(busPayload.sleepDuration).toBe(7_000);
   });
 
   it("emits sys:wake even with no window to broadcast to", async () => {
@@ -443,9 +445,10 @@ describe("setupPowerMonitor", () => {
     const workspaceClient = createMockWorkspaceClient();
     const { win, wc } = createMockWindow();
     mockGetAllWindows.mockReturnValue([win]);
-    events.on("sys:wake", () => {
+    const thrower = vi.fn(() => {
       throw new Error("listener boom");
     });
+    events.on("sys:wake", thrower);
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     setupPowerMonitor({
@@ -456,7 +459,59 @@ describe("setupPowerMonitor", () => {
     powerHandlers.get("resume")!();
     await vi.advanceTimersByTimeAsync(2000);
 
+    // Assert the thrower actually ran — otherwise deleting the emit entirely
+    // would leave the renderer assertions below green.
+    expect(thrower).toHaveBeenCalledTimes(1);
     expect(wc.send).toHaveBeenCalledTimes(1);
     expect(workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
+  });
+
+  it("still announces the wake when post-wake recovery fails", async () => {
+    const workspaceClient = createMockWorkspaceClient({
+      refreshOnWake: vi.fn().mockRejectedValue(new Error("refresh failed")),
+    });
+    const { win, wc } = createMockWindow();
+    mockGetAllWindows.mockReturnValue([win]);
+    const onWake = vi.fn();
+    events.on("sys:wake", onWake);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    setupPowerMonitor({
+      getPtyClient: () => createMockPtyClient(),
+      getWorkspaceClient: () => workspaceClient,
+    });
+
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // A half-recovered host is precisely when a listener needs to revalidate;
+    // swallowing the wake there would strand everyone on suspend-era state.
+    expect(onWake).toHaveBeenCalledTimes(1);
+    expect(wc.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces the next wake after one was cancelled by a re-suspend", async () => {
+    const workspaceClient = createMockWorkspaceClient();
+    const onWake = vi.fn();
+    events.on("sys:wake", onWake);
+
+    setupPowerMonitor({
+      getPtyClient: () => createMockPtyClient(),
+      getWorkspaceClient: () => workspaceClient,
+    });
+
+    // Cancelled cycle: resume, then re-suspend before the debounce fires.
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(1000);
+    powerHandlers.get("suspend")!();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(onWake).not.toHaveBeenCalled();
+
+    // The real wake that follows must still land, timed from the newer suspend.
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(onWake).toHaveBeenCalledTimes(1);
+    expect(onWake.mock.calls[0]?.[0].sleepDuration).toBe(5_000);
   });
 });
