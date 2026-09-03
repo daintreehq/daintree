@@ -680,7 +680,11 @@ export class PluginDevWorkerHostProxy {
         writeFile: (filePath, contents) =>
           this.call<void>("fs.writeFile", { path: filePath, contents }),
         readdir: (dirPath, options) =>
-          this.call<PluginFsDirEntry[]>("fs.readdir", { path: dirPath }, options?.signal),
+          this.call<PluginFsDirEntry[]>(
+            "fs.readdir",
+            { path: dirPath, ...(options?.detail === true && { detail: true }) },
+            options?.signal
+          ),
         stat: (targetPath, options) =>
           this.call<PluginFsStat>("fs.stat", { path: targetPath }, options?.signal),
         watch: async (paths, callback, options) => {

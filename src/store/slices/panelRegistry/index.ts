@@ -12,6 +12,7 @@ import { createBrowserActions } from "./browser";
 import { createFilePanelActions } from "./file";
 import { createDiffPanelActions } from "./diff";
 import { createFileBrowserPanelActions } from "./fileBrowser";
+import { createExtensionStateActions } from "./extensionState";
 import { createTabGroupActions } from "./tabGroups";
 
 // Re-exports for backward compatibility
@@ -54,6 +55,7 @@ export const createPanelRegistrySlice =
       ...createFilePanelActions(set),
       ...createDiffPanelActions(set),
       ...createFileBrowserPanelActions(set),
+      ...createExtensionStateActions(set),
       ...createTabGroupActions(set, get),
     };
   };

@@ -261,10 +261,54 @@ export interface PanelViewProps {
    * — e.g. `{ path }` from a "open file in plugin panel" intent. Sourced from
    * the panel's `extensionState` (the same bag that survives the save/restore
    * round-trip), so a restored panel sees the args it was originally spawned
-   * with. Empty (no key) for panels opened without an initial argument. The
-   * host never mutates it; plugins should treat the contents as read-only.
+   * with. Empty (no key) for panels opened without an initial argument.
+   *
+   * This is a snapshot taken at mount, not a live value: it does not update
+   * while the view is mounted, including in response to your own
+   * {@link persistState} calls. Treat the contents as read-only and hold your
+   * working copy in React state seeded from here.
    */
   readonly initialArgs?: Record<string, unknown>;
+  /**
+   * Persist view state onto the panel record, so the next mount of this panel
+   * sees it in {@link initialArgs}.
+   *
+   * The two are one bag: spawn seeds it, this updates it, `initialArgs` reads
+   * it back. That round trip is what lets a view survive the teardowns a panel
+   * routinely outlives — maximizing a sibling pane, leaving a dock tab, a
+   * cached project view, an app restart — without forgetting where the user
+   * was. A file browser's expanded paths, selection, root and sort are exactly
+   * this kind of state.
+   *
+   * The patch is **merged**, so two independent parts of a view can each
+   * persist their own key without reading and rewriting the whole bag; setting
+   * a key to `undefined` removes it. Writing state identical to what is already
+   * stored is free — it neither churns the store nor schedules a save — so
+   * calling this from a render-derived effect is fine.
+   *
+   * **Stored as JSON, canonically.** The host round-trips what you pass through
+   * `JSON.stringify`/`parse` and keeps that, so the value is detached from any
+   * object you still hold — mutating a patch afterwards changes nothing — and
+   * what you read back on the next mount is exactly what you would read back
+   * after a restart. A `NaN` becomes `null` and a `Date` becomes its ISO string
+   * at the moment you persist, not silently at the next launch.
+   *
+   * Keep it small. The bag rides the panel record into the layout save, and the
+   * host refuses an update whose serialized form exceeds 64KB. Anything larger,
+   * anything not JSON round-trippable, and anything that should outlive the
+   * panel belongs in `host.storage` instead. State here is stored in plain
+   * SQLite alongside the layout, so it is not a place for secrets.
+   *
+   * Returns whether the stored state is now what you asked for: `false` when
+   * the host rejected the update (over the cap, or not serializable), `true`
+   * when it was applied or already matched. Best-effort in the sense that
+   * `true` means "accepted and scheduled" — the layout save is debounced, so it
+   * is not a promise that bytes have reached disk.
+   *
+   * Absent when the host does not support persistence for this panel; call it
+   * optionally.
+   */
+  readonly persistState?: (patch: Record<string, unknown>) => boolean;
   /**
    * The worktree the panel instance belongs to, as recorded on the panel at
    * spawn time. Lets a view reconstruct its own context without dispatching
@@ -1977,16 +2021,93 @@ export interface PluginProcessApi {
   spawn(command: string, options?: PluginProcessSpawnOptions): Promise<PluginProcessHandle>;
 }
 
+/**
+ * What a symbolic link points at, as classified by the host's listing.
+ * Present on a {@link PluginFsDirEntry} only for a detailed read of a link.
+ *
+ * Deliberately mirrors the classification Daintree's own file browser renders,
+ * so a plugin presenting a file tree does not have to re-derive it — resolving
+ * a link correctly means resolving it against the *canonical* directory it was
+ * listed from, which differs from the lexical parent whenever the listed
+ * directory is itself reached through a link.
+ */
+export interface PluginFsSymlink {
+  /** Absolute path the link resolves to, the way the kernel would resolve it. */
+  target: string;
+  /**
+   * `"file"` and `"directory"` are the resolved, in-scope cases — the only two
+   * where `isDirectory` describes the target and descending is allowed.
+   * `"broken"` is a target that does not exist. `"external"` is a target that
+   * resolves outside the allowed root that contains the listed directory, so
+   * the host will refuse to read it through that listing. Conservative: a link
+   * into a different allowed root also reads as `"external"`. `"unknown"` is a
+   * target that could not be classified at all (a link loop, permission
+   * denied) — kept distinct from `"external"` so a UI never reports a link as
+   * leaving scope when the truth is that it could not be read.
+   */
+  targetKind: "file" | "directory" | "broken" | "external" | "unknown";
+}
+
 /** One directory entry returned by {@link PluginFsApi.readdir}. */
 export interface PluginFsDirEntry {
   /** Entry name (basename only — never a path). */
   name: string;
   /** True when the entry is a directory. */
   isDirectory: boolean;
-  /** True when the entry is a regular file. */
+  /**
+   * True when the entry is a regular file.
+   *
+   * On a detailed read a symbolic link is described by what it resolves to, so
+   * a link is `isFile` only when its `symlink.targetKind` is `"file"` — a
+   * broken or out-of-scope link is neither a file nor a directory, because
+   * there is nothing there to open. On a plain read this is the raw directory
+   * entry's own kind, so a link reads as neither file nor directory there.
+   *
+   * Caveat on a detailed read: a non-link entry that is neither a directory nor
+   * a regular file — a socket, fifo or device node — is reported as a file,
+   * because the underlying listing records only "directory or not". These do
+   * not occur in ordinary project trees; treat `isFile` as "not a directory"
+   * if your plugin might browse somewhere they do.
+   */
   isFile: boolean;
   /** True when the entry is a symbolic link (resolved containment still applies on read). */
   isSymbolicLink: boolean;
+  /**
+   * Size in bytes. Only present on a detailed read
+   * ({@link PluginFsReaddirOptions.detail}), and omitted there for directories
+   * and for an unresolved symlink — a link's own size is the byte length of the
+   * stored target string, which renders as a real but meaningless file size.
+   */
+  size?: number;
+  /**
+   * Last-modified time in epoch milliseconds. Only present on a detailed read.
+   * A resolved symlink reports its target's time, because that is what opening
+   * the entry would give you.
+   */
+  mtimeMs?: number;
+  /**
+   * Present only on a symbolic link, and only on a detailed read. Absence means
+   * the entry is a plain file or directory, which is why a consumer can keep
+   * reading `isDirectory` and ignore this field entirely.
+   */
+  symlink?: PluginFsSymlink;
+}
+
+/** Options for {@link PluginFsApi.readdir}. */
+export interface PluginFsReaddirOptions extends PluginHostCallOptions {
+  /**
+   * Return the same metadata Daintree's own file listing produces — `size`,
+   * `mtimeMs`, symlink target and kind — with entries ordered directories-first
+   * and then by a numeric-aware name collation.
+   *
+   * Off by default: a plain read is one `readdir` syscall, while a detailed one
+   * additionally `lstat`s every entry and resolves every link, so the cost is
+   * opt-in rather than silently imposed on existing callers. Turn it on when
+   * you are presenting a file tree — deriving these per entry with your own
+   * {@link PluginFsApi.stat} calls costs one host round trip *per entry* and
+   * still would not reproduce the link classification or the ordering.
+   */
+  detail?: boolean;
 }
 
 /** File metadata returned by {@link PluginFsApi.stat}. */
@@ -2037,8 +2158,14 @@ export interface PluginFsApi {
    * partial-write semantics are deliberately out of scope.
    */
   writeFile(filePath: string, contents: string): Promise<void>;
-  /** List a directory's immediate children. Rejects on a missing read capability or an out-of-scope path. */
-  readdir(dirPath: string, options?: PluginHostCallOptions): Promise<PluginFsDirEntry[]>;
+  /**
+   * List a directory's immediate children. Rejects on a missing read capability
+   * or an out-of-scope path.
+   *
+   * Pass `{ detail: true }` to get the metadata and ordering Daintree's own file
+   * browser uses — see {@link PluginFsReaddirOptions.detail}.
+   */
+  readdir(dirPath: string, options?: PluginFsReaddirOptions): Promise<PluginFsDirEntry[]>;
   /** Stat a path. Rejects on a missing read capability or an out-of-scope path. */
   stat(targetPath: string, options?: PluginHostCallOptions): Promise<PluginFsStat>;
   /**

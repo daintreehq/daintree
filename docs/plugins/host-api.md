@@ -679,6 +679,39 @@ const dispose = await host.fs.watch(["/Users/me/.acme/data"], (changedPath) => {
 
 **Honest scope note:** `host.fs` gates the host-mediated path only. Your `main` is still un-sandboxed Node code (it runs in the plugin worker with full filesystem privileges) and can call raw `node:fs` directly, which the host cannot intercept until the sandbox/trust model changes (D3). `host.fs` gives a contained, audited path; it does not seal the un-mediated one.
 
+### `readdir` and the detailed listing
+
+`readdir` defaults to a bare directory read — one syscall, and each entry carries only `name` plus the three kind flags. That is the right cost when you are looking for a filename.
+
+It is the wrong cost when you are _presenting_ files. Pass `{ detail: true }` and you get the same listing Daintree's own file browser renders:
+
+```ts
+const entries = await host.fs.readdir(projectRoot, { detail: true });
+for (const entry of entries) {
+  // entry.size, entry.mtimeMs, entry.symlink?.target, entry.symlink?.targetKind
+}
+```
+
+What the detailed read adds beyond the flags:
+
+| Field | Notes |
+| --- | --- |
+| `size` | Bytes. Omitted for directories, and for a symlink whose target could not be resolved — a link's own size is the byte length of the stored target string, which renders as a real but meaningless file size. |
+| `mtimeMs` | Epoch milliseconds. A resolved symlink reports its **target's** time, because that is what opening the entry would give you. |
+| `symlink` | Present only on links: `target` (absolute, resolved the way the kernel would) and `targetKind`. |
+| ordering | Directories first, then a numeric-aware name collation — so `file2` sorts before `file10`, and ties break deterministically regardless of host locale. |
+
+`targetKind` is one of `"file"`, `"directory"`, `"broken"`, `"external"`, `"unknown"`. `"external"` means the target resolves **outside the allowed root that contains the listed directory**, so the host will refuse to read it through that listing — the classification is scoped to what _your_ plugin may reach, not to some global notion of the workspace. It is conservative: a link into a _different_ one of your allowed roots also reads as `"external"`. It is kept distinct from `"unknown"` (a link loop, permission denied) so your UI never tells someone a link points out of scope when the truth is that it could not be read. `isDirectory` is true for a link only when `targetKind` is `"directory"`, so code routing on `isDirectory` alone stays correct and can ignore `symlink` entirely.
+
+Reach for `{ detail: true }` rather than calling `stat` per entry: that costs one host round trip **per entry**, and it still would not reproduce the link classification or the ordering. Both paths apply identical containment and capability checks; `detail` changes what is read, never what is allowed.
+
+Two things to know about the detailed path:
+
+- **`symlink.target` is an absolute path and may point outside your scope.** That is the point of `targetKind: "external"` — it tells you the link leaves what you may read. The host will refuse to read it, but the pathname itself is visible, because it is the literal content of a link that sits inside your scope.
+- **Errors read differently.** A plain read surfaces Node's own filesystem errors (`ENOTDIR`, `ENOENT`, with `err.code`); a detailed read surfaces the listing service's messages (`Path is not a directory: …`). The `PATH_NOT_ALLOWED:` and `PERMISSION_REQUIRED:` prefixes are unaffected — containment and capability are checked before either branch runs — so discriminating on those keeps working. Don't discriminate on `err.code` across both modes.
+
+`createMockHost` honours `detail` too, supplying `size`, `mtimeMs` and the same ordering for its in-memory files — an in-memory filesystem has no links to classify, so `symlink` is never present there.
+
 ## `git` — host-mediated git, scoped to a worktree
 
 ```ts
@@ -728,7 +761,7 @@ Errors carry prefixes: `PATH_NOT_ALLOWED:` for a path that is relative, unresolv
 
 ## React hooks — `@daintreehq/plugin-sdk/react`
 
-The `@daintreehq/plugin-sdk/react` subpath carries the renderer hooks for plugin view components. It is a separate import path so non-view code (your `main`) doesn't pull React into the main-process bundle. The runtime implementations live in Daintree's `src/hooks/` — the renderer's home, where the `window.electron` ambient global is in scope — and are re-exported verbatim by the SDK so plugin authors and the host share one implementation.
+The `@daintreehq/plugin-sdk/react` subpath carries the renderer hooks for plugin view components. It is a separate import path so non-view code (your `main`) doesn't pull React into the main-process bundle. The runtime implementations live in the SDK package itself (`packages/plugin-sdk/src/react/`) and Daintree's own `src/hooks/` re-exports them, so plugin authors and the host run one implementation rather than two that can drift.
 
 **These hooks resolve only in a bundled view.** `@daintreehq/plugin-vite` bundles the SDK into your plugin output, so the hooks ship inside your bundle. The host import map serves only React specifiers — it has no `@daintreehq/plugin-sdk/react` entry — so a raw, un-bundled `plugin://` view that bare-imports this subpath fails at runtime with an unresolved specifier. For hand-authored views without the build preset, use the `window.electron.plugin` bridge directly ([Raw ESM views](#raw-esm-views--windowelectronplugin) below) — it is exactly what these hooks wrap.
 
@@ -776,6 +809,41 @@ const result = await window.electron.plugin.invoke(pluginId, "sync-now", { team:
 ```
 
 `window.electron.plugin.on(pluginId, channel, callback)` subscribes to every payload your `main` pushes via `host.postToPanel(channel, payload)` (or a one-shot `broadcastToRenderer` during activation) and returns a `() => void` disposer. `window.electron.plugin.invoke(pluginId, channel, ...args)` calls your `registerHandler(channel, …)` and resolves with its result. Payloads and results arrive untyped over IPC — cast at the call site (the bundled hooks do the same; the plugin owns the shape it pushes). Prefer the hooks when you bundle with `@daintreehq/plugin-vite`; reach for this bridge only when authoring a raw ESM module.
+
+## File listings — `@daintreehq/plugin-sdk/files`
+
+If your plugin presents files, this subpath is the machinery Daintree's own file browser runs on. It exists so a plugin building a custom browser, asset picker or log explorer does not have to rebuild the parts that are genuinely hard.
+
+```ts
+import {
+  flattenTree,
+  buildFolderListingRows,
+  countHiddenRows,
+  createVisibilityFilter,
+  resolveTypeahead,
+  buildFileBrowserGitStatusIndex,
+  getFileTypeCategory,
+} from "@daintreehq/plugin-sdk/files";
+```
+
+What it gives you:
+
+| Area | Exports |
+| --- | --- |
+| Tree model | `flattenTree` (a lazily-expanded directory map → the flat row list a virtualised list renders), `buildFolderListingRows`, `findNodeInListings`, `sortFileNodes` |
+| Sorting | `DEFAULT_FILE_SORT`, `isDefaultFileSort`, and the `FileBrowserSortOrder` shape — name/modified/size/type, ascending or descending |
+| Hidden entries | `createVisibilityFilter`, `countHiddenRows`, `isRowPathVisible`, `NO_HIDDEN_ROWS` — dotfiles plus a caller-supplied always-hidden pattern list, with the counts a "N hidden" affordance needs |
+| Keyboard | `resolveTypeahead`, `resolveTreeKey`, `TYPEAHEAD_RESET_MS` — type-to-select and arrow/expand/collapse resolution over the flat rows |
+| Changed files | `buildFileBrowserGitStatusIndex`, `getFileBrowserRowGitStatus` — per-row status plus the folder roll-up, so a collapsed directory can show that something under it changed |
+| Classification | `getFileTypeCategory` — several hundred curated extensions and basenames, plus the patterns that catch `.eslintrc.json`, `Dockerfile.dev` and `compose.override.yaml`, resolved most-specific-first |
+
+**It is headless on purpose.** No components, no icons, no styling. A plugin building its own browser wants its own chrome, and exporting Daintree's would freeze the app's internal component contract into the plugin API — the mistake that made Obsidian's CodeMirror upgrade an ecosystem break. `getFileTypeCategory` returns a category name, not an icon, so you map it to whatever glyph set you already ship.
+
+**Nothing here performs I/O.** Feed it listings from [`host.fs.readdir(dir, { detail: true })`](#readdir-and-the-detailed-listing), which returns exactly the shape the model consumes — that pairing is the point of the two features. A view gets those listings the ordinary way: register a channel in `main` that calls `readdir`, and `useHostChannel` it from the view.
+
+Daintree's own file browser imports the same modules from the same package, so this is not a parallel implementation that can quietly drift from the one we maintain — it is the one we maintain.
+
+**A worked example ships in the repo**: `plugins/sample/file-tree/` is a functioning file browser — lazy expansion, hidden-entry filtering with counts, keyboard navigation, per-type classification, and expansion that survives a remount — built on nothing but this subpath, `host.fs.readdir(dir, { detail: true })` and `PanelViewProps.persistState`. Its `main` half is 30 lines (one channel that forwards to `readdir`); everything else is the model plus the plugin's own row markup. It is deliberately built through the published package boundary rather than by relative import, so a missing or reshaped export breaks _it_ — in typecheck and in its bundle — rather than reaching you.
 
 ## Disposables
 

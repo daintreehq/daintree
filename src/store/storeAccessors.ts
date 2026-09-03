@@ -35,6 +35,8 @@ let _getWorktreeIdSet: (() => Set<string> | null) | null = null;
 let _getWorktreeGitDirById: ((worktreeId: string) => string | undefined) | null = null;
 let _getWorktreePathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
 let _getProjectPathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
+let _setPanelExtensionState: ((panelId: string, patch: Record<string, unknown>) => boolean) | null =
+  null;
 let _clearPanelStoreForSwitch: (() => void) | null = null;
 let _clearFleetArming: (() => void) | null = null;
 let _getFleetArmedIds: (() => Set<string>) | null = null;
@@ -116,6 +118,34 @@ export function getProjectPathIndex(): ReadonlyMap<string, string> | null {
   return _getProjectPathIndex?.() ?? null;
 }
 
+/**
+ * Lets a plugin panel's view persist state onto its panel record without the
+ * plugin view host importing the panel store.
+ *
+ * The indirection is not ceremony: `PluginViewHost` is imported by a component
+ * test that stubs the panel graph, and a static store import there drags the
+ * client and service modules in behind it. Routing through the accessor keeps
+ * the host a leaf, which is the same reason every other cross-store read in the
+ * renderer goes through this module.
+ */
+export function setPanelExtensionStateAccessor(
+  setter: (panelId: string, patch: Record<string, unknown>) => boolean
+): void {
+  _setPanelExtensionState = setter;
+}
+
+/**
+ * Returns whether the state is now what the caller asked for. `false` before
+ * the orchestrator has registered the setter, which is the honest answer: no
+ * store exists yet to have accepted it.
+ */
+export function persistPanelExtensionStateThroughAccessor(
+  panelId: string,
+  patch: Record<string, unknown>
+): boolean {
+  return _setPanelExtensionState?.(panelId, patch) ?? false;
+}
+
 export function setPanelStoreClearForSwitchAccessor(callback: () => void): void {
   _clearPanelStoreForSwitch = callback;
 }
@@ -155,6 +185,7 @@ export function resetStoreAccessorsForTesting(): void {
   _getWorktreeGitDirById = null;
   _getWorktreePathIndex = null;
   _getProjectPathIndex = null;
+  _setPanelExtensionState = null;
   _clearPanelStoreForSwitch = null;
   _clearFleetArming = null;
   _getFleetArmedIds = null;

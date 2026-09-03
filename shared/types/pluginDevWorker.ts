@@ -407,6 +407,12 @@ export interface ShowConfirmParams {
 /** Params for `fs.readFile` / `fs.readdir` / `fs.stat` (`host-call`). */
 export interface FsPathParams {
   path: string;
+  /**
+   * `fs.readdir` only — request the host's full listing (size, mtime, symlink
+   * classification, collated order) rather than a bare `readdir`. Absent means
+   * the cheap read, so an existing worker build keeps its current behaviour.
+   */
+  detail?: boolean;
 }
 
 /** Params for `fs.writeFile` (`host-call`). */

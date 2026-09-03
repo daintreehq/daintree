@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     react: "src/react.ts",
+    files: "src/files.ts",
   },
   format: ["esm"],
   target: "node22",

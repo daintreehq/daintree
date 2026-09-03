@@ -199,6 +199,47 @@ describe("makePluginViewContent", () => {
     }
   });
 
+  it("freezes initialArgs for the life of a mount even as the prop changes", async () => {
+    const capturedProps: Array<Record<string, unknown>> = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: Record<string, unknown>) {
+            capturedProps.push(props);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
+
+      const spawned = { root: "src" };
+      const { rerender } = render(<Content panelId="panel-frozen" initialArgs={spawned} />);
+      await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
+
+      // `extensionState` reaches this component straight off the panel record,
+      // so once a view can WRITE that record through `persistState` the prop
+      // changes underneath it on every save. Re-rendering with a new bag stands
+      // in for exactly that.
+      const persisted = { root: "src", selected: "src/index.ts" };
+      rerender(<Content panelId="panel-frozen" initialArgs={persisted} />);
+
+      // Same mount, so the view keeps the snapshot it was given. Forwarding the
+      // new bag would turn a documented "what you were opened with" value into
+      // a live channel, and hand any view that persists state derived from
+      // `initialArgs` a render loop.
+      const latest = capturedProps[capturedProps.length - 1]!;
+      expect(latest.initialArgs).toBe(spawned);
+      expect(capturedProps.every((props) => props.initialArgs === spawned)).toBe(true);
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
   it("subscribes to plugin:panel-kinds-changed on mount and unsubscribes on unmount", async () => {
     const cleanupSpy = vi.fn();
     onPanelKindsChangedMock.mockReturnValue(cleanupSpy);
