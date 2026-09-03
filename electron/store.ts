@@ -224,6 +224,7 @@ export interface StoreSchema {
     workingPulseEnabled: boolean;
     workingPulseSoundFile: string;
     uiFeedbackSoundEnabled: boolean;
+    flashEnabled: boolean;
     quietHoursEnabled: boolean;
     quietHoursStartMin: number;
     quietHoursEndMin: number;
@@ -631,6 +632,7 @@ const storeOptions = {
       workingPulseEnabled: false,
       workingPulseSoundFile: "pulse.wav",
       uiFeedbackSoundEnabled: false,
+      flashEnabled: false,
       quietHoursEnabled: false,
       quietHoursStartMin: 22 * 60,
       quietHoursEndMin: 8 * 60,

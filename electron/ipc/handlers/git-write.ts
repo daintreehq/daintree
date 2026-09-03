@@ -42,10 +42,12 @@ import {
   STAGED_FILE_SIZE_CAP,
   scanStagedFilesForConflictMarkers,
 } from "../../services/git/conflictMarkerScan.js";
+import { shouldPlayUiFeedbackSound } from "../../utils/uiFeedbackSound.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 
 function playSoundFireAndForget(id: SoundId): void {
+  if (!shouldPlayUiFeedbackSound(store.get("notificationSettings"))) return;
   void getSoundService()
     .then((svc) => svc.play(id))
     .catch((err) => console.error("[git-write] sound play failed:", err));

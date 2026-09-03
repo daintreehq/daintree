@@ -5,7 +5,7 @@
  * scenario file. That benchmark could not regress when the product did: it
  * measured a hand-written copy of the chain, so the only thing its oracle
  * proved was that the copy still ran. This fixture drives the shipped
- * `MigrationRunner` over the shipped `migrations` barrel (v0→v27), against a
+ * `MigrationRunner` over the shipped `migrations` barrel (v0→v28), against a
  * real `config.json` on disk opened through the product's own
  * `initializeStore()` — the same call `globalServicesInit` makes at boot.
  *
@@ -113,6 +113,7 @@ type LegacyStoreV0 = Omit<
     | "workingPulseEnabled"
     | "workingPulseSoundFile"
     | "uiFeedbackSoundEnabled"
+    | "flashEnabled"
     | "quietHoursEnabled"
     | "quietHoursStartMin"
     | "quietHoursEndMin"
@@ -865,7 +866,7 @@ async function buildHarness(): Promise<MigrationHarness> {
         if (recipe.projectId !== FIXTURE_PROJECT_ID) recipeMigrationMisses += 1;
       }
 
-      // --- 008 / 010 / 011 / 017
+      // --- 008 / 010 / 011 / 017 / 028
       let notificationMisses = 0;
       const expectNotification: Array<[string, unknown]> = [
         ["soundFile", undefined],
@@ -879,6 +880,9 @@ async function buildHarness(): Promise<MigrationHarness> {
         ["quietHoursEnabled", false],
         ["quietHoursStartMin", 22 * 60],
         ["quietHoursEndMin", 8 * 60],
+        // 028 flips the v0 fixture's soundEnabled:true and backfills flashEnabled.
+        ["soundEnabled", false],
+        ["flashEnabled", false],
       ];
       for (const [key, expected] of expectNotification) {
         if (notifications?.[key] !== expected) notificationMisses += 1;

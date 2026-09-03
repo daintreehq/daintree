@@ -48,6 +48,7 @@ export class ProjectSettingsManager {
       workingPulseEnabled: overrides.workingPulseEnabled ?? global.workingPulseEnabled,
       workingPulseSoundFile: overrides.workingPulseSoundFile ?? global.workingPulseSoundFile,
       uiFeedbackSoundEnabled: global.uiFeedbackSoundEnabled,
+      flashEnabled: global.flashEnabled,
       quietHoursEnabled: global.quietHoursEnabled,
       quietHoursStartMin: global.quietHoursStartMin,
       quietHoursEndMin: global.quietHoursEndMin,

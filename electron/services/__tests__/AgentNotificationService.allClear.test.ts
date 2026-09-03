@@ -69,6 +69,7 @@ const DEFAULT_SETTINGS = {
   workingPulseEnabled: false,
   workingPulseSoundFile: "pulse.wav",
   uiFeedbackSoundEnabled: false,
+  flashEnabled: false,
   quietHoursEnabled: false,
   quietHoursStartMin: 22 * 60,
   quietHoursEndMin: 6 * 60,

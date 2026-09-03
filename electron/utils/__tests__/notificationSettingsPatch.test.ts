@@ -18,6 +18,15 @@ describe("sanitizeNotificationSettingsPatch", () => {
     expect(result).not.toHaveProperty("enabled");
   });
 
+  it("accepts flashEnabled and drops a non-boolean value for it", () => {
+    expect(sanitizeNotificationSettingsPatch({ flashEnabled: true }, ALLOWED)).toEqual({
+      flashEnabled: true,
+    });
+    expect(sanitizeNotificationSettingsPatch({ flashEnabled: "true" }, ALLOWED)).not.toHaveProperty(
+      "flashEnabled"
+    );
+  });
+
   it("drops a sound file that isn't available and keeps one that is", () => {
     const result = sanitizeNotificationSettingsPatch(
       { completedSoundFile: "missing.wav", waitingSoundFile: "ping.wav" },

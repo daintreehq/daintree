@@ -28,12 +28,14 @@ import {
   WORKTREE_RATE_LIMIT_INTERVAL_MS,
   WORKTREE_RATE_LIMIT_BURST,
 } from "./constants.js";
+import { shouldPlayUiFeedbackSound } from "../../../utils/uiFeedbackSound.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 
 const inFlightWorktreeCreateRequests = new Map<string, Promise<WorktreeCreateResult>>();
 
 function playSoundFireAndForget(id: SoundId): void {
+  if (!shouldPlayUiFeedbackSound(store.get("notificationSettings"))) return;
   void getSoundService()
     .then((svc) => svc.play(id))
     .catch((err) => console.error("[worktree.lifecycle] sound play failed:", err));

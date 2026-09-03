@@ -1,5 +1,5 @@
 import { useState, useEffect, useId } from "react";
-import { Play, Bell, BellOff, Volume2, AudioLines, Moon } from "lucide-react";
+import { Play, Bell, BellOff, Volume2, AudioLines, Moon, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -38,6 +38,7 @@ const DEFAULT_SETTINGS: NotificationSettings = {
   workingPulseEnabled: false,
   workingPulseSoundFile: "pulse.wav",
   uiFeedbackSoundEnabled: false,
+  flashEnabled: false,
   quietHoursEnabled: false,
   quietHoursStartMin: 22 * 60,
   quietHoursEndMin: 8 * 60,
@@ -163,6 +164,7 @@ export function NotificationSettingsTab() {
           waitingEnabled: boolean;
           workingPulseEnabled: boolean;
           uiFeedbackSoundEnabled: boolean;
+          flashEnabled: boolean;
           quietHoursEnabled: boolean;
           quietHoursStartMin: number;
           quietHoursEndMin: number;
@@ -176,6 +178,7 @@ export function NotificationSettingsTab() {
           revert.workingPulseEnabled = prevStore.workingPulseEnabled;
         if (patch.uiFeedbackSoundEnabled !== undefined)
           revert.uiFeedbackSoundEnabled = prevStore.uiFeedbackSoundEnabled;
+        if (patch.flashEnabled !== undefined) revert.flashEnabled = prevStore.flashEnabled;
         if (patch.quietHoursEnabled !== undefined)
           revert.quietHoursEnabled = prevStore.quietHoursEnabled;
         if (patch.quietHoursStartMin !== undefined)
@@ -196,6 +199,7 @@ export function NotificationSettingsTab() {
       waitingEnabled: boolean;
       workingPulseEnabled: boolean;
       uiFeedbackSoundEnabled: boolean;
+      flashEnabled: boolean;
       quietHoursEnabled: boolean;
       quietHoursStartMin: number;
       quietHoursEndMin: number;
@@ -208,6 +212,7 @@ export function NotificationSettingsTab() {
       storePatch.workingPulseEnabled = patch.workingPulseEnabled;
     if (patch.uiFeedbackSoundEnabled !== undefined)
       storePatch.uiFeedbackSoundEnabled = patch.uiFeedbackSoundEnabled;
+    if (patch.flashEnabled !== undefined) storePatch.flashEnabled = patch.flashEnabled;
     if (patch.quietHoursEnabled !== undefined)
       storePatch.quietHoursEnabled = patch.quietHoursEnabled;
     if (patch.quietHoursStartMin !== undefined)
@@ -324,7 +329,7 @@ export function NotificationSettingsTab() {
             <SettingsSwitchCard
               variant="compact"
               title="Play sound"
-              subtitle="Enable audio alerts for agent notifications"
+              subtitle="Master switch for every sound, including UI feedback sounds"
               isEnabled={settings.soundEnabled}
               onChange={() => update({ soundEnabled: !settings.soundEnabled })}
               ariaLabel="Play sound for notifications"
@@ -359,6 +364,21 @@ export function NotificationSettingsTab() {
               </div>
             )}
           </div>
+        </SettingsSection>
+
+        <SettingsSection
+          icon={Zap}
+          title="Screen flash"
+          description="Flash the screen once a working fleet of agents goes fully idle."
+        >
+          <SettingsSwitchCard
+            variant="compact"
+            title="Flash on all-clear"
+            subtitle="Briefly flash the screen when a working fleet goes fully idle"
+            isEnabled={settings.flashEnabled}
+            onChange={() => update({ flashEnabled: !settings.flashEnabled })}
+            ariaLabel="Flash screen on all-clear"
+          />
         </SettingsSection>
 
         <SettingsSection
@@ -443,7 +463,7 @@ export function NotificationSettingsTab() {
         <SettingsSection
           icon={AudioLines}
           title="UI feedback sounds"
-          description="Play subtle audio cues for git operations, worktree lifecycle, agent spawning, and context injection. These sounds are independent of agent notification sounds above."
+          description="Play subtle audio cues for git operations, worktree lifecycle, agent spawning, and context injection. They only play while Play sound is on."
         >
           <SettingsSwitchCard
             variant="compact"

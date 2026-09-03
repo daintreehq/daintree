@@ -2496,6 +2496,7 @@ function buildElectronApi(): ElectronAPI {
         workingPulseEnabled: boolean;
         workingPulseSoundFile: string;
         uiFeedbackSoundEnabled: boolean;
+        flashEnabled: boolean;
         quietHoursEnabled: boolean;
         quietHoursStartMin: number;
         quietHoursEndMin: number;
@@ -2515,6 +2516,7 @@ function buildElectronApi(): ElectronAPI {
           workingPulseEnabled: boolean;
           workingPulseSoundFile: string;
           uiFeedbackSoundEnabled: boolean;
+          flashEnabled: boolean;
           quietHoursEnabled: boolean;
           quietHoursStartMin: number;
           quietHoursEndMin: number;
