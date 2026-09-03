@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState, useCallback } from "react";
-import { useEffectiveCombo, useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useTabLoad } from "@/hooks";
 import { getAgentIds, getAgentConfig, getMergedPresets, type AgentPreset } from "@/config/agents";
 import { useAgentSettingsStore, useCliAvailabilityStore, useAgentPreferencesStore } from "@/store";
@@ -16,7 +16,11 @@ import {
   type AgentCliDetails,
 } from "@shared/types";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
-import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
+import {
+  isAssistantOnlyAgentId,
+  isBuiltInAgentId,
+  type BuiltInAgentId,
+} from "@shared/config/agentIds";
 import { ExternalLink } from "lucide-react";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -269,8 +273,6 @@ export function AgentSettings({
   const lastAddTimeRef = useRef(0);
   const lastEditTimeRef = useRef(0);
 
-  const helpShortcut = useKeybindingDisplay("help.launchAgent");
-
   // Preset editing state
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
@@ -402,7 +404,13 @@ export function AgentSettings({
   const defaultAgentOptions = useMemo(
     () => [
       { value: NO_DEFAULT_AGENT, label: "None (first available)" },
-      ...agentOptions.map((agent) => ({ value: agent.id, label: agent.name })),
+      // Launchable agents only. This preference names what a DIRECT launch spawns, and
+      // the Daintree Assistant has no terminal form to spawn — offering it here persisted
+      // a default every launch path then refused. Which agent the assistant itself runs
+      // lives on the assistant tab.
+      ...agentOptions
+        .filter((agent) => !isAssistantOnlyAgentId(agent.id))
+        .map((agent) => ({ value: agent.id, label: agent.name })),
     ],
     [agentOptions]
   );
@@ -487,9 +495,10 @@ export function AgentSettings({
               label="Default agent"
               description={
                 <>
-                  Used by the help dock button{helpShortcut && ` (${helpShortcut})`} and automated
-                  workflows such as "What's next?", onboarding and project explanations. The
-                  portal's default new tab agent is set separately
+                  Used by automated workflows such as "What's next?", onboarding and project
+                  explanations, and wherever a launch doesn't name an agent. The Daintree
+                  Assistant picks its own agent on the Assistant tab, and the portal's default
+                  new tab agent is set separately
                 </>
               }
               value={defaultAgent ?? NO_DEFAULT_AGENT}

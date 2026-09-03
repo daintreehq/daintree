@@ -6,12 +6,28 @@ import {
   safeJSONParse,
 } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
-import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
+import {
+  LAUNCHABLE_AGENT_IDS,
+  type AssistantOnlyAgentId,
+  type BuiltInAgentId,
+} from "@shared/config/agentIds";
 
-export type DefaultAgentId = BuiltInAgentId;
+/**
+ * Launchable built-ins only. Excluding the assistant-only ids in the TYPE rather than
+ * guarding the setter makes the invariant hold at every entry point at compile time —
+ * `setDefaultAgent` writes without validation, so a runtime guard would only cover the
+ * paths someone remembered to route through it.
+ */
+export type DefaultAgentId = Exclude<BuiltInAgentId, AssistantOnlyAgentId>;
 
+/**
+ * This preference names the agent a DIRECT launch spawns, and an assistant-only agent
+ * has no PTY form to spawn — picking one here used to persist a default that every
+ * launch path then quietly refused, so a stored one is dropped on rehydrate. Which
+ * agent the Daintree Assistant runs is its own setting, on the assistant settings tab.
+ */
 function isValidAgentId(value: unknown): value is DefaultAgentId {
-  return typeof value === "string" && (BUILT_IN_AGENT_IDS as readonly string[]).includes(value);
+  return typeof value === "string" && (LAUNCHABLE_AGENT_IDS as readonly string[]).includes(value);
 }
 
 interface AgentPreferences {
