@@ -212,7 +212,7 @@ describe("hydration fixture drives the real statePatcher", () => {
         expect(command).toContain(planned.plantedSessionId!);
       } else if (planned.route === "respawnWithheld") {
         expect(command).not.toContain(planned.plantedSessionId!);
-        expect(observed.built[i].sessionLostOnRestore).toBe(true);
+        expect(observed.built[i].sessionLostOnRestore).toBe("sibling-owns-session-id");
       }
     }
   }, 30_000);

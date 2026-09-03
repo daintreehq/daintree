@@ -2,6 +2,8 @@ import { performance } from "node:perf_hooks";
 import { dirname, join, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import type { SessionLostReason } from "../../../shared/types/panel";
+
 import { createPerfTempRoot } from "./tempRoots";
 
 /**
@@ -104,7 +106,7 @@ interface BuiltArgs {
   waitingReason?: string;
   agentSessionId?: string;
   agentLaunchFlags?: string[];
-  sessionLostOnRestore?: boolean;
+  sessionLostOnRestore?: SessionLostReason;
   browserUrl?: string;
   filePath?: string;
   fileViewMode?: string;
@@ -787,7 +789,7 @@ export function hydrationPassMisses(
         // saved conversation, and the id must ride onto the respawned panel.
         if (!args.command || !args.command.includes(sessionId)) misses.respawnResumeMisses += 1;
         if (args.agentSessionId !== sessionId) misses.respawnResumeMisses += 1;
-        if (args.sessionLostOnRestore === true) misses.respawnResumeMisses += 1;
+        if (args.sessionLostOnRestore !== undefined) misses.respawnResumeMisses += 1;
         // `mintFreshTerminalId: false`, so the pane keeps its persisted id.
         if (args.requestedId !== saved.id) misses.respawnResumeMisses += 1;
         if (args.launchAgentId !== saved.launchAgentId) misses.respawnResumeMisses += 1;
@@ -809,8 +811,11 @@ export function hydrationPassMisses(
         // above only if the id changed shape.
         if (args.command === saved.command) misses.resumeSuppressionMisses += 1;
         // The resume-latest back door does not set this; every branch that
-        // genuinely abandons the conversation does.
-        if (args.sessionLostOnRestore !== true) misses.resumeSuppressionMisses += 1;
+        // genuinely abandons the conversation names why (#12182), and here the
+        // only true cause is the sibling holding this exact session.
+        if (args.sessionLostOnRestore !== "sibling-owns-session-id") {
+          misses.resumeSuppressionMisses += 1;
+        }
         // `mintFreshTerminalId: true`, so the saved id must NOT be reused.
         if (args.requestedId !== undefined) misses.resumeSuppressionMisses += 1;
         break;
