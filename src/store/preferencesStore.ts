@@ -23,6 +23,16 @@ export type DiffViewType = "split" | "unified";
 export type DiffFontSize = "s" | "m" | "l";
 
 /**
+ * Diff soft-wrap: `null` means "derive it from the file", a boolean is an
+ * explicit user override. Modelled as a nullable boolean rather than an
+ * `"auto" | "on" | "off"` enum because every consumer resolves it to a plain
+ * boolean anyway — `?? isProseFilePath(path)` is the whole translation, where
+ * an enum would need mapping at each of the three call sites for no added
+ * behaviour.
+ */
+export type DiffWrapPreference = boolean | null;
+
+/**
  * Reading scale for rendered markdown, in reading order. The stepper walks this
  * and the persistence guard checks against it, and the type below is DERIVED
  * from it so the ladder is the single place a rung is declared — a rung added
@@ -123,7 +133,14 @@ interface PreferencesState {
   setReduceAnimations: (value: boolean) => void;
   diffViewType: DiffViewType;
   setDiffViewType: (value: DiffViewType) => void;
-  diffWrapLines: boolean;
+  /**
+   * Soft-wrap long lines in diffs. `null` is auto: prose extensions wrap,
+   * everything else doesn't (see `isProseFilePath`). A boolean is an explicit
+   * override the user set from a toolbar toggle, and it applies to every file
+   * until they flip it back — global and sticky, like every desktop diff tool
+   * (#12170). Hosts resolve it per file; `DiffViewer` only ever sees a boolean.
+   */
+  diffWrapLines: DiffWrapPreference;
   setDiffWrapLines: (value: boolean) => void;
   diffIgnoreWhitespace: boolean;
   setDiffIgnoreWhitespace: (value: boolean) => void;
@@ -251,6 +268,10 @@ function isDiffFontSize(value: unknown): value is DiffFontSize {
   return value === "s" || value === "m" || value === "l";
 }
 
+function isDiffWrapPreference(value: unknown): value is DiffWrapPreference {
+  return value === null || typeof value === "boolean";
+}
+
 function isMarkdownFontSize(value: unknown): value is MarkdownFontSize {
   // `some` rather than `includes`: the latter narrows its argument to the
   // tuple's own type, so it would need an assertion here to accept `unknown`.
@@ -283,7 +304,7 @@ function sanitizePersistedPreferences(
 
   if (!isDockDensity(sanitized.dockDensity)) sanitized.dockDensity = "normal";
   if (!isDiffViewType(sanitized.diffViewType)) sanitized.diffViewType = "split";
-  if (typeof sanitized.diffWrapLines !== "boolean") sanitized.diffWrapLines = false;
+  if (!isDiffWrapPreference(sanitized.diffWrapLines)) sanitized.diffWrapLines = null;
   if (typeof sanitized.diffIgnoreWhitespace !== "boolean") sanitized.diffIgnoreWhitespace = false;
   if (typeof sanitized.diffShowFileList !== "boolean") sanitized.diffShowFileList = true;
   if (typeof sanitized.diffFullFile !== "boolean") sanitized.diffFullFile = false;
@@ -369,7 +390,7 @@ const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
   assignWorktreeToSelf: false,
   reduceAnimations: false,
   diffViewType: "split",
-  diffWrapLines: false,
+  diffWrapLines: null,
   diffIgnoreWhitespace: false,
   diffShowFileList: true,
   diffFullFile: false,
@@ -497,7 +518,7 @@ function toPreferencesPersisted(
     assignWorktreeToSelf: coerceBool(raw.assignWorktreeToSelf, d.assignWorktreeToSelf),
     reduceAnimations: coerceBool(raw.reduceAnimations, d.reduceAnimations),
     diffViewType: isDiffViewType(raw.diffViewType) ? raw.diffViewType : d.diffViewType,
-    diffWrapLines: coerceBool(raw.diffWrapLines, d.diffWrapLines),
+    diffWrapLines: isDiffWrapPreference(raw.diffWrapLines) ? raw.diffWrapLines : d.diffWrapLines,
     diffIgnoreWhitespace: coerceBool(raw.diffIgnoreWhitespace, d.diffIgnoreWhitespace),
     diffShowFileList: coerceBool(raw.diffShowFileList, d.diffShowFileList),
     diffFullFile: coerceBool(raw.diffFullFile, d.diffFullFile),
@@ -694,7 +715,7 @@ export const usePreferencesStore = create<PreferencesState>()(
       setReduceAnimations: (value) => set({ reduceAnimations: value }),
       diffViewType: "split",
       setDiffViewType: (value) => set({ diffViewType: value }),
-      diffWrapLines: false,
+      diffWrapLines: null,
       setDiffWrapLines: (value) => set({ diffWrapLines: value }),
       diffIgnoreWhitespace: false,
       setDiffIgnoreWhitespace: (value) => set({ diffIgnoreWhitespace: value }),
@@ -797,7 +818,7 @@ export const usePreferencesStore = create<PreferencesState>()(
       storage: createSafeJSONStorage<PreferencesPersistedState>({
         mergeOnWrite: mergePreferencesPersistedWrite,
       }),
-      version: 18,
+      version: 19,
       // Explicit persisted subset — matches the pre-existing default (setters are
       // dropped by JSON serialization); named so the write merge (#11351) has a
       // typed persisted shape to reconcile.
@@ -969,6 +990,18 @@ export const usePreferencesStore = create<PreferencesState>()(
             persisted.markdownFontSize = DEFAULT_MARKDOWN_FONT_SIZE;
           }
         }
+        if (version < 19 && isRecord(persisted)) {
+          // Wrap gained an auto mode, so the old boolean has to be reinterpreted
+          // (#12170). Only `true` survives: it could only ever have come from a
+          // deliberate toggle, since `false` was the default. A stored `false`
+          // is genuinely ambiguous — the store persists the whole default
+          // snapshot and keeps no per-field provenance, so "never touched it"
+          // and "turned it on, then off again" are the same bytes on disk. This
+          // maps both to auto, which reads the ambiguity in favour of shipping
+          // the new prose default to existing installs rather than leaving it
+          // to new ones.
+          persisted.diffWrapLines = persisted.diffWrapLines === true ? true : null;
+        }
         return persisted as PreferencesState;
       },
     }
@@ -979,5 +1012,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; markdownFontSize: MarkdownFontSize; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean; keyboardLayoutConfirmationsByBinding: Record<string, number> }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean | null; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; markdownFontSize: MarkdownFontSize; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean; keyboardLayoutConfirmationsByBinding: Record<string, number> }",
 });

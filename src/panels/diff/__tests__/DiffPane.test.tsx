@@ -29,7 +29,11 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 vi.mock("@/components/Worktree/DiffViewer", () => ({
-  DiffViewer: () => <div data-testid="diff-viewer-mock" />,
+  // Surfaces `wrapLines` so the auto/override resolution is observable from the
+  // prop the viewer actually receives, not just from the toolbar's pressed state.
+  DiffViewer: (props: { wrapLines?: boolean }) => (
+    <div data-testid="diff-viewer-mock" data-wrap-lines={String(props.wrapLines)} />
+  ),
   FULL_FILE_MAX_LINES: 5000,
 }));
 
@@ -90,7 +94,8 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 const preferences = {
   diffViewType: "unified" as const,
   setDiffViewType: vi.fn(),
-  diffWrapLines: false,
+  // `null` is auto — prose wraps, everything else doesn't (#12170).
+  diffWrapLines: null as boolean | null,
   setDiffWrapLines: vi.fn(),
   diffShowFileList: true,
   setDiffShowFileList: vi.fn(),
@@ -171,6 +176,8 @@ beforeEach(() => {
   isImageDiffCandidateMock.mockReset();
   isImageDiffCandidateMock.mockReturnValue(false);
   preferences.diffShowFileList = true;
+  preferences.diffWrapLines = null;
+  preferences.setDiffWrapLines.mockReset();
   worktrees.clear();
   worktrees.set(WORKTREE_ID, { path: WORKTREE_PATH, branch: "feature/x" });
 });
@@ -906,5 +913,77 @@ describe("DiffPane — PDF current-version mode (#11427)", () => {
 
     expect(pdfFrame(container)).toBeNull();
     expect(screen.getByTestId("empty-state-mock")).toBeTruthy();
+  });
+});
+
+describe("DiffPane wrap toggle (#12170)", () => {
+  function wrapButton(): HTMLElement {
+    return screen.getByRole("button", { name: "Wrap long lines" });
+  }
+
+  function viewerWrap(): string | null {
+    return screen.getByTestId("diff-viewer-mock").getAttribute("data-wrap-lines");
+  }
+
+  it("wraps a prose diff on first render with nothing stored", () => {
+    seedPanel({
+      filePath: "docs/spec.md",
+      fileStatus: "modified",
+      changeSet: [entry("docs/spec.md")],
+    });
+    renderPane();
+
+    expect(viewerWrap()).toBe("true");
+    expect(wrapButton().getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("leaves a code diff unwrapped under the same auto default", () => {
+    seedPanel({ filePath: "src/a.ts", fileStatus: "modified", changeSet: [entry("src/a.ts")] });
+    renderPane();
+
+    expect(viewerWrap()).toBe("false");
+    expect(wrapButton().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("stores an explicit off when toggled from an auto-wrapped prose diff", () => {
+    // The bug this guards: toggling against the raw stored value would write
+    // `true` here (`!null` is `true`), leaving the button visibly pressed and
+    // the diff wrapped after a click that asked for the opposite.
+    seedPanel({
+      filePath: "docs/spec.md",
+      fileStatus: "modified",
+      changeSet: [entry("docs/spec.md")],
+    });
+    renderPane();
+
+    fireEvent.click(wrapButton());
+
+    expect(preferences.setDiffWrapLines).toHaveBeenCalledWith(false);
+  });
+
+  it("stores an explicit on when toggled from an auto-unwrapped code diff", () => {
+    seedPanel({ filePath: "src/a.ts", fileStatus: "modified", changeSet: [entry("src/a.ts")] });
+    renderPane();
+
+    fireEvent.click(wrapButton());
+
+    expect(preferences.setDiffWrapLines).toHaveBeenCalledWith(true);
+  });
+
+  it("lets an explicit override beat the file type in both directions", () => {
+    preferences.diffWrapLines = false;
+    seedPanel({
+      filePath: "docs/spec.md",
+      fileStatus: "modified",
+      changeSet: [entry("docs/spec.md")],
+    });
+    const { unmount } = renderPane();
+    expect(viewerWrap()).toBe("false");
+    unmount();
+
+    preferences.diffWrapLines = true;
+    seedPanel({ filePath: "src/a.ts", fileStatus: "modified", changeSet: [entry("src/a.ts")] });
+    renderPane();
+    expect(viewerWrap()).toBe("true");
   });
 });

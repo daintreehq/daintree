@@ -726,7 +726,7 @@ describe("preferencesStore migration", () => {
       // Pin the bump too: `migrate` only runs for a blob below the configured
       // version, so leaving it at 17 would skip the branch above entirely and
       // hydration's sanitizer would quietly supply the same default.
-      expect(store.persist.getOptions().version).toBe(18);
+      expect(store.persist.getOptions().version).toBe(19);
     });
 
     it("leaves an already-valid rung alone when migrating", async () => {
@@ -1173,6 +1173,69 @@ describe("preferencesStore migration", () => {
       setStoredState({ hasSeenActionPalettePrefixHint: "yes" }, 15);
       const store = await loadStore();
       expect(store.getState().hasSeenActionPalettePrefixHint).toBe(false);
+    });
+  });
+
+  describe("diffWrapLines auto mode (#12170)", () => {
+    it("defaults to auto rather than off", async () => {
+      const store = await loadStore();
+      expect(store.getState().diffWrapLines).toBeNull();
+    });
+
+    it("migrates a pre-v19 explicit `true` through untouched", async () => {
+      // `true` could only ever have come from a deliberate toggle, since `false`
+      // was the old default — so it is the one legacy value worth preserving.
+      const store = await loadStore();
+      const migrated = store.persist.getOptions().migrate?.({ diffWrapLines: true }, 18);
+
+      expect(migrated).toMatchObject({ diffWrapLines: true });
+    });
+
+    it("migrates a pre-v19 `false` to auto", async () => {
+      // Ambiguous on disk: the store persists the whole default snapshot with no
+      // per-field provenance, so "never touched it" and "on, then off again" are
+      // the same bytes. Auto reads that in favour of shipping the prose default.
+      const store = await loadStore();
+      const migrated = store.persist.getOptions().migrate?.({ diffWrapLines: false }, 18);
+
+      expect(migrated).toMatchObject({ diffWrapLines: null });
+    });
+
+    it("migrates an absent or corrupt pre-v19 value to auto", async () => {
+      const store = await loadStore();
+      for (const legacy of [{}, { diffWrapLines: "yes" }, { diffWrapLines: 1 }]) {
+        expect(store.persist.getOptions().migrate?.(legacy, 18)).toMatchObject({
+          diffWrapLines: null,
+        });
+      }
+    });
+
+    it("keeps an explicit `false` set at the current version", async () => {
+      // The migration only reinterprets pre-v19 blobs. A `false` written since
+      // is a real override and must survive a reload, or turning wrap off on a
+      // markdown diff would not stick.
+      setStoredState({ diffWrapLines: false }, 19);
+      const store = await loadStore();
+      expect(store.getState().diffWrapLines).toBe(false);
+    });
+
+    it("sanitises a corrupt current-version value to auto, not to off", async () => {
+      setStoredState({ diffWrapLines: "yes" }, 19);
+      const store = await loadStore();
+      expect(store.getState().diffWrapLines).toBeNull();
+    });
+
+    it("persists both explicit states to localStorage", async () => {
+      const store = await loadStore();
+      store.getState().setDiffWrapLines(true);
+      await vi.waitFor(() => {
+        expect(JSON.parse(storageMock.getItem(STORAGE_KEY)!).state.diffWrapLines).toBe(true);
+      });
+
+      store.getState().setDiffWrapLines(false);
+      await vi.waitFor(() => {
+        expect(JSON.parse(storageMock.getItem(STORAGE_KEY)!).state.diffWrapLines).toBe(false);
+      });
     });
   });
 });

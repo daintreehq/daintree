@@ -82,9 +82,12 @@ vi.mock("@/lib/viewCacheState", () => ({
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (state: unknown) => unknown) => selector({ currentProject: null }),
 }));
-const { setMarkdownFontSizeMock } = vi.hoisted(() => ({
+const { setMarkdownFontSizeMock, setDiffWrapLinesMock } = vi.hoisted(() => ({
   setMarkdownFontSizeMock: vi.fn(),
+  setDiffWrapLinesMock: vi.fn(),
 }));
+// Mutable so a test can seed an explicit wrap override; `null` is auto (#12170).
+const preferences = { diffWrapLines: null as boolean | null };
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (state: unknown) => unknown) =>
     selector({
@@ -93,7 +96,8 @@ vi.mock("@/store/preferencesStore", () => ({
       markdownFontSize: "lg",
       setMarkdownFontSize: setMarkdownFontSizeMock,
       diffViewType: "unified",
-      diffWrapLines: false,
+      diffWrapLines: preferences.diffWrapLines,
+      setDiffWrapLines: setDiffWrapLinesMock,
       diffIgnoreWhitespace: false,
     }),
 }));
@@ -213,8 +217,13 @@ const { useDiffContentMock } = vi.hoisted(() => ({
 vi.mock("@/panels/diff/useDiffContent", () => ({ useDiffContent: useDiffContentMock }));
 // FilePane lazy-loads the viewer, so assertions on it must await the chunk.
 vi.mock("@/components/Worktree/DiffViewer", () => ({
-  DiffViewer: (props: { diff: string; rootPath?: string }) => (
-    <div data-testid="diff-viewer-mock" data-diff={props.diff} data-root={props.rootPath ?? ""} />
+  DiffViewer: (props: { diff: string; rootPath?: string; wrapLines?: boolean }) => (
+    <div
+      data-testid="diff-viewer-mock"
+      data-diff={props.diff}
+      data-root={props.rootPath ?? ""}
+      data-wrap-lines={String(props.wrapLines)}
+    />
   ),
 }));
 vi.mock("@/components/Html/HtmlViewer", () => ({
@@ -279,6 +288,8 @@ afterEach(() => {
   for (const key of Object.keys(panelsById)) delete panelsById[key];
   setFileViewModeMock.mockReset();
   setFilePanelPathMock.mockReset();
+  setDiffWrapLinesMock.mockReset();
+  preferences.diffWrapLines = null;
   markdownViewerProps.current = null;
   lifecycleListeners.clear();
   dockState.activeDockTerminalId = null;
@@ -1834,6 +1845,68 @@ describe("FilePane diff mode (#11274)", () => {
 
       expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
       expect(container.querySelector("img")).toBeNull();
+    });
+  });
+
+  // Diff mode had no wrap control at all before #12170: the only wrap button in
+  // this toolbar was gated to `isMarkdown && viewMode === "source"`, so a
+  // markdown file's diff — the case that needs wrapping most — had no reachable
+  // toggle.
+  describe("diff-mode wrap toggle (#12170)", () => {
+    function wrapButton(): HTMLElement {
+      return screen.getByRole("button", { name: "Wrap long lines" });
+    }
+
+    function viewerWrap(): string | null {
+      return screen.getByTestId("diff-viewer-mock").getAttribute("data-wrap-lines");
+    }
+
+    async function renderDiff(filePath: string) {
+      seedWorktree([{ path: filePath, status: "modified" }]);
+      useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+      await renderPane({ filePath, fileViewMode: "diff" });
+      expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
+    }
+
+    it("wraps a markdown diff on first render with nothing stored", async () => {
+      await renderDiff("/repo/docs/spec.md");
+
+      expect(viewerWrap()).toBe("true");
+      expect(wrapButton().getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("offers the toggle for a non-markdown file too, unwrapped by default", async () => {
+      await renderDiff("/repo/src/index.ts");
+
+      expect(wrapButton()).toBeTruthy();
+      expect(viewerWrap()).toBe("false");
+      expect(wrapButton().getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("writes the opposite of the effective value, not of the stored one", async () => {
+      await renderDiff("/repo/docs/spec.md");
+
+      fireEvent.click(wrapButton());
+
+      expect(setDiffWrapLinesMock).toHaveBeenCalledWith(false);
+    });
+
+    it("honours an explicit override over the file type", async () => {
+      preferences.diffWrapLines = false;
+      await renderDiff("/repo/docs/spec.md");
+
+      expect(viewerWrap()).toBe("false");
+    });
+
+    it("stays out of the other view modes, which keep their own controls", async () => {
+      // Source view's wrap button is the markdown one, on a different
+      // preference; diff's must not appear beside it or double up on the slot.
+      seedWorktree([{ path: "/repo/docs/spec.md", status: "modified" }]);
+      await renderPane({ filePath: "/repo/docs/spec.md", fileViewMode: "source" });
+
+      fireEvent.click(wrapButton());
+      expect(setDiffWrapLinesMock).not.toHaveBeenCalled();
+      expect(screen.getAllByRole("button", { name: "Wrap long lines" }).length).toBe(1);
     });
   });
 

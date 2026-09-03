@@ -30,6 +30,7 @@ import {
   isVideoFilePath,
 } from "@/components/FileViewer/filePreviewKinds";
 import { ImageDiffViewer, isImageDiffCandidate } from "@/components/FileViewer/ImageDiffViewer";
+import { isProseFilePath } from "@/components/FileViewer/isProseFile";
 import { DiffViewer, FULL_FILE_MAX_LINES } from "@/components/Worktree/DiffViewer";
 import type { FullFileUnavailableReason } from "@/components/Worktree/DiffViewer";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
@@ -187,6 +188,11 @@ export function DiffPane({
   const setDiffShowFileList = usePreferencesStore((s) => s.setDiffShowFileList);
 
   const filePath = panel?.filePath;
+  // `null` means auto — prose wraps, code doesn't. Resolved here rather than in
+  // `DiffViewer` so the viewer keeps a plain boolean contract, and computed
+  // during render rather than held in state so the very first paint is already
+  // wrapped for a `.md` diff (#12170).
+  const effectiveWrapLines = diffWrapLines ?? (filePath !== undefined && isProseFilePath(filePath));
   // `filePath` is worktree-relative (unlike FilePanelData's), but both file
   // actions want an absolute path. Null means there is nothing to aim them at:
   // a relative path with no resolved worktree can't be made absolute, and
@@ -581,8 +587,8 @@ export function DiffPane({
           {!isImageMode && !isMediaMode && !isPdfMode && (
             <FileViewerToolbar.IconButton
               label="Wrap long lines"
-              pressed={diffWrapLines}
-              onClick={() => setDiffWrapLines(!diffWrapLines)}
+              pressed={effectiveWrapLines}
+              onClick={() => setDiffWrapLines(!effectiveWrapLines)}
             >
               <WrapText className={TOOLBAR_ICON_CLASS} />
             </FileViewerToolbar.IconButton>
@@ -841,7 +847,7 @@ export function DiffPane({
                 source={wantsFullFile ? source : undefined}
                 fullFile={wantsFullFile}
                 onFullFileVerdict={handleFullFileVerdict}
-                wrapLines={diffWrapLines}
+                wrapLines={effectiveWrapLines}
                 onRetry={retry}
               />
             )}
