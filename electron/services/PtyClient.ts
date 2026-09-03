@@ -125,6 +125,8 @@ interface TerminalInfoResponse {
   projectId?: string;
   kind?: PanelKind;
   launchAgentId?: AgentId;
+  /** This PTY backs the Daintree Assistant overlay, not a grid pane. */
+  isAssistantTerminal?: boolean;
   title?: string;
   /** Title ownership rung mirrored from the pty-host record. */
   titleMode?: PanelTitleMode;

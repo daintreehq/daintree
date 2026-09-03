@@ -2,6 +2,7 @@ import type { PtyClient } from "../PtyClient.js";
 import type { WorkspaceClient } from "../WorkspaceClient.js";
 import { getLifecycleLedger } from "./lifecycleLedger.js";
 import { journalAgentSession } from "./agentSessionJournal.js";
+import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import { projectStore } from "../ProjectStore.js";
 import { createLogger } from "../../utils/logger.js";
 
@@ -96,6 +97,15 @@ export async function gracefulTeardownAndJournalProject(
     [...infoById.keys()].map((id) => [id, ledger.currentGeneration(id)])
   );
 
+  // The Daintree Assistant's overlay terminal is not a grid pane, so it must
+  // reach neither the resume picker nor a saved terminal snapshot (#12183).
+  // Resolved against the pre-kill info snapshot for the same reason the
+  // generation is frozen above: by the time the writeback and journal loop run
+  // the PTY is dead and its live help-session binding has been torn down, so
+  // asking a session service after the fact would answer "not the assistant".
+  const isAssistant = (id: string): boolean =>
+    isAssistantTerminalRecord(infoById.get(id) ?? { id });
+
   const outcome = await ptyClient.gracefulKillByProjectConfirmed(
     scopeId,
     options.preserveSession !== undefined ? { preserveSession: options.preserveSession } : undefined
@@ -106,7 +116,7 @@ export async function gracefulTeardownAndJournalProject(
   // resume each agent in place, the journal is what the session picker reads.
   // Only callers that keep the restoration state ask for this.
   if (options.writeBackSessionIds) {
-    const capturedIds = outcome.sessions.filter((r) => r.agentSessionId);
+    const capturedIds = outcome.sessions.filter((r) => r.agentSessionId && !isAssistant(r.id));
     if (capturedIds.length > 0) {
       try {
         await projectStore.enqueueProjectStateUpdate(scopeId, (state) => {
@@ -129,7 +139,7 @@ export async function gracefulTeardownAndJournalProject(
   }
 
   const captured = outcome.sessions
-    .filter((r) => r.agentSessionId)
+    .filter((r) => r.agentSessionId && !isAssistant(r.id))
     .map((r) => ({ result: r, info: infoById.get(r.id) }))
     .filter((c): c is { result: (typeof c)["result"]; info: NonNullable<(typeof c)["info"]> } =>
       Boolean(c.info?.launchAgentId)

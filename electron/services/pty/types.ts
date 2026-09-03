@@ -37,6 +37,12 @@ export interface TerminalPublicState {
    * restored agent terminals branded until explicit exit.
    */
   launchAgentId?: AgentId;
+  /**
+   * This PTY backs the Daintree Assistant overlay, not a grid pane. Sealed at
+   * spawn so a teardown path can still recognise it from a pre-kill snapshot.
+   * See `isAssistantTerminalRecord`.
+   */
+  isAssistantTerminal?: boolean;
   title?: string;
   titleMode?: PanelTitleMode;
   /** Command submitted immediately after shell spawn, if any. */

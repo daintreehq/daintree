@@ -45,6 +45,19 @@ describe("classifyRun", () => {
     expect(classifyRun(agent({ id: "help" }), isHelp)).toBe("help");
   });
 
+  it("reports a stamped assistant as help before the renderer's mark lands", () => {
+    // The mark arrives on a round trip that lands after the PTY exists, so
+    // until this read the assistant tallied as a working agent and showed up
+    // as a fleet queue row during that window (#12183).
+    expect(classifyRun(agent({ id: "unmarked", isAssistantTerminal: true }), isHelp)).toBe("help");
+  });
+
+  it("still checks trashed before the stamp", () => {
+    expect(
+      classifyRun(agent({ id: "unmarked", isAssistantTerminal: true, isTrashed: true }), isHelp)
+    ).toBe("trashed");
+  });
+
   it("reports help before the no-pty and non-agent guards", () => {
     // A dead or unidentified assistant must still classify as help rather than
     // falling through — the tally decision belongs to the caller, not here.

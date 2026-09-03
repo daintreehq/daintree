@@ -12,6 +12,7 @@ import { projectStore } from "../../../services/ProjectStore.js";
 import type * as McpServerServiceModule from "../../../services/McpServerService.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
+import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import {
   TerminalSpawnOptionsSchema,
@@ -781,6 +782,18 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         projectId,
         restore: validatedOptions.restore,
         isEphemeral: validatedOptions.isEphemeral,
+        // Seal the assistant's identity onto the record itself, for the
+        // generic terminal paths to read back through
+        // `isAssistantTerminalRecord`. Derived in main, never from a
+        // renderer-supplied field: a pane that could assert this would opt
+        // itself out of the session journal.
+        //
+        // The live binding is the second source because a restart respawns the
+        // same panel id with a rebuilt env that carries no help token
+        // (`buildRestartEnv`), so `isHelpLaunch` is false there — and nothing
+        // unbinds the session on a restart's kill. Without it, Restart All
+        // Terminals would quietly strip the assistant's identity.
+        isAssistantTerminal: isHelpLaunch || helpSessionService.isHelpTerminal(id),
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
         agentSessionId: validatedOptions.agentSessionId,
@@ -849,6 +862,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     generation?: number
   ): Promise<void> => {
     if (!sessionId || !info?.launchAgentId) return;
+    // The Daintree Assistant's overlay terminal must never surface in the
+    // resume picker as an ordinary agent pane (#12183). Both callers snapshot
+    // `info` before the kill, so the record still carries the stamp here.
+    if (isAssistantTerminalRecord(info)) return;
     try {
       const branch = await resolveBranchForMain(info.worktreeId, deps.worktreeService);
       // journalAgentSession is the exactly-once funnel: it gates on the

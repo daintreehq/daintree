@@ -1,6 +1,6 @@
 import type { BackendTerminalInfo } from "../../shared/types/ipc.js";
 import type { PtyClient } from "./PtyClient.js";
-import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
+import { isAssistantTerminalRecord } from "./assistantTerminal.js";
 import { logInfo } from "../utils/logger.js";
 
 /**
@@ -39,13 +39,13 @@ export async function buildTerminalInventory(
 
   const terminals: BackendTerminalInfo[] = [];
   for (const terminal of infos) {
-    // Dev preview and help PTYs should not be rehydrated as generic terminal
-    // panels during project switching/hydration.
-    if (
-      terminal &&
-      terminal.kind !== "dev-preview" &&
-      !getAgentAvailabilityStore().isHelpTerminal(terminal.id)
-    ) {
+    // Dev preview and assistant PTYs should not be rehydrated as generic
+    // terminal panels during project switching/hydration. The assistant's
+    // terminal never has a saved panel, so anything left in this inventory is
+    // appended by `restorePanelsPhase` as a grid orphan (#12183) — which is
+    // how a renderer crash could surface the assistant's conversation as a
+    // pane in the main area.
+    if (terminal && terminal.kind !== "dev-preview" && !isAssistantTerminalRecord(terminal)) {
       terminals.push({
         id: terminal.id,
         projectId: terminal.projectId,

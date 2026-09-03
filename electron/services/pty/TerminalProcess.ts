@@ -384,6 +384,7 @@ export class TerminalProcess {
       titleMode: options.titleMode ?? "default",
       command: options.command,
       launchAgentId,
+      isAssistantTerminal: options.isAssistantTerminal,
       spawnedAt,
       // If we launched an agent, seed its state as "idle" — the activity
       // monitor will update it as soon as the pty produces output. Plain
