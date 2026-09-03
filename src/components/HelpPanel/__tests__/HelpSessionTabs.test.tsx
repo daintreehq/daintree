@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useState } from "react";
 import { render, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "../HelpSessionTabs";
@@ -102,14 +103,46 @@ describe("HelpSessionTabs", () => {
     expect(ids).toEqual([helpSessionTabId("strip", 0), helpSessionTabId("strip", 1)]);
   });
 
-  it("keeps the whole strip to one tab stop, with the selected lane holding it", () => {
-    // Roving tabindex. Two stops per chip is what made arrow-key movement impossible
-    // and put six stops between the header and the body at three lanes.
+  it("keeps the whole strip to one tab stop, starting on the selected lane", () => {
+    // Two stops per chip is what put six stops between the header and the body at three
+    // lanes, and it is what makes arrow-key movement impossible.
     const { container } = renderStrip();
     const [first, second] = tabs(container);
 
     expect(first!.tabIndex).toBe(-1);
     expect(second!.tabIndex).toBe(0);
+  });
+
+  it("moves the tab stop with the arrow keys, not just the focus ring", () => {
+    // The half of roving tabindex that is easy to leave out, because arrow keys appear to
+    // work without it. What it costs is the return trip: with the stop pinned to the
+    // SELECTED lane, tabbing away and back lands on that lane rather than the one you
+    // arrowed to, so the arrow keys' effect evaporates whenever focus leaves the panel.
+    const { container } = renderStrip();
+    const list = container.querySelector('[role="tablist"]')!;
+    const [first, second] = tabs(container);
+
+    second!.focus();
+    fireEvent.keyDown(list, { key: "ArrowRight" });
+
+    expect(document.activeElement).toBe(first!);
+    expect(first!.tabIndex).toBe(0);
+    expect(second!.tabIndex).toBe(-1);
+    // …and the stop moving is not selection moving.
+    expect(first!.getAttribute("aria-selected")).toBe("false");
+    expect(second!.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("hands the tab stop to a lane reached by pointer as well", () => {
+    // One route for every way focus arrives, rather than one for arrows and none for a
+    // click.
+    const { container } = renderStrip();
+    const [first, second] = tabs(container);
+
+    fireEvent.focus(first!);
+
+    expect(first!.tabIndex).toBe(0);
+    expect(second!.tabIndex).toBe(-1);
   });
 
   it("moves focus along the strip with arrow keys without selecting", () => {
@@ -153,6 +186,74 @@ describe("HelpSessionTabs", () => {
     fireEvent.keyDown(container.querySelector('[role="tablist"]')!, { key: "Delete" });
 
     expect(onClose).toHaveBeenCalledWith(1);
+  });
+
+  it("leaves focus on a surviving lane after a keyboard close", () => {
+    // Focusing inline in the key handler focused the tab that was about to be removed:
+    // closing only ASKS, and the element is still there until the next commit, so the
+    // ring landed on a node that then unmounted and focus fell to the document body. The
+    // successor has to be named by slot before the close and resolved after it. This
+    // needs a stateful host — the bug is invisible when `tabs` never actually changes.
+    function Host() {
+      const [open, setOpen] = useState([0, 1, 2]);
+      return (
+        <HelpSessionTabs
+          tabs={open.map((slot) => ({
+            slot,
+            label: `Session ${slot + 1}`,
+            agentState: undefined,
+          }))}
+          activeSlot={open[0]!}
+          onSelect={vi.fn()}
+          onClose={(slot) => setOpen((prev) => prev.filter((s) => s !== slot))}
+          idBase="host"
+          panelId="host-body"
+        />
+      );
+    }
+
+    const { container } = render(<Host />);
+    const list = container.querySelector('[role="tablist"]')!;
+
+    // Close the FIRST of three — the case the old code got wrong, because the successor
+    // sits at the same index the closed tab occupied.
+    tabs(container)[0]!.focus();
+    fireEvent.keyDown(list, { key: "Delete" });
+
+    const remaining = tabs(container);
+    expect(remaining.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 2", "Session 3"]);
+    expect(document.activeElement).toBe(remaining[0]!);
+    expect(remaining[0]!.tabIndex).toBe(0);
+  });
+
+  it("falls back to the preceding lane when the last one is closed", () => {
+    function Host() {
+      const [open, setOpen] = useState([0, 1]);
+      return (
+        <HelpSessionTabs
+          tabs={open.map((slot) => ({
+            slot,
+            label: `Session ${slot + 1}`,
+            agentState: undefined,
+          }))}
+          activeSlot={open[0]!}
+          onSelect={vi.fn()}
+          onClose={(slot) => setOpen((prev) => prev.filter((s) => s !== slot))}
+          idBase="host2"
+          panelId="host2-body"
+        />
+      );
+    }
+
+    const { container } = render(<Host />);
+    const list = container.querySelector('[role="tablist"]')!;
+
+    tabs(container)[1]!.focus();
+    fireEvent.keyDown(list, { key: "Delete" });
+
+    const remaining = tabs(container);
+    expect(remaining).toHaveLength(1);
+    expect(document.activeElement).toBe(remaining[0]!);
   });
 
   it("advertises that shortcut on the tab rather than leaving it to be discovered", () => {

@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
@@ -93,6 +93,12 @@ interface SessionTabChipProps {
   agentState: AgentState | null | undefined;
   isActive: boolean;
   /**
+   * Whether this lane owns the strip's single tab stop. Deliberately not the same thing
+   * as `isActive`: under manual activation the arrow keys move the stop without moving
+   * the selection, so the focused lane and the selected lane are routinely different.
+   */
+  hasTabStop: boolean;
+  /**
    * Whether there is more than one lane to choose between. The fill and the rail are a
    * SELECTION mark, and a selection mark on the only available option states nothing —
    * at one lane it also spans nearly the whole strip, where the rail stops reading as a
@@ -105,6 +111,8 @@ interface SessionTabChipProps {
   panelId: string;
   onSelect: (slot: number) => void;
   onClose: (slot: number) => void;
+  /** Hands the strip's single tab stop to whichever lane focus just reached. */
+  onFocusTab: (slot: number) => void;
 }
 
 /** One tab: its marker, its label, its close control, and its selection mark. */
@@ -112,11 +120,13 @@ function SessionTabChip({
   tab,
   agentState,
   isActive,
+  hasTabStop,
   showSelection,
   tabId,
   panelId,
   onSelect,
   onClose,
+  onFocusTab,
 }: SessionTabChipProps) {
   const stateId = `${tabId}-state`;
 
@@ -160,10 +170,14 @@ function SessionTabChip({
         // across the strip was Tab, which stopped on every close control on the way.
         role="tab"
         id={tabId}
+        // How the strip finds one lane without holding a ref to every chip.
+        data-slot={tab.slot}
         aria-selected={isActive}
         aria-controls={panelId}
-        // Roving tabindex: the strip is ONE tab stop, and arrow keys move inside it.
-        tabIndex={isActive ? 0 : -1}
+        // Roving tabindex: the strip is ONE tab stop, and the stop follows the last tab
+        // the arrow keys reached rather than staying pinned to the selected one. Those
+        // are different lanes under manual activation, which is the whole point.
+        tabIndex={hasTabStop ? 0 : -1}
         // Stated, not derived. The visible label is split across two spans so its
         // identifying tail cannot truncate, and the accessible-name algorithm trims each
         // element's own contribution before joining them — which silently turned
@@ -177,6 +191,7 @@ function SessionTabChip({
         // to it has to be advertised rather than discovered.
         aria-keyshortcuts="Delete"
         onClick={() => onSelect(tab.slot)}
+        onFocus={() => onFocusTab(tab.slot)}
         className={cn(
           // `pl-2` against the strip's own `px-1` puts this tab's first ink at 12px — the
           // same column the header's Daintree mark starts in, one row up.
@@ -316,19 +331,63 @@ export function HelpSessionTabs({
   const listRef = useRef<HTMLDivElement | null>(null);
 
   /**
-   * Move focus along the strip by DOM query rather than by holding a ref per tab.
-   * One ref on the container does the same job, and a ref handed down to a subcomponent
-   * as a prop is a silent React Compiler bailout in this repo.
+   * Which lane currently owns the strip's single tab stop.
+   *
+   * This is the half of "roving tabindex" that is easy to leave out, and leaving it out
+   * looks correct: arrow keys move focus either way. What it costs is the return trip —
+   * with the stop pinned to the SELECTED lane, tabbing away and back drops you on the
+   * selected tab rather than the one you had arrowed to, so the arrow keys' effect
+   * silently evaporates every time focus leaves the panel.
+   *
+   * Held as a slot rather than an index because a slot survives a lane closing. The
+   * derivation below falls back to the selected lane whenever the remembered one is gone,
+   * which is what makes closing a lane self-healing rather than something to clean up
+   * after.
    */
-  const focusTabAt = useCallback((index: number) => {
-    const list = listRef.current;
-    if (!list) return;
-    const items = list.querySelectorAll<HTMLElement>('[role="tab"]');
-    if (items.length === 0) return;
-    // Wrap, which is what the pattern specifies for a horizontal tablist.
-    const wrapped = ((index % items.length) + items.length) % items.length;
-    items[wrapped]?.focus();
+  const [focusedSlot, setFocusedSlot] = useState<number | null>(null);
+  const rovingSlot =
+    focusedSlot !== null && tabs.some((t) => t.slot === focusedSlot) ? focusedSlot : activeSlot;
+
+  /** The lane to focus once the tab array has committed — see the close handler. */
+  const pendingFocusRef = useRef<number | null>(null);
+
+  /**
+   * Move focus to one lane by DOM query rather than by holding a ref per tab. One ref on
+   * the container does the same job, and a ref handed down to a subcomponent as a prop is
+   * a silent React Compiler bailout in this repo.
+   */
+  const focusSlot = useCallback((slot: number) => {
+    // The stop itself is moved by the tab's own `onFocus` rather than from here, so that
+    // a pointer click, a Tab from outside and an arrow press all update it by the same
+    // route instead of three.
+    listRef.current?.querySelector<HTMLElement>(`[role="tab"][data-slot="${slot}"]`)?.focus();
   }, []);
+
+  const focusTabAt = useCallback(
+    (index: number) => {
+      if (tabs.length === 0) return;
+      // Wrap, which is what the pattern specifies for a horizontal tablist.
+      const wrapped = ((index % tabs.length) + tabs.length) % tabs.length;
+      const slot = tabs[wrapped]?.slot;
+      if (slot !== undefined) focusSlot(slot);
+    },
+    [tabs, focusSlot]
+  );
+
+  /**
+   * Land focus on the lane that replaced the closed one, after React has committed.
+   *
+   * Focusing inline in the key handler focused the element that was about to be removed:
+   * `onClose` only asks, and the tab is still in the DOM until the next commit, so the
+   * ring landed on a node that then unmounted and focus fell to the document body. It has
+   * to be a slot recorded before the close and resolved after it.
+   */
+  useEffect(() => {
+    const slot = pendingFocusRef.current;
+    if (slot === null) return;
+    pendingFocusRef.current = null;
+    if (tabs.some((t) => t.slot === slot)) focusSlot(slot);
+  }, [tabs, focusSlot]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -360,12 +419,13 @@ export function HelpSessionTabs({
           const tab = tabs[current];
           if (!tab) return;
           e.preventDefault();
-          // Aim focus at the lane that will occupy this position afterwards, so closing
-          // the middle of three leaves focus in the strip rather than on the document.
-          // Closing may open a confirm dialog instead, in which case the dialog takes
-          // focus and this is a no-op the user never sees.
+          // Name the successor by slot BEFORE asking for the close: the lane that will
+          // occupy this position afterwards is the one behind it, or the one in front
+          // when this is the last. Closing may raise a confirm dialog instead, in which
+          // case the dialog takes focus, the tab array never changes, and the effect
+          // above simply never fires.
+          pendingFocusRef.current = tabs[current + 1]?.slot ?? tabs[current - 1]?.slot ?? null;
           onClose(tab.slot);
-          focusTabAt(current === items.length - 1 ? current - 1 : current);
           break;
         }
         default:
@@ -394,11 +454,13 @@ export function HelpSessionTabs({
           tab={tab}
           agentState={tab.agentState}
           isActive={tab.slot === activeSlot}
+          hasTabStop={tab.slot === rovingSlot}
           showSelection={showSelection}
           tabId={helpSessionTabId(idBase, tab.slot)}
           panelId={panelId}
           onSelect={onSelect}
           onClose={onClose}
+          onFocusTab={setFocusedSlot}
         />
       ))}
       {/* The one way to another session, at the edge a tab set keeps it, drawn with the
