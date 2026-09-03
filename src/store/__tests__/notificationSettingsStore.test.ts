@@ -15,6 +15,7 @@ beforeEach(() => {
     waitingEnabled: true,
     workingPulseEnabled: false,
     uiFeedbackSoundEnabled: false,
+    flashEnabled: false,
     osDndActive: undefined,
   });
   (globalThis as { window?: unknown }).window = {
@@ -37,6 +38,7 @@ describe("notificationSettingsStore hydrate — per-kind toggles", () => {
       waitingEnabled: true,
       workingPulseEnabled: true,
       uiFeedbackSoundEnabled: true,
+      flashEnabled: true,
     });
 
     await useNotificationSettingsStore.getState().hydrate();
@@ -46,6 +48,7 @@ describe("notificationSettingsStore hydrate — per-kind toggles", () => {
     expect(s.waitingEnabled).toBe(true);
     expect(s.workingPulseEnabled).toBe(true);
     expect(s.uiFeedbackSoundEnabled).toBe(true);
+    expect(s.flashEnabled).toBe(true);
     expect(s.hydrated).toBe(true);
   });
 
@@ -60,6 +63,7 @@ describe("notificationSettingsStore hydrate — per-kind toggles", () => {
     expect(s.waitingEnabled).toBe(true);
     expect(s.workingPulseEnabled).toBe(false);
     expect(s.uiFeedbackSoundEnabled).toBe(false);
+    expect(s.flashEnabled).toBe(false);
   });
 
   it("marks hydrated and preserves defaults when getSettings rejects", async () => {

@@ -19,6 +19,7 @@ import type { HandlerDependencies } from "../types.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
 import { typedHandle } from "../utils.js";
 import { sanitizeNotificationSettingsPatch } from "../../utils/notificationSettingsPatch.js";
+import { shouldPlayUiFeedbackSound } from "../../utils/uiFeedbackSound.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 type AgentNotificationSingleton = typeof AgentNotificationServiceModule.agentNotificationService;
@@ -136,7 +137,7 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
     if (typeof soundId !== "string") return;
     const SOUNDS = await soundFiles();
     if (!(soundId in SOUNDS)) return;
-    if (!store.get("notificationSettings").uiFeedbackSoundEnabled) return;
+    if (!shouldPlayUiFeedbackSound(store.get("notificationSettings"))) return;
     const sound = await getSoundService();
     sound.play(soundId as SoundId);
   };

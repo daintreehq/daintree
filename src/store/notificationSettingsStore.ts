@@ -5,12 +5,15 @@ interface NotificationSettingsState {
   hydrated: boolean;
   // Per-kind toggles, mirrored from IPC settings so the notification center can
   // compute a "what will fire right now" summary without a per-open IPC round
-  // trip. These gate the main-process completion/waiting notifications and the
-  // working-pulse / UI-feedback sounds — they are display-only here.
+  // trip. `completedEnabled`/`waitingEnabled`/`workingPulseEnabled`/
+  // `uiFeedbackSoundEnabled` gate main-process notifications and sounds and
+  // are display-only here; `flashEnabled` is read directly by
+  // AllClearOverlay to gate the all-clear screen flash (#12185).
   completedEnabled: boolean;
   waitingEnabled: boolean;
   workingPulseEnabled: boolean;
   uiFeedbackSoundEnabled: boolean;
+  flashEnabled: boolean;
   quietHoursEnabled: boolean;
   quietHoursStartMin: number;
   quietHoursEndMin: number;
@@ -52,6 +55,7 @@ export const useNotificationSettingsStore = create<NotificationSettingsState>((s
   waitingEnabled: true,
   workingPulseEnabled: false,
   uiFeedbackSoundEnabled: false,
+  flashEnabled: false,
   quietHoursEnabled: false,
   quietHoursStartMin: 22 * 60,
   quietHoursEndMin: 8 * 60,
@@ -76,6 +80,7 @@ export const useNotificationSettingsStore = create<NotificationSettingsState>((s
           waitingEnabled: settings.waitingEnabled !== false,
           workingPulseEnabled: settings.workingPulseEnabled === true,
           uiFeedbackSoundEnabled: settings.uiFeedbackSoundEnabled === true,
+          flashEnabled: settings.flashEnabled === true,
           quietHoursEnabled: settings.quietHoursEnabled === true,
           quietHoursStartMin:
             typeof settings.quietHoursStartMin === "number" ? settings.quietHoursStartMin : 22 * 60,

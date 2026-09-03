@@ -63,6 +63,9 @@ export function sanitizeNotificationSettingsPatch(
   if (typeof s.uiFeedbackSoundEnabled === "boolean") {
     allowed.uiFeedbackSoundEnabled = s.uiFeedbackSoundEnabled;
   }
+  if (typeof s.flashEnabled === "boolean") {
+    allowed.flashEnabled = s.flashEnabled;
+  }
   if (typeof s.quietHoursEnabled === "boolean") {
     allowed.quietHoursEnabled = s.quietHoursEnabled;
   }

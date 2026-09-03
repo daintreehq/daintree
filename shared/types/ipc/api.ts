@@ -191,6 +191,8 @@ export interface NotificationSettings {
   workingPulseEnabled: boolean;
   workingPulseSoundFile: string;
   uiFeedbackSoundEnabled: boolean;
+  /** When true, the screen flashes once every agent goes idle (the "all-clear"). */
+  flashEnabled: boolean;
   /** When true, non-urgent notifications are suppressed during the scheduled window. */
   quietHoursEnabled: boolean;
   /** Start of the quiet window, minutes since local midnight (0-1439). */

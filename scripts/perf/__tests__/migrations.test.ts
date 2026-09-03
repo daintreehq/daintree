@@ -67,7 +67,7 @@ describe("PERF-080 drives the real migration chain", () => {
       expect(metrics[name], name).toBe(0);
     }
 
-    expect(metrics.schemaVersion).toBe(27);
+    expect(metrics.schemaVersion).toBe(28);
     expect(metrics.terminalCount).toBe(HEAVY_FIXTURE_COUNTS.terminals);
     expect(metrics.recipeCount).toBe(HEAVY_FIXTURE_COUNTS.recipes);
     expect(metrics.agentCount).toBe(HEAVY_FIXTURE_COUNTS.survivingAgents);
@@ -82,6 +82,6 @@ describe("PERF-080 drives the real migration chain", () => {
     const sample = await scenario.run(context);
     const metrics = sample.metrics as Record<string, number>;
     expect(metrics.migrationMisses).toBe(0);
-    expect(metrics.schemaVersion).toBe(27);
+    expect(metrics.schemaVersion).toBe(28);
   }, 120_000);
 });

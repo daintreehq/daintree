@@ -6,7 +6,7 @@ import {
 } from "../lib/migrationFixture";
 
 /**
- * The real electron-store migration chain, v0 → v27.
+ * The real electron-store migration chain, v0 → v28.
  *
  * This scenario used to reimplement all sixteen migrations inside this file and
  * time the copy. The copy could not regress when the product did — a migration
@@ -54,7 +54,7 @@ const FIXTURE_BYTES = JSON.stringify(createHeavyMigrationFixture()).length;
 export const migrationScenarios: PerfScenario[] = [
   {
     id: "PERF-080",
-    name: "Migration Chain v0→v27 (real MigrationRunner)",
+    name: "Migration Chain v0→v28 (real MigrationRunner)",
     description:
       "Run the shipped MigrationRunner over the shipped migrations barrel, v0 to head, against a " +
       "worst-case on-disk store (10k terminals, 500 recipes, 200 agents, six audit rings) opened " +
