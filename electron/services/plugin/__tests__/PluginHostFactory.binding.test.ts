@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import path from "path";
 
 const ipcUtilsMock = vi.hoisted(() => ({
@@ -703,5 +703,155 @@ describe("createHost onDidChangeAgentState", () => {
       timestamp: 1,
     } as never);
     expect(callback).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createHost onDidWake (#12175)", () => {
+  const WAKE = { sleepDuration: 42_000, timestamp: 1234 };
+
+  // Subscriptions live on the module-level bus, so a listener left behind by
+  // one case would still be attached when the next emits. Spies are restored
+  // here too: this file's `beforeEach` only clears mocks, so a console spy
+  // would otherwise stay installed for every later test.
+  afterEach(() => {
+    events.removeAllListeners();
+    vi.restoreAllMocks();
+  });
+
+  it("delivers a frozen wake to a project-bound host", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const received: unknown[] = [];
+    await host.onDidWake((event) => received.push(event));
+
+    events.emit("sys:wake", WAKE);
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toEqual(WAKE);
+    // Frozen so a plugin that mutates the event fails here, not in the wild.
+    expect(Object.isFrozen(received[0])).toBe(true);
+  });
+
+  it("delivers to a bound host regardless of which project woke — a wake is machine-scoped", async () => {
+    const h = makeHarness();
+    const boundHost = createHost(h.deps, PLUGIN_ID, BOUND).host;
+    const unboundHost = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING).host;
+    const boundCb = vi.fn();
+    const unboundCb = vi.fn();
+    await boundHost.onDidWake(boundCb);
+    await unboundHost.onDidWake(unboundCb);
+
+    events.emit("sys:wake", WAKE);
+
+    // Unlike agent state, there is no project filter: the blurred, non-current
+    // project is exactly the one whose plugin state went stale over the sleep.
+    expect(boundCb).toHaveBeenCalledTimes(1);
+    expect(unboundCb).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires no capability", async () => {
+    const h = makeHarness();
+    h.deps.declaredCapabilities = () => new Set();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+
+    await expect(host.onDidWake(callback)).resolves.toBeTypeOf("function");
+    events.emit("sys:wake", WAKE);
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay a wake that happened before the subscription", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    events.emit("sys:wake", WAKE);
+    const callback = vi.fn();
+    await host.onDidWake(callback);
+
+    // A pulse has no resting state; replaying it would make a stale wake look
+    // fresh and trigger a duplicate reconciliation pass.
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("stops delivering once the disposer runs", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    const dispose = await host.onDidWake(callback);
+
+    dispose();
+    dispose();
+    events.emit("sys:wake", WAKE);
+
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("falls silent once the plugin is unloaded, without needing its disposer", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const callback = vi.fn();
+    await host.onDidWake(callback);
+
+    h.deps.plugins.delete(PLUGIN_ID);
+    events.emit("sys:wake", WAKE);
+
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("registers its teardown in pluginEventCleanups and clears it on dispose", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    const dispose = await host.onDidWake(vi.fn());
+
+    // The membership guard alone would keep the "unloaded" test above green
+    // even if the subscription stopped being tracked — at which point a
+    // same-id reload would revive the stale listener. Assert the tracking.
+    expect(h.deps.pluginEventCleanups.get(PLUGIN_ID)).toHaveLength(1);
+
+    dispose();
+
+    expect(h.deps.pluginEventCleanups.get(PLUGIN_ID)).toBeUndefined();
+  });
+
+  it("keeps delivering to a sibling listener when one throws", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const healthy = vi.fn();
+    const thrower = vi.fn(() => {
+      throw new Error("plugin boom");
+    });
+    await host.onDidWake(thrower);
+    await host.onDidWake(healthy);
+
+    events.emit("sys:wake", WAKE);
+
+    // Assert the thrower ran: without it, a first subscription that silently
+    // never registered would leave this test green.
+    expect(thrower).toHaveBeenCalledTimes(1);
+    expect(healthy).toHaveBeenCalledTimes(1);
+  });
+
+  it("quarantines a listener that throws on three consecutive wakes", async () => {
+    const h = makeHarness();
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const callback = vi.fn(() => {
+      throw new Error("plugin boom");
+    });
+    await host.onDidWake(callback);
+
+    for (let i = 0; i < 4; i++) events.emit("sys:wake", WAKE);
+
+    expect(callback).toHaveBeenCalledTimes(3);
+  });
+
+  it("throws once the host is revoked", async () => {
+    const h = makeHarness();
+    const { host, revoke } = createHost(h.deps, PLUGIN_ID, BOUND);
+    revoke();
+
+    expect(() => host.onDidWake(vi.fn())).toThrow(/onDidWake/);
   });
 });

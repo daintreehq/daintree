@@ -20,6 +20,7 @@ import type {
   PanelViewProps,
   PluginPanelLifecycleEvent,
   PluginPanelLifecyclePhase,
+  PluginSystemWakeEvent,
   McpServerContribution,
   PluginCapability,
   BuiltInPluginCapability,
@@ -562,6 +563,20 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(activation.onDidChangePanelLifecycle).returns.toEqualTypeOf<
         Promise<() => void>
       >();
+    });
+
+    it("exposes the system wake contract as a named SDK type (#12175)", () => {
+      // Named export, not just structural presence: the docs tell authors to
+      // `import type { PluginSystemWakeEvent } from "@daintreehq/plugin-sdk"`.
+      const event = {} as PluginSystemWakeEvent;
+      expectTypeOf(event.sleepDuration).toEqualTypeOf<number>();
+      expectTypeOf(event.timestamp).toEqualTypeOf<number>();
+    });
+
+    it("PluginActivationApi revoke-guards the wake subscription", () => {
+      const activation = {} as PluginActivationApi;
+      expectTypeOf(activation.onDidWake).toBeFunction();
+      expectTypeOf(activation.onDidWake).returns.toEqualTypeOf<Promise<() => void>>();
     });
 
     it("PluginIpcContext has required fields", () => {

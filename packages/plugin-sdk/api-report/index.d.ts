@@ -1821,6 +1821,35 @@ interface PluginPanelLifecycleEvent {
     readonly phase: PluginPanelLifecyclePhase;
 }
 /**
+ * One machine wake observation delivered to a plugin (#12175). Frozen before
+ * delivery, and carries only timing — never what the machine was doing while
+ * suspended.
+ *
+ * Emitted at most once per resume, after the host's own settle delay and after
+ * it has attempted to resync its pty and workspace hosts. Suspend has no
+ * counterpart event: a plugin cannot reliably run work between the OS
+ * signalling suspend and the process freezing, so only the wake edge is
+ * exposed.
+ */
+interface PluginSystemWakeEvent {
+    /**
+     * Milliseconds the machine spent suspended.
+     *
+     * Measured from the observed suspend to the start of the host's post-wake
+     * recovery, so it includes the settle delay but not however long recovery
+     * itself took — a coarse "how stale is my state" figure, not a precise
+     * hardware sleep time.
+     *
+     * `0` is a sentinel, not a measurement: it means the matching suspend edge
+     * was never observed (the host started mid-sleep, or the OS delivered resume
+     * without a preceding suspend). Treat `0` as "unknown duration" — do not
+     * compare it against a staleness threshold and conclude the sleep was short.
+     */
+    readonly sleepDuration: number;
+    /** `Date.now()` at the moment the wake was published. */
+    readonly timestamp: number;
+}
+/**
  * Lazily-spawned MCP server contribution (#9235). The declared `command` is
  * launched as a real subprocess the first time its tools are enumerated (not at
  * load time), inheriting `args` and `env`. `${settings:*}` templates inside
@@ -3338,6 +3367,47 @@ interface PluginActivationApi {
      *   is revoked and the subscription is rejected.
      */
     onDidChangePanelLifecycle(callback: (event: PluginPanelLifecycleEvent) => void): Promise<() => void>;
+    /**
+     * Subscribe to the machine waking from sleep (#12175). No capability is
+     * required — the event describes the machine's own suspend/resume timing and
+     * carries nothing about the workspace, the user, or any other plugin.
+     *
+     * This is the signal background work has no other way to get.
+     * {@link onDidChangePanelLifecycle} gives a *view* a re-validation point, but
+     * a plugin's timers, forge providers, and reconciliation passes keep running
+     * against state frozen at suspend. The host's own resume path only re-enables
+     * workspace polling if a window is focused, so a machine that wakes while the
+     * app is blurred leaves that state stale until the user comes back — for an
+     * unbounded stretch, with nothing else announcing the wake.
+     *
+     * Delivered at most once per resume, after the host has attempted to resync
+     * its pty and workspace hosts, so a plugin re-reading worktree state from the
+     * callback is not racing the host's own recovery. That recovery is
+     * best-effort: the wake is announced even when part of it failed, because a
+     * half-recovered host is when a plugin most needs to revalidate. Rapid
+     * resumes coalesce into one delivery, and a re-suspend during the settle
+     * window cancels the wake outright rather than emitting a spurious one.
+     *
+     * Nothing is replayed on subscribe: a wake is a one-shot pulse with no
+     * resting state, so a plugin that subscribes after a wake waits for the next
+     * one.
+     *
+     * The event is machine-scoped, not project-scoped: every loaded instance of
+     * the plugin receives it, including one bound to a project whose window is
+     * not focused.
+     *
+     * Callbacks receive a frozen {@link PluginSystemWakeEvent}. Resolves to a
+     * disposer; calling it more than once is a no-op, and all subscriptions are
+     * disposed automatically when the plugin is unloaded.
+     *
+     * Subscribing is revoke-guarded — call it during `activate()`. The callback
+     * itself fires for the plugin's whole lifetime; only the act of subscribing
+     * is restricted to the activation window.
+     *
+     * @throws {Error} If called after activation resolves or times out — the host
+     *   is revoked and the subscription is rejected.
+     */
+    onDidWake(callback: (event: PluginSystemWakeEvent) => void): Promise<() => void>;
 }
 /**
  * The full host surface handed to a plugin's `activate()`. Extends
@@ -3828,4 +3898,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };

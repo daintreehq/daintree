@@ -308,7 +308,7 @@ Adding a field to the plugin snapshot requires:
 
 Plugins consuming worktree events during `activate()` — before the WorkspaceClient is fully initialized — get their subscriptions queued in `pendingWorktreeSubs` and replayed once the client connects. Your callback never misses the early events.
 
-Plugin-supplied listeners across the host (`onDidChangeAgentState`, `storage.onDidChange`, `settings.onDidChange`, and the worktree subscriptions above) are dispatched through `invokeTrackedListener`, which quarantines a misbehaving callback. Each throw — synchronous or a rejected async return — increments a per-listener counter that is logged with its position (`1/3`, `2/3`, …); a single successful invocation resets it to zero, so intermittent failures never accumulate. After three consecutive throws the listener is auto-unsubscribed via its own disposer, so a buggy or adversarial plugin can't spam the log with a repeating error on every event.
+Plugin-supplied listeners across the host (`onDidChangeAgentState`, `onDidWake`, `storage.onDidChange`, `settings.onDidChange`, and the worktree subscriptions above) are dispatched through `invokeTrackedListener`, which quarantines a misbehaving callback. Each throw — synchronous or a rejected async return — increments a per-listener counter that is logged with its position (`1/3`, `2/3`, …); a single successful invocation resets it to zero, so intermittent failures never accumulate. After three consecutive throws the listener is auto-unsubscribed via its own disposer, so a buggy or adversarial plugin can't spam the log with a repeating error on every event.
 
 ## Capability disclosure
 

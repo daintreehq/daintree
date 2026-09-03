@@ -34,6 +34,7 @@ function makeHost() {
     })),
     onDidChangeActiveWorktree: vi.fn((_cb: any) => vi.fn()),
     onDidChangeWorktrees: vi.fn((_cb: any) => vi.fn()),
+    onDidWake: vi.fn((_cb: any) => vi.fn()),
     registerForgeProvider: vi.fn(() => vi.fn()),
     registerFileDecorationProvider: vi.fn(() => vi.fn()),
     invalidateFileDecorations: vi.fn(),
@@ -391,6 +392,27 @@ describe("PluginDevWorkerMainBridge", () => {
     emitActive?.({ id: "w9" });
     const evt = workerHost.sent.find((m) => m.type === "subscription-event");
     expect(evt).toMatchObject({ subscriptionId: "s1", payload: { id: "w9" } });
+  });
+
+  it("routes a system-wake subscription to host.onDidWake (#12175)", async () => {
+    const { host, workerHost } = makeBridge();
+    let emitWake: ((e: unknown) => void) | undefined;
+    host.onDidWake.mockImplementation((cb: any) => {
+      emitWake = cb;
+      return vi.fn();
+    });
+    workerHost.emit("worker-message", {
+      type: "subscribe",
+      subscriptionId: "s-wake",
+      kind: "system-wake",
+    });
+    expect(host.onDidWake).toHaveBeenCalled();
+    emitWake?.({ sleepDuration: 42_000, timestamp: 1234 });
+    const evt = workerHost.sent.find((m) => m.type === "subscription-event");
+    expect(evt).toMatchObject({
+      subscriptionId: "s-wake",
+      payload: { sleepDuration: 42_000, timestamp: 1234 },
+    });
   });
 
   it("disposes a subscription on unsubscribe", async () => {

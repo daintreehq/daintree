@@ -423,6 +423,32 @@ describe("createMockHost", () => {
     expect(cb).toHaveBeenCalledTimes(1);
   });
 
+  it("pushes a frozen wake to onDidWake subscribers and stops on dispose (#12175)", async () => {
+    const host = createMockHost();
+    const cb = vi.fn();
+    const dispose = await host.onDidWake(cb);
+
+    host.simulateSystemWake({ sleepDuration: 42_000, timestamp: 1234 });
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledWith({ sleepDuration: 42_000, timestamp: 1234 });
+    expect(Object.isFrozen(cb.mock.calls[0]?.[0])).toBe(true);
+
+    dispose();
+    dispose(); // no-op
+    host.simulateSystemWake({ sleepDuration: 1, timestamp: 2 });
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay an earlier wake to a later onDidWake subscriber", async () => {
+    const host = createMockHost();
+    host.simulateSystemWake({ sleepDuration: 42_000, timestamp: 1234 });
+
+    const cb = vi.fn();
+    await host.onDidWake(cb);
+
+    expect(cb).not.toHaveBeenCalled();
+  });
+
   it("registers forge providers and unregisters via disposer", async () => {
     const host = createMockHost();
     const impl = { parseRemote: vi.fn() } as unknown as Parameters<

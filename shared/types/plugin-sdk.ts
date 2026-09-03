@@ -47,6 +47,10 @@ export type { PanelViewProps } from "./plugin.js";
 
 export type { PluginPanelLifecycleEvent, PluginPanelLifecyclePhase } from "./plugin.js";
 
+// ── System wake (worker-facing) ─────────────────────────────────────
+
+export type { PluginSystemWakeEvent } from "./plugin.js";
+
 // ── Manifest root ───────────────────────────────────────────────────
 
 export type { PluginManifest, PluginAuthor } from "./plugin.js";
