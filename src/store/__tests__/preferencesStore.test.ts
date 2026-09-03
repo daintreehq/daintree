@@ -726,7 +726,7 @@ describe("preferencesStore migration", () => {
       // Pin the bump too: `migrate` only runs for a blob below the configured
       // version, so leaving it at 17 would skip the branch above entirely and
       // hydration's sanitizer would quietly supply the same default.
-      expect(store.persist.getOptions().version).toBe(19);
+      expect(store.persist.getOptions().version).toBe(20);
     });
 
     it("leaves an already-valid rung alone when migrating", async () => {
@@ -1214,13 +1214,13 @@ describe("preferencesStore migration", () => {
       // The migration only reinterprets pre-v19 blobs. A `false` written since
       // is a real override and must survive a reload, or turning wrap off on a
       // markdown diff would not stick.
-      setStoredState({ diffWrapLines: false }, 19);
+      setStoredState({ diffWrapLines: false }, 20);
       const store = await loadStore();
       expect(store.getState().diffWrapLines).toBe(false);
     });
 
     it("sanitises a corrupt current-version value to auto, not to off", async () => {
-      setStoredState({ diffWrapLines: "yes" }, 19);
+      setStoredState({ diffWrapLines: "yes" }, 20);
       const store = await loadStore();
       expect(store.getState().diffWrapLines).toBeNull();
     });
@@ -1237,5 +1237,34 @@ describe("preferencesStore migration", () => {
         expect(JSON.parse(storageMock.getItem(STORAGE_KEY)!).state.diffWrapLines).toBe(false);
       });
     });
+  });
+});
+
+describe("diffMarkdownRendered (v20 migration, #12171)", () => {
+  it("defaults to the source diff, so the new layout opts nobody in", async () => {
+    const store = await loadStore();
+    expect(store.getState().diffMarkdownRendered).toBe(false);
+  });
+
+  it("setDiffMarkdownRendered updates the value", async () => {
+    const store = await loadStore();
+    store.getState().setDiffMarkdownRendered(true);
+    expect(store.getState().diffMarkdownRendered).toBe(true);
+    store.getState().setDiffMarkdownRendered(false);
+    expect(store.getState().diffMarkdownRendered).toBe(false);
+  });
+
+  it("gives a pre-v20 blob the default rather than leaving it undefined", async () => {
+    const store = await loadStore();
+    const migrated = store.persist.getOptions().migrate?.({ dockDensity: "compact" }, 19);
+
+    expect(migrated).toMatchObject({ diffMarkdownRendered: false, dockDensity: "compact" });
+  });
+
+  it("keeps an existing choice through the migration", async () => {
+    const store = await loadStore();
+    const migrated = store.persist.getOptions().migrate?.({ diffMarkdownRendered: true }, 19);
+
+    expect(migrated).toMatchObject({ diffMarkdownRendered: true });
   });
 });

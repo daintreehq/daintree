@@ -74,6 +74,9 @@ vi.mock("@/store/preferencesStore", () => ({
     selector({
       diffViewType: "unified",
       setDiffViewType: vi.fn(),
+      diffMarkdownRendered: false,
+      setDiffMarkdownRendered: vi.fn(),
+      markdownFontSize: "sm",
       diffWrapLines: false,
       setDiffWrapLines: vi.fn(),
       diffShowFileList: false,

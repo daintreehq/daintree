@@ -142,6 +142,15 @@ interface PreferencesState {
    */
   diffWrapLines: DiffWrapPreference;
   setDiffWrapLines: (value: boolean) => void;
+  /**
+   * Show Markdown diffs as a rendered document rather than as source (#12171).
+   * Deliberately NOT a third `DiffViewType`: that union is a layout for the
+   * source diff and is read by surfaces (the file panel, the cross-worktree
+   * diff) that render no such mode. Keeping it a separate flag also preserves
+   * the user's Unified/Split choice across a round trip through rendered mode.
+   */
+  diffMarkdownRendered: boolean;
+  setDiffMarkdownRendered: (value: boolean) => void;
   diffIgnoreWhitespace: boolean;
   setDiffIgnoreWhitespace: (value: boolean) => void;
   /** Show the changed-files sidebar in the diff workspace (multi-file review). */
@@ -305,6 +314,7 @@ function sanitizePersistedPreferences(
   if (!isDockDensity(sanitized.dockDensity)) sanitized.dockDensity = "normal";
   if (!isDiffViewType(sanitized.diffViewType)) sanitized.diffViewType = "split";
   if (!isDiffWrapPreference(sanitized.diffWrapLines)) sanitized.diffWrapLines = null;
+  if (typeof sanitized.diffMarkdownRendered !== "boolean") sanitized.diffMarkdownRendered = false;
   if (typeof sanitized.diffIgnoreWhitespace !== "boolean") sanitized.diffIgnoreWhitespace = false;
   if (typeof sanitized.diffShowFileList !== "boolean") sanitized.diffShowFileList = true;
   if (typeof sanitized.diffFullFile !== "boolean") sanitized.diffFullFile = false;
@@ -364,6 +374,7 @@ type PreferencesPersistedState = Pick<
   | "reduceAnimations"
   | "diffViewType"
   | "diffWrapLines"
+  | "diffMarkdownRendered"
   | "diffIgnoreWhitespace"
   | "diffShowFileList"
   | "diffFullFile"
@@ -391,6 +402,7 @@ const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
   reduceAnimations: false,
   diffViewType: "split",
   diffWrapLines: null,
+  diffMarkdownRendered: false,
   diffIgnoreWhitespace: false,
   diffShowFileList: true,
   diffFullFile: false,
@@ -519,6 +531,7 @@ function toPreferencesPersisted(
     reduceAnimations: coerceBool(raw.reduceAnimations, d.reduceAnimations),
     diffViewType: isDiffViewType(raw.diffViewType) ? raw.diffViewType : d.diffViewType,
     diffWrapLines: isDiffWrapPreference(raw.diffWrapLines) ? raw.diffWrapLines : d.diffWrapLines,
+    diffMarkdownRendered: coerceBool(raw.diffMarkdownRendered, d.diffMarkdownRendered),
     diffIgnoreWhitespace: coerceBool(raw.diffIgnoreWhitespace, d.diffIgnoreWhitespace),
     diffShowFileList: coerceBool(raw.diffShowFileList, d.diffShowFileList),
     diffFullFile: coerceBool(raw.diffFullFile, d.diffFullFile),
@@ -620,6 +633,11 @@ function mergePreferencesPersistedWrite({
         inc.diffWrapLines,
         disk.diffWrapLines
       ),
+      diffMarkdownRendered: pickFieldByWriterDelta(
+        base.diffMarkdownRendered,
+        inc.diffMarkdownRendered,
+        disk.diffMarkdownRendered
+      ),
       diffIgnoreWhitespace: pickFieldByWriterDelta(
         base.diffIgnoreWhitespace,
         inc.diffIgnoreWhitespace,
@@ -717,6 +735,8 @@ export const usePreferencesStore = create<PreferencesState>()(
       setDiffViewType: (value) => set({ diffViewType: value }),
       diffWrapLines: null,
       setDiffWrapLines: (value) => set({ diffWrapLines: value }),
+      diffMarkdownRendered: false,
+      setDiffMarkdownRendered: (value) => set({ diffMarkdownRendered: value }),
       diffIgnoreWhitespace: false,
       setDiffIgnoreWhitespace: (value) => set({ diffIgnoreWhitespace: value }),
       diffShowFileList: true,
@@ -818,7 +838,7 @@ export const usePreferencesStore = create<PreferencesState>()(
       storage: createSafeJSONStorage<PreferencesPersistedState>({
         mergeOnWrite: mergePreferencesPersistedWrite,
       }),
-      version: 19,
+      version: 20,
       // Explicit persisted subset — matches the pre-existing default (setters are
       // dropped by JSON serialization); named so the write merge (#11351) has a
       // typed persisted shape to reconcile.
@@ -833,6 +853,7 @@ export const usePreferencesStore = create<PreferencesState>()(
         reduceAnimations: state.reduceAnimations,
         diffViewType: state.diffViewType,
         diffWrapLines: state.diffWrapLines,
+        diffMarkdownRendered: state.diffMarkdownRendered,
         diffIgnoreWhitespace: state.diffIgnoreWhitespace,
         diffShowFileList: state.diffShowFileList,
         diffFullFile: state.diffFullFile,
@@ -1002,6 +1023,13 @@ export const usePreferencesStore = create<PreferencesState>()(
           // to new ones.
           persisted.diffWrapLines = persisted.diffWrapLines === true ? true : null;
         }
+        if (version < 20 && isRecord(persisted)) {
+          // The rendered Markdown layout is new, so nobody has an opinion yet
+          // and everyone opens on the source diff they already had (#12171).
+          if (typeof persisted.diffMarkdownRendered !== "boolean") {
+            persisted.diffMarkdownRendered = false;
+          }
+        }
         return persisted as PreferencesState;
       },
     }
@@ -1012,5 +1040,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean | null; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; markdownFontSize: MarkdownFontSize; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean; keyboardLayoutConfirmationsByBinding: Record<string, number> }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean | null; diffMarkdownRendered: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; markdownFontSize: MarkdownFontSize; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean; keyboardLayoutConfirmationsByBinding: Record<string, number> }",
 });

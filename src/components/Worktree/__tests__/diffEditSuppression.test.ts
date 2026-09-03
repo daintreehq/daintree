@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { markEdits, parseDiff, tokenize } from "react-diff-view";
 import type { HunkData, TokenNode, TokenPath } from "react-diff-view";
-import { suppressFullLineEdits } from "../diffEditSuppression";
+import {
+  EDIT_COVERAGE_LIMIT,
+  shouldSuppressEdits,
+  suppressFullLineEdits,
+} from "../diffEditSuppression";
 
 function textPath(value: string): TokenPath {
   return [{ type: "text", value }];
@@ -82,5 +86,26 @@ index 0000001..0000002 100644
     const newLines = tokens.new as TokenNode[][];
     expect(treeHasEdit(newLines[1] ?? [])).toBe(true);
     expect(treeHasEdit(newLines[10] ?? [])).toBe(false);
+  });
+});
+
+// The predicate the rendered Markdown diff shares with the line diff (#12171):
+// both surfaces have to land on the same side of the same judgment.
+describe("shouldSuppressEdits", () => {
+  it("keeps marks at exactly the limit and drops them past it", () => {
+    const total = 100;
+    const atLimit = Math.round(total * EDIT_COVERAGE_LIMIT);
+    expect(shouldSuppressEdits(total, atLimit, "x".repeat(atLimit))).toBe(false);
+    expect(shouldSuppressEdits(total, atLimit + 1, "x".repeat(atLimit + 1))).toBe(true);
+  });
+
+  it("exempts whitespace-only edits at any coverage", () => {
+    expect(shouldSuppressEdits(10, 9, "         ")).toBe(false);
+    expect(shouldSuppressEdits(10, 9, "\t\t\t\t\t\t\t\t\t")).toBe(false);
+  });
+
+  it("says nothing to suppress when there are no edits or no content", () => {
+    expect(shouldSuppressEdits(100, 0, "")).toBe(false);
+    expect(shouldSuppressEdits(0, 0, "")).toBe(false);
   });
 });

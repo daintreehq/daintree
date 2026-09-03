@@ -164,8 +164,10 @@
     "posix-pty-reaper": "file:electron/native/posix-pty-reaper",
     "proper-lockfile": "^4.1.2",
     "react-colorful": "^5.6.1",
+    "remark-parse": "^11.0.0",
     "safe-stable-stringify": "^2.5.0",
     "smol-toml": "^1.6.1",
+    "unified": "^11.0.5",
     "win-job-object": "file:electron/native/win-job-object",
     "yauzl": "^3.4.0"
   },

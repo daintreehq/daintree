@@ -11,6 +11,18 @@ import {
 
 const PREFETCH_DWELL_MS = 500;
 
+export interface UseDiffContentOptions {
+  /**
+   * Force the whitespace sensitivity of the request instead of following the
+   * preference. The rendered Markdown layout needs an exact patch: it rebuilds
+   * the old document by reverse-applying the hunks, and an --ignore-all-space
+   * patch omits indentation changes that in Markdown change the structure —
+   * a list nested one level deeper would reconstruct as though it never moved
+   * (#12171). Undefined means "use the preference".
+   */
+  ignoreWhitespace?: boolean;
+}
+
 export interface UseDiffContentResult {
   /** Diff text, `"NO_CHANGES"`, `"ERROR"`, or undefined while loading. */
   content: string | undefined;
@@ -29,7 +41,8 @@ export interface UseDiffContentResult {
  */
 export function useDiffContent(
   subject: DiffSubject | null,
-  nextSubject?: DiffSubject | null
+  nextSubject?: DiffSubject | null,
+  options?: UseDiffContentOptions
 ): UseDiffContentResult {
   const [content, setContent] = useState<string | undefined>(undefined);
   // Freshness key the shown diff was fetched under, tagged with its cache key
@@ -40,7 +53,8 @@ export function useDiffContent(
     key: string | undefined;
   } | null>(null);
   const requestRef = useRef(0);
-  const ignoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
+  const preferredIgnoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
+  const ignoreWhitespace = options?.ignoreWhitespace ?? preferredIgnoreWhitespace;
 
   // Tolerate hosts mounted without a worktree-store provider (mirrors
   // useFleetPicker): staleness detection simply never fires there.
@@ -67,9 +81,12 @@ export function useDiffContent(
   // Toggling ignore-whitespace strands every entry built under the other flag
   // (their keys can no longer be requested this session unless the user
   // toggles back, and a long review can hold 20 stale diffs). Purge them.
+  // Purged against the preference, not the effective flag: an override is a
+  // transient second view of the same file, and letting it evict the
+  // preference's entries would make every toggle back a refetch.
   useEffect(() => {
-    purgeOtherWhitespaceEntries(ignoreWhitespace);
-  }, [ignoreWhitespace]);
+    purgeOtherWhitespaceEntries(preferredIgnoreWhitespace);
+  }, [preferredIgnoreWhitespace]);
 
   const subjectKey = subject === null ? null : diffCacheKey(subject, ignoreWhitespace);
 
