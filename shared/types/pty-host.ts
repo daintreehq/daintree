@@ -65,7 +65,8 @@ export interface PtyHostSpawnOptions {
   isEphemeral?: boolean;
   /**
    * This PTY backs the Daintree Assistant overlay rather than a grid pane.
-   * Stamped by Main from a validated help token — never from a renderer field,
+   * Stamped by Main from a validated help token, or from the live help-session
+   * binding when a restart respawns without one — never from a renderer field,
    * which would let any pane opt itself out of journaling.
    */
   isAssistantTerminal?: boolean;

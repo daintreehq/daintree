@@ -119,7 +119,10 @@ class MockTerminalProcess {
     return false;
   }
 
+  gracefulShutdownCalled = false;
+
   gracefulShutdown(): Promise<string | null> {
+    this.gracefulShutdownCalled = true;
     return Promise.resolve(this.sessionId);
   }
 }
@@ -391,6 +394,30 @@ describe("PtyManager lifecycle ledger", () => {
 
     expect(shared.created[0]?.options.cols).toBe(100);
     expect(shared.created[0]?.options.rows).toBe(30);
+  });
+
+  it("captures no resume record when a trashed assistant terminal expires", async () => {
+    // The assistant cannot reach the trash today — the renderer routes
+    // `removeOnExit` panels straight to removal — but the record that says so
+    // lives here, a process away from that rule (#12183).
+    const manager = new PtyManager();
+
+    manager.spawn(
+      "t1",
+      spawnOptions({ launchAgentId: "claude", launchGeneration: 3, isAssistantTerminal: true })
+    );
+    shared.created[0]!.sessionId = "sess-1";
+
+    manager.trash("t1");
+    shared.trashCallbacks.get("t1")!("t1");
+    await vi.waitFor(() => {
+      expect(shared.created[0]!.gracefulShutdownCalled).toBe(true);
+    });
+
+    expect(shared.eventsEmit).not.toHaveBeenCalledWith(
+      "agent-session:captured",
+      expect.anything()
+    );
   });
 
   it("stamps terminalId and launchGeneration on trash-expiry session captures", async () => {

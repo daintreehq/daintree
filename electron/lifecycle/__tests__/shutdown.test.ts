@@ -34,7 +34,9 @@ const projectStoreMock = vi.hoisted(() => ({
   getAllProjects: vi.fn(() => []),
   getProjectState: vi.fn(),
   saveProjectState: vi.fn(),
-  enqueueProjectStateUpdate: vi.fn(async () => undefined),
+  enqueueProjectStateUpdate: vi.fn<
+    (id: string, updater: (state: unknown) => unknown) => Promise<void>
+  >(async () => undefined),
 }));
 
 vi.mock("../../services/ProjectStore.js", () => ({
@@ -1221,6 +1223,21 @@ describe("registerShutdownHandler", () => {
       expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
       const record = persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>;
       expect(record.sessionId).toBe("sess-1");
+
+      // The session-id writeback skips it too, matching the mirrored block in
+      // `gracefulTeardownAndJournalProject`.
+      const [, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      const state = {
+        terminals: [
+          { id: "t1", agentSessionId: undefined },
+          { id: "assistant", agentSessionId: undefined },
+        ],
+      };
+      updater(state);
+      expect(state.terminals).toEqual([
+        { id: "t1", agentSessionId: "sess-1" },
+        { id: "assistant", agentSessionId: undefined },
+      ]);
     });
 
     it("still captures and journals when the rate-limit drain import fails", async () => {
