@@ -210,6 +210,12 @@ const mockGetCopilotLaunchArgs = vi.hoisted(() =>
   vi.fn<(token: string) => string[] | null>(() => null)
 );
 
+// Defaults to "a Claude session with nothing to append", so the many existing
+// Claude help-launch cases keep their commands byte-for-byte.
+const mockGetClaudeLaunchArgs = vi.hoisted(() =>
+  vi.fn<(token: string) => string[] | null>(() => [])
+);
+
 const mockMarkTerminalForToken = vi.hoisted(() =>
   vi.fn<(token: string, terminalId: string) => boolean>(() => true)
 );
@@ -231,6 +237,7 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
     validateToken: (token: string) => mockValidateToken(token),
     getCodexLaunchArgs: (token: string) => mockGetCodexLaunchArgs(token),
     getCopilotLaunchArgs: (token: string) => mockGetCopilotLaunchArgs(token),
+    getClaudeLaunchArgs: (token: string) => mockGetClaudeLaunchArgs(token),
     getAssistantScratchEnv: (token: string) => mockGetAssistantScratchEnv(token),
     getBypassPermissions: (token: string) => mockGetBypassPermissions(token),
     getDebugLogging: (token: string) => mockGetDebugLogging(token),
@@ -1192,6 +1199,8 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     mockCurrentPort.mockReturnValue(null);
     mockGetCodexLaunchArgs.mockReset();
     mockGetCodexLaunchArgs.mockReturnValue(null);
+    mockGetClaudeLaunchArgs.mockReset();
+    mockGetClaudeLaunchArgs.mockReturnValue([]);
     mockGetBypassPermissions.mockReset();
     mockGetBypassPermissions.mockReturnValue(false);
     mockMarkTerminalForToken.mockReset();
@@ -1834,6 +1843,67 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
         } as unknown as Parameters<typeof handler>[1]
       )
     ).rejects.toThrow(/does not belong to a Codex session/);
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+  });
+
+  it("appends the lane's --mcp-config to a Claude help launch, shell-quoted", async () => {
+    // Every lane of a project shares one session directory, so Claude's MCP
+    // wiring — with its literal per-lane bearer — cannot come from the cwd's
+    // `.mcp.json`. It arrives as a per-lane file through this flag instead.
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockGetClaudeLaunchArgs.mockReturnValue([
+      "--mcp-config",
+      "/Users/me/Library/help-sessions/abc123/.lanes/slot-1.mcp.json",
+    ]);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude",
+        launchAgentId: "claude",
+        env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(mockGetClaudeLaunchArgs).toHaveBeenCalledWith("help-token");
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    // Both args are shell-quoted on the way in, so match the pieces rather
+    // than one exact spelling of the quoting.
+    expect(spawnArgs.command).toMatch(/^claude /);
+    expect(spawnArgs.command).toContain("--mcp-config");
+    expect(spawnArgs.command).toContain("help-sessions/abc123/.lanes/slot-1.mcp.json");
+    // Still the help path, never the per-pane one.
+    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
+  });
+
+  it("refuses to spawn a Claude help session when getClaudeLaunchArgs returns null — cross-agent token reuse", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "action" : false));
+    mockGetClaudeLaunchArgs.mockReturnValue(null);
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await expect(
+      handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          cwd: tmpDir,
+          command: "claude",
+          launchAgentId: "claude",
+          env: { DAINTREE_MCP_TOKEN: "help-token" },
+        } as unknown as Parameters<typeof handler>[1]
+      )
+    ).rejects.toThrow(/does not belong to a Claude session/);
     expect(ptyClient.spawn).not.toHaveBeenCalled();
   });
 

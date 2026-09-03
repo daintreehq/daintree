@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useMemo, useState } from "react";
+import { StrictMode, useEffect, useId, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { resolveAppTheme } from "@shared/theme/themes";
@@ -18,10 +18,9 @@ installPreviewShims();
 /**
  * Standalone visual-review harness for the assistant panel's session-tab strip.
  *
- * The strip only exists when a project has two or three assistant lanes open, which in
- * the real app means launching a second session and waiting for it — no way to look at
- * a state deliberately, and no way at all to see a BACKGROUND lane's marker, which is
- * the whole reason the strip carries state. So this renders the real
+ * The strip's most important state — a BACKGROUND lane's marker, which is the whole
+ * reason the strip carries state — cannot be reached from the lane on screen, and in the
+ * real app means launching a second session and waiting for it. So this renders the real
  * `HelpPanelHeader` + `HelpSessionTabs` pair against the theme's real tokens, at the
  * panel's real widths, from fixtures that name each state.
  *
@@ -59,11 +58,22 @@ interface Fixture {
  * long-label case to fixture — but there IS a width case, and an earlier version of
  * this comment got it wrong. Three lanes come to roughly 325px of content against 319px
  * of room at the panel's 320px minimum, so `three-mixed` at `?width=320` is a real
- * pressure test, not a formality. It is also the only place the trailing new-session
- * control's absence matters: at three lanes there is nowhere to put a fourth, so the
- * control is gone and the width it would have cost with it.
+ * pressure test, not a formality. At three lanes the trailing new-session control is
+ * parked (`aria-disabled`) rather than removed, so it still costs its 24px there.
  */
 const FIXTURES = {
+  "one-lane": {
+    what: "the state every project starts in — one lane, nothing running",
+    lanes: [null],
+    activeIndex: 0,
+    focused: true,
+  },
+  "one-lane-working": {
+    what: "one lane, busy — the case where header and strip both speak for it",
+    lanes: ["working"],
+    activeIndex: 0,
+    focused: true,
+  },
   "two-idle": {
     what: "the common case — two lanes, neither reporting",
     lanes: [null, null],
@@ -118,6 +128,8 @@ const width = Number(params.get("width")) || 380;
 function Chrome({ name }: { name: FixtureName }) {
   const fixture = FIXTURES[name];
   const [activeSlot, setActiveSlot] = useState(fixture.activeIndex);
+  const idBase = useId();
+  const bodyId = `${idBase}-body`;
 
   const tabs: HelpSessionTab[] = fixture.lanes.map((agentState, index) => ({
     slot: index,
@@ -128,12 +140,13 @@ function Chrome({ name }: { name: FixtureName }) {
   return (
     <div className="flex flex-col h-full bg-surface-canvas">
       <HelpPanelHeader
-        agentState={null}
-        canStartNewSession
+        // The active lane's state, exactly as `HelpPanel` feeds it — the header speaks
+        // for the lane on screen and nothing else. Hardcoding `null` here made the one
+        // thing the header and the strip can disagree about invisible to the harness.
+        agentState={tabs[activeSlot]?.agentState ?? null}
+        canRestartConversation
         canEndSession
-        canOpenParallelSession={tabs.length < MAX_ASSISTANT_SLOTS}
-        onNewSession={() => {}}
-        onOpenParallelSession={() => {}}
+        onRestartConversation={() => {}}
         onEndSession={() => {}}
         onOpenDocs={() => {}}
         onClose={() => {}}
@@ -146,10 +159,12 @@ function Chrome({ name }: { name: FixtureName }) {
         onClose={() => {}}
         canOpenSession={tabs.length < MAX_ASSISTANT_SLOTS}
         onOpenSession={() => {}}
+        idBase={idBase}
+        panelId={bodyId}
       />
       {/* Stand-in for the transcript. Deliberately quiet: its only job is to be the
           strip's real bottom neighbour on the theme's canvas. */}
-      <div className="flex-1 min-h-0 px-3 py-3 space-y-2" aria-hidden="true">
+      <div id={bodyId} className="flex-1 min-h-0 px-3 py-3 space-y-2" aria-hidden="true">
         <div className="h-2 w-4/5 rounded-full bg-overlay-soft" />
         <div className="h-2 w-3/5 rounded-full bg-overlay-soft" />
         <div className="h-2 w-2/3 rounded-full bg-overlay-soft" />

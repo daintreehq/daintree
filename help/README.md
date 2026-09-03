@@ -22,7 +22,7 @@ claude                            # Claude Code
 codex                             # Codex CLI
 ```
 
-Each agent auto-discovers its instruction file from the working directory and constrains itself to help-assistant mode. Note that running a CLI here by hand is **not** an end-to-end test of a real help session: MCP wiring is injected per session at spawn time (a fresh bearer token in `.mcp.json` for Claude, `-c` flags for Codex), so a manual launch from this directory gets the prompt but not the live MCP servers.
+Each agent auto-discovers its instruction file from the working directory and constrains itself to help-assistant mode. Note that running a CLI here by hand is **not** an end-to-end test of a real help session: MCP wiring is injected per session at spawn time (a per-lane `--mcp-config` file carrying a fresh bearer token for Claude, `-c` flags for Codex), so a manual launch from this directory gets the prompt but not the live MCP servers.
 
 ## Architecture
 

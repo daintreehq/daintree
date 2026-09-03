@@ -178,6 +178,22 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuSeparator: () => <hr />,
 }));
 
+/**
+ * The control that discards the conversation in the lane on screen and starts a fresh
+ * one in the same slot.
+ *
+ * It used to be a "+" in the header, which sat directly above the strip's own "+" — one
+ * of them opened a session and the other threw one away. It is now a named item in the
+ * overflow menu, beside the other destructive action, and the tests find it by that name.
+ */
+function restartConversationButton(container: HTMLElement): HTMLButtonElement | null {
+  return (
+    Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Restart conversation")
+    ) ?? null
+  );
+}
+
 vi.mock("@/components/icons/DaintreeIcon", () => ({
   DaintreeIcon: () => null,
 }));
@@ -661,11 +677,11 @@ describe("HelpPanel — + New session destructive reset", () => {
     };
   }
 
-  it("hides the + button when there is no live terminal", () => {
+  it("offers no restart when there is no live terminal to restart", () => {
     helpPanelState.terminalId = null;
     helpPanelState.agentId = null;
     const { container } = render(<HelpPanel width={380} />);
-    expect(container.querySelector('button[aria-label="Start new session"]')).toBeNull();
+    expect(restartConversationButton(container)).toBeNull();
   });
 
   it("resets immediately without a confirm when the agent is idle and conversation is untouched", async () => {
@@ -682,7 +698,7 @@ describe("HelpPanel — + New session destructive reset", () => {
 
     const { container, queryByTestId } = render(<HelpPanel width={380} />);
     await act(async () => {
-      fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+      fireEvent.click(restartConversationButton(container)!);
     });
 
     expect(queryByTestId("confirm-dialog")).toBeNull();
@@ -712,12 +728,12 @@ describe("HelpPanel — + New session destructive reset", () => {
     setupBoundTerminal({ agentState: "working", conversationTouched: false });
 
     const { container, getByTestId } = render(<HelpPanel width={380} />);
-    fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+    fireEvent.click(restartConversationButton(container)!);
 
     expect(panelStoreState.removePanel).not.toHaveBeenCalled();
     expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
-    expect(getByTestId("dialog-title").textContent).toBe("Start a new session?");
-    expect(getByTestId("dialog-confirm").textContent).toBe("Start new session");
+    expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
+    expect(getByTestId("dialog-confirm").textContent).toBe("Restart conversation");
     expect(getByTestId("dialog-description").textContent).toContain(
       "the conversation will be discarded"
     );
@@ -727,17 +743,17 @@ describe("HelpPanel — + New session destructive reset", () => {
     setupBoundTerminal({ agentState: "idle", conversationTouched: true });
 
     const { container, getByTestId } = render(<HelpPanel width={380} />);
-    fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+    fireEvent.click(restartConversationButton(container)!);
 
     expect(panelStoreState.removePanel).not.toHaveBeenCalled();
-    expect(getByTestId("dialog-title").textContent).toBe("Start a new session?");
+    expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
   });
 
   it("keeps the session intact when the user cancels the confirm dialog", () => {
     setupBoundTerminal({ agentState: "working" });
 
     const { container, getByTestId, queryByTestId } = render(<HelpPanel width={380} />);
-    fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+    fireEvent.click(restartConversationButton(container)!);
     fireEvent.click(getByTestId("dialog-cancel"));
 
     expect(queryByTestId("confirm-dialog")).toBeNull();
@@ -759,7 +775,7 @@ describe("HelpPanel — + New session destructive reset", () => {
     });
 
     const { container, getByTestId } = render(<HelpPanel width={380} />);
-    fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+    fireEvent.click(restartConversationButton(container)!);
     await act(async () => {
       fireEvent.click(getByTestId("dialog-confirm"));
     });
@@ -795,7 +811,7 @@ describe("HelpPanel — + New session destructive reset", () => {
 
     const { container } = render(<HelpPanel width={380} />);
     await act(async () => {
-      fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+      fireEvent.click(restartConversationButton(container)!);
     });
 
     // Pre-set already fired with the same id we passed as requestedId.
@@ -824,7 +840,7 @@ describe("HelpPanel — + New session destructive reset", () => {
 
     const { container } = render(<HelpPanel width={380} />);
     await act(async () => {
-      fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+      fireEvent.click(restartConversationButton(container)!);
     });
 
     expect(mockDispatch).toHaveBeenCalledWith(
@@ -851,7 +867,7 @@ describe("HelpPanel — + New session destructive reset", () => {
 
     const { container } = render(<HelpPanel width={380} />);
     await act(async () => {
-      fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+      fireEvent.click(restartConversationButton(container)!);
     });
 
     // setTerminal called once (pre-set), then clearTerminal reverted it on !ok.
@@ -872,7 +888,7 @@ describe("HelpPanel — + New session destructive reset", () => {
 
     const { container } = render(<HelpPanel width={380} />);
     await act(async () => {
-      fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+      fireEvent.click(restartConversationButton(container)!);
     });
 
     expect(panelStoreState.addPanel).not.toHaveBeenCalled();
@@ -916,7 +932,7 @@ describe("HelpPanel — + New session destructive reset", () => {
     const { container, rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
-      fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+      fireEvent.click(restartConversationButton(container)!);
     });
 
     // We're in the in-flight window. Force a re-render so the cleanup
@@ -959,7 +975,7 @@ describe("HelpPanel — + New session destructive reset", () => {
 
     const { container } = render(<HelpPanel width={380} />);
     await act(async () => {
-      fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+      fireEvent.click(restartConversationButton(container)!);
     });
 
     expect(mockDispatch).toHaveBeenCalledWith(
@@ -1131,7 +1147,7 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
     const { container } = render(<HelpPanel width={380} />);
     // Start the relaunch (idle + untouched → immediate, no confirm); dispatch hangs.
     await act(async () => {
-      fireEvent.click(container.querySelector('button[aria-label="Start new session"]')!);
+      fireEvent.click(restartConversationButton(container)!);
     });
     const reservedId = (mockDispatch.mock.calls[0]?.[1] as { requestedId?: string } | undefined)
       ?.requestedId;
@@ -1213,13 +1229,46 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     };
   }
 
+  // Found by `title` rather than `aria-label`: the close control is pointer-only and
+  // `aria-hidden`, because a focusable control beside a `tab` is what makes a roving
+  // tabindex impossible and would leave a stray non-`tab` child in the tablist. The
+  // keyboard route is Delete on the focused tab, covered in HelpSessionTabs.test.tsx.
   function closeButtonFor(container: HTMLElement, label: string): HTMLButtonElement {
-    const button = container.querySelector<HTMLButtonElement>(
-      `button[aria-label="Close ${label}"]`
-    );
+    const button = container.querySelector<HTMLButtonElement>(`button[title="Close ${label}"]`);
     if (!button) throw new Error(`no close button for ${label}`);
     return button;
   }
+
+  it("labels lanes by durable slot and names the body after the selected tab", () => {
+    // Sparse slots on purpose: lanes 0 and 2 with 1 closed. Position-based labels would
+    // read "Session 1 / Session 2" here and rename a live conversation; slot-based ones
+    // leave a gap that `openSlot` closes on its own. The strip's own tests build labels
+    // themselves, so this is the only place HelpPanel's rule is actually exercised.
+    setupTwoLanes();
+    helpPanelState.openSlots = [0, 2];
+    helpPanelState.sessions = {
+      0: helpPanelState.sessions[0]!,
+      2: { ...helpPanelState.sessions[1]!, terminalId: "term-3", sessionId: "sess-third" },
+    };
+    delete helpPanelState.sessions[1];
+    panelStoreState.panelsById["term-3"] = {
+      ...panelStoreState.panelsById["term-2"]!,
+      id: "term-3",
+    };
+
+    const { container } = render(<HelpPanel width={380} />);
+    const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
+
+    expect(tabs.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 1", "Session 3"]);
+    expect(new Set(tabs.map((t) => t.id)).size).toBe(2);
+
+    const body = container.querySelector('[role="tabpanel"]')!;
+    expect(body.getAttribute("aria-labelledby")).toBe(tabs[0]!.id);
+    expect(tabs[0]!.getAttribute("aria-controls")).toBe(body.id);
+
+    fireEvent.click(tabs[1]!);
+    expect(helpPanelState.setActiveSlot).toHaveBeenCalledWith(2);
+  });
 
   it("tears down only the closed lane and leaves the panel open on the survivor", () => {
     setupTwoLanes();

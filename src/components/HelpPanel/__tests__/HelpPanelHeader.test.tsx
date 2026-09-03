@@ -39,11 +39,9 @@ function renderHeader(overrides: Partial<ComponentProps<typeof HelpPanelHeader>>
   return render(
     <HelpPanelHeader
       agentState={null}
-      canStartNewSession={false}
+      canRestartConversation={false}
       canEndSession={false}
-      canOpenParallelSession
-      onOpenParallelSession={vi.fn()}
-      onNewSession={vi.fn()}
+      onRestartConversation={vi.fn()}
       onEndSession={vi.fn()}
       onOpenDocs={vi.fn()}
       onClose={vi.fn()}
@@ -72,13 +70,12 @@ describe("HelpPanelHeader", () => {
     expect([...focused.firstElementChild!.classList].some((c) => c.includes("accent"))).toBe(false);
   });
 
-  it("keeps the primary header row to new-session, overflow, and hide", () => {
+  it("keeps the primary header row to overflow and hide", () => {
     const { container, getByLabelText } = renderHeader({
-      canStartNewSession: true,
+      canRestartConversation: true,
       canEndSession: true,
     });
 
-    expect(getByLabelText("Start new session")).not.toBeNull();
     expect(getByLabelText("More actions")).not.toBeNull();
     expect(getByLabelText("Hide Daintree Assistant")).not.toBeNull();
     // Stop and docs are overflow items, never dedicated header icons — the
@@ -92,6 +89,52 @@ describe("HelpPanelHeader", () => {
     );
     expect(stop).toBeDefined();
     expect(docs).toBeDefined();
+  });
+
+  it("carries no control that could be read as adding a session", () => {
+    // The header's "+" restarted the current conversation while the strip a row below
+    // opened a new one. Two plus-shaped affordances a few pixels apart doing different
+    // things is the confusion this header now exists without.
+    const { container } = renderHeader({ canRestartConversation: true, canEndSession: true });
+    const labels = [...container.firstElementChild!.children]
+      .filter((el) => el.tagName === "BUTTON")
+      .map((el) => el.getAttribute("aria-label"));
+
+    expect(labels).toEqual(["Hide Daintree Assistant"]);
+  });
+
+  it("draws no state marker of its own — the strip owns per-lane state", () => {
+    // The header and the active tab used to draw the same 14px glyph for the same lane,
+    // one row apart. The state is still ANNOUNCED here, because a description on a tab
+    // is read when the tab takes focus and not when the state changes.
+    const { container, getByTestId } = renderHeader({ agentState: "working" });
+
+    expect(container.querySelector("svg.animate-spin-slow")).toBeNull();
+    const announcer = getByTestId("assistant-header-state-announcer");
+    expect(announcer.getAttribute("role")).toBe("status");
+    expect(announcer.className).toContain("sr-only");
+    expect(announcer.textContent).toBe("Assistant is working");
+  });
+
+  it("names the restart item for the conversation it discards", () => {
+    const onRestartConversation = vi.fn();
+    const { getByText, queryByText } = renderHeader({
+      canRestartConversation: true,
+      onRestartConversation,
+    });
+
+    // Never "new session" — that is the strip's "+", and it does close to the opposite.
+    expect(queryByText("Start new session")).toBeNull();
+    // And never mirrored here: the strip's "+" is that action's single home.
+    expect(queryByText("Open parallel session")).toBeNull();
+
+    fireEvent.click(getByText("Restart conversation"));
+    expect(onRestartConversation).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the restart item when there is no conversation to restart", () => {
+    const { queryByText } = renderHeader({ canRestartConversation: false });
+    expect(queryByText("Restart conversation")).toBeNull();
   });
 
   it("shows the Stop assistant item only when canEndSession is true", () => {

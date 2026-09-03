@@ -412,12 +412,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // pool for every spawn. The spawn-side fallback stays absent below.
     const quotingShell = validatedOptions.shell || projectShell || getDefaultShell();
 
-    // Help-assistant launches arrive with a pre-provisioned session dir whose
-    // .mcp.json is already in cwd, baked with the literal session token, and
-    // a .claude/settings.json that sets `enableAllProjectMcpServers: true` so
-    // Claude Code auto-trusts the project-scoped servers without prompting.
-    // Skip per-pane MCP config injection (the session dir owns it) and let
-    // Claude's normal cwd discovery do its thing. The CLI bypass flag is
+    // Help-assistant launches arrive with a pre-provisioned session dir that
+    // every lane of the project shares. Claude's MCP wiring, with its literal
+    // per-lane bearer, is a per-lane file handed over with `--mcp-config`
+    // below; the shared `.mcp.json` in cwd is empty, and `.claude/settings.json`
+    // sets `enableAllProjectMcpServers: true` so nothing there prompts. Skip
+    // the per-pane MCP config injection (the help session owns its own) and let
+    // Claude's normal cwd discovery do the rest. The CLI bypass flag is
     // gated on the session's snapshotted `bypassPermissions` (independent
     // of `tier`), so an `action`-tier session can still skip permission
     // prompts and a `system`-tier session can still respect them.
@@ -578,6 +579,25 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         if (copilotArgs.length > 0) {
           safeCommand =
             `${safeCommand} ${copilotArgs.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`.trim();
+        }
+      }
+
+      // Claude help sessions read their MCP wiring from a per-lane file
+      // handed over with `--mcp-config`, not from the cwd's `.mcp.json`. Every
+      // lane of a project shares one session directory, so the shared file
+      // cannot carry a lane's bearer; the per-lane file can, and servers
+      // supplied this way raise no per-folder approval prompt. Same `null`
+      // contract as Codex and Copilot: a valid help token that does not
+      // belong to a Claude session is a cross-agent reuse and refuses to spawn.
+      if (launchAgentId === "claude") {
+        const claudeArgs = helpSessionService.getClaudeLaunchArgs(helpToken);
+        if (claudeArgs === null) {
+          throw new Error(
+            "Daintree Assistant help token does not belong to a Claude session; refusing to spawn"
+          );
+        }
+        if (claudeArgs.length > 0) {
+          safeCommand = `${safeCommand} ${claudeArgs.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`;
         }
       }
 

@@ -548,6 +548,24 @@ describe("HelpSessionController — launch error routing", () => {
     ctrl.stop();
   });
 
+  it("maps a mixed-agent refusal to its own kind, not the generic spawn failure", async () => {
+    // `spawn-failed` would offer a bare Retry that fails identically until the
+    // sibling lane stops, under copy that blames the agent for not starting.
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    primeInputs(ctrl, true);
+    provisionMock().mockRejectedValueOnce(
+      Object.assign(new Error("sibling lane runs codex"), { code: "MIXED_AGENT_LANES" })
+    );
+
+    ctrl.launch({ agentId: "claude" });
+
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().launchError?.kind).toBe("mixed-agent-lanes");
+    });
+    ctrl.stop();
+  });
+
   it("falls back to a toast when the panel is closed", async () => {
     const ctrl = new HelpSessionController();
     ctrl.start();

@@ -22,8 +22,12 @@ const {
     currentPort: 45454 as number | null,
     currentApiKey: "test-api-key" as string | null,
     enabled: true,
+    // By name, not `this`: two lanes provisioning at once reach this through
+    // concurrent dynamic imports of the mocked module, and the second call
+    // arrives with `this` unbound. The real service is a class instance and has
+    // no such problem; only the fixture did.
     isEnabled() {
-      return this.enabled;
+      return mockMcpServerService.enabled;
     },
     start: vi.fn().mockResolvedValue(undefined),
     setEnabled: vi.fn().mockResolvedValue(undefined),
@@ -230,6 +234,29 @@ describe("HelpSessionService", () => {
     };
   }
 
+  type McpFile = {
+    mcpServers: Record<
+      string,
+      { type?: string; url?: string; headers?: { Authorization?: string } }
+    >;
+  };
+
+  type Provisioned = { sessionPath: string; sessionId: string };
+
+  /** The per-provision `--mcp-config` file a Claude session was handed. */
+  function laneFile(result: Provisioned, slot = 0): string {
+    return path.join(result.sessionPath, ".lanes", `slot-${slot}-${result.sessionId}.mcp.json`);
+  }
+
+  /** Claude's MCP wiring: the per-lane `--mcp-config` file, not the shared `.mcp.json`. */
+  async function readLaneConfig(result: Provisioned, slot = 0): Promise<McpFile> {
+    return JSON.parse(await fs.readFile(laneFile(result, slot), "utf-8")) as McpFile;
+  }
+
+  async function readSharedMcp(sessionPath: string): Promise<McpFile> {
+    return JSON.parse(await fs.readFile(path.join(sessionPath, ".mcp.json"), "utf-8")) as McpFile;
+  }
+
   it("returns mcpUrl and windowId on the provision result when MCP is enabled", async () => {
     const result = await service.provisionSession(provisionInput());
     expect(result).not.toBeNull();
@@ -323,25 +350,29 @@ describe("HelpSessionService", () => {
     expect(maxInFlight).toBe(1);
   });
 
-  it("creates a session dir with a .mcp.json that bakes the literal session token into the Authorization header", async () => {
+  it("writes the lane's --mcp-config file with the literal session token, and leaves the shared .mcp.json empty", async () => {
     // Claude Code's `${VAR}` substitution in `headers` is still broken as of
     // v2.1.83 through v2.1.133 (anthropics/claude-code#6204) and `mcp
     // add/remove` rewrite it to a literal env value, leaking the bearer to disk
     // (#18692, #57131) — must bake the literal token. Same reason as
-    // McpPaneConfigService.ts.
+    // McpPaneConfigService.ts. It goes in the per-lane file because the cwd
+    // `.mcp.json` is one file for every lane of the project.
     const result = await service.provisionSession(provisionInput());
     expect(result).not.toBeNull();
     if (!result) throw new Error("expected result");
 
-    const mcpRaw = await fs.readFile(path.join(result.sessionPath, ".mcp.json"), "utf-8");
-    const mcp = JSON.parse(mcpRaw);
-    expect(mcp.mcpServers.daintree).toEqual({
+    const lane = await readLaneConfig(result);
+    expect(lane.mcpServers.daintree).toEqual({
       type: "sse",
       url: "http://127.0.0.1:45454/sse",
       headers: { Authorization: `Bearer ${result.token}` },
     });
-    expect(mcp.mcpServers.daintree.headers.Authorization).not.toContain("${");
-    expect(mcp.mcpServers["daintree-docs"]).toBeDefined();
+    expect(lane.mcpServers.daintree?.headers?.Authorization).not.toContain("${");
+    expect(lane.mcpServers["daintree-docs"]).toBeDefined();
+
+    // A project `.mcp.json` with servers in it is what raises Claude's per-folder
+    // approval prompt, so the shared one is written with none.
+    expect((await readSharedMcp(result.sessionPath)).mcpServers).toEqual({});
   });
 
   it("sets enableAllProjectMcpServers in .claude/settings.json so Claude auto-trusts the bundled servers", async () => {
@@ -564,9 +595,9 @@ describe("HelpSessionService", () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
-    const mcp = JSON.parse(await fs.readFile(path.join(result.sessionPath, ".mcp.json"), "utf-8"));
-    expect(mcp.mcpServers.daintree).toBeUndefined();
-    expect(mcp.mcpServers["daintree-docs"]).toBeDefined();
+    const lane = await readLaneConfig(result);
+    expect(lane.mcpServers.daintree).toBeUndefined();
+    expect(lane.mcpServers["daintree-docs"]).toBeDefined();
 
     const settings = JSON.parse(
       await fs.readFile(path.join(result.sessionPath, ".claude", "settings.json"), "utf-8")
@@ -690,18 +721,44 @@ describe("HelpSessionService", () => {
     await fs.access(result.sessionPath);
   });
 
-  it("strips the daintree entry from .mcp.json on revoke so a stray claude in that cwd can't auth with the dead token", async () => {
+  it("removes the lane's --mcp-config file on revoke so a stray claude can't auth with the dead token", async () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
-    const target = path.join(result.sessionPath, ".mcp.json");
-    const before = JSON.parse(await fs.readFile(target, "utf-8"));
-    expect(before.mcpServers.daintree).toBeDefined();
-    expect(before.mcpServers["daintree-docs"]).toBeDefined();
+    await fs.access(laneFile(result));
+    expect((await readLaneConfig(result)).mcpServers.daintree).toBeDefined();
 
     await service.revokeSession(result.sessionId);
 
-    const after = JSON.parse(await fs.readFile(target, "utf-8"));
+    await expect(fs.access(laneFile(result))).rejects.toThrow();
+    // The shared file never held the bearer, and stays as it was.
+    expect((await readSharedMcp(result.sessionPath)).mcpServers).toEqual({});
+  });
+
+  it("still strips a pre-shared-directory literal bearer from .mcp.json on revoke", async () => {
+    // An install that predates the per-lane files can have a literal Claude
+    // bearer in the shared file. Revoking the session that owns it must still
+    // take it out, or a stray `claude` in that cwd keeps a working credential.
+    const result = await service.provisionSession(provisionInput());
+    if (!result) throw new Error("expected result");
+    const target = path.join(result.sessionPath, ".mcp.json");
+    await fs.writeFile(
+      target,
+      JSON.stringify({
+        mcpServers: {
+          "daintree-docs": { type: "http", url: "https://daintree.org/api/mcp" },
+          daintree: {
+            type: "sse",
+            url: "http://127.0.0.1:45454/sse",
+            headers: { Authorization: `Bearer ${result.token}` },
+          },
+        },
+      })
+    );
+
+    await service.revokeSession(result.sessionId);
+
+    const after = await readSharedMcp(result.sessionPath);
     expect(after.mcpServers.daintree).toBeUndefined();
     // daintree-docs entry must remain — it doesn't depend on a live session.
     expect(after.mcpServers["daintree-docs"]).toBeDefined();
@@ -780,8 +837,8 @@ describe("HelpSessionService", () => {
     expect(second.sessionPath).toBe(first.sessionPath);
     expect(second.token).not.toBe(first.token);
 
-    const mcp = JSON.parse(await fs.readFile(path.join(second.sessionPath, ".mcp.json"), "utf-8"));
-    expect(mcp.mcpServers.daintree.headers.Authorization).toBe(`Bearer ${second.token}`);
+    const lane = await readLaneConfig(second);
+    expect(lane.mcpServers.daintree?.headers?.Authorization).toBe(`Bearer ${second.token}`);
     expect(service.validateToken(first.token)).toBe(false);
     expect(service.validateToken(second.token)).toBe("action");
   });
@@ -847,16 +904,14 @@ describe("HelpSessionService", () => {
     expect(cleaned.mcpServers["daintree-docs"]).toBeDefined();
   });
 
-  it("gcStaleSessions leaves a live session's daintree entry untouched", async () => {
+  it("gcStaleSessions leaves a live session's lane file untouched", async () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
     await service.gcStaleSessions();
 
-    const after = JSON.parse(
-      await fs.readFile(path.join(result.sessionPath, ".mcp.json"), "utf-8")
-    );
-    expect(after.mcpServers.daintree.headers.Authorization).toBe(`Bearer ${result.token}`);
+    const lane = await readLaneConfig(result);
+    expect(lane.mcpServers.daintree?.headers?.Authorization).toBe(`Bearer ${result.token}`);
   });
 
   it("gcStaleSessions sweeps legacy UUID-named dirs from the old per-launch model and preserves per-project dirs", async () => {
@@ -893,30 +948,51 @@ describe("HelpSessionService", () => {
     await fs.access(fresh.sessionPath);
   });
 
-  it("gcStaleSessions preserves lane directories while still sweeping look-alikes (#12108)", async () => {
-    // The predicate GC uses to decide what to keep is the ONLY thing standing
-    // between a live lane and recursive deletion of its transcripts and its
-    // workspace-trust acceptance. A bare 16-hex check would delete `-s1`.
+  it("gcStaleSessions keeps the shared project directory and sweeps legacy per-lane ones", async () => {
+    // Lanes used to get `<hash>-sN` directories of their own. They now share the
+    // bare-hash directory, so a leftover `-sN` is a legacy shape with nothing
+    // resumable in it — its agent's resume id was captured against a cwd that
+    // nothing launches in any more — and GC removes it like any other stranger.
     const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
     const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
     if (!laneZero || !laneOne) throw new Error("expected both provisions");
+    expect(laneOne.sessionPath).toBe(laneZero.sessionPath);
 
     const hash = path.basename(laneZero.sessionPath);
     const sessionsRoot = path.join(userData, "help-sessions");
-    // Not lanes: `-s0` is slot 0's second spelling, and `-s99` is out of range.
-    // Keeping either alive would strand a directory nothing collects.
-    const bogusZeroSuffix = path.join(sessionsRoot, `${hash}-s0`);
+    const legacyLane = path.join(sessionsRoot, `${hash}-s1`);
     const outOfRange = path.join(sessionsRoot, `${hash}-s99`);
-    await fs.mkdir(bogusZeroSuffix, { recursive: true });
+    await fs.mkdir(legacyLane, { recursive: true });
     await fs.mkdir(outOfRange, { recursive: true });
 
     await service.gcStaleSessions();
 
     await fs.access(laneZero.sessionPath);
-    await fs.access(laneOne.sessionPath);
-    for (const dir of [bogusZeroSuffix, outOfRange]) {
+    for (const dir of [legacyLane, outOfRange]) {
       await expect(fs.access(dir)).rejects.toThrow();
     }
+  });
+
+  it("gcStaleSessions removes a lane's --mcp-config file once its bearer is dead", async () => {
+    // Tokens never rehydrate across a restart, so after a boot every lane file
+    // on disk names a bearer the server will 401. Revoking stands in for that.
+    const live = await service.provisionSession({ ...provisionInput(), slot: 0 });
+    const dead = await service.provisionSession({ ...provisionInput(), slot: 1 });
+    if (!live || !dead) throw new Error("expected both provisions");
+    await fs.access(laneFile(live, 0));
+    await fs.access(laneFile(dead, 1));
+    // A file that is not a lane file at all has no business in that directory.
+    const stray = path.join(live.sessionPath, ".lanes", "notes.txt");
+    await fs.writeFile(stray, "x");
+
+    // Revoke without the file cleanup the revoke path itself performs, by
+    // marking the record dead the way a restart leaves it.
+    service["sessionsByToken"].get(dead.token)!.revoked = true;
+    await service.gcStaleSessions();
+
+    await fs.access(laneFile(live, 0));
+    await expect(fs.access(laneFile(dead, 1))).rejects.toThrow();
+    await expect(fs.access(stray)).rejects.toThrow();
   });
 
   it("returns null when the bundled help folder is unavailable", async () => {
@@ -1043,11 +1119,11 @@ describe("HelpSessionService", () => {
     const sessionsRoot = path.join(userData, "help-sessions");
     const entries = await fs.readdir(sessionsRoot);
     expect(entries.length).toBe(1);
-    const mcp = JSON.parse(
-      await fs.readFile(path.join(sessionsRoot, entries[0]!, ".mcp.json"), "utf-8")
-    );
-    expect(mcp.mcpServers.daintree).toBeUndefined();
-    expect(mcp.mcpServers["daintree-docs"]).toBeDefined();
+    const sessionPath = path.join(sessionsRoot, entries[0]!);
+    // Nothing on disk may name the bearer the probe just proved dead: not the
+    // shared file, and not the lane file written moments before the probe.
+    expect((await readSharedMcp(sessionPath)).mcpServers.daintree).toBeUndefined();
+    await expect(fs.readdir(path.join(sessionPath, ".lanes"))).resolves.toEqual([]);
   });
 
   describe("single-backend invariant (#7509)", () => {
@@ -1332,18 +1408,174 @@ describe("HelpSessionService", () => {
       expect(service.validateToken(laneOne.token)).toBe("action");
     });
 
-    it("gives each lane its own session directory so one bearer can't overwrite another", async () => {
+    it("shares one session directory across lanes and keeps each bearer in its own lane file", async () => {
       const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
       const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
       if (!laneZero || !laneOne) throw new Error("expected both provisions");
 
-      // Same cwd would mean one `.mcp.json`, and the second provision would
-      // silently overwrite the first session's literal bearer.
-      expect(laneOne.sessionPath).not.toBe(laneZero.sessionPath);
-      // Lane 0 keeps the historical bare-hash directory, so an existing
-      // install's Claude workspace-trust acceptance survives this change.
+      // One cwd for the project, so Claude's per-folder trust prompt and its
+      // `.mcp.json` approval prompt each fire once per project, not per lane.
+      expect(laneOne.sessionPath).toBe(laneZero.sessionPath);
       expect(path.basename(laneZero.sessionPath)).toMatch(/^[0-9a-f]{16}$/);
-      expect(path.basename(laneOne.sessionPath)).toBe(`${path.basename(laneZero.sessionPath)}-s1`);
+
+      // What that directory used to isolate — the literal bearer — is in a
+      // per-lane `--mcp-config` file, so the second provision cannot overwrite
+      // the first session's credential.
+      const fileZero = await readLaneConfig(laneZero, 0);
+      const fileOne = await readLaneConfig(laneOne, 1);
+      expect(fileZero.mcpServers["daintree"]?.headers?.Authorization).toBe(
+        `Bearer ${laneZero.token}`
+      );
+      expect(fileOne.mcpServers["daintree"]?.headers?.Authorization).toBe(
+        `Bearer ${laneOne.token}`
+      );
+
+      // The shared project file carries nothing lane-specific — and nothing at
+      // all, since a project `.mcp.json` with servers in it is what prompts.
+      const shared = JSON.parse(
+        await fs.readFile(path.join(laneZero.sessionPath, ".mcp.json"), "utf-8")
+      ) as { mcpServers: Record<string, unknown> };
+      expect(shared.mcpServers).toEqual({});
+    });
+
+    it("hands Claude its lane file through --mcp-config, and refuses other agents", async () => {
+      const claude = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      // A Codex session in ANOTHER project: same-project mixing is refused below.
+      const codex = await service.provisionSession({
+        ...provisionInput(),
+        projectId: "proj-2",
+        projectPath: "/tmp/project-2",
+        agentId: "codex",
+      });
+      if (!claude || !codex) throw new Error("expected both provisions");
+
+      expect(service.getClaudeLaunchArgs(claude.token)).toEqual([
+        "--mcp-config",
+        path.join(claude.sessionPath, ".lanes", `slot-0-${claude.sessionId}.mcp.json`),
+      ]);
+      // Cross-agent reuse of a valid token is the spawn handler's refusal signal.
+      expect(service.getClaudeLaunchArgs(codex.token)).toBeNull();
+      expect(service.getClaudeLaunchArgs("not-a-token")).toBeNull();
+    });
+
+    it("refuses a second agent in a project whose sibling lane is live", async () => {
+      // The shared directory holds agent-shaped files — the content mirror, the
+      // Copilot `.mcp.json`, Claude's settings overlay — and two agents' versions
+      // of them cannot coexist. Fail closed with a reason rather than let the
+      // newcomer quietly clobber the sibling's setup.
+      const claude = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      if (!claude) throw new Error("expected claude provision");
+
+      await expect(
+        service.provisionSession({ ...provisionInput(), agentId: "codex", slot: 1 })
+      ).rejects.toMatchObject({ name: "HelpSessionError", code: "MIXED_AGENT_LANES" });
+      // The sibling is untouched.
+      expect(service.validateToken(claude.token)).toBe("action");
+
+      // Once the Claude lane is gone, the project can switch agents.
+      await service.revokeSession(claude.sessionId);
+      const codex = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "codex",
+        slot: 1,
+      });
+      expect(codex).not.toBeNull();
+    });
+
+    it("refuses a mixed-agent launch without displacing the caller's own lane", async () => {
+      // The guard has to run BEFORE displacement. Displacement revokes and
+      // kills whatever holds the slot being launched into, so a refusal
+      // ordered after it would charge the user their own live lane for an
+      // error they never get a session out of.
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+      expect(service.markTerminalForToken(laneZero.token, "term-slot-0")).toBe(true);
+      expect(service.markTerminalForToken(laneOne.token, "term-slot-1")).toBe(true);
+      mockPtyKill.mockClear();
+
+      await expect(
+        service.provisionSession({ ...provisionInput(), agentId: "codex", slot: 1 })
+      ).rejects.toMatchObject({ name: "HelpSessionError", code: "MIXED_AGENT_LANES" });
+
+      // The lane the refused launch targeted is still the user's live session.
+      expect(service.validateToken(laneOne.token)).toBe("action");
+      expect(service.validateToken(laneZero.token)).toBe("action");
+      expect(mockPtyKill).not.toHaveBeenCalled();
+    });
+
+    it("removes a lane's --mcp-config file on revoke without touching its sibling's", async () => {
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+
+      await service.revokeSession(laneOne.sessionId);
+
+      await fs.access(laneFile(laneZero, 0));
+      await expect(fs.access(laneFile(laneOne, 1))).rejects.toThrow();
+      expect(service.getClaudeLaunchArgs(laneOne.token)).toBeNull();
+    });
+
+    it("a late revoke of a replaced session cannot delete the replacement's lane file", async () => {
+      // The file is named per PROVISION. With a fixed per-slot name, the old
+      // session's revoke — which may still be waiting on its graceful kill when the
+      // same slot re-provisions — would remove the file the replacement just wrote.
+      const first = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      if (!first) throw new Error("expected first provision");
+      const replacement = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      if (!replacement) throw new Error("expected replacement provision");
+      expect(laneFile(replacement)).not.toBe(laneFile(first));
+
+      // The displaced session's own cleanup runs late.
+      await service.revokeSession(first.sessionId);
+
+      await fs.access(laneFile(replacement));
+      expect(service.getClaudeLaunchArgs(replacement.token)).toEqual([
+        "--mcp-config",
+        laneFile(replacement),
+      ]);
+    });
+
+    it("serializes two lanes' filesystem work on the shared directory", async () => {
+      // The lane lock deliberately lets different lanes provision in parallel —
+      // which, with one directory, would be two writers on the same template
+      // copy, hash stamp, content manifest and shared `.mcp.json`. The directory
+      // lock is what keeps them in turn; the in-flight counter is how the
+      // existing same-lane test proves serialization, reused here across lanes.
+      let inFlight = 0;
+      let maxInFlight = 0;
+      mockSyncAssistantContent.mockImplementation(async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        inFlight -= 1;
+        return cleanSyncResult();
+      });
+
+      // A first, sequential provision warms the lazily imported MCP module so the
+      // two below exercise the directory lock rather than the module loader. Its
+      // own sync call is discounted so the assertion is about the pair alone.
+      const warm = await service.provisionSession({ ...provisionInput(), slot: 2 });
+      if (!warm) throw new Error("expected warm-up provision");
+      mockSyncAssistantContent.mockClear();
+      inFlight = 0;
+      maxInFlight = 0;
+
+      const [laneZero, laneOne] = await Promise.all([
+        service.provisionSession({ ...provisionInput(), slot: 0 }),
+        service.provisionSession({ ...provisionInput(), slot: 1 }),
+      ]);
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+
+      // Both reached the shared-directory section, and never at the same time.
+      expect(mockSyncAssistantContent).toHaveBeenCalledTimes(2);
+      expect(maxInFlight).toBe(1);
+      await fs.access(laneFile(laneZero, 0));
+      await fs.access(laneFile(laneOne, 1));
+      await fs.access(laneFile(warm, 2));
+      expect(service.validateToken(laneZero.token)).toBe("action");
+      expect(service.validateToken(laneOne.token)).toBe("action");
+      expect((await readSharedMcp(laneZero.sessionPath)).mcpServers).toEqual({});
     });
 
     it("rejects an out-of-range lane instead of clamping it onto a neighbour", async () => {
@@ -2808,7 +3040,7 @@ describe("HelpSessionService", () => {
       expect(stripScratchAddendum(claude)).toBe("# Help");
     });
 
-    it("rewrites .mcp.json with a fresh bearer on every provision, even when the template copy is skipped", async () => {
+    it("rewrites the lane file with a fresh bearer on every provision, even when the template copy is skipped", async () => {
       const first = await service.provisionSession(provisionInput());
       if (!first) throw new Error("expected first provision");
       await service.revokeSession(first.sessionId);
@@ -2817,21 +3049,31 @@ describe("HelpSessionService", () => {
       if (!second) throw new Error("expected second provision");
       expect(second.token).not.toBe(first.token);
 
-      const mcp = JSON.parse(
-        await fs.readFile(path.join(second.sessionPath, ".mcp.json"), "utf-8")
-      );
-      expect(mcp.mcpServers.daintree.headers.Authorization).toBe(`Bearer ${second.token}`);
+      const lane = await readLaneConfig(second);
+      expect(lane.mcpServers.daintree?.headers?.Authorization).toBe(`Bearer ${second.token}`);
     });
 
     it("strips a prior Claude bearer from .mcp.json on Codex hash-skip switch (no stale Authorization in cwd)", async () => {
-      // Provision Claude first — writes `.mcp.json` with a literal Bearer.
+      // Provision Claude first — its literal Bearer lands in the lane file. Then
+      // plant one in the shared `.mcp.json` too, the way an install that
+      // predates the per-lane files would have left it.
       const claudeResult = await service.provisionSession(provisionInput());
       if (!claudeResult) throw new Error("expected claude provision");
-      const claudeMcp = JSON.parse(
-        await fs.readFile(path.join(claudeResult.sessionPath, ".mcp.json"), "utf-8")
-      );
-      expect(claudeMcp.mcpServers.daintree.headers.Authorization).toBe(
+      expect((await readLaneConfig(claudeResult)).mcpServers.daintree?.headers?.Authorization).toBe(
         `Bearer ${claudeResult.token}`
+      );
+      await fs.writeFile(
+        path.join(claudeResult.sessionPath, ".mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            "daintree-docs": { type: "http", url: "https://daintree.org/api/mcp" },
+            daintree: {
+              type: "sse",
+              url: "http://127.0.0.1:45454/sse",
+              headers: { Authorization: `Bearer ${claudeResult.token}` },
+            },
+          },
+        })
       );
 
       // Provision Codex for the same project. Template is unchanged →
@@ -2839,7 +3081,13 @@ describe("HelpSessionService", () => {
       // stale-strip in the codex branch, the dead Claude bearer would
       // remain on disk in cwd (regression vs pre-#7525 behavior, where
       // fs.cp would have restored the bundled `.mcp.json`).
+      // The gate must actually be what strips it: if the template were recopied
+      // here, the bundled docs-only `.mcp.json` would replace the planted file and
+      // this test would pass without the strip code doing anything.
+      const cpSpy = vi.spyOn(fs, "cp");
       const codexResult = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
+      expect(cpSpy).not.toHaveBeenCalled();
+      cpSpy.mockRestore();
       if (!codexResult) throw new Error("expected codex provision");
       expect(codexResult.sessionPath).toBe(claudeResult.sessionPath);
 
@@ -3015,7 +3263,10 @@ describe("HelpSessionService", () => {
         const content = await fs.readFile(path.join(result.sessionPath, name), "utf-8");
         expect(content).toContain("<!-- DAINTREE_ASSISTANT_SCRATCH_START -->");
         expect(content).toContain("<!-- DAINTREE_ASSISTANT_SCRATCH_END -->");
-        expect(content).toContain(scratchDir);
+        // The file is shared by every lane of the project while the scratch folder
+        // is per session, so the addendum names the env var and never the path —
+        // a literal path here would be whichever lane provisioned last.
+        expect(content).not.toContain(scratchDir);
         expect(content).toContain("DAINTREE_ASSISTANT_SCRATCH_DIR");
       }
     });
@@ -3027,19 +3278,20 @@ describe("HelpSessionService", () => {
       if (!second) throw new Error("expected result");
 
       // The session dir is reused per-project, so both provisions write into
-      // the same CLAUDE.md. The marker block must appear exactly once and
-      // contain the second (current) scratch path — never the first.
+      // the same CLAUDE.md. The marker block must appear exactly once, and it
+      // names neither session's path: the folder is per session, the file is not.
       const claudeMd = await fs.readFile(path.join(second.sessionPath, "CLAUDE.md"), "utf-8");
       const startMatches = claudeMd.match(/<!-- DAINTREE_ASSISTANT_SCRATCH_START -->/g) ?? [];
       expect(startMatches).toHaveLength(1);
 
       const firstEnv = service.getAssistantScratchEnv(first.token);
       const secondEnv = service.getAssistantScratchEnv(second.token);
-      // First session was displaced (single-backend invariant) — its env
-      // getter returns null; the addendum should reference the live session.
+      // First session was displaced (single-backend invariant) — its env getter
+      // returns null. The live one still gets its own folder through the env var.
       expect(firstEnv).toBeNull();
       expect(secondEnv).not.toBeNull();
-      expect(claudeMd).toContain(secondEnv!.DAINTREE_ASSISTANT_SCRATCH_DIR);
+      expect(claudeMd).not.toContain(secondEnv!.DAINTREE_ASSISTANT_SCRATCH_DIR);
+      expect(claudeMd).toContain("DAINTREE_ASSISTANT_SCRATCH_DIR");
     });
   });
 });
