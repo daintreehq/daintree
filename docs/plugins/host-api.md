@@ -844,6 +844,8 @@ What it gives you:
 
 Daintree's own file browser imports the same modules from the same package, so this is not a parallel implementation that can quietly drift from the one we maintain — it is the one we maintain.
 
+**A worked example ships in the repo**: `plugins/sample/file-tree/` is a functioning file browser — lazy expansion, hidden-entry filtering with counts, keyboard navigation, per-type classification, and expansion that survives a remount — built on nothing but this subpath, `host.fs.readdir(dir, { detail: true })` and `PanelViewProps.persistState`. Its `main` half is 30 lines (one channel that forwards to `readdir`); everything else is the model plus the plugin's own row markup. It is deliberately built through the published package boundary rather than by relative import, so a missing or reshaped export breaks _it_ — in typecheck and in its bundle — rather than reaching you.
+
 ## Disposables
 
 Anything that takes a callback and returns a cleanup function follows the VS Code-style Disposable pattern. You can safely ignore the return value — the plugin's disposal cascade cleans everything up on unload. If you need explicit control (e.g., unsubscribe from a worktree change listener after a one-shot reaction), keep the reference and call it.

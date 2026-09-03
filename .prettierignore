@@ -27,6 +27,12 @@ yarn.lock
 # fail format:check. Its hand-authored sibling (rich-panel-view.js) IS formatted.
 plugins/sample/rich-daintree/view/hook-panel-view.js
 
+# Generated plugin view — `npm run build:sample-file-tree` output, committed and
+# shipped verbatim. Same reason as above: `check:sample-views` regenerates it and
+# compares byte-for-byte, so formatting it here would make every regeneration
+# fail one gate or the other.
+plugins/sample/file-tree/view/file-tree-view.js
+
 # Generated API-surface snapshots (raw tsup .d.ts output — see scripts/ci/check-api-surface.mjs)
 packages/*/api-report/
 

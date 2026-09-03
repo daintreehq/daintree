@@ -1,0 +1,37 @@
+{
+  "name": "daintree.filetree",
+  "version": "0.1.0",
+  "displayName": "File Tree Sample",
+  "description": "A working file browser built only on the public plugin surface — host.fs.readdir({ detail: true }) for data, @daintreehq/plugin-sdk/files for the tree model, and PanelViewProps.persistState to remember where the user was. It exists so a contract gap makes this plugin fail to build rather than making a third-party author discover it for us.",
+  "main": "main/index.js",
+  "engines": {
+    "daintree": ">=0.34.0"
+  },
+  "capabilities": ["fs:project-read"],
+  "scopes": {
+    "fs": {
+      "allowedPaths": ["${project}", "${worktree}"]
+    }
+  },
+  "contributes": {
+    "panels": [
+      {
+        "id": "explorer",
+        "name": "Sample Explorer",
+        "iconId": "folder-tree",
+        "color": "#5b8def",
+        "hasPty": false,
+        "canRestart": false,
+        "canConvert": false,
+        "showInPalette": true
+      }
+    ],
+    "views": [
+      {
+        "id": "explorer",
+        "componentPath": "./view/file-tree-view.js",
+        "location": "panel"
+      }
+    ]
+  }
+}

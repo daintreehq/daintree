@@ -28,6 +28,18 @@ export const SAMPLE_PLUGIN_LABEL = "Hello Daintree";
  */
 export const RICH_PLUGIN_LABEL = "Rich Daintree";
 
+/**
+ * Display label for the file-browser sample. Unlike the other two, this one is
+ * a working feature rather than a fixture: it exists so the file-listing
+ * surface a plugin author would build a browser on is exercised end to end,
+ * through the published package boundary rather than through the app's own
+ * relative imports.
+ */
+export const FILE_TREE_PLUGIN_LABEL = "File Tree Sample";
+
+/** Manifest id of the file-browser sample. */
+export const FILE_TREE_PLUGIN_ID = "daintree.filetree";
+
 const PLUGIN_READY_TIMEOUT = process.env.CI ? 60_000 : T_LONG;
 
 async function getPluginActionIds(page: Page): Promise<string[]> {
