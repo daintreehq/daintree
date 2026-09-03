@@ -3,6 +3,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const CODEX_METHOD_CHANNELS = {
   listSubagents: "codex:list-subagents",
   readSubagentTranscript: "codex:read-subagent-transcript",
+  resolveResumeLatestSession: "codex:resolve-resume-latest-session",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CODEX_METHOD_CHANNELS;

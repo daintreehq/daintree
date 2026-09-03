@@ -507,6 +507,7 @@ export const CHANNELS = {
 
   CODEX_LIST_SUBAGENTS: "codex:list-subagents",
   CODEX_READ_SUBAGENT_TRANSCRIPT: "codex:read-subagent-transcript",
+  CODEX_RESOLVE_RESUME_LATEST_SESSION: "codex:resolve-resume-latest-session",
 
   CLAUDE_LIST_SUBAGENTS: "claude:list-subagents",
   CLAUDE_READ_SUBAGENT_TRANSCRIPT: "claude:read-subagent-transcript",

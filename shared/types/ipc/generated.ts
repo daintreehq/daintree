@@ -162,6 +162,10 @@ export interface GeneratedIpcInvokeMap {
     args: [__0: { terminalId: string; subagentId: string }];
     result: import("./agentSubagents.js").AgentSubagentTranscriptResult;
   };
+  "codex:resolve-resume-latest-session": {
+    args: [__0: { cwd: string }];
+    result: string | null;
+  };
   "commands:execute": {
     args: [payload: import("../commands.js").CommandExecutePayload];
     result: import("../commands.js").CommandResult<unknown>;
