@@ -3372,3 +3372,148 @@ describe("buildArgsForRespawn — assigned session id", () => {
     expect(result.agentSessionId).toBeUndefined();
   });
 });
+
+describe("buildArgsForRespawn — a named resume-latest session (#12178)", () => {
+  const codexPane = {
+    id: "t1",
+    kind: "terminal" as const,
+    agentId: "codex",
+    cwd: "/p",
+    location: "grid" as const,
+  };
+
+  it("launches the resolved session by name instead of `--last`", () => {
+    buildResumeCommandMock.mockReturnValue("codex resume sess-9");
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = buildArgsForRespawn(
+      codexPane,
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp",
+      undefined,
+      { resolvedResumeLatestSessionId: "sess-9" }
+    );
+
+    expect(result.command).toBe("codex resume sess-9");
+    expect(buildResumeCommandMock.mock.calls[0]?.slice(0, 2)).toEqual(["codex", "sess-9"]);
+    expect(buildResumeLatestCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("records the id on the pane, so the PTY is never an unknown writer", () => {
+    buildResumeCommandMock.mockReturnValue("codex resume sess-9");
+
+    const result = buildArgsForRespawn(
+      codexPane,
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp",
+      undefined,
+      { resolvedResumeLatestSessionId: "sess-9" }
+    );
+
+    expect(result.agentSessionId).toBe("sess-9");
+    expect(result.sessionLostOnRestore).toBeUndefined();
+  });
+
+  it("passes the resolved executable and reconciled flags through, like the exact-id branch", () => {
+    buildResumeCommandMock.mockReturnValue("/bin/codex resume sess-9");
+
+    const result = buildArgsForRespawn(
+      { ...codexPane, agentLaunchFlags: ["--yolo"] },
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp",
+      undefined,
+      { resolvedResumeLatestSessionId: "sess-9", resolvedAgentBaseCommand: "/bin/codex" }
+    );
+
+    // Flags are the reconciled set, not the raw saved array — the same ones the
+    // `--last` branch would have prepended, which is the point of the swap.
+    const [agentId, sessionId, flags, baseCommand] = buildResumeCommandMock.mock.calls[0] ?? [];
+    expect([agentId, sessionId, baseCommand]).toEqual(["codex", "sess-9", "/bin/codex"]);
+    expect(flags).toEqual(expect.arrayContaining(["--yolo"]));
+    expect(result.command).toBe("/bin/codex resume sess-9");
+  });
+
+  it("keeps today's `--last` behaviour when the lookup resolved nothing", () => {
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = buildArgsForRespawn(
+      codexPane,
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp"
+    );
+
+    expect(result.command).toBe("codex resume --last");
+    expect(result.agentSessionId).toBeUndefined();
+  });
+
+  it("falls back to `--last` if the exact resume cannot be built, and attaches no id", () => {
+    buildResumeCommandMock.mockReturnValue(undefined);
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = buildArgsForRespawn(
+      codexPane,
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp",
+      undefined,
+      { resolvedResumeLatestSessionId: "sess-9" }
+    );
+
+    expect(result.command).toBe("codex resume --last");
+    expect(result.agentSessionId).toBeUndefined();
+  });
+
+  it("is ignored when the election suppressed this pane's resume-latest slot (#11461)", () => {
+    buildResumeCommandMock.mockReturnValue("codex resume sess-9");
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = buildArgsForRespawn(
+      codexPane,
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp",
+      undefined,
+      { resolvedResumeLatestSessionId: "sess-9", allowResumeLatest: false }
+    );
+
+    expect(result.command).toBe("codex --generated");
+    expect(result.agentSessionId).not.toBe("sess-9");
+    expect(result.sessionLostOnRestore).toBe(true);
+  });
+
+  it("never displaces the exact id a snapshot already carries", () => {
+    buildResumeCommandMock.mockImplementation(
+      (_agentId: string, sessionId: string) => `codex resume ${sessionId}`
+    );
+
+    const result = buildArgsForRespawn(
+      { ...codexPane, agentSessionId: "saved-1" },
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp",
+      undefined,
+      { resolvedResumeLatestSessionId: "sess-9" }
+    );
+
+    expect(result.command).toBe("codex resume saved-1");
+    expect(result.agentSessionId).toBe("saved-1");
+  });
+});

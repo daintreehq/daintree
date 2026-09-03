@@ -462,6 +462,18 @@ export interface BuildArgsForRespawnOptions {
    * two writers on one transcript, so the loser resumes nothing.
    */
   allowSessionIdResume?: boolean;
+  /**
+   * The session the agent's resume-latest fallback would itself have resolved
+   * to, looked up before this call (#12178). Present only for a pane that was
+   * actually going to use that fallback, so it upgrades `codex resume --last`
+   * to `codex resume <id>`: the same conversation, but named — which puts the id
+   * on the pane from the moment the PTY exists instead of leaving it for a
+   * teardown to observe, the way it was lost in the first place.
+   *
+   * Undefined whenever the lookup found nothing, could not choose, or failed;
+   * the fallback then runs exactly as it does today.
+   */
+  resolvedResumeLatestSessionId?: string;
 }
 
 export function buildArgsForRespawn(
@@ -622,8 +634,23 @@ export function buildArgsForRespawn(
       // not reach that same conversation through the back door, since the owner
       // replaying it is exactly what resume-latest would resolve to.
       let resumeLatestCmd: string | undefined;
+      // The id the fallback would have resolved to, when the caller looked it up
+      // (#12178). Naming it turns an anonymous "whatever is most recent" launch
+      // into the same conversation on the record, so this pane stops being an
+      // unknown live writer. Falls through to the bare fallback if the agent
+      // can't build an exact resume, which leaves today's behaviour intact.
+      const namedResumeLatestId = options?.resolvedResumeLatestSessionId;
       if (allowResumeLatest && !resumeWithheld) {
-        resumeLatestCmd = resolvedAgentBaseCommand
+        if (namedResumeLatestId) {
+          const namedCmd = resolvedAgentBaseCommand
+            ? buildResumeCommand(agentId, namedResumeLatestId, resumeFlags, baseCommand)
+            : buildResumeCommand(agentId, namedResumeLatestId, resumeFlags);
+          if (namedCmd) {
+            resumeLatestCmd = namedCmd;
+            respawnSessionId = namedResumeLatestId;
+          }
+        }
+        resumeLatestCmd ??= resolvedAgentBaseCommand
           ? buildResumeLatestCommand(agentId, resumeFlags, baseCommand)
           : buildResumeLatestCommand(agentId, resumeFlags);
       }

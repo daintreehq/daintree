@@ -19,4 +19,13 @@ export const codexClient = {
   }): Promise<AgentSubagentTranscriptResult> => {
     return window.electron.codex.readSubagentTranscript(payload);
   },
+
+  /**
+   * Which session `codex resume --last` would open in `cwd`, or null when the
+   * folder has none, two are tied for most recent, or Codex can't be asked
+   * (#12178). Null is a normal answer: restore falls back to plain `--last`.
+   */
+  resolveResumeLatestSession: (payload: { cwd: string }): Promise<string | null> => {
+    return window.electron.codex.resolveResumeLatestSession(payload);
+  },
 } as const;

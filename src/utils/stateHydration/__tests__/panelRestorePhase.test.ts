@@ -23,6 +23,17 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 
 const reconnectWithTimeoutMock = vi.hoisted(() => vi.fn());
 
+// Restore asks Codex which session `--last` would open before it builds the
+// respawn command (#12178). Defaults to "no answer", which is the fallback every
+// pre-existing case here already expects.
+const resolveResumeLatestSessionMock = vi.hoisted(() => vi.fn(async () => null));
+
+vi.mock("@/clients/codexClient", () => ({
+  codexClient: {
+    resolveResumeLatestSession: (...args: unknown[]) => resolveResumeLatestSessionMock(...args),
+  },
+}));
+
 vi.mock("../reconnectManager", () => ({
   reconnectWithTimeout: (...args: unknown[]) => reconnectWithTimeoutMock(...args),
 }));
@@ -68,7 +79,11 @@ vi.mock("../statePatcher", () => ({
     reconnectTimedOut?: boolean,
     _clipboardDirectory?: string,
     _projectPresetsByAgent?: unknown,
-    options?: { allowResumeLatest?: boolean; allowSessionIdResume?: boolean }
+    options?: {
+      allowResumeLatest?: boolean;
+      allowSessionIdResume?: boolean;
+      resolvedResumeLatestSessionId?: string;
+    }
   ) => ({
     cwd: s.cwd ?? "/cwd",
     kind,
@@ -82,6 +97,7 @@ vi.mock("../statePatcher", () => ({
     // resume election (#11461) is assertable through addPanel's args.
     allowResumeLatest: options?.allowResumeLatest ?? true,
     allowSessionIdResume: options?.allowSessionIdResume ?? true,
+    resolvedResumeLatestSessionId: options?.resolvedResumeLatestSessionId,
   }),
   // Mirrors the real resolver's title recovery (same agent order) so the
   // election's identity resolution can't silently diverge from production.
@@ -226,6 +242,8 @@ beforeEach(() => {
   initializeBackendTierMock.mockReset();
   setTargetSizeMock.mockReset();
   reconnectWithTimeoutMock.mockReset();
+  resolveResumeLatestSessionMock.mockReset();
+  resolveResumeLatestSessionMock.mockResolvedValue(null);
   getRestoreBatchParamsMock.mockClear();
   getRestoreBatchParamsMock.mockReturnValue({ batchSize: 2, delayMs: 0 });
 });
@@ -2072,5 +2090,127 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
 
     expect(allowanceById(ctx).get("t1")).toBe(true);
     expect(allowanceById(ctx).get("t2")).toBe(true);
+  });
+});
+
+describe("restorePanelsPhase — naming the resume-latest session (#12178)", () => {
+  const codexPanel = (id: string, overrides: Partial<TerminalState> = {}): TerminalState =>
+    panel(id, { kind: "agent", launchAgentId: "codex", ...overrides });
+
+  /** id → the resolved session id the respawn builder was handed. */
+  function resolvedIdById(ctx: MockedContext): Map<string, string | undefined> {
+    const byId = new Map<string, string | undefined>();
+    for (const [args] of ctx.addPanel.mock.calls as [
+      { requestedId?: string; resolvedResumeLatestSessionId?: string },
+    ][]) {
+      if (args.requestedId !== undefined) {
+        byId.set(args.requestedId, args.resolvedResumeLatestSessionId);
+      }
+    }
+    return byId;
+  }
+
+  beforeEach(() => {
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+  });
+
+  it("asks Codex for the pane's folder and hands the answer to the respawn builder", async () => {
+    resolveResumeLatestSessionMock.mockResolvedValue("sess-9");
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("a", { cwd: "/repo" })], ctx);
+
+    expect(resolveResumeLatestSessionMock).toHaveBeenCalledWith({ cwd: "/repo" });
+    expect(resolvedIdById(ctx).get("a")).toBe("sess-9");
+  });
+
+  it("falls back to the project root when the snapshot recorded no cwd", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("a", { cwd: undefined })], ctx);
+
+    expect(resolveResumeLatestSessionMock).toHaveBeenCalledWith({ cwd: "/proj" });
+  });
+
+  it("does not ask for a pane that already carries an exact session id", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("a", { agentSessionId: "saved-1" })], ctx);
+
+    expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("asks only for the pane that won the scope, never for a suppressed sibling", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [
+        codexPanel("a", { cwd: "/repo", lastActiveAt: 100 }),
+        codexPanel("b", { cwd: "/repo", lastActiveAt: 300 }),
+      ],
+      ctx
+    );
+
+    // The loser is denied the fallback, so naming the winner's conversation for
+    // it would put a second writer on the very transcript the election protects.
+    expect(resolveResumeLatestSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves other agents' rolling-history fallbacks alone", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase([panel("a", { kind: "agent", launchAgentId: "claude" })], ctx);
+
+    expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not ask for a pane whose PTY survived — it is already attached", async () => {
+    reconnectWithTimeoutMock.mockResolvedValue({
+      status: "found",
+      terminal: { id: "a", cwd: "/repo", title: "a" },
+    });
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("a", { cwd: "/repo" })], ctx);
+
+    expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("still restores the pane when the lookup finds nothing", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("a", { cwd: "/repo" })], ctx);
+
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+    expect(resolvedIdById(ctx).get("a")).toBeUndefined();
+  });
+
+  it("still restores the pane when the lookup rejects", async () => {
+    resolveResumeLatestSessionMock.mockRejectedValue(new Error("main is gone"));
+    const ctx = makeContext();
+
+    await restorePanelsPhase([codexPanel("a", { cwd: "/repo" })], ctx);
+
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+    expect(resolvedIdById(ctx).get("a")).toBeUndefined();
+  });
+
+  it("resolves before the pane is added, so the id is never a later patch", async () => {
+    let released: (value: string) => void = () => {};
+    resolveResumeLatestSessionMock.mockReturnValue(
+      new Promise<string>((resolve) => {
+        released = resolve;
+      })
+    );
+    const ctx = makeContext();
+
+    const phase = restorePanelsPhase([codexPanel("a", { cwd: "/repo" })], ctx);
+    await Promise.resolve();
+    expect(ctx.addPanel).not.toHaveBeenCalled();
+
+    released("sess-9");
+    await phase;
+
+    expect(resolvedIdById(ctx).get("a")).toBe("sess-9");
   });
 });
