@@ -98,15 +98,6 @@ interface SessionTabChipProps {
    * the selection, so the focused lane and the selected lane are routinely different.
    */
   hasTabStop: boolean;
-  /**
-   * Whether there is more than one lane to choose between. The fill and the rail are a
-   * SELECTION mark, and a selection mark on the only available option states nothing —
-   * at one lane it also spans nearly the whole strip, where the rail stops reading as a
-   * mark on a tab and starts reading as a second bottom border. The active lane still
-   * takes the selected TEXT treatment either way, so a single tab reads as the session
-   * you are in rather than as an unselected one.
-   */
-  showSelection: boolean;
   tabId: string;
   panelId: string;
   onSelect: (slot: number) => void;
@@ -121,7 +112,6 @@ function SessionTabChip({
   agentState,
   isActive,
   hasTabStop,
-  showSelection,
   tabId,
   panelId,
   onSelect,
@@ -140,26 +130,21 @@ function SessionTabChip({
       // its forced-colors fallback, both in `index.css`. `relative` because the rail is
       // an `::after` positioned against this element, and `data-active` because the mark
       // belongs to the whole chip while `aria-selected` belongs to the tab inside it.
-      data-active={showSelection && isActive}
+      data-active={isActive}
       className={cn(
-        "session-tab group relative flex items-center min-w-0",
-        // Equal shares of the strip rather than content-width chips left-aligned with
-        // dead space after them. At the 320px minimum three lanes come to ~93px each,
-        // which still clears the 80px floor a status marker plus a truncated label plus
-        // a close target needs; at one lane it makes the strip a session title bar,
-        // which is what a single-tab strip is for.
-        //
-        // `PilotFilterBar` deliberately rejects this in favour of `grow`, because equal
-        // shares of its bar truncated "Needs you" to "Need…". That reasoning does not
-        // reach here: it has seven items of differing lengths, this has at most three of
-        // one length, and `TabLabel` above keeps the identifying tail out of the
-        // truncating span either way.
-        "flex-1",
+        // Content-width, like every other tab strip in the app and every browser's. An
+        // earlier version stretched tabs to equal shares of the strip, which at one lane
+        // made a full-width session bar the owner did not want. Tabs may shrink when the
+        // strip is tight — three lanes at the 320px minimum — and `TabLabel` above keeps
+        // the identifying numeral out of the part that gives way.
+        "session-tab group relative flex items-center min-w-0 shrink",
         "rounded-[var(--radius-sm)] transition-colors duration-150 ease-out",
         // `overlay-raised` is the app's selection fill — the same one a palette row and
         // a highlighted menu item wear. It cannot carry the signal alone; the rail below
-        // it is what meets WCAG 1.4.11.
-        showSelection && isActive ? "bg-overlay-raised" : "hover:bg-overlay-subtle"
+        // it is what meets WCAG 1.4.11. Drawn for the only lane too: nothing else in the
+        // app withholds its selected state at a single item, and with a content-width
+        // chip the rail is a mark on a tab rather than a second bottom border.
+        isActive ? "bg-overlay-raised" : "hover:bg-overlay-subtle"
       )}
     >
       <button
@@ -200,7 +185,7 @@ function SessionTabChip({
           // drawn 1px inside this button and is 2px thick, so with no right padding it
           // painted over the label's last character, which on a `Session N` label is the
           // only character that identifies the lane.
-          "flex items-center gap-1.5 min-w-0 flex-1 pl-2 pr-1 py-1",
+          "flex items-center gap-1.5 min-w-0 pl-2 pr-1 py-1",
           "text-xs rounded-[var(--radius-sm)] transition-colors duration-150 ease-out",
           // Inset, unlike every other ring in this panel. The chip is 24px in a strip
           // whose padding is 4px, so an outset 2px ring at a 2px offset measured exactly
@@ -227,9 +212,6 @@ function SessionTabChip({
         // day. So the tab is the sole focus target and closing moves to `Delete`, which
         // the tablist handles and `aria-keyshortcuts` announces.
         //
-        // The cost is real and worth naming: closing a session here now works differently
-        // from closing a panel, dock or portal tab elsewhere in the app.
-        //
         // Both attributes are load-bearing and neither is decoration. `tabIndex={-1}`
         // keeps it out of the sequence AND out of axe's nested-interactive rule, which
         // keys on focusability. `aria-hidden` is what keeps `aria-required-children`
@@ -237,15 +219,17 @@ function SessionTabChip({
         // of one rather than a descendant (nesting a button inside a button is invalid
         // HTML), and hiding it is what removes it from the tablist's owned set instead
         // of leaving a stray `button` child there.
+        //
+        // The cost is real and worth naming: closing a session here now works differently
+        // from closing a panel, dock or portal tab elsewhere in the app.
         tabIndex={-1}
         aria-hidden="true"
-        onClick={(e) => {
-          // Without this the click reaches the chip and selects the lane on its way to
-          // closing it, which briefly swaps the body to a session that is being torn
-          // down.
-          e.stopPropagation();
-          onClose(tab.slot);
-        }}
+        // A click would otherwise focus this button on its way to removing it, and focus
+        // on a node that then unmounts falls to the document body. Refusing the focus at
+        // mousedown leaves it wherever it was, which for the selected lane is the tab
+        // beside this control.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => onClose(tab.slot)}
         title={`Close ${tab.label}`}
         className={cn(
           // 24x24, the WCAG 2.2 SC 2.5.8 floor, reached by growing the BOX and leaving
@@ -291,6 +275,28 @@ interface HelpSessionTabsProps {
 }
 
 /**
+ * A close asked for from the keyboard, and where focus should land when it happens.
+ *
+ * Closing a lane with a live agent raises a confirm dialog first, so an arbitrary
+ * amount of time passes between the ask and the commit — and `tabs` is rebuilt on every
+ * `agentState` transition, not only on a close. So the record names the lane being
+ * closed, not just where to go: the effect that spends it waits for THAT lane to be
+ * absent, which is the only signal that distinguishes the close landing from any other
+ * reason the array changed.
+ *
+ * `closingWasActive` decides where "where to go" is. Closing a background lane leaves
+ * the selection alone, so its positional neighbour is the right place. Closing the
+ * ACTIVE lane makes the store pick a new active lane — the lowest remaining slot, not
+ * the neighbour — and focus has to follow the selection there, or the ring lands on one
+ * session while the body shows another.
+ */
+interface PendingCloseFocus {
+  closingSlot: number;
+  successorSlot: number;
+  closingWasActive: boolean;
+}
+
+/**
  * The session strip.
  *
  * Always rendered, at one lane as well as three. That is what every comparable side
@@ -307,10 +313,11 @@ interface HelpSessionTabsProps {
  * coordinated signals rather than one, because the fill is 4% additive on dark and
  * cannot carry it alone.
  *
- * Tabs share the width equally instead of sitting content-width at the leading edge.
- * At two lanes in a 380px panel that recovered about 165px of dead space which had
- * made the row read as unfinished, and it removes the overflow question entirely:
- * three is the ceiling, three always fit.
+ * Tabs are content-width and sit at the leading edge with the new-session control
+ * directly after the last one, which is how the panel, dock and portal strips in this
+ * app lay out and how a browser does. The tablist scrolls horizontally if it ever has
+ * to; at the current ceiling of three lanes it cannot, and a raised ceiling would find
+ * the machinery already there rather than tabs clipped off the end.
  *
  * The keyboard contract is the APG tabs pattern with MANUAL activation. Arrow keys and
  * Home/End move focus along the strip, Enter or Space selects, Delete closes. Manual
@@ -348,17 +355,7 @@ export function HelpSessionTabs({
   const rovingSlot =
     focusedSlot !== null && tabs.some((t) => t.slot === focusedSlot) ? focusedSlot : activeSlot;
 
-  /**
-   * A close asked for from the keyboard, and where focus should land when it happens.
-   *
-   * Both slots are needed, not just the successor. Closing a lane with a live agent
-   * raises a confirm dialog first, so an arbitrary amount of time passes between the ask
-   * and the commit — and `tabs` is rebuilt on every `agentState` transition, not only on
-   * a close. Keyed on the array alone, a working lane ticking over while the dialog is
-   * open looks exactly like the close landing: the handoff is spent early, and the real
-   * close then arrives with nothing left to place focus with.
-   */
-  const pendingCloseFocusRef = useRef<{ closingSlot: number; successorSlot: number } | null>(null);
+  const pendingCloseFocusRef = useRef<PendingCloseFocus | null>(null);
 
   /**
    * Move focus to one lane by DOM query rather than by holding a ref per tab. One ref on
@@ -398,8 +395,9 @@ export function HelpSessionTabs({
     // next time this array is rebuilt, which also happens whenever any lane changes state.
     if (tabs.some((t) => t.slot === pending.closingSlot)) return;
     pendingCloseFocusRef.current = null;
-    if (tabs.some((t) => t.slot === pending.successorSlot)) focusSlot(pending.successorSlot);
-  }, [tabs, focusSlot]);
+    const target = pending.closingWasActive ? activeSlot : pending.successorSlot;
+    if (tabs.some((t) => t.slot === target)) focusSlot(target);
+  }, [tabs, activeSlot, focusSlot]);
 
   /**
    * Take the tab stop, and stand down a pending close if this is the lane it was for.
@@ -414,6 +412,19 @@ export function HelpSessionTabs({
     if (pendingCloseFocusRef.current?.closingSlot === slot) pendingCloseFocusRef.current = null;
     setFocusedSlot(slot);
   }, []);
+
+  /**
+   * A pointer close supersedes any keyboard close still waiting on its dialog. The
+   * pointer left focus where it was, so there is nothing to hand off, and an armed
+   * record from an earlier, cancelled keyboard close must not fire on this one.
+   */
+  const handlePointerClose = useCallback(
+    (slot: number) => {
+      pendingCloseFocusRef.current = null;
+      onClose(slot);
+    },
+    [onClose]
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -447,13 +458,13 @@ export function HelpSessionTabs({
           e.preventDefault();
           // Name the successor by slot BEFORE asking for the close: the lane that will
           // occupy this position afterwards is the one behind it, or the one in front
-          // when this is the last. Recorded alongside the lane being closed, so the
-          // effect above can tell a real close from any other reason this array was
-          // rebuilt. Nothing is armed when this is the only lane — there is no successor,
-          // and the panel closes with it.
+          // when this is the last. Nothing is armed when this is the only lane — there is
+          // no successor, and the panel closes with it.
           const successorSlot = tabs[current + 1]?.slot ?? tabs[current - 1]?.slot;
           pendingCloseFocusRef.current =
-            successorSlot === undefined ? null : { closingSlot: tab.slot, successorSlot };
+            successorSlot === undefined
+              ? null
+              : { closingSlot: tab.slot, successorSlot, closingWasActive: tab.slot === activeSlot };
           onClose(tab.slot);
           break;
         }
@@ -461,47 +472,54 @@ export function HelpSessionTabs({
           break;
       }
     },
-    [tabs, onClose, focusTabAt]
+    [tabs, activeSlot, onClose, focusTabAt]
   );
 
   if (tabs.length === 0) return null;
 
-  const showSelection = tabs.length > 1;
-
   return (
-    <div
-      ref={listRef}
-      role="tablist"
-      aria-label="Assistant sessions"
-      aria-orientation="horizontal"
-      onKeyDown={handleKeyDown}
-      className="flex items-stretch gap-0.5 px-1 py-1 border-b border-border-default shrink-0"
-    >
-      {tabs.map((tab) => (
-        <SessionTabChip
-          key={tab.slot}
-          tab={tab}
-          agentState={tab.agentState}
-          isActive={tab.slot === activeSlot}
-          hasTabStop={tab.slot === rovingSlot}
-          showSelection={showSelection}
-          tabId={helpSessionTabId(idBase, tab.slot)}
-          panelId={panelId}
-          onSelect={onSelect}
-          onClose={onClose}
-          onFocusTab={handleTabFocus}
-        />
-      ))}
-      {/* The one way to another session, at the edge a tab set keeps it, drawn with the
-          glyph that means "one more of these". It used to be a `Columns2` mark placed
-          here to avoid colliding with a "+" in the header that restarted the current
-          conversation instead — two controls a row apart, one of them findable, both of
-          them looking like they added something. The header's is gone, so this can be
-          the plus it always should have been.
+    <div className="flex items-center gap-0.5 px-1 py-1 border-b border-border-default shrink-0">
+      {/* The tablist is its own element so that it owns nothing but tabs. With the
+          new-session button inside it, axe's `aria-required-children` rejects the
+          stray `button` in a `tablist`; as a sibling it is simply the next control. */}
+      <div
+        ref={listRef}
+        role="tablist"
+        aria-label="Assistant sessions"
+        aria-orientation="horizontal"
+        onKeyDown={handleKeyDown}
+        // `overflow-x-auto` is the safety net, not the plan: at the current ceiling of
+        // three lanes the tabs shrink before they overflow. Should the ceiling rise,
+        // tabs past the edge stay reachable — arrow keys move focus, and focus scrolls
+        // its target into view. The scrollbar is hidden because a scrollbar inside a
+        // 33px strip is louder than the tabs it scrolls; keyboard and trackpad still
+        // scroll it.
+        className="flex items-stretch gap-0.5 min-w-0 overflow-x-auto [scrollbar-width:none]"
+      >
+        {tabs.map((tab) => (
+          <SessionTabChip
+            key={tab.slot}
+            tab={tab}
+            agentState={tab.agentState}
+            isActive={tab.slot === activeSlot}
+            hasTabStop={tab.slot === rovingSlot}
+            tabId={helpSessionTabId(idBase, tab.slot)}
+            panelId={panelId}
+            onSelect={onSelect}
+            onClose={handlePointerClose}
+            onFocusTab={handleTabFocus}
+          />
+        ))}
+      </div>
+      {/* The one way to another session, directly after the last tab where a tab set
+          keeps it, drawn with the glyph that means "one more of these". It used to be a
+          `Columns2` mark placed here to avoid colliding with a "+" in the header that
+          restarted the current conversation instead — two controls a row apart, one of
+          them findable, both of them looking like they added something. The header's is
+          gone, so this can be the plus it always should have been.
 
           Parked rather than removed at the ceiling: a control that vanishes takes its
-          own explanation with it, and the strip's width budget stays constant whether a
-          lane is free or not. */}
+          own explanation with it. */}
       {onOpenSession && (
         <button
           type="button"
@@ -513,7 +531,7 @@ export function HelpSessionTabs({
           // announces the state, and drops the handler instead.
           aria-disabled={!canOpenSession || undefined}
           className={cn(
-            "ml-0.5 w-6 h-6 inline-flex items-center justify-center shrink-0 self-center",
+            "w-6 h-6 inline-flex items-center justify-center shrink-0",
             "rounded-[var(--radius-sm)] text-text-secondary",
             "transition-colors duration-150 ease-out",
             canOpenSession

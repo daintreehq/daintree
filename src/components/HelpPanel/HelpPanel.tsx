@@ -1118,14 +1118,13 @@ export function HelpPanel({
     // listeners — it deliberately does not end the session — so releasing the
     // controller first would strand a live agent with nothing to shut it down.
     if (lane?.terminalId || lane?.sessionId) {
-      // Keep the panel on screen while a sibling lane is still live: the tab
-      // strip only exists at two lanes or more, so an unconditional close would
-      // slide a running Session 1 out because Session 2 was dismissed. Closing
-      // the LAST lane still closes — `closeSlot` recreates an empty slot 0
-      // whose fresh controller would auto-launch straight back into a session
-      // the user just ended if the panel stayed open.
-      const isLastLane = selectOpenSlots(state).length <= 1;
-      acquireHelpSessionController(slot).endSession({ closePanel: isLastLane });
+      // Whether the panel slides out is the controller's call, made in one
+      // place for every stop path: it stays on screen while any other lane is
+      // open, and closes only for the last one — where the close is
+      // load-bearing, because `closeSlot` recreates an empty slot 0 whose fresh
+      // controller would auto-launch straight back into a session the user just
+      // ended if the panel stayed open.
+      acquireHelpSessionController(slot).endSession();
     }
     releaseHelpSessionController(slot);
     state.closeSlot(slot);
@@ -1642,7 +1641,7 @@ export function HelpPanel({
                       switch-away, but the conversation can be picked back up.
                       Does not record auto-launch consent (#10699), unlike "Start
                       assistant". This is the single load-bearing accent here.
-                      Starting a fresh session is the header's "+ New session". */}
+                      Starting fresh is the overflow menu's "Restart conversation". */}
                   <Button
                     type="button"
                     onClick={handleResumeAssistant}
@@ -1728,7 +1727,7 @@ export function HelpPanel({
               // with no live grid target is no longer a failure to shout about:
               // tool calls re-resolve at dispatch time and the dock-hosted chat
               // keeps working, so it stays a quiet neutral indicator. The
-              // recovery path lives on the header's "Start new session" button
+              // recovery path is the overflow menu's "Restart conversation"
               // (#10792).
               (isPinnedWorktreeDiverged ? (
                 <button
@@ -1839,6 +1838,14 @@ export function HelpPanel({
         onConfirm={handleConfirmCloseSlot}
         onClose={handleCancelCloseSlot}
         variant="destructive"
+        // Where focus goes once the tab this was opened from no longer exists. The
+        // strip has already moved its single tab stop to the lane that took over,
+        // so asking for "the tab that currently holds the stop" lands on the same
+        // element the strip chose, without this dialog needing to know which one.
+        // On cancel the trigger still exists and the dialog restores to it directly.
+        restoreFocusTo={() =>
+          panelRef.current?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]') ?? null
+        }
       />
       <ConfirmDialog
         isOpen={showAgentSwitchConfirm}

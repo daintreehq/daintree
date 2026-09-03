@@ -18,10 +18,9 @@ installPreviewShims();
 /**
  * Standalone visual-review harness for the assistant panel's session-tab strip.
  *
- * The strip only exists when a project has two or three assistant lanes open, which in
- * the real app means launching a second session and waiting for it — no way to look at
- * a state deliberately, and no way at all to see a BACKGROUND lane's marker, which is
- * the whole reason the strip carries state. So this renders the real
+ * The strip's most important state — a BACKGROUND lane's marker, which is the whole
+ * reason the strip carries state — cannot be reached from the lane on screen, and in the
+ * real app means launching a second session and waiting for it. So this renders the real
  * `HelpPanelHeader` + `HelpSessionTabs` pair against the theme's real tokens, at the
  * panel's real widths, from fixtures that name each state.
  *
@@ -59,9 +58,8 @@ interface Fixture {
  * long-label case to fixture — but there IS a width case, and an earlier version of
  * this comment got it wrong. Three lanes come to roughly 325px of content against 319px
  * of room at the panel's 320px minimum, so `three-mixed` at `?width=320` is a real
- * pressure test, not a formality. It is also the only place the trailing new-session
- * control's absence matters: at three lanes there is nowhere to put a fourth, so the
- * control is gone and the width it would have cost with it.
+ * pressure test, not a formality. At three lanes the trailing new-session control is
+ * parked (`aria-disabled`) rather than removed, so it still costs its 24px there.
  */
 const FIXTURES = {
   "one-lane": {

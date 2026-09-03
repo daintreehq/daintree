@@ -70,18 +70,54 @@ describe("HelpSessionTabs", () => {
     expect(marked.getAttribute("role")).toBe("presentation");
   });
 
-  it("draws no selection mark when there is only one lane to choose between", () => {
-    // A selection mark on the only option states nothing, and at one lane the chip
-    // spans nearly the whole strip, where the rail stops reading as a mark on a tab
-    // and starts reading as a second bottom border.
-    const { container } = renderStrip({
-      tabs: [TABS[0]!],
-      activeSlot: 0,
-    });
+  it("draws the selection mark for the only lane too", () => {
+    // Nothing else in the app withholds a selected state at a single item, and with a
+    // content-width chip the rail is a mark on a tab, not a second bottom border.
+    const { container } = renderStrip({ tabs: [TABS[0]!], activeSlot: 0 });
 
-    expect(container.querySelectorAll('[data-active="true"]')).toHaveLength(0);
-    // The tab is still the selected one as far as the pattern is concerned.
+    expect(container.querySelectorAll('[data-active="true"]')).toHaveLength(1);
     expect(tabs(container)[0]!.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("keeps exactly one mark as lanes open and close around the selection", () => {
+    const { container, rerender } = render(
+      <HelpSessionTabs
+        tabs={[TABS[0]!]}
+        activeSlot={0}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+        idBase="grow"
+        panelId="grow-body"
+      />
+    );
+    const marked = () => chips(container).filter((c) => c.dataset.active === "true");
+    expect(marked()).toHaveLength(1);
+
+    rerender(
+      <HelpSessionTabs
+        tabs={TABS}
+        activeSlot={0}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+        idBase="grow"
+        panelId="grow-body"
+      />
+    );
+    expect(marked()).toHaveLength(1);
+    expect(marked()[0]!.textContent).toContain("Session 1");
+
+    rerender(
+      <HelpSessionTabs
+        tabs={[TABS[1]!]}
+        activeSlot={1}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+        idBase="grow"
+        panelId="grow-body"
+      />
+    );
+    expect(marked()).toHaveLength(1);
+    expect(marked()[0]!.textContent).toContain("Session 2");
   });
 
   it("is a tablist whose tabs point at the body they drive", () => {
@@ -96,11 +132,18 @@ describe("HelpSessionTabs", () => {
 
   it("exposes each tab's id under the same derivation the body uses to name it", () => {
     // The body's `aria-labelledby` is built by the panel from the same base. If these
-    // two ever stop agreeing the relationship silently resolves to nothing.
-    const { container } = renderStrip();
+    // two ever stop agreeing the relationship silently resolves to nothing. Sparse
+    // slots on purpose, and uniqueness asserted outright: comparing against the
+    // helper alone would pass a helper that ignored the slot.
+    const { container } = renderStrip({
+      tabs: [TABS[0]!, { slot: 2, label: "Session 3", agentState: undefined }],
+      activeSlot: 0,
+    });
     const ids = tabs(container).map((t) => t.id);
 
-    expect(ids).toEqual([helpSessionTabId("strip", 0), helpSessionTabId("strip", 1)]);
+    expect(ids).toEqual([helpSessionTabId("strip", 0), helpSessionTabId("strip", 2)]);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids[1]).toContain("2");
   });
 
   it("keeps the whole strip to one tab stop, starting on the selected lane", () => {
@@ -311,9 +354,11 @@ describe("HelpSessionTabs", () => {
             idBase="cancel"
             panelId="cancel-body"
           />
-          <button type="button" onClick={() => setOpen([0, 2])}>
-            drop middle
+
+          <button type="button" onClick={() => setOpen([1, 2])}>
+            drop first
           </button>
+          <button type="button">sentinel</button>
         </>
       );
     }
@@ -321,15 +366,24 @@ describe("HelpSessionTabs", () => {
     const { container, getByText } = render(<Host />);
     const list = container.querySelector('[role="tablist"]')!;
 
-    // Ask to close the first lane, then cancel — modelled as focus coming back to it.
+    // Ask to close the first lane. The dialog takes focus…
     tabs(container)[0]!.focus();
     fireEvent.keyDown(list, { key: "Delete" });
-    fireEvent.focus(tabs(container)[0]!);
+    getByText("sentinel").focus();
+    // …and cancelling hands it back to the tab the ask came from.
+    tabs(container)[0]!.focus();
 
-    // Later, a different lane goes away for unrelated reasons. Focus must not jump.
-    const before = document.activeElement;
-    fireEvent.click(getByText("drop middle"));
-    expect(document.activeElement).toBe(before);
+    // The user moves on, and later that same lane is closed some other way — a pointer
+    // close, or the agent exiting. A handoff still armed from the cancelled ask would
+    // now fire and drag focus onto its old successor.
+    getByText("sentinel").focus();
+    fireEvent.click(getByText("drop first"));
+
+    expect(tabs(container).map((t) => t.getAttribute("aria-label"))).toEqual([
+      "Session 2",
+      "Session 3",
+    ]);
+    expect(document.activeElement).toBe(getByText("sentinel"));
   });
 
   it("falls back to the preceding lane when the last one is closed", () => {
@@ -382,18 +436,36 @@ describe("HelpSessionTabs", () => {
     }
   });
 
-  it("closes by slot rather than by position, and does not select on the way", () => {
+  it("closes by slot rather than by position from the pointer, without selecting", () => {
+    // Sparse slots, so slot and index disagree: closing index 1 must ask for slot 2.
     const onSelect = vi.fn();
     const onClose = vi.fn();
-    const { container } = renderStrip({ onSelect, onClose });
+    const { container } = renderStrip({
+      tabs: [TABS[0]!, { slot: 2, label: "Session 3", agentState: undefined }],
+      activeSlot: 0,
+      onSelect,
+      onClose,
+    });
     const closer = Array.from(container.querySelectorAll("button")).find(
-      (b) => b.getAttribute("title") === "Close Session 1"
+      (b) => b.getAttribute("title") === "Close Session 3"
     )!;
 
     fireEvent.click(closer);
 
-    expect(onClose).toHaveBeenCalledWith(0);
+    expect(onClose).toHaveBeenCalledWith(2);
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("refuses focus at mousedown on the close control, so a click never strands it", () => {
+    // A native button takes focus on mousedown. This one is about to unmount, and focus
+    // on a node that unmounts falls to the document body.
+    const { container } = renderStrip();
+    const closer = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.getAttribute("title") === "Close Session 2"
+    )!;
+
+    const prevented = !fireEvent.mouseDown(closer);
+    expect(prevented).toBe(true);
   });
 
   it("selects by slot rather than by position", () => {
@@ -481,5 +553,142 @@ describe("HelpSessionTabs", () => {
   it("omits the new-session control entirely when no handler is supplied", () => {
     const { queryByLabelText } = renderStrip({ onOpenSession: undefined });
     expect(queryByLabelText("New session")).toBeNull();
+  });
+
+  it("opens a session once per click while a lane is free", () => {
+    const onOpenSession = vi.fn();
+    const { getByLabelText } = renderStrip({ canOpenSession: true, onOpenSession });
+    const control = getByLabelText("New session") as HTMLButtonElement;
+
+    expect(control.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(control);
+    expect(onOpenSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the new-session control outside the tablist, which may own only tabs", () => {
+    const { container, getByLabelText } = renderStrip({
+      canOpenSession: true,
+      onOpenSession: vi.fn(),
+    });
+    const list = container.querySelector('[role="tablist"]')!;
+
+    expect(list.contains(getByLabelText("New session"))).toBe(false);
+    // And nothing in the tablist's a11y-visible subtree is anything but a tab.
+    const visible = Array.from(list.querySelectorAll("button")).filter(
+      (b) => b.getAttribute("aria-hidden") !== "true"
+    );
+    expect(visible.every((b) => b.getAttribute("role") === "tab")).toBe(true);
+  });
+
+  it("treats Backspace as Delete", () => {
+    const onClose = vi.fn();
+    const { container } = renderStrip({ onClose });
+
+    tabs(container)[0]!.focus();
+    fireEvent.keyDown(container.querySelector('[role="tablist"]')!, { key: "Backspace" });
+
+    expect(onClose).toHaveBeenCalledWith(0);
+  });
+
+  it("leaves focus where it is for Home and End on a single tab", () => {
+    const { container } = renderStrip({ tabs: [TABS[0]!], activeSlot: 0 });
+    const list = container.querySelector('[role="tablist"]')!;
+    const only = tabs(container)[0]!;
+
+    only.focus();
+    fireEvent.keyDown(list, { key: "Home" });
+    expect(document.activeElement).toBe(only);
+    fireEvent.keyDown(list, { key: "End" });
+    expect(document.activeElement).toBe(only);
+    fireEvent.keyDown(list, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(only);
+  });
+
+  it("follows the selection, not the neighbour, when the ACTIVE lane is closed", () => {
+    // The store picks the lowest remaining slot as the new active lane, not the one
+    // beside the closed tab. Focus has to land on the same lane the body now shows, or
+    // the ring is on one session while the terminal is another.
+    function Host() {
+      const [open, setOpen] = useState([0, 1, 2]);
+      const [active, setActive] = useState(1);
+      return (
+        <HelpSessionTabs
+          tabs={open.map((slot) => ({
+            slot,
+            label: `Session ${slot + 1}`,
+            agentState: undefined,
+          }))}
+          activeSlot={active}
+          onSelect={setActive}
+          onClose={(slot) => {
+            const next = open.filter((s) => s !== slot);
+            setOpen(next);
+            if (slot === active) setActive(next[0]!);
+          }}
+          idBase="mid"
+          panelId="mid-body"
+        />
+      );
+    }
+
+    const { container } = render(<Host />);
+    const list = container.querySelector('[role="tablist"]')!;
+
+    // Slot 1 is active and in the middle. Its positional neighbour is slot 2; the store
+    // will select slot 0.
+    tabs(container)[1]!.focus();
+    fireEvent.keyDown(list, { key: "Delete" });
+
+    const remaining = tabs(container);
+    expect(remaining.map((t) => t.getAttribute("aria-selected"))).toEqual(["true", "false"]);
+    expect(document.activeElement).toBe(remaining[0]!);
+  });
+
+  it("steals no focus when the successor has also gone by the time the close lands", () => {
+    function Host() {
+      const [open, setOpen] = useState([0, 1, 2]);
+      const [pending, setPending] = useState<number | null>(null);
+      return (
+        <>
+          <HelpSessionTabs
+            tabs={open.map((slot) => ({
+              slot,
+              label: `Session ${slot + 1}`,
+              agentState: undefined,
+            }))}
+            activeSlot={open[0]!}
+            onSelect={vi.fn()}
+            onClose={(slot) => setPending(slot)}
+            idBase="gone"
+            panelId="gone-body"
+          />
+          <button type="button" onClick={() => setOpen((prev) => prev.filter((s) => s !== 2))}>
+            drop successor
+          </button>
+          <button
+            type="button"
+            onClick={() => setOpen((prev) => prev.filter((s) => s !== pending))}
+          >
+            confirm
+          </button>
+          <button type="button">elsewhere</button>
+        </>
+      );
+    }
+
+    const { container, getByText } = render(<Host />);
+    const list = container.querySelector('[role="tablist"]')!;
+
+    // Close the middle lane: its successor is slot 2.
+    tabs(container)[1]!.focus();
+    fireEvent.keyDown(list, { key: "Delete" });
+    // While the dialog is up, slot 2 goes away on its own, and focus is elsewhere.
+    fireEvent.click(getByText("drop successor"));
+    getByText("elsewhere").focus();
+
+    fireEvent.click(getByText("confirm"));
+
+    expect(tabs(container)).toHaveLength(1);
+    expect(document.activeElement).toBe(getByText("elsewhere"));
   });
 });

@@ -7,7 +7,7 @@
 
 import { getAgentConfig } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
-import { useHelpPanelStore, selectSlot } from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectSlot, selectOpenSlots } from "@/store/helpPanelStore";
 import { DEFAULT_ASSISTANT_SLOT, assistantSlotKey } from "@shared/config/assistantSlots";
 import { usePanelStore } from "@/store";
 import { logError } from "@/utils/logger";
@@ -532,9 +532,10 @@ export class HelpSessionController {
     // agent quit, or it crashed. Treat that as a real stop (like the Stop
     // button): make it stick so a consented auto-launch can't respawn it, then
     // slide the sidebar out. The user ended the session from inside the
-    // terminal, so hide the panel rather than lingering on the empty state.
+    // terminal, so hide the panel rather than lingering on the empty state —
+    // unless another lane is still open behind the tab strip.
     this._applyStopSuppression();
-    useHelpPanelStore.getState().setOpen(false);
+    this._closePanelUnlessSiblingLane();
   }
 
   /**
@@ -634,12 +635,18 @@ export class HelpSessionController {
    * repeatedly: with nothing bound it skips the teardown but still invalidates
    * any in-flight launch and closes, converging on the same stopped state.
    *
-   * `closePanel: false` is for the parallel-lane close (#12108), where a
-   * sibling lane is still live behind the tab strip and sliding the whole
-   * sidebar out would take a running conversation off screen with it. It stays
-   * true by default — for the last lane the close is load-bearing, not
-   * cosmetic: `closeSlot` recreates an empty slot 0 whose fresh controller has
-   * never auto-launched, and `_maybeAutoLaunch` hard-gates on `isOpen`.
+   * The slide-out only ever happens when this is the LAST open lane (#12108).
+   * That guard lives in `_closePanelUnlessSiblingLane` rather than at each
+   * caller, because every stop path used to make its own call and most of them
+   * made it wrong: Stop, the agent's own `/exit`, and a PTY exit all slid the
+   * whole sidebar out while a second session was still running behind the tab
+   * strip, taking a live conversation off screen with it. Only the tab's own
+   * close control had the check. For the last lane the close is load-bearing,
+   * not cosmetic: `closeSlot` recreates an empty slot 0 whose fresh controller
+   * has never auto-launched, and `_maybeAutoLaunch` hard-gates on `isOpen`.
+   *
+   * `closePanel: false` opts out of the slide-out entirely, for callers that
+   * know they are about to launch again into the same panel.
    */
   endSession(options: { closePanel?: boolean } = {}): void {
     this._stopBoundSession(options.closePanel ?? true);
@@ -694,7 +701,24 @@ export class HelpSessionController {
 
     this._applyStopSuppression();
 
-    if (closePanel) useHelpPanelStore.getState().setOpen(false);
+    if (closePanel) this._closePanelUnlessSiblingLane();
+  }
+
+  /**
+   * Slide the sidebar out — but only if no OTHER lane is open.
+   *
+   * "Open" is a slot that exists in the store, not one with a live terminal: a
+   * tab the user has opened and not yet launched into is still a tab they are
+   * looking at, and hiding the panel would take it away. This is the same
+   * predicate the tab strip's own close uses (`selectOpenSlots(state).length`),
+   * kept here so every stop path shares one answer. The lane being stopped is
+   * still in the store at this point — `closeSlot` runs after the stop — which
+   * is why it is excluded by slot rather than by counting.
+   */
+  private _closePanelUnlessSiblingLane(): void {
+    const store = useHelpPanelStore.getState();
+    const siblingOpen = selectOpenSlots(store).some((slot) => slot !== this.slot);
+    if (!siblingOpen) store.setOpen(false);
   }
 
   /**

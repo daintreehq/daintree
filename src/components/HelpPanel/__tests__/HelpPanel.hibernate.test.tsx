@@ -2042,6 +2042,19 @@ describe("HelpPanel — assistant header state indicator", () => {
   function setupTerminalWithState(state: string) {
     helpPanelState.terminalId = "live-term";
     helpPanelState.agentId = "claude";
+    // The strip reads each lane's terminal off `sessions[slot]`, not the flat fields
+    // the rest of this fixture projects as the active lane — so the lane has to exist
+    // there for its marker to render at all.
+    helpPanelState.sessions = {
+      0: {
+        terminalId: "live-term",
+        agentId: "claude",
+        sessionId: null,
+        conversationTouched: false,
+        figures: [],
+        activeFigureNumber: null,
+      },
+    };
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     panelStoreState.panelsById = {
       "live-term": {
@@ -2071,11 +2084,11 @@ describe("HelpPanel — assistant header state indicator", () => {
     expect(announcer.getAttribute("data-agent-state")).toBe("working");
     expect(announcer.getAttribute("role")).toBe("status");
     expect(announcer.textContent).toBe("Assistant is working");
-    // The only working marker on screen belongs to a tab.
+    // Exactly one working marker on screen, and it belongs to a tab — not zero (the
+    // state would be invisible) and not two (the header would be drawing it again).
     const markers = container.querySelectorAll("svg.animate-spin-slow");
-    for (const marker of markers) {
-      expect(marker.closest('[role="tab"]')).not.toBeNull();
-    }
+    expect(markers).toHaveLength(1);
+    expect(markers[0]!.closest('[role="tab"]')).not.toBeNull();
   });
 
   it("announces the waiting state", () => {

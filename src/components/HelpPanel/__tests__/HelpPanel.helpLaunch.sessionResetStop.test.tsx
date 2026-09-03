@@ -1239,6 +1239,37 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     return button;
   }
 
+  it("labels lanes by durable slot and names the body after the selected tab", () => {
+    // Sparse slots on purpose: lanes 0 and 2 with 1 closed. Position-based labels would
+    // read "Session 1 / Session 2" here and rename a live conversation; slot-based ones
+    // leave a gap that `openSlot` closes on its own. The strip's own tests build labels
+    // themselves, so this is the only place HelpPanel's rule is actually exercised.
+    setupTwoLanes();
+    helpPanelState.openSlots = [0, 2];
+    helpPanelState.sessions = {
+      0: helpPanelState.sessions[0]!,
+      2: { ...helpPanelState.sessions[1]!, terminalId: "term-3", sessionId: "sess-third" },
+    };
+    delete helpPanelState.sessions[1];
+    panelStoreState.panelsById["term-3"] = {
+      ...panelStoreState.panelsById["term-2"]!,
+      id: "term-3",
+    };
+
+    const { container } = render(<HelpPanel width={380} />);
+    const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
+
+    expect(tabs.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 1", "Session 3"]);
+    expect(new Set(tabs.map((t) => t.id)).size).toBe(2);
+
+    const body = container.querySelector('[role="tabpanel"]')!;
+    expect(body.getAttribute("aria-labelledby")).toBe(tabs[0]!.id);
+    expect(tabs[0]!.getAttribute("aria-controls")).toBe(body.id);
+
+    fireEvent.click(tabs[1]!);
+    expect(helpPanelState.setActiveSlot).toHaveBeenCalledWith(2);
+  });
+
   it("tears down only the closed lane and leaves the panel open on the survivor", () => {
     setupTwoLanes();
     const survivor = acquireHelpSessionController(0);

@@ -132,9 +132,15 @@ async function snap(target: Locator, file: string): Promise<string> {
  * standalone harness among them, even though it ships an empty CSP meta of its own. The
  * throw aborts the module graph, `#root` stays empty, and nothing recovers.
  *
- * Stubbing the client removes the socket, and with it the whole chain. Verified over 30
- * consecutive loads. HMR is worthless to a screenshot run that navigates for every shot
- * anyway.
+ * Stubbing the client removes the socket, and with it the whole chain. HMR is worthless
+ * to a screenshot run that navigates for every shot anyway.
+ *
+ * One export is NOT inert: `updateStyle`. In dev, Vite delivers every `.css` import as a
+ * JS module that calls `updateStyle(id, css)` from this very client to append a `<style>`
+ * tag — so a stub that no-ops it renders the whole page unstyled, and a capture of that
+ * passes every "is it mounted" check while photographing raw HTML. The first version of
+ * this stub did exactly that, and the `open()` helper now refuses an unstyled page so it
+ * cannot happen quietly again.
  *
  * The unscoped CSP is the deeper half of this and is left alone deliberately: it is a
  * dev-server security control shared by the whole app, and narrowing which pages receive
@@ -145,7 +151,30 @@ async function stubViteHmrClient(page: Page): Promise<void> {
     route.fulfill({
       status: 200,
       contentType: "text/javascript",
-      body: `const noop=()=>{};export const createHotContext=()=>({accept:noop,acceptExports:noop,dispose:noop,prune:noop,decline:noop,invalidate:noop,on:noop,off:noop,send:noop,data:{}});export const injectQuery=u=>u;export const updateStyle=noop;export const removeStyle=noop;`,
+      body: [
+        "const noop = () => {};",
+        "export const createHotContext = () => ({ accept: noop, acceptExports: noop, dispose: noop, prune: noop, decline: noop, invalidate: noop, on: noop, off: noop, send: noop, data: {} });",
+        "export const injectQuery = (u) => u;",
+        // Vite's own implementation, minus HMR bookkeeping: one <style> per module id.
+        "const sheets = new Map();",
+        "export function updateStyle(id, content) {",
+        "  let style = sheets.get(id);",
+        "  if (!style) {",
+        "    style = document.createElement('style');",
+        "    style.setAttribute('type', 'text/css');",
+        "    style.setAttribute('data-vite-dev-id', id);",
+        "    style.textContent = content;",
+        "    document.head.appendChild(style);",
+        "    sheets.set(id, style);",
+        "  } else {",
+        "    style.textContent = content;",
+        "  }",
+        "}",
+        "export function removeStyle(id) {",
+        "  const style = sheets.get(id);",
+        "  if (style) { document.head.removeChild(style); sheets.delete(id); }",
+        "}",
+      ].join("\n"),
     })
   );
 }
@@ -178,6 +207,11 @@ async function open(
     await page.goto(url);
     await expect(panel).toBeAttached({ timeout });
   } catch {
+    // Loud, so a retry never passes silently: a sweep that needed one is a sweep whose
+    // first mount failed, and that is worth knowing even when the second one lands.
+    console.warn(
+      `[session-tab-shots] first mount of ${fixture}/${theme}@${width} failed; retrying once`
+    );
     await page.goto("about:blank");
     await page.goto(url, { waitUntil: "load" });
     await expect(panel).toBeAttached({ timeout });
@@ -186,6 +220,11 @@ async function open(
   // one of the things this harness exists to show, so a missing strip has to be
   // capturable rather than a crash — `snap` still refuses to write a PNG for one.
   const strip = page.getByRole("tablist", { name: "Assistant sessions" });
+  // Mounted is not the same as styled. A page whose stylesheet never arrived still has a
+  // tablist to find and a box to photograph — and the resulting PNG is raw HTML that
+  // passes every structural check while looking nothing like the product. `flex` here
+  // comes from a Tailwind utility, so its presence proves the stylesheet landed.
+  await expect(strip).toHaveCSS("display", "flex");
   // Type metrics drive every measurement in the strip, so a capture taken before the
   // fonts land measures the fallback face.
   await page.evaluate(() => document.fonts.ready);
@@ -210,12 +249,10 @@ test("assistant session tabs — states, widths and themes", async ({ page }) =>
       const { panel, strip } = await open(page, name, theme, DEFAULT_WIDTH);
       written.push(await snap(panel, `${name}-${theme}-panel.png`));
       // The strip alone, at the size the eye actually judges it. This is where a
-      // selection that is too quiet stops being arguable. Skipped, not failed, when
-      // the fixture renders no strip — that absence is itself a captured finding in
-      // the panel shot above.
-      if ((await strip.count()) > 0) {
-        written.push(await snap(strip, `${name}-${theme}-strip.png`));
-      }
+      // selection that is too quiet stops being arguable. Required for EVERY fixture,
+      // the one-lane ones included: the strip is always rendered now, and a fixture
+      // without one is a regression, not a state.
+      written.push(await snap(strip, `${name}-${theme}-strip.png`));
     }
   }
 
@@ -267,6 +304,20 @@ test("assistant session tabs — states, widths and themes", async ({ page }) =>
     // is not wired.
     await page.keyboard.press("ArrowRight");
     await page.waitForTimeout(250);
+    // The picture cannot tell a roving tab stop from a pinned one — both draw the ring
+    // on the second tab — so the DOM has to. Focus, the stop AND the selection are all
+    // asserted: the first two moved together, the third did not move at all.
+    const roving = await strip.evaluate((el) => {
+      const items = [...el.querySelectorAll<HTMLElement>('[role="tab"]')];
+      return items.map((t) => ({
+        focused: t === document.activeElement,
+        stop: t.tabIndex === 0,
+        selected: t.getAttribute("aria-selected") === "true",
+      }));
+    });
+    expect(roving.map((t) => t.focused)).toEqual([false, true, false]);
+    expect(roving.map((t) => t.stop)).toEqual([false, true, false]);
+    expect(roving.map((t) => t.selected)).toEqual([true, false, false]);
     written.push(await snap(strip, `three-mixed-${hoverTheme}-strip-focus-arrow.png`));
 
     // One more Tab leaves the tablist entirely — the whole strip is a single tab
@@ -280,9 +331,8 @@ test("assistant session tabs — states, widths and themes", async ({ page }) =>
   // ends up reasoning about screenshots that were never written.
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  // One panel shot per fixture per theme is the floor that proves the sweep actually
-  // ran. Strip shots are counted in `written` but not floored here, because whether a
-  // given fixture has a strip is exactly what is under review.
-  expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * FIXTURES.length);
+  // A panel shot AND a strip shot per fixture per theme is the floor that proves the
+  // sweep actually ran and that every fixture had a strip to shoot.
+  expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * FIXTURES.length * 2);
   console.log(`[session-tab-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });
