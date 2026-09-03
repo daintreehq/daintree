@@ -177,12 +177,13 @@ export function deactivateEntry(host: ProjectViewManager, current: ViewEntry): v
 }
 
 /**
- * Delayed + periodic memory purge for a cached view. The renderer-side
- * `requestIdleCallback(gc)` above is best-effort inside a throttled
- * renderer; this is the guaranteed main-side counterpart (works throttled
- * or frozen) and additionally purges Blink's discardable caches. Purging
- * does not stop timers, ports, or agent output processing — it only drops
- * reclaimable memory — so it is safe for cached views with live agents.
+ * Delayed + periodic V8 garbage collection for a cached view. The
+ * renderer-side `requestIdleCallback(gc)` above is best-effort inside a
+ * throttled renderer; this is the guaranteed main-side counterpart (works
+ * throttled or frozen). It reclaims the renderer's JS heap only — Blink's
+ * discardable caches are not in reach from main (see the invariants on
+ * `purgeMemoryWebContents`). Collecting does not stop timers, ports, or
+ * agent output processing, so it is safe for cached views with live agents.
  */
 function schedulePurge(host: ProjectViewManager, entry: ViewEntry, delayMs: number): void {
   clearPurgeTimer(entry);
