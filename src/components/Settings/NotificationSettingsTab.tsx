@@ -329,7 +329,7 @@ export function NotificationSettingsTab() {
             <SettingsSwitchCard
               variant="compact"
               title="Play sound"
-              subtitle="Enable audio alerts for agent notifications"
+              subtitle="Master switch for every sound, including UI feedback sounds"
               isEnabled={settings.soundEnabled}
               onChange={() => update({ soundEnabled: !settings.soundEnabled })}
               ariaLabel="Play sound for notifications"
@@ -463,7 +463,7 @@ export function NotificationSettingsTab() {
         <SettingsSection
           icon={AudioLines}
           title="UI feedback sounds"
-          description="Play subtle audio cues for git operations, worktree lifecycle, agent spawning, and context injection. These sounds are independent of agent notification sounds above."
+          description="Play subtle audio cues for git operations, worktree lifecycle, agent spawning, and context injection. They only play while Play sound is on."
         >
           <SettingsSwitchCard
             variant="compact"
