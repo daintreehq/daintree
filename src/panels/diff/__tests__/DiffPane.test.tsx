@@ -1127,8 +1127,8 @@ describe("DiffPane — rendered Markdown layout (#12171)", () => {
     expect(rendered?.hasAttribute("disabled")).toBe(true);
 
     const describedBy = group.getAttribute("aria-describedby");
-    expect(describedBy).toBeTruthy();
-    expect(document.getElementById(describedBy as string)?.textContent).toContain("staged changes");
+    if (!describedBy) throw new Error("layout group carries no aria-describedby");
+    expect(document.getElementById(describedBy)?.textContent).toContain("staged changes");
   });
 
   it("falls back to the source diff when the file can render but the diff is stale", () => {

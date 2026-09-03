@@ -226,7 +226,9 @@ function reverseApplyHunks(
     }
   }
   for (let line = newCursor; line <= newLines.length; line++) {
-    oldLines.push(newLines[line - 1] as string);
+    const content = newLines[line - 1];
+    if (content === undefined) break;
+    oldLines.push(content);
   }
   return oldLines;
 }
@@ -472,8 +474,8 @@ function longestCommonSubsequence(
     for (let j = right.length - 1; j >= 0; j--) {
       table[i * cols + j] =
         left[i] === right[j]
-          ? (table[(i + 1) * cols + j + 1] as number) + 1
-          : Math.max(table[(i + 1) * cols + j] as number, table[i * cols + j + 1] as number);
+          ? (table[(i + 1) * cols + j + 1] ?? 0) + 1
+          : Math.max(table[(i + 1) * cols + j] ?? 0, table[i * cols + j + 1] ?? 0);
     }
   }
   const matches: Array<[number, number]> = [];
@@ -484,7 +486,7 @@ function longestCommonSubsequence(
       matches.push([i, j]);
       i++;
       j++;
-    } else if ((table[(i + 1) * cols + j] as number) >= (table[i * cols + j + 1] as number)) {
+    } else if ((table[(i + 1) * cols + j] ?? 0) >= (table[i * cols + j + 1] ?? 0)) {
       // Ties drop the left element first, so duplicate blocks anchor
       // deterministically to their earliest counterpart.
       i++;
@@ -679,17 +681,16 @@ function pairGap(
   const oldStats = oldBlocks.map((block) => tokenStats(block.text));
   const newStats = newBlocks.map((block) => tokenStats(block.text));
   for (let i = 0; i < oldBlocks.length; i++) {
+    const oldBlock = oldBlocks[i];
+    const oldStat = oldStats[i];
+    if (!oldBlock || !oldStat) continue;
     for (let j = 0; j < newBlocks.length; j++) {
-      const oldBlock = oldBlocks[i] as MarkdownBlock;
-      const newBlock = newBlocks[j] as MarkdownBlock;
+      const newBlock = newBlocks[j];
+      const newStat = newStats[j];
+      if (!newBlock || !newStat) continue;
       const score =
         oldBlock.type === newBlock.type
-          ? similarityFrom(
-              oldBlock.text,
-              newBlock.text,
-              oldStats[i] as TokenStats,
-              newStats[j] as TokenStats
-            )
+          ? similarityFrom(oldBlock.text, newBlock.text, oldStat, newStat)
           : 0;
       candidate[i * newBlocks.length + j] = score >= PAIR_SIMILARITY_THRESHOLD ? score : 0;
     }
@@ -697,14 +698,13 @@ function pairGap(
   for (let i = oldBlocks.length - 1; i >= 0; i--) {
     for (let j = newBlocks.length - 1; j >= 0; j--) {
       const paired =
-        (candidate[i * newBlocks.length + j] as number) > 0
-          ? (candidate[i * newBlocks.length + j] as number) +
-            (scores[(i + 1) * cols + j + 1] as number)
+        (candidate[i * newBlocks.length + j] ?? 0) > 0
+          ? (candidate[i * newBlocks.length + j] ?? 0) + (scores[(i + 1) * cols + j + 1] ?? 0)
           : -1;
       scores[i * cols + j] = Math.max(
         paired,
-        scores[(i + 1) * cols + j] as number,
-        scores[i * cols + j + 1] as number
+        scores[(i + 1) * cols + j] ?? 0,
+        scores[i * cols + j + 1] ?? 0
       );
     }
   }
@@ -713,12 +713,13 @@ function pairGap(
   let i = 0;
   let j = 0;
   while (i < oldBlocks.length && j < newBlocks.length) {
-    const score = candidate[i * newBlocks.length + j] as number;
-    const paired = score > 0 ? score + (scores[(i + 1) * cols + j + 1] as number) : -1;
-    const current = scores[i * cols + j] as number;
+    const score = candidate[i * newBlocks.length + j] ?? 0;
+    const paired = score > 0 ? score + (scores[(i + 1) * cols + j + 1] ?? 0) : -1;
+    const current = scores[i * cols + j] ?? 0;
+    const oldBlock = oldBlocks[i];
+    const newBlock = newBlocks[j];
+    if (!oldBlock || !newBlock) break;
     if (paired === current) {
-      const oldBlock = oldBlocks[i] as MarkdownBlock;
-      const newBlock = newBlocks[j] as MarkdownBlock;
       changes.push({
         kind: "modified",
         old: oldBlock,
@@ -733,19 +734,21 @@ function pairGap(
       });
       i++;
       j++;
-    } else if (current === (scores[(i + 1) * cols + j] as number)) {
-      changes.push({ kind: "removed", block: oldBlocks[i] as MarkdownBlock });
+    } else if (current === (scores[(i + 1) * cols + j] ?? 0)) {
+      changes.push({ kind: "removed", block: oldBlock });
       i++;
     } else {
-      changes.push({ kind: "added", block: newBlocks[j] as MarkdownBlock });
+      changes.push({ kind: "added", block: newBlock });
       j++;
     }
   }
   for (; i < oldBlocks.length; i++) {
-    changes.push({ kind: "removed", block: oldBlocks[i] as MarkdownBlock });
+    const block = oldBlocks[i];
+    if (block) changes.push({ kind: "removed", block });
   }
   for (; j < newBlocks.length; j++) {
-    changes.push({ kind: "added", block: newBlocks[j] as MarkdownBlock });
+    const block = newBlocks[j];
+    if (block) changes.push({ kind: "added", block });
   }
   return changes;
 }
@@ -776,8 +779,9 @@ export function diffMarkdownBlocks(
     changes.push(
       ...pairGap(oldBlocks.slice(oldCursor, oldIndex), newBlocks.slice(newCursor, newIndex), budget)
     );
-    const oldBlock = oldBlocks[oldIndex] as MarkdownBlock;
-    const newBlock = newBlocks[newIndex] as MarkdownBlock;
+    const oldBlock = oldBlocks[oldIndex];
+    const newBlock = newBlocks[newIndex];
+    if (!oldBlock || !newBlock) continue;
     // Identical source, but it renders through a definition that moved — so the
     // block really did change and must not be reported as untouched. The word
     // marks stay empty: the text is the same, the target behind it is not.

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 import ReactMarkdown, { type PluggableList } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Element as HastElement, Nodes as HastNodes, RootContent as HastContent } from "hast";
+import type { Nodes as HastNodes, RootContent as HastContent } from "hast";
 import type { GitStatus } from "@shared/types/git";
 import { useMarkdownRenderPolicy } from "@/components/Markdown/markdownRenderPolicy";
 import { MARKDOWN_FONT_SIZE_TOKEN } from "@/components/Markdown/MarkdownDocument";
@@ -83,11 +83,11 @@ const BLOCK_MARKER: Record<BlockKind, string> = {
  */
 function collectTextNodes(tree: HastNodes): {
   text: string;
-  entries: Array<{ parent: HastElement | HastNodes; index: number; start: number; value: string }>;
+  entries: Array<{ children: HastContent[]; index: number; start: number; value: string }>;
 } {
   let text = "";
   const entries: Array<{
-    parent: HastElement | HastNodes;
+    children: HastContent[];
     index: number;
     start: number;
     value: string;
@@ -103,8 +103,7 @@ function collectTextNodes(tree: HastNodes): {
         // list, table, blockquote and task list disagree with the mdast
         // flattening and so lose its inline marks entirely.
         if (!child.position && !/\S/.test(child.value)) return;
-        if (wrappable)
-          entries.push({ parent: node, index, start: text.length, value: child.value });
+        if (wrappable) entries.push({ children, index, start: text.length, value: child.value });
         text += child.value;
         return;
       }
@@ -166,8 +165,7 @@ function inlineRangePlugin(ranges: readonly TextRange[], expectedText: string, k
       if (cursor < end) {
         replacement.push({ type: "text", value: entry.value.slice(cursor - entry.start) });
       }
-      const children = (entry.parent as { children: HastContent[] }).children;
-      children.splice(entry.index, 1, ...replacement);
+      entry.children.splice(entry.index, 1, ...replacement);
     }
   };
 }
