@@ -213,11 +213,20 @@ interface DriverResult {
  * The child must NOT look like a Vitest process: every fixture disables its
  * module hooks when `VITEST` is set, so an inherited flag would silently turn
  * each scenario into a run against the real electron module graph.
+ *
+ * `DAINTREE_USER_DATA` goes too. `vitest.setup.ts` points it at one directory
+ * per worker pid, and every fixture that needs a user-data root takes an
+ * inherited value in preference to minting its own — so the whole pool would
+ * share a single `daintree.db`. Two children opening that database at the same
+ * time both read an empty `__drizzle_migrations` and both apply the same
+ * migration, and the loser dies on `duplicate column name` before its scenario
+ * runs. Unset, each child mints its own temp root.
  */
 function childEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (key.startsWith("VITEST")) continue;
+    if (key === "DAINTREE_USER_DATA") continue;
     env[key] = value;
   }
   return env;
