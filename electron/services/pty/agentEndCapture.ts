@@ -15,9 +15,9 @@ const logger = createLogger("pty:AgentEndCapture");
  * Taking the last match is not enough on its own: with no real hint printed, the
  * last match would be whatever `codex resume <id>` text the conversation
  * happened to contain. The window is what makes the scrape mean "the agent's
- * farewell", and it has to be measured in rendered rows — the raw PTY tail is
- * useless for this, because `stripAnsiCodes` deletes cursor-positioning escapes
- * with no replacement and a ratatui repaint collapses into one giant line.
+ * farewell". This bound only bites on text with real line breaks — rendered
+ * rows, or plain line-oriented output — so {@link CAPTURE_SCAN_CHARS} carries
+ * the raw fallback, where a ratatui repaint has collapsed into one giant line.
  *
  * Eight rows, not the four `IdentityWatcher` uses for prompt-return
  * (`SHELL_IDENTITY_FALLBACK_SCAN_LINES`): that scan only has to reach the prompt
