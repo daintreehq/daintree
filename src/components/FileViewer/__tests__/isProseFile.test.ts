@@ -9,7 +9,16 @@ describe("isProseFilePath", () => {
   });
 
   it("classifies the non-markdown prose formats", () => {
-    for (const path of ["CHANGELOG.txt", "index.rst", "guide.adoc", "guide.asciidoc"]) {
+    // `.text` and `.rest` are the recognised aliases of the two formats above
+    // them; `.asciidoc` is AsciiDoc's own long spelling.
+    for (const path of [
+      "CHANGELOG.txt",
+      "notes.text",
+      "index.rst",
+      "manual.rest",
+      "guide.adoc",
+      "guide.asciidoc",
+    ]) {
       expect(isProseFilePath(path)).toBe(true);
     }
   });

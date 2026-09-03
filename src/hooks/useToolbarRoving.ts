@@ -59,10 +59,20 @@ export function useToolbarRoving(
     const items = controls();
     if (items.length === 0) return;
 
-    // Clamp rather than reset: a control disappearing from the middle of the
-    // row should leave the tab stop near where it was, not throw it back to the
+    // Focus wins over the remembered index whenever it is already inside the
+    // row. A pointer click moves focus without telling us, and a control
+    // appearing ahead of the focused one shifts every index after it — so
+    // trusting the index alone would hand the tab stop to a different control
+    // and set `tabindex="-1"` on the one that actually holds focus. That is not
+    // merely untidy: `TABBABLE_SELECTOR` excludes negative tabindex, so a focus
+    // trap computing its boundary (AppDialog) stops recognising the focused
+    // element as first or last and lets Tab walk straight out of the modal.
+    //
+    // Clamp for the rest: a control disappearing from the middle of the row
+    // should leave the tab stop near where it was, not throw it back to the
     // start of the toolbar.
-    const active = Math.min(activeIndexRef.current, items.length - 1);
+    const focused = items.findIndex((item) => item === document.activeElement);
+    const active = focused === -1 ? Math.min(activeIndexRef.current, items.length - 1) : focused;
     activeIndexRef.current = active;
     items.forEach((item, index) => {
       item.tabIndex = index === active ? 0 : -1;

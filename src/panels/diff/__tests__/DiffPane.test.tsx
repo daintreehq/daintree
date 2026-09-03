@@ -96,7 +96,11 @@ const preferences = {
   setDiffViewType: vi.fn(),
   // `null` is auto — prose wraps, everything else doesn't (#12170).
   diffWrapLines: null as boolean | null,
-  setDiffWrapLines: vi.fn(),
+  // Writes through, so a test can follow a full toggle cycle instead of only
+  // the argument the click dispatched.
+  setDiffWrapLines: vi.fn((value: boolean) => {
+    preferences.diffWrapLines = value;
+  }),
   diffShowFileList: true,
   setDiffShowFileList: vi.fn(),
   diffFullFile: false,
@@ -140,8 +144,8 @@ function seedPanel(overrides: Record<string, unknown>): void {
   panelsById[PANEL_ID] = { id: PANEL_ID, kind: "diff", diffSource: "working-tree", ...overrides };
 }
 
-function renderPane(isFocused = true) {
-  return render(
+function paneElement(isFocused = true) {
+  return (
     <DiffPane
       id={PANEL_ID}
       title="pane"
@@ -152,6 +156,10 @@ function renderPane(isFocused = true) {
       onClose={() => {}}
     />
   );
+}
+
+function renderPane(isFocused = true) {
+  return render(paneElement(isFocused));
 }
 
 /** The stepping shortcuts ride bubbling from inside the pane, not the document. */
@@ -177,7 +185,7 @@ beforeEach(() => {
   isImageDiffCandidateMock.mockReturnValue(false);
   preferences.diffShowFileList = true;
   preferences.diffWrapLines = null;
-  preferences.setDiffWrapLines.mockReset();
+  preferences.setDiffWrapLines.mockClear();
   worktrees.clear();
   worktrees.set(WORKTREE_ID, { path: WORKTREE_PATH, branch: "feature/x" });
 });
@@ -968,6 +976,31 @@ describe("DiffPane wrap toggle (#12170)", () => {
     fireEvent.click(wrapButton());
 
     expect(preferences.setDiffWrapLines).toHaveBeenCalledWith(true);
+  });
+
+  it("cycles auto-on to explicit-off to explicit-on, updating button and viewer", () => {
+    // Dispatching the right argument is not enough: a regression that wrote the
+    // preference but left the control and the viewer showing the old value
+    // would pass every assertion that stops at the setter.
+    seedPanel({
+      filePath: "docs/spec.md",
+      fileStatus: "modified",
+      changeSet: [entry("docs/spec.md")],
+    });
+    const { rerender } = renderPane();
+    expect(viewerWrap()).toBe("true");
+
+    fireEvent.click(wrapButton());
+    rerender(paneElement());
+    expect(preferences.diffWrapLines).toBe(false);
+    expect(viewerWrap()).toBe("false");
+    expect(wrapButton().getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(wrapButton());
+    rerender(paneElement());
+    expect(preferences.diffWrapLines).toBe(true);
+    expect(viewerWrap()).toBe("true");
+    expect(wrapButton().getAttribute("aria-pressed")).toBe("true");
   });
 
   it("lets an explicit override beat the file type in both directions", () => {

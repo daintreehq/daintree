@@ -87,9 +87,9 @@ function useFittedPath(fullText: string | undefined): {
 }
 
 /**
- * One icon size for every control in this toolbar family, so the four panels
- * that use it (FilePane, DiffPane, and the file browser's two header rows)
- * cannot drift apart a pixel at a time.
+ * One icon size for every control in this toolbar family, so every surface that
+ * uses it (FilePane, DiffPane, the cross-worktree comparison dialog, and the
+ * file browser's two header rows) cannot drift apart a pixel at a time.
  *
  * 14px rather than 16: at 16 the glyphs read heavier than the text beside them
  * and Refresh in particular dominated a row it only shares. With the button's

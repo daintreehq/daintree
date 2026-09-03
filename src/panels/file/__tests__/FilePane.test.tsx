@@ -82,17 +82,20 @@ vi.mock("@/lib/viewCacheState", () => ({
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (state: unknown) => unknown) => selector({ currentProject: null }),
 }));
-const { setMarkdownFontSizeMock, setDiffWrapLinesMock } = vi.hoisted(() => ({
-  setMarkdownFontSizeMock: vi.fn(),
-  setDiffWrapLinesMock: vi.fn(),
-}));
+const { setMarkdownFontSizeMock, setDiffWrapLinesMock, setMarkdownWrapLinesMock } = vi.hoisted(
+  () => ({
+    setMarkdownFontSizeMock: vi.fn(),
+    setDiffWrapLinesMock: vi.fn(),
+    setMarkdownWrapLinesMock: vi.fn(),
+  })
+);
 // Mutable so a test can seed an explicit wrap override; `null` is auto (#12170).
 const preferences = { diffWrapLines: null as boolean | null };
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (state: unknown) => unknown) =>
     selector({
       markdownWrapLines: false,
-      setMarkdownWrapLines: vi.fn(),
+      setMarkdownWrapLines: setMarkdownWrapLinesMock,
       markdownFontSize: "lg",
       setMarkdownFontSize: setMarkdownFontSizeMock,
       diffViewType: "unified",
@@ -289,6 +292,7 @@ afterEach(() => {
   setFileViewModeMock.mockReset();
   setFilePanelPathMock.mockReset();
   setDiffWrapLinesMock.mockReset();
+  setMarkdownWrapLinesMock.mockReset();
   preferences.diffWrapLines = null;
   markdownViewerProps.current = null;
   lifecycleListeners.clear();
@@ -1905,8 +1909,38 @@ describe("FilePane diff mode (#11274)", () => {
       await renderPane({ filePath: "/repo/docs/spec.md", fileViewMode: "source" });
 
       fireEvent.click(wrapButton());
+      expect(setMarkdownWrapLinesMock).toHaveBeenCalledWith(true);
       expect(setDiffWrapLinesMock).not.toHaveBeenCalled();
       expect(screen.getAllByRole("button", { name: "Wrap long lines" }).length).toBe(1);
+    });
+
+    it("offers the toggle for an image diff, which renders as text like any other", async () => {
+      // The button is deliberately ungated by file type here, unlike the diff
+      // panel's: this pane's diff branch precedes every load-state branch, so a
+      // PNG shows a text diff rather than a preview. Gating it the way DiffPane
+      // does would silently strip the control from those diffs.
+      seedWorktree([{ path: "/repo/assets/logo.png", status: "modified" }]);
+      useDiffContentMock.mockReturnValue({
+        content: "Binary files differ",
+        stale: false,
+        retry: vi.fn(),
+      });
+      await renderPane({ filePath: "/repo/assets/logo.png", fileViewMode: "diff" });
+      expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
+
+      expect(wrapButton().getAttribute("aria-pressed")).toBe("false");
+      expect(viewerWrap()).toBe("false");
+
+      fireEvent.click(wrapButton());
+      expect(setDiffWrapLinesMock).toHaveBeenCalledWith(true);
+    });
+
+    it("honours an explicit `true` on a code file", async () => {
+      preferences.diffWrapLines = true;
+      await renderDiff("/repo/src/index.ts");
+
+      expect(viewerWrap()).toBe("true");
+      expect(wrapButton().getAttribute("aria-pressed")).toBe("true");
     });
   });
 

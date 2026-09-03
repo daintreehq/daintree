@@ -10,7 +10,7 @@ import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
  * unrecognised extension is far more likely to be code or config, and wrapping
  * those hides the column structure that makes them readable.
  */
-const PROSE_EXTENSIONS = new Set(["txt", "rst", "adoc", "asciidoc"]);
+const PROSE_EXTENSIONS = new Set(["txt", "text", "rst", "rest", "adoc", "asciidoc"]);
 
 /**
  * Whether a path names a prose document, which decides the default for diff

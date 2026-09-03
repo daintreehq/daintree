@@ -168,4 +168,44 @@ describe("CrossWorktreeDiff wrap toggle (#12170)", () => {
 
     expect(viewerWrap()).toBe("false");
   });
+
+  it("honours an explicit `true` on a code file", async () => {
+    preferences.diffWrapLines = true;
+    await setupComparison([{ path: "src/a.ts", status: "M" }]);
+
+    expect(viewerWrap()).toBe("true");
+    expect(wrapButton().getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("recomputes auto wrapping when stepping from prose to code", async () => {
+    // Auto is derived per file, so stepping has to re-resolve it — a value
+    // captured once when the dialog opened would keep the code diff wrapped.
+    await setupComparison([
+      { path: "docs/spec.md", status: "M" },
+      { path: "src/a.ts", status: "M" },
+    ]);
+    expect(viewerWrap()).toBe("true");
+
+    fireEvent.click(screen.getByLabelText("Next file"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe("2 of 2");
+    });
+    expect(viewerWrap()).toBe("false");
+    expect(wrapButton().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("keeps the roving tab stop on the wrap button after it is clicked", async () => {
+    // The toolbar applies roving tabindex over every descendant button. Moving
+    // the stop off the focused control would set `tabindex="-1"` on it, and
+    // AppDialog's trap excludes negative tabindex when computing its boundary.
+    await setupComparison([{ path: "docs/spec.md", status: "M" }]);
+    const button = wrapButton();
+    button.focus();
+
+    fireEvent.click(button);
+
+    expect(document.activeElement).toBe(button);
+    expect(button.tabIndex).toBe(0);
+  });
 });
