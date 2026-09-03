@@ -76,12 +76,13 @@ test.beforeAll(async () => {
   if (existsSync(OUT_DIR)) rmSync(OUT_DIR, { recursive: true, force: true });
   mkdirSync(OUT_DIR, { recursive: true });
 
-  // `strictPort: false` matters: the project's own vite config sets
-  // `strictPort: true` for the app's dev server, and that wins over an inline
-  // `port: 0` — so with the app running this harness dies on "Port 5173 is
-  // already in use" instead of taking a free one. Falling forward and reading
-  // the port back off the server is what makes the harness runnable while the
-  // app is up.
+  // `strictPort: false` is the load-bearing half of this. The project's own
+  // `vite.config.ts` sets `port: 5173` with `strictPort: true`, and that survives the
+  // merge with this inline config — so on a machine already running `npm run dev` the
+  // harness tried to bind an occupied port. It surfaced as `element(s) not found` on
+  // whichever page load lost the race, which reads exactly like a render bug in the
+  // surface under review rather than a port collision. Walking to the next free port
+  // means the harness can run beside a live dev server, which is when it is most useful.
   server = await createServer({
     server: { port: 0, strictPort: false },
     logLevel: "error",
@@ -119,17 +120,36 @@ async function open(
   theme: string,
   width: number
 ): Promise<{ panel: Locator; strip: Locator }> {
-  await page.setViewportSize({ width: width + 40, height: 640 });
-  await page.goto(
-    `${baseURL}/session-tabs-preview.html?theme=${theme}&fixture=${fixture}&width=${width}`
-  );
+  // A fixed, generous viewport rather than one sized to the panel. The panel is a
+  // fixed-width element and `snap` screenshots that element, so the surrounding space
+  // never reaches a PNG, while a viewport tightened to the panel does reach the browser
+  // window and Chromium will not go below its own minimum window width on macOS.
+  await page.setViewportSize({ width: 1000, height: 640 });
+
+  const url = `${baseURL}/session-tabs-preview.html?theme=${theme}&fixture=${fixture}&width=${width}`;
   const panel = page.locator("[data-preview-panel]").first();
-  // Generous on purpose. This harness is run on developer machines that are often
-  // busy running the agent fleet this app exists to orchestrate, and at high load a
-  // cold Vite transform of the preview entry comfortably outruns the 5s default —
-  // which fails as "element(s) not found", i.e. looking exactly like a render bug in
-  // the surface under review rather than a busy box.
-  await expect(panel).toBeAttached({ timeout: 30_000 });
+
+  // Load, and give it one more go if the app never mounted.
+  //
+  // Not defensive padding — this reproduces. A full sweep is ~22 page loads against one
+  // dev server, and somewhere past the twentieth the mount stops arriving within 30s;
+  // the same load in a shorter sweep is fine, which is what rules out the fixture and
+  // the width and points at the accumulated context. These machines are also usually
+  // busy running the very agent fleet this app orchestrates.
+  //
+  // A single reload is the right shape of fix because the failure mode it covers is
+  // indistinguishable, from the outside, from the surface genuinely failing to render —
+  // both surface as `element(s) not found`. So the retry is bounded and loud: if the
+  // second attempt also comes up empty, that IS the product, and it throws.
+  const timeout = 30_000;
+  try {
+    await page.goto(url);
+    await expect(panel).toBeAttached({ timeout });
+  } catch {
+    await page.goto("about:blank");
+    await page.goto(url, { waitUntil: "load" });
+    await expect(panel).toBeAttached({ timeout });
+  }
   // Deliberately not asserted here. Whether a one-lane project gets a strip at all is
   // one of the things this harness exists to show, so a missing strip has to be
   // capturable rather than a crash — `snap` still refuses to write a PNG for one.

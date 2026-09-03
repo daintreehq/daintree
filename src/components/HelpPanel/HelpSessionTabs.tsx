@@ -138,7 +138,13 @@ function SessionTabChip({
         // which still clears the 80px floor a status marker plus a truncated label plus
         // a close target needs; at one lane it makes the strip a session title bar,
         // which is what a single-tab strip is for.
-        "flex-1 basis-0",
+        //
+        // `PilotFilterBar` deliberately rejects this in favour of `grow`, because equal
+        // shares of its bar truncated "Needs you" to "Need…". That reasoning does not
+        // reach here: it has seven items of differing lengths, this has at most three of
+        // one length, and `TabLabel` above keeps the identifying tail out of the
+        // truncating span either way.
+        "flex-1",
         "rounded-[var(--radius-sm)] transition-colors duration-150 ease-out",
         // `overlay-raised` is the app's selection fill — the same one a palette row and
         // a highlighted menu item wear. It cannot carry the signal alone; the rail below
@@ -197,10 +203,17 @@ function SessionTabChip({
       </button>
       <button
         type="button"
-        // Pointer-only, and deliberately so. A second tab stop per chip is exactly what
-        // makes a roving tabindex impossible — at three lanes it put six stops between
-        // the header and the body — so the tab is the sole focus target and closing
-        // moves to `Delete`, which the tablist handles and `aria-keyshortcuts` announces.
+        // Pointer-only, and deliberately so — but not because the two cannot coexist.
+        // `Panel/TabButton.tsx` runs a roving tabindex WITH a focusable close, so that
+        // was never the constraint. Two things make this the better trade here: a
+        // focusable control inside a `tab` is the nesting ARIA forbids, which is what
+        // that family is doing; and each extra stop is one more thing between the header
+        // and the terminal, six of them at three lanes, on a panel people tab through all
+        // day. So the tab is the sole focus target and closing moves to `Delete`, which
+        // the tablist handles and `aria-keyshortcuts` announces.
+        //
+        // The cost is real and worth naming: closing a session here now works differently
+        // from closing a panel, dock or portal tab elsewhere in the app.
         //
         // Both attributes are load-bearing and neither is decoration. `tabIndex={-1}`
         // keeps it out of the sequence AND out of axe's nested-interactive rule, which
@@ -401,14 +414,20 @@ export function HelpSessionTabs({
       {onOpenSession && (
         <button
           type="button"
-          onClick={onOpenSession}
-          disabled={!canOpenSession}
+          onClick={canOpenSession ? onOpenSession : undefined}
+          // `aria-disabled`, not `disabled`. A truly disabled button is removed from the
+          // tab order and stops firing pointer events, which takes its `title` with it —
+          // so the one state that has something to explain would have been the one state
+          // that could not explain it. This keeps the control focusable and hoverable,
+          // announces the state, and drops the handler instead.
+          aria-disabled={!canOpenSession || undefined}
           className={cn(
             "ml-0.5 w-6 h-6 inline-flex items-center justify-center shrink-0 self-center",
             "rounded-[var(--radius-sm)] text-text-secondary",
             "transition-colors duration-150 ease-out",
-            "enabled:hover:text-text-primary enabled:hover:bg-overlay-subtle",
-            "disabled:opacity-40 disabled:cursor-default",
+            canOpenSession
+              ? "hover:text-text-primary hover:bg-overlay-subtle"
+              : "opacity-40 cursor-default",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-1"
           )}
           aria-label="New session"

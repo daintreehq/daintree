@@ -254,17 +254,21 @@ describe("HelpSessionTabs", () => {
     expect(container.querySelector(`[id="${describedBy}"]`)!.textContent).toBe("working");
   });
 
-  it("keeps the new-session control present but inert once every lane is taken", () => {
-    // Parked rather than removed: a control that vanishes takes its own explanation
-    // with it, and the strip's width budget stays constant either way.
-    const { getByLabelText } = renderStrip({
-      canOpenSession: false,
-      onOpenSession: vi.fn(),
-    });
+  it("keeps the new-session control present, focusable and explained once every lane is taken", () => {
+    // Parked rather than removed: a control that vanishes takes its own explanation with
+    // it, and the strip's width budget stays constant either way. `aria-disabled` rather
+    // than `disabled` is what keeps the explanation reachable — a disabled button leaves
+    // the tab order and stops firing pointer events, so its `title` never surfaces.
+    const onOpenSession = vi.fn();
+    const { getByLabelText } = renderStrip({ canOpenSession: false, onOpenSession });
     const control = getByLabelText("New session") as HTMLButtonElement;
 
-    expect(control.disabled).toBe(true);
+    expect(control.disabled).toBe(false);
+    expect(control.getAttribute("aria-disabled")).toBe("true");
     expect(control.title).toContain("maximum");
+
+    fireEvent.click(control);
+    expect(onOpenSession).not.toHaveBeenCalled();
   });
 
   it("omits the new-session control entirely when no handler is supplied", () => {
