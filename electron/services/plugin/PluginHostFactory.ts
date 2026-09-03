@@ -50,6 +50,8 @@ import type { PluginDiagnosticsLogLine } from "../../../shared/types/ipc/pluginD
 import type {
   PluginIpcHandler,
   PluginHostApi,
+  PluginWorktreesResult,
+  PluginWorktreesUnavailableReason,
   PluginActionContribution,
   PluginActionDescriptor,
   PluginChannelSchema,
@@ -230,6 +232,22 @@ function sanitizeConfirmOptions(options: PluginConfirmOptions): PluginConfirmOpt
 }
 
 /**
+ * A worktree read the factory's dependencies performed, keeping the reason it
+ * came back with nothing (#12174).
+ *
+ * The internal twin of {@link PluginWorktreesResult}: same discriminant, but
+ * carrying raw `WorktreeSnapshot`s, which the factory projects through
+ * `toPluginWorktreeSnapshot` before a plugin ever sees them. `plugin-unloaded`
+ * is excluded because only the factory can observe it.
+ */
+export type PluginWorktreeSnapshotFetchResult =
+  | { status: "ok"; projectId: string; snapshots: WorktreeSnapshot[] }
+  | {
+      status: "unavailable";
+      reason: Exclude<PluginWorktreesUnavailableReason, "plugin-unloaded">;
+    };
+
+/**
  * Live collaborators and shared registries `createHost` and the fs/git/process/
  * clipboard API builders read and write. Every Map/Set/collaborator field here
  * is the SAME live reference `PluginService` holds — never a snapshot — so the
@@ -257,16 +275,26 @@ export interface PluginHostFactoryDeps {
   getHostGitFactory: () => HostGitFactory | undefined;
   getProcessManager: () => PluginProcessManager;
   declaredCapabilities: (pluginId: string) => Set<BuiltInPluginCapability>;
-  fetchAllWorktreeSnapshots: () => Promise<WorktreeSnapshot[]>;
   /**
-   * Worktree snapshots for one named project, for a project-bound host. Reads
-   * the workspace host that owns `projectRoot` directly instead of the focused
-   * window's, and resolves `[]` once that project closes.
+   * Worktree snapshots for the host's project, carrying why there are none and
+   * which project the ones there are belong to (#12174).
+   *
+   * Result-shaped rather than `WorktreeSnapshot[]` because `[]` is the same
+   * answer for "this project has no worktrees" and for five ways of having no
+   * answer at all, and the host API has to be able to tell a plugin apart. The
+   * `plugin-unloaded` reason is not reachable here — liveness is the factory's
+   * own concern, checked around this call — so it is excluded from the shape.
    */
-  fetchWorktreeSnapshotsForProject: (
+  fetchWorktreeSnapshotsResult: () => Promise<PluginWorktreeSnapshotFetchResult>;
+  /**
+   * The same read for one named project, for a project-bound host. Reads the
+   * workspace host that owns `projectRoot` directly instead of the focused
+   * window's, and reports `project-unavailable` once that project closes.
+   */
+  fetchWorktreeSnapshotsForProjectResult: (
     projectId: string,
     projectRoot: string
-  ) => Promise<WorktreeSnapshot[]>;
+  ) => Promise<PluginWorktreeSnapshotFetchResult>;
   recordPluginLog: (
     boundPlugin: LoadedPlugin,
     pluginId: string,
@@ -350,17 +378,34 @@ export function createHost(
   const { projectId: boundProjectId, projectRoot: boundProjectRoot } = binding;
 
   /**
-   * The worktree set this host may see. Unbound stays ambient on purpose: an
-   * app-global plugin has no project of its own, so the focused window's
-   * worktrees are the only set its argument-less getters can mean.
+   * The worktree set this host may see, with the reason it may see none.
+   *
+   * Unbound stays ambient on purpose: an app-global plugin has no project of
+   * its own, so the focused window's worktrees are the only set its
+   * argument-less getters can mean — which is exactly why the result names the
+   * project it landed on, so a plugin can notice when focus moved under it.
    */
-  const fetchWorktreeSnapshots = (): Promise<WorktreeSnapshot[]> => {
-    if (boundProjectId === null) return deps.fetchAllWorktreeSnapshots();
+  const fetchWorktreeSnapshotsResult = (): Promise<PluginWorktreeSnapshotFetchResult> => {
+    if (boundProjectId === null) return deps.fetchWorktreeSnapshotsResult();
     // Bound with no root is a malformed binding. Fail closed rather than fall
     // back to the ambient read, which would hand this plugin whichever project
     // happens to be focused — the confused-deputy bug the binding exists for.
-    if (boundProjectRoot === null) return Promise.resolve([]);
-    return deps.fetchWorktreeSnapshotsForProject(boundProjectId, boundProjectRoot);
+    if (boundProjectRoot === null) {
+      return Promise.resolve({ status: "unavailable", reason: "project-unavailable" });
+    }
+    return deps.fetchWorktreeSnapshotsForProjectResult(boundProjectId, boundProjectRoot);
+  };
+
+  /**
+   * The array-shaped read the pre-#12174 surfaces still use. Every unavailable
+   * reason flattens back to `[]` here, which is the fail-closed sentinel those
+   * surfaces are built on: worktree storage finds no target, `${worktree}` and
+   * `${project}` allowlist roots drop so containment denies (#9492), and
+   * `getWorktreeStatus` answers `null`.
+   */
+  const fetchWorktreeSnapshots = async (): Promise<WorktreeSnapshot[]> => {
+    const result = await fetchWorktreeSnapshotsResult();
+    return result.status === "ok" ? result.snapshots : [];
   };
 
   /**
@@ -437,6 +482,34 @@ export function createHost(
   // onDidChangeAgentState. The host keeps no pre-subscription history, so
   // getAgentState() returns null until the first transition is observed.
   let lastAgentSnapshot: PluginAgentSnapshot | null = null;
+  /**
+   * The availability- and scope-aware worktree read behind
+   * {@link PluginHostApi.getWorktreesResult}, and the single source the
+   * `[]`/`null`-shaped `getWorktrees` and `getActiveWorktree` project from, so
+   * the three can never disagree about what this host can see (#12174).
+   */
+  const getWorktreesResult = async (): Promise<PluginWorktreesResult> => {
+    if (!isBound()) return { status: "unavailable", reason: "plugin-unloaded" };
+    const result = await fetchWorktreeSnapshotsResult();
+    // Re-checked after the await: an unload (or a same-id reload) that landed
+    // while the read was in flight makes these snapshots the previous
+    // instance's, so they are discarded rather than handed to whatever still
+    // holds this stale host.
+    if (!isBound()) return { status: "unavailable", reason: "plugin-unloaded" };
+    if (result.status !== "ok") return { status: "unavailable", reason: result.reason };
+    // Belt and braces on the binding: a dependency answering for some other
+    // project would be the confused deputy (#11297) arriving through the new
+    // shape, so refuse it rather than relabel it.
+    if (boundProjectId !== null && result.projectId !== boundProjectId) {
+      return { status: "unavailable", reason: "project-unavailable" };
+    }
+    return {
+      status: "ok",
+      projectId: result.projectId,
+      worktrees: result.snapshots.map(toPluginWorktreeSnapshot),
+    };
+  };
+
   const host: PluginHostApi = {
     get pluginId() {
       return pluginId;
@@ -584,18 +657,15 @@ export function createHost(
       return Promise.resolve();
     },
     getActiveWorktree: async () => {
-      if (!isBound()) return null;
-      const snapshots = await fetchWorktreeSnapshots();
-      if (!isBound()) return null;
-      const active = snapshots.find((s) => s.isCurrent === true);
-      return active ? toPluginWorktreeSnapshot(active) : null;
+      const result = await getWorktreesResult();
+      if (result.status !== "ok") return null;
+      return result.worktrees.find((w) => w.isCurrent) ?? null;
     },
     getWorktrees: async () => {
-      if (!isBound()) return [];
-      const snapshots = await fetchWorktreeSnapshots();
-      if (!isBound()) return [];
-      return snapshots.map(toPluginWorktreeSnapshot);
+      const result = await getWorktreesResult();
+      return result.status === "ok" ? result.worktrees : [];
     },
+    getWorktreesResult,
     getWorktreeStatus: async (path, options) => {
       options?.signal?.throwIfAborted();
       if (!isBound()) return null;

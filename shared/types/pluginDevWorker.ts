@@ -37,6 +37,7 @@ import type {
 export type PluginHostCallMethod =
   | "getActiveWorktree"
   | "getWorktrees"
+  | "getWorktreesResult"
   | "getWorktreeStatus"
   | "getAgentState"
   | "sendToActiveAgent"

@@ -206,8 +206,16 @@ function fakePlugin(): LoadedPlugin {
  * `webContents.send` and a `host.settings.set` all the way to a file on disk.
  */
 function makeHostDeps(): PluginHostFactoryDeps {
-  ambientWorktreeFetch = vi.fn(async () => []);
-  projectWorktreeFetch = vi.fn(async () => []);
+  ambientWorktreeFetch = vi.fn(async () => ({
+    status: "ok",
+    projectId: PROJECT_B,
+    snapshots: [],
+  }));
+  projectWorktreeFetch = vi.fn(async () => ({
+    status: "ok",
+    projectId: PROJECT_A,
+    snapshots: [],
+  }));
   return {
     plugins: new Map<string, LoadedPlugin>([[PLUGIN_ID, fakePlugin()]]),
     pluginEventCleanups: new Map(),
@@ -226,8 +234,8 @@ function makeHostDeps(): PluginHostFactoryDeps {
     getHostGitFactory: () => undefined,
     getProcessManager: vi.fn(),
     declaredCapabilities: () => new Set(["agent:input", "agent:read"]),
-    fetchAllWorktreeSnapshots: ambientWorktreeFetch,
-    fetchWorktreeSnapshotsForProject: projectWorktreeFetch,
+    fetchWorktreeSnapshotsResult: ambientWorktreeFetch,
+    fetchWorktreeSnapshotsForProjectResult: projectWorktreeFetch,
     recordPluginLog: vi.fn(),
     serializePluginBadges: () => ({}),
     pluginDataDir: () => path.join(tmpDir, "plugin-data"),
@@ -441,6 +449,44 @@ describe("a malformed binding fails closed", () => {
     expect(await host.getWorktrees()).toEqual([]);
     expect(ambientWorktreeFetch).not.toHaveBeenCalled();
     expect(projectWorktreeFetch).not.toHaveBeenCalled();
+
+    // #12174 rides on the same guard: the result surface says WHY it is empty
+    // rather than letting the plugin read the [] as "A has no worktrees", and
+    // still never reaches for the focused project's set to fill the gap.
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "project-unavailable",
+    });
+    expect(ambientWorktreeFetch).not.toHaveBeenCalled();
+  });
+
+  it("will not let a read that answered for B escape through an A-bound host", async () => {
+    // The confused deputy in the shape #12174 adds: a dependency answering with
+    // B's project id must fail closed, never be relabelled as A's.
+    const host = hostBoundTo({ projectId: PROJECT_A, projectRoot: projectRootOf(PROJECT_A) });
+    projectWorktreeFetch.mockResolvedValue({
+      status: "ok",
+      projectId: PROJECT_B,
+      snapshots: [],
+    });
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "project-unavailable",
+    });
+    expect(await host.getWorktrees()).toEqual([]);
+  });
+
+  it("names A while B is focused, and never consults the ambient read", async () => {
+    const host = hostBoundTo({ projectId: PROJECT_A, projectRoot: projectRootOf(PROJECT_A) });
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "ok",
+      projectId: PROJECT_A,
+      worktrees: [],
+    });
+    expect(projectWorktreeFetch).toHaveBeenCalledWith(PROJECT_A, projectRootOf(PROJECT_A));
+    expect(ambientWorktreeFetch).not.toHaveBeenCalled();
   });
 });
 

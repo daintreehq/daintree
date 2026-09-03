@@ -395,6 +395,8 @@ export class PluginDevWorkerMainBridge {
         return this.host.getActiveWorktree();
       case "getWorktrees":
         return this.host.getWorktrees();
+      case "getWorktreesResult":
+        return this.host.getWorktreesResult();
       case "getWorktreeStatus":
         return this.host.getWorktreeStatus(params as string, { signal });
       case "getAgentState":

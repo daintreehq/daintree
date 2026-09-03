@@ -145,6 +145,34 @@ function resolveCall(proxy: any, sent: any[], method: string, result: unknown): 
   proxy.handleMessage({ type: "host-result", requestId: call.requestId, ok: true, result });
 }
 
+describe("PluginDevWorkerHostProxy getWorktreesResult (#12174)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("relays the call and resolves with the union unchanged", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.getWorktreesResult();
+    expect(
+      sent.find((m) => m.type === "host-call" && m.method === "getWorktreesResult")
+    ).toBeDefined();
+    const envelope = { status: "ok", projectId: "project-1", worktrees: [] };
+    resolveCall(proxy, sent, "getWorktreesResult", envelope);
+    await expect(promise).resolves.toEqual(envelope);
+  });
+
+  it("resolves an in-flight call to plugin-unloaded when the proxy is disposed", async () => {
+    // The real host degrades rather than throwing once the plugin unloads, so a
+    // dev-hosted plugin must observe the same contract.
+    const { proxy } = makeProxy();
+    const promise = proxy.host.getWorktreesResult();
+    proxy.dispose();
+    await expect(promise).resolves.toEqual({
+      status: "unavailable",
+      reason: "plugin-unloaded",
+    });
+  });
+});
+
 describe("PluginDevWorkerHostProxy host.actions (#10561)", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(() => vi.restoreAllMocks());

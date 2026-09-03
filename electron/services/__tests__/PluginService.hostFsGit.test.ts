@@ -80,6 +80,13 @@ function dataDir(): string {
 function setWorktrees(snapshots: Array<Partial<WorktreeSnapshot> & { path: string }>): void {
   (svc as unknown as { setWorkspaceClient(c: unknown): void }).setWorkspaceClient({
     getAllStatesAsync: async () => snapshots,
+    // The result-shaped read the plugin host's worktree surfaces go through
+    // (#12174) — same states, plus the project they belong to.
+    getAllStatesResultAsync: async () => ({
+      status: "ok",
+      projectId: "project-1",
+      states: snapshots,
+    }),
     // The real WorkspaceClient is an EventEmitter; setWorkspaceClient wires the
     // #10621 worktree-scope cache-eviction listener through on/off.
     on: vi.fn(),
@@ -390,9 +397,12 @@ describe("host.fs ${worktree}/${project} token expansion", () => {
     await expect(host.fs.readFile(join(baseDir, "x.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
   });
 
-  it("fails closed (no fallback) when getAllStatesAsync rejects", async () => {
+  it("fails closed (no fallback) when the states read rejects", async () => {
     (svc as unknown as { setWorkspaceClient(c: unknown): void }).setWorkspaceClient({
       getAllStatesAsync: async () => {
+        throw new Error("client unavailable");
+      },
+      getAllStatesResultAsync: async () => {
         throw new Error("client unavailable");
       },
       on: vi.fn(),
@@ -592,7 +602,18 @@ describe("a bound plugin's ${project}/${worktree} allowlist roots", () => {
     );
     (svc as unknown as { setWorkspaceClient(c: unknown): void }).setWorkspaceClient({
       getAllStatesAsync: async () => asCurrent(ambient),
+      getAllStatesResultAsync: async () => ({
+        status: "ok",
+        projectId: "project-ambient",
+        states: asCurrent(ambient),
+      }),
       getAllStatesForProjectAsync: forProject,
+      getAllStatesForProjectResultAsync: async (root: string, projectId: string) => {
+        const states = await forProject(root, projectId);
+        return states.length > 0
+          ? { status: "ok", projectId, states }
+          : { status: "unavailable", reason: "project-unavailable" };
+      },
       on: vi.fn(),
       off: vi.fn(),
     });

@@ -516,6 +516,11 @@ describe("Plugin worktree host API", () => {
     _secret?: string;
   };
 
+  /** Mirror of WorkspaceClient's WorkspaceStatesResult over the local snapshot shape. */
+  type StatesResultLike =
+    | { status: "ok"; projectId: string; states: WorktreeSnapshotLike[] }
+    | { status: "unavailable"; reason: "workspace-unavailable" | "project-unavailable" };
+
   function mkSnap(over: Partial<WorktreeSnapshotLike> & { id: string }): WorktreeSnapshotLike {
     return {
       worktreeId: over.id,
@@ -544,8 +549,14 @@ describe("Plugin worktree host API", () => {
     const getAllStatesAsync = vi.fn((windowId?: number) =>
       Promise.resolve(windowId === undefined ? foreign : states)
     );
+    // The result-shaped read behind `host.getWorktreesResult()` (#12174). Same
+    // states, plus the id of the project the serving host belongs to.
+    const getAllStatesResultAsync = vi.fn((_windowId: number): Promise<StatesResultLike> =>
+      Promise.resolve({ status: "ok", projectId: "project-1", states })
+    );
     const client = Object.assign(emitter, {
       getAllStatesAsync,
+      getAllStatesResultAsync,
       setStates: (next: WorktreeSnapshotLike[]) => {
         states = next;
       },
@@ -559,6 +570,7 @@ describe("Plugin worktree host API", () => {
     broadcastToRenderer: (c: string, p: unknown) => void;
     getActiveWorktree: () => Promise<unknown>;
     getWorktrees: () => Promise<unknown[]>;
+    getWorktreesResult: () => Promise<unknown>;
     getWorktreeStatus: (path: string) => Promise<unknown>;
     onDidChangeActiveWorktree: (cb: (s: unknown) => void) => () => void;
     onDidChangeWorktrees: (cb: (list: unknown[]) => void) => () => void;
@@ -608,7 +620,7 @@ describe("Plugin worktree host API", () => {
     await host.getActiveWorktree();
     // Not called bare: an unscoped fetch aggregates every open project and
     // hands back whichever `isCurrent` snapshot happens to sort first.
-    expect(client.getAllStatesAsync).toHaveBeenCalledWith(1);
+    expect(client.getAllStatesResultAsync).toHaveBeenCalledWith(1);
   });
 
   it("returns empty rather than a cross-project aggregate when no window resolves", async () => {
@@ -618,6 +630,7 @@ describe("Plugin worktree host API", () => {
     expect(await host.getWorktrees()).toEqual([]);
     expect(await host.getActiveWorktree()).toBeNull();
     // The unscoped call is the bug — it must never be reached.
+    expect(client.getAllStatesResultAsync).not.toHaveBeenCalled();
     expect(client.getAllStatesAsync).not.toHaveBeenCalled();
   });
 
@@ -626,6 +639,7 @@ describe("Plugin worktree host API", () => {
     webContentsRegistryMock.getWindowForWebContents.mockReturnValue(null);
 
     expect(await host.getWorktrees()).toEqual([]);
+    expect(client.getAllStatesResultAsync).not.toHaveBeenCalled();
     expect(client.getAllStatesAsync).not.toHaveBeenCalled();
   });
 
@@ -690,6 +704,95 @@ describe("Plugin worktree host API", () => {
     await expect(
       (service as unknown as ServiceWithWindowLookup).getActiveWorktreeIdForWindow(7)
     ).resolves.toBeNull();
+  });
+
+  // ── #12174: telling an unavailable read from an empty project ──
+
+  it("names the project a successful read describes", async () => {
+    const { host, client } = await setup([mkSnap({ id: "b", isCurrent: true })]);
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "ok",
+      projectId: "project-1",
+      worktrees: [expect.objectContaining({ id: "b" })],
+    });
+    expect(client.getAllStatesResultAsync).toHaveBeenCalledWith(1);
+  });
+
+  it("reports an authoritative empty project rather than an unavailable one", async () => {
+    const { host } = await setup([]);
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "ok",
+      projectId: "project-1",
+      worktrees: [],
+    });
+    // The legacy surface still cannot tell this from any of the failures below.
+    expect(await host.getWorktrees()).toEqual([]);
+  });
+
+  it("reports scope-unresolved when no window resolves", async () => {
+    const { host, client } = await setup([mkSnap({ id: "b", isCurrent: true })]);
+    windowRefMock.getProjectViewManager.mockReturnValue(null);
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "scope-unresolved",
+    });
+    expect(await host.getWorktrees()).toEqual([]);
+    expect(client.getAllStatesResultAsync).not.toHaveBeenCalled();
+  });
+
+  it("reports scope-unresolved when the resolved webContents maps to no window", async () => {
+    const { host, client } = await setup([mkSnap({ id: "b", isCurrent: true })]);
+    webContentsRegistryMock.getWindowForWebContents.mockReturnValue(null);
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "scope-unresolved",
+    });
+    expect(client.getAllStatesResultAsync).not.toHaveBeenCalled();
+  });
+
+  it("passes the workspace layer's own unavailability through", async () => {
+    const { host, client } = await setup([mkSnap({ id: "b", isCurrent: true })]);
+    client.getAllStatesResultAsync.mockResolvedValueOnce({
+      status: "unavailable",
+      reason: "workspace-unavailable",
+    });
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "workspace-unavailable",
+    });
+  });
+
+  it("reports fetch-failed when the workspace read throws", async () => {
+    const { host, client } = await setup([mkSnap({ id: "b", isCurrent: true })]);
+    client.getAllStatesResultAsync.mockRejectedValueOnce(new Error("workspace host down"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "fetch-failed",
+    });
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("labels a populated list with the project it actually came from", async () => {
+    // The switch race: the focused view can still be the outgoing project's, so
+    // a plugin that looked for its worktree in this list and missed would read
+    // a confirmed mismatch. The label is what lets it tell the difference.
+    const { host, client } = await setup([mkSnap({ id: "outgoing", isCurrent: true })]);
+    client.getAllStatesResultAsync.mockResolvedValueOnce({
+      status: "ok",
+      projectId: "project-outgoing",
+      states: [mkSnap({ id: "outgoing", isCurrent: true })],
+    });
+
+    const result = await host.getWorktreesResult();
+    expect(result).toMatchObject({ status: "ok", projectId: "project-outgoing" });
   });
 
   it("getWorktrees returns frozen snapshots for every worktree", async () => {

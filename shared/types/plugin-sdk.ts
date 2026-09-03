@@ -116,6 +116,8 @@ export type {
 
 export type {
   PluginWorktreeSnapshot,
+  PluginWorktreesResult,
+  PluginWorktreesUnavailableReason,
   PluginWorktreeLinked,
   PluginWorktreeLinkedIssue,
   PluginWorktreeLinkedPR,

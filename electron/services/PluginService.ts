@@ -127,6 +127,7 @@ import {
   createHost as createPluginHost,
   type PluginHostFactoryDeps,
   type PluginWorktreeEventPayload,
+  type PluginWorktreeSnapshotFetchResult,
 } from "./plugin/PluginHostFactory.js";
 import type {
   LoadedPlugin,
@@ -2751,9 +2752,9 @@ export class PluginService {
       getHostGitFactory: () => this.hostGitFactory,
       getProcessManager: () => this.getProcessManager(),
       declaredCapabilities: (pluginId) => this.declaredCapabilities(pluginId),
-      fetchAllWorktreeSnapshots: () => this.fetchAllWorktreeSnapshots(),
-      fetchWorktreeSnapshotsForProject: (projectId, projectRoot) =>
-        this.fetchWorktreeSnapshotsForProject(projectId, projectRoot),
+      fetchWorktreeSnapshotsResult: () => this.fetchAllWorktreeSnapshotsResult(),
+      fetchWorktreeSnapshotsForProjectResult: (projectId, projectRoot) =>
+        this.fetchWorktreeSnapshotsForProjectResult(projectId, projectRoot),
       recordPluginLog: (boundPlugin, pluginId, level, message, fields) =>
         this.recordPluginLog(boundPlugin, pluginId, level, message, fields),
       serializePluginBadges: (pluginId) => this.serializePluginBadges(pluginId),
@@ -3127,15 +3128,33 @@ export class PluginService {
    * project's worktree, which is exactly the bug being fixed.
    */
   private async fetchAllWorktreeSnapshots(): Promise<WorktreeSnapshot[]> {
+    const result = await this.fetchAllWorktreeSnapshotsResult();
+    return result.status === "ok" ? result.snapshots : [];
+  }
+
+  /**
+   * {@link fetchAllWorktreeSnapshots} keeping the reason it has nothing and the
+   * project the snapshots belong to (#12174), for `host.getWorktreesResult()`.
+   *
+   * Every branch that flattens to `[]` above maps to a distinct `reason` here.
+   * Nothing about the containment posture changes: this still never widens to
+   * the cross-project aggregate, and the array-shaped read above is unchanged
+   * for storage, `${worktree}`/`${project}` allowlist roots and the spawn cwd —
+   * they keep failing closed on an empty list rather than learning a new shape.
+   */
+  private async fetchAllWorktreeSnapshotsResult(): Promise<PluginWorktreeSnapshotFetchResult> {
     const client = this.workspaceClient;
-    if (!client) return [];
+    if (!client) return { status: "unavailable", reason: "workspace-unavailable" };
     const windowId = this.resolveScopeWindowId();
-    if (windowId === undefined) return [];
+    if (windowId === undefined) return { status: "unavailable", reason: "scope-unresolved" };
     try {
-      return await client.getAllStatesAsync(windowId);
+      const result = await client.getAllStatesResultAsync(windowId);
+      return result.status === "ok"
+        ? { status: "ok", projectId: result.projectId, snapshots: result.states }
+        : { status: "unavailable", reason: result.reason };
     } catch (err) {
       console.error("[PluginService] Failed to fetch worktree snapshots:", err);
-      return [];
+      return { status: "unavailable", reason: "fetch-failed" };
     }
   }
 
@@ -3158,16 +3177,34 @@ export class PluginService {
     projectId: string,
     projectRoot: string
   ): Promise<WorktreeSnapshot[]> {
+    const result = await this.fetchWorktreeSnapshotsForProjectResult(projectId, projectRoot);
+    return result.status === "ok" ? result.snapshots : [];
+  }
+
+  /**
+   * {@link fetchWorktreeSnapshotsForProject} keeping the reason it has nothing
+   * (#12174). A closed project — pool entry gone, or the path reopened as a
+   * different project so `expectedProjectId` no longer matches — reports
+   * `project-unavailable` instead of the `[]` a live project with no worktrees
+   * returns, which is the whole distinction the plugin side was missing.
+   */
+  private async fetchWorktreeSnapshotsForProjectResult(
+    projectId: string,
+    projectRoot: string
+  ): Promise<PluginWorktreeSnapshotFetchResult> {
     const client = this.workspaceClient;
-    if (!client) return [];
+    if (!client) return { status: "unavailable", reason: "workspace-unavailable" };
     try {
-      return await client.getAllStatesForProjectAsync(projectRoot, projectId);
+      const result = await client.getAllStatesForProjectResultAsync(projectRoot, projectId);
+      return result.status === "ok"
+        ? { status: "ok", projectId: result.projectId, snapshots: result.states }
+        : { status: "unavailable", reason: result.reason };
     } catch (err) {
       console.error(
         `[PluginService] Failed to fetch worktree snapshots for project ${projectId}:`,
         err
       );
-      return [];
+      return { status: "unavailable", reason: "fetch-failed" };
     }
   }
 

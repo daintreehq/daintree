@@ -2491,6 +2491,68 @@ interface PluginWorktreeSnapshot {
     readonly status: PluginWorktreeStatus | null;
 }
 /**
+ * Why {@link PluginWorktreesResult} could not name a worktree set (#12174).
+ *
+ * The argument-less {@link PluginHostApi.getWorktrees} collapses every one of
+ * these to `[]`, which a plugin cannot tell apart from a project that genuinely
+ * has no worktrees. The reasons are deliberately semantic rather than one
+ * literal per internal branch: a plugin can act on "retry later" versus "this
+ * project is gone", but nothing it can do differs between a workspace client
+ * that is not wired yet and a workspace host that missed its readiness gate.
+ * The finer diagnosis stays in Daintree's logs.
+ *
+ * - `plugin-unloaded` — the plugin unloaded (or was replaced by a same-id
+ *   reload) before or during the read; a stale timer sees this
+ * - `workspace-unavailable` — the workspace subsystem cannot answer yet: no
+ *   client wired, or the owning workspace host never finished populating
+ * - `scope-unresolved` — an unbound host found no focused project view to read
+ *   on behalf of (common mid-project-switch)
+ * - `project-unavailable` — a bound host's project cannot be resolved: the
+ *   binding carries no root, or the project has closed and its workspace-host
+ *   entry is gone
+ * - `fetch-failed` — a read was attempted against a live host and threw
+ */
+type PluginWorktreesUnavailableReason = "plugin-unloaded" | "workspace-unavailable" | "scope-unresolved" | "project-unavailable" | "fetch-failed";
+/**
+ * Availability- and scope-aware outcome of a worktree read (#12174). Returned
+ * as plain data (never thrown), like {@link PluginCheckUpdateResult} and
+ * {@link PluginActivationResult}, so the structured result survives Electron's
+ * structured-clone IPC boundary.
+ *
+ * This exists because `[]` is overloaded. {@link PluginHostApi.getWorktrees}
+ * answers `[]` for an unloaded plugin, an unwired workspace client, an
+ * unresolved window scope, a rootless or closed project, a failed read, *and*
+ * for a project that really has no worktrees — seven states behind one value.
+ * A plugin that treats "no match in the list" as proof its stored worktree is
+ * gone will therefore false-positive during a project switch or after a wake.
+ *
+ * `status: "ok"` is the only authoritative answer, and it names `projectId` so
+ * a plugin can also tell *which* project the list describes. That matters on
+ * the unbound path: mid-switch the focused view can still be the outgoing
+ * project, so a populated list that omits the worktree you are looking for may
+ * simply belong to another project rather than confirm a mismatch. Compare
+ * `projectId` before concluding anything from the contents.
+ *
+ * The `unavailable` variant deliberately carries no `projectId`: there is no
+ * authoritative answer in that branch, so there is no project the absent
+ * worktrees can be said to be absent *from*.
+ */
+type PluginWorktreesResult = {
+    readonly status: "ok";
+    /**
+     * The project whose workspace host produced `worktrees`, as the host
+     * itself knows it — captured from the entry that served this read, not
+     * re-resolved from focus afterwards, so a switch that lands while the
+     * read is in flight cannot relabel it.
+     */
+    readonly projectId: string;
+    /** Authoritative for `projectId`. Empty means the project has no worktrees. */
+    readonly worktrees: PluginWorktreeSnapshot[];
+} | {
+    readonly status: "unavailable";
+    readonly reason: PluginWorktreesUnavailableReason;
+};
+/**
  * Read-only, frozen projection of an agent session's coarse state, exposed to
  * plugins behind the `agent:read` capability. This is an explicit allowlist of
  * fields from the internal `agent:state-changed` event payload; do NOT add
@@ -3346,14 +3408,41 @@ interface PluginHostApi extends PluginActivationApi {
      */
     postToPanel(channel: string, payload: unknown, panelId?: string | null): Promise<void>;
     /**
-     * Returns the currently-active worktree (`isCurrent === true`) across all
-     * projects as a frozen snapshot, or `null` if none is active. In multi-project
-     * sessions this returns the first match; plugins needing per-project scoping
-     * should filter from `getWorktrees()`.
+     * Returns the currently-active worktree (`isCurrent === true`) of the project
+     * this host reads for, as a frozen snapshot, or `null` if none is active.
+     *
+     * `null` is overloaded exactly as `[]` is on {@link getWorktrees} — it means
+     * "no active worktree" *or* "no answer available". Use
+     * {@link getWorktreesResult} and pick out `isCurrent` yourself when the
+     * difference matters.
      */
     getActiveWorktree(): Promise<PluginWorktreeSnapshot | null>;
-    /** Returns all worktrees across all loaded projects as frozen snapshots. */
+    /**
+     * Returns the worktrees of the project this host reads for, as frozen
+     * snapshots — the project named by a project-bound host's binding, or the
+     * focused window's project for an app-global one.
+     *
+     * Resolves `[]` both when the project has no worktrees and when no answer is
+     * available at all; {@link getWorktreesResult} separates the two.
+     */
     getWorktrees(): Promise<PluginWorktreeSnapshot[]>;
+    /**
+     * The same read as {@link getWorktrees}, but able to say when it has no
+     * answer and which project the answer it does have describes (#12174).
+     *
+     * `getWorktrees()` collapses an unloaded plugin, an unwired workspace client,
+     * an unresolved window scope, a rootless or closed project and a failed read
+     * all to the same `[]` a genuinely empty project returns. Prefer this method
+     * wherever the absence of a worktree drives a decision — a stored binding
+     * that looks broken, a panel that looks orphaned — and only treat a
+     * `status: "ok"` result whose `projectId` matches your expectation as
+     * evidence. See {@link PluginWorktreesResult}.
+     *
+     * Like {@link getWorktrees} this is not revoke-guarded and never throws: once
+     * the plugin unloads it degrades to `{ status: "unavailable", reason:
+     * "plugin-unloaded" }`.
+     */
+    getWorktreesResult(): Promise<PluginWorktreesResult>;
     /**
      * Returns the changed-file / git-status projection for the worktree at the
      * given absolute `path` (the same {@link PluginWorktreeStatus} carried on
@@ -3738,4 +3827,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };

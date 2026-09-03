@@ -53,6 +53,7 @@ interface PluginHostApi {
   // Worktree observation
   getActiveWorktree(): Promise<PluginWorktreeSnapshot | null>;
   getWorktrees(): Promise<PluginWorktreeSnapshot[]>;
+  getWorktreesResult(): Promise<PluginWorktreesResult>;
   getWorktreeStatus(path: string): Promise<PluginWorktreeStatus | null>;
   onDidChangeActiveWorktree(
     callback: (snapshot: PluginWorktreeSnapshot | null) => void
@@ -260,6 +261,46 @@ const dispose = await host.onDidChangeActiveWorktree((snapshot) => {
 
 // Later: dispose() to unsubscribe (automatic on plugin unload)
 ```
+
+### Telling "unavailable" from "empty"
+
+`getWorktrees()` answers `[]` for seven different situations, and `getActiveWorktree()` answers `null` for the same set: the plugin is unloading, no workspace client is wired, no window scope resolves, the host's binding names a project with no root, the bound project has closed, the read failed — and, legitimately, the project genuinely has no worktrees. That sentinel is deliberate and stays: it fails closed, so a plugin never receives some other project's worktrees by accident (#11297, #9492). But it means a plugin cannot tell an unavailable answer from an authoritative empty one, and a validator that treats "my worktree isn't in this list" as "my worktree is gone" will fire spuriously during a project switch or after the machine wakes.
+
+`getWorktreesResult()` is the same read with that ambiguity removed (#12174):
+
+```ts
+type PluginWorktreesResult =
+  | { status: "ok"; projectId: string; worktrees: PluginWorktreeSnapshot[] }
+  | { status: "unavailable"; reason: PluginWorktreesUnavailableReason };
+
+type PluginWorktreesUnavailableReason =
+  | "plugin-unloaded" // unloaded, or replaced by a same-id reload, mid-read
+  | "workspace-unavailable" // no workspace client yet, or the host missed its readiness gate
+  | "scope-unresolved" // an app-global plugin found no focused project view
+  | "project-unavailable" // a bound host's project has no root, or has closed
+  | "fetch-failed"; // a live host was asked and the read threw
+```
+
+`status: "ok"` is the only authoritative answer, and it names the project it describes. That second half matters as much as the first: an app-global (unbound) plugin reads whichever project is focused, and mid-switch that can still be the *outgoing* project — so a populated list that omits the worktree you are looking for may simply belong to a different project rather than confirm a mismatch. Compare `projectId` before drawing any conclusion from the contents.
+
+Guard a binding validator like this:
+
+```ts
+const result = await host.getWorktreesResult();
+
+// No answer — keep whatever you cached and try again later. Do not diagnose.
+if (result.status !== "ok") return;
+
+// A valid answer, but about a different project than the one you care about.
+if (result.projectId !== storedProjectId) return;
+
+const match = result.worktrees.find((w) => w.worktreeId === storedWorktreeId);
+if (!match) {
+  // Only now is the absence authoritative.
+}
+```
+
+Like `getWorktrees()`, this never throws: once the plugin unloads it degrades to `{ status: "unavailable", reason: "plugin-unloaded" }`. `getWorktrees()` and `getActiveWorktree()` are unchanged and remain the right call when a missing worktree is not load-bearing.
 
 **`PluginWorktreeSnapshot` shape:**
 

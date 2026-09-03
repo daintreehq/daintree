@@ -27,6 +27,11 @@ function makeHost() {
     broadcastToRenderer: vi.fn(),
     getActiveWorktree: vi.fn(async () => null),
     getWorktrees: vi.fn(async () => [{ id: "w1" }]),
+    getWorktreesResult: vi.fn(async () => ({
+      status: "ok",
+      projectId: "project-1",
+      worktrees: [{ id: "w1" }],
+    })),
     onDidChangeActiveWorktree: vi.fn((_cb: any) => vi.fn()),
     onDidChangeWorktrees: vi.fn((_cb: any) => vi.fn()),
     registerForgeProvider: vi.fn(() => vi.fn()),
@@ -176,6 +181,23 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(host.getWorktrees).toHaveBeenCalled();
     const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c1");
     expect(result).toMatchObject({ ok: true, result: [{ id: "w1" }] });
+  });
+
+  it("relays getWorktreesResult and returns the union object unchanged (#12174)", async () => {
+    const { host, workerHost } = makeBridge();
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "c-wr",
+      method: "getWorktreesResult",
+      params: undefined,
+    });
+    await flush();
+    expect(host.getWorktreesResult).toHaveBeenCalled();
+    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "c-wr");
+    expect(result).toMatchObject({
+      ok: true,
+      result: { status: "ok", projectId: "project-1", worktrees: [{ id: "w1" }] },
+    });
   });
 
   it("routes clipboard.writeText to the host and replies with undefined", async () => {

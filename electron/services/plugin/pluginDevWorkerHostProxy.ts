@@ -28,6 +28,7 @@ import type {
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
   PluginWorktreeStatus,
+  PluginWorktreesResult,
   PluginAgentSnapshot,
   PluginPanelLifecycleEvent,
   PluginFsDirEntry,
@@ -440,6 +441,15 @@ export class PluginDevWorkerHostProxy {
       getActiveWorktree: () =>
         this.call<PluginWorktreeSnapshot | null>("getActiveWorktree", undefined),
       getWorktrees: () => this.call<PluginWorktreeSnapshot[]>("getWorktrees", undefined),
+      // callWithGrace, not call: the host contract for this method is that it
+      // degrades to an `unavailable` result on unload rather than throwing, so a
+      // dev-worker call in flight when the proxy is disposed must resolve the
+      // same way the real host would (#12174).
+      getWorktreesResult: () =>
+        this.callWithGrace<PluginWorktreesResult>("getWorktreesResult", undefined, {
+          status: "unavailable",
+          reason: "plugin-unloaded",
+        }),
       getWorktreeStatus: (path, options) =>
         this.call<PluginWorktreeStatus | null>("getWorktreeStatus", path, options?.signal),
       getAgentState: () => this.call<PluginAgentSnapshot | null>("getAgentState", undefined),
