@@ -211,6 +211,204 @@ describe("host.fs containment + capability gating", () => {
   });
 });
 
+describe("host.fs.readdir detailed listing", () => {
+  it("returns only name and kind flags by default", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.writeFile(join(allowed, "a.txt"), "hello");
+
+    const [entry] = await host.fs.readdir(allowed);
+
+    expect(entry).toEqual({
+      name: "a.txt",
+      isDirectory: false,
+      isFile: true,
+      isSymbolicLink: false,
+    });
+    // The cheap read must stay cheap — no per-entry lstat is implied.
+    expect(entry?.size).toBeUndefined();
+    expect(entry?.mtimeMs).toBeUndefined();
+  });
+
+  it("supplies size and mtime for a detailed read", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.writeFile(join(allowed, "a.txt"), "hello");
+
+    const [entry] = await host.fs.readdir(allowed, { detail: true });
+
+    expect(entry?.name).toBe("a.txt");
+    expect(entry?.size).toBe(5);
+    expect(entry?.mtimeMs).toBeGreaterThan(0);
+  });
+
+  it("orders directories first, then by a numeric-aware name collation", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.writeFile(join(allowed, "file10.txt"), "x");
+    await fs.writeFile(join(allowed, "file2.txt"), "x");
+    await fs.writeFile(join(allowed, "alpha.txt"), "x");
+    await fs.mkdir(join(allowed, "zeta"));
+
+    const names = (await host.fs.readdir(allowed, { detail: true })).map((e) => e.name);
+
+    // `file2` before `file10` is the numeric collation; a plain sort would
+    // invert them, which is exactly what a plugin would get rolling its own.
+    expect(names).toEqual(["zeta", "alpha.txt", "file2.txt", "file10.txt"]);
+  });
+
+  it("reports a directory with no size", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.mkdir(join(allowed, "sub"));
+
+    const [entry] = await host.fs.readdir(allowed, { detail: true });
+
+    expect(entry?.isDirectory).toBe(true);
+    expect(entry?.size).toBeUndefined();
+  });
+
+  it("classifies a link to an in-scope file by its target", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.writeFile(join(allowed, "real.txt"), "hello");
+    await fs.symlink(join(allowed, "real.txt"), join(allowed, "link.txt"));
+
+    const entries = await host.fs.readdir(allowed, { detail: true });
+    const link = entries.find((e) => e.name === "link.txt");
+
+    expect(link?.isSymbolicLink).toBe(true);
+    expect(link?.symlink?.targetKind).toBe("file");
+    // A resolved link reports the target's size, because that is what opening
+    // the row would give you — not the byte length of the stored link string.
+    expect(link?.size).toBe(5);
+  });
+
+  it("classifies a link to an in-scope directory as descendable", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.mkdir(join(allowed, "realdir"));
+    await fs.symlink(join(allowed, "realdir"), join(allowed, "linkdir"));
+
+    const entries = await host.fs.readdir(allowed, { detail: true });
+    const link = entries.find((e) => e.name === "linkdir");
+
+    expect(link?.symlink?.targetKind).toBe("directory");
+    // `isDirectory` and `targetKind` must agree, or a consumer routing on one
+    // contradicts the other.
+    expect(link?.isDirectory).toBe(true);
+  });
+
+  it("marks a link leaving the plugin's scope as external and non-descendable", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const outside = join(baseDir, "outside");
+    await fs.mkdir(outside, { recursive: true });
+    await fs.symlink(outside, join(allowed, "escape"));
+
+    const entries = await host.fs.readdir(allowed, { detail: true });
+    const link = entries.find((e) => e.name === "escape");
+
+    // "external" is scoped to what THIS plugin may read, which is the only
+    // classification a plugin can act on.
+    expect(link?.symlink?.targetKind).toBe("external");
+    expect(link?.isDirectory).toBe(false);
+  });
+
+  it("marks a dangling link broken rather than external", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.symlink(join(allowed, "nothing-here"), join(allowed, "dangling"));
+
+    const entries = await host.fs.readdir(allowed, { detail: true });
+    const link = entries.find((e) => e.name === "dangling");
+
+    expect(link?.symlink?.targetKind).toBe("broken");
+  });
+
+  it("reports a link that resolves to nothing as neither file nor directory", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const outside = join(baseDir, "outside-dir");
+    await fs.mkdir(outside, { recursive: true });
+    await fs.symlink(join(allowed, "nothing-here"), join(allowed, "dangling"));
+    await fs.symlink(outside, join(allowed, "escape"));
+
+    const entries = await host.fs.readdir(allowed, { detail: true });
+    const dangling = entries.find((e) => e.name === "dangling");
+    const escape = entries.find((e) => e.name === "escape");
+
+    // Deriving isFile as `!isDirectory` would call both of these regular files
+    // and invite a plugin to read something that isn't there.
+    for (const entry of [dangling, escape]) {
+      expect(entry?.isFile).toBe(false);
+      expect(entry?.isDirectory).toBe(false);
+    }
+  });
+
+  it("describes a link by its target for both kind flags", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await fs.writeFile(join(allowed, "real.txt"), "hello");
+    await fs.mkdir(join(allowed, "realdir"));
+    await fs.symlink(join(allowed, "real.txt"), join(allowed, "tofile"));
+    await fs.symlink(join(allowed, "realdir"), join(allowed, "todir"));
+
+    const entries = await host.fs.readdir(allowed, { detail: true });
+    const toFile = entries.find((e) => e.name === "tofile");
+    const toDir = entries.find((e) => e.name === "todir");
+
+    expect(toFile?.isFile).toBe(true);
+    expect(toFile?.isDirectory).toBe(false);
+    expect(toDir?.isDirectory).toBe(true);
+    expect(toDir?.isFile).toBe(false);
+  });
+
+  it("never returns content or metadata for a target reached outside scope", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    const outside = join(baseDir, "outside");
+    await fs.mkdir(outside, { recursive: true });
+    await fs.writeFile(join(outside, "exists"), "secret");
+
+    // Both probes are lexically inside the allowed root, so the cheap
+    // out-of-scope rejection does not fire — they only leave scope once the
+    // intermediate link is resolved.
+    await fs.symlink(outside, join(allowed, "hop"));
+    await fs.symlink(join(allowed, "hop", "exists"), join(allowed, "probe-real"));
+    await fs.symlink(join(allowed, "hop", "absent"), join(allowed, "probe-absent"));
+
+    const entries = await host.fs.readdir(allowed, { detail: true });
+    const real = entries.find((e) => e.name === "probe-real");
+    const absent = entries.find((e) => e.name === "probe-absent");
+
+    // Neither is readable, and neither carries the target's size — an
+    // unresolved link reports no size at all, precisely so a link's own
+    // `lstat.size` (the byte length of the stored target string) is never
+    // mistaken for the target's. `mtimeMs` IS present, but it is the link
+    // entry's own, and that entry lives inside the allowed scope.
+    for (const entry of [real, absent]) {
+      expect(entry?.isFile).toBe(false);
+      expect(entry?.isDirectory).toBe(false);
+      expect(entry?.size).toBeUndefined();
+    }
+    const linkStat = await fs.lstat(join(allowed, "probe-real"));
+    expect(real?.mtimeMs).toBe(linkStat.mtimeMs);
+
+    // The two DO classify differently — an existing out-of-scope target reads
+    // "external", a missing one "broken" — so the pair is a one-bit existence
+    // probe for a path outside the declared scope. Pinned rather than removed
+    // because it is deliberate: the distinction is what lets the file browser
+    // tell a user "this link points outside your workspace" apart from "this
+    // link is dangling", and it hands a plugin nothing, since its `main` runs
+    // un-sandboxed and can stat that path through raw `node:fs` anyway. If
+    // host.fs ever becomes a real seal (D3), this is one of the seams to close.
+    expect(real?.symlink?.targetKind).toBe("external");
+    expect(absent?.symlink?.targetKind).toBe("broken");
+  });
+
+  it("still enforces containment and capability on a detailed read", async () => {
+    const host = registerPlugin(["fs:project-read"], [allowed]);
+    await expect(host.fs.readdir(join(baseDir, "outside"), { detail: true })).rejects.toThrow(
+      /PATH_NOT_ALLOWED/
+    );
+
+    const uncapable = registerPlugin([], [allowed]);
+    await expect(uncapable.fs.readdir(allowed, { detail: true })).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+  });
+});
+
 describe("host.fs.watch lifecycle", () => {
   it("invokes the callback on a change and tears down on unload", async () => {
     const host = registerPlugin(["fs:project-read"], [allowed]);

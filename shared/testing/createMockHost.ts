@@ -1239,12 +1239,28 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
             isDir.set(rest.slice(0, slash), true);
           }
         }
-        return [...isDir.entries()].map(([name, directory]) => ({
+        const entries = [...isDir.entries()].map(([name, directory]) => ({
           name,
           isDirectory: directory,
           isFile: !directory,
           isSymbolicLink: false,
+          // A detailed read promises size and mtime, so the mock supplies them
+          // rather than letting a plugin that reads `entry.size` pass here and
+          // fail against the real host. Written files have a real byte length;
+          // directories carry no size, matching the production listing. There
+          // are no symlinks to classify in an in-memory filesystem.
+          ...(options?.detail === true &&
+            !directory && { size: fsFiles.get(`${prefix}${name}`)?.length ?? 0 }),
+          ...(options?.detail === true && { mtimeMs: 0 }),
         }));
+        if (options?.detail !== true) return entries;
+        // Same ordering the production listing applies: directories first, then
+        // a numeric-aware name collation.
+        const collator = new Intl.Collator(undefined, { numeric: true });
+        return entries.sort((a, b) => {
+          if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+          return collator.compare(a.name, b.name);
+        });
       },
       async stat(targetPath, options) {
         options?.signal?.throwIfAborted();

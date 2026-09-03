@@ -2942,16 +2942,90 @@ interface PluginProcessApi {
      */
     spawn(command: string, options?: PluginProcessSpawnOptions): Promise<PluginProcessHandle>;
 }
+/**
+ * What a symbolic link points at, as classified by the host's listing.
+ * Present on a {@link PluginFsDirEntry} only for a detailed read of a link.
+ *
+ * Deliberately mirrors the classification Daintree's own file browser renders,
+ * so a plugin presenting a file tree does not have to re-derive it — resolving
+ * a link correctly means resolving it against the *canonical* directory it was
+ * listed from, which differs from the lexical parent whenever the listed
+ * directory is itself reached through a link.
+ */
+interface PluginFsSymlink {
+    /** Absolute path the link resolves to, the way the kernel would resolve it. */
+    target: string;
+    /**
+     * `"file"` and `"directory"` are the resolved, in-scope cases — the only two
+     * where `isDirectory` describes the target and descending is allowed.
+     * `"broken"` is a target that does not exist. `"external"` is a target that
+     * resolves outside the plugin's declared `scopes.fs.allowedPaths`, so the
+     * host will refuse to read it. `"unknown"` is a target that could not be
+     * classified at all (a link loop, permission denied) — kept distinct from
+     * `"external"` so a UI never reports a link as leaving scope when the truth
+     * is that it could not be read.
+     */
+    targetKind: "file" | "directory" | "broken" | "external" | "unknown";
+}
 /** One directory entry returned by {@link PluginFsApi.readdir}. */
 interface PluginFsDirEntry {
     /** Entry name (basename only — never a path). */
     name: string;
     /** True when the entry is a directory. */
     isDirectory: boolean;
-    /** True when the entry is a regular file. */
+    /**
+     * True when the entry is a regular file.
+     *
+     * On a detailed read a symbolic link is described by what it resolves to, so
+     * a link is `isFile` only when its `symlink.targetKind` is `"file"` — a
+     * broken or out-of-scope link is neither a file nor a directory, because
+     * there is nothing there to open. On a plain read this is the raw directory
+     * entry's own kind, so a link reads as neither file nor directory there.
+     *
+     * Caveat on a detailed read: a non-link entry that is neither a directory nor
+     * a regular file — a socket, fifo or device node — is reported as a file,
+     * because the underlying listing records only "directory or not". These do
+     * not occur in ordinary project trees; treat `isFile` as "not a directory"
+     * if your plugin might browse somewhere they do.
+     */
     isFile: boolean;
     /** True when the entry is a symbolic link (resolved containment still applies on read). */
     isSymbolicLink: boolean;
+    /**
+     * Size in bytes. Only present on a detailed read
+     * ({@link PluginFsReaddirOptions.detail}), and omitted there for directories
+     * and for an unresolved symlink — a link's own size is the byte length of the
+     * stored target string, which renders as a real but meaningless file size.
+     */
+    size?: number;
+    /**
+     * Last-modified time in epoch milliseconds. Only present on a detailed read.
+     * A resolved symlink reports its target's time, because that is what opening
+     * the entry would give you.
+     */
+    mtimeMs?: number;
+    /**
+     * Present only on a symbolic link, and only on a detailed read. Absence means
+     * the entry is a plain file or directory, which is why a consumer can keep
+     * reading `isDirectory` and ignore this field entirely.
+     */
+    symlink?: PluginFsSymlink;
+}
+/** Options for {@link PluginFsApi.readdir}. */
+interface PluginFsReaddirOptions extends PluginHostCallOptions {
+    /**
+     * Return the same metadata Daintree's own file listing produces — `size`,
+     * `mtimeMs`, symlink target and kind — with entries ordered directories-first
+     * and then by a numeric-aware name collation.
+     *
+     * Off by default: a plain read is one `readdir` syscall, while a detailed one
+     * additionally `lstat`s every entry and resolves every link, so the cost is
+     * opt-in rather than silently imposed on existing callers. Turn it on when
+     * you are presenting a file tree — deriving these per entry with your own
+     * {@link PluginFsApi.stat} calls costs one host round trip *per entry* and
+     * still would not reproduce the link classification or the ordering.
+     */
+    detail?: boolean;
 }
 /** File metadata returned by {@link PluginFsApi.stat}. */
 interface PluginFsStat {
@@ -3000,8 +3074,14 @@ interface PluginFsApi {
      * partial-write semantics are deliberately out of scope.
      */
     writeFile(filePath: string, contents: string): Promise<void>;
-    /** List a directory's immediate children. Rejects on a missing read capability or an out-of-scope path. */
-    readdir(dirPath: string, options?: PluginHostCallOptions): Promise<PluginFsDirEntry[]>;
+    /**
+     * List a directory's immediate children. Rejects on a missing read capability
+     * or an out-of-scope path.
+     *
+     * Pass `{ detail: true }` to get the metadata and ordering Daintree's own file
+     * browser uses — see {@link PluginFsReaddirOptions.detail}.
+     */
+    readdir(dirPath: string, options?: PluginFsReaddirOptions): Promise<PluginFsDirEntry[]>;
     /** Stat a path. Rejects on a missing read capability or an out-of-scope path. */
     stat(targetPath: string, options?: PluginHostCallOptions): Promise<PluginFsStat>;
     /**

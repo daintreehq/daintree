@@ -679,6 +679,39 @@ const dispose = await host.fs.watch(["/Users/me/.acme/data"], (changedPath) => {
 
 **Honest scope note:** `host.fs` gates the host-mediated path only. Your `main` is still un-sandboxed Node code (it runs in the plugin worker with full filesystem privileges) and can call raw `node:fs` directly, which the host cannot intercept until the sandbox/trust model changes (D3). `host.fs` gives a contained, audited path; it does not seal the un-mediated one.
 
+### `readdir` and the detailed listing
+
+`readdir` defaults to a bare directory read — one syscall, and each entry carries only `name` plus the three kind flags. That is the right cost when you are looking for a filename.
+
+It is the wrong cost when you are _presenting_ files. Pass `{ detail: true }` and you get the same listing Daintree's own file browser renders:
+
+```ts
+const entries = await host.fs.readdir(projectRoot, { detail: true });
+for (const entry of entries) {
+  // entry.size, entry.mtimeMs, entry.symlink?.target, entry.symlink?.targetKind
+}
+```
+
+What the detailed read adds beyond the flags:
+
+| Field | Notes |
+| --- | --- |
+| `size` | Bytes. Omitted for directories, and for a symlink whose target could not be resolved — a link's own size is the byte length of the stored target string, which renders as a real but meaningless file size. |
+| `mtimeMs` | Epoch milliseconds. A resolved symlink reports its **target's** time, because that is what opening the entry would give you. |
+| `symlink` | Present only on links: `target` (absolute, resolved the way the kernel would) and `targetKind`. |
+| ordering | Directories first, then a numeric-aware name collation — so `file2` sorts before `file10`, and ties break deterministically regardless of host locale. |
+
+`targetKind` is one of `"file"`, `"directory"`, `"broken"`, `"external"`, `"unknown"`. `"external"` means the target resolves **outside your declared `scopes.fs.allowedPaths`**, so the host will refuse to read it — the classification is scoped to what _your_ plugin may reach, not to some global notion of the workspace. It is kept distinct from `"unknown"` (a link loop, permission denied) so your UI never tells someone a link points out of scope when the truth is that it could not be read. `isDirectory` is true for a link only when `targetKind` is `"directory"`, so code routing on `isDirectory` alone stays correct and can ignore `symlink` entirely.
+
+Reach for `{ detail: true }` rather than calling `stat` per entry: that costs one host round trip **per entry**, and it still would not reproduce the link classification or the ordering. Both paths apply identical containment and capability checks; `detail` changes what is read, never what is allowed.
+
+Two things to know about the detailed path:
+
+- **`symlink.target` is an absolute path and may point outside your scope.** That is the point of `targetKind: "external"` — it tells you the link leaves what you may read. The host will refuse to read it, but the pathname itself is visible, because it is the literal content of a link that sits inside your scope.
+- **Errors read differently.** A plain read surfaces Node's own filesystem errors (`ENOTDIR`, `ENOENT`, with `err.code`); a detailed read surfaces the listing service's messages (`Path is not a directory: …`). The `PATH_NOT_ALLOWED:` and `PERMISSION_REQUIRED:` prefixes are unaffected — containment and capability are checked before either branch runs — so discriminating on those keeps working. Don't discriminate on `err.code` across both modes.
+
+`createMockHost` honours `detail` too, supplying `size`, `mtimeMs` and the same ordering for its in-memory files — an in-memory filesystem has no links to classify, so `symlink` is never present there.
+
 ## `git` — host-mediated git, scoped to a worktree
 
 ```ts

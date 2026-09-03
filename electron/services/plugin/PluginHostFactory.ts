@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { watchShared } from "../FileObservationService.js";
+import { fileTreeService } from "../FileTreeService.js";
 import { clipboard, shell } from "electron";
 import { decodeClipboardPng, MAX_CLIPBOARD_IMAGE_BYTES } from "../../utils/clipboardImage.js";
 import { assertExtensionAllowed } from "../../utils/executablePathGuard.js";
@@ -1944,10 +1945,59 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       options?.signal?.throwIfAborted();
       requireLoaded("readdir");
       requireAnyReadCap("readdir");
-      const { resolved, rootClass } = await containWithClass(dirPath);
+      const { resolved, rootClass, root } = await containWithClass(dirPath);
       options?.signal?.throwIfAborted();
       requireLoaded("readdir");
       requireReadCapForClass("readdir", rootClass);
+
+      if (options?.detail === true) {
+        // The same listing the built-in file browser renders, rather than a
+        // second implementation of ordering and symlink classification that
+        // would drift from it. Scoped to the allowed root that admitted this
+        // path, so `targetKind: "external"` means "outside what this plugin may
+        // read" — the classification a plugin actually needs.
+        // The DECLARED root is the base, not its realpath: `getFileTree`
+        // resolves the real one itself and uses both, and its symlink
+        // classification gates the raw link target lexically against the
+        // declared prefix first. Handing it an already-realpathed base makes
+        // every link written with the declared prefix (`/var/...` where the real
+        // path is `/private/var/...`) read as "external". The relative dir is
+        // still measured from the real root, because `resolved` is realpathed.
+        //
+        // This does mean the declared root is traversed a second time, after
+        // authorization — so a declared root that is itself a symlink, swapped
+        // between the two, would list the new target. That window grants a
+        // plugin nothing: its `main` runs un-sandboxed and can read either
+        // directory through raw `node:fs` regardless (see the honest-scope note
+        // in docs/plugins/host-api.md). Closing it properly needs `getFileTree`
+        // to take the traversal base and the classification spelling
+        // separately, which is a change to a surface the file browser shares.
+        const realRoot = await fs.realpath(root);
+        options?.signal?.throwIfAborted();
+        const nodes = await fileTreeService.getFileTree(root, path.relative(realRoot, resolved));
+        options?.signal?.throwIfAborted();
+        return nodes.map((node): PluginFsDirEntry => {
+          const symlink = node.symlink;
+          return {
+            name: node.name,
+            isDirectory: node.isDirectory,
+            // A link is described by what it resolves to, exactly as
+            // `isDirectory` already is — so a link that resolves to nothing
+            // readable (broken, out of scope, unclassifiable) is neither a file
+            // nor a directory. Reporting `!isDirectory` here would have called
+            // every dangling link a regular file and invited a plugin to read
+            // it.
+            isFile: symlink ? symlink.targetKind === "file" : !node.isDirectory,
+            isSymbolicLink: symlink !== undefined,
+            ...(node.size !== undefined && { size: node.size }),
+            ...(node.mtimeMs !== undefined && { mtimeMs: node.mtimeMs }),
+            ...(symlink && {
+              symlink: { target: symlink.target, targetKind: symlink.targetKind },
+            }),
+          };
+        });
+      }
+
       const entries = await fs.readdir(resolved, { withFileTypes: true });
       return entries.map((e): PluginFsDirEntry => ({
         name: e.name,
@@ -2200,13 +2250,16 @@ async function containToDeclaredRoots(
   deps: PluginHostFactoryDeps,
   pluginId: string,
   targetPath: string
-): Promise<{ resolved: string; rootClass: FsRootClass }> {
+): Promise<{ resolved: string; rootClass: FsRootClass; root: string }> {
   const entries = await deps.expandAllowedPathEntries(pluginId, { includeDataDir: true });
   let lastErr: unknown;
   for (const entry of entries) {
     try {
       const resolved = await resolveContainedPath(pluginId, targetPath, [entry.path]);
-      return { resolved, rootClass: entry.rootClass };
+      // The matching root travels with the result so a caller that needs to
+      // reason about scope — a detailed listing classifying whether a symlink
+      // leaves it — does not have to rediscover which root allowed the path.
+      return { resolved, rootClass: entry.rootClass, root: entry.path };
     } catch (err) {
       lastErr = err;
     }

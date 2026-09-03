@@ -472,8 +472,10 @@ export class PluginDevWorkerMainBridge {
         await this.host.fs.writeFile(p.path, p.contents);
         return undefined;
       }
-      case "fs.readdir":
-        return this.host.fs.readdir((params as FsPathParams).path, { signal });
+      case "fs.readdir": {
+        const p = params as FsPathParams;
+        return this.host.fs.readdir(p.path, { signal, ...(p.detail === true && { detail: true }) });
+      }
       case "fs.stat":
         return this.host.fs.stat((params as FsPathParams).path, { signal });
       case "fs.watch": {
