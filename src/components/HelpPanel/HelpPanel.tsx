@@ -1437,6 +1437,12 @@ export function HelpPanel({
         activeSlot={activeSlot}
         onSelect={handleSelectSlot}
         onClose={handleCloseSlot}
+        // The same capability and the same handler the overflow menu's "Open
+        // parallel session" uses. Given to the strip as well because that is
+        // where a tab set's new-tab control belongs, and because the menu item
+        // was the only route to it.
+        canOpenSession={canOpenParallelSession}
+        onOpenSession={handleOpenParallelSession}
       />
 
       {/* One runtime per open lane. Background lanes need theirs so a session

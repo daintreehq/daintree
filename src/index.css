@@ -2507,6 +2507,70 @@ label:focus-within .brand-mark,
   }
 }
 
+/* The assistant session strip's selected-tab mark.
+ *
+ * The same problem the palette rail solves, turned on its side. `overlay-raised`
+ * is a 4% additive fill on dark and clears about 1.1:1, so it cannot be the
+ * WCAG 1.4.11 indicator on its own — which is exactly how this strip shipped:
+ * a 2% `overlay-subtle` chip and a font weight, and no reliable way to tell
+ * Session 1 from Session 2. `selection-outline` carries the ratio, spent on a
+ * rail rather than an enclosure, for the same reason it is a rail in the
+ * palette: an indicator has to meet the ratio, not surround the component.
+ *
+ * A BOTTOM rail, not a leading one. These are tabs, and the edge a tab set is
+ * read along is the one it shares with the body below it — a leading rail here
+ * would land beside the lane's state marker and put two small marks in one
+ * gutter, the collision the palette note describes.
+ *
+ * And ON that shared edge, not merely near it. The chip sits in the strip's 4px
+ * of vertical padding, so a rail at `bottom: 0` floated four pixels clear of the
+ * seam and read as an underline drawn inside a pill — a chip that happens to be
+ * underlined, rather than the tab its content belongs to. Pulled down onto the
+ * strip's own boundary it does the job the mark is for: it joins the selected
+ * lane to the body below and breaks the divider that separates the other two
+ * from it. `-0.25rem` is the strip's `py-1`, and the two have to stay in step.
+ *
+ * Full-width rather than inset, for the same reason: an inset rail is a mark
+ * under a label, a full-width one is the tab's edge. It is drawn outside the
+ * chip's own box, so the chip's radius does not clip its ends.
+ *
+ * Not logical-property flipped: `bottom` is the same edge under RTL.
+ */
+.session-tab::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: -0.25rem;
+  height: 2px;
+  /* A pill, like the palette's: at 2px any radius above 1px is the same shape,
+     so a scale step would only make it theme-dependent. */
+  border-radius: 9999px;
+  background: var(--color-selection-outline);
+  opacity: 0;
+  pointer-events: none;
+  /* The same slot the chip's fill fades in on, so the mark and the surface
+     under it arrive together rather than one popping over the other. */
+  transition: opacity var(--duration-150) ease-out;
+}
+
+.session-tab[data-active="true"]::after {
+  opacity: 1;
+}
+
+@variant reduce-motion {
+  /* The chip, its rail, AND the two controls inside it. The chip's fill is only
+     one of four things that move on a tab switch — the label's colour, the close
+     control's opacity and its own hover fill are the others — so stopping the
+     wrapper alone would still cross-fade most of the change. Reaching the
+     buttons here rather than at each call site keeps the tab's motion answered
+     in one place, the way the palette row's is. */
+  .session-tab,
+  .session-tab::after,
+  .session-tab button {
+    transition: none;
+  }
+}
+
 /* Success fade - scale in then fade out */
 @keyframes forge-status-success-fade {
   0% {
@@ -2867,6 +2931,16 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 
   .palette-row[aria-selected="true"] {
+    outline: 2px solid SelectedItem;
+    outline-offset: -2px;
+  }
+
+  /* The selected session tab is a raised fill plus a neutral rail, and forced
+     colors strips both — `background-color` on the chip and on the rail alike.
+     An outline like the palette row's, and for the same reason: the tab carries
+     an independently coloured child (the lane's state glyph), and a SelectedItem
+     fill would leave that painting on a pair with no contrast guarantee. */
+  .session-tab[data-active="true"] {
     outline: 2px solid SelectedItem;
     outline-offset: -2px;
   }
