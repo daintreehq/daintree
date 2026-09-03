@@ -20,11 +20,14 @@ import type {
   PendingHelpHibernationStore,
 } from "./PendingHelpHibernationStore.js";
 import {
+  ASSISTANT_LANE_CONFIG_DIR,
   ASSISTANT_SLOTS,
-  assistantSlotDirName,
+  assistantLaneMcpConfigName,
+  assistantSessionDirName,
   assistantSlotKey,
+  isAssistantSessionDirName,
   isValidAssistantSlot,
-  parseAssistantSlotDirName,
+  sessionIdFromLaneMcpConfigName,
 } from "../../shared/config/assistantSlots.js";
 
 // Narrow type so the test suite (and any future caller) can satisfy this
@@ -168,6 +171,15 @@ interface HelpSessionRecord {
   /** Computed at provision for copilot sessions; consumed by lifecycle.ts. */
   copilotLaunchArgs?: string[];
   /**
+   * Claude sessions only: the per-lane `--mcp-config` file holding this lane's
+   * literal bearer. Lives inside the shared session directory under
+   * `ASSISTANT_LANE_CONFIG_DIR`, is removed on revoke, and is what lets three
+   * lanes share one cwd without sharing one `.mcp.json`.
+   */
+  laneMcpConfigPath?: string;
+  /** Computed at provision for claude sessions; consumed by lifecycle.ts. */
+  claudeLaunchArgs?: string[];
+  /**
    * Per-session scratch directory under
    * `userData/assistant-scratch/<instanceId>/<sessionId>/`. Cleared on every
    * app start; injected into the PTY spawn env as `DAINTREE_ASSISTANT_SCRATCH_DIR`
@@ -279,7 +291,11 @@ async function readTemplateHashStamp(sessionPath: string): Promise<string | null
  * so provisioning fails closed and the renderer shows a retryable error.
  */
 export type HelpSessionErrorCode =
-  "MCP_NOT_READY" | "MCP_SERVER_NOT_STARTED" | "MCP_PROBE_FAILED" | "USER_CONTENT_SYNC_FAILED";
+  | "MCP_NOT_READY"
+  | "MCP_SERVER_NOT_STARTED"
+  | "MCP_PROBE_FAILED"
+  | "USER_CONTENT_SYNC_FAILED"
+  | "MIXED_AGENT_LANES";
 
 export class HelpSessionError extends Error {
   readonly code: HelpSessionErrorCode;
@@ -686,10 +702,13 @@ export class HelpSessionService {
    * launches so Claude Code's per-folder workspace-trust prompt only fires
    * once per project; the .mcp.json bearer is rotated on every provision.
    *
-   * On every call:
+   * One directory serves every lane of the project. On every call:
    *   1. Copy the bundled help/ template into the dir (overwrites — picks up
    *      bundled-asset updates without losing the trust acceptance).
-   *   2. Overwrite .mcp.json with a fresh literal-token Authorization header.
+   *   2. Write this lane's MCP wiring: for Claude, a per-lane `--mcp-config`
+   *      file under `.lanes/` carrying the fresh literal bearer, with the
+   *      shared `.mcp.json` left empty; for Copilot, the shared `.mcp.json`
+   *      with an env placeholder; nothing on disk for Codex.
    *   3. Overlay .claude/settings.json with current `helpAssistant` settings.
    *   4. Stamp meta.json with the project identity for GC.
    */
@@ -709,8 +728,8 @@ export class HelpSessionService {
     // (`/work/p` vs `/work/p/`): they would hash apart, both run
     // `displacePriorSessions` before either registered its record, and both
     // end up live in one lane. Different lanes and different projects still
-    // provision in parallel, which is all the parallelism this needs — each
-    // lane writes its own `.mcp.json` in its own directory.
+    // provision in parallel here; the shared session DIRECTORY they write into
+    // is serialized separately, inside `doProvision`.
     const pathHash = projectPathHash(input.projectPath);
     const lockKey = assistantSlotKey(input.projectId, input.slot ?? 0);
     const previous = this.provisionLocks.get(lockKey);
@@ -757,7 +776,11 @@ export class HelpSessionService {
     const sessionId = randomUUID();
     const token = randomBytes(SESSION_TOKEN_BYTES).toString("hex");
     const sessionsRoot = this.getSessionsRoot();
-    const sessionPath = path.join(sessionsRoot, assistantSlotDirName(pathHash, slot));
+    // One directory per PROJECT, shared by every lane. Claude's workspace-trust
+    // and `.mcp.json` approval prompts are both per folder, so this is what
+    // makes them fire once per project rather than once per lane. Anything a
+    // lane must not share — its MCP bearer — lives in a per-lane file below.
+    const sessionPath = path.join(sessionsRoot, assistantSessionDirName(pathHash));
 
     if (settings.daintreeControl) {
       try {
@@ -787,124 +810,167 @@ export class HelpSessionService {
     // switch, hibernate race).
     this.displacePriorSessions(input.projectId, slot);
 
-    await fs.mkdir(sessionsRoot, { recursive: true, mode: 0o700 });
-    await fs.chmod(sessionsRoot, 0o700).catch(() => {});
-    // Hash-gate the template overwrite (#7525). `fs.cp` is non-atomic — a
-    // crash mid-copy would leave a torn session dir whose template files
-    // are a mix of old and new. Most launches see an unchanged template
-    // (same app version since last open), so we skip the copy entirely
-    // when the on-disk stamp matches the bundled hash. The stamp is only
-    // written AFTER `fs.cp` resolves, so a failed copy never marks itself
-    // as valid: next launch sees the mismatch and re-runs the copy.
-    //
-    // The `.mcp.json`, `.claude/settings.json`, and `meta.json` writes
-    // below stay unconditional — those carry per-session secrets (rotated
-    // bearer, current user settings) and are not template content.
-    const sourceHash = await computeTemplateHash(helpFolder);
-    const existingHash = await readTemplateHashStamp(sessionPath);
-    if (existingHash !== sourceHash) {
-      // `force: true` is the default — overwrites existing files in the dir
-      // with the bundled template, picking up any updates to CLAUDE.md /
-      // settings baseline / etc. without losing Claude Code's per-folder trust
-      // acceptance (which lives in ~/.claude.json, not here).
-      await fs.cp(helpFolder, sessionPath, { recursive: true });
-      await resilientAtomicWriteFile(
-        path.join(sessionPath, TEMPLATE_HASH_FILE),
-        sourceHash + "\n",
-        "utf-8",
-        { mode: 0o600 }
-      );
-    }
-    await fs.chmod(sessionPath, 0o700).catch(() => {});
-
-    // Mirror user-authored commands/skills from ~/.daintree/assistant and
-    // <project>/.daintree/assistant into the session dir so the launched CLI
-    // discovers them through its native cwd-scoped mechanisms. Runs after the
-    // template copy and unconditionally — the template hash gate doesn't
-    // cover user content, which changes independently of app version.
-    //
-    // Failure policy: invalid or unwritable NEW content is safely omitted (the
-    // assistant just launches without it), but content that would run STALE —
-    // an unreadable source (desired state unprovable) or a managed skill that
-    // should be gone yet is still on disk — fails the provision closed. A
-    // session quietly running deleted or superseded skill instructions is
-    // worse than a retryable launch error.
-    let syncResult;
-    try {
-      syncResult = await syncAssistantContent({
-        sessionPath,
-        projectPath: input.projectPath,
-        agentId: input.agentId,
-      });
-    } catch (err) {
-      const reason = formatErrorMessage(err, "couldn't read the assistant content folders");
+    // One agent per project's lanes. The shared directory holds files that are
+    // agent-shaped as well as lane-shaped: the user-content mirror writes each
+    // agent's skills and removes the other's, Copilot needs the shared
+    // `.mcp.json` that a Claude provision empties, and the settings overlay is
+    // Claude's. Serializing the writes keeps them whole; it does not make two
+    // agents' versions of them coexist. The renderer already keeps lanes on one
+    // preferred agent, so this only ever fires for an explicit `help.launch` of
+    // a different agent while a sibling is live, and it fails closed with a
+    // reason rather than letting that lane quietly clobber its sibling's setup.
+    const liveSibling = [...this.sessionsByToken.values()].find(
+      (record) =>
+        !record.revoked &&
+        record.projectId === input.projectId &&
+        record.slot !== slot &&
+        record.agentId !== input.agentId
+    );
+    if (liveSibling) {
       throw new HelpSessionError(
-        "USER_CONTENT_SYNC_FAILED",
-        `Couldn't refresh the project's assistant commands and skills: ${reason}`
+        "MIXED_AGENT_LANES",
+        `Another session in this project is running ${liveSibling.agentId}; sessions of one project share a folder and have to use the same agent. Stop it first, or open the new session with ${liveSibling.agentId}.`
       );
     }
-    if (syncResult) {
-      if (syncResult.omittedSkills.length > 0 || syncResult.failedCopies.length > 0) {
-        console.warn(
-          "[HelpSessionService] Assistant content partially mirrored; launching without:",
-          {
+
+    // Every lane of a project provisions into ONE directory, so the file work
+    // below is serialized per directory as well as per lane. The lane lock
+    // above guards the single-backend invariant; this one guards the template
+    // copy and its hash stamp, the user-content mirror and its manifest, the
+    // markdown scratch addendum and the shared `.mcp.json` — all of which two
+    // lanes provisioning at once would otherwise write over each other.
+    const { scratchPath, port, laneMcpConfigPath } = await this.withDirectoryLock(
+      pathHash,
+      async () => {
+        await fs.mkdir(sessionsRoot, { recursive: true, mode: 0o700 });
+        await fs.chmod(sessionsRoot, 0o700).catch(() => {});
+        // Hash-gate the template overwrite (#7525). `fs.cp` is non-atomic — a
+        // crash mid-copy would leave a torn session dir whose template files
+        // are a mix of old and new. Most launches see an unchanged template
+        // (same app version since last open), so we skip the copy entirely
+        // when the on-disk stamp matches the bundled hash. The stamp is only
+        // written AFTER `fs.cp` resolves, so a failed copy never marks itself
+        // as valid: next launch sees the mismatch and re-runs the copy.
+        //
+        // The `.mcp.json`, `.claude/settings.json`, and `meta.json` writes
+        // below stay unconditional — those carry per-session secrets (rotated
+        // bearer, current user settings) and are not template content.
+        const sourceHash = await computeTemplateHash(helpFolder);
+        const existingHash = await readTemplateHashStamp(sessionPath);
+        if (existingHash !== sourceHash) {
+          // `force: true` is the default — overwrites existing files in the dir
+          // with the bundled template, picking up any updates to CLAUDE.md /
+          // settings baseline / etc. without losing Claude Code's per-folder trust
+          // acceptance (which lives in ~/.claude.json, not here).
+          await fs.cp(helpFolder, sessionPath, { recursive: true });
+          await resilientAtomicWriteFile(
+            path.join(sessionPath, TEMPLATE_HASH_FILE),
+            sourceHash + "\n",
+            "utf-8",
+            { mode: 0o600 }
+          );
+        }
+        await fs.chmod(sessionPath, 0o700).catch(() => {});
+
+        // Mirror user-authored commands/skills from ~/.daintree/assistant and
+        // <project>/.daintree/assistant into the session dir so the launched CLI
+        // discovers them through its native cwd-scoped mechanisms. Runs after the
+        // template copy and unconditionally — the template hash gate doesn't
+        // cover user content, which changes independently of app version.
+        //
+        // Failure policy: invalid or unwritable NEW content is safely omitted (the
+        // assistant just launches without it), but content that would run STALE —
+        // an unreadable source (desired state unprovable) or a managed skill that
+        // should be gone yet is still on disk — fails the provision closed. A
+        // session quietly running deleted or superseded skill instructions is
+        // worse than a retryable launch error.
+        let syncResult;
+        try {
+          syncResult = await syncAssistantContent({
             sessionPath,
-            omittedSkills: syncResult.omittedSkills,
-            failedCopies: syncResult.failedCopies,
+            projectPath: input.projectPath,
+            agentId: input.agentId,
+          });
+        } catch (err) {
+          const reason = formatErrorMessage(err, "couldn't read the assistant content folders");
+          throw new HelpSessionError(
+            "USER_CONTENT_SYNC_FAILED",
+            `Couldn't refresh the project's assistant commands and skills: ${reason}`
+          );
+        }
+        if (syncResult) {
+          if (syncResult.omittedSkills.length > 0 || syncResult.failedCopies.length > 0) {
+            console.warn(
+              "[HelpSessionService] Assistant content partially mirrored; launching without:",
+              {
+                sessionPath,
+                omittedSkills: syncResult.omittedSkills,
+                failedCopies: syncResult.failedCopies,
+              }
+            );
           }
-        );
+          if (syncResult.staleFailures.length > 0) {
+            // Name the session dir: a stale file that survives removal (symlinked
+            // chain, or a directory where a managed file belongs) fails every
+            // retry identically, so clearing that path by hand is the only fix.
+            console.warn(
+              "[HelpSessionService] Assistant content sync left stale managed files; clear this session directory to recover:",
+              { sessionPath, staleFailures: syncResult.staleFailures }
+            );
+            throw new HelpSessionError(
+              "USER_CONTENT_SYNC_FAILED",
+              `Couldn't refresh the project's assistant commands and skills — outdated copies still present in the session directory ${sessionPath}: ${syncResult.staleFailures.join(", ")}`
+            );
+          }
+        }
+
+        // Per-session scratch dir under `userData/assistant-scratch/<instanceId>/`.
+        // Cleared on every app start by `AssistantScratchService`. Created
+        // unconditionally outside the template hash gate so the path is always
+        // valid for this provision — agents won't see a missing dir behind the
+        // `DAINTREE_ASSISTANT_SCRATCH_DIR` env var. Failure to create propagates
+        // (rather than being swallowed) because launching with a stale or missing
+        // scratch path is worse than a clean provision failure.
+        const scratchPath = getScratchDirForSession(sessionId);
+        await fs.mkdir(scratchPath, { recursive: true, mode: 0o700 });
+        await fs.chmod(scratchPath, 0o700).catch(() => {});
+
+        // Write the scratch-path addendum to each per-agent markdown file in the
+        // session dir. Unconditional — must run even when the template hash gate
+        // above skips `fs.cp`, otherwise a stale path from a prior session would
+        // persist (`scratchPath` changes every provision because `sessionId` does).
+        // Uses managed markers so re-provision replaces the block in place instead
+        // of accumulating duplicate stanzas.
+        await this.writeScratchAddendum(sessionPath, scratchPath);
+
+        const port = await this.getMcpPort(settings.daintreeControl);
+        let laneMcpConfigPath: string | undefined;
+        if (input.agentId === "claude") {
+          laneMcpConfigPath = await this.writeClaudeMcpConfig(
+            sessionPath,
+            slot,
+            sessionId,
+            settings,
+            port,
+            token
+          );
+          await this.writeClaudeSettings(sessionPath, helpFolder, settings);
+        } else if (input.agentId === "copilot") {
+          await this.writeCopilotMcpConfig(sessionPath, settings, port);
+        } else {
+          // Codex and any other agent skip `writeMcpConfig`, so when the
+          // template hash gate (#7525) also skips `fs.cp`, a `.mcp.json` from a
+          // prior Claude provision for this same project keeps its stale
+          // `daintree` Bearer in cwd. The bearer is already revoked in-memory
+          // (single-backend invariant), but before the gate, `fs.cp` would
+          // have restored the bundled `.mcp.json` and wiped the entry. Strip
+          // it now to preserve that hygiene — no-op when the entry is absent
+          // or its bearer is still live.
+          await this.stripStaleDaintreeMcpEntry(sessionPath);
+        }
+        return { scratchPath, port, laneMcpConfigPath };
       }
-      if (syncResult.staleFailures.length > 0) {
-        // Name the session dir: a stale file that survives removal (symlinked
-        // chain, or a directory where a managed file belongs) fails every
-        // retry identically, so clearing that path by hand is the only fix.
-        console.warn(
-          "[HelpSessionService] Assistant content sync left stale managed files; clear this session directory to recover:",
-          { sessionPath, staleFailures: syncResult.staleFailures }
-        );
-        throw new HelpSessionError(
-          "USER_CONTENT_SYNC_FAILED",
-          `Couldn't refresh the project's assistant commands and skills — outdated copies still present in the session directory ${sessionPath}: ${syncResult.staleFailures.join(", ")}`
-        );
-      }
-    }
-
-    // Per-session scratch dir under `userData/assistant-scratch/<instanceId>/`.
-    // Cleared on every app start by `AssistantScratchService`. Created
-    // unconditionally outside the template hash gate so the path is always
-    // valid for this provision — agents won't see a missing dir behind the
-    // `DAINTREE_ASSISTANT_SCRATCH_DIR` env var. Failure to create propagates
-    // (rather than being swallowed) because launching with a stale or missing
-    // scratch path is worse than a clean provision failure.
-    const scratchPath = getScratchDirForSession(sessionId);
-    await fs.mkdir(scratchPath, { recursive: true, mode: 0o700 });
-    await fs.chmod(scratchPath, 0o700).catch(() => {});
-
-    // Write the scratch-path addendum to each per-agent markdown file in the
-    // session dir. Unconditional — must run even when the template hash gate
-    // above skips `fs.cp`, otherwise a stale path from a prior session would
-    // persist (`scratchPath` changes every provision because `sessionId` does).
-    // Uses managed markers so re-provision replaces the block in place instead
-    // of accumulating duplicate stanzas.
-    await this.writeScratchAddendum(sessionPath, scratchPath);
-
-    const port = await this.getMcpPort(settings.daintreeControl);
-    if (input.agentId === "claude") {
-      await this.writeMcpConfig(sessionPath, settings, port, token);
-      await this.writeClaudeSettings(sessionPath, helpFolder, settings);
-    } else if (input.agentId === "copilot") {
-      await this.writeCopilotMcpConfig(sessionPath, settings, port);
-    } else {
-      // Codex and any other agent skip `writeMcpConfig`, so when the
-      // template hash gate (#7525) also skips `fs.cp`, a `.mcp.json` from a
-      // prior Claude provision for this same project keeps its stale
-      // `daintree` Bearer in cwd. The bearer is already revoked in-memory
-      // (single-backend invariant), but before the gate, `fs.cp` would
-      // have restored the bundled `.mcp.json` and wiped the entry. Strip
-      // it now to preserve that hygiene — no-op when the entry is absent
-      // or its bearer is still live.
-      await this.stripStaleDaintreeMcpEntry(sessionPath);
-    }
+    );
     // Codex doesn't read project-scoped `.codex/config.toml` from cwd —
     // its only mechanism for overriding the global config is the `-c key=value`
     // CLI flag (verified against codex-cli 0.129.0). MCP servers are appended
@@ -921,6 +987,9 @@ export class HelpSessionService {
         : undefined;
     const copilotLaunchArgs =
       input.agentId === "copilot" ? this.buildCopilotLaunchArgs() : undefined;
+    // Claude reads its MCP wiring from the per-lane file rather than the
+    // shared cwd `.mcp.json`; the flag is the only way that file reaches it.
+    const claudeLaunchArgs = laneMcpConfigPath ? ["--mcp-config", laneMcpConfigPath] : undefined;
 
     const now = Date.now();
     const record: HelpSessionRecord = {
@@ -941,6 +1010,8 @@ export class HelpSessionService {
       actionContext: input.actionContext,
       codexLaunchArgs,
       copilotLaunchArgs,
+      laneMcpConfigPath,
+      claudeLaunchArgs,
       scratchPath,
     };
 
@@ -957,8 +1028,8 @@ export class HelpSessionService {
       try {
         if (input.agentId === "claude") {
           // Claude Code reads SSE at /sse with a literal bearer baked into
-          // `.mcp.json`. Both probes warm the same in-memory MCP token
-          // map, so neither leaks across agents.
+          // its lane's `--mcp-config` file. Both probes warm the same
+          // in-memory MCP token map, so neither leaks across agents.
           await probeMcpSseServer(port, token);
         } else {
           // Codex and Copilot both speak Streamable HTTP at /mcp. Codex
@@ -973,6 +1044,9 @@ export class HelpSessionService {
         this.sessionsById.delete(sessionId);
         if (input.agentId === "claude" || input.agentId === "copilot") {
           await this.stripStaleDaintreeMcpEntry(sessionPath);
+          // The lane file was written moments ago with the bearer the probe just
+          // proved dead; a failed provision must not leave it behind.
+          await this.removeLaneMcpConfig(laneMcpConfigPath);
         }
         const reason = formatErrorMessage(err, "assistant MCP session isn't ready");
         await this.recordMcpNotReady(sessionId, reason);
@@ -1079,11 +1153,11 @@ export class HelpSessionService {
    * Invalidates the in-memory bearer for this session. The on-disk dir is
    * intentionally preserved across launches so the user's one-time Claude
    * Code workspace-trust acceptance for this project carries over to the
-   * next assistant open — but the literal bearer is stripped from
-   * `.mcp.json` so a `claude` started outside the help-panel flow (e.g. a
-   * stray terminal `cd`-ed into the session dir) can't keep authenticating
-   * against the now-revoked record. The next provision rewrites a fresh
-   * entry into the same file.
+   * next assistant open — but this lane's `--mcp-config` file is removed and
+   * any literal bearer is stripped from the shared `.mcp.json`, so a `claude`
+   * started outside the help-panel flow (e.g. a stray terminal `cd`-ed into
+   * the session dir) can't keep authenticating against the now-revoked
+   * record. The next provision writes a fresh lane file.
    *
    * Pass `{ captureHibernation: true }` for the eviction / window-close
    * paths: instead of a hard kill, the bound PTY is graceful-killed so the
@@ -1240,12 +1314,17 @@ export class HelpSessionService {
       this.pendingCapturesBySlotKey.delete(slotKey);
     }
 
-    // Claude bakes a literal session bearer into `.mcp.json`; Copilot
-    // references the same file with `$DAINTREE_MCP_TOKEN` substitution.
-    // Both need the daintree entry stripped on revoke so a stray agent
-    // started outside the help-panel flow in that cwd can't keep talking
-    // to the now-revoked MCP route. Codex stores nothing on disk (uses
-    // `-c` flags), so no file-strip is needed.
+    // Claude's literal session bearer lives in this lane's own `--mcp-config`
+    // file: remove it, so nothing on disk names a route that no longer
+    // answers. The shared `.mcp.json` is also stripped for both Claude and
+    // Copilot (Copilot references it with `$DAINTREE_MCP_TOKEN` substitution,
+    // and a pre-shared-directory install may still have a literal Claude
+    // bearer in it) so a stray agent started outside the help-panel flow in
+    // that cwd can't keep talking to the revoked route. Codex stores nothing
+    // on disk (uses `-c` flags), so no file work is needed.
+    if (record.agentId === "claude") {
+      await this.removeLaneMcpConfig(record.laneMcpConfigPath);
+    }
     if (record.agentId === "claude" || record.agentId === "copilot") {
       await this.stripStaleDaintreeMcpEntry(record.sessionPath);
     }
@@ -1597,8 +1676,13 @@ export class HelpSessionService {
         const entryPath = path.join(sessionsRoot, entry);
         if (this.isProjectHashDirName(entry)) {
           await this.stripStaleDaintreeMcpEntry(entryPath);
+          await this.sweepStaleLaneConfigs(entryPath);
           return;
         }
+        // Everything else goes: per-launch UUID directories from the oldest
+        // model, and the `<hash>-sN` per-lane directories that preceded the
+        // shared one. Neither can be resumed from — their agents' resume ids
+        // were captured against a cwd nothing launches in any more.
         await this.removeSessionDir(entryPath);
       })
     );
@@ -1654,14 +1738,51 @@ export class HelpSessionService {
    * Whether `name` is a session directory we own and must keep.
    *
    * Load-bearing: `gcStaleSessions` recursively DELETES every directory this
-   * rejects, so a lane directory that failed to parse here would have its
-   * workspace trust and its transcripts collected out from under a live
-   * session. `parseAssistantSlotDirName` accepts the bare hash (slot 0) and
-   * exactly the in-range `-s<n>` suffixes, so legacy per-launch UUID dirs are
-   * still collected while lanes 1+ survive.
+   * rejects. Only the bare project hash passes — every lane of a project shares
+   * it — so both legacy shapes are collected: per-launch UUID directories from
+   * the oldest model, and the `<hash>-sN` per-lane directories that preceded the
+   * shared one. See `isAssistantSessionDirName` for why neither is worth keeping.
    */
   private isProjectHashDirName(name: string): boolean {
-    return parseAssistantSlotDirName(name, PROJECT_HASH_LEN) !== null;
+    return isAssistantSessionDirName(name, PROJECT_HASH_LEN);
+  }
+
+  /**
+   * The MCP server module, imported lazily (it is a cycle at load time) and
+   * exactly once. Two lanes provisioning at the same moment used to issue two
+   * concurrent `import()`s of it, which is one more than the module system
+   * guarantees to resolve identically — under vitest the second escaped the
+   * module mock and loaded the real service. One shared promise, one import.
+   */
+  private mcpServerModule: Promise<typeof import("./McpServerService.js")> | null = null;
+
+  private loadMcpServerModule(): Promise<typeof import("./McpServerService.js")> {
+    this.mcpServerModule ??= import("./McpServerService.js");
+    return this.mcpServerModule;
+  }
+
+  /** Serializes filesystem work on one project's shared session directory. */
+  private readonly directoryLocks = new Map<string, Promise<void>>();
+
+  private async withDirectoryLock<T>(pathHash: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.directoryLocks.get(pathHash);
+    let release!: () => void;
+    const next = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // Same shape as `provisionLocks`: chain, remember the chained promise, and
+    // only drop the entry if this call is still the tail.
+    const tail = (previous ?? Promise.resolve()).then(() => next);
+    this.directoryLocks.set(pathHash, tail);
+    if (previous) await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.directoryLocks.get(pathHash) === tail) {
+        this.directoryLocks.delete(pathHash);
+      }
+    }
   }
 
   private validateProvisionInput(input: ProvisionInput): void {
@@ -1813,7 +1934,7 @@ export class HelpSessionService {
     if (!this.mcpRegistry) {
       throw new Error("MCP registry not yet wired (app still initializing)");
     }
-    const { mcpServerService } = await import("./McpServerService.js");
+    const { mcpServerService } = await this.loadMcpServerModule();
     mcpServerService.setHelpTokenValidator((token) => this.validateToken(token));
     mcpServerService.setHelpSessionWebContentsResolver((token) =>
       this.getWebContentsIdForToken(token)
@@ -1867,7 +1988,7 @@ export class HelpSessionService {
    */
   private async recordMcpNotReady(sessionId: string | null, detail: string): Promise<void> {
     try {
-      const { mcpServerService } = await import("./McpServerService.js");
+      const { mcpServerService } = await this.loadMcpServerModule();
       mcpServerService.recordTurnOutcome({
         outcome: "mcp-not-ready",
         sessionId,
@@ -1881,19 +2002,34 @@ export class HelpSessionService {
   private async getMcpPort(daintreeControl: boolean): Promise<number | null> {
     if (!daintreeControl) return null;
     try {
-      const { mcpServerService } = await import("./McpServerService.js");
+      const { mcpServerService } = await this.loadMcpServerModule();
       return mcpServerService.currentPort;
     } catch {
       return null;
     }
   }
 
-  private async writeMcpConfig(
+  /**
+   * Writes a Claude lane's MCP wiring, and returns the path of the per-lane
+   * `--mcp-config` file that carries it.
+   *
+   * Two files, deliberately. The shared `<sessionPath>/.mcp.json` is written
+   * EMPTY: it is one file for every lane of the project, so nothing lane-
+   * specific can live in it, and a project-scoped `.mcp.json` with servers in
+   * it is also what raises Claude's per-folder approval prompt. Everything —
+   * the docs server and the daintree control server with this lane's literal
+   * bearer — goes into `<sessionPath>/.lanes/slot-N.mcp.json` instead, handed
+   * to the CLI with `--mcp-config`. Servers supplied that way are caller input
+   * and raise no approval prompt, and they merge with the (empty) project file.
+   */
+  private async writeClaudeMcpConfig(
     sessionPath: string,
+    slot: number,
+    sessionId: string,
     settings: { daintreeControl: boolean; docSearch: boolean },
     port: number | null,
     token: string
-  ): Promise<void> {
+  ): Promise<string> {
     const mcpServers: Record<string, unknown> = {};
     if (settings.docSearch) {
       mcpServers["daintree-docs"] = {
@@ -1922,12 +2058,82 @@ export class HelpSessionService {
         headers: { Authorization: `Bearer ${token}` },
       };
     }
-    const target = path.join(sessionPath, ".mcp.json");
+    const laneDir = path.join(sessionPath, ASSISTANT_LANE_CONFIG_DIR);
+    await fs.mkdir(laneDir, { recursive: true, mode: 0o700 });
+    await fs.chmod(laneDir, 0o700).catch(() => {});
+    const lanePath = path.join(laneDir, assistantLaneMcpConfigName(slot, sessionId));
     await resilientAtomicWriteFile(
-      target,
+      lanePath,
       JSON.stringify({ mcpServers }, null, 2) + "\n",
       "utf-8",
       { mode: 0o600 }
+    );
+    // The shared project file. The bundled template ships one with the docs
+    // server in it; that is what the approval prompt was for, so it is
+    // overwritten with nothing rather than left to prompt.
+    await resilientAtomicWriteFile(
+      path.join(sessionPath, ".mcp.json"),
+      JSON.stringify({ mcpServers: {} }, null, 2) + "\n",
+      "utf-8",
+      { mode: 0o600 }
+    );
+    return lanePath;
+  }
+
+  /**
+   * Returns the cached `--mcp-config` flag pair for a Claude help session.
+   * lifecycle.ts appends it to the spawn command after the help token
+   * validates. Returns null for unknown / revoked tokens or non-Claude
+   * sessions, so the spawn handler never injects the flag for the wrong agent.
+   */
+  getClaudeLaunchArgs(token: string): string[] | null {
+    if (!token) return null;
+    const record = this.sessionsByToken.get(token);
+    if (!record || record.revoked) return null;
+    if (record.agentId !== "claude") return null;
+    return record.claudeLaunchArgs ?? [];
+  }
+
+  /**
+   * Removes the per-lane `--mcp-config` file, if any. Called on revoke — the
+   * bearer in it is dead the moment its session is — and from GC for lane
+   * files whose bearer is no longer in `sessionsByToken`.
+   */
+  private async removeLaneMcpConfig(lanePath: string | undefined): Promise<void> {
+    if (!lanePath) return;
+    try {
+      await fs.rm(lanePath, { force: true });
+    } catch (err) {
+      console.warn("[HelpSessionService] Failed to remove lane MCP config:", lanePath, err);
+    }
+  }
+
+  /**
+   * Sweeps `<sessionPath>/.lanes/` of every file whose session isn't live.
+   * Keyed on the session id in the file NAME, so a docs-only file with no
+   * bearer in it is judged the same way as one with, and nothing has to parse
+   * a credential out of a file to decide its fate. Sessions never rehydrate
+   * across restarts, so after a boot every lane file on disk is dead until its
+   * lane re-provisions and writes a new one. Anything in the directory that is
+   * not a lane file at all is removed too — nothing else is supposed to be there.
+   */
+  private async sweepStaleLaneConfigs(sessionPath: string): Promise<void> {
+    const laneDir = path.join(sessionPath, ASSISTANT_LANE_CONFIG_DIR);
+    let entries: string[];
+    try {
+      entries = await fs.readdir(laneDir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      console.warn("[HelpSessionService] Failed to read lane config dir for GC:", laneDir, err);
+      return;
+    }
+    await Promise.all(
+      entries.map(async (entry) => {
+        const sessionId = sessionIdFromLaneMcpConfigName(entry);
+        const live = sessionId ? this.sessionsById.get(sessionId) : undefined;
+        if (live && !live.revoked) return;
+        await this.removeLaneMcpConfig(path.join(laneDir, entry));
+      })
     );
   }
 
@@ -2089,13 +2295,16 @@ export class HelpSessionService {
     );
   }
 
-  private buildScratchAddendum(scratchPath: string): string {
+  private buildScratchAddendum(_scratchPath: string): string {
+    // No literal path. This block lives in the CLAUDE.md / AGENTS.md that every
+    // lane of the project shares, while the scratch folder is per session — so a
+    // literal path here is whichever lane provisioned last, and the other lanes
+    // would be told to write into a folder that is not theirs. The env var is
+    // set per PTY and is always this lane's own.
     return [
       "## Assistant Scratch Folder",
       "",
-      `You have a dedicated scratch folder for any temporary or working files you need to create: \`${scratchPath}\`.`,
-      "",
-      `The same path is available in the environment variable \`${ASSISTANT_SCRATCH_ENV_VAR}\` for use in shell commands.`,
+      `You have a dedicated scratch folder for any temporary or working files you need to create. Its path is in the environment variable \`${ASSISTANT_SCRATCH_ENV_VAR}\`; read that variable rather than assuming a location.`,
       "",
       "Use this folder — not the project workspace, not the system temp dir — for any notes, drafts, intermediate output, or other scratch work. The folder is cleared on every Daintree launch, so don't put anything you want to keep there.",
       "",
@@ -2199,11 +2408,14 @@ export class HelpSessionService {
     );
     if (token === COPILOT_BEARER_PLACEHOLDER && ownedByLiveCopilot) return;
 
-    // Otherwise a token is only live FOR THIS DIRECTORY. Once lanes each own a
-    // session dir (#12108), a bearer that is valid for another lane sitting in
-    // this one is misplaced, not live — keeping it would leave a working
-    // credential in a directory its session never owned, which is the
-    // stray-`claude`-in-cwd hole this strip exists to close.
+    // Otherwise a token is only live FOR THIS DIRECTORY. Lanes share their
+    // project's directory, so a live bearer here belongs to one of this
+    // project's lanes; one belonging to another project is misplaced, not live
+    // — keeping it would leave a working credential in a directory its session
+    // never owned, which is the stray-`claude`-in-cwd hole this strip exists to
+    // close. Claude's own bearers no longer land in this file at all (they ride
+    // in per-lane `--mcp-config` files), so the only literal ones left to find
+    // are from installs that predate that.
     const live = token ? this.sessionsByToken.get(token) : undefined;
     if (live && live.sessionPath === sessionPath) return;
 

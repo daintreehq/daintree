@@ -1084,7 +1084,9 @@ describe("HelpPanel — resume from main-captured hibernation (eviction recovery
     mockTakePendingHibernation.mockResolvedValueOnce({
       agentId: "claude",
       agentSessionId: "",
-      cwd: "/help/session-dir",
+      // Main records the session directory it provisioned as the cwd; the
+      // resume-latest fallback is only honoured from that same directory.
+      cwd: "/help",
     });
     helpPanelState.setHibernateSession = vi.fn(
       (

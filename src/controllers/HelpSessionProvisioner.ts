@@ -33,6 +33,7 @@ export type ProvisionFailureCode =
   | "MCP_SERVER_NOT_STARTED"
   | "MCP_PROBE_FAILED"
   | "USER_CONTENT_SYNC_FAILED"
+  | "MIXED_AGENT_LANES"
   | "UNKNOWN";
 
 export type ProvisionOutcome =
@@ -76,7 +77,8 @@ export async function provisionHelpSession(
       code === "MCP_SERVER_NOT_STARTED" ||
       code === "MCP_PROBE_FAILED" ||
       code === "MCP_NOT_READY" ||
-      code === "USER_CONTENT_SYNC_FAILED"
+      code === "USER_CONTENT_SYNC_FAILED" ||
+      code === "MIXED_AGENT_LANES"
     ) {
       return { ok: false, code, message };
     }

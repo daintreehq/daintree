@@ -8,7 +8,11 @@
 import { getAgentConfig } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
 import { useHelpPanelStore, selectSlot, selectOpenSlots } from "@/store/helpPanelStore";
-import { DEFAULT_ASSISTANT_SLOT, assistantSlotKey } from "@shared/config/assistantSlots";
+import {
+  DEFAULT_ASSISTANT_SLOT,
+  assistantSlotKey,
+  projectIdFromSlotKey,
+} from "@shared/config/assistantSlots";
 import { usePanelStore } from "@/store";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -1144,11 +1148,23 @@ export class HelpSessionController {
     const customLaunchFlags = await loadCustomLaunchFlags();
     const flags = customLaunchFlags.length > 0 ? customLaunchFlags : undefined;
     const hasSpecificSessionId = hibernated.sessionId.length > 0;
-    const command = hasSpecificSessionId
-      ? (buildResumeCommand(launchAgentId, hibernated.sessionId, flags) ??
-        buildResumeLatestCommand(launchAgentId, flags))
-      : buildResumeLatestCommand(launchAgentId, flags);
-    if (!command) return null;
+    // "Resume the latest session in this cwd" is only meaningful when this lane
+    // is the only one that has ever launched there. Every lane of a project now
+    // shares one session directory, so with a sibling lane around, "latest" is
+    // as likely to be THEIR conversation as this lane's — and resuming someone
+    // else's transcript into this tab is worse than starting fresh. An explicit
+    // id is always safe; the cwd-keyed fallback is gated on being alone.
+    //
+    // "Around" means open OR hibernated: a sibling that is closed but captured
+    // left its transcript in the same cwd, and after a restart with only this
+    // lane open it is exactly the one `--continue` would find first.
+    const store = useHelpPanelStore.getState();
+    const ownKey = assistantSlotKey(launchProject.id, this.slot);
+    const hibernatedSibling = Object.keys(store.hibernateSessions).some(
+      (key) => key !== ownKey && projectIdFromSlotKey(key) === launchProject.id
+    );
+    const soleLane =
+      !hibernatedSibling && selectOpenSlots(store).every((slot) => slot === this.slot);
 
     // The Daintree Assistant runs in the project root (env-only MCP, ships its
     // own skills, reads nothing from cwd) — never the session dir or the
@@ -1157,6 +1173,18 @@ export class HelpSessionController {
     const cwd = isAssistantOnlyAgentId(launchAgentId)
       ? launchProject.path
       : (session?.sessionPath ?? hibernated.cwd ?? folderPath);
+
+    // And "latest in this cwd" has to mean THIS cwd. An entry captured in a
+    // different directory — a lane from before every lane shared one — would
+    // have `--continue` pick up whatever conversation the shared directory saw
+    // last, which is not the one the entry was for. A specific id is not bound
+    // this way: the CLIs resolve it wherever the transcript lives.
+    const sameCwd = !hibernated.cwd || hibernated.cwd === cwd;
+    const latest = soleLane && sameCwd ? buildResumeLatestCommand(launchAgentId, flags) : undefined;
+    const command = hasSpecificSessionId
+      ? (buildResumeCommand(launchAgentId, hibernated.sessionId, flags) ?? latest)
+      : latest;
+    if (!command) return null;
     // Bind the resumed session's project identity to the project captured at
     // launch, not live store state — otherwise a project switch mid-resume
     // could make cwd (the captured project) and DAINTREE_PROJECT_ID disagree.

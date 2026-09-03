@@ -476,8 +476,9 @@ export interface AgentContinuity {
 export interface AssistantSupports {
   /**
    * How MCP servers are injected into the agent's session.
-   * - `"project-config"`: written to per-session config files (e.g. Claude's
-   *   `.mcp.json` plus `.claude/settings.json` overlay).
+   * - `"project-config"`: written to config files in the session directory
+   *   (e.g. Claude's per-lane `--mcp-config` file plus the `.claude/settings.json`
+   *   overlay; Copilot's `.mcp.json`).
    * - `"cli-flags"`: passed as `-c key=value` flags at spawn time (e.g. Codex).
    * - `"env-only"`: connection details are passed purely through PTY env vars
    *   the agent reads itself (`DAINTREE_MCP_URL`, `DAINTREE_MCP_TOKEN`, …) —
