@@ -6,7 +6,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
-import { isPtyPanel } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { buildResumeCommand } from "@shared/types";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { logWarn, logError } from "@/utils/logger";
@@ -34,6 +34,26 @@ function findSessionsErrorMessage(reason: AgentSubagentUnavailableReason): strin
 
 function firstLine(value: string): string {
   return value.trim().split("\n")[0]?.trim() ?? "";
+}
+
+/**
+ * Codex session ids already held by a sibling pane, excluding `panelId`
+ * itself. Shared by the initial fetch filter and by `openSession`'s
+ * just-before-opening recheck (#11461) — a sibling can claim one of these
+ * conversations in the gap between listing and picking, and reopening it
+ * anyway would put two writers on the same transcript.
+ */
+function siblingHeldSessionIds(
+  panelsById: Record<string, PanelInstance>,
+  panelId: string
+): Set<string> {
+  const held = new Set<string>();
+  for (const panel of Object.values(panelsById)) {
+    if (panel.id === panelId || !isPtyPanel(panel)) continue;
+    const heldAgentId = panel.runtimeIdentity?.agentId ?? panel.launchAgentId;
+    if (heldAgentId === "codex" && panel.agentSessionId) held.add(panel.agentSessionId);
+  }
+  return held;
 }
 
 /**
@@ -68,6 +88,9 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
     agentModelId,
     agentPresetId,
     agentPresetColor,
+    originalPresetId,
+    isUsingFallback,
+    fallbackChainIndex,
   } = usePanelStore(
     useShallow((state) => {
       const panel = state.panelsById[panelId];
@@ -94,6 +117,12 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
         agentModelId: pty?.agentModelId,
         agentPresetId: pty?.agentPresetId,
         agentPresetColor: pty?.agentPresetColor,
+        // Carried too, or a lost pane already running on a fallback preset
+        // would present the fallback as though it were the original choice,
+        // losing the "was X → now Y" state the fallback chain tracks.
+        originalPresetId: pty?.originalPresetId,
+        isUsingFallback: pty?.isUsingFallback,
+        fallbackChainIndex: pty?.fallbackChainIndex,
       };
     })
   );
@@ -113,14 +142,10 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
         // its subscribed selector is impure and the React Compiler bails out
         // on it, and this list only matters while the popover is open anyway
         // — it doesn't need to track panes that open or close in the
-        // background.
-        const held = new Set<string>();
-        for (const panel of Object.values(usePanelStore.getState().panelsById)) {
-          if (panel.id === panelId || !isPtyPanel(panel)) continue;
-          const heldAgentId = panel.runtimeIdentity?.agentId ?? panel.launchAgentId;
-          if (heldAgentId === "codex" && panel.agentSessionId) held.add(panel.agentSessionId);
-        }
-        setHeldElsewhere(held);
+        // background. `openSession` below re-checks right before opening, so
+        // this snapshot going stale only ever costs a still-listed row, never
+        // a duplicate resume.
+        setHeldElsewhere(siblingHeldSessionIds(usePanelStore.getState().panelsById, panelId));
       })
       .catch((error: unknown) => {
         logWarn(
@@ -140,6 +165,14 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
 
   const openSession = async (session: CodexFolderSession) => {
     if (!cwd) return;
+    // A sibling can claim this exact conversation in the gap between the list
+    // loading and the user picking a row — the popover can sit open for a
+    // while. Re-check right before opening rather than trusting the snapshot
+    // the list was filtered against (#11461).
+    if (siblingHeldSessionIds(usePanelStore.getState().panelsById, panelId).has(session.id)) {
+      setHeldElsewhere((prev) => new Set(prev).add(session.id));
+      return;
+    }
     const command = buildResumeCommand("codex", session.id, agentLaunchFlags);
     if (!command) return;
     setIsOpen(false);
@@ -155,6 +188,9 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
         agentModelId,
         agentPresetId,
         agentPresetColor,
+        originalPresetId,
+        isUsingFallback,
+        fallbackChainIndex,
         env,
       });
     } catch (error) {

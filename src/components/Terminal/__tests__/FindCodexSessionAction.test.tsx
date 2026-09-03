@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import type { CodexFolderSession } from "@shared/types/ipc/agentSubagents";
 
@@ -238,5 +238,55 @@ describe("FindCodexSessionAction", () => {
       agentPresetColor: "#123456",
       agentModelId: "o3",
     });
+  });
+
+  it("carries the fallback-chain state, so a fallback preset isn't presented as the original", async () => {
+    findSessions.mockResolvedValue(ok([{ id: "sess-1", preview: "pick me", updatedAt: 1 }]));
+    seed(
+      panel("t-1", {
+        originalPresetId: "preset-original",
+        isUsingFallback: true,
+        fallbackChainIndex: 2,
+      })
+    );
+
+    render(<FindCodexSessionAction panelId="t-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Find session" }));
+    fireEvent.click(await screen.findByText("pick me"));
+
+    await waitFor(() => expect(addPanel).toHaveBeenCalledOnce());
+    expect(addPanel.mock.calls[0]?.[0]).toMatchObject({
+      originalPresetId: "preset-original",
+      isUsingFallback: true,
+      fallbackChainIndex: 2,
+    });
+  });
+
+  it("re-checks for a sibling claim right before opening, even if the list is stale (#11461)", async () => {
+    findSessions.mockResolvedValue(ok([{ id: "sess-1", preview: "pick me", updatedAt: 1 }]));
+    seed(panel("t-1"));
+
+    render(<FindCodexSessionAction panelId="t-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Find session" }));
+    await screen.findByText("pick me");
+
+    // A sibling claims this exact conversation after the list loaded but
+    // before the user clicks it — the popover can sit open for a while.
+    act(() => {
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          "t-2": panel("t-2", { agentSessionId: "sess-1" }),
+        },
+        panelIds: [...state.panelIds, "t-2"],
+      }));
+    });
+
+    fireEvent.click(screen.getByText("pick me"));
+
+    // Never opened — the recheck caught the just-claimed session instead of
+    // trusting the now-stale list.
+    await waitFor(() => expect(screen.queryByText("pick me")).toBeNull());
+    expect(addPanel).not.toHaveBeenCalled();
   });
 });

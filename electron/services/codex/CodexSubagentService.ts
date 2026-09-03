@@ -590,7 +590,11 @@ function toFolderSession(thread: RawThread): CodexFolderSession | null {
   // `selectResumeLatestThread`, which resolves the same value for the same
   // reason).
   const id = asString(thread.sessionId) ?? asString(thread.id);
-  if (!id) return null;
+  // This id reaches `buildResumeCommand` and is interpolated into a shell
+  // command the instant the user picks it — same shape check
+  // `selectResumeLatestThread` applies before trusting a session id from the
+  // wire.
+  if (!id || !CODEX_SESSION_ID_PATTERN.test(id)) return null;
   return {
     id,
     // The session's own first message — conversation text. Crosses IPC as-is

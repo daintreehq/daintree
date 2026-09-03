@@ -713,6 +713,29 @@ describe("listCodexSessionsForCwd", () => {
     await expect(listCodexSessionsForCwd("/repo")).resolves.toEqual({ status: "ok", sessions: [] });
   });
 
+  it("drops a thread whose id doesn't match the session-id shape", async () => {
+    // The id reaches buildResumeCommand and is interpolated into a shell
+    // command the instant it's picked — never trust it unvalidated off the wire.
+    scriptSession((method) => {
+      if (method === "thread/list") {
+        return {
+          data: [
+            { id: "ok-thread", sessionId: "ok-thread", recencyAt: 5 },
+            { id: "bad; rm -rf /", sessionId: "bad; rm -rf /", recencyAt: 6 },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const result = await listCodexSessionsForCwd("/repo");
+
+    expect(result).toEqual({
+      status: "ok",
+      sessions: [{ id: "ok-thread", preview: "", updatedAt: 5_000 }],
+    });
+  });
+
   it("asks under both spellings of a symlinked path, since the cwd filter is exact", async () => {
     let listParams: QueryParams = {};
     scriptSession((method, params) => {
