@@ -1528,19 +1528,24 @@ export class HelpSessionService {
   }
 
   /**
-   * Idle-background auto-close (#10830): the sweep capture-revokes a project's
-   * help sessions before reclaiming it — the same conversation-preserving path
-   * as LRU eviction, so the next open resumes where the user left off. The
-   * renderer's own hibernate timer can't do this itself, because a parked
-   * project view freezes timers (the #10739 class).
+   * Three entry points capture-revoke a project's help sessions ahead of a
+   * project-wide teardown: the idle-background auto-close sweep (#10830),
+   * `project:sleep`, and `project:close` with `killTerminals` (#12181). All
+   * three take the same conversation-preserving path as LRU eviction, so the
+   * next open resumes where the user left off. The renderer's own hibernate
+   * timer can't do this itself, because a parked project view freezes timers
+   * (the #10739 class).
    *
-   * A LIVE assistant no longer reaches here: since #11807 the sweep treats one
-   * as a hard floor and skips the project entirely, because nothing tells main
+   * The sweep never hands us a LIVE assistant: since #11807 it treats one as a
+   * hard floor and skips the project entirely, because nothing tells main
    * whether an idle-looking assistant is merely at its prompt or sitting on a
-   * scheduled wakeup. So the records this settles are the non-live ones — a
-   * terminal that exited under its own steam (nothing drops that binding), or
-   * a session provisioned but never bound. Only the former has a conversation
-   * to capture; an unbound record writes no pending-hibernation entry.
+   * scheduled wakeup. Its records are the non-live ones — a terminal that
+   * exited under its own steam (nothing drops that binding), or a session
+   * provisioned but never bound. Sleep and close are the opposite: the user
+   * asked for the teardown, so a live assistant behind a still-live project
+   * view is the normal case and the capture path really runs. That is what
+   * makes the renderer's own no-capture revoke of the same session racing us
+   * reachable, and why `revokeSession` finalizes only under the ownership flag.
    */
   async revokeByProjectId(projectId: string): Promise<void> {
     const targets = [...this.sessionsById.values()].filter(
