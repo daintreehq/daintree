@@ -881,17 +881,22 @@ export type DaintreeEventMap = {
   };
 
   /**
-   * Emitted in the pty-host when trash expiry captures a resumable session,
-   * and re-emitted on the Main bus by PtyEventsBridge. Main persists the
-   * record (single journal writer — the pty-host writing the file itself
-   * would race Main's own close-path writes) and then emits
-   * `agent-session:recorded`.
+   * Emitted in the pty-host when a capture path finds a resumable session —
+   * trash expiry, a natural agent exit, or a `/quit`-style demotion — and
+   * re-emitted on the Main bus by PtyEventsBridge. Main persists the record
+   * (single journal writer — the pty-host writing the file itself would race
+   * Main's own close-path writes) and then emits `agent-session:recorded`.
    */
   "agent-session:captured": {
     /** Terminal whose close produced the record — keys ledger dedupe. */
     terminalId: string;
-    /** Launch generation of that terminal incarnation, when known. */
-    launchGeneration?: number;
+    /**
+     * Launch generation of that terminal incarnation, when known. `null`
+     * deliberately opts out of generation gating for a capture that is not a
+     * terminal close (a demotion), where one generation can legitimately
+     * produce several records.
+     */
+    launchGeneration?: number | null;
     record: Omit<
       import("../../shared/types/ipc/agentSessionHistory.js").AgentSessionRecord,
       "savedAt"

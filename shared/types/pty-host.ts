@@ -623,16 +623,20 @@ export type PtyHostEvent =
   | { type: "terminal-restored"; id: string }
   | {
       /**
-       * Trash expiry captured a resumable session in the pty-host. The record
-       * is shipped to Main for persistence — Main is the journal's single
-       * writer, so cross-process read-modify-write races on the file can't
-       * drop records, and the real retention setting applies. `terminalId` +
-       * `launchGeneration` key the capture to one terminal incarnation so
-       * Main's lifecycle ledger can journal it exactly once.
+       * The pty-host captured a resumable session — trash expiry, a natural
+       * agent exit, or a `/quit`-style demotion. The record is shipped to Main
+       * for persistence — Main is the journal's single writer, so cross-process
+       * read-modify-write races on the file can't drop records, and the real
+       * retention setting applies. `terminalId` + `launchGeneration` key the
+       * capture to one terminal incarnation so Main's lifecycle ledger can
+       * journal it exactly once. `null` opts out of that gate for a capture
+       * that is NOT a terminal close: a demoted pane survives and can host
+       * several agent runs in one generation, so gating would drop all but the
+       * first.
        */
       type: "agent-session-captured";
       terminalId: string;
-      launchGeneration?: number;
+      launchGeneration?: number | null;
       record: Omit<AgentSessionRecord, "savedAt">;
     }
   | { type: "terminal-pid"; id: string; pid: number }

@@ -9,6 +9,7 @@ import {
   GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS,
   type TerminalInfo,
 } from "./types.js";
+import { createSessionIdMatcher } from "./sessionIdCapture.js";
 import { getLiveAgentId } from "./terminalTitle.js";
 import { normalizeSubmitEnterDelay } from "./terminalInput.js";
 import { createLogger } from "../../utils/logger.js";
@@ -205,7 +206,11 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
   // case (#11851): it resumes by an id this tree can hold but never observes
   // one being printed, so a pattern would be a ghost regex too.
   const sessionIdPattern = resume.kind === "session-id" ? resume.sessionIdPattern : undefined;
-  const pattern = sessionIdPattern ? new RegExp(sessionIdPattern) : null;
+  // First match, not last: this buffer starts empty at the quit signal, so it is
+  // already scoped to the teardown and the earliest match in it is the agent's
+  // own hint. The passive boundaries (#12179) scan a rolling buffer instead and
+  // take the last match for exactly the opposite reason.
+  const matcher = createSessionIdMatcher(sessionIdPattern);
 
   let shutdownBuffer = "";
   let resolved = false;
@@ -316,7 +321,7 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
           shutdownSignal !== undefined &&
           stripAnsiCodes(gateProbe).includes(shutdownSignal.gateText);
 
-        if (!pattern) {
+        if (!matcher) {
           if (gateMatched) settleGateArm(true);
           return;
         }
@@ -326,9 +331,8 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
           shutdownBuffer = shutdownBuffer.slice(-GRACEFUL_SHUTDOWN_BUFFER_SIZE);
         }
 
-        const stripped = stripAnsiCodes(shutdownBuffer);
-        const match = pattern.exec(stripped);
-        if (match?.[1]) {
+        const match = matcher(shutdownBuffer, { occurrence: "first", boundary: "stream" });
+        if (match.kind !== "none") {
           // A session id in this chunk means the agent is already on its way
           // out, so this chunk must never also read as permission to press
           // again — including when the capture below turns out to be
@@ -339,18 +343,11 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
           // takes EOF as the boundary, or the per-press timer stops the
           // escalation without ending the teardown.
           if (gateArm) settleGateArm(false);
-          // Guard against truncated captures when the PTY delivers the
-          // session-ID line in chunks. Every `sessionIdPattern` ends with a
-          // greedy `[\w-]+` capture group — if that group ends at the buffer
-          // tail, the regex's character class may still be consuming a token
-          // that is mid-arrival. Wait for at least one trailing character
-          // (newline, space, prompt glyph) that confirms the token boundary
-          // has been seen. Without this, Gemini's resume hint can be captured
-          // as "fc1c3a37-2294-4" instead of the full 36-char UUID, leaving
-          // restore-on-restart to hand the agent an invalid identifier.
-          const captureEnd = match.index + match[0].length;
-          if (captureEnd < stripped.length) {
-            finish(match[1], "captured");
+          // `needs-boundary` means the id may still be mid-arrival, so keep
+          // listening: the next chunk completes the capture, or `onExit` takes
+          // EOF as the boundary. See the truncation guard in `sessionIdCapture`.
+          if (match.kind === "match") {
+            finish(match.sessionId, "captured");
             return;
           }
         }
@@ -359,13 +356,12 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
       });
 
       origOnExit = terminal.ptyProcess.onExit(() => {
-        if (!pattern) {
+        if (!matcher) {
           finish(null, "exited-no-pattern");
           return;
         }
-        const stripped = stripAnsiCodes(shutdownBuffer);
-        const match = pattern.exec(stripped);
-        const sessionId = match?.[1] ?? null;
+        const match = matcher(shutdownBuffer, { occurrence: "first", boundary: "eof" });
+        const sessionId = match.kind === "match" ? match.sessionId : null;
         finish(sessionId, sessionId ? "captured" : "exited-no-match");
       });
 
