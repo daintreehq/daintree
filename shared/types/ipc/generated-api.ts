@@ -75,6 +75,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["clipboard:write-text"]["result"]>;
   };
   codex: {
+    findSessions(
+      ...args: IpcInvokeMap["codex:find-sessions"]["args"]
+    ): Promise<IpcInvokeMap["codex:find-sessions"]["result"]>;
     listSubagents(
       ...args: IpcInvokeMap["codex:list-subagents"]["args"]
     ): Promise<IpcInvokeMap["codex:list-subagents"]["result"]>;

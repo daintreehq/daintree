@@ -361,6 +361,24 @@ export interface PanelWorktreeMoveNotice {
   deliveryFailed?: boolean;
 }
 
+/**
+ * Why a restored pane's prior agent session could not be resumed (#12182).
+ *
+ * Distinguished because the banner's copy and its "Find session" affordance
+ * both depend on which one fired — "a sibling pane already has it" is a
+ * fundamentally different message (and a different recovery) than "there was
+ * never anything to resume".
+ */
+export type SessionLostReason =
+  /** Had the exact session id and permission to use it, but no resume command could be built. */
+  | "no-resume-command"
+  /** A sibling pane already holds the exact conversation this pane carried. */
+  | "sibling-owns-session-id"
+  /** A sibling pane already claimed this agent+folder's resume-latest slot. */
+  | "sibling-owns-resume-latest-slot"
+  /** No session id was ever captured and no resume-latest fallback exists for this agent. */
+  | "no-resume-path";
+
 export interface PtyPanelData extends BasePanelData {
   kind: "terminal";
   /**
@@ -574,17 +592,17 @@ export interface PtyPanelData extends BasePanelData {
   /** How many fallback hops have been consumed from the primary's chain (0-based index into fallbacks[]). */
   fallbackChainIndex?: number;
   /**
-   * Live-only restore signal. True on first mount when the saved agent session
+   * Live-only restore signal. Set on first mount when the saved agent session
    * could not be safely resumed — unreachable, or resume-latest suppressed
    * because a sibling pane owns the slot (#11461) — and a fresh session was
-   * launched instead. Drives the
+   * launched instead. The value names which cause it was (#12182). Drives the
    * "Session no longer reachable" restart banner. Cleared on restart, and when
    * the user dismisses the banner (#11589) — dismissal consumes this signal
    * rather than shadowing it with a second flag, so the acknowledgement
    * survives the unmount a worktree switch causes. Never serialized — see
    * `serializePtyPanel`.
    */
-  sessionLostOnRestore?: boolean;
+  sessionLostOnRestore?: SessionLostReason;
 }
 
 export interface BrowserPanelData extends BasePanelData {

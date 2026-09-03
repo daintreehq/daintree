@@ -947,7 +947,7 @@ describe("restartTerminal stale flow state cleared (#9899)", () => {
   it("consumes the session-lost signal on restart (#9802)", async () => {
     const lost = {
       ...agentPanelBase,
-      sessionLostOnRestore: true,
+      sessionLostOnRestore: "no-resume-command" as const,
     };
     usePanelStore.setState({
       panelsById: { [lost.id]: lost },

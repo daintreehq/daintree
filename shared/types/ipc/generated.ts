@@ -154,6 +154,10 @@ export interface GeneratedIpcInvokeMap {
     args: [text: string];
     result: void;
   };
+  "codex:find-sessions": {
+    args: [__0: { cwd: string; codexHome?: string | undefined }];
+    result: import("./agentSubagents.js").CodexFolderSessionsResult;
+  };
   "codex:list-subagents": {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;

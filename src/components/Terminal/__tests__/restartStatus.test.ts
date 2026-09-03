@@ -257,15 +257,25 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
   };
 
   it("returns session-resume-unavailable when restore fell through to a fresh launch", () => {
-    const result = getRestartBannerVariant({ ...restored, sessionLostOnRestore: true });
-    expect(result).toEqual({ type: "session-resume-unavailable" });
+    const result = getRestartBannerVariant({
+      ...restored,
+      sessionLostOnRestore: "no-resume-command",
+    });
+    expect(result).toEqual({ type: "session-resume-unavailable", reason: "no-resume-command" });
   });
 
-  it("returns none when sessionLostOnRestore is absent (resumed normally)", () => {
-    // Both falsey shapes: never set, and consumed by a dismissal (#11589).
-    expect(getRestartBannerVariant({ ...restored, sessionLostOnRestore: false })).toEqual({
-      type: "none",
+  it("passes the reason through verbatim, whichever of the four fired (#12182)", () => {
+    const result = getRestartBannerVariant({
+      ...restored,
+      sessionLostOnRestore: "sibling-owns-session-id",
     });
+    expect(result).toEqual({
+      type: "session-resume-unavailable",
+      reason: "sibling-owns-session-id",
+    });
+  });
+
+  it("returns none when sessionLostOnRestore is absent (resumed normally, or consumed by a dismissal — #11589)", () => {
     expect(getRestartBannerVariant({ ...restored, sessionLostOnRestore: undefined })).toEqual({
       type: "none",
     });
@@ -275,10 +285,10 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
     // Dismissing an exit-error prompt must not hide a lost-session acknowledgement.
     const result = getRestartBannerVariant({
       ...restored,
-      sessionLostOnRestore: true,
+      sessionLostOnRestore: "no-resume-command",
       dismissedRestartPrompt: true,
     });
-    expect(result).toEqual({ type: "session-resume-unavailable" });
+    expect(result).toEqual({ type: "session-resume-unavailable", reason: "no-resume-command" });
   });
 
   it("hands off to exit-error when the lost-session banner is dismissed (#10823)", () => {
@@ -290,8 +300,11 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
     const crashedAfterLostSession = { ...restored, isExited: true, exitCode: 1 };
 
     expect(
-      getRestartBannerVariant({ ...crashedAfterLostSession, sessionLostOnRestore: true })
-    ).toEqual({ type: "session-resume-unavailable" });
+      getRestartBannerVariant({
+        ...crashedAfterLostSession,
+        sessionLostOnRestore: "no-resume-command",
+      })
+    ).toEqual({ type: "session-resume-unavailable", reason: "no-resume-command" });
 
     expect(
       getRestartBannerVariant({ ...crashedAfterLostSession, sessionLostOnRestore: undefined })
@@ -301,16 +314,16 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
   it("ignores backendStatus — the lost session is independent of host connectivity", () => {
     const result = getRestartBannerVariant({
       ...restored,
-      sessionLostOnRestore: true,
+      sessionLostOnRestore: "no-resume-command",
       backendStatus: "disconnected",
     });
-    expect(result).toEqual({ type: "session-resume-unavailable" });
+    expect(result).toEqual({ type: "session-resume-unavailable", reason: "no-resume-command" });
   });
 
   it("yields to an in-flight restart (isRestarting wins)", () => {
     const result = getRestartBannerVariant({
       ...restored,
-      sessionLostOnRestore: true,
+      sessionLostOnRestore: "no-resume-command",
       isRestarting: true,
     });
     expect(result).toEqual({ type: "restarting" });
@@ -319,7 +332,7 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
   it("yields to auto-restart (isAutoRestarting wins)", () => {
     const result = getRestartBannerVariant({
       ...restored,
-      sessionLostOnRestore: true,
+      sessionLostOnRestore: "no-resume-command",
       isAutoRestarting: true,
     });
     expect(result).toEqual({ type: "auto-restarting" });
@@ -328,7 +341,7 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
   it("suppresses while a restartError is present", () => {
     const result = getRestartBannerVariant({
       ...restored,
-      sessionLostOnRestore: true,
+      sessionLostOnRestore: "no-resume-command",
       restartError: {
         message: "failed",
         code: "RESTART_FAILED",
@@ -342,7 +355,7 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
   it("suppresses while a reconnectError is present", () => {
     const result = getRestartBannerVariant({
       ...restored,
-      sessionLostOnRestore: true,
+      sessionLostOnRestore: "no-resume-command",
       reconnectError: {
         message: "lost connection",
         code: "RECONNECT_FAILED",
@@ -355,7 +368,7 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
   it("suppresses while a spawnError is present", () => {
     const result = getRestartBannerVariant({
       ...restored,
-      sessionLostOnRestore: true,
+      sessionLostOnRestore: "no-resume-command",
       spawnError: {
         message: "spawn failed",
         code: "SPAWN_FAILED",
@@ -370,8 +383,8 @@ describe("getRestartBannerVariant — session-resume-unavailable (issue #9802)",
       ...restored,
       isExited: true,
       exitCode: 1,
-      sessionLostOnRestore: true,
+      sessionLostOnRestore: "no-resume-command",
     });
-    expect(result).toEqual({ type: "session-resume-unavailable" });
+    expect(result).toEqual({ type: "session-resume-unavailable", reason: "no-resume-command" });
   });
 });

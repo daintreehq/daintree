@@ -43,6 +43,8 @@ import {
   type AgentSubagentUnavailableReason,
   type AgentSubagentsResult,
   type AgentSubagentTranscriptResult,
+  type CodexFolderSession,
+  type CodexFolderSessionsResult,
 } from "../../../shared/types/ipc/agentSubagents.js";
 
 /**
@@ -579,5 +581,62 @@ export async function resolveCodexResumeLatestSession(cwd: string): Promise<stri
     // Degrading to `--last` loses the id capture; failing the restore would lose
     // the pane. The pane is worth more.
     return null;
+  }
+}
+
+function toFolderSession(thread: RawThread): CodexFolderSession | null {
+  // `codex resume` takes `sessionId`; for a root thread it equals `id`, and an
+  // older server that omits the field falls back to that (matches
+  // `selectResumeLatestThread`, which resolves the same value for the same
+  // reason).
+  const id = asString(thread.sessionId) ?? asString(thread.id);
+  // This id reaches `buildResumeCommand` and is interpolated into a shell
+  // command the instant the user picks it — same shape check
+  // `selectResumeLatestThread` applies before trusting a session id from the
+  // wire.
+  if (!id || !CODEX_SESSION_ID_PATTERN.test(id)) return null;
+  return {
+    id,
+    // The session's own first message — conversation text. Crosses IPC as-is
+    // (see the type's doc comment) but must never be logged.
+    preview: typeof thread.preview === "string" ? thread.preview : "",
+    updatedAt: secondsToMs(activityOf(thread)),
+  };
+}
+
+/**
+ * List the Codex sessions recorded for a folder, for the "Find session"
+ * action on the lost-session banner (#12182) — the user picks one to reopen
+ * when restore couldn't reattach to it automatically.
+ *
+ * Root threads only: a picker offering to reopen a delegated subagent thread
+ * would be reopening something that was never its own conversation.
+ *
+ * `codexHome` should be the pane's own launch env when it carries one
+ * (renderer resolves this from `PtyPanelData.env`, matching the lookup
+ * `resolveNamedResumeLatestSession` already does for the same reason) — this
+ * client has no way to learn a pane's redirected profile on its own, and
+ * querying main's default one would silently show the wrong folder's history
+ * or nothing at all.
+ */
+export async function listCodexSessionsForCwd(
+  cwd: string,
+  codexHome?: string
+): Promise<CodexFolderSessionsResult> {
+  try {
+    return await runCodexAppServerSession(
+      async (call) => {
+        const threads = await listThreadsInCwd(call, await resolveCwdSpellings(cwd));
+        const sessions = threads
+          .filter((thread) => asString(thread.parentThreadId) === null)
+          .map(toFolderSession)
+          .filter((session): session is CodexFolderSession => session !== null)
+          .sort((a, b) => b.updatedAt - a.updatedAt);
+        return { status: "ok" as const, sessions };
+      },
+      { codexHome }
+    );
+  } catch (error) {
+    return toUnavailable(error);
   }
 }

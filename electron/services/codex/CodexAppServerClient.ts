@@ -125,6 +125,13 @@ export interface CodexAppServerSessionOptions {
   command?: string;
   timeoutMs?: number;
   requestTimeoutMs?: number;
+  /**
+   * Overrides main's own `CODEX_HOME` for this session. A caller asking on
+   * behalf of a specific pane must pass the pane's own launch env here when it
+   * carries one (#12182) — without it, this client silently queries the
+   * default profile even though the pane itself ran against a redirected one.
+   */
+  codexHome?: string;
 }
 
 function classifySpawnError(error: NodeJS.ErrnoException): CodexAppServerError {
@@ -142,17 +149,17 @@ function classifySpawnError(error: NodeJS.ErrnoException): CodexAppServerError {
  * than a credential, and omitting it would silently point the query at the
  * default profile while the terminal itself runs against a relocated one.
  *
- * This inherits main's `CODEX_HOME`, not the terminal's own spawn env, so a
- * per-project override is invisible here. Usually that fails quiet — the
- * default profile holds no thread for that cwd, so the lookup reports
- * `no-session` and the UI stays hidden — but if the default profile also has
- * threads for the same folder, spawn-time correlation runs against the wrong
- * profile. Carrying the terminal's effective profile through pty-host metadata
- * is the real fix and is not wired yet.
+ * Falls back to inheriting main's own `CODEX_HOME` when no override is given.
+ * A caller that knows which pane it's asking on behalf of should pass
+ * `options.codexHome` — main's own env has no relation to a pane's redirected
+ * profile, so without it a query can silently run against the wrong index
+ * (#12182). Callers with no specific pane in mind (e.g. resume-latest
+ * resolution, which only ever asks against main's own profile today) are
+ * unaffected either way.
  */
-function buildAppServerEnv(): NodeJS.ProcessEnv {
+function buildAppServerEnv(codexHomeOverride?: string): NodeJS.ProcessEnv {
   const env = buildProbeEnv();
-  const codexHome = process.env.CODEX_HOME;
+  const codexHome = codexHomeOverride ?? process.env.CODEX_HOME;
   if (codexHome) env.CODEX_HOME = codexHome;
   return env;
 }
@@ -196,7 +203,7 @@ async function spawnCodexAppServerSession<T>(
     child = spawn(command, ["app-server", "--listen", "stdio://"], {
       shell: false,
       windowsHide: true,
-      env: buildAppServerEnv(),
+      env: buildAppServerEnv(options.codexHome),
       detached: useGroup,
       stdio: ["pipe", "pipe", "pipe"],
     });

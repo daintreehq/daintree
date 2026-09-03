@@ -4,6 +4,7 @@ export const CODEX_METHOD_CHANNELS = {
   listSubagents: "codex:list-subagents",
   readSubagentTranscript: "codex:read-subagent-transcript",
   resolveResumeLatestSession: "codex:resolve-resume-latest-session",
+  findSessions: "codex:find-sessions",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CODEX_METHOD_CHANNELS;
