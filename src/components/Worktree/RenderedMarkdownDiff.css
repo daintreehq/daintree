@@ -1,0 +1,158 @@
+/* Rendered-Markdown diff markers (issue #12171). Imported by
+   RenderedMarkdownDiff.tsx, so it ships with the lazy rendered-diff chunk.
+
+   Everything in this file is intentionally UNLAYERED, for the same reason
+   MarkdownDocument.css is: the typography plugin emits `.prose` inside
+   @layer utilities, and layered rules lose to unlayered author styles no matter
+   their specificity or order. Wrapping these rules in any @layer block would
+   silently hand the block fills back to the plugin's defaults — a regression
+   that is invisible in one polarity and reads as a wrong token value in the
+   other.
+
+   High-contrast support follows the same dual-block discipline as
+   DiffViewer.css: forced-colors = Windows system palette; prefers-contrast =
+   macOS Increase Contrast, keeping theme colors. The two blocks must stay
+   separate. */
+
+.rendered-markdown-diff {
+  /* The reading measure that centers a document would strand the block markers
+     against the pane edge, and a diff is scanned rather than read at length. */
+  max-width: none;
+}
+
+.rendered-markdown-diff__block {
+  position: relative;
+  /* Contains the child prose margins so a block's fill covers its own content
+     instead of collapsing through the wrapper. */
+  display: flow-root;
+  padding: 0.25rem 0.75rem;
+  border-radius: var(--radius-xs);
+}
+
+/* An unchanged block is the document as it reads — no fill, no edge, nothing
+   competing with the two states that carry meaning. */
+.rendered-markdown-diff__block--unchanged {
+  padding-inline: 0.75rem;
+}
+
+.rendered-markdown-diff__block--added,
+.rendered-markdown-diff__block--removed {
+  /* Real border, not a ring: box-shadow rings are dropped entirely in forced
+     colors, taking the only non-color signal with them. */
+  border-inline-start: 3px solid transparent;
+  padding-inline-start: calc(0.75rem - 3px);
+  margin-block: 0.25rem;
+}
+
+.rendered-markdown-diff__block--added {
+  background: var(--color-diff-insert-background);
+  border-inline-start-color: var(--color-diff-gutter-insert);
+}
+
+.rendered-markdown-diff__block--removed {
+  background: var(--color-diff-delete-background);
+  border-inline-start-color: var(--color-diff-gutter-delete);
+}
+
+/* GitHub's rich-diff treatment: a removed block reads as struck-out prose,
+   which is what makes it legible as "this text is gone" without recoloring the
+   text itself and losing contrast over the fill.
+
+   Declared on the text-bearing descendants rather than on the block wrapper,
+   which is the only way to keep it off code fences and table grids: a text
+   decoration propagates to every descendant of the element that declares it and
+   CANNOT be switched off further down — `text-decoration: none` on the <pre>
+   would be silently ignored. The :has() exclusion drops the line from a
+   container holding a fence or table (a list item wrapping a code block), where
+   the block fill and the marker still carry the state. */
+.rendered-markdown-diff__block--removed
+  :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, dt, dd):not(:has(pre, table)) {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklab, var(--color-text-primary) 45%, transparent);
+  text-decoration-thickness: 1px;
+}
+
+/* The status marker. Sits in the inline-start padding so it never displaces the
+   prose, and is a character rather than a color so the state survives a palette
+   that can't distinguish red from green. */
+.rendered-markdown-diff__marker {
+  position: absolute;
+  inset-inline-start: 0.125rem;
+  top: 0.3rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+  user-select: none;
+  text-decoration: none;
+}
+
+.rendered-markdown-diff__block--added > .rendered-markdown-diff__marker {
+  color: var(--color-diff-gutter-insert);
+}
+
+.rendered-markdown-diff__block--removed > .rendered-markdown-diff__marker {
+  color: var(--color-diff-gutter-delete);
+}
+
+/* Word-level marks inside a modified block, using the same edit fills the line
+   diff uses for intra-line marks so the two surfaces read identically. */
+.rendered-markdown-diff__inline {
+  border-radius: var(--radius-xs);
+  padding-block: 0.05em;
+}
+
+.rendered-markdown-diff__inline--added {
+  background: var(--color-diff-insert-edit-background);
+}
+
+.rendered-markdown-diff__inline--removed {
+  background: var(--color-diff-delete-edit-background);
+}
+
+/* A modified block's two halves are one thought; keep them adjacent and let the
+   gap between pairs do the separating. */
+.rendered-markdown-diff__pair > .rendered-markdown-diff__block + .rendered-markdown-diff__block {
+  margin-block-start: 0;
+}
+
+@media (forced-colors: active) {
+  /* Author fills are dropped by the system anyway; the edge and the marker are
+     what survive, so they carry the whole signal here. */
+  .rendered-markdown-diff__block--added,
+  .rendered-markdown-diff__block--removed {
+    background: Canvas;
+    border-inline-start-width: 4px;
+  }
+
+  .rendered-markdown-diff__block--added {
+    border-inline-start-color: Highlight;
+  }
+
+  .rendered-markdown-diff__block--removed {
+    border-inline-start-color: LinkText;
+  }
+
+  .rendered-markdown-diff__block--added > .rendered-markdown-diff__marker,
+  .rendered-markdown-diff__block--removed > .rendered-markdown-diff__marker {
+    color: CanvasText;
+  }
+
+  /* A background can't mark a word here, so the underline does. */
+  .rendered-markdown-diff__inline {
+    background: none;
+    text-decoration: underline dotted CanvasText;
+    text-underline-offset: 2px;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .rendered-markdown-diff__block--added,
+  .rendered-markdown-diff__block--removed {
+    border-inline-start-width: 4px;
+  }
+
+  .rendered-markdown-diff__block--removed
+    :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, dt, dd):not(:has(pre, table)) {
+    text-decoration-color: var(--color-text-primary);
+  }
+}

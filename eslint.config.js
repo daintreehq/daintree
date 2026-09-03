@@ -774,6 +774,7 @@ export default tseslint.config(
       "src/components/Worktree/diffTokenRanges.ts",
       "src/components/Worktree/diffTokenizePipeline.ts",
       "src/components/Worktree/diffTokenizer.ts",
+      "src/components/Worktree/markdownBlockDiff.ts",
     ],
     rules: { "no-restricted-imports": "off" },
   },

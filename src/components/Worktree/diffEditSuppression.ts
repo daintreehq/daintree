@@ -14,7 +14,28 @@ import type { TokenPath, TokenizeEnhancer } from "react-diff-view";
  * ·/→ glyphs (renderTokenWithInvisibles), which is the only visible signal
  * an indentation-only change has.
  */
-const EDIT_COVERAGE_LIMIT = 0.6;
+export const EDIT_COVERAGE_LIMIT = 0.6;
+
+/**
+ * The judgment itself, separated from the token plumbing so the rendered
+ * Markdown diff can apply it to a block's visible text (issue #12171). Both
+ * callers must agree: a unit whose edits cover more than EDIT_COVERAGE_LIMIT of
+ * its characters was rewritten, and the marks stop saying what changed.
+ *
+ * `editedText` is every edited character concatenated. Whitespace-only edits
+ * are exempt at any coverage — in the line diff their mark is the ·/→ glyph
+ * that is the only visible signal of an indentation change, and in the block
+ * diff a whitespace-only edit has no other visible signal either.
+ */
+export function shouldSuppressEdits(
+  totalLength: number,
+  editedLength: number,
+  editedText: string
+): boolean {
+  if (editedLength === 0 || totalLength === 0) return false;
+  if (editedLength / totalLength <= EDIT_COVERAGE_LIMIT) return false;
+  return /[^ \t]/.test(editedText);
+}
 
 function pathText(path: TokenPath): string {
   const leaf = path[path.length - 1];
@@ -37,8 +58,7 @@ function suppressLine(line: TokenPath[]): TokenPath[] {
       editText += text;
     }
   }
-  if (edited === 0 || total === 0 || edited / total <= EDIT_COVERAGE_LIMIT) return line;
-  if (!/[^ \t]/.test(editText)) return line;
+  if (!shouldSuppressEdits(total, edited, editText)) return line;
   return line.map((path) =>
     isEditPath(path) ? path.filter((node) => node.type !== "edit") : path
   );

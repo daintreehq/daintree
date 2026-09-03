@@ -102,10 +102,16 @@ export function diffCacheKey(subject: DiffSubject, ignoreWhitespace: boolean): s
   ].join("\u0000");
 }
 
-/** Drop every entry built under the other ignore-whitespace flag. */
-export function purgeOtherWhitespaceEntries(ignoreWhitespace: boolean): void {
+/**
+ * Drop every entry built under an ignore-whitespace flag nothing can ask for
+ * any more. Takes the set of live flags rather than a single one: the rendered
+ * Markdown layout requests exact patches regardless of the preference, so both
+ * variants can be legitimately in use at once (#12171).
+ */
+export function purgeWhitespaceEntriesExcept(live: readonly boolean[]): void {
+  const suffixes = live.map((flag) => `\u0000${flag}`);
   for (const key of [...diffCache.keys()]) {
-    if (!key.endsWith(`\u0000${ignoreWhitespace}`)) diffCache.delete(key);
+    if (!suffixes.some((suffix) => key.endsWith(suffix))) diffCache.delete(key);
   }
 }
 

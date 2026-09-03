@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -41,18 +50,35 @@ import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { usePanelStore } from "@/store/panelStore";
-import { usePreferencesStore, type DiffFontSize } from "@/store/preferencesStore";
+import {
+  usePreferencesStore,
+  type DiffFontSize,
+  type DiffViewType,
+} from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { useDiffContent } from "./useDiffContent";
 import { useDiffFileSource } from "./useDiffFileSource";
 import { getFullFileAvailability } from "./fullFileAvailability";
+import {
+  getRenderedMarkdownAvailability,
+  isRenderedMarkdownSupported,
+} from "./renderedMarkdownAvailability";
+import type { MarkdownDiffFailure } from "@/components/Worktree/markdownBlockDiff";
 import type { DiffSubject } from "./diffContentCache";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 
-type DiffViewType = "split" | "unified";
+/**
+ * The layout segments the toolbar offers. `rendered` is deliberately not a
+ * `DiffViewType`: that union is the source diff's layout and is read by
+ * surfaces which render no such mode (the file panel, the cross-worktree diff),
+ * so it stays closed and rendered rides a separate preference (#12171). Keeping
+ * them apart is also what makes the round trip sticky — leaving rendered mode
+ * returns the user to the Unified or Split they were last on.
+ */
+type DiffPaneLayout = DiffViewType | "rendered";
 
 /**
  * How much of the file the diff renders. Kept separate from `DiffViewType`:
@@ -89,6 +115,15 @@ const DIFF_FONT_SIZE: Record<DiffFontSize, string> = {
   m: "var(--text-xs)",
   l: "var(--text-sm)",
 };
+
+// react-markdown plus the remark pipeline behind it are several hundred KB that
+// no source diff needs, and DiffPane is on the first-render path. Same lazy
+// boundary MarkdownViewer draws around MarkdownDocument.
+const LazyRenderedMarkdownDiff = lazy(() =>
+  import("@/components/Worktree/RenderedMarkdownDiff").then((m) => ({
+    default: m.RenderedMarkdownDiff,
+  }))
+);
 
 export interface DiffPaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -178,6 +213,9 @@ export function DiffPane({
   const setDiffViewType = usePreferencesStore((s) => s.setDiffViewType);
   const diffWrapLines = usePreferencesStore((s) => s.diffWrapLines);
   const setDiffWrapLines = usePreferencesStore((s) => s.setDiffWrapLines);
+  const diffMarkdownRendered = usePreferencesStore((s) => s.diffMarkdownRendered);
+  const setDiffMarkdownRendered = usePreferencesStore((s) => s.setDiffMarkdownRendered);
+  const markdownFontSize = usePreferencesStore((s) => s.markdownFontSize);
   const diffFullFile = usePreferencesStore((s) => s.diffFullFile);
   const setDiffFullFile = usePreferencesStore((s) => s.setDiffFullFile);
   const diffShowFileList = usePreferencesStore((s) => s.diffShowFileList);
@@ -281,7 +319,17 @@ export function DiffPane({
     [diffSource, panelBaseBranch, worktreePath, nextPath, nextStatus, currentBranch]
   );
 
-  const { content, stale, retry } = useDiffContent(subject, nextSubject);
+  // Decided from the subject alone, before any content exists: the request's
+  // whitespace sensitivity depends on it, so it cannot wait on the verdict that
+  // needs the content the request produces.
+  const renderedSupported = isRenderedMarkdownSupported(filePath, diffSource);
+  const renderedRequested = diffMarkdownRendered && renderedSupported;
+  const renderedContentOptions = useMemo(
+    () => (renderedRequested ? { ignoreWhitespace: false } : undefined),
+    [renderedRequested]
+  );
+
+  const { content, stale, retry } = useDiffContent(subject, nextSubject, renderedContentOptions);
 
   const viewedSet = useDiffViewedStore(
     useCallback((state) => selectViewedSet(state, worktreePath), [worktreePath])
@@ -477,7 +525,23 @@ export function DiffPane({
     () => (worktreePath && filePath ? { worktreePath, filePath } : null),
     [worktreePath, filePath]
   );
-  const { source, errorCode: sourceErrorCode } = useDiffFileSource(sourceSubject, wantsFullFile);
+  // The rendered layout rebuilds the old document by reverse-applying the patch
+  // onto the current file, so it needs the same whole-file read the full-file
+  // scope does. A deleted file is the exception: its patch already carries every
+  // line of the old document, and there is nothing on disk to read.
+  //
+  // Gated on `hasDiff` and `!stale` for the same reason `wantsFullFile` is, and
+  // that gate is what makes Refresh work: clearing the diff drops `hasDiff`,
+  // which disables the read and invalidates whatever it held, so a new patch
+  // can never be paired with the file snapshot the old one was measured
+  // against. Without it, a Refresh after a partial revert would verify the one
+  // surviving hunk and then copy the reverted text out of the stale snapshot as
+  // trusted context.
+  const renderedNeedsSource = renderedRequested && hasDiff && !stale && fileStatus !== "deleted";
+  const { source, errorCode: sourceErrorCode } = useDiffFileSource(
+    sourceSubject,
+    wantsFullFile || renderedNeedsSource
+  );
 
   // Reported by the viewer once it has the parsed diff and the source side by
   // side — the mismatch and size checks can only be made there.
@@ -498,6 +562,65 @@ export function DiffPane({
   const activeViewerFallback =
     viewerVerdict && viewerVerdict.source === source ? viewerVerdict.reason : null;
 
+  // The whole input the engine consumes. The verdict is stamped with this
+  // rather than with the patch text alone, because a verdict outliving its
+  // inputs is a latch: two attempts on one file can share a patch and differ in
+  // the source, and a failure recorded against the patch would then disqualify
+  // every later attempt that reused it.
+  const renderedAttemptKey = `${filePath ?? ""}\u0000${fileStatus ?? ""}\u0000${content ?? ""}\u0000${source ?? ""}`;
+
+  const [renderedVerdict, setRenderedVerdict] = useState<{
+    attempt: string;
+    reason: MarkdownDiffFailure | null;
+  } | null>(null);
+  const handleRenderedVerdict = useCallback(
+    (reason: MarkdownDiffFailure | null, forAttempt: string) => {
+      setRenderedVerdict({ attempt: forAttempt, reason });
+    },
+    []
+  );
+  const renderedEngineFailure =
+    renderedVerdict && renderedVerdict.attempt === renderedAttemptKey
+      ? renderedVerdict.reason
+      : null;
+
+  // The whole-file read hasn't landed yet. Handing the engine an absent source
+  // would make it report `source-required` — a failure the availability verdict
+  // latches onto, disabling the segment over a read that was merely in flight.
+  // This is a loading state, so the body shows a skeleton instead.
+  const renderedSourcePending = renderedNeedsSource && source === undefined && !sourceErrorCode;
+
+  const renderedAvailability = getRenderedMarkdownAvailability({
+    filePath,
+    diffSource,
+    content,
+    stale,
+    // Only relevant once the rendered layout is the thing waiting on the read —
+    // a failed full-file read says nothing about a layout that never asked.
+    sourceErrorCode: renderedNeedsSource ? sourceErrorCode : null,
+    engineFailure: renderedEngineFailure,
+  });
+
+  // What the body actually shows. A requested rendered layout that turns out to
+  // be unavailable falls back to the source diff without clearing the
+  // preference, so the file that can't render doesn't cost the user the setting
+  // — the same clamp shape the file panel applies to its own view modes.
+  const showRendered =
+    renderedRequested && renderedAvailability.visible && renderedAvailability.enabled;
+  const layout: DiffPaneLayout = showRendered ? "rendered" : diffViewType;
+
+  const handleLayoutChange = useCallback(
+    (next: DiffPaneLayout) => {
+      if (next === "rendered") {
+        setDiffMarkdownRendered(true);
+        return;
+      }
+      setDiffMarkdownRendered(false);
+      setDiffViewType(next);
+    },
+    [setDiffMarkdownRendered, setDiffViewType]
+  );
+
   // Only the diff is retried: clearing it drops `hasDiff`, which disables the
   // source hook and invalidates its read, and the source is fetched again when
   // the new diff lands. Retrying both here would issue that read twice. The
@@ -512,16 +635,20 @@ export function DiffPane({
   // never got far enough to have one. `recoverable` marks the notices a refresh
   // can actually clear — a hunkless rename never grows hunks and an over-size
   // file never shrinks, so those get no action rather than one that can't work.
-  const fullFileNotice: { message: string; recoverable: boolean } | null = wantsFullFile
-    ? sourceErrorCode
-      ? { message: FILE_READ_ERROR_MESSAGES[sourceErrorCode], recoverable: true }
-      : activeViewerFallback
-        ? {
-            message: FULL_FILE_FALLBACK_MESSAGES[activeViewerFallback],
-            recoverable: activeViewerFallback === "source-mismatch",
-          }
-        : null
-    : null;
+  // Suppressed while the rendered layout owns the body: it shows the whole
+  // document regardless, so a notice explaining why the full file isn't on
+  // screen would be describing a scope that isn't in force.
+  const fullFileNotice: { message: string; recoverable: boolean } | null =
+    wantsFullFile && !showRendered
+      ? sourceErrorCode
+        ? { message: FILE_READ_ERROR_MESSAGES[sourceErrorCode], recoverable: true }
+        : activeViewerFallback
+          ? {
+              message: FULL_FILE_FALLBACK_MESSAGES[activeViewerFallback],
+              recoverable: activeViewerFallback === "source-mismatch",
+            }
+          : null
+      : null;
 
   // The reason rides an aria-describedby rather than the tooltip alone: a
   // disabled segment takes no focus, so a keyboard or screen-reader user would
@@ -553,6 +680,55 @@ export function DiffPane({
     </div>
   );
 
+  const renderedSkeleton = (
+    <div className="p-4 space-y-3">
+      <Skeleton label="Loading rendered Markdown">
+        <SkeletonBone className="h-7 w-3/4" />
+        <SkeletonText lines={8} />
+      </Skeleton>
+    </div>
+  );
+
+  const renderedDisabledReason =
+    renderedAvailability.visible && !renderedAvailability.enabled
+      ? renderedAvailability.reason
+      : null;
+  const layoutReasonId = `${id}-rendered-reason`;
+  const layoutToggle = (
+    <div
+      role="group"
+      aria-label="Diff layout"
+      aria-describedby={renderedDisabledReason ? layoutReasonId : undefined}
+    >
+      <SegmentedToggle<DiffPaneLayout>
+        options={[
+          { value: "unified", label: "Unified" },
+          { value: "split", label: "Split" },
+          // Absent rather than disabled for a non-Markdown file: a rendered
+          // layout there isn't something the user was denied, it's something
+          // that doesn't exist, and a permanently dead segment on every source
+          // diff is noise.
+          ...(renderedAvailability.visible
+            ? [
+                {
+                  value: "rendered" as const,
+                  label: "Rendered",
+                  disabled: Boolean(renderedDisabledReason),
+                },
+              ]
+            : []),
+        ]}
+        value={layout}
+        onChange={handleLayoutChange}
+      />
+      {renderedDisabledReason && (
+        <span id={layoutReasonId} className="sr-only">
+          {renderedDisabledReason}
+        </span>
+      )}
+    </div>
+  );
+
   const fileName = filePath?.split(/[/\\]/).filter(Boolean).pop();
   const displayTitle = panel?.titleMode === "user" ? title : (fileName ?? title);
 
@@ -560,31 +736,39 @@ export function DiffPane({
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root label="Diff viewer controls">
-        {!isImageMode && !isMediaMode && !isPdfMode && (
-          <div role="group" aria-label="Diff layout">
-            <SegmentedToggle<DiffViewType>
-              options={[
-                { value: "unified", label: "Unified" },
-                { value: "split", label: "Split" },
-              ]}
-              value={diffViewType}
-              onChange={setDiffViewType}
-            />
-          </div>
-        )}
-        {fullFileAvailability.available ? (
-          scopeToggle
-        ) : (
-          // A disabled segment can't host a tooltip trigger of its own
-          // (pointer-events are off), so the explanation hangs off the wrapper.
-          <Tooltip>
-            <TooltipTrigger asChild>{scopeToggle}</TooltipTrigger>
-            <TooltipContent side="bottom">{fullFileAvailability.reason}</TooltipContent>
-          </Tooltip>
-        )}
+        {!isImageMode &&
+          !isMediaMode &&
+          !isPdfMode &&
+          (renderedDisabledReason ? (
+            // Same pattern as the scope toggle: a disabled segment takes no
+            // pointer events and no focus, so the reason hangs off the wrapper as
+            // both a tooltip and a description the keyboard path can reach.
+            <Tooltip>
+              <TooltipTrigger asChild>{layoutToggle}</TooltipTrigger>
+              <TooltipContent side="bottom">{renderedDisabledReason}</TooltipContent>
+            </Tooltip>
+          ) : (
+            layoutToggle
+          ))}
+        {/* Content scope is meaningless in the rendered layout, which always
+            shows the whole document — and a control that does nothing is worse
+            than an absent one. The preference is left untouched, so returning to
+            a source layout restores whatever scope was in force. */}
+        {!showRendered &&
+          (fullFileAvailability.available ? (
+            scopeToggle
+          ) : (
+            // A disabled segment can't host a tooltip trigger of its own
+            // (pointer-events are off), so the explanation hangs off the wrapper.
+            <Tooltip>
+              <TooltipTrigger asChild>{scopeToggle}</TooltipTrigger>
+              <TooltipContent side="bottom">{fullFileAvailability.reason}</TooltipContent>
+            </Tooltip>
+          ))}
         <FileViewerToolbar.Path path={filePath} copied={pathCopied} onCopy={handleCopyPath} />
         <FileViewerToolbar.Actions>
-          {!isImageMode && !isMediaMode && !isPdfMode && (
+          {/* Rendered prose already wraps; the control would toggle nothing. */}
+          {!isImageMode && !isMediaMode && !isPdfMode && !showRendered && (
             <FileViewerToolbar.IconButton
               label="Wrap long lines"
               pressed={effectiveWrapLines}
@@ -839,18 +1023,42 @@ export function DiffPane({
                 />
               ))}
 
-            {filePath && subject && !isImageMode && !isMediaMode && !isPdfMode && content && (
-              <DiffViewer
-                diff={content}
-                viewType={diffViewType}
-                rootPath={worktreePath}
-                source={wantsFullFile ? source : undefined}
-                fullFile={wantsFullFile}
-                onFullFileVerdict={handleFullFileVerdict}
-                wrapLines={effectiveWrapLines}
-                onRetry={retry}
-              />
-            )}
+            {filePath &&
+              subject &&
+              !isImageMode &&
+              !isMediaMode &&
+              !isPdfMode &&
+              content &&
+              (showRendered ? (
+                <Suspense fallback={renderedSkeleton}>
+                  {renderedSourcePending ? (
+                    renderedSkeleton
+                  ) : (
+                    <LazyRenderedMarkdownDiff
+                      diff={content}
+                      newSource={renderedNeedsSource ? source : undefined}
+                      status={fileStatus ?? "modified"}
+                      filePath={absolutePath ?? filePath}
+                      rootPath={worktreePath}
+                      cacheBust={String(previewReloadNonce)}
+                      fontSize={markdownFontSize}
+                      attemptKey={renderedAttemptKey}
+                      onVerdict={handleRenderedVerdict}
+                    />
+                  )}
+                </Suspense>
+              ) : (
+                <DiffViewer
+                  diff={content}
+                  viewType={diffViewType}
+                  rootPath={worktreePath}
+                  source={wantsFullFile ? source : undefined}
+                  fullFile={wantsFullFile}
+                  onFullFileVerdict={handleFullFileVerdict}
+                  wrapLines={effectiveWrapLines}
+                  onRetry={retry}
+                />
+              ))}
 
             {filePath && subject && !isImageMode && !isMediaMode && !isPdfMode && !content && (
               <div className="p-4 space-y-3">

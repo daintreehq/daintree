@@ -3,13 +3,25 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import {
   diffCacheKey,
-  purgeOtherWhitespaceEntries,
+  purgeWhitespaceEntriesExcept,
   requestDiff,
   selectDiffFreshnessKey,
   type DiffSubject,
 } from "./diffContentCache";
 
 const PREFETCH_DWELL_MS = 500;
+
+export interface UseDiffContentOptions {
+  /**
+   * Force the whitespace sensitivity of the request instead of following the
+   * preference. The rendered Markdown layout needs an exact patch: it rebuilds
+   * the old document by reverse-applying the hunks, and an --ignore-all-space
+   * patch omits indentation changes that in Markdown change the structure —
+   * a list nested one level deeper would reconstruct as though it never moved
+   * (#12171). Undefined means "use the preference".
+   */
+  ignoreWhitespace?: boolean;
+}
 
 export interface UseDiffContentResult {
   /** Diff text, `"NO_CHANGES"`, `"ERROR"`, or undefined while loading. */
@@ -29,7 +41,8 @@ export interface UseDiffContentResult {
  */
 export function useDiffContent(
   subject: DiffSubject | null,
-  nextSubject?: DiffSubject | null
+  nextSubject?: DiffSubject | null,
+  options?: UseDiffContentOptions
 ): UseDiffContentResult {
   const [content, setContent] = useState<string | undefined>(undefined);
   // Freshness key the shown diff was fetched under, tagged with its cache key
@@ -40,7 +53,8 @@ export function useDiffContent(
     key: string | undefined;
   } | null>(null);
   const requestRef = useRef(0);
-  const ignoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
+  const preferredIgnoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
+  const ignoreWhitespace = options?.ignoreWhitespace ?? preferredIgnoreWhitespace;
 
   // Tolerate hosts mounted without a worktree-store provider (mirrors
   // useFleetPicker): staleness detection simply never fires there.
@@ -67,9 +81,13 @@ export function useDiffContent(
   // Toggling ignore-whitespace strands every entry built under the other flag
   // (their keys can no longer be requested this session unless the user
   // toggles back, and a long review can hold 20 stale diffs). Purge them.
+  // Both variants are live now, so the purge keeps both: the preference's, and
+  // the exact patches the rendered Markdown layout overrides to. Purging
+  // against one flag would have every mount of any pane — this hook also backs
+  // the file panel — evict whichever set it isn't currently asking for.
   useEffect(() => {
-    purgeOtherWhitespaceEntries(ignoreWhitespace);
-  }, [ignoreWhitespace]);
+    purgeWhitespaceEntriesExcept([preferredIgnoreWhitespace, false]);
+  }, [preferredIgnoreWhitespace]);
 
   const subjectKey = subject === null ? null : diffCacheKey(subject, ignoreWhitespace);
 
