@@ -51,6 +51,10 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
   const [isOpen, setIsOpen] = useState(false);
   const [result, setResult] = useState<CodexFolderSessionsResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // Sibling-held session ids at the moment sessions were last fetched — see
+  // the load() callback below for why this is computed there rather than
+  // read here at render time.
+  const [heldElsewhere, setHeldElsewhere] = useState<ReadonlySet<string>>(new Set());
   const showSpinner = useDohertyGate(isLoading);
   const addPanel = usePanelStore((state) => state.addPanel);
 
@@ -79,7 +83,25 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
     setIsLoading(true);
     void codexClient
       .findSessions({ cwd, codexHome })
-      .then(setResult)
+      .then((response) => {
+        setResult(response);
+        // A sibling pane already holding one of these conversations isn't
+        // worth offering back — reopening it would put two writers on one
+        // transcript, exactly the collision restore's own suppression exists
+        // to prevent (#11461). Snapshotted here, at fetch time, rather than
+        // read live during render: a render body reading the store outside
+        // its subscribed selector is impure and the React Compiler bails out
+        // on it, and this list only matters while the popover is open anyway
+        // — it doesn't need to track panes that open or close in the
+        // background.
+        const held = new Set<string>();
+        for (const panel of Object.values(usePanelStore.getState().panelsById)) {
+          if (panel.id === panelId || !isPtyPanel(panel)) continue;
+          const heldAgentId = panel.runtimeIdentity?.agentId ?? panel.launchAgentId;
+          if (heldAgentId === "codex" && panel.agentSessionId) held.add(panel.agentSessionId);
+        }
+        setHeldElsewhere(held);
+      })
       .catch((error: unknown) => {
         logWarn(
           `[FindCodexSessionAction] query failed: ${formatErrorMessage(error, "unknown error")}`
@@ -87,24 +109,10 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
         setResult({ status: "unavailable", reason: "protocol-error" });
       })
       .finally(() => setIsLoading(false));
-  }, [cwd, codexHome, isLoading]);
+  }, [cwd, codexHome, isLoading, panelId]);
 
   if (agentId !== "codex") return null;
 
-  // A sibling pane already holding one of these conversations isn't worth
-  // offering back — reopening it would put two writers on one transcript,
-  // exactly the collision restore's own suppression exists to prevent
-  // (#11461). Read fresh off the store rather than a subscription: this list
-  // only matters while the popover is open, so it doesn't need to track
-  // panes that open or close in the background.
-  const heldElsewhere = new Set<string>();
-  if (result?.status === "ok") {
-    for (const panel of Object.values(usePanelStore.getState().panelsById)) {
-      if (panel.id === panelId || !isPtyPanel(panel)) continue;
-      const heldAgentId = panel.runtimeIdentity?.agentId ?? panel.launchAgentId;
-      if (heldAgentId === "codex" && panel.agentSessionId) heldElsewhere.add(panel.agentSessionId);
-    }
-  }
   const sessions: CodexFolderSession[] =
     result?.status === "ok"
       ? result.sessions.filter((session) => !heldElsewhere.has(session.id))
@@ -139,7 +147,7 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+          className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-border-default/50 transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
         >
           <Search className="w-3 h-3" aria-hidden="true" />
           Find session
@@ -154,7 +162,7 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
             type="button"
             onClick={load}
             disabled={isLoading}
-            className="text-daintree-text/40 hover:text-text-primary transition-colors disabled:opacity-50 disabled:pointer-events-none"
+            className="text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50 disabled:pointer-events-none"
             aria-label="Refresh sessions"
           >
             <RefreshCw className={cn("w-3 h-3", isLoading && "animate-spin")} aria-hidden="true" />
