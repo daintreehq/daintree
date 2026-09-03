@@ -99,6 +99,49 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     expect(written.state.showProjectPulse).toBe(false);
   });
 
+  it("a sibling's explicit wrap `false` survives a write from a view still on auto", async () => {
+    // `diffWrapLines` is the one tri-state scalar here (#12170). `null` is a
+    // real value, not an absent one, so the merge has to tell "this view never
+    // touched it" from "this view set it to false" — a falsy-coercing or
+    // null-skipping comparison would resurrect auto and re-wrap every prose
+    // diff the sibling had deliberately unwrapped.
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+    expect(store.getState().diffWrapLines).toBeNull();
+
+    backing.set(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: store.persist.getOptions().version,
+        state: { diffWrapLines: false },
+      })
+    );
+
+    // This view changes something unrelated while its own baseline is auto.
+    store.getState().setDockDensity("compact");
+
+    const written = readBlob(backing);
+    expect(written.state.diffWrapLines).toBe(false);
+    expect(written.state.dockDensity).toBe("compact");
+  });
+
+  it("this view's explicit wrap choice beats a sibling's on-disk value", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    backing.set(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: store.persist.getOptions().version,
+        state: { diffWrapLines: true },
+      })
+    );
+
+    store.getState().setDiffWrapLines(false);
+
+    expect(readBlob(backing).state.diffWrapLines).toBe(false);
+  });
+
   it("independent map and scalar changes from two views both survive", async () => {
     const backing = installLocalStorage({});
     const { usePreferencesStore: store } = await import("../preferencesStore");

@@ -21,6 +21,7 @@ import { FolderOpen, FolderTree } from "@/components/icons";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
+import { isProseFilePath } from "@/components/FileViewer/isProseFile";
 import { MarkdownTextSizeControl } from "@/components/Markdown/MarkdownTextSizeControl";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
@@ -277,11 +278,17 @@ export function FilePane({
   // across every surface that shows a diff.
   const diffViewType = usePreferencesStore((state) => state.diffViewType);
   const diffWrapLines = usePreferencesStore((state) => state.diffWrapLines);
+  const setDiffWrapLines = usePreferencesStore((state) => state.setDiffWrapLines);
 
   const heightHold = useHeightHold();
 
   const filePath = panel?.filePath;
   const isMarkdown = filePath !== undefined && isMarkdownFilePath(filePath);
+  // `null` means auto — prose wraps, code doesn't. Resolved during render so a
+  // `.md` diff is already wrapped on first paint, and separate from
+  // `markdownWrapLines`, which owns Source view only (#12170).
+  const effectiveDiffWrapLines =
+    diffWrapLines ?? (filePath !== undefined && isProseFilePath(filePath));
   const isHtml = filePath !== undefined && isHtmlFilePath(filePath);
   // Markdown and HTML get a Rendered mode; every other file is source-only.
   const isRenderable = isMarkdown || isHtml;
@@ -1064,6 +1071,19 @@ export function FilePane({
               <WrapText className={TOOLBAR_ICON_CLASS} />
             </FileViewerToolbar.IconButton>
           )}
+          {/* Diff mode's own wrap, on the shared `diffWrapLines` the diff panel
+              writes — not the markdown one above it, which only ever applied to
+              Source view. Ungated by file type: the diff below renders as text
+              for every file, images and binaries included. */}
+          {viewMode === "diff" && (
+            <FileViewerToolbar.IconButton
+              label="Wrap long lines"
+              pressed={effectiveDiffWrapLines}
+              onClick={() => setDiffWrapLines(!effectiveDiffWrapLines)}
+            >
+              <WrapText className={TOOLBAR_ICON_CLASS} />
+            </FileViewerToolbar.IconButton>
+          )}
           {/* Refresh follows what's on screen — re-reading the file wouldn't
               refetch a diff, and vice versa. */}
           <FileViewerToolbar.IconButton label="Refresh" onClick={handleToolbarRefresh}>
@@ -1197,7 +1217,7 @@ export function FilePane({
                 // so open-in-editor has to join against the same root the
                 // relative paths were derived from.
                 rootPath={diffWorktreePath}
-                wrapLines={diffWrapLines}
+                wrapLines={effectiveDiffWrapLines}
                 onRetry={retryDiff}
               />
             )}
