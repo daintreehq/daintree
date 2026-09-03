@@ -768,51 +768,27 @@ export interface DiffPanelData extends BasePanelData {
   viewedKey?: string;
 }
 
-/** One directory entry in a persisted file-browser tree snapshot. */
-export interface FileBrowserSnapshotNode {
-  /** Entry basename. */
-  name: string;
-  /** Worktree-relative path. */
-  path: string;
-  isDirectory: boolean;
-}
-
-/** One directory's listing in a persisted file-browser tree snapshot. */
-export interface FileBrowserTreeSnapshotEntry {
-  /** Worktree-relative directory path; "" = the browse root's own listing. */
-  dirPath: string;
-  nodes: FileBrowserSnapshotNode[];
-}
-
 /**
- * Structure-only snapshot of a file browser's last-known tree (#11367): entry
- * names, paths and directory bits — never contents, sizes or timestamps.
- * Tagged with the identity it was captured under so a worktree switch or
- * re-root can't seed the wrong tree; a mismatch just cold-starts. Arrays
- * rather than a Map because it round-trips through JSON persistence.
+ * The file-browser tree snapshot and sort types live in their own narrow module
+ * and are re-exported here, so the persisted panel fields below and the tree
+ * model that produces them are one definition rather than two that can drift.
+ * The plugin SDK ships that model and imports the same module directly — it
+ * cannot import `panel.ts`, which would drag the whole renderer type graph into
+ * a dependency-free package.
  */
-export interface FileBrowserTreeSnapshot {
-  /** Absent when the browser is rooted at the workspace itself (#11482). */
-  worktreeId?: string;
-  /**
-   * Absolute root the listings were captured under. Identity only — never
-   * joined against, so it can't strand the panel the way a persisted absolute
-   * *root* would; a mismatch (a relocated project) just cold-starts, which is
-   * the same self-healing outcome as a worktree switch.
-   */
-  basePath?: string;
-  /** Browse root relative to the base at capture time; "" = the base itself. */
-  rootPath: string;
-  listings: FileBrowserTreeSnapshotEntry[];
-}
+export type {
+  FileBrowserSnapshotNode,
+  FileBrowserTreeSnapshotEntry,
+  FileBrowserTreeSnapshot,
+  FileBrowserSortKey,
+  FileBrowserSortDirection,
+} from "./fileBrowserTree.js";
 
-/**
- * What the file browser orders directory entries by (#11620). Lives here
- * rather than beside the comparator in the renderer because it is a persisted
- * panel field, and `shared/` cannot import from `src/`.
- */
-export type FileBrowserSortKey = "name" | "modified" | "size" | "type";
-export type FileBrowserSortDirection = "asc" | "desc";
+import type {
+  FileBrowserTreeSnapshot,
+  FileBrowserSortKey,
+  FileBrowserSortDirection,
+} from "./fileBrowserTree.js";
 
 /**
  * File browser panel — a lazily-expanded directory tree over one folder with a
