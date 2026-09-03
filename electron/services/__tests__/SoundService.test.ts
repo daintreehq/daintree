@@ -124,7 +124,7 @@ describe("SoundService", () => {
 
   // -- Web Audio IPC routing --
 
-  it("sends sound:trigger IPC when renderer is available", () => {
+  it("routes sound:trigger to visible renderers only, never the global broadcast", () => {
     mockGetAllWindows.mockReturnValue([{ id: 1 }]);
 
     soundService.preview("error");
@@ -132,12 +132,7 @@ describe("SoundService", () => {
     expect(mockBroadcastToVisibleRenderers).toHaveBeenCalledWith("sound:trigger", {
       soundFile: "error.wav",
     });
-    // Cached project views each own an AudioContext — a global broadcast would
-    // play one copy per open project and wake frozen renderers (#12177).
-    expect(mockBroadcastToRenderer).not.toHaveBeenCalledWith(
-      "sound:trigger",
-      expect.anything()
-    );
+    expect(mockBroadcastToRenderer).not.toHaveBeenCalled();
     expect(mockPlaySound).not.toHaveBeenCalled();
   });
 
@@ -169,8 +164,7 @@ describe("SoundService", () => {
       name: "sound:cancel",
       payload: undefined,
     });
-    // Cancel stays global on purpose: a view can be cached after starting or
-    // decoding a sound, and caching never disposes its AudioContext (#12177).
+    // Cancel must reach cached views too — see the WHY in SoundService.cancel().
     expect(mockBroadcastToVisibleRenderers).not.toHaveBeenCalled();
     expect(mockCancel).not.toHaveBeenCalled();
   });
@@ -232,7 +226,7 @@ describe("SoundService", () => {
     });
   });
 
-  it("broadcasts sound:trigger with volume via playDampened when windows are available", () => {
+  it("routes dampened sound:trigger to visible renderers only, never the global broadcast", () => {
     mockGetAllWindows.mockReturnValue([{ id: 1 }]);
 
     soundService.play("error");
@@ -241,6 +235,8 @@ describe("SoundService", () => {
       soundFile: "error.wav",
       volume: 1,
     });
+    // Catches an accidental dual-send, which the positive assertion alone would not.
+    expect(mockBroadcastToRenderer).not.toHaveBeenCalled();
     expect(mockPlaySound).not.toHaveBeenCalled();
   });
 
