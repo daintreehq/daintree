@@ -782,12 +782,18 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         projectId,
         restore: validatedOptions.restore,
         isEphemeral: validatedOptions.isEphemeral,
-        // Seal the assistant's identity onto the record itself. Derived from
-        // the validated help token above, never from a renderer-supplied
-        // field: a pane that could assert this would opt itself out of the
-        // session journal. The generic terminal paths read it back through
-        // `isAssistantTerminalRecord`.
-        isAssistantTerminal: isHelpLaunch,
+        // Seal the assistant's identity onto the record itself, for the
+        // generic terminal paths to read back through
+        // `isAssistantTerminalRecord`. Derived in main, never from a
+        // renderer-supplied field: a pane that could assert this would opt
+        // itself out of the session journal.
+        //
+        // The live binding is the second source because a restart respawns the
+        // same panel id with a rebuilt env that carries no help token
+        // (`buildRestartEnv`), so `isHelpLaunch` is false there — and nothing
+        // unbinds the session on a restart's kill. Without it, Restart All
+        // Terminals would quietly strip the assistant's identity.
+        isAssistantTerminal: isHelpLaunch || helpSessionService.isHelpTerminal(id),
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
         agentSessionId: validatedOptions.agentSessionId,

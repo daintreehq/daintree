@@ -1,10 +1,5 @@
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 
-/**
- * The subset of a backend terminal record this predicate needs. Every generic
- * path already holds something of this shape — the pty-host record, a
- * `getAllTerminalsAsync` snapshot, or a `get-terminal` response.
- */
 export interface AssistantTerminalCandidate {
   id: string;
   isAssistantTerminal?: boolean;
@@ -12,7 +7,8 @@ export interface AssistantTerminalCandidate {
 
 /**
  * Whether a terminal record belongs to the Daintree Assistant overlay rather
- * than the grid.
+ * than the grid. ("Assistant" here is what older main-process code calls
+ * "help".)
  *
  * The single predicate every generic terminal path consults, so the assistant
  * cannot fall into a filter's default "treat as an ordinary pane" bucket the
@@ -21,29 +17,24 @@ export interface AssistantTerminalCandidate {
  *
  * Two sources, deliberately OR'd:
  *
- * - `isAssistantTerminal` — sealed onto the record at spawn from the spawn
- *   handler's validated help token. Authoritative and durable: it is readable
- *   from a snapshot taken before a kill, which is the only thing the teardown
- *   paths have once the PTY is gone.
- * - `AgentAvailabilityStore.isHelpTerminal` — the pre-existing renderer mark
- *   (`help.markTerminal`). Kept as a fallback because it also covers records
- *   that predate the stamp, such as a terminal adopted across a pty-host
- *   restart. On its own it is race-prone: the renderer sends it only after the
- *   spawn IPC has returned, so there is a window where the PTY is live and the
- *   mark has not landed — which is what let hydration adopt the assistant.
+ * - `isAssistantTerminal` — sealed onto the record at spawn. Authoritative:
+ *   it is readable from a snapshot taken before a kill, which is all a
+ *   teardown path has once the PTY is gone.
+ * - `AgentAvailabilityStore.isHelpTerminal` — the renderer's
+ *   `help.markTerminal`, kept as a same-window fallback for unstamped
+ *   records. Not sufficient alone: it lands only after the spawn IPC returns,
+ *   and a second window re-initialises the store and drops it.
  *
- * Neither `HelpSessionService.isHelpTerminal` nor `launchAgentId` works here.
- * The former is a *live binding* that goes false on revoke/displace/unbind, so
- * it is already gone by the time a teardown path journals. The latter is just
- * a launch hint: the assistant can be backed by `claude`/`codex`/`copilot`, so
- * its `launchAgentId` is indistinguishable from a user-launched agent's.
+ * Neither `HelpSessionService.isHelpTerminal` nor `launchAgentId` can stand in
+ * here. The former is a live binding that goes false on revoke/displace, so it
+ * is already gone by the time a teardown path journals. The latter is a launch
+ * hint: the assistant can be backed by `claude`/`codex`/`copilot`, making it
+ * indistinguishable from a user-launched agent.
  *
- * Fails open, and never throws. This runs inside the shutdown and project-
- * teardown journal loops, whose surrounding best-effort catches would turn one
- * throw here into "no resume records for anything" — far worse than the single
- * stray assistant record a false answer costs. The record stamp is consulted
- * first, so a stamped assistant is still skipped even if the store is
- * unavailable.
+ * Fails open. This runs inside best-effort journal loops whose surrounding
+ * catches would turn a throw here into "no resume records for anything" — far
+ * worse than the one stray record a false answer costs. The stamp is checked
+ * first, so a stamped assistant is skipped regardless.
  */
 export function isAssistantTerminalRecord(
   terminal: AssistantTerminalCandidate | null | undefined

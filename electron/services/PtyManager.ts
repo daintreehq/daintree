@@ -730,7 +730,11 @@ export class PtyManager extends EventEmitter {
       void (async () => {
         try {
           const { sessionId } = await this.gracefulKill(termId);
-          if (sessionId && info?.launchAgentId) {
+          // The assistant's overlay terminal must never produce a resume
+          // record (#12183). It cannot reach the trash today — the renderer
+          // routes `removeOnExit` panels straight to removal — but that
+          // invariant lives a process away from the record that states it.
+          if (sessionId && info?.launchAgentId && info.isAssistantTerminal !== true) {
             // Best-effort branch stamp for resume sanity checks. The pty-host
             // has FS access but no WorkspaceClient, so resolve directly from
             // git with a short timeout; never let it block or fail the close.

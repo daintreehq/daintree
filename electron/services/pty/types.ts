@@ -38,10 +38,9 @@ export interface TerminalPublicState {
    */
   launchAgentId?: AgentId;
   /**
-   * This PTY backs the Daintree Assistant overlay rather than a grid pane.
-   * Sealed at spawn and never cleared, so a generic path can recognise the
-   * assistant from a record snapshot taken before the kill — the live
-   * help-session binding is gone by then. See `isAssistantTerminalRecord`.
+   * This PTY backs the Daintree Assistant overlay, not a grid pane. Sealed at
+   * spawn so a teardown path can still recognise it from a pre-kill snapshot.
+   * See `isAssistantTerminalRecord`.
    */
   isAssistantTerminal?: boolean;
   title?: string;

@@ -98,6 +98,8 @@ export interface CountableTerminal {
   detectedAgentId?: string;
   launchAgentId?: string;
   everDetectedAgent?: boolean;
+  /** Sealed at spawn: this PTY backs the Daintree Assistant overlay (#12183). */
+  isAssistantTerminal?: boolean;
   /**
    * When this PTY was spawned. Read only to tell one assistant session from
    * another during a displacement — `AgentStateService` already treats it as
@@ -144,6 +146,13 @@ export function classifyRun(
   // counts as an agent. Named rather than silently dropped so callers can net
   // it out of a process count the host already included it in, and so its
   // state can be carried as presence instead of vanishing (#11806).
+  //
+  // The record stamp is checked first because the callback reads a mark the
+  // renderer sends only after the spawn IPC returns, leaving a window where a
+  // live assistant tallies as a working agent (#12183). Read inline rather
+  // than through `isAssistantTerminalRecord` so this stays importable from the
+  // pty-host, which has no availability store.
+  if (terminal.isAssistantTerminal === true) return "help";
   if (terminal.id !== undefined && isHelpTerminal(terminal.id)) return "help";
 
   if (terminal.kind === "dev-preview") return "dev-preview";

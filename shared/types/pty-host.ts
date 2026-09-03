@@ -65,12 +65,8 @@ export interface PtyHostSpawnOptions {
   isEphemeral?: boolean;
   /**
    * This PTY backs the Daintree Assistant overlay rather than a grid pane.
-   *
-   * Stamped by Main from the spawn handler's already-validated `isHelpLaunch`
-   * — never from a renderer-supplied field, which would let any pane claim
-   * assistant status and opt itself out of journaling. Durable on the record
-   * so the generic terminal paths can still recognise it from a pre-kill
-   * snapshot, long after the live help-session binding has been torn down.
+   * Stamped by Main from a validated help token — never from a renderer field,
+   * which would let any pane opt itself out of journaling.
    */
   isAssistantTerminal?: boolean;
   /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */

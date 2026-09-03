@@ -224,6 +224,8 @@ const mockGetAssistantScratchEnv = vi.hoisted(() =>
   vi.fn<(token: string) => Record<string, string> | null>(() => null)
 );
 
+const mockIsHelpTerminal = vi.hoisted(() => vi.fn<(terminalId: string) => boolean>(() => false));
+
 vi.mock("../../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     validateToken: (token: string) => mockValidateToken(token),
@@ -235,7 +237,12 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
     markTerminalForToken: (token: string, terminalId: string) =>
       mockMarkTerminalForToken(token, terminalId),
     unbindTerminal: (terminalId: string) => mockUnbindTerminal(terminalId),
+    isHelpTerminal: (terminalId: string) => mockIsHelpTerminal(terminalId),
   },
+}));
+
+vi.mock("../../../../services/AgentAvailabilityStore.js", () => ({
+  getAgentAvailabilityStore: () => ({ isHelpTerminal: () => false }),
 }));
 
 vi.mock("../../../../services/McpServerService.js", () => ({
@@ -1189,6 +1196,8 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     mockGetBypassPermissions.mockReturnValue(false);
     mockMarkTerminalForToken.mockReset();
     mockMarkTerminalForToken.mockReturnValue(true);
+    mockIsHelpTerminal.mockReset();
+    mockIsHelpTerminal.mockReturnValue(false);
     mockUnbindTerminal.mockReset();
     mockGetAssistantScratchEnv.mockReset();
     mockGetAssistantScratchEnv.mockReturnValue(null);
@@ -1243,6 +1252,33 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
         command: "claude",
         launchAgentId: "claude",
         env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn.mock.calls[0][1].isAssistantTerminal).toBe(true);
+  });
+
+  it("keeps the assistant stamp across a restart, which respawns without the token", async () => {
+    // `buildRestartEnv` rebuilds the env from global + project + runtime vars
+    // only, so a restarted assistant arrives with no DAINTREE_MCP_TOKEN and
+    // `isHelpLaunch` is false. The live binding survives the restart's kill
+    // and is what keeps the record honest — without it, Restart All Terminals
+    // would silently strip the assistant's identity and reopen #12183.
+    mockIsHelpTerminal.mockImplementation((id) => id === "assistant-term");
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        id: "assistant-term",
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude",
+        launchAgentId: "claude",
       } as unknown as Parameters<typeof handler>[1]
     );
 
@@ -2570,6 +2606,31 @@ describe("terminal close handlers - resume journaling", () => {
     const deps = { ptyClient, worktreeService } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
   }
+
+  it("does not journal the assistant's overlay terminal on close", async () => {
+    // The path the assistant travels every time it closes: removePanel ->
+    // terminal:kill -> persistCloseRecord. Journaling here is what put the
+    // assistant's conversation in the resume picker (#12183).
+    ptyClient.getTerminalAsync.mockResolvedValue({ ...agentInfo, isAssistantTerminal: true });
+    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    register();
+
+    await getKillHandler()({}, "term-1");
+
+    // Still torn down gracefully — only the resume record is suppressed.
+    expect(ptyClient.gracefulKill).toHaveBeenCalledWith("term-1");
+    expect(persistAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not journal the assistant on an explicit gracefulKill either", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue({ ...agentInfo, isAssistantTerminal: true });
+    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    register();
+
+    await getGracefulKillHandler()({}, "term-1");
+
+    expect(persistAgentSessionMock).not.toHaveBeenCalled();
+  });
 
   it("routes an agent terminal kill through gracefulKill and journals a record", async () => {
     ptyClient.getTerminalAsync.mockResolvedValue(agentInfo);
