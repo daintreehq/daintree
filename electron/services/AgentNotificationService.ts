@@ -11,6 +11,7 @@ import { soundService } from "./SoundService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { isScheduledQuietNow } from "../../shared/utils/quietHours.js";
 import { getOsDndService } from "./OsDndService.js";
+import { shouldPlayUiFeedbackSound } from "../utils/uiFeedbackSound.js";
 import { coerceWaitingReason, type WaitingReason } from "../../shared/types/agent.js";
 import {
   actionableWaitingReason,
@@ -251,7 +252,11 @@ class AgentNotificationService {
         this.agentSpawnTimestamps.set(agentKey, Date.now());
       }
       const settings = projectStore.getEffectiveNotificationSettings();
-      if (settings.uiFeedbackSoundEnabled && !this.isWithinBootGrace() && !this.isSessionMuted()) {
+      if (
+        shouldPlayUiFeedbackSound(settings) &&
+        !this.isWithinBootGrace() &&
+        !this.isSessionMuted()
+      ) {
         if (!isScheduledQuietNow(settings)) {
           soundService.play("agent-spawned");
         }
