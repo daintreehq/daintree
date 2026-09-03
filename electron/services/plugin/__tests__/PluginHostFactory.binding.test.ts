@@ -383,6 +383,29 @@ describe("createHost worktree surfaces", () => {
     expect(await host.getWorktrees()).toEqual([]);
   });
 
+  it("answers fetch-failed when projecting a malformed snapshot throws", async () => {
+    const h = makeHarness();
+    // `worktreeChanges` present but with no `changes` array — toPluginWorktree
+    // Snapshot iterates it and throws. The projection sits inside the boundary,
+    // so this is data, not a rejection into whatever timer called it.
+    h.projectFetch.mockResolvedValue(
+      okFetch([
+        {
+          ...worktree({ id: "wt-a", isCurrent: true }),
+          worktreeChanges: {} as never,
+        },
+      ])
+    );
+    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
+
+    expect(await host.getWorktreesResult()).toEqual({
+      status: "unavailable",
+      reason: "fetch-failed",
+    });
+    expect(await host.getWorktrees()).toEqual([]);
+    expect(await host.getActiveWorktree()).toBeNull();
+  });
+
   it("names the focus-resolved project on the unbound path", async () => {
     const h = makeHarness();
     // Mid-switch the focused view can still be the outgoing project's, so an

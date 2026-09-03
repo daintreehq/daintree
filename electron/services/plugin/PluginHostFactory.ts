@@ -411,9 +411,14 @@ export function createHost(
   /**
    * The array-shaped read the pre-#12174 surfaces still use. Every unavailable
    * reason flattens back to `[]` here, which is the fail-closed sentinel those
-   * surfaces are built on: worktree storage finds no target, `${worktree}` and
-   * `${project}` allowlist roots drop so containment denies (#9492), and
-   * `getWorktreeStatus` answers `null`.
+   * surfaces are built on: `${worktree}` and `${project}` allowlist roots drop
+   * so containment denies (#9492), `getWorktreeStatus` answers `null`, and the
+   * default spawn cwd falls back rather than pointing into another project.
+   *
+   * Not every worktree-derived surface routes through here — worktree-scoped
+   * *storage* resolves its target through `PluginStorageManager`'s own active-
+   * worktree callback, which is still ambient for a bound host. That is a
+   * separate pre-existing gap, not something this read covers.
    */
   const fetchWorktreeSnapshots = async (): Promise<WorktreeSnapshot[]> => {
     const result = await fetchWorktreeSnapshotsResult();
@@ -502,29 +507,27 @@ export function createHost(
    */
   const getWorktreesResult = async (): Promise<PluginWorktreesResult> => {
     if (!isBound()) return { status: "unavailable", reason: "plugin-unloaded" };
-    let result: PluginWorktreeSnapshotFetchResult;
     try {
-      result = await fetchWorktreeSnapshotsResult();
+      const result = await fetchWorktreeSnapshotsResult();
+      // Re-checked after the await: an unload (or a same-id reload) that landed
+      // while the read was in flight makes these snapshots the previous
+      // instance's, so they are discarded rather than handed to whatever still
+      // holds this stale host.
+      if (!isBound()) return { status: "unavailable", reason: "plugin-unloaded" };
+      if (result.status !== "ok") return { status: "unavailable", reason: result.reason };
+      // Projection is inside the boundary too: toPluginWorktreeSnapshot throws
+      // on a malformed snapshot, and this method's contract is to answer with
+      // data rather than reject into whatever timer called it.
+      return {
+        status: "ok",
+        projectId: result.projectId,
+        worktrees: result.snapshots.map(toPluginWorktreeSnapshot),
+      };
     } catch {
-      // The documented contract is that this method answers with data and never
-      // throws, so an unexpected rejection (a dependency that escaped its own
-      // catch, a malformed snapshot) becomes a reason rather than an unhandled
-      // rejection in whatever timer called it.
       return isBound()
         ? { status: "unavailable", reason: "fetch-failed" }
         : { status: "unavailable", reason: "plugin-unloaded" };
     }
-    // Re-checked after the await: an unload (or a same-id reload) that landed
-    // while the read was in flight makes these snapshots the previous
-    // instance's, so they are discarded rather than handed to whatever still
-    // holds this stale host.
-    if (!isBound()) return { status: "unavailable", reason: "plugin-unloaded" };
-    if (result.status !== "ok") return { status: "unavailable", reason: result.reason };
-    return {
-      status: "ok",
-      projectId: result.projectId,
-      worktrees: result.snapshots.map(toPluginWorktreeSnapshot),
-    };
   };
 
   const host: PluginHostApi = {

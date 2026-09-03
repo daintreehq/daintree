@@ -343,6 +343,9 @@ describe("createMockHost", () => {
 
   it("can be driven to an unavailable result without disturbing the legacy getters", async () => {
     const host = createMockHost({
+      // Both seeded, so the assertions below fail if the override stops driving
+      // the legacy getters rather than passing on an already-null default.
+      activeWorktree: sampleSnapshot,
       worktrees: [sampleSnapshot],
       worktreesResult: { status: "unavailable", reason: "scope-unresolved" },
     });
