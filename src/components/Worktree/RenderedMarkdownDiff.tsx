@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, type CSSProperties } from "react";
-import ReactMarkdown, { type PluggableList } from "react-markdown";
+import ReactMarkdown from "react-markdown";
+import type { PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
 import type { Nodes as HastNodes, RootContent as HastContent } from "hast";
 import type { GitStatus } from "@shared/types/git";
@@ -134,7 +135,8 @@ function inlineRangePlugin(ranges: readonly TextRange[], expectedText: string, k
     if (!ranges.length) return;
     const { text, entries } = collectTextNodes(tree);
     if (text !== expectedText) return;
-    const className = `rendered-markdown-diff__inline rendered-markdown-diff__inline--${kind}`;
+    // hast models a class attribute as a list, not the joined string.
+    const className = ["rendered-markdown-diff__inline", `rendered-markdown-diff__inline--${kind}`];
     // Rebuilt back-to-front within each parent so an earlier splice can't
     // invalidate a later recorded index.
     for (const entry of [...entries].reverse()) {
