@@ -27,6 +27,7 @@ import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
+import { DiffChangeStepper } from "@/components/FileViewer/DiffChangeStepper";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
@@ -569,6 +570,13 @@ export function DiffPane({
   // every later attempt that reused it.
   const renderedAttemptKey = `${filePath ?? ""}\u0000${fileStatus ?? ""}\u0000${content ?? ""}\u0000${source ?? ""}`;
 
+  // The rendered layout's change inventory, reported up by the view because the
+  // host has a patch and the view has the model: a hunk is a run of lines, a
+  // change here is a block the reader can point at, and the two counts differ.
+  const [renderedChangeCount, setRenderedChangeCount] = useState(0);
+  const [renderedChangeIndex, setRenderedChangeIndex] = useState(0);
+  const scrollRootRef = useRef<HTMLDivElement>(null);
+
   const [renderedVerdict, setRenderedVerdict] = useState<{
     attempt: string;
     reason: MarkdownDiffFailure | null;
@@ -680,6 +688,82 @@ export function DiffPane({
     </div>
   );
 
+  const handleRenderedChangeCount = useCallback((count: number) => {
+    setRenderedChangeCount(count);
+    setRenderedChangeIndex(0);
+  }, []);
+
+  /**
+   * Keep the counter honest while the reader scrolls by hand.
+   *
+   * Without this the index only moves when a stepper button is pressed, so
+   * `1 of 4` sits in the toolbar while the reader is looking at the fourth
+   * change — a counter that lies is worse than no counter. The nearest change to
+   * the middle of the viewport wins, which is also where a step lands one.
+   *
+   * Deliberately not announced: `aria-live` fires on the value, and narrating
+   * every change a mouse wheel passes over would make the toolbar chatter. The
+   * announcement belongs to the deliberate act of stepping.
+   */
+  useEffect(() => {
+    const root = scrollRootRef.current;
+    if (!showRendered || renderedChangeCount === 0 || !root) return;
+    let frame = 0;
+    const sync = () => {
+      frame = 0;
+      const middle = root.clientHeight / 2;
+      let bestIndex: number | null = null;
+      let bestDistance = Infinity;
+      for (const element of root.querySelectorAll("[data-change-index]")) {
+        const box = element.getBoundingClientRect();
+        const rootBox = root.getBoundingClientRect();
+        const centre = box.top - rootBox.top + box.height / 2;
+        const distance = Math.abs(centre - middle);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIndex = Number(element.getAttribute("data-change-index"));
+        }
+      }
+      if (bestIndex !== null && Number.isFinite(bestIndex)) setRenderedChangeIndex(bestIndex);
+    };
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(sync);
+    };
+    root.addEventListener("scroll", onScroll, { passive: true });
+    sync();
+    return () => {
+      root.removeEventListener("scroll", onScroll);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [showRendered, renderedChangeCount]);
+
+  /**
+   * Move to the next or previous change and bring it into view.
+   *
+   * Found by data attribute rather than through a ref: the rendered view is a
+   * lazy chunk behind `Suspense`, and threading an imperative handle across that
+   * boundary buys nothing a query on the scroll root does not already give.
+   * Wraps at both ends — a reviewer stepping through a document expects the
+   * fourth Next to return to the first change, not to stop dead.
+   *
+   * `instant` rather than `smooth`, matching every other programmatic scroll in
+   * the app (`SettingsDialog`'s scroll-to-section, `SearchablePalette`,
+   * `FileTreeView`). A smooth scroll here would also need its own
+   * reduced-motion branch, which is a second reason the app does not use one.
+   */
+  const stepRenderedChange = useCallback(
+    (delta: number) => {
+      if (renderedChangeCount === 0) return;
+      const next = (renderedChangeIndex + delta + renderedChangeCount) % renderedChangeCount;
+      setRenderedChangeIndex(next);
+      scrollRootRef.current
+        ?.querySelector(`[data-change-index="${next}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "instant" });
+    },
+    [renderedChangeCount, renderedChangeIndex]
+  );
+
   const renderedSkeleton = (
     <div className="p-4 space-y-3">
       <Skeleton label="Loading rendered Markdown">
@@ -750,6 +834,13 @@ export function DiffPane({
           ) : (
             layoutToggle
           ))}
+        {showRendered && (
+          <DiffChangeStepper
+            count={renderedChangeCount}
+            index={renderedChangeIndex}
+            onStep={stepRenderedChange}
+          />
+        )}
         {/* Content scope is meaningless in the rendered layout, which always
             shows the whole document — and a control that does nothing is worse
             than an absent one. The preference is left untouched, so returning to
@@ -918,7 +1009,7 @@ export function DiffPane({
           style={diffFontStyle}
           data-testid="diff-pane-body"
         >
-          <div className="flex-1 min-h-0 overflow-auto diff-scroll-root">
+          <div ref={scrollRootRef} className="flex-1 min-h-0 overflow-auto diff-scroll-root">
             {!filePath && (
               <div className="flex h-full w-full items-center justify-center p-6">
                 <EmptyState
@@ -1044,6 +1135,7 @@ export function DiffPane({
                       fontSize={markdownFontSize}
                       attemptKey={renderedAttemptKey}
                       onVerdict={handleRenderedVerdict}
+                      onChangeCount={handleRenderedChangeCount}
                     />
                   )}
                 </Suspense>
