@@ -799,17 +799,6 @@ export class HelpSessionService {
       }
     }
 
-    // Single-backend invariant (#7509): displace any prior unrevoked record
-    // for this LANE BEFORE writing a fresh `.mcp.json`. The bearer is
-    // marked revoked first so any in-flight MCP call from the orphan 401s
-    // before the kill IPC reaches the PTY host. Runs inside `provisionLocks`
-    // (per lane directory), so concurrent provisions for the same lane see
-    // this as an atomic step. The renderer still calls `revokeHelpSession`
-    // from its cooperative cleanup paths — this enforcement is defense-in-depth
-    // for when those paths drop the kill or never fire (crash, project
-    // switch, hibernate race).
-    this.displacePriorSessions(input.projectId, slot);
-
     // One agent per project's lanes. The shared directory holds files that are
     // agent-shaped as well as lane-shaped: the user-content mirror writes each
     // agent's skills and removes the other's, Copilot needs the shared
@@ -819,6 +808,12 @@ export class HelpSessionService {
     // preferred agent, so this only ever fires for an explicit `help.launch` of
     // a different agent while a sibling is live, and it fails closed with a
     // reason rather than letting that lane quietly clobber its sibling's setup.
+    //
+    // Runs BEFORE the displacement below, or the refusal would be paid for with
+    // the caller's own lane: displacement revokes and kills this slot's prior
+    // session, so a rejected launch would leave the user with a dead lane AND
+    // an error. The predicate only matches `record.slot !== slot`, which
+    // displacement never touches, so the order is behaviour-preserving.
     const liveSibling = [...this.sessionsByToken.values()].find(
       (record) =>
         !record.revoked &&
@@ -832,6 +827,17 @@ export class HelpSessionService {
         `Another session in this project is running ${liveSibling.agentId}; sessions of one project share a folder and have to use the same agent. Stop it first, or open the new session with ${liveSibling.agentId}.`
       );
     }
+
+    // Single-backend invariant (#7509): displace any prior unrevoked record
+    // for this LANE BEFORE writing a fresh `.mcp.json`. The bearer is
+    // marked revoked first so any in-flight MCP call from the orphan 401s
+    // before the kill IPC reaches the PTY host. Runs inside `provisionLocks`
+    // (per lane directory), so concurrent provisions for the same lane see
+    // this as an atomic step. The renderer still calls `revokeHelpSession`
+    // from its cooperative cleanup paths — this enforcement is defense-in-depth
+    // for when those paths drop the kill or never fire (crash, project
+    // switch, hibernate race).
+    this.displacePriorSessions(input.projectId, slot);
 
     // Every lane of a project provisions into ONE directory, so the file work
     // below is serialized per directory as well as per lane. The lane lock

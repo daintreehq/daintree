@@ -97,6 +97,11 @@ export function provisionFailureKind(code: ProvisionFailureCode): LaunchErrorKin
       return "mcp-probe-failed";
     case "USER_CONTENT_SYNC_FAILED":
       return "skills-sync-failed";
+    // Not a failure — a refusal. Retrying repeats it verbatim until the
+    // sibling lane stops, so it gets its own kind rather than the
+    // `spawn-failed` retry banner.
+    case "MIXED_AGENT_LANES":
+      return "mixed-agent-lanes";
     default:
       return "spawn-failed";
   }

@@ -153,6 +153,10 @@ const LAUNCH_ERROR_BODY: Record<LaunchErrorKind, string> = {
   "skills-sync-failed":
     "Daintree couldn't refresh this project's assistant commands and skills, so the session didn't start. Retry, or check the logs if it keeps failing.",
   "spawn-failed": "The agent didn't start. Try again.",
+  // Same wording as the command/MCP path in `helpActions.ts` — one refusal,
+  // one sentence, whichever surface the user hit it from.
+  "mixed-agent-lanes":
+    "Another session in this project is running a different agent. Sessions of one project share a folder and use one agent, so stop that session first or open this one with the same agent.",
   "folder-unavailable":
     "Daintree's bundled assistant files are missing. Reinstall Daintree or check the logs.",
 };
@@ -163,7 +167,11 @@ const LAUNCH_ERROR_BODY: Record<LaunchErrorKind, string> = {
 // kept for the transient kinds (spawn/probe/server). `skills-sync-failed`
 // pairs both: some causes clear on retry, but a corrupt manifest or an
 // unremovable stale file fails identically forever, so the log — which names
-// the session dir to clear — is the only way out. The CTA handler is
+// the session dir to clear — is the only way out. `mixed-agent-lanes` carries
+// no CTA at all: the one way out is stopping the sibling session, which lives
+// in another lane's tab, and every button this banner can offer would either
+// fail identically (Retry) or point somewhere irrelevant. The body names the
+// action; the dismiss × is the only control. The CTA handler is
 // resolved in the component from this discriminator — no callbacks in the
 // data, so the data stays serializable and easy to assert against.
 type LaunchErrorCtaHandler = "retry" | "settings" | "logs" | "installer";
@@ -188,6 +196,7 @@ const LAUNCH_ERROR_CTAS: Record<LaunchErrorKind, LaunchErrorCta[]> = {
     { label: "Open logs", handler: "logs", variant: "secondary" },
   ],
   "spawn-failed": [{ label: "Retry", handler: "retry", variant: "primary" }],
+  "mixed-agent-lanes": [],
   "folder-unavailable": [
     { label: "Open logs", handler: "logs", variant: "secondary" },
     { label: "Open installer page", handler: "installer", variant: "primary" },
@@ -397,35 +406,37 @@ export function HelpPanelBanners({
               <X className="w-3 h-3" />
             </button>
           </div>
-          <div className="flex items-center gap-2 flex-wrap pl-5">
-            {LAUNCH_ERROR_CTAS[launchError.kind].map((cta) => {
-              const onClick =
-                cta.handler === "retry"
-                  ? onRetryLaunch
-                  : cta.handler === "settings"
-                    ? onOpenAssistantSettings
-                    : cta.handler === "logs"
-                      ? onOpenLogs
-                      : onOpenInstallerPage;
-              return (
-                <button
-                  key={cta.label}
-                  type="button"
-                  onClick={onClick}
-                  className={cn(
-                    "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
-                    cta.variant === "primary"
-                      ? "font-medium bg-daintree-text/10 hover:bg-daintree-text/15 text-text-primary"
-                      : "text-text-secondary hover:text-text-primary",
-                    "transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-                  )}
-                >
-                  {cta.label}
-                </button>
-              );
-            })}
-          </div>
+          {LAUNCH_ERROR_CTAS[launchError.kind].length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap pl-5">
+              {LAUNCH_ERROR_CTAS[launchError.kind].map((cta) => {
+                const onClick =
+                  cta.handler === "retry"
+                    ? onRetryLaunch
+                    : cta.handler === "settings"
+                      ? onOpenAssistantSettings
+                      : cta.handler === "logs"
+                        ? onOpenLogs
+                        : onOpenInstallerPage;
+                return (
+                  <button
+                    key={cta.label}
+                    type="button"
+                    onClick={onClick}
+                    className={cn(
+                      "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
+                      cta.variant === "primary"
+                        ? "font-medium bg-daintree-text/10 hover:bg-daintree-text/15 text-text-primary"
+                        : "text-text-secondary hover:text-text-primary",
+                      "transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                    )}
+                  >
+                    {cta.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
       {sessionRevoked && (

@@ -54,6 +54,7 @@ describe("HelpPanelBanners — launch error", () => {
       "mcp-probe-failed",
       "skills-sync-failed",
       "spawn-failed",
+      "mixed-agent-lanes",
       "folder-unavailable",
     ];
     for (const kind of kinds) {
@@ -81,6 +82,7 @@ describe("HelpPanelBanners — launch error", () => {
     const kindsWithoutSettings: LaunchErrorKind[] = [
       "skills-sync-failed",
       "spawn-failed",
+      "mixed-agent-lanes",
       "folder-unavailable",
     ];
     for (const kind of kindsWithoutSettings) {
@@ -104,6 +106,22 @@ describe("HelpPanelBanners — launch error", () => {
     expect(getByText("Open installer page")).toBeTruthy();
     const text =
       getByText("Open logs").closest('[data-testid="help-launch-error-banner"]')?.textContent ?? "";
+    expect(text).not.toMatch(/Try again/i);
+  });
+
+  it("offers no CTA for mixed-agent-lanes and names the sibling session as the fix", () => {
+    const { getByTestId, queryAllByRole, queryByText } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        launchError={{ agentId: "claude", kind: "mixed-agent-lanes" }}
+      />
+    );
+    expect(queryByText("Retry")).toBeNull();
+    // Only the dismiss × — every CTA this banner can render would be a lie.
+    expect(queryAllByRole("button").length).toBe(1);
+    const text = getByTestId("help-launch-error-banner").textContent ?? "";
+    expect(text).toMatch(/running a different agent/);
+    expect(text).toMatch(/stop that session first/);
     expect(text).not.toMatch(/Try again/i);
   });
 
@@ -145,6 +163,7 @@ describe("HelpPanelBanners — launch error", () => {
       { kind: "mcp-probe-failed", labels: ["Retry", "Open settings"] },
       { kind: "skills-sync-failed", labels: ["Retry", "Open logs"] },
       { kind: "spawn-failed", labels: ["Retry"] },
+      { kind: "mixed-agent-lanes", labels: [] },
       { kind: "folder-unavailable", labels: ["Open logs", "Open installer page"] },
     ];
     for (const { kind, labels } of cases) {
@@ -153,8 +172,11 @@ describe("HelpPanelBanners — launch error", () => {
       );
       const banner = getByTestId("help-launch-error-banner");
       const actionRow = banner.querySelector(".flex.items-center.gap-2.flex-wrap.pl-5");
-      expect(actionRow).not.toBeNull();
-      const buttons = Array.from(actionRow!.querySelectorAll("button"));
+      // A kind with no CTAs drops the row entirely rather than rendering an
+      // empty one — the parent is a `gap-2` column, so an empty child would
+      // pad the banner with a phantom action row's worth of space.
+      expect(actionRow === null).toBe(labels.length === 0);
+      const buttons = actionRow ? Array.from(actionRow.querySelectorAll("button")) : [];
       const actualLabels = buttons.map((b) => b.textContent?.trim() ?? "");
       expect(actualLabels).toEqual(labels);
       // folder-unavailable: "Open installer page" is the primary CTA, so it

@@ -1482,6 +1482,28 @@ describe("HelpSessionService", () => {
       expect(codex).not.toBeNull();
     });
 
+    it("refuses a mixed-agent launch without displacing the caller's own lane", async () => {
+      // The guard has to run BEFORE displacement. Displacement revokes and
+      // kills whatever holds the slot being launched into, so a refusal
+      // ordered after it would charge the user their own live lane for an
+      // error they never get a session out of.
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!laneZero || !laneOne) throw new Error("expected both provisions");
+      expect(service.markTerminalForToken(laneZero.token, "term-slot-0")).toBe(true);
+      expect(service.markTerminalForToken(laneOne.token, "term-slot-1")).toBe(true);
+      mockPtyKill.mockClear();
+
+      await expect(
+        service.provisionSession({ ...provisionInput(), agentId: "codex", slot: 1 })
+      ).rejects.toMatchObject({ name: "HelpSessionError", code: "MIXED_AGENT_LANES" });
+
+      // The lane the refused launch targeted is still the user's live session.
+      expect(service.validateToken(laneOne.token)).toBe("action");
+      expect(service.validateToken(laneZero.token)).toBe("action");
+      expect(mockPtyKill).not.toHaveBeenCalled();
+    });
+
     it("removes a lane's --mcp-config file on revoke without touching its sibling's", async () => {
       const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
       const laneOne = await service.provisionSession({ ...provisionInput(), slot: 1 });

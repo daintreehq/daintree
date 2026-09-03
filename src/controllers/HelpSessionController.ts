@@ -88,6 +88,7 @@ export type LaunchErrorKind =
   | "mcp-probe-failed"
   | "skills-sync-failed"
   | "spawn-failed"
+  | "mixed-agent-lanes"
   | "folder-unavailable";
 
 export interface LaunchErrorState {
