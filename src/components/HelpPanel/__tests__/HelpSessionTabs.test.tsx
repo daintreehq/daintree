@@ -226,6 +226,112 @@ describe("HelpSessionTabs", () => {
     expect(remaining[0]!.tabIndex).toBe(0);
   });
 
+  it("survives a lane changing state while a close is still being confirmed", () => {
+    // Closing a lane with a live agent raises a confirm dialog, so the close is deferred.
+    // Meanwhile `tabs` is rebuilt on every agentState transition, not only on a close —
+    // so keyed on the array alone, a working lane ticking over during the dialog looks
+    // exactly like the close landing, spends the focus handoff early, and leaves the real
+    // close with nothing to place focus with.
+    function Host() {
+      const [open, setOpen] = useState([0, 1, 2]);
+      const [busy, setBusy] = useState(false);
+      const [pending, setPending] = useState<number | null>(null);
+      return (
+        <>
+          <HelpSessionTabs
+            tabs={open.map((slot) => ({
+              slot,
+              label: `Session ${slot + 1}`,
+              agentState: busy && slot === 2 ? "working" : undefined,
+            }))}
+            activeSlot={open[0]!}
+            onSelect={vi.fn()}
+            // Defers, the way a confirm dialog does.
+            onClose={(slot) => setPending(slot)}
+            idBase="deferred"
+            panelId="deferred-body"
+          />
+          <button type="button" onClick={() => setBusy(true)}>
+            tick
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen((prev) => prev.filter((s) => s !== pending));
+              setPending(null);
+            }}
+          >
+            confirm
+          </button>
+        </>
+      );
+    }
+
+    const { container, getByText } = render(<Host />);
+    const list = container.querySelector('[role="tablist"]')!;
+
+    tabs(container)[0]!.focus();
+    fireEvent.keyDown(list, { key: "Delete" });
+
+    const closingTab = tabs(container)[0]!;
+
+    // An unrelated lane goes to work while the dialog is still open.
+    fireEvent.click(getByText("tick"));
+
+    // Nothing has closed, so nothing may move. This is the assertion that catches the
+    // bug: a handoff spent here does not merely arrive early, it drags focus off
+    // whatever holds it — in the real panel that is the open confirm dialog.
+    expect(tabs(container)).toHaveLength(3);
+    expect(document.activeElement).toBe(closingTab);
+
+    fireEvent.click(getByText("confirm"));
+
+    const remaining = tabs(container);
+    expect(remaining.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 2", "Session 3"]);
+    expect(document.activeElement).toBe(remaining[0]!);
+  });
+
+  it("stands down the close handoff when the confirm is cancelled", () => {
+    // A cancelled dialog returns focus to the tab it was opened from. Left armed, the
+    // handoff would fire on some later close of that lane — possibly a pointer close,
+    // where focus should not move at all.
+    function Host() {
+      const [open, setOpen] = useState([0, 1, 2]);
+      return (
+        <>
+          <HelpSessionTabs
+            tabs={open.map((slot) => ({
+              slot,
+              label: `Session ${slot + 1}`,
+              agentState: undefined,
+            }))}
+            activeSlot={open[0]!}
+            onSelect={vi.fn()}
+            onClose={vi.fn()}
+            idBase="cancel"
+            panelId="cancel-body"
+          />
+          <button type="button" onClick={() => setOpen([0, 2])}>
+            drop middle
+          </button>
+        </>
+      );
+    }
+
+    const { container, getByText } = render(<Host />);
+    const list = container.querySelector('[role="tablist"]')!;
+
+    // Ask to close the first lane, then cancel — modelled as focus coming back to it.
+    tabs(container)[0]!.focus();
+    fireEvent.keyDown(list, { key: "Delete" });
+    fireEvent.focus(tabs(container)[0]!);
+
+    // Later, a different lane goes away for unrelated reasons. Focus must not jump.
+    const before = document.activeElement;
+    fireEvent.click(getByText("drop middle"));
+    expect(document.activeElement).toBe(before);
+  });
+
   it("falls back to the preceding lane when the last one is closed", () => {
     function Host() {
       const [open, setOpen] = useState([0, 1]);

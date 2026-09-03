@@ -348,8 +348,17 @@ export function HelpSessionTabs({
   const rovingSlot =
     focusedSlot !== null && tabs.some((t) => t.slot === focusedSlot) ? focusedSlot : activeSlot;
 
-  /** The lane to focus once the tab array has committed — see the close handler. */
-  const pendingFocusRef = useRef<number | null>(null);
+  /**
+   * A close asked for from the keyboard, and where focus should land when it happens.
+   *
+   * Both slots are needed, not just the successor. Closing a lane with a live agent
+   * raises a confirm dialog first, so an arbitrary amount of time passes between the ask
+   * and the commit — and `tabs` is rebuilt on every `agentState` transition, not only on
+   * a close. Keyed on the array alone, a working lane ticking over while the dialog is
+   * open looks exactly like the close landing: the handoff is spent early, and the real
+   * close then arrives with nothing left to place focus with.
+   */
+  const pendingCloseFocusRef = useRef<{ closingSlot: number; successorSlot: number } | null>(null);
 
   /**
    * Move focus to one lane by DOM query rather than by holding a ref per tab. One ref on
@@ -383,11 +392,28 @@ export function HelpSessionTabs({
    * to be a slot recorded before the close and resolved after it.
    */
   useEffect(() => {
-    const slot = pendingFocusRef.current;
-    if (slot === null) return;
-    pendingFocusRef.current = null;
-    if (tabs.some((t) => t.slot === slot)) focusSlot(slot);
+    const pending = pendingCloseFocusRef.current;
+    if (!pending) return;
+    // The commit that matters is the one where the closing lane is GONE — not merely the
+    // next time this array is rebuilt, which also happens whenever any lane changes state.
+    if (tabs.some((t) => t.slot === pending.closingSlot)) return;
+    pendingCloseFocusRef.current = null;
+    if (tabs.some((t) => t.slot === pending.successorSlot)) focusSlot(pending.successorSlot);
   }, [tabs, focusSlot]);
+
+  /**
+   * Take the tab stop, and stand down a pending close if this is the lane it was for.
+   *
+   * A cancelled confirm dialog hands focus back to the control it was opened from, so
+   * focus arriving on the closing lane is the signal that the close is not happening.
+   * Without this the handoff would sit armed indefinitely and fire on some later close of
+   * that same lane — one the user might have made with the pointer, where focus should
+   * have stayed where it was.
+   */
+  const handleTabFocus = useCallback((slot: number) => {
+    if (pendingCloseFocusRef.current?.closingSlot === slot) pendingCloseFocusRef.current = null;
+    setFocusedSlot(slot);
+  }, []);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -421,10 +447,13 @@ export function HelpSessionTabs({
           e.preventDefault();
           // Name the successor by slot BEFORE asking for the close: the lane that will
           // occupy this position afterwards is the one behind it, or the one in front
-          // when this is the last. Closing may raise a confirm dialog instead, in which
-          // case the dialog takes focus, the tab array never changes, and the effect
-          // above simply never fires.
-          pendingFocusRef.current = tabs[current + 1]?.slot ?? tabs[current - 1]?.slot ?? null;
+          // when this is the last. Recorded alongside the lane being closed, so the
+          // effect above can tell a real close from any other reason this array was
+          // rebuilt. Nothing is armed when this is the only lane — there is no successor,
+          // and the panel closes with it.
+          const successorSlot = tabs[current + 1]?.slot ?? tabs[current - 1]?.slot;
+          pendingCloseFocusRef.current =
+            successorSlot === undefined ? null : { closingSlot: tab.slot, successorSlot };
           onClose(tab.slot);
           break;
         }
@@ -460,7 +489,7 @@ export function HelpSessionTabs({
           panelId={panelId}
           onSelect={onSelect}
           onClose={onClose}
-          onFocusTab={setFocusedSlot}
+          onFocusTab={handleTabFocus}
         />
       ))}
       {/* The one way to another session, at the edge a tab set keeps it, drawn with the
