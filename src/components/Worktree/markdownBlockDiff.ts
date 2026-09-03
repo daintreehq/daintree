@@ -5,7 +5,13 @@ import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import type { Root, RootContent } from "mdast";
 import type { GitStatus } from "@shared/types/git";
-import { shouldSuppressEdits } from "./diffEditSuppression";
+import {
+  inlineChangeRanges,
+  MAX_INLINE_TOKENS,
+  NO_RANGES,
+  type InlineCellBudget,
+  type InlineRanges,
+} from "./markdownInlineDiff";
 
 /**
  * The rendered-Markdown diff engine (issue #12171): everything between a
@@ -19,8 +25,8 @@ import { shouldSuppressEdits } from "./diffEditSuppression";
  *      without its header), so both sides must be whole documents.
  *   2. Split each side into top-level Markdown blocks and match them by an
  *      exact-source LCS, then pair the leftovers by similarity.
- *   3. Word-diff each paired block's visible text, under the same coverage
- *      judgment the line diff applies (`shouldSuppressEdits`).
+ *   3. Mark what changed inside each paired block, by aligning sentences and
+ *      then words within an aligned pair (`markdownInlineDiff`).
  */
 
 /** Why the rendered view can't be built from these inputs. */
@@ -36,7 +42,7 @@ export type MarkdownDiffFailure =
  */
 export const MARKDOWN_DIFF_MAX_LINES = 5000;
 export const MARKDOWN_DIFF_MAX_BLOCKS = 500;
-export const MARKDOWN_DIFF_MAX_INLINE_TOKENS = 2000;
+export const MARKDOWN_DIFF_MAX_INLINE_TOKENS = MAX_INLINE_TOKENS;
 /**
  * Total word-LCS cells one document may spend. The per-pair token cap alone
  * bounds one matrix at ~16MB but says nothing about how many get built: a
@@ -51,11 +57,20 @@ const PAIR_LENGTH_RATIO_FLOOR = 0.25;
 
 /**
  * Similarity a removed/added pair must reach to render as one modified block
- * rather than two. Tuned to pair an edited sentence with its rewrite while
- * leaving genuinely unrelated paragraphs apart; exported so a real-world miss
- * is a one-constant adjustment rather than an algorithm rewrite.
+ * rather than two.
+ *
+ * Set from a measured corpus rather than by feel — see the pairing-corpus test,
+ * which is the real specification. Across the cases a reader would call one
+ * edited paragraph, the lowest score is 0.447 (a paragraph expanded by a third);
+ * across the cases a reader would call two different paragraphs, the highest is
+ * 0.331 (two paragraphs sharing only their boilerplate). This sits in the middle
+ * of that gap with comparable headroom either side.
+ *
+ * It was 0.45, which is above the floor: the paragraph that opened this design
+ * review scored 0.447 and rendered as two unrelated walls of text. A threshold
+ * set flush against the lowest true positive has no tolerance at all.
  */
-export const PAIR_SIMILARITY_THRESHOLD = 0.45;
+export const PAIR_SIMILARITY_THRESHOLD = 0.39;
 
 export interface MarkdownBlock {
   /** mdast node type — `paragraph`, `list`, `table`, `code`, … */
@@ -76,20 +91,15 @@ export interface MarkdownBlock {
    * referencing block as edited whenever any unrelated definition moved.
    */
   referenceIds: readonly string[];
+  /**
+   * Offsets into `text` where a structural child begins — a list item, a table
+   * cell, a paragraph inside a blockquote. The inline diff treats each as a hard
+   * segment boundary, which is what stops one cell's words matching another's.
+   */
+  segments: readonly number[];
 }
 
-/** Half-open character range into a block's `text`. */
-export interface TextRange {
-  start: number;
-  end: number;
-}
-
-export interface InlineRanges {
-  /** Ranges deleted from the old block, or empty when suppressed. */
-  old: readonly TextRange[];
-  /** Ranges inserted into the new block, or empty when suppressed. */
-  new: readonly TextRange[];
-}
+export type { InlineCellBudget, InlineRanges, TextRange } from "./markdownInlineDiff";
 
 export type MarkdownBlockChange =
   | { kind: "unchanged"; block: MarkdownBlock }
@@ -377,22 +387,52 @@ function referenceIdsOf(node: RootContent): string[] {
  * disagree the renderer notices and falls back to whole-block marking, so this
  * needs to be right for the common shapes rather than exhaustive.
  */
-function flattenText(node: RootContent): string {
+/**
+ * Node types whose start is a hard boundary in the flattened text.
+ *
+ * A list's items and a table's cells contribute their characters with NOTHING
+ * between them — mdast-util-to-hast's layout whitespace carries no source
+ * position, so `collectTextNodes` drops it and the two flattenings only agree if
+ * this one drops it too. The consequence is that a whole table flattens to one
+ * unbroken string, and a word diff run over it anchors the `O` of one cell's
+ * "Option-Command-O" against the identical `O` in a completely different cell.
+ *
+ * Recording where each structural child STARTS costs nothing in the text and
+ * gives the inline diff the boundaries it cannot otherwise see.
+ */
+const STRUCTURAL_BOUNDARY_TYPES: ReadonlySet<string> = new Set([
+  "listItem",
+  "tableRow",
+  "tableCell",
+  "paragraph",
+  "heading",
+  "blockquote",
+  "code",
+]);
+
+function flattenText(node: RootContent): { text: string; boundaries: number[] } {
   const parts: string[] = [];
+  const boundaries: number[] = [];
+  let length = 0;
+  const push = (value: string): void => {
+    parts.push(value);
+    length += value.length;
+  };
   const walk = (current: unknown): void => {
     if (typeof current !== "object" || current === null) return;
     const candidate = current as { type?: string; value?: unknown; children?: unknown };
     if (candidate.type === "html") return;
+    if (candidate.type !== undefined && STRUCTURAL_BOUNDARY_TYPES.has(candidate.type)) {
+      if (boundaries[boundaries.length - 1] !== length) boundaries.push(length);
+    }
     if (typeof candidate.value === "string") {
-      parts.push(
-        candidate.type === "code" && candidate.value ? `${candidate.value}\n` : candidate.value
-      );
+      push(candidate.type === "code" && candidate.value ? `${candidate.value}\n` : candidate.value);
       return;
     }
     // A break is a visible boundary; without a separator the words either side
     // of it fuse into one token and the word diff reports a spurious edit.
     if (candidate.type === "break") {
-      parts.push("\n");
+      push("\n");
       return;
     }
     if (Array.isArray(candidate.children)) {
@@ -400,7 +440,7 @@ function flattenText(node: RootContent): string {
     }
   };
   walk(node);
-  return parts.join("");
+  return { text: parts.join(""), boundaries };
 }
 
 export interface ParsedMarkdown {
@@ -449,11 +489,13 @@ export function parseMarkdownBlocks(source: string): ParsedMarkdown {
       continue;
     }
     if (node.type === "html") continue;
+    const flattened = flattenText(node);
     blocks.push({
       type: node.type,
       source: slice,
-      text: flattenText(node),
+      text: flattened.text,
       referenceIds: referenceIdsOf(node),
+      segments: flattened.boundaries,
     });
   }
   return { blocks, definitions: definitions.join("\n\n"), definitionsById };
@@ -539,9 +581,20 @@ function commonAffixLength(a: string, b: string, fromEnd: boolean): number {
  * Token overlap carries the score because prose edits keep most of their words;
  * the shared prefix/suffix term is the tiebreak that favours a block edited at
  * one end over an unrelated one of similar vocabulary — the same shape of
- * judgment `diffTokenizer`'s `edgeSimilarity` makes for line pairing. The
- * length ratio multiplies rather than gates, so a paragraph that grew by half
- * still pairs while one that grew tenfold does not.
+ * judgment `diffTokenizer`'s `edgeSimilarity` makes for line pairing.
+ *
+ * The length term is deliberately soft. Dice already charges for a length
+ * mismatch — it divides by the sum of both token counts, so a paragraph that
+ * grew loses score for the words it gained — and multiplying that by the raw
+ * length ratio charged for it a second time. The paragraph that opened this
+ * review is the case: an agent expanded it by a third while keeping most of its
+ * wording, and it scored 0.38 against a 0.45 threshold, so the two halves of one
+ * obvious edit rendered as two unrelated walls of text. Halving the term's reach
+ * puts it at 0.52 without moving a genuinely unrelated pair anywhere near the
+ * threshold, because those fail on dice rather than on length.
+ *
+ * `PAIR_LENGTH_RATIO_FLOOR` still gates outright: a block that grew tenfold is
+ * not the same block whatever its vocabulary says.
  */
 export function blockSimilarity(oldText: string, newText: string): number {
   return similarityFrom(oldText, newText, tokenStats(oldText), tokenStats(newText));
@@ -575,82 +628,22 @@ function similarityFrom(
   const suffix = Math.min(commonAffixLength(oldText, newText, true), minLength - prefix);
   const edge = (prefix + Math.max(suffix, 0)) / minLength;
 
-  return lengthRatio * (0.8 * dice + 0.2 * edge);
+  return (0.5 + 0.5 * lengthRatio) * (0.8 * dice + 0.2 * edge);
 }
 
 /**
- * Word-level ranges for one modified pair, or empty ranges where the marks
- * would stop earning their place.
+ * Word- and sentence-level ranges for one modified pair.
  *
- * Each side is judged on its own coverage: a block that lost a clause but
- * gained a rewrite should keep the precise deletion marks even though the
- * insertion side is a wash. That is the same per-side independence
- * `suppressFullLineEdits` applies.
+ * The judgment lives in `markdownInlineDiff`, which aligns sentences before it
+ * looks at words. This wrapper keeps the block engine's own ceilings in one
+ * place and gives the call site a name that says what it produces.
  */
-export interface InlineCellBudget {
-  remaining: number;
-}
-
-const NO_RANGES: InlineRanges = { old: [], new: [] };
-
 export function inlineWordRanges(
-  oldText: string,
-  newText: string,
+  oldBlock: Pick<MarkdownBlock, "text" | "segments">,
+  newBlock: Pick<MarkdownBlock, "text" | "segments">,
   budget?: InlineCellBudget
 ): InlineRanges {
-  const oldTokens = tokenize(oldText);
-  const newTokens = tokenize(newText);
-  // Per-pair cap, then the document-wide one: past either the pair keeps its
-  // whole-block treatment and loses only the finer emphasis.
-  if (oldTokens.length > MARKDOWN_DIFF_MAX_INLINE_TOKENS) return NO_RANGES;
-  if (newTokens.length > MARKDOWN_DIFF_MAX_INLINE_TOKENS) return NO_RANGES;
-  const cells = (oldTokens.length + 1) * (newTokens.length + 1);
-  if (budget) {
-    if (cells > budget.remaining) return NO_RANGES;
-    budget.remaining -= cells;
-  }
-
-  const matches = longestCommonSubsequence(oldTokens, newTokens);
-  const oldMatched = new Set<number>();
-  const newMatched = new Set<number>();
-  for (const [oldIndex, newIndex] of matches) {
-    oldMatched.add(oldIndex);
-    newMatched.add(newIndex);
-  }
-
-  const collect = (tokens: readonly string[], matched: ReadonlySet<number>) => {
-    const ranges: TextRange[] = [];
-    let offset = 0;
-    let runStart: number | null = null;
-    tokens.forEach((token, index) => {
-      if (matched.has(index)) {
-        if (runStart !== null) {
-          ranges.push({ start: runStart, end: offset });
-          runStart = null;
-        }
-      } else if (runStart === null) {
-        runStart = offset;
-      }
-      offset += token.length;
-    });
-    if (runStart !== null) ranges.push({ start: runStart, end: offset });
-    return ranges;
-  };
-
-  const oldRanges = collect(oldTokens, oldMatched);
-  const newRanges = collect(newTokens, newMatched);
-
-  const judge = (text: string, ranges: readonly TextRange[]): readonly TextRange[] => {
-    let edited = 0;
-    let editedText = "";
-    for (const range of ranges) {
-      edited += range.end - range.start;
-      editedText += text.slice(range.start, range.end);
-    }
-    return shouldSuppressEdits(text.length, edited, editedText) ? [] : ranges;
-  };
-
-  return { old: judge(oldText, oldRanges), new: judge(newText, newRanges) };
+  return inlineChangeRanges(oldBlock, newBlock, budget);
 }
 
 /**
@@ -727,10 +720,7 @@ function pairGap(
         // A fence's body is highlighted source, not prose; word marks inside it
         // fight the syntax colouring for the same characters. The block keeps
         // its removed/added treatment, which is the readable signal there.
-        inline:
-          oldBlock.type === "code"
-            ? NO_RANGES
-            : inlineWordRanges(oldBlock.text, newBlock.text, budget),
+        inline: oldBlock.type === "code" ? NO_RANGES : inlineWordRanges(oldBlock, newBlock, budget),
       });
       i++;
       j++;

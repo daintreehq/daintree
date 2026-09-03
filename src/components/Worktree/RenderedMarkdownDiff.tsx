@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
 import type { PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import type { MarkdownFontSize } from "@/store/preferencesStore";
 import {
   buildMarkdownDiff,
+  type MarkdownBlock,
   type MarkdownBlockChange,
   type MarkdownDiffFailure,
   type TextRange,
@@ -56,6 +57,65 @@ export interface RenderedMarkdownDiffProps {
    * on the verdict.
    */
   onVerdict?: (reason: MarkdownDiffFailure | null, forAttempt: string) => void;
+  /**
+   * How many discrete changes the document holds, so the host can offer a
+   * counter and a stepper. A modified pair is ONE change, not two.
+   *
+   * Reported rather than derived by the host because the host has a patch and
+   * this component has the model — and the two disagree by design: a patch hunk
+   * is a run of lines, a change here is a block the reader can point at.
+   */
+  onChangeCount?: (count: number) => void;
+}
+
+/**
+ * How long a run of untouched blocks may get before it is folded away.
+ *
+ * A 40-paragraph document with four edits renders 40 paragraphs, and the reader
+ * scrolls past screens of prose they have already accepted looking for the next
+ * thing to judge — the failure mode every diff tool with a folding affordance
+ * exists to avoid. Five is the point where a run stops being context and starts
+ * being an obstacle; two blocks stay at each edge because a change reads
+ * differently when you cannot see what it follows.
+ */
+const UNCHANGED_RUN_LIMIT = 5;
+const UNCHANGED_CONTEXT = 2;
+
+/** One change the reader can point at, or a run of blocks they can skip. */
+type Section =
+  | { kind: "change"; index: number; change: MarkdownBlockChange }
+  // `blocks` is mutable because `toSections` appends to the run in place as it
+  // walks; nothing outside that function touches it.
+  | { kind: "unchanged"; id: number; blocks: MarkdownBlock[] };
+
+/**
+ * Group the model into the things a reader navigates by.
+ *
+ * Consecutive untouched blocks collapse into one run so they can be folded as a
+ * unit, and everything else takes the next change number. A `modified` pair is
+ * one change: it is one edit the reader accepts or rejects, and numbering its
+ * halves separately would report twice as many changes as the document has.
+ */
+function toSections(changes: readonly MarkdownBlockChange[]): {
+  sections: Section[];
+  changeCount: number;
+} {
+  const sections: Section[] = [];
+  let changeCount = 0;
+  let runId = 0;
+  for (const change of changes) {
+    if (change.kind === "unchanged") {
+      const last = sections[sections.length - 1];
+      if (last?.kind === "unchanged") {
+        last.blocks.push(change.block);
+        continue;
+      }
+      sections.push({ kind: "unchanged", id: runId++, blocks: [change.block] });
+      continue;
+    }
+    sections.push({ kind: "change", index: changeCount++, change });
+  }
+  return { sections, changeCount };
 }
 
 type BlockKind = "unchanged" | "added" | "removed";
@@ -66,10 +126,19 @@ const BLOCK_LABEL: Record<BlockKind, string> = {
   removed: "Removed block:",
 };
 
-const BLOCK_MARKER: Record<BlockKind, string> = {
-  unchanged: "",
-  added: "+",
-  removed: "−",
+/**
+ * What a marked range is announced as.
+ *
+ * `<ins>` and `<del>` carry the `insertion` and `deletion` roles, but no
+ * mainstream screen reader announces either one in browse mode unless the user
+ * has already raised their verbosity. So the elements are for the accessibility
+ * tree and this hidden text is for the reader: without it a screen-reader user
+ * hears the block-level "Added block" and then the same prose as everywhere
+ * else, with no idea which words the agent actually touched.
+ */
+const RANGE_LABEL: Record<"added" | "removed", string> = {
+  added: "Inserted: ",
+  removed: "Deleted: ",
 };
 
 /**
@@ -137,6 +206,11 @@ function inlineRangePlugin(ranges: readonly TextRange[], expectedText: string, k
     if (text !== expectedText) return;
     // hast models a class attribute as a list, not the joined string.
     const className = ["rendered-markdown-diff__inline", `rendered-markdown-diff__inline--${kind}`];
+    // Native revision elements rather than styled spans: `<ins>` and `<del>`
+    // are what an assistive technology reads as a revision, and a `<span>` with
+    // a background is not a revision to anything but a sighted reader.
+    const tagName = kind === "removed" ? "del" : "ins";
+    const label = RANGE_LABEL[kind === "removed" ? "removed" : "added"];
     // Rebuilt back-to-front within each parent so an earlier splice can't
     // invalidate a later recorded index.
     for (const entry of [...entries].reverse()) {
@@ -156,9 +230,15 @@ function inlineRangePlugin(ranges: readonly TextRange[], expectedText: string, k
         }
         replacement.push({
           type: "element",
-          tagName: "span",
+          tagName,
           properties: { className },
           children: [
+            {
+              type: "element",
+              tagName: "span",
+              properties: { className: ["sr-only"] },
+              children: [{ type: "text", value: label }],
+            },
             { type: "text", value: entry.value.slice(from - entry.start, to - entry.start) },
           ],
         });
@@ -178,6 +258,9 @@ function DiffBlock({
   definitions,
   ranges,
   expectedText,
+  whole,
+  blockRef,
+  tabIndex,
   components,
   urlTransform,
 }: {
@@ -186,6 +269,15 @@ function DiffBlock({
   definitions: string;
   ranges: readonly TextRange[];
   expectedText: string;
+  /** Focus target, for the block a fold hands focus to when it opens. */
+  blockRef?: React.Ref<HTMLDivElement>;
+  tabIndex?: number;
+  /**
+   * True when the whole block is the change — an insertion or a deletion with
+   * no counterpart. False for either half of a substitution, where the block
+   * has a partner and only parts of it actually moved.
+   */
+  whole: boolean;
   components: ReturnType<typeof useMarkdownRenderPolicy>["components"];
   urlTransform: ReturnType<typeof useMarkdownRenderPolicy>["urlTransform"];
 }) {
@@ -203,17 +295,13 @@ function DiffBlock({
 
   return (
     <div
+      ref={blockRef}
+      tabIndex={tabIndex}
       className={cn("rendered-markdown-diff__block", `rendered-markdown-diff__block--${kind}`)}
       data-block-kind={kind}
+      data-whole={whole ? "true" : "false"}
     >
-      {kind !== "unchanged" && (
-        <>
-          <span className="sr-only">{BLOCK_LABEL[kind]}</span>
-          <span className="rendered-markdown-diff__marker" aria-hidden="true">
-            {BLOCK_MARKER[kind]}
-          </span>
-        </>
-      )}
+      {kind !== "unchanged" && <span className="sr-only">{BLOCK_LABEL[kind]}</span>}
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={rehypePlugins}
@@ -239,6 +327,7 @@ export function RenderedMarkdownDiff({
   fontSize,
   attemptKey,
   onVerdict,
+  onChangeCount,
 }: RenderedMarkdownDiffProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   useScopedSelectAll(rootRef);
@@ -256,6 +345,26 @@ export function RenderedMarkdownDiff({
   useEffect(() => {
     onVerdict?.(reason, attemptKey);
   }, [onVerdict, reason, attemptKey]);
+
+  const { sections, changeCount } = useMemo(
+    () => (result.ok ? toSections(result.model.changes) : { sections: [], changeCount: 0 }),
+    [result]
+  );
+
+  useEffect(() => {
+    onChangeCount?.(changeCount);
+  }, [onChangeCount, changeCount]);
+
+  // Which folded runs the reader has opened. Keyed by run id rather than index
+  // so re-rendering the same document keeps them open; a new document produces
+  // a new model and the set is dropped with it.
+  const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number>>(() => new Set());
+  useEffect(() => {
+    setExpandedRuns(new Set());
+  }, [attemptKey]);
+  const expandRun = useCallback((id: number) => {
+    setExpandedRuns((current) => new Set(current).add(id));
+  }, []);
 
   // Removed blocks resolve their relative links and images against the current
   // path too. On a rename that is the wrong directory for the old side, and a
@@ -297,17 +406,121 @@ export function RenderedMarkdownDiff({
       className="rendered-markdown-diff markdown-document prose px-6 py-5"
       style={fontStyle}
     >
-      {result.model.changes.map((change, index) => (
-        <BlockChange
-          key={index}
-          change={change}
-          oldDefinitions={result.model.oldDefinitions}
-          newDefinitions={result.model.newDefinitions}
-          components={components}
-          urlTransform={urlTransform}
-        />
-      ))}
+      {sections.map((section) =>
+        section.kind === "change" ? (
+          <div
+            key={`change-${section.index}`}
+            data-change-index={section.index}
+            className="rendered-markdown-diff__change"
+          >
+            <BlockChange
+              change={section.change}
+              oldDefinitions={result.model.oldDefinitions}
+              newDefinitions={result.model.newDefinitions}
+              components={components}
+              urlTransform={urlTransform}
+            />
+          </div>
+        ) : (
+          <UnchangedRun
+            key={`unchanged-${section.id}`}
+            blocks={section.blocks}
+            definitions={result.model.newDefinitions}
+            expanded={expandedRuns.has(section.id)}
+            onExpand={() => expandRun(section.id)}
+            components={components}
+            urlTransform={urlTransform}
+          />
+        )
+      )}
     </div>
+  );
+}
+
+/**
+ * A run of untouched blocks, folded in the middle once it gets long enough to
+ * be an obstacle rather than context.
+ *
+ * Expanding is one-way on purpose. A reader opens a run to check something and
+ * then keeps reading; a control that offers to close it again is a second
+ * decision about text they have already accepted, and it would move the change
+ * they were heading for back off the screen.
+ */
+function UnchangedRun({
+  blocks,
+  definitions,
+  expanded,
+  onExpand,
+  components,
+  urlTransform,
+}: {
+  blocks: readonly MarkdownBlock[];
+  /** The new side's reference definitions, for the blocks that cite one. */
+  definitions: string;
+  expanded: boolean;
+  onExpand: () => void;
+  components: ReturnType<typeof useMarkdownRenderPolicy>["components"];
+  urlTransform: ReturnType<typeof useMarkdownRenderPolicy>["urlTransform"];
+}) {
+  // The fold unmounts when it opens, which would drop focus on `document.body`
+  // and strand a keyboard user in the middle of a long document. Focus goes to
+  // the first block the fold just revealed instead — the thing they asked to
+  // see.
+  const revealedRef = useRef<HTMLDivElement>(null);
+  const wasExpanded = useRef(expanded);
+  useEffect(() => {
+    if (expanded && !wasExpanded.current) revealedRef.current?.focus({ preventScroll: true });
+    wasExpanded.current = expanded;
+  }, [expanded]);
+
+  const shared = { components, urlTransform, kind: "unchanged" as const, ranges: [], whole: false };
+  const render = (block: MarkdownBlock, key: string, reveal = false) => (
+    <DiffBlock
+      key={key}
+      blockRef={reveal ? revealedRef : undefined}
+      tabIndex={reveal ? -1 : undefined}
+      source={block.source}
+      // Every block renders on its own, so one citing `[docs][d]` needs the
+      // definition appended or it renders the literal brackets and loses its
+      // link. Only the blocks that actually cite one pay for it.
+      definitions={block.referenceIds.length ? definitions : ""}
+      expectedText={block.text}
+      {...shared}
+    />
+  );
+
+  if (expanded || blocks.length <= UNCHANGED_RUN_LIMIT) {
+    return (
+      <>
+        {blocks.map((block, index) =>
+          render(block, `block-${index}`, expanded && index === UNCHANGED_CONTEXT)
+        )}
+      </>
+    );
+  }
+
+  const hiddenCount = blocks.length - UNCHANGED_CONTEXT * 2;
+  return (
+    <>
+      {blocks.slice(0, UNCHANGED_CONTEXT).map((block, index) => render(block, `lead-${index}`))}
+      <button
+        type="button"
+        onClick={onExpand}
+        className="rendered-markdown-diff__fold"
+        aria-expanded={false}
+      >
+        {/*
+          "Expand", not "Show", and "unchanged", not "hidden": the Unified and
+          Split layouts of this same panel are one segmented-control click away
+          and their hunk expanders already say `Expand N lines` and
+          `N unchanged lines hidden`. Same panel, same gesture, same verb.
+        */}
+        {`Expand ${hiddenCount} unchanged ${hiddenCount === 1 ? "block" : "blocks"}`}
+      </button>
+      {blocks
+        .slice(blocks.length - UNCHANGED_CONTEXT)
+        .map((block, index) => render(block, `trail-${index}`))}
+    </>
   );
 }
 
@@ -336,6 +549,7 @@ function BlockChange({
           definitions={change.old.referenceIds.length ? oldDefinitions : ""}
           ranges={change.inline.old}
           expectedText={change.old.text}
+          whole={false}
           {...shared}
         />
         <DiffBlock
@@ -344,6 +558,7 @@ function BlockChange({
           definitions={change.new.referenceIds.length ? newDefinitions : ""}
           ranges={change.inline.new}
           expectedText={change.new.text}
+          whole={false}
           {...shared}
         />
       </div>
@@ -362,6 +577,7 @@ function BlockChange({
       definitions={definitions}
       ranges={[]}
       expectedText={change.block.text}
+      whole={kind !== "unchanged"}
       {...shared}
     />
   );

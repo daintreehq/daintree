@@ -75,7 +75,16 @@ test.beforeAll(async () => {
   if (existsSync(OUT_DIR)) rmSync(OUT_DIR, { recursive: true, force: true });
   mkdirSync(OUT_DIR, { recursive: true });
 
-  server = await createServer({ server: { port: 0 }, logLevel: "error" });
+  // `strictPort: false` matters: the project's own vite config sets
+  // `strictPort: true` for the app's dev server, and that wins over an inline
+  // `port: 0` — so with the app running this harness dies on "Port 5173 is
+  // already in use" instead of taking a free one. Falling forward and reading
+  // the port back off the server is what makes the harness runnable while the
+  // app is up.
+  server = await createServer({
+    server: { port: 0, strictPort: false },
+    logLevel: "error",
+  });
   await server.listen();
   const address = server.httpServer?.address();
   if (!address || typeof address === "string") throw new Error("vite gave no TCP address");

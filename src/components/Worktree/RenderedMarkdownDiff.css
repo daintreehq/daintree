@@ -15,48 +15,133 @@
    separate. */
 
 .rendered-markdown-diff {
-  /* The reading measure that centers a document would strand the block markers
+  /* The reading measure that centers a document would strand the change bars
      against the pane edge, and a diff is scanned rather than read at length. */
   max-width: none;
+
+  /* The document's own inline padding, restated as a variable so a changed
+     block can cancel it and put its bar in the margin. Kept in sync with the
+     `px-6` on the root element by hand — there is no way to read a utility's
+     value back out, and the alternative is threading a style prop through the
+     component for a constant. */
+  --rendered-diff-inset: 1.5rem;
+  /* Room between the bar and the prose, matching what an unchanged block gets
+     so a paragraph does not shift sideways when it changes. */
+  --rendered-diff-gutter: 0.75rem;
+  --rendered-diff-bar: 3px;
+
+  /* The two tiers.
+
+     A block fill and a word fill that sit 18% and 28% apart read as one tone,
+     which is why a changed block currently looks like a slab rather than a
+     paragraph with changed words in it. The block tier is damped to roughly a
+     third of its token so the word tier stands off it by about 4x, which is
+     the separation Kaleidoscope and GitHub's rich diff both use. The tokens
+     themselves are untouched: they are shared with the source line diff, where
+     the line fill IS the signal, and they carry the color-vision overrides. */
+  --rendered-diff-insert-fill: color-mix(
+    in oklab,
+    var(--color-diff-insert-background) 38%,
+    transparent
+  );
+  --rendered-diff-delete-fill: color-mix(
+    in oklab,
+    var(--color-diff-delete-background) 38%,
+    transparent
+  );
 }
 
 .rendered-markdown-diff__block {
-  position: relative;
   /* Contains the child prose margins so a block's fill covers its own content
      instead of collapsing through the wrapper. */
   display: flow-root;
-  padding: 0.25rem 0.75rem;
-  border-radius: var(--radius-xs);
+  padding-block: 0.25rem;
+  padding-inline: var(--rendered-diff-gutter);
 }
 
-/* An unchanged block is the document as it reads — no fill, no edge, nothing
-   competing with the two states that carry meaning. */
-.rendered-markdown-diff__block--unchanged {
-  padding-inline: 0.75rem;
+/* The band hugs its text.
+
+   `flow-root` keeps the child's own margins inside the block, which is what
+   stops the fill collapsing through the wrapper — but it also paints them. A
+   one-line paragraph pair was carrying 4 x 17.5px of tinted nothing, and a
+   heading pair 42px above and 21px below EACH half, so a change of three words
+   cost over 200px of vertical space and the two halves looked like separate
+   cards with a gap between them. The block supplies its own breathing room
+   instead, and the document's rhythm still comes from the unchanged prose
+   around it. */
+.rendered-markdown-diff__block--added > :first-child:not(.sr-only),
+.rendered-markdown-diff__block--removed > :first-child:not(.sr-only),
+.rendered-markdown-diff__block--added > .sr-only + *,
+.rendered-markdown-diff__block--removed > .sr-only + * {
+  margin-block-start: 0;
 }
 
+.rendered-markdown-diff__block--added > :last-child,
+.rendered-markdown-diff__block--removed > :last-child {
+  margin-block-end: 0;
+}
+
+/* An unchanged block gets no rule of its own: it is the document as it reads,
+   with no fill, no edge and nothing competing with the two states that carry
+   meaning. Everything below applies only to the two that do. */
 .rendered-markdown-diff__block--added,
 .rendered-markdown-diff__block--removed {
-  /* Real border, not a ring: box-shadow rings are dropped entirely in forced
-     colors, taking the only non-color signal with them. */
-  border-inline-start: 3px solid transparent;
-  padding-inline-start: calc(0.75rem - 3px);
-  margin-block: 0.25rem;
+  /* A margin change bar, not a card.
+
+     The band runs to both pane edges and the bar sits in the margin, which is
+     what a change bar is in every editor that has one — and it is why there is
+     no radius here. A rounded corner on a shape whose whole left edge is a
+     rule reads as a card that someone has drawn a line down, and the two
+     halves of a modified pair then read as two unrelated cards rather than one
+     substitution. Square, flush, and the pair's two bars meet with no seam.
+
+     Real border rather than a ring: box-shadow is dropped entirely in forced
+     colors, taking the only non-color signal with it. */
+  margin-inline: calc(var(--rendered-diff-inset) * -1);
+  border-inline-start: var(--rendered-diff-bar) solid transparent;
+  padding-inline-start: calc(
+    var(--rendered-diff-inset) + var(--rendered-diff-gutter) - var(--rendered-diff-bar)
+  );
+  padding-inline-end: calc(var(--rendered-diff-inset) + var(--rendered-diff-gutter));
+  padding-block: 0.5rem;
+  border-radius: 0;
 }
 
 .rendered-markdown-diff__block--added {
-  background: var(--color-diff-insert-background);
+  background: var(--rendered-diff-insert-fill);
   border-inline-start-color: var(--color-diff-gutter-insert);
 }
 
 .rendered-markdown-diff__block--removed {
-  background: var(--color-diff-delete-background);
+  background: var(--rendered-diff-delete-fill);
   border-inline-start-color: var(--color-diff-gutter-delete);
 }
 
-/* GitHub's rich-diff treatment: a removed block reads as struck-out prose,
-   which is what makes it legible as "this text is gone" without recoloring the
-   text itself and losing contrast over the fill.
+/* One change is one thought.
+
+   The space goes on the change, never between the halves of a substitution: a
+   modified pair's two bands touch, and the gap that separates one change from
+   the next sits outside them both. That difference is the only thing telling a
+   reader that a deletion followed by an insertion is two unrelated edits rather
+   than one substitution — with a uniform gap everywhere the two cases look
+   identical, which is what they used to do. */
+.rendered-markdown-diff__change {
+  margin-block: 0.625rem;
+}
+
+.rendered-markdown-diff__pair > .rendered-markdown-diff__block + .rendered-markdown-diff__block {
+  margin-block-start: 0;
+}
+
+/* Struck-out prose is what makes a deleted block legible as "this text is gone"
+   without recoloring the text itself and losing contrast over the fill.
+
+   Only where the whole block is the deletion. On the removed half of a
+   SUBSTITUTION it says the opposite of what the engine found: a heading that
+   merely gained three words has every one of its surviving words struck, and a
+   rewritten paragraph's untouched clauses are crossed out alongside the ones
+   that actually went. There, the `<del>` ranges carry the line and the words
+   that survived are left alone — which is the whole point of locating them.
 
    Declared on the text-bearing descendants rather than on the block wrapper,
    which is the only way to keep it off code fences and table grids: a text
@@ -64,60 +149,66 @@
    CANNOT be switched off further down — `text-decoration: none` on the <pre>
    would be silently ignored. The :has() exclusion drops the line from a
    container holding a fence or table (a list item wrapping a code block), where
-   the block fill and the marker still carry the state. */
-.rendered-markdown-diff__block--removed
+   the block fill and the bar still carry the state. */
+.rendered-markdown-diff__block--removed[data-whole="true"]
   :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, dt, dd):not(:has(pre, table)) {
   text-decoration: line-through;
   text-decoration-color: color-mix(in oklab, var(--color-text-primary) 45%, transparent);
   text-decoration-thickness: 1px;
 }
 
-/* The status marker. Sits in the inline-start padding so it never displaces the
-   prose, and is a character rather than a color so the state survives a palette
-   that can't distinguish red from green. */
-.rendered-markdown-diff__marker {
-  position: absolute;
-  inset-inline-start: 0.125rem;
-  top: 0.3rem;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: 1.2;
-  user-select: none;
-  text-decoration: none;
-}
+/* Word- and sentence-level marks inside a modified block, using the same edit
+   fills the line diff uses for intra-line marks so the two surfaces read
+   identically.
 
-.rendered-markdown-diff__block--added > .rendered-markdown-diff__marker {
-  color: var(--color-diff-gutter-insert);
-}
-
-.rendered-markdown-diff__block--removed > .rendered-markdown-diff__marker {
-  color: var(--color-diff-gutter-delete);
-}
-
-/* Word-level marks inside a modified block, using the same edit fills the line
-   diff uses for intra-line marks so the two surfaces read identically. */
+   These are real <ins> and <del> elements, so the browser's own default
+   decorations would apply on top of ours; both are restated here rather than
+   inherited, because the underline offset a diff needs is not the one the UA
+   picks. */
 .rendered-markdown-diff__inline {
   border-radius: var(--radius-xs);
   padding-block: 0.05em;
+  /* The mark is a fill and a decoration, never a color change: recoloring text
+     over a tinted fill is how a diff loses its contrast floor in the themes
+     with the least headroom. */
+  color: inherit;
 }
 
+/* The non-color half of the signal, at word level.
+
+   WCAG 1.4.1 is not satisfied by the block's bar alone here: inside a changed
+   block, "these three words are new" and "these three words are old" differ
+   only by fill, and the two fills are a red and a green. An underline on the
+   insertion and a line through the deletion are the same cues Word and Google
+   Docs use, and they survive both high-contrast modes and a monochrome
+   display. */
 .rendered-markdown-diff__inline--added {
   background: var(--color-diff-insert-edit-background);
+  text-decoration: underline;
+  text-decoration-color: var(--color-diff-gutter-insert);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 
 .rendered-markdown-diff__inline--removed {
   background: var(--color-diff-delete-edit-background);
-}
-
-/* A modified block's two halves are one thought; keep them adjacent and let the
-   gap between pairs do the separating. */
-.rendered-markdown-diff__pair > .rendered-markdown-diff__block + .rendered-markdown-diff__block {
-  margin-block-start: 0;
+  /* `.markdown-document :where(del) { opacity: 0.6 }` is meant for authored GFM
+     strikethrough, where the dimming IS the point. It also catches the `<del>`
+     elements this diff injects, and a deleted word at 60% over its own tinted
+     fill measures about 3.5:1 in the light themes — under the 4.5:1 floor, on
+     the one run of text the reader most needs to read. The strikethrough
+     already says "deleted"; the opacity was saying it twice and charging
+     contrast for the second one. Authored `~~text~~` keeps its dimming, because
+     this only names the diff's own marks. */
+  opacity: 1;
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklab, var(--color-text-primary) 55%, transparent);
+  text-decoration-thickness: 1px;
 }
 
 @media (forced-colors: active) {
-  /* Author fills are dropped by the system anyway; the edge and the marker are
-     what survive, so they carry the whole signal here. */
+  /* Author fills are dropped by the system anyway; the edge and the inline
+     decorations are what survive, so they carry the whole signal here. */
   .rendered-markdown-diff__block--added,
   .rendered-markdown-diff__block--removed {
     background: Canvas;
@@ -132,16 +223,18 @@
     border-inline-start-color: LinkText;
   }
 
-  .rendered-markdown-diff__block--added > .rendered-markdown-diff__marker,
-  .rendered-markdown-diff__block--removed > .rendered-markdown-diff__marker {
-    color: CanvasText;
-  }
-
-  /* A background can't mark a word here, so the underline does. */
+  /* A background can't mark a word here, so the decoration does it alone. */
   .rendered-markdown-diff__inline {
     background: none;
+  }
+
+  .rendered-markdown-diff__inline--added {
     text-decoration: underline dotted CanvasText;
     text-underline-offset: 2px;
+  }
+
+  .rendered-markdown-diff__inline--removed {
+    text-decoration: line-through CanvasText;
   }
 }
 
@@ -151,8 +244,85 @@
     border-inline-start-width: 4px;
   }
 
-  .rendered-markdown-diff__block--removed
+  .rendered-markdown-diff__block--removed[data-whole="true"]
     :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, dt, dd):not(:has(pre, table)) {
     text-decoration-color: var(--color-text-primary);
   }
+
+  .rendered-markdown-diff__inline--removed {
+    text-decoration-color: var(--color-text-primary);
+  }
+
+  .rendered-markdown-diff__inline--added {
+    text-decoration-thickness: 2px;
+  }
+}
+
+/* Structural rules inside a changed block.
+
+   Every rule the Markdown document draws — a table grid, a blockquote's left
+   bar, a heading's underline — is `--color-border-default` mixed down towards
+   transparent. Mixed towards transparent means composited against whatever is
+   behind it, and behind it here is a tinted fill rather than the canvas: in the
+   dark themes the table grid measures 1.04:1 against its own block, so the same
+   table renders with a grid outside a change and none inside one. The reader
+   loses the structure of exactly the thing being reviewed.
+
+   Restated at full strength for changed blocks only. Unchanged blocks keep the
+   document's own values, so the quiet grid stays quiet where nothing happened. */
+.rendered-markdown-diff__block--added :where(th, td),
+.rendered-markdown-diff__block--removed :where(th, td) {
+  border-color: var(--color-border-strong);
+}
+
+.rendered-markdown-diff__block--added :where(blockquote),
+.rendered-markdown-diff__block--removed :where(blockquote) {
+  border-inline-start-color: var(--color-border-strong);
+}
+
+.rendered-markdown-diff__block--added :where(h1, h2),
+.rendered-markdown-diff__block--removed :where(h1, h2) {
+  border-bottom-color: var(--color-border-strong);
+}
+
+/* The fold that stands in for a run of untouched blocks.
+
+   Deliberately the quietest thing on the surface: it marks an absence, and an
+   absence that draws the eye competes with the changes the reader came for. No
+   fill, no bar — a hairline rule through the measure with the count sitting on
+   it, which is the same "there is more here" idiom the source diff's expander
+   uses without borrowing its gutter. */
+.rendered-markdown-diff__fold {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  margin-block: 0.75rem;
+  padding-inline: var(--rendered-diff-gutter);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+  color: var(--color-text-secondary);
+  background: none;
+  text-align: start;
+}
+
+.rendered-markdown-diff__fold::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-border-default);
+}
+
+.rendered-markdown-diff__fold:hover {
+  color: var(--color-text-primary);
+}
+
+.rendered-markdown-diff__fold:hover::after {
+  background: var(--color-border-strong);
+}
+
+/* The stepper scrolls to a change, and it must land clear of the toolbar rather
+   than flush under it. */
+.rendered-markdown-diff__change {
+  scroll-margin-block: 1.5rem;
 }
