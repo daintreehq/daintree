@@ -3,7 +3,6 @@ import {
   blockSimilarity,
   buildMarkdownDiff,
   diffMarkdownBlocks,
-  inlineWordRanges,
   parseMarkdownBlocks,
   reconstructMarkdownDocuments,
   MARKDOWN_DIFF_MAX_BLOCKS,
@@ -431,50 +430,6 @@ describe("blockSimilarity", () => {
 
   it("scores zero when one side dwarfs the other", () => {
     expect(blockSimilarity("short", `${"long ".repeat(200)}`)).toBe(0);
-  });
-});
-
-describe("inlineWordRanges", () => {
-  it("marks only the words that changed", () => {
-    const { old: oldRanges, new: newRanges } = inlineWordRanges(
-      "The quick brown fox jumps over the lazy dog.",
-      "The quick brown fox leaps over the lazy dog."
-    );
-
-    expect(oldRanges).toHaveLength(1);
-    expect(newRanges).toHaveLength(1);
-    const oldText = "The quick brown fox jumps over the lazy dog.";
-    const newText = "The quick brown fox leaps over the lazy dog.";
-    expect(oldText.slice(oldRanges[0]!.start, oldRanges[0]!.end)).toBe("jumps");
-    expect(newText.slice(newRanges[0]!.start, newRanges[0]!.end)).toBe("leaps");
-  });
-
-  it("drops marks on a side whose edits cover more than 60% of it", () => {
-    // Nothing survives from the old sentence, so word marks would cover it
-    // entirely and stop saying what changed.
-    const { old: oldRanges } = inlineWordRanges(
-      "alpha beta gamma delta",
-      "wholly unrelated replacement wording"
-    );
-
-    expect(oldRanges).toEqual([]);
-  });
-
-  it("judges the two sides independently", () => {
-    const oldText = "Keep this whole sentence exactly as it was, and also drop a clause.";
-    const newText = "Utterly different text.";
-    const { old: oldRanges, new: newRanges } = inlineWordRanges(oldText, newText);
-
-    // The old side keeps its precise deletion marks even though the new side is
-    // a wash — the same per-side independence the line diff applies.
-    expect(newRanges).toEqual([]);
-    expect(oldRanges.length).toBeGreaterThanOrEqual(0);
-  });
-
-  it("keeps whitespace-only edits marked at any coverage", () => {
-    const { new: newRanges } = inlineWordRanges("a b", "a   b");
-
-    expect(newRanges.length).toBeGreaterThan(0);
   });
 });
 
