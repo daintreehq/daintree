@@ -1112,6 +1112,43 @@ describe("AgentNotificationService", () => {
       expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
     });
 
+    it("skips pulse audio during scheduled quiet hours but keeps the loop alive", () => {
+      // Monday 23:00 sits inside the 22:00 -> 06:00 window.
+      vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+      mockStore({
+        soundEnabled: true,
+        workingPulseEnabled: true,
+        quietHoursEnabled: true,
+        quietHoursStartMin: 22 * 60,
+        quietHoursEndMin: 6 * 60,
+        quietHoursWeekdays: [],
+      } as unknown as Partial<typeof DEFAULT_NOTIFICATION_SETTINGS>);
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).not.toHaveBeenCalled();
+
+      // Step outside the window — the next tick must fire without a new spawn,
+      // proving the interval timer survived the suppressed tick.
+      vi.setSystemTime(new Date(2024, 0, 2, 12, 0));
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips pulse audio during a session mute but keeps the loop alive", () => {
+      vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
+      mockStore({ soundEnabled: true, workingPulseEnabled: true });
+      agentNotificationService.setSessionMuteUntil(Date.now() + 60 * 60 * 1000);
+
+      events.emit("agent:state-changed", makePayload("working", "idle"));
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).not.toHaveBeenCalled();
+
+      agentNotificationService.setSessionMuteUntil(0);
+      vi.advanceTimersByTime(10_000);
+      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+    });
+
     it("does not gate the pulse when OS DND state is undefined", () => {
       mockStore({ soundEnabled: true, workingPulseEnabled: true });
       osDndServiceMock.getState.mockReturnValue(undefined);

@@ -877,8 +877,8 @@ class AgentNotificationService {
   /**
    * Whether a non-urgent audio cue should stay silent right now: scheduled
    * quiet hours, an active session mute, or OS-level Do-Not-Disturb / Focus.
-   * An `undefined` OS state (unsupported platform, detection failed) means
-   * "do not gate".
+   * An `undefined` OS state (Windows/Linux, where no detection exists) means
+   * "do not gate" — only an explicit `true` suppresses.
    *
    * Audio only. OS DND must never suppress a native notification — the OS
    * already silences its own banners — so `drainQueue` keeps its own gate.
