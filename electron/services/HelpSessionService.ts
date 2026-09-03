@@ -1109,6 +1109,15 @@ export class HelpSessionService {
     // resume entry. A best-effort capture is strictly an improvement over
     // the previous behaviour of always losing the conversation.
     let capturedAgentSessionId: string | null = null;
+    // Whether THIS call claimed the lane's capture below. `revoked` is only set
+    // after the gracefulKill await, so a concurrent revoke of the same session —
+    // the renderer's no-capture `handleTerminalPanelMissing` path, which now
+    // races us whenever the project view outlives the kill (project sleep and
+    // close+kill both keep it alive) — passes the guard at the top and reaches
+    // the finalize block below. Without this flag it would release OUR ownership
+    // and the real resume id would be dropped for the empty-sentinel placeholder,
+    // silently demoting the resume to latest-conversation.
+    let ownsCapture = false;
     if (opts?.captureHibernation && terminalId && this.ptyClient) {
       // #9639: write a placeholder resume entry SYNCHRONOUSLY (memory-first
       // via `set`) before the gracefulKill round-trip. The eviction path that
@@ -1121,6 +1130,7 @@ export class HelpSessionService {
       // placeholder with the agent's real resume ID (below).
       if (this.pendingHibernationStore) {
         this.pendingCapturesBySlotKey.set(slotKey, sessionId);
+        ownsCapture = true;
         const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore
           .set(slotKey, {
@@ -1204,7 +1214,11 @@ export class HelpSessionService {
     // took the lane. When we still own it: overwrite with the real resume ID
     // if gracefulKill yielded one, otherwise leave the empty-sentinel in place
     // (resume-latest beats a fresh launch). Then release ownership.
-    if (this.pendingHibernationStore && this.pendingCapturesBySlotKey.get(slotKey) === sessionId) {
+    if (
+      ownsCapture &&
+      this.pendingHibernationStore &&
+      this.pendingCapturesBySlotKey.get(slotKey) === sessionId
+    ) {
       if (capturedAgentSessionId) {
         const panelWasOpen = this.panelOpenByProjectId.get(record.projectId) === true;
         void this.pendingHibernationStore

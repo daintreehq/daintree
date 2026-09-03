@@ -82,10 +82,7 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
             try {
               await helpSessionService.revokeByProjectId(projectId);
             } catch (revokeError) {
-              console.warn(
-                `[IPC] project:sleep: assistant hibernation capture failed for ${projectId}:`,
-                revokeError
-              );
+              logError("project-sleep-help-revoke-failed", revokeError, { projectId });
             }
 
             // Graceful, session-preserving kill + snapshot writeback + journal, in

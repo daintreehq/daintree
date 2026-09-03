@@ -2250,6 +2250,69 @@ describe("HelpSessionService", () => {
 
       expect(backing.get(slotKey("proj-no-take", 0))?.agentSessionId).toBe("real-resume-id-abc");
     });
+
+    it("keeps the real resume id when a no-capture revoke of the same session races the capture (#12181)", async () => {
+      // A session is not marked revoked until AFTER gracefulKill resolves, so a
+      // second revoke of the same id passes the top guard and reaches the
+      // finalize block. Only the call that CLAIMED the capture may release it —
+      // otherwise the renderer's no-capture revoke (fired by
+      // `handleTerminalPanelMissing` when the assistant's PTY exits) hands
+      // ownership back mid-capture and the real resume id is dropped for the
+      // empty sentinel, silently demoting the resume to latest-conversation.
+      // Newly reachable via project sleep / close+kill, which keep the project
+      // view alive and observing while main tears the assistant down.
+      type PendingHelpHibernationLike = {
+        agentId: string;
+        agentSessionId: string;
+        cwd: string;
+        capturedAt: number;
+      };
+      const backing = new Map<string, PendingHelpHibernationLike>();
+      const statefulStore = {
+        get: vi.fn((projectId: string) => backing.get(projectId) ?? null),
+        set: vi.fn((projectId: string, entry: PendingHelpHibernationLike) => {
+          backing.set(projectId, entry);
+          return Promise.resolve();
+        }),
+        clear: vi.fn((projectId: string) => {
+          backing.delete(projectId);
+          return Promise.resolve();
+        }),
+      };
+      service.setPendingHibernationStore(statefulStore as never);
+
+      let resolveGraceful: (value: string | null) => void = () => {};
+      mockPtyGracefulKill.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveGraceful = resolve;
+          })
+      );
+
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        projectViewWebContentsId: 91,
+        projectId: "proj-double-revoke",
+      });
+      if (!result) throw new Error("expected provision");
+      expect(service.markTerminalForToken(result.token, "term-double-revoke")).toBe(true);
+
+      // Main's capture-revoke parks on gracefulKill, holding the lane.
+      const capturePromise = service.revokeByProjectId("proj-double-revoke");
+      expect(backing.get(slotKey("proj-double-revoke", 0))?.agentSessionId).toBe("");
+
+      // The renderer revokes the SAME session with no capture flag while that
+      // await is still outstanding. It must not release main's ownership.
+      await service.revokeSession(result.sessionId);
+
+      resolveGraceful("real-resume-id-race");
+      await capturePromise;
+      await Promise.resolve();
+
+      expect(backing.get(slotKey("proj-double-revoke", 0))?.agentSessionId).toBe(
+        "real-resume-id-race"
+      );
+    });
   });
 
   describe("isHelpTerminal (#7526)", () => {

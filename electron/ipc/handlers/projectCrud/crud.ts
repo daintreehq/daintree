@@ -20,6 +20,7 @@ import { AppError } from "../../../utils/errorTypes.js";
 import { pruneWindowStateForPath } from "../../../windowState.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
+import { logError } from "../../../utils/logger.js";
 
 /**
  * Rejection copy for a destructive teardown (close+kill / remove) the pty-host
@@ -329,10 +330,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
         try {
           await helpSessionService.revokeByProjectId(projectId);
         } catch (revokeError) {
-          console.warn(
-            `[IPC] project:close: assistant hibernation capture failed for ${projectId}:`,
-            revokeError
-          );
+          logError("project-close-help-revoke-failed", revokeError, { projectId });
         }
 
         // Gracefully tear down and journal each agent session before wiping the
