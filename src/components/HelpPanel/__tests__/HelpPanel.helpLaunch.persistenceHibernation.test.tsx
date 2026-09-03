@@ -819,15 +819,19 @@ describe("HelpPanel — pinned-terminal state stays a quiet neutral indicator (#
     expect(worktreeSelectionState.selectWorktree).toHaveBeenCalledWith("wt-1", { source: "user" });
   });
 
-  it("keeps the header recovery button available with no live grid terminal", async () => {
-    // Removing the footer "Start new session" button must not strand the user:
-    // the header button (canStartNewSession = terminalId && agentId, both still
-    // set via the dock assistant) remains the recovery path (#10792).
+  it("keeps the recovery route available with no live grid terminal", async () => {
+    // Removing the footer "Start new session" button must not strand the user: restarting
+    // the conversation (canRestartConversation = terminalId && agentId, both still set via
+    // the dock assistant) remains the recovery path (#10792). It now lives in the header's
+    // overflow menu rather than as a header "+", which collided with the strip's own "+".
     setupPinnedSession({ "assistant-term": dockAssistantTerminal() });
 
     const { container } = await renderResolved();
 
-    expect(container.querySelector('[aria-label="Start new session"]')).not.toBeNull();
+    const restart = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Restart conversation")
+    );
+    expect(restart).toBeTruthy();
   });
 
   it("does not flag danger when pinnedContext has no terminal id", async () => {

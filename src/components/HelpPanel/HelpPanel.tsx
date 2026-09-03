@@ -3,6 +3,7 @@ import {
   lazy,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -26,7 +27,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
-import { HelpSessionTabs, type HelpSessionTab } from "./HelpSessionTabs";
+import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "./HelpSessionTabs";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
 import {
   acquireHelpSessionController,
@@ -1023,6 +1024,11 @@ export function HelpPanel({
     conversationTouched;
 
   // --- Parallel lanes (#12108) -------------------------------------------
+  // One base for the whole tablist/tabpanel relationship. Both ends have to name
+  // the same ids and neither can hold a ref to the other, so the panel owns the
+  // base and both sides derive from it.
+  const tabIdBase = useId();
+  const sessionBodyId = `${tabIdBase}-body`;
   const openSlots = useHelpPanelStore(useShallow(selectOpenSlots));
   const canOpenParallelSession = openSlots.length < MAX_ASSISTANT_SLOTS;
 
@@ -1041,9 +1047,14 @@ export function HelpPanel({
     () =>
       openSlots.map((slot, index) => ({
         slot,
-        // Numbered by position rather than by slot, so closing lane 1 of three
-        // leaves "Session 1 / Session 2" rather than a gap at 2.
-        label: `Session ${index + 1}`,
+        // Numbered by SLOT, which is the lane's durable identity, rather than by
+        // position in the strip. Position renumbers: closing the first of three
+        // lanes used to rename the two behind it, so a conversation the user had
+        // been calling "Session 3" silently became "Session 2" and the name they
+        // navigated back to belonged to a different session. A gap at 2 is a much
+        // smaller cost than a label that lies, and the gap closes on its own —
+        // `openSlot` always takes the lowest free slot.
+        label: `Session ${slot + 1}`,
         agentState: laneAgentStates[index],
       })),
     [openSlots, laneAgentStates]
@@ -1421,11 +1432,9 @@ export function HelpPanel({
 
       <HelpPanelHeader
         agentState={terminalPty?.agentState}
-        canStartNewSession={Boolean(terminalId && agentId)}
+        canRestartConversation={Boolean(terminalId && agentId)}
         canEndSession={Boolean(terminalId && agentId)}
-        canOpenParallelSession={canOpenParallelSession}
-        onNewSession={handleNewSession}
-        onOpenParallelSession={handleOpenParallelSession}
+        onRestartConversation={handleNewSession}
         onEndSession={handleEndSession}
         onOpenDocs={handleOpenAssistantDocs}
         onClose={handleClose}
@@ -1437,12 +1446,13 @@ export function HelpPanel({
         activeSlot={activeSlot}
         onSelect={handleSelectSlot}
         onClose={handleCloseSlot}
-        // The same capability and the same handler the overflow menu's "Open
-        // parallel session" uses. Given to the strip as well because that is
-        // where a tab set's new-tab control belongs, and because the menu item
-        // was the only route to it.
+        // The strip is the only home for this action now. It used to live in the
+        // header's overflow menu as well, which put the one findable route to a
+        // second session two clicks behind an ellipsis.
         canOpenSession={canOpenParallelSession}
         onOpenSession={handleOpenParallelSession}
+        idBase={tabIdBase}
+        panelId={sessionBodyId}
       />
 
       {/* One runtime per open lane. Background lanes need theirs so a session
@@ -1464,8 +1474,21 @@ export function HelpPanel({
         />
       ))}
 
-      {/* Content */}
-      <div className="flex-1 flex flex-col min-h-0 relative">
+      {/* Content — the strip's `tabpanel`. Named by whichever tab is selected, so the
+          relationship the tablist claims through `aria-controls` actually resolves.
+
+          No `tabIndex` of its own. The pattern asks for one only on a panel with nothing
+          focusable inside it, and every state this body settles into has something: the
+          terminal's textarea, the empty state's starter prompts, a banner's recovery
+          action. The launching skeleton is the one exception, and giving the body a
+          permanent tab stop to cover a state that lasts under a second would cost every
+          keyboard user an extra stop on the way past the terminal, forever. */}
+      <div
+        id={sessionBodyId}
+        role="tabpanel"
+        aria-labelledby={helpSessionTabId(tabIdBase, activeSlot)}
+        className="flex-1 flex flex-col min-h-0 relative"
+      >
         {/* Banners render above every content state — the launch-error banner
             must stay visible in the empty state a failed launch falls back to.
             The other banners are null unless a session is live, so this mount
@@ -1789,9 +1812,12 @@ export function HelpPanel({
       )}
       <ConfirmDialog
         isOpen={showNewSessionConfirm}
-        title="Start a new session?"
+        // Matches the overflow item that opens it. The old wording ("Start a new
+        // session?") described the outcome as a gain when the thing being confirmed
+        // is a loss, and it collided with the strip's own new-session control.
+        title="Restart this conversation?"
         description="The current agent will stop and the conversation will be discarded"
-        confirmLabel="Start new session"
+        confirmLabel="Restart conversation"
         onConfirm={handleConfirmNewSession}
         onClose={handleCancelNewSession}
         variant="destructive"

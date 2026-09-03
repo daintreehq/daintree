@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useMemo, useState } from "react";
+import { StrictMode, useEffect, useId, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { resolveAppTheme } from "@shared/theme/themes";
@@ -64,6 +64,18 @@ interface Fixture {
  * control is gone and the width it would have cost with it.
  */
 const FIXTURES = {
+  "one-lane": {
+    what: "the state every project starts in — one lane, nothing running",
+    lanes: [null],
+    activeIndex: 0,
+    focused: true,
+  },
+  "one-lane-working": {
+    what: "one lane, busy — the case where header and strip both speak for it",
+    lanes: ["working"],
+    activeIndex: 0,
+    focused: true,
+  },
   "two-idle": {
     what: "the common case — two lanes, neither reporting",
     lanes: [null, null],
@@ -118,6 +130,8 @@ const width = Number(params.get("width")) || 380;
 function Chrome({ name }: { name: FixtureName }) {
   const fixture = FIXTURES[name];
   const [activeSlot, setActiveSlot] = useState(fixture.activeIndex);
+  const idBase = useId();
+  const bodyId = `${idBase}-body`;
 
   const tabs: HelpSessionTab[] = fixture.lanes.map((agentState, index) => ({
     slot: index,
@@ -128,12 +142,13 @@ function Chrome({ name }: { name: FixtureName }) {
   return (
     <div className="flex flex-col h-full bg-surface-canvas">
       <HelpPanelHeader
-        agentState={null}
-        canStartNewSession
+        // The active lane's state, exactly as `HelpPanel` feeds it — the header speaks
+        // for the lane on screen and nothing else. Hardcoding `null` here made the one
+        // thing the header and the strip can disagree about invisible to the harness.
+        agentState={tabs[activeSlot]?.agentState ?? null}
+        canRestartConversation
         canEndSession
-        canOpenParallelSession={tabs.length < MAX_ASSISTANT_SLOTS}
-        onNewSession={() => {}}
-        onOpenParallelSession={() => {}}
+        onRestartConversation={() => {}}
         onEndSession={() => {}}
         onOpenDocs={() => {}}
         onClose={() => {}}
@@ -146,10 +161,12 @@ function Chrome({ name }: { name: FixtureName }) {
         onClose={() => {}}
         canOpenSession={tabs.length < MAX_ASSISTANT_SLOTS}
         onOpenSession={() => {}}
+        idBase={idBase}
+        panelId={bodyId}
       />
       {/* Stand-in for the transcript. Deliberately quiet: its only job is to be the
           strip's real bottom neighbour on the theme's canvas. */}
-      <div className="flex-1 min-h-0 px-3 py-3 space-y-2" aria-hidden="true">
+      <div id={bodyId} className="flex-1 min-h-0 px-3 py-3 space-y-2" aria-hidden="true">
         <div className="h-2 w-4/5 rounded-full bg-overlay-soft" />
         <div className="h-2 w-3/5 rounded-full bg-overlay-soft" />
         <div className="h-2 w-2/3 rounded-full bg-overlay-soft" />

@@ -1,5 +1,4 @@
-import { ChevronRight, CircleHelp, CircleStop, Columns2, Ellipsis, Plus } from "lucide-react";
-import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
+import { ChevronRight, CircleHelp, CircleStop, Ellipsis, RotateCcw } from "lucide-react";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import {
   DropdownMenu,
@@ -11,65 +10,48 @@ import {
 import { cn } from "@/lib/utils";
 import type { AgentState } from "@/types";
 
-// Tier-1 ambient indicator (per CLAUDE.md Runtime Signals): surfaces the
-// in-flight assistant state next to the header title so the user can read it
-// without watching the terminal. Only the actionable triad — working,
-// directing, waiting — earns a marker; idle/completed/exited stay quiet.
-function AssistantHeaderStateIndicator({
-  agentState,
-}: {
-  agentState: AgentState | null | undefined;
-}) {
-  if (agentState === "working") {
-    return (
-      <span
-        data-testid="assistant-header-state-indicator"
-        data-agent-state="working"
-        aria-label="Assistant is working"
-        role="status"
-        className="ml-1.5 inline-flex shrink-0"
-      >
-        <SpinnerCircle className="w-3.5 h-3.5 text-state-working animate-spin-slow motion-reduce:animate-none" />
-      </span>
-    );
-  }
-  if (agentState === "directing") {
-    return (
-      <span
-        data-testid="assistant-header-state-indicator"
-        data-agent-state="directing"
-        aria-label="Assistant is directing"
-        role="status"
-        className="ml-1.5 inline-flex shrink-0"
-      >
-        <InteractingCircle className="w-3.5 h-3.5 text-category-blue" />
-      </span>
-    );
-  }
-  if (agentState === "waiting") {
-    return (
-      <span
-        data-testid="assistant-header-state-indicator"
-        data-agent-state="waiting"
-        aria-label="Assistant is waiting"
-        role="status"
-        className="ml-1.5 inline-flex shrink-0"
-      >
-        <HollowCircle className="w-3.5 h-3.5 text-state-waiting" />
-      </span>
-    );
-  }
-  return null;
+/** What the active lane's state is called when it is spoken rather than drawn. */
+const SPOKEN_STATE: Partial<Record<NonNullable<AgentState>, string>> = {
+  working: "Assistant is working",
+  directing: "Assistant is directing",
+  waiting: "Assistant is waiting",
+};
+
+/**
+ * The active lane's state, announced but not drawn.
+ *
+ * The header used to draw the same 14px marker the session strip draws, for the same
+ * lane, one row apart — so a working session put two identical spinners on screen and
+ * left the user to work out whether the panel or the conversation was busy. The strip
+ * is now always present and its marker is per-lane, which is strictly more information
+ * in a more specific place, so the visible duplicate is gone.
+ *
+ * What does not survive that deletion on its own is the announcement. A marker in the
+ * strip reaches assistive tech through `aria-describedby`, which is read when a tab
+ * takes focus and not when the state CHANGES — whereas the mark this replaces was a
+ * `role="status"` live region that spoke on every transition. Keeping one here, with
+ * no visual presence, preserves that for the lane on screen.
+ */
+function AssistantStateAnnouncer({ agentState }: { agentState: AgentState | null | undefined }) {
+  const spoken = agentState ? SPOKEN_STATE[agentState] : undefined;
+  return (
+    <span
+      data-testid="assistant-header-state-announcer"
+      data-agent-state={agentState ?? undefined}
+      role="status"
+      className="sr-only"
+    >
+      {spoken ?? ""}
+    </span>
+  );
 }
 
 interface HelpPanelHeaderProps {
+  /** The state of the lane on screen. Announced only — the strip draws it. */
   agentState: AgentState | null | undefined;
-  canStartNewSession: boolean;
+  canRestartConversation: boolean;
   canEndSession: boolean;
-  /** False once every assistant lane is occupied (#12108). */
-  canOpenParallelSession: boolean;
-  onNewSession: () => void;
-  onOpenParallelSession: () => void;
+  onRestartConversation: () => void;
   onEndSession: () => void;
   onOpenDocs: () => void;
   onClose: () => void;
@@ -78,11 +60,9 @@ interface HelpPanelHeaderProps {
 
 export function HelpPanelHeader({
   agentState,
-  canStartNewSession,
+  canRestartConversation,
   canEndSession,
-  canOpenParallelSession,
-  onNewSession,
-  onOpenParallelSession,
+  onRestartConversation,
   onEndSession,
   onOpenDocs,
   onClose,
@@ -109,22 +89,16 @@ export function HelpPanelHeader({
         <span className="ml-1.5 text-xs font-medium text-text-secondary truncate">
           Daintree Assistant
         </span>
-        <AssistantHeaderStateIndicator agentState={agentState} />
+        <AssistantStateAnnouncer agentState={agentState} />
       </div>
-      {canStartNewSession && (
-        <button
-          type="button"
-          onClick={onNewSession}
-          className="p-1 rounded-[var(--radius-sm)] text-daintree-text/50 hover:text-text-primary hover:bg-tint/8 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-          aria-label="Start new session"
-          title="Start a new conversation in this session"
-        >
-          <Plus className="w-3.5 h-3.5" />
-        </button>
-      )}
-      {/* Secondary + destructive actions live in the overflow, per the 3-icon
-          header budget — and Stop must not sit adjacent to the benign hide
-          chevron (destructive-adjacency misfire risk). */}
+      {/* The header carries panel-level actions only. Anything scoped to ONE
+          conversation belongs to the strip, which is where the sessions are.
+
+          The `+` that used to sit here is gone. It restarted the current
+          conversation, while the strip a row below grew a control that opened
+          another session — two plus-shaped affordances a few pixels apart doing
+          different things, and only the destructive one was visible. Restarting
+          is now a named overflow item, and the strip owns the only `+`. */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
@@ -137,15 +111,21 @@ export function HelpPanelHeader({
             <Ellipsis className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-[160px]">
-          {/* Distinct from the header's "+" — that restarts THIS conversation,
-              this one opens a second conversation beside it. Lives in the
-              overflow to keep the header at its 3-icon budget. */}
-          <DropdownMenuItem onSelect={onOpenParallelSession} disabled={!canOpenParallelSession}>
-            <Columns2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Open parallel session
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
+        <DropdownMenuContent align="end" className="min-w-[180px]">
+          {/* Named for what it does to the conversation, not for what it does to
+              the session. "Start new session" read as "give me another session",
+              which is the strip's `+` — and this is the one that throws the
+              current conversation away. Opening a parallel session is NOT
+              mirrored here: the strip's `+` is its single home. */}
+          {canRestartConversation && (
+            <>
+              <DropdownMenuItem onSelect={onRestartConversation}>
+                <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                Restart conversation
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
           <DropdownMenuItem onSelect={onOpenDocs}>
             <CircleHelp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Open docs

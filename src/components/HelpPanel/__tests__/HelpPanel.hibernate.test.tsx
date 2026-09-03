@@ -2057,50 +2057,71 @@ describe("HelpPanel — assistant header state indicator", () => {
     };
   }
 
-  it("renders the working indicator when the assistant terminal is working", () => {
+  // The header no longer DRAWS the active lane's state — the session strip does, and
+  // drawing it in both put two identical glyphs one row apart for the same lane. What
+  // the header keeps is the announcement, because the strip reaches assistive tech
+  // through `aria-describedby`, which is read when a tab takes focus and not when the
+  // state changes underneath it.
+
+  it("announces the working state without drawing a second marker for it", () => {
     setupTerminalWithState("working");
 
-    const { getByTestId } = render(<HelpPanel width={380} />);
-    const indicator = getByTestId("assistant-header-state-indicator");
-    expect(indicator.getAttribute("data-agent-state")).toBe("working");
-    expect(indicator.getAttribute("aria-label")).toBe("Assistant is working");
+    const { getByTestId, container } = render(<HelpPanel width={380} />);
+    const announcer = getByTestId("assistant-header-state-announcer");
+    expect(announcer.getAttribute("data-agent-state")).toBe("working");
+    expect(announcer.getAttribute("role")).toBe("status");
+    expect(announcer.textContent).toBe("Assistant is working");
+    // The only working marker on screen belongs to a tab.
+    const markers = container.querySelectorAll("svg.animate-spin-slow");
+    for (const marker of markers) {
+      expect(marker.closest('[role="tab"]')).not.toBeNull();
+    }
   });
 
-  it("renders the waiting indicator when the assistant terminal is waiting", () => {
+  it("announces the waiting state", () => {
     setupTerminalWithState("waiting");
 
     const { getByTestId } = render(<HelpPanel width={380} />);
-    const indicator = getByTestId("assistant-header-state-indicator");
-    expect(indicator.getAttribute("data-agent-state")).toBe("waiting");
-    expect(indicator.getAttribute("aria-label")).toBe("Assistant is waiting");
+    const announcer = getByTestId("assistant-header-state-announcer");
+    expect(announcer.getAttribute("data-agent-state")).toBe("waiting");
+    expect(announcer.textContent).toBe("Assistant is waiting");
   });
 
-  it("renders the directing indicator when the assistant terminal is directing", () => {
+  it("announces the directing state", () => {
     setupTerminalWithState("directing");
 
     const { getByTestId } = render(<HelpPanel width={380} />);
-    const indicator = getByTestId("assistant-header-state-indicator");
-    expect(indicator.getAttribute("data-agent-state")).toBe("directing");
-    expect(indicator.getAttribute("aria-label")).toBe("Assistant is directing");
+    const announcer = getByTestId("assistant-header-state-announcer");
+    expect(announcer.getAttribute("data-agent-state")).toBe("directing");
+    expect(announcer.textContent).toBe("Assistant is directing");
   });
 
-  it("does not render an indicator for idle, completed, or exited states", () => {
+  it("announces nothing for idle, completed, or exited states", () => {
     for (const state of ["idle", "completed", "exited"]) {
       setupTerminalWithState(state);
-      const { queryByTestId, unmount } = render(<HelpPanel width={380} />);
-      expect(queryByTestId("assistant-header-state-indicator")).toBeNull();
+      const { getByTestId, unmount } = render(<HelpPanel width={380} />);
+      expect(getByTestId("assistant-header-state-announcer").textContent).toBe("");
       unmount();
     }
   });
 
-  it("does not render an indicator before any assistant terminal exists", () => {
+  it("announces nothing before any assistant terminal exists", () => {
     helpPanelState.terminalId = null;
     helpPanelState.agentId = null;
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     panelStoreState.panelsById = {};
 
-    const { queryByTestId } = render(<HelpPanel width={380} />);
-    expect(queryByTestId("assistant-header-state-indicator")).toBeNull();
+    const { getByTestId } = render(<HelpPanel width={380} />);
+    expect(getByTestId("assistant-header-state-announcer").textContent).toBe("");
+  });
+
+  it("keeps the live region mounted so a transition is announced rather than inserted", () => {
+    // A `role="status"` that only appears once there is something to say is added to the
+    // DOM at the same moment its content is, and a live region added and populated in one
+    // pass is not reliably announced. It has to be there first, empty.
+    setupTerminalWithState("idle");
+    const { getByTestId } = render(<HelpPanel width={380} />);
+    expect(getByTestId("assistant-header-state-announcer")).not.toBeNull();
   });
 });
 
@@ -2134,11 +2155,15 @@ describe("HelpPanel — + New session clears hibernated entry", () => {
 
     const { container } = render(<HelpPanel width={380} />);
 
-    const newSessionBtn = container.querySelector('button[aria-label="Start new session"]')!;
-    expect(newSessionBtn).toBeTruthy();
+    // The restart control moved from a header "+" into the overflow menu, where it is
+    // named for the conversation it discards.
+    const restartBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Restart conversation")
+    )!;
+    expect(restartBtn).toBeTruthy();
 
     await act(async () => {
-      fireEvent.click(newSessionBtn);
+      fireEvent.click(restartBtn);
     });
 
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);

@@ -1,11 +1,10 @@
 /**
  * Assistant session-tab strip visual-review harness.
  *
- * The strip only appears once a project has a second assistant lane open, and its most
- * important job — showing that a lane you are NOT looking at has gone to `working` or
- * `waiting` — is by definition invisible from the lane on screen. Reaching those states
- * in the real app means launching two sessions and waiting for one of them, which is no
- * way to look at a surface deliberately.
+ * The strip's most important job — showing that a lane you are NOT looking at has gone
+ * to `working` or `waiting` — is by definition invisible from the lane on screen.
+ * Reaching those states in the real app means launching two sessions and waiting for
+ * one of them, which is no way to look at a surface deliberately.
  *
  * So this drives the strip's own preview entry (`session-tabs-preview.html`) rather than
  * booting Electron: the same `HelpPanelHeader` and `HelpSessionTabs`, the same theme
@@ -55,6 +54,8 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
 
 /** Mirrors `FIXTURES` in the preview entry, with what each one is here to prove. */
 const FIXTURES = [
+  { name: "one-lane", what: "the state every project starts in" },
+  { name: "one-lane-working", what: "one lane busy — header and strip both speak for it" },
   { name: "two-idle", what: "the common case — two lanes, neither reporting" },
   { name: "two-background-working", what: "the lane you cannot see is busy" },
   { name: "three-mixed", what: "all three markers at once, still distinguishable" },
@@ -123,9 +124,16 @@ async function open(
     `${baseURL}/session-tabs-preview.html?theme=${theme}&fixture=${fixture}&width=${width}`
   );
   const panel = page.locator("[data-preview-panel]").first();
-  await expect(panel).toBeAttached();
-  const strip = page.getByRole("group", { name: "Assistant sessions" });
-  await expect(strip).toBeAttached();
+  // Generous on purpose. This harness is run on developer machines that are often
+  // busy running the agent fleet this app exists to orchestrate, and at high load a
+  // cold Vite transform of the preview entry comfortably outruns the 5s default —
+  // which fails as "element(s) not found", i.e. looking exactly like a render bug in
+  // the surface under review rather than a busy box.
+  await expect(panel).toBeAttached({ timeout: 30_000 });
+  // Deliberately not asserted here. Whether a one-lane project gets a strip at all is
+  // one of the things this harness exists to show, so a missing strip has to be
+  // capturable rather than a crash — `snap` still refuses to write a PNG for one.
+  const strip = page.getByRole("tablist", { name: "Assistant sessions" });
   // Type metrics drive every measurement in the strip, so a capture taken before the
   // fonts land measures the fallback face.
   await page.evaluate(() => document.fonts.ready);
@@ -147,8 +155,12 @@ test("assistant session tabs — states, widths and themes", async ({ page }) =>
       const { panel, strip } = await open(page, name, theme, DEFAULT_WIDTH);
       written.push(await snap(panel, `${name}-${theme}-panel.png`));
       // The strip alone, at the size the eye actually judges it. This is where a
-      // selection that is too quiet stops being arguable.
-      written.push(await snap(strip, `${name}-${theme}-strip.png`));
+      // selection that is too quiet stops being arguable. Skipped, not failed, when
+      // the fixture renders no strip — that absence is itself a captured finding in
+      // the panel shot above.
+      if ((await strip.count()) > 0) {
+        written.push(await snap(strip, `${name}-${theme}-strip.png`));
+      }
     }
   }
 
@@ -168,7 +180,7 @@ test("assistant session tabs — states, widths and themes", async ({ page }) =>
     const hoverTheme = THEMES[0]!;
     const { panel, strip } = await open(page, "three-mixed", hoverTheme, DEFAULT_WIDTH);
 
-    await strip.getByRole("button", { name: "Session 2", exact: true }).hover();
+    await strip.getByRole("tab", { name: "Session 2", exact: true }).hover();
     await page.waitForTimeout(250);
     written.push(await snap(strip, `three-mixed-${hoverTheme}-strip-hover-inactive.png`));
 
@@ -194,17 +206,28 @@ test("assistant session tabs — states, widths and themes", async ({ page }) =>
     // whether the ring is clipped by the chrome around it.
     written.push(await snap(panel, `three-mixed-${hoverTheme}-panel-focus-first.png`));
 
-    // The close control's own ring. It is a separate tab stop by design, and it is the
-    // one control here small enough that its ring can collide with the chip's edge.
+    // Roving tabindex: ArrowRight moves focus WITHIN the strip without selecting,
+    // which is the half of the tabs pattern a static fixture cannot show. If this
+    // capture looks identical to the one above, focus did not move and the pattern
+    // is not wired.
+    await page.keyboard.press("ArrowRight");
+    await page.waitForTimeout(250);
+    written.push(await snap(strip, `three-mixed-${hoverTheme}-strip-focus-arrow.png`));
+
+    // One more Tab leaves the tablist entirely — the whole strip is a single tab
+    // stop now — and lands on the trailing new-session control.
     await page.keyboard.press("Tab");
     await page.waitForTimeout(250);
-    written.push(await snap(strip, `three-mixed-${hoverTheme}-strip-focus-close.png`));
+    written.push(await snap(strip, `three-mixed-${hoverTheme}-strip-focus-new.png`));
   }
 
   // Count the files ourselves. A harness that trusts its own exit code is how a review
   // ends up reasoning about screenshots that were never written.
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * FIXTURES.length * 2);
+  // One panel shot per fixture per theme is the floor that proves the sweep actually
+  // ran. Strip shots are counted in `written` but not floored here, because whether a
+  // given fixture has a strip is exactly what is under review.
+  expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * FIXTURES.length);
   console.log(`[session-tab-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });
