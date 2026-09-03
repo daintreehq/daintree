@@ -227,7 +227,8 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
     try {
       // Snapshot terminal infos before the kills — info is gone once the PTY
       // exits — so each captured agent session can be journaled below. Outside
-      // the 4s kill race; a failed snapshot just no-ops the journal step.
+      // PROJECT_GRACEFUL_KILL_TIMEOUT_MS; a failed snapshot just no-ops the
+      // journal step.
       let terminalInfoById = new Map<
         string,
         Awaited<ReturnType<PtyClient["getAllTerminalsAsync"]>>[number]

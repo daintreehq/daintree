@@ -80,6 +80,7 @@ export interface PtyEventRouterCallbacks {
    */
   onGracefulKillProgress?: (
     projectId: string,
+    requestId: string,
     result: { id: string; agentSessionId: string | null }
   ) => void;
   /**
@@ -263,7 +264,7 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       // arrives. This only records the capture so a caller that abandons the
       // wait still has it (#12180).
       if (callbacks.onGracefulKillProgress) {
-        callbacks.onGracefulKillProgress(event.projectId, event.result);
+        callbacks.onGracefulKillProgress(event.projectId, event.requestId, event.result);
       }
       return true;
 

@@ -712,6 +712,22 @@ describe("PtyManager gracefulKillByProject partial capture (#12180)", () => {
     ]);
   });
 
+  it("kills a pane that outran its budget before the batch resolves", async () => {
+    vi.useFakeTimers();
+    const manager = new PtyManager();
+    spawnFastAndHung(manager);
+
+    const promise = manager.gracefulKillByProject("project-a");
+    await vi.advanceTimersByTimeAsync(GRACEFUL_KILL_TERMINAL_BUDGET_MS);
+    await promise;
+
+    // Callers read the resolved batch as an acknowledged teardown and delete a
+    // project's restoration state on it (#11340), so the kill cannot be left to
+    // the abandoned chain to issue after we have already answered.
+    expect(shared.created[1]!.kill).toHaveBeenCalled();
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("outran its budget"));
+  });
+
   it("keeps the capture when the progress reporter throws", async () => {
     vi.useFakeTimers();
     const manager = new PtyManager();

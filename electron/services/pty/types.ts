@@ -315,8 +315,9 @@ export { TRASH_TTL_MS } from "../../../shared/config/trash.js";
 // The real ceiling is PROJECT_GRACEFUL_KILL_TIMEOUT_MS (4000ms) in
 // `electron/lifecycle/shutdown.ts`. A terminal that outlives it no longer costs
 // its project the captures that did land — the host streams each one as it
-// settles (#12180) — but it still costs its own. 3000ms leaves 1000ms for the
-// PtyClient RPC round-trip on either side of this window. Both layers are
+// settles (#12180) — but it still costs its own. The host's aggregate is capped
+// at GRACEFUL_KILL_TERMINAL_BUDGET_MS below, so 750ms of that 4000ms is left for
+// the PtyClient RPC round-trip on either side of this window. Both layers are
 // `Promise.all` (terminals within a project, projects within the quit), so this
 // budget is parallel, not additive: ten terminals cost one terminal's wall
 // clock, not ten. Raise it only against that 4000ms number, and only with the

@@ -31,6 +31,9 @@ import {
   type PtyManagerEvents,
   MAX_PRESERVED_TERMINAL_SNAPSHOTS,
 } from "./pty/index.js";
+// From ./pty/types.js rather than the ./pty/index.js barrel above: the
+// PtyManager unit tests mock that barrel wholesale, which would leave this
+// undefined and fire the budget timer on the next tick.
 import { GRACEFUL_KILL_TERMINAL_BUDGET_MS } from "./pty/types.js";
 import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
@@ -1162,10 +1165,17 @@ export class PtyManager extends EventEmitter {
    * One terminal's slot in {@link gracefulKillByProject}, capped at
    * GRACEFUL_KILL_TERMINAL_BUDGET_MS.
    *
-   * Timing out abandons the wait, not the teardown: the losing chain keeps
-   * running and still tears the terminal down — `gracefulShutdown` kills on its
-   * own timeout, and the fallback below covers the terminals it returns without
-   * killing — so giving up on a capture never leaves a live pane behind.
+   * Timing out abandons the wait, not the teardown, and kills on the way out —
+   * mirroring the single-terminal timeout in `PtyClient.gracefulKill`. Leaving
+   * the kill to the abandoned chain would have been enough to reap the pane
+   * eventually, but not before this method returned, and callers read the
+   * acknowledged teardown as licence to delete a project's restoration state
+   * (#11340). The kill has to have been issued for every terminal by the time
+   * the aggregate resolves.
+   *
+   * Double-killing is not a hazard: `kill` re-reads the registry and no-ops on a
+   * terminal that is already gone, and `gracefulShutdown` latches its own
+   * teardown, so whichever path lands second does nothing.
    */
   private gracefulKillWithinBudget(
     terminalId: string,
@@ -1190,10 +1200,15 @@ export class PtyManager extends EventEmitter {
     return Promise.race([
       settled,
       new Promise<{ id: string; agentSessionId: string | null }>((resolve) => {
-        timer = setTimeout(
-          () => resolve({ id: terminalId, agentSessionId: null }),
-          GRACEFUL_KILL_TERMINAL_BUDGET_MS
-        );
+        timer = setTimeout(() => {
+          logWarn(`Graceful kill outran its budget for terminal ${terminalId}; killing`);
+          try {
+            this.kill(terminalId, "graceful-kill-timeout", options);
+          } catch {
+            // already dead
+          }
+          resolve({ id: terminalId, agentSessionId: null });
+        }, GRACEFUL_KILL_TERMINAL_BUDGET_MS);
       }),
     ]).finally(() => {
       if (timer) clearTimeout(timer);
