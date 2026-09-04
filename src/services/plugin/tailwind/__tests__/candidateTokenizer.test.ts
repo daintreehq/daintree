@@ -34,13 +34,16 @@ describe("tokenizePluginSource", () => {
     // on whitespace: brackets have to be counted, or `grid-cols-[1fr_auto]`
     // becomes two useless fragments and the class never compiles.
     const tokens = tokenizePluginSource(
-      `"w-[327px] grid-cols-[1fr_auto] shadow-[0_1px_2px_rgb(0,0,0,.1)] bg-[url('a b.png')]"`
+      `"w-[327px] grid-cols-[1fr_auto] shadow-[0_1px_2px_rgb(0,0,0,.1)] bg-[url('a_b.png')]"`
     );
 
     expect(tokens).toContain("w-[327px]");
     expect(tokens).toContain("grid-cols-[1fr_auto]");
     expect(tokens).toContain("shadow-[0_1px_2px_rgb(0,0,0,.1)]");
-    expect(tokens).toContain("bg-[url('a b.png')]");
+    // Quotes and parens are not candidate characters, so this one only survives
+    // by bracket depth. Tailwind spells the space as `_` because `class` is split
+    // on whitespace — a literal space here could never have matched an element.
+    expect(tokens).toContain("bg-[url('a_b.png')]");
   });
 
   it("keeps variants, important markers and opacity intact", () => {
@@ -138,6 +141,30 @@ describe("tokenizePluginSource", () => {
   it("survives unbalanced quotes and brackets without throwing", () => {
     expect(() => tokenizePluginSource(`"p-4 [unclosed`)).not.toThrow();
     expect(() => tokenizePluginSource("`p-4 ${unclosed")).not.toThrow();
+  });
+
+  it("never emits a token carrying whitespace, however the brackets are abused", () => {
+    // A `[...]` run swallows every character while it is open, so one spanning a
+    // line break used to yield a token with a RAW NEWLINE inside it. The compiler
+    // serialises that verbatim, the newline ends the CSS declaration as a
+    // bad-string, and the rest of the token then closes the `@scope` and `@layer`
+    // that contain it — putting a plugin's rule on host chrome. A class attribute
+    // is split on ASCII whitespace, so such a token can never match anything
+    // anyway; the only thing it can do is break out.
+    const sources = [
+      "const x = `[content:'\n}}}html{display:none}/*']`;",
+      "\"[content:'\t}}}html{display:none}/*']\"",
+      "`p-[1px\r] gap-2`",
+    ];
+
+    for (const source of sources) {
+      for (const token of tokenizePluginSource(source)) {
+        expect(/\s/.test(token), `token carries whitespace: ${JSON.stringify(token)}`).toBe(false);
+      }
+    }
+
+    // …and only the malformed token is lost; its neighbours still compile.
+    expect(tokenizePluginSource("`p-[1px\r] gap-2`")).toContain("gap-2");
   });
 });
 

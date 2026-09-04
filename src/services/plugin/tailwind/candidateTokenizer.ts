@@ -52,6 +52,17 @@ const CANDIDATE_CHARACTER = /[A-Za-z0-9_\-:./!@*%()#]/;
 const CANDIDATE_START = /^[A-Za-z@\-!['*]/;
 
 /**
+ * A bracket run swallows everything until its `]`, so one spanning a line break
+ * would otherwise yield a token with a raw newline inside it — which Tailwind
+ * serialises verbatim into a CSS string, where the newline ends the declaration
+ * as a bad-string and the rest of the token closes the `@scope` and `@layer`
+ * around it. `class` is split on ASCII whitespace, so such a token could never
+ * have matched an element anyway; dropping it costs nothing and is a stronger
+ * rule than tracking which characters CSS happens to treat as a line break.
+ */
+const HAS_WHITESPACE = /\s/;
+
+/**
  * Words after which a `/` begins a regular expression rather than division.
  * The rest of the decision is made from the previous significant character.
  */
@@ -313,7 +324,12 @@ function* splitCandidates(literal: string): Generator<string> {
   let bracketDepth = 0;
 
   const flush = function* (): Generator<string> {
-    if (token.length > 0 && token.length <= MAX_TOKEN_LENGTH && CANDIDATE_START.test(token)) {
+    if (
+      token.length > 0 &&
+      token.length <= MAX_TOKEN_LENGTH &&
+      !HAS_WHITESPACE.test(token) &&
+      CANDIDATE_START.test(token)
+    ) {
       yield token;
     }
     token = "";

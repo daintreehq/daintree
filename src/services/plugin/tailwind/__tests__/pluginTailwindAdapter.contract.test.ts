@@ -18,6 +18,7 @@ import {
   type PluginCssCompiler,
   type PluginCandidateValidator,
 } from "@/services/plugin/tailwind/pluginTailwindAdapter";
+import { tokenizePluginSource } from "@/services/plugin/tailwind/candidateTokenizer";
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
 
 /** Everything the definition-of-done names, plus the ordering probes. */
@@ -148,6 +149,27 @@ describe("plugin Tailwind adapter — scoping, which is what protects host chrom
         `unscoped top-level construct would reach host chrome: ${construct}`
       ).toBe(true);
     }
+  });
+
+  it("cannot be broken out of by hostile plugin source", async () => {
+    // The end-to-end form of the invariant above: source in, stylesheet out. An
+    // arbitrary-property value carrying a raw newline serialises as a CSS
+    // bad-string — the declaration dies at the line break, and the `}}}` after it
+    // closes the utility rule, the `@scope` AND the `@layer`, leaving
+    // `html{display:none}` at top level where it reaches host chrome.
+    const fresh = await createPluginCssCompiler();
+    const css = fresh.build([
+      ...tokenizePluginSource("const x = `[content:'\n}}}html{display:none}/*']`;"),
+      "p-4",
+    ]);
+
+    for (const construct of topLevelConstructs(css)) {
+      expect(
+        /^@(?:property|keyframes|layer)\b/.test(construct),
+        `hostile source escaped the plugin scope: ${construct}`
+      ).toBe(true);
+    }
+    expect(css).not.toMatch(/html\s*\{/);
   });
 
   it("re-emits neither preflight nor the theme's `:root` variables", () => {
