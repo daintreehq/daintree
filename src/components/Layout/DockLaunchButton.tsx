@@ -1,7 +1,17 @@
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import Fuse, { type IFuseOptions } from "fuse.js";
-import { ChevronRight, Keyboard, Pin, Plug, Plus, Settings2, SquareTerminal } from "lucide-react";
+import {
+  ChevronRight,
+  Keyboard,
+  Pin,
+  Plug,
+  Plus,
+  Settings2,
+  SlidersHorizontal,
+  SquareTerminal,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -53,6 +63,7 @@ import {
   DOCK_LAUNCH_CATEGORY_LABELS,
   DOCK_LAUNCH_CUE_LABELS,
   type DockLaunchAgent,
+  type DockLaunchCueId,
   type DockLaunchInventoryState,
   type DockLaunchItem,
   type DockLaunchRow,
@@ -1498,15 +1509,28 @@ function DockLaunchOption({
   );
 }
 
+/**
+ * A glyph per cue, exhaustive by type. The ternary this replaced ended in the
+ * recipe `Workflow` as its else — a cue added without a branch drew the wrong
+ * icon silently, the presentation half of the routing bug #12218 fixed.
+ *
+ * `SlidersHorizontal` rather than the `Settings2` the plugin tray's Customize
+ * entry carries: that glyph already belongs to Manage agents, the row directly
+ * above this one under the same heading, and two neighbours sharing a gear read
+ * as one destination listed twice. It is the toolbar's own settings glyph
+ * (`ToolbarSettingsButton`), so the row still points where its label says.
+ */
+const DOCK_LAUNCH_CUE_ICONS: Record<DockLaunchCueId, LucideIcon> = {
+  "create-recipe": Workflow,
+  "setup-agents": Plug,
+  "manage-agents": Settings2,
+  "customize-toolbar": SlidersHorizontal,
+};
+
 function DockLaunchOptionIcon({ row }: { row: DockLaunchRow }) {
   if (row.kind === "cue") {
-    return row.cue === "setup-agents" ? (
-      <Plug className="w-3.5 h-3.5 mr-2 shrink-0" />
-    ) : row.cue === "manage-agents" ? (
-      <Settings2 className="w-3.5 h-3.5 mr-2 shrink-0" />
-    ) : (
-      <Workflow className="w-3.5 h-3.5 mr-2 shrink-0" />
-    );
+    const CueIcon = DOCK_LAUNCH_CUE_ICONS[row.cue];
+    return <CueIcon className="w-3.5 h-3.5 mr-2 shrink-0" />;
   }
 
   const { item } = row;
