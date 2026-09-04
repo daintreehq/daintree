@@ -38,6 +38,7 @@ function makePlugin(overrides: {
         recipes: [],
       },
     },
+    instanceId: overrides.name,
     dir: `/plugins/${overrides.name}`,
     loadedAt: 0,
     isBuiltin: overrides.isBuiltin ?? false,

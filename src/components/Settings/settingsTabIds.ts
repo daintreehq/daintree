@@ -36,6 +36,7 @@ export const PROJECT_SETTINGS_TAB_IDS = [
   "project:commands",
   "project:notifications",
   "project:code-forge",
+  "project:plugins",
 ] as const;
 
 export type GlobalSettingsTab = (typeof GLOBAL_SETTINGS_TAB_IDS)[number];

@@ -11,6 +11,10 @@ import { getPluginKeybindings } from "../pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../pluginContextMenuRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import { getPluginRecipes } from "./PluginRecipeRegistry.js";
+import {
+  hasProjectPluginVisibilityOverrides,
+  isPluginVisibleInProject,
+} from "./projectPluginVisibility.js";
 import type { PluginActionDescriptor, PluginScopeKey } from "../../../shared/types/plugin.js";
 
 /**
@@ -87,6 +91,20 @@ export function hasProjectScopedContributions(): boolean {
 }
 
 /**
+ * Whether ANY reason exists for two views to see different contributions — a
+ * project-local plugin, or a per-project visibility decision about a global one.
+ *
+ * The identity fast path is keyed on this rather than on
+ * {@link hasProjectScopedContributions} alone, because the two conditions are
+ * independent: an app with no project plugins at all can still have an installed
+ * plugin the user switched off in one project, and filtering only on the scope
+ * map would silently ignore that.
+ */
+function hasScopedOrHiddenContributions(): boolean {
+  return PROJECT_SCOPED_PLUGINS.size > 0 || hasProjectPluginVisibilityOverrides();
+}
+
+/**
  * Does a contribution owned by `pluginId` belong in a view of `projectId`?
  *
  * `projectId` is `null` for a renderer with no project binding (an unbound
@@ -100,7 +118,12 @@ export function hasProjectScopedContributions(): boolean {
 function isVisibleInProject(pluginId: string | undefined, projectId: string | null): boolean {
   if (pluginId === undefined) return true;
   const scope = PROJECT_SCOPED_PLUGINS.get(pluginId);
-  if (scope === undefined) return true;
+  // Global plugin: it runs everywhere, so the only thing that can hide it is an
+  // explicit per-project decision. Consulted HERE, at the single point every
+  // contribution passes through, rather than anywhere the toggle is written —
+  // a filter that reads the overlay only at registration time would leave the
+  // switch flipped and the panels still showing.
+  if (scope === undefined) return isPluginVisibleInProject(pluginId, projectId);
   if (projectId === null || projectId.length === 0) return false;
   return scope === projectId;
 }
@@ -117,7 +140,7 @@ function forProject<T>(
   pluginIdOf: (item: T) => string | undefined,
   projectId: string | null
 ): T[] {
-  if (PROJECT_SCOPED_PLUGINS.size === 0) return items as T[];
+  if (!hasScopedOrHiddenContributions()) return items as T[];
   return items.filter((item) => isVisibleInProject(pluginIdOf(item), projectId));
 }
 
@@ -269,7 +292,7 @@ export class PluginContributionBroadcaster {
    * followed by a project one.
    */
   private emitScoped(name: string, buildPayload: (projectId: string | null) => unknown): void {
-    if (!hasProjectScopedContributions()) {
+    if (!hasScopedOrHiddenContributions()) {
       broadcastToRenderer(CHANNELS.EVENTS_PUSH, { name, payload: buildPayload(null) });
       return;
     }
@@ -302,6 +325,32 @@ export class PluginContributionBroadcaster {
         // Silently ignore send failures during window initialization/disposal.
       }
     }
+  }
+
+  /**
+   * Re-emit every scoped contribution channel because the audience changed
+   * rather than the registries did.
+   *
+   * A per-project visibility decision moves a plugin's contributions in or out
+   * of one project's snapshot without any registry mutation, so nothing in the
+   * ordinary load/unload path fires. Without this the switch would take effect
+   * only on the next unrelated plugin event or the next cold view restore.
+   *
+   * Every payload that carries the flag is marked COMPLETE. This is the one
+   * case where a re-send has to be authoritative: the registries still hold the
+   * hidden plugin's contributions, so an incomplete snapshot would merely be
+   * merged into what the renderer already has and the newly hidden buttons,
+   * keybindings and menu items would stay exactly where they were. The toggle
+   * would flip, persist, filter every future broadcast — and change nothing on
+   * screen until the next unrelated plugin event swept them.
+   */
+  broadcastVisibilityChanged(): void {
+    if (this.deps.isDisposed()) return;
+    this.broadcastPluginActions();
+    this.schedulePanelKindsBroadcast();
+    this.scheduleToolbarButtonsBroadcast(true);
+    this.scheduleKeybindingsBroadcast(true);
+    this.scheduleContextMenuItemsBroadcast(true);
   }
 
   broadcastProvenanceChanged(): void {

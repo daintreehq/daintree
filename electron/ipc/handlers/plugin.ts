@@ -94,6 +94,7 @@ import {
 import type {
   ProjectPluginInfo,
   ProjectPluginTrustDecision,
+  ProjectPluginVisibility,
 } from "../../../shared/types/plugin.js";
 import type { ToolbarButtonConfig } from "../../../shared/config/toolbarButtonRegistry.js";
 import { assertIpcSecurityReady } from "../ipcGuard.js";
@@ -1318,6 +1319,80 @@ async function handleProjectPluginsReload(ctx: IpcContext): Promise<void> {
   await svc.reloadProjectPlugins(ctx.projectId);
 }
 
+/**
+ * Switch one of the sender project's own plugins off, or back on. Unlike the
+ * trust decision this is per plugin and leaves the folder's grant alone.
+ */
+async function handleProjectPluginsSetMuted(
+  ctx: IpcContext,
+  pluginId: string,
+  muted: boolean
+): Promise<void> {
+  if (!ctx.projectId) throw new Error("project plugins: sender has no project");
+  if (typeof pluginId !== "string" || !SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+    throw new Error("project plugins: pluginId must be a scoped plugin name (publisher.name)");
+  }
+  if (typeof muted !== "boolean") {
+    throw new Error("project plugins: muted must be a boolean");
+  }
+  const svc = await getPluginService();
+  await svc.setProjectPluginMuted(ctx.projectId, pluginId, muted);
+}
+
+/**
+ * The sender project's visibility overlay for INSTALLED plugins. Same
+ * sender-resolved project rule as every other project-plugin op: a renderer
+ * never names the project, so asking about another one is not expressible.
+ */
+async function handleProjectPluginVisibilityGet(ctx: IpcContext): Promise<ProjectPluginVisibility> {
+  if (!ctx.projectId) return { defaultHiddenPluginIds: [], overrides: {} };
+  const svc = await getPluginService();
+  return svc.getProjectPluginVisibility(ctx.projectId);
+}
+
+/**
+ * Hide or show one installed plugin in the sender's project. `visible: null`
+ * clears the decision back to the default rather than storing an explicit
+ * allow, so turning something back on leaves nothing behind.
+ */
+async function handleProjectPluginVisibilitySet(
+  ctx: IpcContext,
+  pluginId: string,
+  visible: boolean | null
+): Promise<void> {
+  if (!ctx.projectId) throw new Error("project plugins: sender has no project");
+  if (typeof pluginId !== "string" || !SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+    throw new Error("project plugins: pluginId must be a scoped plugin name (publisher.name)");
+  }
+  if (visible !== null && typeof visible !== "boolean") {
+    throw new Error("project plugins: visible must be a boolean or null");
+  }
+  const svc = await getPluginService();
+  svc.setProjectPluginVisibility(ctx.projectId, pluginId, visible);
+}
+
+/**
+ * Whether one installed plugin is hidden in projects that have made no explicit
+ * choice — the "everywhere" / "only where I turn it on" switch. Global in
+ * effect, but reached from a project's settings, so the sender's project is
+ * still what the resulting push is addressed to.
+ */
+async function handlePluginVisibilityDefaultSet(
+  ctx: IpcContext,
+  pluginId: string,
+  hidden: boolean
+): Promise<void> {
+  if (!ctx.projectId) throw new Error("project plugins: sender has no project");
+  if (typeof pluginId !== "string" || !SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) {
+    throw new Error("project plugins: pluginId must be a scoped plugin name (publisher.name)");
+  }
+  if (typeof hidden !== "boolean") {
+    throw new Error("project plugins: hidden must be a boolean");
+  }
+  const svc = await getPluginService();
+  svc.setPluginVisibilityDefault(ctx.projectId, pluginId, hidden);
+}
+
 // Native folder/file chooser for `path` / `directory` / `file` settings fields.
 // User-initiated from the settings form's "Browse" button, so it carries no
 // capability gate — but `pluginId` must be a well-formed scoped name so the
@@ -1435,6 +1510,26 @@ export const pluginNamespace = defineIpcNamespace({
     reloadProjectPlugins: op(
       PLUGIN_METHOD_CHANNELS.reloadProjectPlugins,
       handleProjectPluginsReload,
+      { withContext: true }
+    ),
+    setProjectPluginMuted: op(
+      PLUGIN_METHOD_CHANNELS.setProjectPluginMuted,
+      handleProjectPluginsSetMuted,
+      { withContext: true }
+    ),
+    getProjectPluginVisibility: op(
+      PLUGIN_METHOD_CHANNELS.getProjectPluginVisibility,
+      handleProjectPluginVisibilityGet,
+      { withContext: true }
+    ),
+    setProjectPluginVisibility: op(
+      PLUGIN_METHOD_CHANNELS.setProjectPluginVisibility,
+      handleProjectPluginVisibilitySet,
+      { withContext: true }
+    ),
+    setPluginVisibilityDefault: op(
+      PLUGIN_METHOD_CHANNELS.setPluginVisibilityDefault,
+      handlePluginVisibilityDefaultSet,
       { withContext: true }
     ),
     activateForView: op(PLUGIN_METHOD_CHANNELS.activateForView, handleActivateForView, {

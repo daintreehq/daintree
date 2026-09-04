@@ -4,6 +4,7 @@ import {
   pluginManifestIdFromInstanceKey,
   projectIdFromPluginInstanceKey,
 } from "./projectPluginIdentity.js";
+import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import { PluginSettingsStore } from "../PluginSettingsStore.js";
 import { projectStore } from "../ProjectStore.js";
 import type {
@@ -100,6 +101,18 @@ export class PluginSettingsManager {
     scope: PluginSettingsScope,
     projectRoot?: string | null
   ): string | undefined {
+    if (scope === "local") {
+      // Local scope is keyed by project ID, not project root — the file lives
+      // under this machine's own state directory, so there is no repository to
+      // isolate it and the id has to do that job. A project plugin's instance
+      // key already names its project, which pins it exactly the way
+      // `projectRoot` pins the "project" branch below: a plugin owned by
+      // project A cannot address project B's local file even if A is not the
+      // active project any more.
+      const projectId =
+        projectIdFromPluginInstanceKey(pluginId) ?? projectStore.getCurrentProject()?.id;
+      return this.localSettingsFilePath(pluginId, projectId);
+    }
     if (scope === "project") {
       // Nullish, not falsy: an empty-string root is a caller bug, and treating it
       // as "unbound" would silently target whatever project is active instead.
@@ -118,6 +131,38 @@ export class PluginSettingsManager {
       );
     }
     return path.join(this.settingsRoot(), `${pluginId}.json`);
+  }
+
+  /**
+   * `<settingsRoot>/local/<projectId>/<pluginId>.json` — the per-project,
+   * per-machine settings file.
+   *
+   * Under Daintree's own state directory rather than the project, which is the
+   * entire reason the scope exists: a value like an interpreter path is true of
+   * one checkout on one machine, and writing it into `<projectRoot>/.daintree/`
+   * would commit it to everyone who clones.
+   *
+   * Named by the FULL plugin id — instance key and all — unlike the "project"
+   * branch, which strips it back to the manifest id. That branch can afford to:
+   * its file lives under the project root, so the path already says which
+   * project it belongs to, and an instance key would leak this machine's
+   * project id into a git-tracked file. Here there is no repository doing that
+   * work, and a project plugin and an installed plugin that happen to share a
+   * manifest id are two different plugins that must not share a settings file.
+   *
+   * Returns `undefined` for a missing or malformed project id — a value with
+   * nowhere legitimate to go is unset, never guessed into some other project's
+   * directory. `local` cannot collide with a `<pluginId>.json` sibling of the
+   * user-scope files: a plugin id is always `publisher.name`, so no plugin file
+   * is ever named `local`.
+   */
+  private localSettingsFilePath(
+    pluginId: string,
+    projectId: string | null | undefined
+  ): string | undefined {
+    if (!projectId || !isProjectWorkspaceId(projectId)) return undefined;
+    if (!isSafePluginInstanceId(pluginId)) return undefined;
+    return path.join(this.settingsRoot(), "local", projectId, `${pluginId}.json`);
   }
 
   getOrCreateSettingsStore(
@@ -340,8 +385,19 @@ export class PluginSettingsManager {
     if (!isSafePluginInstanceId(pluginId)) {
       throw new Error("plugin settings: pluginId must be a scoped plugin name (publisher.name)");
     }
-    if (scope !== "user" && scope !== "project") {
+    if (scope !== "user" && scope !== "project" && scope !== "local") {
       throw new Error(`plugin settings: invalid scope "${String(scope)}"`);
+    }
+    if (scope === "local") {
+      if (!projectId) return null;
+      // Same pinning check the project branch makes below, and for the same
+      // reason: both halves come from the renderer, so without it a form could
+      // pair project A's plugin instance with project B's id.
+      const boundProjectId = projectIdFromPluginInstanceKey(pluginId);
+      if (boundProjectId !== null && boundProjectId !== projectId) {
+        throw new Error("plugin settings: plugin belongs to a different project");
+      }
+      return this.localSettingsFilePath(pluginId, projectId) ?? null;
     }
     if (scope === "project") {
       if (!projectId) return null;

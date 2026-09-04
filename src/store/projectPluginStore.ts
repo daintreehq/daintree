@@ -5,6 +5,8 @@ import type {
   ProjectPluginTrustDecision,
   ProjectPluginTrustPromptEvent,
   ProjectPluginTrustState,
+  ProjectPluginVisibility,
+  ProjectPluginVisibilityChangedEvent,
   ProjectPluginsChangedEvent,
 } from "@shared/types/plugin";
 
@@ -45,6 +47,15 @@ export interface ProjectPluginStoreState {
   deciding: ProjectPluginTrustDecision | null;
   /** Manifest ids whose staged-activation call has not resolved yet. */
   activating: ReadonlySet<string>;
+  /** Manifest ids whose mute/unmute call has not resolved yet. */
+  muting: ReadonlySet<string>;
+  /**
+   * Visibility for INSTALLED plugins as this project sees it: the ids hidden by
+   * default, plus this project's own explicit answers. Empty on both counts is
+   * the honest representation of "nothing has been changed here", not "nothing
+   * is known yet" — which is why it needs no separate loaded flag.
+   */
+  visibility: ProjectPluginVisibility;
   /** Last mutation failure, surfaced inline by the manager. */
   error: string | null;
 }
@@ -57,12 +68,22 @@ export interface ProjectPluginActions {
   dismissPrompt: () => void;
   decide: (decision: ProjectPluginTrustDecision) => Promise<void>;
   activateStaged: (pluginId: string) => Promise<void>;
+  /** Switch one of the project's own plugins off, or back on, on its own. */
+  setMuted: (pluginId: string, muted: boolean) => Promise<void>;
+  applyVisibility: (event: ProjectPluginVisibilityChangedEvent) => void;
+  loadVisibility: () => Promise<void>;
+  /** Hide or show one INSTALLED plugin in this project. `null` restores the default. */
+  setVisibility: (pluginId: string, visible: boolean | null) => Promise<void>;
+  /** Whether an INSTALLED plugin is hidden in projects that have not decided. */
+  setVisibilityDefault: (pluginId: string, hidden: boolean) => Promise<void>;
   reload: () => Promise<void>;
   clearError: () => void;
   reset: () => void;
 }
 
 const EMPTY_ACTIVATING: ReadonlySet<string> = new Set<string>();
+
+const EMPTY_VISIBILITY: ProjectPluginVisibility = { defaultHiddenPluginIds: [], overrides: {} };
 
 const INITIAL: ProjectPluginStoreState = {
   viewProjectId: null,
@@ -72,6 +93,8 @@ const INITIAL: ProjectPluginStoreState = {
   prompt: null,
   deciding: null,
   activating: EMPTY_ACTIVATING,
+  muting: EMPTY_ACTIVATING,
+  visibility: EMPTY_VISIBILITY,
   error: null,
 };
 
@@ -101,7 +124,9 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       set({
         viewProjectId: projectId,
         ...(foreign(state.prompt?.projectId) ? { prompt: null } : {}),
-        ...(foreign(state.projectId) ? { projectId: null, plugins: [], trust: null } : {}),
+        ...(foreign(state.projectId)
+          ? { projectId: null, plugins: [], trust: null, visibility: EMPTY_VISIBILITY }
+          : {}),
       });
     },
 
@@ -173,6 +198,83 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
         const next = new Set(get().activating);
         next.delete(pluginId);
         set({ activating: next });
+      }
+    },
+
+    setMuted: async (pluginId, muted) => {
+      const state = get();
+      if (state.projectId !== null && !belongsToView(state, state.projectId)) return;
+      if (state.muting.has(pluginId)) return;
+      set({ muting: new Set([...state.muting, pluginId]), error: null });
+      try {
+        await window.electron.plugin.setProjectPluginMuted(pluginId, muted);
+      } catch (err) {
+        set({
+          error: formatErrorMessage(
+            err,
+            muted ? `Couldn't turn off '${pluginId}'` : `Couldn't turn on '${pluginId}'`
+          ),
+        });
+      } finally {
+        const next = new Set(get().muting);
+        next.delete(pluginId);
+        set({ muting: next });
+      }
+    },
+
+    applyVisibility: (event) => {
+      if (!belongsToView(get(), event.projectId)) return;
+      set({ visibility: event.visibility });
+    },
+
+    loadVisibility: async () => {
+      try {
+        const visibility = await window.electron.plugin.getProjectPluginVisibility();
+        set({ visibility });
+      } catch (err) {
+        set({ error: formatErrorMessage(err, "Couldn't read this project's plugin visibility") });
+      }
+    },
+
+    setVisibility: async (pluginId, visible) => {
+      const state = get();
+      if (state.projectId !== null && !belongsToView(state, state.projectId)) return;
+      // Optimistic: main pushes the authoritative overlay back, and a failure
+      // below restores what was there. Without this the switch lags a full IPC
+      // round trip behind the finger that moved it.
+      const previous = state.visibility;
+      const overrides = { ...previous.overrides };
+      if (visible === null) delete overrides[pluginId];
+      else overrides[pluginId] = visible;
+      set({ visibility: { ...previous, overrides }, error: null });
+      try {
+        await window.electron.plugin.setProjectPluginVisibility(pluginId, visible);
+      } catch (err) {
+        set({
+          visibility: previous,
+          error: formatErrorMessage(err, `Couldn't change visibility for '${pluginId}'`),
+        });
+      }
+    },
+
+    setVisibilityDefault: async (pluginId, hidden) => {
+      const state = get();
+      if (state.projectId !== null && !belongsToView(state, state.projectId)) return;
+      const previous = state.visibility;
+      const defaults = new Set(previous.defaultHiddenPluginIds);
+      if (hidden) defaults.add(pluginId);
+      else defaults.delete(pluginId);
+      set({
+        visibility: { ...previous, defaultHiddenPluginIds: [...defaults] },
+        error: null,
+      });
+      try {
+        await window.electron.plugin.setPluginVisibilityDefault(pluginId, hidden);
+      } catch (err) {
+        set({
+          visibility: previous,
+          error: formatErrorMessage(err, `Couldn't change the default for '${pluginId}'`),
+        });
       }
     },
 

@@ -134,6 +134,7 @@ const importProjectRecipesTab = () => import("@/components/Project/RecipesTab");
 const importProjectCommandsTab = () => import("./CommandOverridesTab");
 const importProjectNotificationsTab = () => import("@/components/Project/ProjectNotificationsTab");
 const importProjectCodeForgeTab = () => import("@/components/Project/CodeForgeTab");
+const importProjectPluginsTab = () => import("./ProjectPluginsTab");
 
 // ── Lazy components (module-level — React requires stable lazy() refs) ──
 
@@ -215,6 +216,9 @@ const LazyProjectNotificationsTab = lazy(() =>
 );
 const LazyProjectCodeForgeTab = lazy(() =>
   importProjectCodeForgeTab().then((m) => ({ default: m.CodeForgeTab }))
+);
+const LazyProjectPluginsTab = lazy(() =>
+  importProjectPluginsTab().then((m) => ({ default: m.ProjectPluginsTab }))
 );
 
 // ── Voice requiresEnabled gates (referenced repeatedly) ─────────────────
@@ -1718,6 +1722,20 @@ export const SETTINGS_REGISTRY = [
     LazyComponent: LazyProjectCodeForgeTab,
     needsProjectForm: true,
   } satisfies LazySettingsTabEntry,
+
+  {
+    id: "project:plugins",
+    scope: "project",
+    group: "Project",
+    label: "Plugins",
+    icon: <Package className="w-4 h-4" />,
+    importKind: "lazy",
+    importer: importProjectPluginsTab,
+    LazyComponent: LazyProjectPluginsTab,
+    // Routed through ProjectFormTabContent like every other project tab, though
+    // it reads its own stores rather than the shared project form.
+    needsProjectForm: true,
+  } satisfies LazySettingsTabEntry,
 ] as const satisfies readonly AnySettingsTabEntry[];
 
 // ── Drift guards against settingsTabIds (direction 2) ───────────────────
@@ -1886,6 +1904,24 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
     searchNavDescription: "Project-specific notification overrides",
     searchNavKeywords: ["project", "notifications", "alerts", "sounds", "overrides"],
   },
+  "project:plugins": {
+    tabLabel: "Plugins",
+    searchNavDescription:
+      "This project's own plugins, their per-plugin off switches, and which installed plugins show up here",
+    searchNavKeywords: [
+      "project",
+      "plugins",
+      "extensions",
+      "trust",
+      "enable",
+      "disable",
+      "mute",
+      "off",
+      "hide",
+      "local settings",
+      "staged",
+    ],
+  },
   "project:code-forge": {
     tabLabel: "Code Forge",
     searchNavDescription: "Per-project forge remote configuration for issues, PRs, and pulse data",
@@ -1979,6 +2015,7 @@ export const projectTabIcons: Record<ProjectSettingsTab, ReactNode> = {
   "project:commands": <Command className="w-5 h-5 text-text-secondary" />,
   "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,
   "project:code-forge": <GitBranch className="w-5 h-5 text-text-secondary" />,
+  "project:plugins": <Package className="w-5 h-5 text-text-secondary" />,
 };
 
 export function preloadAllSettingsTabs(): void {

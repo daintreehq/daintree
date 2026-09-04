@@ -44,6 +44,7 @@ function makePlugin(name: string): LoadedPluginInfo {
         recipes: [],
       },
     },
+    instanceId: name,
     dir: `/plugins/${name}`,
     loadedAt: 1,
     isBuiltin: false,

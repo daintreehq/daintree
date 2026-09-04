@@ -1009,6 +1009,14 @@ export const CHANNELS = {
   PLUGIN_PROJECT_ACTIVATE_STAGED: "plugin:project-activate-staged",
   /** Project-local plugins: manual re-scan of the sender project's plugins folder. */
   PLUGIN_PROJECT_RELOAD: "plugin:project-reload",
+  /** Project-local plugins: switch one plugin off (or back on) on its own, without touching folder trust. */
+  PLUGIN_PROJECT_SET_MUTED: "plugin:project-set-muted",
+  /** Installed plugins: the sender project's per-project visibility overlay. */
+  PLUGIN_PROJECT_VISIBILITY_GET: "plugin:project-visibility-get",
+  /** Installed plugins: hide or show one installed plugin in the SENDER's project. */
+  PLUGIN_PROJECT_VISIBILITY_SET: "plugin:project-visibility-set",
+  /** Installed plugins: whether one plugin is hidden in projects that have not decided. */
+  PLUGIN_VISIBILITY_DEFAULT_SET: "plugin:visibility-default-set",
   /** Lazy activation: force the plugin owning a contributed panel view to `activate()` before its module loads. */
   PLUGIN_ACTIVATE_FOR_VIEW: "plugin:activate-for-view",
   /** Renderer reports plugin panel lifecycle transitions (mounted/hidden/trashed/removed) for worker delivery. */

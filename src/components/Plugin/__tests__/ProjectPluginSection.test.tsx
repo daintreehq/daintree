@@ -19,6 +19,7 @@ function plugin(overrides: Partial<ProjectPluginInfo> & { state: ProjectPluginSt
     version: "1.2.0",
     capabilities: [],
     dirName: "dashboard",
+    muted: false,
     collidesWithGlobal: false,
     ...overrides,
   } satisfies ProjectPluginInfo;

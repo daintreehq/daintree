@@ -2317,7 +2317,18 @@ interface SettingDefinition {
      */
     secret?: boolean;
 }
-type PluginSettingsScope = "user" | "project";
+/**
+ * Where a `contributes.settings` value is stored.
+ *
+ * `"user"` is one file shared by every project. `"project"` is written into the
+ * repository (`<projectRoot>/.daintree/plugin-settings/`) and travels to every
+ * clone. `"local"` is the third case neither covers: per project AND per
+ * machine, held in Daintree's own state directory beside the rest of this
+ * machine's per-project plugin state, never in the repo. An interpreter path is
+ * the canonical example — committing it publishes one machine's layout, and
+ * putting it in user scope applies it to unrelated projects.
+ */
+type PluginSettingsScope = "user" | "project" | "local";
 /**
  * Scope for the private {@link StorageApi} key/value store. Unlike
  * {@link PluginSettingsScope} this adds a `"worktree"` scope that auto-resolves

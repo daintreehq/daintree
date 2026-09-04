@@ -1992,6 +1992,11 @@ export interface IpcEventMap {
   // rather than run (main → renderer, project-scoped). Fires once per new id.
   "plugin:project-plugin-staged": import("../plugin.js").ProjectPluginStagedEvent;
 
+  // The per-project visibility overlay for INSTALLED plugins changed (main →
+  // renderer, project-scoped). Carries the whole overlay so the settings tab
+  // renders from the push rather than refetching.
+  "plugin:project-plugin-visibility-changed": import("../plugin.js").ProjectPluginVisibilityChangedEvent;
+
   // The project's git remote table changed (main → renderer, #11155) — e.g.
   // `git remote add origin`. Signal-only and project-scoped: the renderer drops
   // its cached forge-provider resolution for `projectId` and re-resolves via
@@ -2147,6 +2152,7 @@ export type IpcEventBusMap = Pick<
   | "plugin:project-trust-prompt"
   | "plugin:project-plugins-changed"
   | "plugin:project-plugin-staged"
+  | "plugin:project-plugin-visibility-changed"
   // Project's git remotes changed — re-resolve the forge provider (global broadcast)
   | "forge:remote-changed"
   // Background plugin update check found updates (global broadcast)

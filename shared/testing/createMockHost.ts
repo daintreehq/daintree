@@ -283,6 +283,8 @@ export interface CreateMockHostOptions {
   settings?: {
     user?: Record<string, unknown>;
     project?: Record<string, unknown>;
+    /** Per-project, per-machine scope — a flat map here, like the other two. */
+    local?: Record<string, unknown>;
   };
   /**
    * Opt-in `contributes.settings` declarations (`id` + `scope` are what matter)
@@ -531,11 +533,13 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   const settingsStore: Record<PluginSettingsScope, Map<string, unknown>> = {
     user: new Map(Object.entries(options.settings?.user ?? {})),
     project: new Map(Object.entries(options.settings?.project ?? {})),
+    local: new Map(Object.entries(options.settings?.local ?? {})),
   };
 
   const settingsSubs: Record<PluginSettingsScope, Map<string, Set<(value: unknown) => void>>> = {
     user: new Map(),
     project: new Map(),
+    local: new Map(),
   };
 
   // `user`/`project` scopes are flat maps; `worktree` scope is isolated per

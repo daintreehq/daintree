@@ -28,6 +28,10 @@ const mockIsCachedViewWebContents = vi.fn<(webContentsId: number) => boolean>();
 const mockListProjectPlugins = vi.fn();
 const mockSetProjectPluginTrust = vi.fn();
 const mockActivateStagedProjectPlugin = vi.fn();
+const mockSetProjectPluginMuted = vi.fn();
+const mockGetProjectPluginVisibility = vi.fn();
+const mockSetProjectPluginVisibility = vi.fn();
+const mockSetPluginVisibilityDefault = vi.fn();
 const mockReloadProjectPlugins = vi.fn();
 
 // plugin:invoke resolves the sender's project/worktree through the registry
@@ -83,6 +87,10 @@ vi.mock("../../../services/PluginService.js", () => ({
     listProjectPlugins: (...args: unknown[]) => mockListProjectPlugins(...args),
     setProjectPluginTrust: (...args: unknown[]) => mockSetProjectPluginTrust(...args),
     activateStagedProjectPlugin: (...args: unknown[]) => mockActivateStagedProjectPlugin(...args),
+    setProjectPluginMuted: (...args: unknown[]) => mockSetProjectPluginMuted(...args),
+    getProjectPluginVisibility: (...args: unknown[]) => mockGetProjectPluginVisibility(...args),
+    setProjectPluginVisibility: (...args: unknown[]) => mockSetProjectPluginVisibility(...args),
+    setPluginVisibilityDefault: (...args: unknown[]) => mockSetPluginVisibilityDefault(...args),
     reloadProjectPlugins: (...args: unknown[]) => mockReloadProjectPlugins(...args),
   },
 }));
@@ -177,7 +185,7 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(48);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(52);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:project-surfaces-get",
@@ -2649,6 +2657,11 @@ describe("project-local plugin handlers", () => {
   beforeEach(() => {
     mockListProjectPlugins.mockReturnValue([]);
     mockSetProjectPluginTrust.mockResolvedValue(undefined);
+    mockSetProjectPluginMuted.mockResolvedValue(undefined);
+    mockGetProjectPluginVisibility.mockReturnValue({
+      defaultHiddenPluginIds: [],
+      overrides: {},
+    });
     mockActivateStagedProjectPlugin.mockResolvedValue(undefined);
     mockReloadProjectPlugins.mockResolvedValue(undefined);
   });
@@ -2704,6 +2717,86 @@ describe("project-local plugin handlers", () => {
     mockGetProjectForWebContents.mockReturnValue(PROJECT);
     await getHandler("plugin:project-reload")({ sender: { id: 1 } });
     expect(mockReloadProjectPlugins).toHaveBeenCalledWith(PROJECT);
+  });
+
+  it("mutes a plugin against the sender's project", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    await getHandler("plugin:project-set-muted")({ sender: { id: 1 } }, "acme.dashboard", true);
+    expect(mockSetProjectPluginMuted).toHaveBeenCalledWith(PROJECT, "acme.dashboard", true);
+  });
+
+  it("rejects a malformed plugin id and a non-boolean mute", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    await expect(
+      getHandler("plugin:project-set-muted")({ sender: { id: 1 } }, "../../etc/passwd", true)
+    ).rejects.toThrow(/scoped plugin name/);
+    await expect(
+      getHandler("plugin:project-set-muted")({ sender: { id: 1 } }, "acme.dashboard", "yes")
+    ).rejects.toThrow(/must be a boolean/);
+    expect(mockSetProjectPluginMuted).not.toHaveBeenCalled();
+  });
+
+  it("refuses to mute for a sender with no project", async () => {
+    mockGetProjectForWebContents.mockReturnValue(null);
+    await expect(
+      getHandler("plugin:project-set-muted")({ sender: { id: 1 } }, "acme.dashboard", true)
+    ).rejects.toThrow(/no project/);
+  });
+
+  it("reads the visibility overlay for the sender's project", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    mockGetProjectPluginVisibility.mockReturnValue({
+      defaultHiddenPluginIds: ["acme.tools"],
+      overrides: { "acme.tools": true },
+    });
+    const result = await getHandler("plugin:project-visibility-get")({ sender: { id: 1 } });
+    expect(mockGetProjectPluginVisibility).toHaveBeenCalledWith(PROJECT);
+    expect(result).toEqual({
+      defaultHiddenPluginIds: ["acme.tools"],
+      overrides: { "acme.tools": true },
+    });
+  });
+
+  it("returns an empty overlay for a sender with no project binding", async () => {
+    mockGetProjectForWebContents.mockReturnValue(null);
+    expect(await getHandler("plugin:project-visibility-get")({ sender: { id: 1 } })).toEqual({
+      defaultHiddenPluginIds: [],
+      overrides: {},
+    });
+    expect(mockGetProjectPluginVisibility).not.toHaveBeenCalled();
+  });
+
+  it("accepts true, false and null as a visibility decision", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    for (const visible of [true, false, null]) {
+      await getHandler("plugin:project-visibility-set")(
+        { sender: { id: 1 } },
+        "acme.tools",
+        visible
+      );
+      expect(mockSetProjectPluginVisibility).toHaveBeenCalledWith(PROJECT, "acme.tools", visible);
+    }
+  });
+
+  it("rejects a non-boolean, non-null visibility decision", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    await expect(
+      getHandler("plugin:project-visibility-set")({ sender: { id: 1 } }, "acme.tools", "maybe")
+    ).rejects.toThrow(/boolean or null/);
+    expect(mockSetProjectPluginVisibility).not.toHaveBeenCalled();
+  });
+
+  it("sets the visibility default and validates its arguments", async () => {
+    mockGetProjectForWebContents.mockReturnValue(PROJECT);
+    await getHandler("plugin:visibility-default-set")({ sender: { id: 1 } }, "acme.tools", true);
+    expect(mockSetPluginVisibilityDefault).toHaveBeenCalledWith(PROJECT, "acme.tools", true);
+
+    await expect(
+      getHandler("plugin:visibility-default-set")({ sender: { id: 1 } }, "../escape", true)
+    ).rejects.toThrow(/scoped plugin name/);
+    await expect(
+      getHandler("plugin:visibility-default-set")({ sender: { id: 1 } }, "acme.tools", "yes")
+    ).rejects.toThrow(/must be a boolean/);
   });
 });
 

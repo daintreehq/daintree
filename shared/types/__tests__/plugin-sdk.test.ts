@@ -322,12 +322,25 @@ describe("plugin-sdk boundary", () => {
       >();
     });
 
-    it("PluginStorageScope adds 'worktree' beyond the settings scopes", () => {
-      // "worktree" is assignable to the storage scope but not the settings scope —
-      // the two are intentionally distinct so the settings UI never sees it.
+    it("settings and storage scopes overlap on user/project and diverge past it", () => {
+      // Both carry `user` and `project`, and each adds exactly one scope the
+      // other deliberately lacks — neither is a subset of the other.
+      expectTypeOf<"user">().toMatchTypeOf<PluginSettingsScope>();
+      expectTypeOf<"user">().toMatchTypeOf<PluginStorageScope>();
+      expectTypeOf<"project">().toMatchTypeOf<PluginSettingsScope>();
+      expectTypeOf<"project">().toMatchTypeOf<PluginStorageScope>();
+
+      // `worktree` resolves the active git worktree at call time — a property of
+      // the private key/value store, which the generated settings form and the
+      // manifest schema must never have to reason about.
       expectTypeOf<"worktree">().toMatchTypeOf<PluginStorageScope>();
-      expectTypeOf<PluginSettingsScope>().toMatchTypeOf<PluginStorageScope>();
       expectTypeOf<"worktree">().not.toMatchTypeOf<PluginSettingsScope>();
+
+      // `local` is per project AND per machine, for a declared setting whose
+      // value belongs in neither the repo nor a user-wide file. Storage already
+      // covers machine-local state through `worktree`, so it does not need it.
+      expectTypeOf<"local">().toMatchTypeOf<PluginSettingsScope>();
+      expectTypeOf<"local">().not.toMatchTypeOf<PluginStorageScope>();
     });
 
     it("PluginHostApi.actions exposes the built-in catalog surface (#10561)", () => {

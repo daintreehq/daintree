@@ -562,6 +562,21 @@ export interface StoreSchema {
    * `?? {}` and a missing key is indistinguishable from an empty one.
    */
   projectPluginTrust?: Record<string, ProjectPluginTrustRecord>;
+
+  /**
+   * Per-project visibility for INSTALLED (global) plugins: which manifest ids
+   * are hidden by default, plus each project's explicit answers, which win in
+   * either direction. Absence everywhere means visible.
+   *
+   * Kept here rather than in the project's own repository on purpose: which
+   * plugins one person wants surfaced in one checkout is not a fact about the
+   * project, and committing it would push a personal choice onto everyone who
+   * clones it. Same additive-key convention as `projectPluginTrust` above.
+   */
+  projectPluginVisibility?: {
+    defaultHiddenPluginIds: string[];
+    projectOverrides: Record<string, Record<string, boolean>>;
+  };
 }
 
 const storeOptions = {

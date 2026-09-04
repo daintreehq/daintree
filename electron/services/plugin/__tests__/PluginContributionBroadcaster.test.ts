@@ -46,6 +46,20 @@ vi.mock("../PluginRecipeRegistry.js", () => ({
   getPluginRecipes: () => contributionsMock.recipes,
 }));
 
+// The visibility overlay reads electron-store; keep it in memory so the filter
+// under test is exercised without a real store on disk.
+const storeMock = vi.hoisted(() => {
+  const data = new Map<string, unknown>();
+  return {
+    data,
+    get: vi.fn((key: string) => data.get(key)),
+    set: vi.fn((key: string, value: unknown) => {
+      data.set(key, value);
+    }),
+  };
+});
+vi.mock("../../../store.js", () => ({ store: storeMock }));
+
 import {
   PluginContributionBroadcaster,
   clearAllPluginContributionScopes,
@@ -55,6 +69,11 @@ import {
   selectContributionsForProject,
   setPluginContributionScope,
 } from "../PluginContributionBroadcaster.js";
+import {
+  __resetProjectPluginVisibilityForTesting,
+  setPluginVisibilityDefault,
+  setProjectPluginVisibility,
+} from "../projectPluginVisibility.js";
 import { CHANNELS } from "../../../ipc/channels.js";
 import type { PluginActionDescriptor } from "../../../../shared/types/plugin.js";
 
@@ -101,6 +120,8 @@ function sentPayloads(wc: ReturnType<typeof fakeWebContents>, name: string): unk
 beforeEach(() => {
   vi.clearAllMocks();
   clearAllPluginContributionScopes();
+  storeMock.data.clear();
+  __resetProjectPluginVisibilityForTesting();
   registryMock.getAllAppWebContents.mockReturnValue([]);
   registryMock.getProjectForWebContents.mockReturnValue(null);
   registryMock.getRegisteredProjectViews.mockReturnValue([]);
@@ -496,5 +517,111 @@ describe("pushSnapshotTo", () => {
     });
     await disposed.pushSnapshotTo(wc as unknown as Electron.WebContents);
     expect(wc.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("per-project visibility of installed plugins", () => {
+  const VIS_PROJECT_A = "a".repeat(64);
+  const VIS_PROJECT_B = "b".repeat(64);
+
+  it("keeps the identity fast path while nothing is hidden", () => {
+    expect(selectContributionsForProject(actions, (a) => a.pluginId, VIS_PROJECT_A)).toBe(actions);
+  });
+
+  it("filters a hidden global plugin out of that project and no other", () => {
+    setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, false);
+
+    expect(selectContributionsForProject(actions, (a) => a.pluginId, VIS_PROJECT_A)).toEqual([]);
+    expect(selectContributionsForProject(actions, (a) => a.pluginId, VIS_PROJECT_B)).toHaveLength(
+      1
+    );
+  });
+
+  it("hides a default-hidden plugin everywhere until a project opts in", () => {
+    setPluginVisibilityDefault(GLOBAL_PLUGIN, true);
+    expect(selectContributionsForProject(actions, (a) => a.pluginId, VIS_PROJECT_A)).toEqual([]);
+    expect(selectContributionsForProject(actions, (a) => a.pluginId, VIS_PROJECT_B)).toEqual([]);
+
+    setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, true);
+    expect(selectContributionsForProject(actions, (a) => a.pluginId, VIS_PROJECT_A)).toHaveLength(
+      1
+    );
+    expect(selectContributionsForProject(actions, (a) => a.pluginId, VIS_PROJECT_B)).toEqual([]);
+  });
+
+  it("never applies an overlay to a project-scoped plugin's own project", () => {
+    // The overlay is about installed plugins. A project plugin's contributions
+    // belong to its project by construction, and a same-id rule must not
+    // reach in and hide them.
+    setPluginContributionScope(PROJECT_PLUGIN_A, VIS_PROJECT_A);
+    setProjectPluginVisibility(VIS_PROJECT_A, PROJECT_PLUGIN_A, false);
+    const projectActions = [action(PROJECT_PLUGIN_A, "local.hello")];
+
+    expect(
+      selectContributionsForProject(projectActions, (a) => a.pluginId, VIS_PROJECT_A)
+    ).toHaveLength(1);
+  });
+
+  it("applies the same filter on the cold-restore snapshot path", async () => {
+    setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, false);
+    const wc = fakeWebContents(21);
+    registryMock.getProjectForWebContents.mockReturnValue(VIS_PROJECT_A);
+
+    const b = makeBroadcaster();
+    await b.pushSnapshotTo(wc as unknown as Electron.WebContents);
+
+    expect(sentPayloads(wc, "plugin:actions-changed")).toEqual([{ actions: [] }]);
+    expect(sentPayloads(wc, "plugin:panel-kinds-changed")).toEqual([{ kinds: [] }]);
+    expect(sentPayloads(wc, "plugin:toolbar-buttons-changed")).toEqual([
+      { buttons: [], complete: false },
+    ]);
+  });
+
+  it("leaves a cold-restored view of another project untouched", async () => {
+    setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, false);
+    const wc = fakeWebContents(22);
+    registryMock.getProjectForWebContents.mockReturnValue(VIS_PROJECT_B);
+
+    const b = makeBroadcaster();
+    await b.pushSnapshotTo(wc as unknown as Electron.WebContents);
+
+    const [payload] = sentPayloads(wc, "plugin:panel-kinds-changed") as Array<{
+      kinds: Array<{ id: string }>;
+    }>;
+    expect(payload.kinds.map((k) => k.id)).toEqual(["acme.global.panel"]);
+  });
+
+  it("rebroadcasts authoritatively so hidden contributions are pruned, not merged", async () => {
+    setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, false);
+    const wc = fakeWebContents(23);
+    registryMock.getRegisteredProjectViews.mockReturnValue([
+      { webContents: wc, projectId: VIS_PROJECT_A },
+    ]);
+
+    const b = makeBroadcaster();
+    b.broadcastVisibilityChanged();
+    await flush();
+
+    // The registries still hold the plugin's contributions — only the filter
+    // changed — so an incomplete snapshot would merely be merged into what the
+    // renderer already has and nothing would disappear.
+    const sent = ipcUtilsMock.broadcastToProjectRenderers.mock.calls.map(
+      (call) => call[2] as { name: string; payload: Record<string, unknown> }
+    );
+    const byName = new Map(sent.map((e) => [e.name, e.payload]));
+    expect(byName.get("plugin:toolbar-buttons-changed")).toEqual({
+      buttons: [],
+      complete: true,
+    });
+    expect(byName.get("plugin:keybindings-changed")).toEqual({
+      keybindings: [],
+      complete: true,
+    });
+    expect(byName.get("plugin:context-menu-items-changed")).toEqual({
+      items: [],
+      complete: true,
+    });
+    expect(byName.get("plugin:actions-changed")).toEqual({ actions: [] });
+    expect(byName.get("plugin:panel-kinds-changed")).toEqual({ kinds: [] });
   });
 });

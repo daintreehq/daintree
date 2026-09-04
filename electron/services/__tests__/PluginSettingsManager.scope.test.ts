@@ -251,3 +251,116 @@ describe("PluginSettingsManager onDidChange failure isolation (#10621)", () => {
     errorSpy.mockRestore();
   });
 });
+
+describe("PluginSettingsManager local scope", () => {
+  const PROJECT_ID = "a".repeat(64);
+  const OTHER_PROJECT_ID = "b".repeat(64);
+
+  it("writes outside the repository, under this machine's own settings root", async () => {
+    const mgr = managerFor([{ id: "interpreter", type: "string", scope: "local" }]);
+    projectStoreMock.getProjectById.mockReturnValue({ path: "/tmp/some-checkout" });
+
+    await mgr.setSettingValueFromUi(
+      "acme.scope-test",
+      "interpreter",
+      "/usr/bin/python3",
+      "local",
+      PROJECT_ID
+    );
+
+    const file = path.join(tmpDir, "plugin-settings", "local", PROJECT_ID, "acme.scope-test.json");
+    expect(JSON.parse(await fs.readFile(file, "utf8"))).toMatchObject({
+      interpreter: "/usr/bin/python3",
+    });
+    // Nothing was written under the project root — that is the whole point of
+    // the scope, and a "project"-scoped write is what would land there.
+    await expect(fs.access("/tmp/some-checkout/.daintree")).rejects.toThrow();
+  });
+
+  it("keeps each project's value separate", async () => {
+    const mgr = managerFor([{ id: "interpreter", type: "string", scope: "local" }]);
+
+    await mgr.setSettingValueFromUi("acme.scope-test", "interpreter", "/a", "local", PROJECT_ID);
+    await mgr.setSettingValueFromUi(
+      "acme.scope-test",
+      "interpreter",
+      "/b",
+      "local",
+      OTHER_PROJECT_ID
+    );
+
+    const a = await mgr.getSettingValuesForUi("acme.scope-test", "local", PROJECT_ID);
+    const b = await mgr.getSettingValuesForUi("acme.scope-test", "local", OTHER_PROJECT_ID);
+    expect(a.values).toEqual({ interpreter: "/a" });
+    expect(b.values).toEqual({ interpreter: "/b" });
+  });
+
+  it("gives a project plugin its own file rather than sharing an installed plugin's", () => {
+    const mgr = managerFor([]);
+    const installed = mgr.resolveSettingsFilePath("acme.scope-test", "local");
+    const projectOwned = mgr.resolveSettingsFilePath(
+      `project__${PROJECT_ID}__acme.scope-test`,
+      "local"
+    );
+    // Same manifest id, two different plugins. With no repository to isolate
+    // them, only the file name can.
+    expect(projectOwned).toBeDefined();
+    expect(projectOwned).not.toBe(installed);
+  });
+
+  it("pins a project plugin to its own project", async () => {
+    const mgr = managerFor([{ id: "interpreter", type: "string", scope: "local" }]);
+    await expect(
+      mgr.getSettingValuesForUi(
+        `project__${PROJECT_ID}__acme.scope-test`,
+        "local",
+        OTHER_PROJECT_ID
+      )
+    ).rejects.toThrow(/belongs to a different project/);
+  });
+
+  it("has no target without a project, exactly like project scope", async () => {
+    const mgr = managerFor([{ id: "interpreter", type: "string", scope: "local" }]);
+    const values = await mgr.getSettingValuesForUi("acme.scope-test", "local", null);
+    expect(values.values).toEqual({});
+    await expect(
+      mgr.setSettingValueFromUi("acme.scope-test", "interpreter", "/x", "local", null)
+    ).rejects.toThrow(/no active project/);
+  });
+
+  it("refuses a project id that is not a project workspace id", async () => {
+    const mgr = managerFor([{ id: "interpreter", type: "string", scope: "local" }]);
+    await expect(
+      mgr.setSettingValueFromUi("acme.scope-test", "interpreter", "/x", "local", "../escape")
+    ).rejects.toThrow(/no active project/);
+  });
+
+  it("enforces the declared scope in both directions", async () => {
+    const mgr = managerFor([{ id: "interpreter", type: "string", scope: "local" }]);
+    expect(mgr.getDeclaredScope("acme.scope-test", "interpreter")).toBe("local");
+    await expect(
+      mgr.setSettingValueFromUi("acme.scope-test", "interpreter", "/x", "project", PROJECT_ID)
+    ).rejects.toThrow(/declared in "local" scope, not "project"/);
+    await expect(
+      mgr.setSettingValueFromUi("acme.scope-test", "interpreter", "/x", "user", null)
+    ).rejects.toThrow(/declared in "local" scope, not "user"/);
+  });
+
+  it("only surfaces local-scoped declarations to the local form section", async () => {
+    const mgr = managerFor([
+      { id: "interpreter", type: "string", scope: "local" },
+      { id: "ref", type: "string", scope: "project" },
+    ]);
+    projectStoreMock.getProjectById.mockReturnValue({ path: tmpDir });
+
+    await mgr.setSettingValueFromUi("acme.scope-test", "interpreter", "/a", "local", PROJECT_ID);
+    await mgr.setSettingValueFromUi("acme.scope-test", "ref", "origin", "project", PROJECT_ID);
+
+    expect(
+      (await mgr.getSettingValuesForUi("acme.scope-test", "local", PROJECT_ID)).values
+    ).toEqual({ interpreter: "/a" });
+    expect(
+      (await mgr.getSettingValuesForUi("acme.scope-test", "project", PROJECT_ID)).values
+    ).toEqual({ ref: "origin" });
+  });
+});
