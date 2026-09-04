@@ -53,6 +53,13 @@ import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
 import { deriveAgentDominantStates } from "@/lib/agentDominantStates";
 import { DockLaunchButton } from "./DockLaunchButton";
 import { useLauncherData } from "./useLauncherData";
+import {
+  activateDockLaunchItem,
+  useDockLaunchModel,
+  type ActivateDockLaunchItemContext,
+} from "./dockLaunchItems";
+import { buildLauncherToolbarMeta, useLauncherToolbarCatalog } from "./launcherToolbarCatalog";
+import { LauncherToolbarButton } from "./LauncherToolbarButton";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -206,7 +213,10 @@ interface OverflowMenuProps {
   // skipped entirely in that case.
   forgeProviderName: string | null;
   overflowActions: Partial<Record<AnyToolbarButtonId, () => void>>;
-  pluginOverflowMeta: Record<string, OverflowMenuMeta>;
+  // Display metadata for every dynamically-registered button — plugin
+  // contributions and pinned launcher items (#12217) alike. The overflow menu
+  // only ever reads a label and a glyph off it, so one map covers both.
+  dynamicOverflowMeta: Record<string, OverflowMenuMeta>;
   // Plugin contributions grouped by owning plugin. When `plugin-tray` itself
   // overflows, its dropdown is unreachable, so the overflow menu inlines these
   // groups instead — an un-promoted contribution has no other toolbar route.
@@ -241,7 +251,7 @@ function OverflowMenu({
   forgeStatsRef,
   forgeProviderName,
   overflowActions,
-  pluginOverflowMeta,
+  dynamicOverflowMeta,
   pluginTrayGroups,
   launcherAgentIds,
   panelTrayDisabled,
@@ -482,7 +492,7 @@ function OverflowMenu({
               ...(isLast ? [] : [<DropdownMenuSeparator key="launcher-sep" />]),
             ];
           }
-          const meta = OVERFLOW_MENU_META[id] ?? pluginOverflowMeta[id];
+          const meta = OVERFLOW_MENU_META[id] ?? dynamicOverflowMeta[id];
           if (!meta) return [];
           if (isBuiltInAgentId(id)) {
             const dominantState = agentDominantStates.get(id) ?? null;
@@ -1037,6 +1047,37 @@ export function Toolbar({
   const toolbarDividerClass = "toolbar-divider w-px h-5 mx-1";
 
   const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
+
+  // The same model the launcher builds, from the same inputs, so the toolbar
+  // can never offer a button for a row the launcher isn't showing — or drop one
+  // it is. `surface: "grid"` matches the launcher this toolbar renders.
+  const launcherModel = useDockLaunchModel({
+    agents: launcherData.agents,
+    pinnedCount: launcherData.pinnedCount,
+    activeWorktreeId: launcherData.activeWorktreeId,
+    surface: "grid",
+    agentInventoryState: launcherData.agentInventoryState,
+    hasWorkspace: launcherData.hasWorkspace,
+    hasProject: launcherData.hasProject,
+  });
+  const launcherCatalog = useLauncherToolbarCatalog(launcherModel.searchItems);
+  const launcherActivationContext = useMemo<ActivateDockLaunchItemContext>(
+    () => ({
+      cwd: launcherData.cwd,
+      activeWorktreeId: launcherData.activeWorktreeId,
+      recipeContext: launcherData.recipeContext,
+      onLaunchAgent: launchAgentFromToolbar,
+      // A toolbar click is as foreground as a launcher click; anything else and
+      // the panel actions silently skip their focus handling.
+      source: "user",
+    }),
+    [
+      launcherData.cwd,
+      launcherData.activeWorktreeId,
+      launcherData.recipeContext,
+      launchAgentFromToolbar,
+    ]
+  );
   const pluginMetaById = usePluginRuntimeStore((s) => s.pluginMetaById);
 
   const buttonRegistry = useMemo<
@@ -1431,6 +1472,30 @@ export function Toolbar({
           ];
         })
       ),
+      // Pinned launcher rows (#12217). Registry membership is the whole
+      // stale-entry defense: the catalog holds only rows the launcher is
+      // showing right now, so a pin left behind by a deleted recipe, an
+      // uninstalled plugin, or a project the user has switched away from finds
+      // no entry here and `availableLeftIds`/`availableRightIds` drop it. That
+      // is deliberately not a sweep — the catalog is project- and
+      // worktree-scoped, and erasing a project-A pin because the user is
+      // standing in project B would lose intent that is still good.
+      ...Object.fromEntries(
+        [...launcherCatalog.values()].map((entry) => [
+          entry.buttonId,
+          {
+            render: () => (
+              <LauncherToolbarButton
+                key={entry.buttonId}
+                entry={entry}
+                activationContext={launcherActivationContext}
+                data-toolbar-item=""
+              />
+            ),
+            isAvailable: true,
+          },
+        ])
+      ),
     }),
     [
       isFocusMode,
@@ -1441,6 +1506,8 @@ export function Toolbar({
       onLaunchAgent,
       launcherData,
       launchAgentFromToolbar,
+      launcherCatalog,
+      launcherActivationContext,
       sidebarShortcut,
       sidebarAriaShortcut,
       sidebarHintHover,
@@ -1596,7 +1663,18 @@ export function Toolbar({
     // replaced. Buttons the user already dragged into a side list keep that
     // position and are filtered on promotion below like any other id.
     const extra = pluginButtonIds.filter((id) => !positioned.has(id) && pinnedButtons[id] === true);
-    return [...base, ...extra].filter((id) =>
+    // Same append, same reason, for a pinned launcher item whose position a
+    // stale cross-view write dropped (#12217). The arrays reconcile
+    // last-writer-wins while `pinnedButtons` merges per key, so the explicit
+    // `true` is the durable record and the slot is rebuilt from it here.
+    // Rebuilt at render rather than written back like `restorePromotedPanelButtons`
+    // does: only the live catalog knows which of these ids exist in this
+    // project, and a hydration that can't tell would either resurrect a
+    // position for a row that isn't here or drop one that is.
+    const launcherExtra = [...launcherCatalog.keys()].filter(
+      (id) => !positioned.has(id) && pinnedButtons[id] === true
+    );
+    return [...base, ...extra, ...launcherExtra].filter((id) =>
       isToolbarButtonVisible(
         id,
         pinnedButtons,
@@ -1611,6 +1689,7 @@ export function Toolbar({
     launcherOnRight,
     unpositionedAgentPins,
     pluginButtonIds,
+    launcherCatalog,
     pinnedButtons,
     effectiveAgentSettings,
     agentAvailability,
@@ -1773,9 +1852,16 @@ export function Toolbar({
     [pluginConfigs, pluginMetaById]
   );
 
-  const pluginOverflowMeta = useMemo(
-    () => buildPluginToolbarMeta(pluginButtonIds, pluginConfigs),
-    [pluginButtonIds, pluginConfigs]
+  // One map for both dynamic classes: the overflow menu looks a button's label
+  // and glyph up by id and doesn't care which registry minted it, and merging
+  // here means a launcher item that overflows still renders as itself rather
+  // than falling through to the unnamed-button path.
+  const dynamicOverflowMeta = useMemo(
+    () => ({
+      ...buildPluginToolbarMeta(pluginButtonIds, pluginConfigs),
+      ...buildLauncherToolbarMeta(launcherCatalog),
+    }),
+    [pluginButtonIds, pluginConfigs, launcherCatalog]
   );
 
   const overflowActions = useMemo<Partial<Record<AnyToolbarButtonId, () => void>>>(
@@ -1818,6 +1904,14 @@ export function Toolbar({
           ];
         })
       ),
+      // An overflowed launcher item stays clickable, and clicks through the
+      // same seam its top-level button uses so the two can't diverge.
+      ...Object.fromEntries(
+        [...launcherCatalog.values()].map((entry) => [
+          entry.buttonId,
+          () => activateDockLaunchItem(entry.item, launcherActivationContext),
+        ])
+      ),
     }),
     [
       onLaunchAgent,
@@ -1827,6 +1921,8 @@ export function Toolbar({
       onToggleProblems,
       pluginButtonIds,
       pluginConfigs,
+      launcherCatalog,
+      launcherActivationContext,
     ]
   );
 
@@ -1873,7 +1969,7 @@ export function Toolbar({
       forgeStatsRef={forgeStatsRef}
       forgeProviderName={forgeProviderName}
       overflowActions={overflowActions}
-      pluginOverflowMeta={pluginOverflowMeta}
+      dynamicOverflowMeta={dynamicOverflowMeta}
       pluginTrayGroups={pluginTrayGroups}
       launcherAgentIds={launcherAgentIds}
       panelTrayDisabled={panelTrayDisabled}

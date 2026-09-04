@@ -3,6 +3,8 @@ import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types
 import { isPluginRecipe } from "@shared/types/project";
 import type { PluginRecipeMetadataPatch } from "@shared/types/project";
 import { usePanelStore } from "./panelStore";
+import { useToolbarPreferencesStore } from "./toolbarPreferencesStore";
+import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
 import { preflightSpawnBatchLimit } from "./panelLimitStore";
 import { countPanelsTowardLimit } from "./slices/panelRegistry/panelCount";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
@@ -725,6 +727,17 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       } else {
         await projectClient.deleteRecipe(recipe.projectId!, id);
       }
+      // Only after the backend confirms, and only for a genuine delete. A
+      // recipe id is never reissued, so a pin left behind can't resurrect
+      // anything and the toolbar already renders nothing for it — but the key
+      // and its slot would otherwise outlive the recipe forever, and unlike a
+      // plugin unload (which also fires for an update) this is permanent
+      // (#12217). Rolled-back deletions fall through to the catch and keep the
+      // pin, which is why this sits after the await rather than beside the
+      // optimistic `set` above.
+      useToolbarPreferencesStore
+        .getState()
+        .setLauncherItemOnToolbar(launcherItemToolbarButtonId("recipe", id), false);
     } catch (error) {
       logError("Failed to persist recipe deletion", error);
       set({

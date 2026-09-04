@@ -1,6 +1,8 @@
 import type { AgentSettings } from "@shared/types/agentSettings";
 import type { AgentAvailabilityState } from "@shared/types";
+import type { ToolbarPinnedState } from "@shared/types/toolbar";
 import { isAgentButtonOnToolbar } from "@shared/utils/agentPinned";
+import { isLauncherItemOnToolbar, launcherItemToolbarButtonId } from "@shared/types/toolbar";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 
 /** Minimal shape needed to order an agent against the toolbar pin state. */
@@ -28,8 +30,12 @@ export interface PinnableAgent {
  * from it (explicitly pinned, never positioned) sorts to the end of the pinned
  * group via a stable sort.
  *
- * Only built-in agents can be pinned: a plugin or user-defined agent has no
- * toolbar button id to write, so it can never be in the pinned group.
+ * Built-in agents and everything else answer the same question from different
+ * stores. A built-in reads `agentSettingsStore` through `isAgentButtonOnToolbar`;
+ * a plugin or user-defined agent has no entry there and reads the explicit
+ * `true` its launcher-item pin writes into `pinnedButtons` (#12217). Before
+ * that they could not be pinned at all and were hard-coded into the unpinned
+ * group — which would now put a filled pin icon on a row sitting under "Other".
  *
  * Returns the concatenated array plus `pinnedCount` so callers can render a
  * separator + labels between the two groups without re-deriving the split.
@@ -41,7 +47,11 @@ export function sortAgentsByToolbarPin<T extends PinnableAgent>(
   // Required rather than defaulted: a caller that forgets it would silently
   // demote every right-side agent out of the pinned group, and there is no
   // value of this argument that is safe to guess.
-  rightButtons: readonly string[]
+  rightButtons: readonly string[],
+  // Required for the same reason, one store over: omitting it would put every
+  // pinned plugin or user-defined agent back under "Other" wearing a filled
+  // pin, which is the contradiction this argument exists to prevent.
+  pinnedButtons: ToolbarPinnedState
 ): { sorted: T[]; pinnedCount: number } {
   const order = new Map<string, number>();
   for (let i = 0; i < leftButtons.length; i++) {
@@ -53,13 +63,13 @@ export function sortAgentsByToolbarPin<T extends PinnableAgent>(
   const pinned: T[] = [];
   const unpinned: T[] = [];
   for (const agent of agents) {
-    const onToolbar =
-      isBuiltInAgentId(agent.id) &&
-      isAgentButtonOnToolbar(
-        agentSettings?.agents?.[agent.id],
-        agent.availability,
-        positioned.has(agent.id)
-      );
+    const onToolbar = isBuiltInAgentId(agent.id)
+      ? isAgentButtonOnToolbar(
+          agentSettings?.agents?.[agent.id],
+          agent.availability,
+          positioned.has(agent.id)
+        )
+      : isLauncherItemOnToolbar(launcherItemToolbarButtonId("agent", agent.id), pinnedButtons);
     if (onToolbar) {
       pinned.push(agent);
     } else {

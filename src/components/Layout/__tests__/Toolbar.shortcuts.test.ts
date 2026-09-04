@@ -388,25 +388,29 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
   });
 
   describe("useMemo dependency array", () => {
-    it("includes sidebarShortcut in useMemo deps", () => {
-      const depsMatch = source.match(/\}\),\s*\[([^\]]+)\]\s*\);/s);
+    // Anchored on `buttonRegistry` rather than taken as the file's first
+    // `}), [...]);`. That shortcut only ever worked because the registry
+    // happened to be the first memo of that shape in the file, so any memo
+    // added above it silently retargeted all three assertions at something
+    // else — which is how a dep list can stop being checked without a failure.
+    function buttonRegistryDeps(): string {
+      const start = source.indexOf("const buttonRegistry = useMemo");
+      expect(start).toBeGreaterThan(-1);
+      const depsMatch = source.slice(start).match(/\}\),\s*\[([^\]]+)\]\s*\);/s);
       expect(depsMatch).not.toBeNull();
-      const deps = depsMatch![1];
-      expect(deps).toContain("sidebarShortcut");
+      return depsMatch![1]!;
+    }
+
+    it("includes sidebarShortcut in useMemo deps", () => {
+      expect(buttonRegistryDeps()).toContain("sidebarShortcut");
     });
 
     it("includes copyTreeShortcut in useMemo deps", () => {
-      const depsMatch = source.match(/\}\),\s*\[([^\]]+)\]\s*\);/s);
-      expect(depsMatch).not.toBeNull();
-      const deps = depsMatch![1];
-      expect(deps).toContain("copyTreeShortcut");
+      expect(buttonRegistryDeps()).toContain("copyTreeShortcut");
     });
 
     it("includes showCopyingSpinner in useMemo deps (issue #8179)", () => {
-      const depsMatch = source.match(/\}\),\s*\[([^\]]+)\]\s*\);/s);
-      expect(depsMatch).not.toBeNull();
-      const deps = depsMatch![1];
-      expect(deps).toContain("showCopyingSpinner");
+      expect(buttonRegistryDeps()).toContain("showCopyingSpinner");
     });
 
     it("diagnosticsShortcut is in ToolbarProblemsButton", () => {

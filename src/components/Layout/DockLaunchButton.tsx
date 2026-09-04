@@ -33,9 +33,14 @@ import { isAgentButtonOnToolbar } from "@shared/utils/agentPinned";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import {
   getLauncherPanelButtonIdForKind,
+  isLauncherItemOnToolbar,
+  isLauncherItemToolbarButtonId,
+  isLauncherPanelButtonId,
   isPanelButtonOnToolbar,
+  type LauncherItemToolbarButtonId,
   type LauncherPanelButtonId,
 } from "@shared/types/toolbar";
+import { resolveLauncherToolbarButtonId } from "./launcherToolbarCatalog";
 import { resolveEffectivePresetId } from "@shared/types";
 import { getMergedPresets } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
@@ -120,13 +125,24 @@ const PLACEMENT_CONFIG = {
 
 /**
  * A row that can be pinned to the toolbar, resolved to the id the write path
- * actually takes. Agents and panels keep separate stores behind the one
- * affordance — `null` means the row has no toolbar representation at all
- * (recipes, cues, plugin panel kinds, non-built-in agents).
+ * actually takes. Three write paths behind the one affordance: a built-in agent's
+ * pin lives in `agentSettingsStore`, one of the four fixed panel buttons goes
+ * through `setPanelButtonOnToolbar`, and every other row — plugin and
+ * user-defined agents, the remaining panel kinds, recipes — through
+ * `setLauncherItemOnToolbar` (#12217).
+ *
+ * `null` now means only that the row launches nothing: a cue, or a preset child
+ * whose parent already carries the button.
  */
 type DockLaunchPinTarget =
   | { category: "agent"; id: BuiltInAgentId; name: string; onToolbar: boolean }
-  | { category: "panel"; id: LauncherPanelButtonId; name: string; onToolbar: boolean };
+  | { category: "panel"; id: LauncherPanelButtonId; name: string; onToolbar: boolean }
+  | {
+      category: "launcher-item";
+      id: LauncherItemToolbarButtonId;
+      name: string;
+      onToolbar: boolean;
+    };
 
 interface DockLaunchButtonProps {
   agents: ReadonlyArray<DockLaunchAgent>;
@@ -197,6 +213,7 @@ export function DockLaunchButton({
   const leftButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.leftButtons));
   const rightButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.rightButtons));
   const setPanelButtonOnToolbar = useToolbarPreferencesStore((s) => s.setPanelButtonOnToolbar);
+  const setLauncherItemOnToolbar = useToolbarPreferencesStore((s) => s.setLauncherItemOnToolbar);
   const positionAgentButton = useToolbarPreferencesStore((s) => s.positionAgentButton);
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
@@ -286,11 +303,25 @@ export function DockLaunchButton({
       if (row.kind !== "item") return null;
       const { item } = row;
 
+      // One resolver decides which of the three id spaces a row belongs to, so
+      // the launcher's pin affordance and the toolbar's button registry can't
+      // disagree about what a row is called (#12217).
+      const id = resolveLauncherToolbarButtonId(item);
+      if (id === null) return null;
+
+      if (isLauncherItemToolbarButtonId(id)) {
+        return {
+          category: "launcher-item",
+          id,
+          name: item.name,
+          onToolbar: isLauncherItemOnToolbar(id, pinnedButtons),
+        };
+      }
+
       if (item.category === "agent") {
-        // Only built-in agents have a toolbar button id to write. A plugin or
-        // user-defined agent is launchable here but can never reach the toolbar.
-        if (!isBuiltInAgentId(item.agent.id)) return null;
-        const id = item.agent.id;
+        // Narrowed by `resolveLauncherToolbarButtonId`: a non-built-in agent
+        // resolved to a launcher-item id and returned above.
+        if (!isBuiltInAgentId(id)) return null;
         return {
           category: "agent",
           id,
@@ -306,21 +337,18 @@ export function DockLaunchButton({
         };
       }
 
-      if (item.category === "panel") {
-        // Through the kind→button map, never `isLauncherPanelButtonId(kindId)`:
-        // the dev preview kind is `dev-preview` and its button is `dev-server`,
-        // so the direct test drops that row and nothing tells you it did.
-        const id = getLauncherPanelButtonIdForKind(item.kindId);
-        if (!id) return null;
-        return {
-          category: "panel",
-          id,
-          name: item.name,
-          onToolbar: isPanelButtonOnToolbar(id, pinnedButtons, leftButtons, rightButtons),
-        };
-      }
-
-      return null;
+      // One of the four fixed panel buttons. The kind→button map got us here,
+      // never `isLauncherPanelButtonId(kindId)`: the dev preview kind is
+      // `dev-preview` and its button is `dev-server`, so the direct test would
+      // route that row to a second, synthetic id for a button that already has
+      // one.
+      if (!isLauncherPanelButtonId(id)) return null;
+      return {
+        category: "panel",
+        id,
+        name: item.name,
+        onToolbar: isPanelButtonOnToolbar(id, pinnedButtons, leftButtons, rightButtons),
+      };
     },
     [agentSettings, leftButtons, pinnedButtons, rightButtons]
   );
@@ -354,6 +382,10 @@ export function DockLaunchButton({
         );
         return;
       }
+      if (target.category === "launcher-item") {
+        setLauncherItemOnToolbar(target.id, !target.onToolbar);
+        return;
+      }
       setPanelButtonOnToolbar(target.id, !target.onToolbar);
     },
     [
@@ -361,6 +393,7 @@ export function DockLaunchButton({
       agentSettings,
       positionAgentButton,
       setAgentPinned,
+      setLauncherItemOnToolbar,
       setPanelButtonOnToolbar,
       toggleButtonVisibility,
     ]
@@ -1136,10 +1169,10 @@ function DockLaunchOption({
         : item!.name;
 
   // Whether this row reserves the two trailing control slots. See the comment at
-  // the slots themselves for why it is decided by category rather than per row.
-  const reservesControlSlots =
-    row.band === "results" ||
-    (row.kind === "item" && (item!.category === "agent" || item!.category === "panel"));
+  // the slots themselves for why it is decided by row kind rather than per row.
+  // Every item row qualifies since #12217 — all three categories are pinnable —
+  // so this is now the same question as "is this a launchable row".
+  const reservesControlSlots = row.band === "results" || row.kind === "item";
 
   // The one flag that separates the two modes. Browse keeps its per-band rows;
   // search collapses everything into a single `results` band.
@@ -1414,12 +1447,14 @@ function DockLaunchOption({
         {/* Reserved wherever a control can ever appear, so revealing one on hover
             never shifts the row under the pointer.
 
-            Not on every row any more. Recipes, presets and cues can hold neither
-            control in any state, so on them the 48px was buying alignment with a
-            band they are not in — while the recipe band carries the longest names
-            in the palette. Bands are type-homogeneous, so deciding this by
-            category keeps every row within a band on the same edge; search mixes
-            the types under one heading, so there it always reserves. */}
+            Presets and cues can hold neither control in any state — a preset
+            child pins nothing of its own and a cue launches nothing — so on them
+            the 48px would buy alignment with a band they are not in. Recipes
+            were in that group until #12217 and are not any more: every recipe
+            row now carries a pin, so withholding the slot would leave the one
+            control it does have with nowhere to appear. Bands are
+            type-homogeneous, so deciding this by row kind keeps every row within
+            a band on the same edge. */}
         {reservesControlSlots && (
           <>
             <span className="ml-1 w-5 shrink-0" data-launcher-slot="shortcut">
