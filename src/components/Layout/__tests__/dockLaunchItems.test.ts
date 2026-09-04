@@ -457,30 +457,54 @@ describe("buildDockLaunchModel — browse rows", () => {
 });
 
 describe("activateDockLaunchCue", () => {
-  it("sends each settings cue to its own tab, and nowhere else", () => {
-    // The call COUNT is half the assertion. Routing is a switch now, so a
-    // dropped `return` would open the right tab and then the next case's tab
-    // on top of it — which `toHaveBeenCalledWith` alone reads as a pass.
-    const dispatchedTabs = (cue: Parameters<typeof activateDockLaunchCue>[0]) => {
+  const dispatchEventMock = vi.fn();
+
+  beforeEach(() => {
+    dispatchEventMock.mockReset();
+    // This suite runs in the node environment, where the setup cue's reach for
+    // `window` throws. Stubbed rather than skipped: a dropped `return` in the
+    // case above it lands here, and an exception is not a reading of that.
+    vi.stubGlobal("window", { dispatchEvent: dispatchEventMock });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("gives every cue exactly one effect, on exactly one channel", () => {
+    const effectsOf = (cue: Parameters<typeof activateDockLaunchCue>[0]) => {
       actionDispatchMock.mockClear();
+      dispatchEventMock.mockClear();
       activateDockLaunchCue(cue, "wt-1", "menu");
-      return actionDispatchMock.mock.calls;
+      return {
+        dispatched: [...actionDispatchMock.mock.calls],
+        events: dispatchEventMock.mock.calls.map(([event]) => (event as Event).type),
+      };
     };
 
-    // Pinned as a pair because routing used to end in an unconditional dispatch
-    // to `agents`: the two destinations are one edit away from being swapped,
-    // and either swap is silent.
-    expect(dispatchedTabs("customize-toolbar")).toEqual([
-      ["app.settings.openTab", { tab: "toolbar" }, { source: "menu" }],
-    ]);
-    expect(dispatchedTabs("manage-agents")).toEqual([
-      ["app.settings.openTab", { tab: "agents" }, { source: "menu" }],
-    ]);
-    // The recipe cue routes elsewhere entirely; falling into either settings
-    // case would be the same dropped `return` seen from above.
-    expect(dispatchedTabs("create-recipe")).toEqual([
-      ["recipe.editor.open", { worktreeId: "wt-1" }, { source: "menu" }],
-    ]);
+    // Exact call lists, both channels, all four cues. Routing is a switch now,
+    // and a dropped `return` runs the next case's effect on top of this one —
+    // which a matcher that only asks whether the expected call happened reads
+    // as a pass.
+    expect(effectsOf("create-recipe")).toEqual({
+      dispatched: [["recipe.editor.open", { worktreeId: "wt-1" }, { source: "menu" }]],
+      events: [],
+    });
+    expect(effectsOf("setup-agents")).toEqual({
+      dispatched: [],
+      events: ["daintree:open-agent-setup-wizard"],
+    });
+    // The two settings cues are one edit apart from being swapped, and either
+    // swap is silent: this used to route on two `if`s and then dispatch `agents`
+    // unconditionally.
+    expect(effectsOf("manage-agents")).toEqual({
+      dispatched: [["app.settings.openTab", { tab: "agents" }, { source: "menu" }]],
+      events: [],
+    });
+    expect(effectsOf("customize-toolbar")).toEqual({
+      dispatched: [["app.settings.openTab", { tab: "toolbar" }, { source: "menu" }]],
+      events: [],
+    });
   });
 });
 

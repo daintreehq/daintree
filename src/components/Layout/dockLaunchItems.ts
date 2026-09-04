@@ -178,10 +178,7 @@ export const DOCK_LAUNCH_CATEGORY_LABELS: Record<DockLaunchItem["category"], str
 
 /** A row that runs something other than a launchable item. */
 export type DockLaunchCueId =
-  | "create-recipe"
-  | "setup-agents"
-  | "manage-agents"
-  | "customize-toolbar";
+  "create-recipe" | "setup-agents" | "manage-agents" | "customize-toolbar";
 
 /** Heading for each named provenance group, matching the old preset submenu. */
 export const DOCK_LAUNCH_PRESET_GROUP_LABELS: Record<DockLaunchPresetGroup, string> = {

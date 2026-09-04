@@ -1438,7 +1438,9 @@ describe("DockLaunchButton", () => {
       under.set(heading, [...(under.get(heading) ?? []), node.textContent ?? ""]);
     }
 
-    expect(getAllByTestId("dock-launcher-band").filter((el) => el.textContent === "More")).toHaveLength(1);
+    expect(
+      getAllByTestId("dock-launcher-band").filter((el) => el.textContent === "More")
+    ).toHaveLength(1);
     const more = under.get("More") ?? [];
     expect(more).toHaveLength(2);
     expect(more[0]).toContain("Manage agents");
