@@ -48,6 +48,11 @@ docs/keyboard-shortcuts.md
 schemas/plugin.schema.json
 schemas/plugin.project.schema.json
 
+# Generated action reference — `npm run codegen:plugin-actions` output, compared
+# byte-for-byte by its test in src/services/actions/__tests__. Same reason as
+# the shortcut reference above.
+docs/plugins/actions.md
+
 # Assets
 build/
 *.ico
