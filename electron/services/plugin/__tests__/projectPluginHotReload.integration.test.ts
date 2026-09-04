@@ -92,6 +92,7 @@ function makeHarness(root: string): Harness {
     },
     purgeConsentForInstance: vi.fn(),
     listGlobalPluginIds: () => new Set<string>(),
+    getPluginLoadError: () => undefined,
     readTrust: (projectId) => trust.get(projectId),
     writeTrust: (projectId, record) => {
       if (record) trust.set(projectId, record);

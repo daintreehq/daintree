@@ -153,4 +153,79 @@ describe("ProjectPluginIndicator", () => {
 
     expect(reloadProjectPlugins).toHaveBeenCalledTimes(1);
   });
+
+  it("appears for an active plugin whose last run failed", () => {
+    // #12232: the row stays `active` and nothing else about it moved, so
+    // without the failure in the visibility gate this project would show no
+    // way back in at all.
+    render(<ProjectPluginIndicator />);
+    snapshot([plugin("a.b", "active", { loadError: { message: "activate() threw", at: 1 } })], {
+      decision: "enabled",
+      enabled: true,
+      persisted: true,
+    });
+
+    expect(document.body.textContent).toContain("1 project plugin failed");
+  });
+
+  it("leads with a failure over decisions the user already made", () => {
+    render(<ProjectPluginIndicator />);
+    snapshot([
+      plugin("a.b", "blocked"),
+      plugin("c.d", "active", { loadError: { message: "activate() threw", at: 1 } }),
+    ]);
+
+    expect(document.body.textContent).toContain("1 project plugin failed");
+    expect(document.body.textContent).not.toContain("project plugins off");
+  });
+
+  it("leads with a failure over an unreadable manifest", () => {
+    // A row that says "Running" and is not is the one this widget has to
+    // correct; "Unreadable" already names itself on its own row.
+    render(<ProjectPluginIndicator />);
+    snapshot([
+      plugin("broken", "invalid", { error: "authors: expected array" }),
+      plugin("c.d", "active", { loadError: { message: "activate() threw", at: 1 } }),
+    ]);
+
+    expect(document.body.textContent).toContain("1 project plugin failed");
+    expect(document.body.textContent).not.toContain("unreadable");
+  });
+
+  it("still leads with a decision that never reached disk", () => {
+    // #12212 ranked `unsaved` first because nothing else can carry it. A
+    // failure has the popover row, the Project > Plugins tab and the plugin
+    // manager; the unwritten decision has only this line.
+    render(<ProjectPluginIndicator />);
+    snapshot([plugin("a.b", "active", { loadError: { message: "activate() threw", at: 1 } })], {
+      decision: "enabled",
+      enabled: true,
+      persisted: false,
+    });
+
+    expect(document.body.textContent).toContain("not saved");
+  });
+
+  it("still summarises blocked plugins when nothing failed", () => {
+    render(<ProjectPluginIndicator />);
+    snapshot([plugin("a.b", "blocked"), plugin("c.d", "blocked")]);
+
+    expect(document.body.textContent).toContain("2 project plugins off");
+  });
+
+  it("calls a failed row Error rather than Running, and names the cause", async () => {
+    render(<ProjectPluginIndicator />);
+    snapshot([plugin("a.b", "active", { loadError: { message: "Cannot find module x", at: 1 } })], {
+      decision: "enabled",
+      enabled: true,
+      persisted: true,
+    });
+
+    await act(async () => {
+      screen.getByRole("button", { name: /Project plugins/ }).click();
+    });
+
+    expect(document.body.textContent).toContain("Cannot find module x");
+    expect(document.body.textContent).not.toContain("Running");
+  });
 });

@@ -49,6 +49,54 @@ afterEach(() => {
   __resetProjectPluginStoreForTesting();
 });
 
+describe("ProjectPluginSection load errors", () => {
+  const failed = plugin({
+    state: "active",
+    loadError: { message: "activate() threw: no such module", at: 1 },
+  });
+
+  it("marks an active row Failed when its last run threw", () => {
+    render(<ProjectPluginSection plugins={[failed]} selectedId={null} onSelect={() => {}} />);
+
+    // Loaded and failed at once: the row keeps its active styling and gains the
+    // failure signal rather than swapping to a fourth state badge.
+    const row = screen.getAllByRole("option")[1]!;
+    expect(row.textContent).toContain("Failed");
+    expect(row.textContent).not.toContain("Off");
+    expect(row.textContent).not.toContain("Staged");
+  });
+
+  it("leaves a healthy active row unmarked", () => {
+    render(
+      <ProjectPluginSection
+        plugins={[plugin({ state: "active" })]}
+        selectedId={null}
+        onSelect={() => {}}
+      />
+    );
+
+    expect(screen.getAllByRole("option")[1]!.textContent).not.toContain("Failed");
+  });
+
+  it("renders the real cause in the detail pane", () => {
+    render(<ProjectPluginDetailPane plugin={failed} />);
+
+    expect(screen.getByText(/activate\(\) threw: no such module/)).toBeTruthy();
+    expect(document.body.textContent).toContain("Failed to start");
+  });
+
+  it("keeps the unreadable-manifest message distinct from a run failure", () => {
+    render(
+      <ProjectPluginDetailPane
+        plugin={plugin({ state: "invalid", error: "bad JSON", id: "broken" })}
+      />
+    );
+
+    expect(document.body.textContent).toContain("bad JSON");
+    expect(document.body.textContent).not.toContain("Failed to start");
+  });
+});
+
 describe("ProjectPluginSection", () => {
   it("renders nothing when the project ships no plugins", () => {
     const { container } = render(

@@ -3379,7 +3379,13 @@ export interface ProjectPluginVisibilityChangedEvent {
 
 /** Runtime state of one plugin directory found under a project's `.daintree/plugins/`. */
 export type ProjectPluginState =
-  /** Loaded and running. */
+  /**
+   * Registered with the host. It is a load observation, not an activation one:
+   * a lazy plugin is `active` before its `activate()` has ever run, and one
+   * whose `activate()` threw stays `active` and carries {@link
+   * ProjectPluginInfo.loadError}. Collapsing the two would conflate the trust
+   * and load lifecycle with the most recent activation outcome.
+   */
   | "active"
   /** Manifest valid, trust granted, but the id is new — parsed, never executed. */
   | "staged"
@@ -3411,8 +3417,20 @@ export interface ProjectPluginInfo {
    * this one plugin is the thing that was turned off.
    */
   muted: boolean;
-  /** Why the directory was rejected. Set iff `state === "invalid"`. */
+  /** Why the directory was rejected at discovery. Set iff `state === "invalid"`. */
   error?: string;
+  /**
+   * Most recent load or activation failure for the loaded instance — a thrown
+   * `activate()`, a worker that failed to fork, an activation that never
+   * settled, or a manifest command that could not be registered (#12232).
+   *
+   * Distinct from {@link error}, which is a discovery-time rejection of a
+   * directory that never loaded. This one describes a plugin that *did* load,
+   * so it is orthogonal to `state` and can accompany `"active"`. Held in
+   * memory only for the life of the load: a project plugin has no installed
+   * provenance record to persist it into, by design.
+   */
+  loadError?: PluginLoadError;
   /**
    * An installed or builtin plugin already claims this manifest id. Both load —
    * the instance key keeps them apart — and the collision is surfaced here

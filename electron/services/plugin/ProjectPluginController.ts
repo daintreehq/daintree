@@ -1,11 +1,15 @@
 import type {
+  PluginLoadError,
   ProjectPluginInfo,
   ProjectPluginTrustDecision,
   ProjectPluginTrustRecord,
   ProjectPluginTrustState,
   PluginManifest,
 } from "../../../shared/types/plugin.js";
-import { makeProjectPluginInstanceKey } from "../../../shared/types/plugin.js";
+import {
+  makeProjectPluginInstanceKey,
+  parseProjectPluginInstanceKey,
+} from "../../../shared/types/plugin.js";
 import type {
   DiscoveredProjectPlugin,
   ProjectPluginDiscoveryResult,
@@ -34,6 +38,12 @@ export interface ProjectPluginControllerDeps {
   purgeConsentForInstance: (instanceKey: string) => void;
   /** Manifest ids already claimed by an installed or builtin plugin. */
   listGlobalPluginIds: () => Set<string>;
+  /**
+   * The instance's most recent load or activation failure, if it has one. A
+   * project plugin holds this in memory only — there is no provenance record
+   * to persist it into — so it is read live per row rather than cached here.
+   */
+  getPluginLoadError: (instanceKey: string) => PluginLoadError | undefined;
   readTrust: (projectId: string) => ProjectPluginTrustRecord | undefined;
   /** Persist (or clear) a trust record. Returns false when the write did not reach disk. */
   writeTrust: (projectId: string, record: ProjectPluginTrustRecord | undefined) => boolean;
@@ -605,12 +615,18 @@ export class ProjectPluginController {
         };
       }
       const manifestId = d.manifest.name;
-      const state = entry.loaded.has(manifestId)
+      const loadedInstance = entry.loaded.get(manifestId);
+      const state = loadedInstance
         ? ("active" as const)
         : entry.staged.has(manifestId)
           ? ("staged" as const)
           : ("blocked" as const);
       const muted = entry.muted.has(manifestId);
+      // Only a loaded instance can have failed at load or activation, and only
+      // its own key answers for it: a stale row for a manifest id this project
+      // no longer runs must not inherit another generation's error. A muted one
+      // never loads, so it never has one.
+      const loadError = loadedInstance ? this.deps.getPluginLoadError(loadedInstance) : undefined;
       return {
         projectId,
         id: manifestId,
@@ -622,9 +638,45 @@ export class ProjectPluginController {
         dirName: d.dirName,
         state,
         muted,
+        ...(loadError !== undefined ? { loadError } : {}),
         collidesWithGlobal: globalIds.has(manifestId),
       };
     });
+  }
+
+  /**
+   * The host recorded or cleared a load/activation error for one instance, so
+   * re-push that project's rows.
+   *
+   * Every other snapshot rides out on a controller mutation — a trust decision,
+   * a stage, a load. A lazily-activated plugin that throws has none of those
+   * behind it, so without this the manager would keep describing a plugin that
+   * failed as a clean one until something unrelated moved.
+   *
+   * Ignores anything but the currently loaded instance for that manifest id: a
+   * late error from a generation this project has already unloaded and
+   * replaced describes nothing the rows still show. The initial load is also
+   * silent for that reason — its `entry.loaded` write lands after activation,
+   * and the load path emits its own snapshot once it has.
+   */
+  notifyLoadErrorChanged(instanceKey: string): void {
+    if (this.disposed) return;
+    const parsed = parseProjectPluginInstanceKey(instanceKey);
+    if (!parsed) return;
+    const entry = this.entries.get(parsed.projectId);
+    if (entry?.loaded.get(parsed.manifestId) !== instanceKey) return;
+    try {
+      this.emitChanged(parsed.projectId);
+    } catch (err) {
+      // Unlike every other `emitChanged` caller, this one runs *inside* the
+      // activation-failure path. A throw here would escape into the catch that
+      // is recording the plugin's error and overwrite it with the broadcast's
+      // — losing the only diagnostic the user was going to get.
+      console.error(
+        `[ProjectPluginController] load-error snapshot for "${instanceKey}" threw:`,
+        err
+      );
+    }
   }
 
   /** The trust state a renderer needs to decide whether to prompt. */

@@ -4,6 +4,7 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { Button } from "@/components/ui/button";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
+import { cn } from "@/lib/utils";
 import type { ProjectPluginInfo } from "@shared/types/plugin";
 
 const MICRO_LABEL = "text-3xs font-medium uppercase tracking-wider text-text-secondary";
@@ -22,18 +23,30 @@ function stateLabel(state: ProjectPluginInfo["state"]): string {
 }
 
 /**
+ * A plugin that loaded and then failed to run is still `active`, so the state
+ * alone would call it "Running" (#12232). The last outcome outranks the state
+ * here — "Running" for something that threw on startup is the one label that
+ * would actively mislead.
+ */
+function rowLabel(plugin: ProjectPluginInfo): string {
+  return plugin.loadError ? "Failed" : stateLabel(plugin.state);
+}
+
+/**
  * The quiet, persistent way back into a project's own plugins.
  *
  * `Keep disabled` is remembered and must never re-prompt, so something has to
  * carry the offer afterwards or the decision is one-way. This is that something:
  * a Tier-1 ambient chrome item in the sidebar footer, sharing the surface and
  * the neutral dot of `ProjectResourceBadge` rather than inventing a new element.
- * No accent, no colour-coded state — a folder full of plugins the user turned
- * off is not a fault, and the popover is where the detail belongs.
+ * Never an accent — a folder full of plugins the user turned off is not a
+ * fault, and the popover is where the detail belongs. The one exception is a
+ * plugin that actually failed to run (#12232): the dot carries `status-danger`
+ * then, as the single load-bearing signal in this region.
  *
  * It renders only when there is something to act on: plugins that are blocked,
- * staged and awaiting a click, or unreadable. A project whose plugins are all
- * running shows nothing at all, which is the point of the tier.
+ * staged and awaiting a click, unreadable, or failed. A project whose plugins
+ * all loaded and ran shows nothing at all, which is the point of the tier.
  *
  * Unreadable earns a place here because a manifest the host refused is a fault
  * the author has to fix, and before #12212 the only record of it anywhere was
@@ -56,6 +69,7 @@ export function ProjectPluginIndicator() {
   const blocked = plugins.filter((p) => p.state === "blocked");
   const staged = plugins.filter((p) => p.state === "staged");
   const invalid = plugins.filter((p) => p.state === "invalid");
+  const failed = plugins.filter((p) => p.loadError !== undefined);
   const enabled = trust?.enabled === true;
   // The decision applied but never reached disk, so the next launch will ask
   // again. Nothing else can carry this: a failed "always enable" still STARTS
@@ -63,18 +77,31 @@ export function ProjectPluginIndicator() {
   // surface left to appear on (#12212).
   const unsaved = trust?.decision === "enabled" && trust.persisted === false;
 
-  if (blocked.length === 0 && staged.length === 0 && invalid.length === 0 && !unsaved) return null;
+  if (
+    blocked.length === 0 &&
+    staged.length === 0 &&
+    invalid.length === 0 &&
+    failed.length === 0 &&
+    !unsaved
+  )
+    return null;
 
-  // Ordered by how much it is a fault rather than a state the user chose: a
-  // decision that silently will not survive a restart first, then a manifest
-  // that will not parse, then the two ordinary resting states.
+  // Ordered by how much it is a fault rather than a state the user chose, and
+  // by how little else carries it. A decision that silently will not survive a
+  // restart first — nothing else can show it, since a failed "always enable"
+  // still starts the plugins. Then a plugin that loaded and failed, whose row
+  // state says "Running" and so reads as healthy until this says otherwise.
+  // Then a manifest that will not parse, which its own row already labels
+  // "Unreadable". Then the two ordinary resting states.
   const summary = unsaved
     ? "Project plugins on, but not saved"
-    : invalid.length > 0
-      ? `${invalid.length} project plugin${invalid.length === 1 ? "" : "s"} unreadable`
-      : blocked.length > 0
-        ? `${blocked.length} project plugin${blocked.length === 1 ? "" : "s"} off`
-        : `${staged.length} project plugin${staged.length === 1 ? "" : "s"} staged`;
+    : failed.length > 0
+      ? `${failed.length} project plugin${failed.length === 1 ? "" : "s"} failed`
+      : invalid.length > 0
+        ? `${invalid.length} project plugin${invalid.length === 1 ? "" : "s"} unreadable`
+        : blocked.length > 0
+          ? `${blocked.length} project plugin${blocked.length === 1 ? "" : "s"} off`
+          : `${staged.length} project plugin${staged.length === 1 ? "" : "s"} staged`;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -85,7 +112,12 @@ export function ProjectPluginIndicator() {
           className="px-4 py-2 border-t border-divider surface-chrome flex items-center shrink-0 w-full hover:bg-text-primary/[0.02] transition-colors cursor-pointer"
         >
           <div className="flex items-center gap-2 min-w-0">
-            <span className="inline-flex h-2 w-2 rounded-full bg-text-primary/25 shrink-0" />
+            <span
+              className={cn(
+                "inline-flex h-2 w-2 rounded-full shrink-0",
+                failed.length > 0 ? "bg-status-danger" : "bg-text-primary/25"
+              )}
+            />
             <span className="text-3xs text-text-secondary font-medium truncate">{summary}</span>
           </div>
         </button>
@@ -118,8 +150,13 @@ export function ProjectPluginIndicator() {
                       Activate
                     </Button>
                   ) : (
-                    <span className="text-3xs text-text-secondary shrink-0">
-                      {stateLabel(plugin.state)}
+                    <span
+                      className={cn(
+                        "text-3xs shrink-0",
+                        plugin.loadError ? "text-status-danger" : "text-text-secondary"
+                      )}
+                    >
+                      {rowLabel(plugin)}
                     </span>
                   )}
                 </div>
@@ -129,6 +166,15 @@ export function ProjectPluginIndicator() {
                 {plugin.state === "invalid" && plugin.error && (
                   <p className="mt-0.5 text-3xs text-text-secondary leading-tight break-words">
                     {plugin.error}
+                  </p>
+                )}
+                {/* Same slot for the same job. A rejected manifest and a plugin
+                    that threw are both "the folder is not working", and the two
+                    can never appear together — a manifest that failed discovery
+                    never loads, so it never reaches an activation. */}
+                {plugin.loadError && (
+                  <p className="mt-0.5 text-3xs text-text-secondary leading-tight break-words">
+                    {plugin.loadError.message}
                   </p>
                 )}
               </li>

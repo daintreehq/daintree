@@ -32,6 +32,7 @@ const windowRefMock = vi.hoisted(() => ({
   getProjectViewManager: vi.fn(() => null),
 }));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+const broadcastToProjectRenderersMock = vi.hoisted(() => vi.fn());
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProject: vi.fn((): { path: string } | null => null),
   getProjectById: vi.fn((_id: string): { path: string } | null => null),
@@ -59,6 +60,7 @@ vi.mock("../../window/windowRef.js", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
+  broadcastToProjectRenderers: broadcastToProjectRenderersMock,
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
@@ -66,13 +68,22 @@ vi.mock("../../store.js", () => ({
 vi.mock("../ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
-vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
-  registerPanelKind: vi.fn(),
-  unregisterPluginPanelKinds: vi.fn(),
-  onPanelKindRegistered: vi.fn(() => () => {}),
-  onPanelKindUnregistered: vi.fn(() => () => {}),
-  getPluginPanelKinds: vi.fn(() => []),
-}));
+vi.mock("../../../shared/config/panelKindRegistry.js", async () => {
+  // `toRuntimePanelKindId` is a pure id builder, and a project plugin's panels
+  // are registered under the id it returns — stubbing it to undefined would
+  // break the load before any of these assertions could run.
+  const actual = await vi.importActual<
+    typeof import("../../../shared/config/panelKindRegistry.js")
+  >("../../../shared/config/panelKindRegistry.js");
+  return {
+    registerPanelKind: vi.fn(),
+    unregisterPluginPanelKinds: vi.fn(),
+    onPanelKindRegistered: vi.fn(() => () => {}),
+    onPanelKindUnregistered: vi.fn(() => () => {}),
+    getPluginPanelKinds: vi.fn(() => []),
+    toRuntimePanelKindId: actual.toRuntimePanelKindId,
+  };
+});
 vi.mock("../../../shared/config/toolbarButtonRegistry.js", () => ({
   registerToolbarButton: vi.fn(),
   unregisterPluginToolbarButtons: vi.fn(),
@@ -214,7 +225,11 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 
 import { PluginService } from "../PluginService.js";
 import { getPluginManifestSchema } from "../../schemas/plugin.js";
-import { type PluginIpcContext } from "../../../shared/types/plugin.js";
+import {
+  makeProjectPluginInstanceKey,
+  type PluginIpcContext,
+} from "../../../shared/types/plugin.js";
+import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
 import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
 import { stripPluginViewGeneration } from "../../../shared/utils/pluginViewUrl.js";
 
@@ -1184,5 +1199,149 @@ describe("Deferred activation — activatePlugin", () => {
       []
     );
     expect(result).toBe("pong");
+  });
+});
+
+/**
+ * A project plugin loads under an instance key the installed-record store
+ * deliberately refuses to persist, so every `loadError` it wrote went nowhere
+ * and the host reported a clean load however activation had gone (#12232).
+ */
+describe("project plugin load errors", () => {
+  const PROJECT_ID = "a".repeat(64);
+  const PLUGIN_ID = "acme.project-boom";
+  const INSTANCE_KEY = makeProjectPluginInstanceKey(PROJECT_ID, PLUGIN_ID);
+  const PANEL_KIND_ID = toRuntimePanelKindId(
+    { origin: "project", pluginId: PLUGIN_ID, kindId: "main" },
+    PROJECT_ID
+  );
+
+  /**
+   * A project root holding one lazily-activated plugin — no `activationEvents`,
+   * so nothing runs until a view asks for it, which is exactly the path the
+   * issue reports.
+   */
+  async function writeProjectPlugin(body: string): Promise<string> {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-project-"));
+    const dir = path.join(projectRoot, ".daintree", "plugins", PLUGIN_ID);
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: PLUGIN_ID,
+        version: "1.0.0",
+        scope: "project",
+        main: "dist/index.js",
+        contributes: {
+          panels: [
+            { id: "main", name: "Boom", iconId: "puzzle", color: "var(--theme-category-orange)" },
+          ],
+          views: [{ id: "main", componentPath: "dist/panel.js", location: "panel" }],
+        },
+      })
+    );
+    await fs.writeFile(path.join(dir, "dist", "index.js"), body);
+    await fs.writeFile(path.join(dir, "dist", "panel.js"), "export default function Panel() {}");
+    // Trust is already granted and the id already known, so the reconcile loads
+    // the plugin rather than staging it behind a prompt.
+    storeMock._state.set("projectPluginTrust", {
+      [PROJECT_ID]: {
+        decision: "enabled",
+        decidedAt: 1,
+        knownPluginIds: [PLUGIN_ID],
+        stagedPluginIds: [],
+      },
+    });
+    return projectRoot;
+  }
+
+  async function openWithPlugin(body: string): Promise<PluginService> {
+    const projectRoot = await writeProjectPlugin(body);
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+    await service.onProjectOpened(PROJECT_ID, projectRoot);
+    return service;
+  }
+
+  it("returns the real cause from activatePluginForView instead of a clean result", async () => {
+    const service = await openWithPlugin(
+      "export function activate() { throw new Error('project-boom'); }"
+    );
+    try {
+      // The row is loaded but nothing has run it yet.
+      expect(service.getPluginLoadError(INSTANCE_KEY)).toBeUndefined();
+
+      const result = await service.activatePluginForView(PANEL_KIND_ID);
+
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.error).toContain("project-boom");
+      expect(service.getPluginLoadError(INSTANCE_KEY)?.message).toContain("project-boom");
+
+      // A lazy failure has no controller mutation behind it, so without its own
+      // push the manager would keep describing this plugin as clean.
+      const pushed = broadcastToProjectRenderersMock.mock.calls.filter(
+        (call) =>
+          (call[2] as { name?: string } | undefined)?.name === "plugin:project-plugins-changed"
+      );
+      expect(pushed.length).toBeGreaterThan(0);
+      const rows = (
+        pushed.at(-1)?.[2] as { payload: { plugins: Array<{ loadError?: { message: string } }> } }
+      ).payload.plugins;
+      expect(rows[0]?.loadError?.message).toContain("project-boom");
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("keeps the instance key out of the persisted provenance record", async () => {
+    const service = await openWithPlugin(
+      "export function activate() { throw new Error('project-boom'); }"
+    );
+    try {
+      await service.activatePluginForView(PANEL_KIND_ID);
+
+      // The whole reason the error lives in memory: the key names one machine's
+      // project id and must never reach `plugins.installed`.
+      const plugins = storeMock._state.get("plugins") as
+        { installed?: Record<string, unknown> } | undefined;
+      expect(Object.keys(plugins?.installed ?? {})).not.toContain(INSTANCE_KEY);
+      expect(Object.keys(plugins?.installed ?? {})).toHaveLength(0);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("marks the row active and attaches the error, and drops both on unload", async () => {
+    const service = await openWithPlugin(
+      "export function activate() { throw new Error('project-boom'); }"
+    );
+    try {
+      await service.activatePluginForView(PANEL_KIND_ID);
+
+      const [row] = service.listProjectPlugins(PROJECT_ID);
+      // It loaded and holds its contributions — the failure is about the last
+      // run, not a different kind of row.
+      expect(row?.state).toBe("active");
+      expect(row?.loadError?.message).toContain("project-boom");
+
+      // The unload cascade owns the error's lifetime: nothing outlives the load.
+      await service.setProjectPluginTrust(PROJECT_ID, "disabled");
+      expect(service.getPluginLoadError(INSTANCE_KEY)).toBeUndefined();
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("reports a clean load for a project plugin whose activate() succeeds", async () => {
+    const service = await openWithPlugin("export function activate() { return () => {}; }");
+    try {
+      const result = await service.activatePluginForView(PANEL_KIND_ID);
+
+      expect(result.ok).toBe(true);
+      expect(service.getPluginLoadError(INSTANCE_KEY)).toBeUndefined();
+      expect(service.listProjectPlugins(PROJECT_ID)[0]?.loadError).toBeUndefined();
+    } finally {
+      service.dispose();
+    }
   });
 });

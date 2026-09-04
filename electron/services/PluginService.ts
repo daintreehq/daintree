@@ -684,6 +684,22 @@ export class PluginService {
    * survives. Cleared on unload alongside the rest of the per-plugin state.
    */
   private pluginsWithLoadTimeErrors = new Set<string>();
+  /**
+   * Runtime load/activation errors for project plugin instances (#12232).
+   *
+   * A project plugin loads under an instance key that
+   * {@link PluginInstalledRecordsStore.upsertInstalledRecord} deliberately
+   * refuses to persist — the key names one machine's project id and the plugin
+   * has no install provenance to record. Every `loadError` write on the load
+   * and activation paths went through that store, so for a project plugin the
+   * error was written to nothing at all and `getPluginLoadError` reported a
+   * clean load however the activation had actually gone.
+   *
+   * This is the same channel with the persistence removed: session-scoped,
+   * keyed by the instance key the call sites already use, and dropped in
+   * `unloadPlugin` with the rest of the per-plugin state.
+   */
+  private projectPluginLoadErrors = new Map<string, PluginLoadError>();
   private ajv: AjvInstance | null = null;
   private pluginEventCleanups = new Map<string, Array<() => void>>();
   private workspaceClient: WorkspaceClient | null = null;
@@ -1981,7 +1997,7 @@ export class PluginService {
     // front). Probes happen after `plugins.set()` so
     // `validateAndBuildActionDescriptor` sees the plugin as loaded.
     if (manifest.contributes.commands.length > 0) {
-      await this.registerManifestCommands(pluginId, plugin, opts.isBuiltin);
+      await this.registerManifestCommands(pluginId, plugin);
     }
 
     return plugin;
@@ -1992,15 +2008,12 @@ export class PluginService {
    * filesystem-convention handler path. Handler modules are NOT imported here —
    * the dynamic `import()` is deferred to {@link dispatchHandler} so plugins
    * with many commands don't pay the eval cost during the 5s activation
-   * budget. Collisions with built-in action ids surface via the provenance
-   * `loadError` field for non-builtins, or a console warning for builtins
-   * (which have no installed-record slot).
+   * budget. Collisions with built-in action ids surface through
+   * {@link recordPluginLoadError} — the provenance record for an installed
+   * plugin, the in-memory map for a project one — or as a console warning for
+   * builtins, which have neither.
    */
-  private async registerManifestCommands(
-    pluginId: string,
-    plugin: LoadedPlugin,
-    isBuiltin: boolean
-  ): Promise<void> {
+  private async registerManifestCommands(pluginId: string, plugin: LoadedPlugin): Promise<void> {
     let owners = this.pluginActionOwners.get(pluginId);
     let registered = false;
     for (const cmd of plugin.manifest.contributes.commands) {
@@ -2008,10 +2021,7 @@ export class PluginService {
       if (BUILT_IN_ACTION_ID_SET.has(namespacedId)) {
         const message = `Plugin "${pluginId}" command id "${namespacedId}" collides with a built-in action id`;
         console.error(`[PluginService] ${message}`);
-        if (!isBuiltin) {
-          this.records.upsertInstalledRecord(pluginId, {
-            loadError: { message, at: Date.now() },
-          });
+        if (this.recordPluginLoadError(pluginId, plugin, { message, at: Date.now() })) {
           // Mark so a later `_doActivate()` success doesn't clear this
           // load-time diagnostic. Collisions are manifest-level facts that
           // don't go away when `main` activates cleanly.
@@ -2031,8 +2041,7 @@ export class PluginService {
           `[PluginService] Failed to validate manifest command "${namespacedId}":`,
           err
         );
-        if (!isBuiltin) {
-          this.records.upsertInstalledRecord(pluginId, { loadError });
+        if (this.recordPluginLoadError(pluginId, plugin, loadError)) {
           this.pluginsWithLoadTimeErrors.add(pluginId);
         }
         continue;
@@ -2322,14 +2331,15 @@ export class PluginService {
       // alone can't see post-reload outcomes.
       onActivationResult: (result) => {
         lastActivationOk = result.ok;
-        if (plugin.isBuiltin) return;
         if (result.ok) {
           if (!this.pluginsWithLoadTimeErrors.has(pluginId)) {
-            this.records.upsertInstalledRecord(pluginId, { loadError: null });
+            this.recordPluginLoadError(pluginId, plugin, null);
           }
         } else {
-          this.records.upsertInstalledRecord(pluginId, {
-            loadError: { message: result.error, stack: result.stack, at: Date.now() },
+          this.recordPluginLoadError(pluginId, plugin, {
+            message: result.error,
+            stack: result.stack,
+            at: Date.now(),
           });
         }
       },
@@ -2361,10 +2371,7 @@ export class PluginService {
     } catch (err) {
       // Fork failure — no worker exists, so this is a hard activation failure.
       cleanup();
-      const loadError = toPluginLoadError(err);
-      if (!plugin.isBuiltin) {
-        this.records.upsertInstalledRecord(pluginId, { loadError });
-      }
+      this.recordPluginLoadError(pluginId, plugin, toPluginLoadError(err));
       console.error(`[PluginService] Failed to start worker for ${pluginId}:`, err);
       throw err;
     }
@@ -2404,9 +2411,7 @@ export class PluginService {
       // provenance loadError so diagnostics surface why the plugin never came up.
       // If activation eventually settles (or a dev reload follows),
       // `onActivationResult` overwrites this.
-      if (!plugin.isBuiltin) {
-        this.records.upsertInstalledRecord(pluginId, { loadError: toPluginLoadError(err) });
-      }
+      this.recordPluginLoadError(pluginId, plugin, toPluginLoadError(err));
       console.error(`[PluginService] Plugin "${pluginId}" activation:`, err);
     } finally {
       if (timer) clearTimeout(timer);
@@ -2563,17 +2568,18 @@ export class PluginService {
    * Returns a plain {@link PluginActivationResult} so the renderer's
    * `PluginViewHost` can surface the real activation cause (#10618). Because
    * {@link activatePlugin} never rejects (the contribution-point trigger
-   * contract), failures are read back from the persisted provenance `loadError`
-   * after the await — covering all three failure modes (worker fork failure,
-   * activate() timeout, activate() throw). An unknown kind id resolves to
-   * `{ ok: true }`: there is nothing to activate, and the renderer's module
-   * import then fails on its own with a more specific error.
+   * contract), failures are read back from {@link getPluginLoadError} after the
+   * await — covering all three failure modes (worker fork failure, activate()
+   * timeout, activate() throw) for installed plugins through the persisted
+   * provenance record and for project plugins through the in-memory map
+   * (#12232). An unknown kind id resolves to `{ ok: true }`: there is nothing
+   * to activate, and the renderer's module import then fails on its own with a
+   * more specific error.
    *
-   * Limitation: built-in plugins have no installed provenance record, so a
-   * built-in activation failure (logged, not persisted) reads back as
-   * `{ ok: true }` here and falls through to the renderer's generic import
-   * error. Built-ins are app-bundled trusted code where this is rare; surfacing
-   * it would need a separate in-memory built-in load-error map.
+   * Limitation: built-in plugins have neither channel, so a built-in activation
+   * failure (logged, not recorded) reads back as `{ ok: true }` here and falls
+   * through to the renderer's generic import error. Built-ins are app-bundled
+   * trusted code where this is rare.
    *
    * `requestRecoveryPath` is the renderer's "my import of this view's module
    * failed, give me a URL V8 hasn't seen" request (#11728). A rejected dynamic
@@ -3831,6 +3837,9 @@ export class PluginService {
           ...this.disabledPlugins.keys(),
           ...this.blockedPlugins.keys(),
         ]),
+      // The instance's most recent load/activation failure, so a row that
+      // loaded but could not run says so instead of reading as clean (#12232).
+      getPluginLoadError: (instanceKey) => this.getPluginLoadError(instanceKey),
       readTrust: (projectId) => readProjectPluginTrust(projectId),
       writeTrust: (projectId, record) => writeProjectPluginTrust(projectId, record),
       emitToProject: (projectId, name, payload) => {
@@ -4302,8 +4311,11 @@ export class PluginService {
     });
 
     // Drop the load-time-error marker (#9281) so a reload with a fixed
-    // manifest can successfully clear `loadError` on next activation.
+    // manifest can successfully clear `loadError` on next activation, and the
+    // project instance's in-memory error (#12232) with it — nothing outlives
+    // the load it describes.
     this.pluginsWithLoadTimeErrors.delete(pluginId);
+    this.projectPluginLoadErrors.delete(pluginId);
 
     // Drop the diagnostic log ring buffer so a reload of the same plugin
     // doesn't carry forward log lines from the previous session.
@@ -4377,7 +4389,7 @@ export class PluginService {
     for (const [pluginId, plugin] of this.plugins) {
       if (plugin.isBuiltin) continue;
       const entry = this.pluginWorkers.get(pluginId);
-      const loadError = this.records.getInstalledRecord(pluginId)?.loadError ?? null;
+      const loadError = this.getPluginLoadError(pluginId) ?? null;
       snapshots.push({
         kind: "plugin-worker",
         id: pluginId,
@@ -4941,11 +4953,68 @@ export class PluginService {
 
   /**
    * Most recent activation error for a plugin id, or `undefined` if the last
-   * load succeeded (or the plugin has never been loaded). Reads from the
-   * persisted provenance record so the error survives a host restart.
+   * load succeeded (or the plugin has never been loaded). An installed plugin
+   * reads from the persisted provenance record so the error survives a host
+   * restart; a project plugin reads the session-scoped
+   * {@link projectPluginLoadErrors} map, which is the only channel it has.
+   *
+   * The two are exclusive rather than layered. A project instance key is never
+   * written to `plugins.installed`, so a record found under one could only be
+   * stale or hand-forged — falling back to it would let either outlive the
+   * load it describes.
    */
   getPluginLoadError(pluginId: string): PluginLoadError | undefined {
+    if (isProjectPluginInstanceKey(pluginId)) {
+      return this.projectPluginLoadErrors.get(pluginId);
+    }
     return this.records.getInstalledRecord(pluginId)?.loadError ?? undefined;
+  }
+
+  /**
+   * Record — or clear, with `null` — a plugin's most recent load/activation
+   * error on whichever channel owns that plugin id: the in-memory map for a
+   * project instance, the durable provenance record for anything else.
+   * Built-ins have neither and are dropped here rather than at seven call
+   * sites (the documented limitation on {@link activatePluginForView}).
+   *
+   * Returns whether the error reached a channel, which is the same question
+   * the callers' old `!isBuiltin` guard answered — so `pluginsWithLoadTimeErrors`
+   * keeps its existing membership — plus a generation check the id-keyed
+   * channels need and the durable one never did. The check is object identity,
+   * not presence: a project plugin unloads and reloads under the same key on
+   * every disable/enable, dev reload and project reopen, so a late
+   * `onActivationResult` or activation timeout belonging to the previous load
+   * would otherwise pin its error on the healthy new one.
+   */
+  private recordPluginLoadError(
+    pluginId: string,
+    plugin: LoadedPlugin,
+    loadError: PluginLoadError | null
+  ): boolean {
+    if (this.plugins.get(pluginId) !== plugin) return false;
+    if (plugin.isBuiltin) return false;
+    if (!isProjectPluginInstanceKey(pluginId)) {
+      this.records.upsertInstalledRecord(pluginId, { loadError });
+      return true;
+    }
+
+    const previous = this.projectPluginLoadErrors.get(pluginId);
+    if (loadError === null) {
+      if (previous === undefined) return true;
+      this.projectPluginLoadErrors.delete(pluginId);
+    } else {
+      if (previous?.message === loadError.message && previous.stack === loadError.stack) {
+        return true;
+      }
+      this.projectPluginLoadErrors.set(pluginId, loadError);
+    }
+    // The project plugin list carries this row, and a lazily-activated plugin
+    // fails with no other mutation behind it to ride out on — without a push
+    // the manager would keep describing a plugin that failed as a clean one.
+    // Read through the field, not the lazy getter: an error must never be the
+    // thing that constructs the controller.
+    this.projectPluginController?.notifyLoadErrorChanged(pluginId);
+    return true;
   }
 
   /**
