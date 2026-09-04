@@ -506,6 +506,101 @@ describe("poll scheduling and adaptive backoff", () => {
     expect(vi.getTimerCount()).toBe(timersBefore);
   });
 
+  // The lineage ledger is the only record of descendants that have already
+  // detached, and it can only be built from sweeps that actually ran (#12203).
+  // Both the zero-subscriber skip and the 15s idle backoff would starve it.
+  it("keeps sweeping with no subscribers while the ledger holds roots", async () => {
+    cache.attachLineageLedger({ hasRoots: () => true, reconcile: () => {} });
+    cache.start();
+    await vi.advanceTimersByTimeAsync(0);
+    refreshSpy.mockClear();
+
+    internals.refreshCallbacks.clear();
+    await vi.advanceTimersByTimeAsync(cache.getCurrentIntervalMs());
+
+    expect(refreshSpy).toHaveBeenCalled();
+  });
+
+  it("still skips with no subscribers when the ledger holds no roots", async () => {
+    cache.attachLineageLedger({ hasRoots: () => false, reconcile: () => {} });
+    cache.start();
+    await vi.advanceTimersByTimeAsync(0);
+    refreshSpy.mockClear();
+
+    internals.refreshCallbacks.clear();
+    await vi.advanceTimersByTimeAsync(cache.getCurrentIntervalMs());
+
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it("caps idle backoff at the lineage ceiling while roots are tracked", async () => {
+    cache.attachLineageLedger({ hasRoots: () => true, reconcile: () => {} });
+    cache.start();
+    for (let i = 0; i < 10; i++) {
+      await vi.advanceTimersByTimeAsync(cache.getCurrentIntervalMs());
+    }
+    expect(cache.getCurrentIntervalMs()).toBe(5000);
+  });
+
+  it("uses the full idle ceiling when nothing is tracked", async () => {
+    cache.attachLineageLedger({ hasRoots: () => false, reconcile: () => {} });
+    cache.start();
+    for (let i = 0; i < 10; i++) {
+      await vi.advanceTimersByTimeAsync(cache.getCurrentIntervalMs());
+    }
+    expect(cache.getCurrentIntervalMs()).toBe(15000);
+  });
+
+  it("never backs off below the configured base interval", async () => {
+    cache.stop();
+    cache = new ProcessTreeCache(20000);
+    internals = cache as unknown as CacheInternals;
+    internals.isWindows = false;
+    (cache as unknown as { refreshUnix: typeof refreshSpy }).refreshUnix = refreshSpy;
+    cache.onRefresh(() => {});
+    cache.attachLineageLedger({ hasRoots: () => true, reconcile: () => {} });
+
+    cache.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The 5s lineage ceiling must not speed a deliberately slow cache up.
+    expect(cache.getCurrentIntervalMs()).toBe(20000);
+  });
+
+  // refresh() directly rather than start(): the beforeEach subscriber already
+  // kicked off (and settled) a refresh, so start() short-circuits as
+  // "already started" and the next sweep is a full interval away.
+  it("reconciles the ledger before firing refresh callbacks", async () => {
+    const order: string[] = [];
+    cache.attachLineageLedger({
+      hasRoots: () => true,
+      reconcile: () => order.push("reconcile"),
+    });
+    cache.onRefresh(() => order.push("callback"));
+
+    await cache.refresh();
+
+    expect(order.slice(0, 2)).toEqual(["reconcile", "callback"]);
+  });
+
+  it("a throwing ledger does not blind the census", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    cache.attachLineageLedger({
+      hasRoots: () => true,
+      reconcile: () => {
+        throw new Error("ledger exploded");
+      },
+    });
+    const callback = vi.fn();
+    cache.onRefresh(callback);
+
+    await cache.refresh();
+
+    expect(callback).toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
   it("no-subscriber optimization still reschedules timer", async () => {
     cache.start();
     await vi.advanceTimersByTimeAsync(0); // first refresh completes

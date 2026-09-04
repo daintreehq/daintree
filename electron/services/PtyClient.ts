@@ -53,7 +53,7 @@
  * - Multiple services need to interact (composition root in main.ts)
  */
 
-import { MessagePortMain } from "electron";
+import { app, MessagePortMain } from "electron";
 import { EventEmitter } from "events";
 import os from "os";
 import path from "path";
@@ -72,6 +72,7 @@ const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
 const logWarn = (msg: string, ctx?: Record<string, unknown>) =>
   ctx ? logger.warn(msg, ctx) : logger.warn(msg);
 import { getTrashedPidTracker } from "./TrashedPidTracker.js";
+import { reapShardLineage } from "./TerminalLineageLedger.js";
 import { helpSessionService } from "./HelpSessionService.js";
 import { helpSessionJobService } from "./HelpSessionJobService.js";
 import { getLifecycleLedger, ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
@@ -1197,7 +1198,21 @@ export class PtyClient extends EventEmitter {
   }
 
   private cleanupOrphanedPtysForShard(shard: PtyShard, crashType: CrashType): void {
-    if (crashType === "CLEAN_EXIT" || this.terminalPids.size === 0) {
+    if (crashType === "CLEAN_EXIT") {
+      return;
+    }
+
+    // The crashed host's lineage ledger died with it, so its persisted orphan
+    // set is the only remaining record of descendants that had already
+    // reparented away from the PTY trees killed below (#12203). Runs before the
+    // terminalPids check: those orphans outlive whatever we still track, and
+    // they are not reachable by the process-group kill at all.
+    const userData = app.getPath("userData");
+    void reapShardLineage(userData, shard.serviceName).catch((err) => {
+      console.warn("[PtyClient] Lineage reap after host crash failed:", err);
+    });
+
+    if (this.terminalPids.size === 0) {
       return;
     }
 
