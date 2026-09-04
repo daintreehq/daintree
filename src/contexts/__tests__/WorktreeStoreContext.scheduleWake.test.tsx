@@ -160,6 +160,37 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
     expect(wakeMock).not.toHaveBeenCalled();
   });
 
+  it("re-rasters document text after the reveal: attribute on frame one, gone on frame two", async () => {
+    await renderProvider();
+    act(() => flushFrame());
+    act(() => flushFrame());
+    const root = document.documentElement;
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+
+    act(() => viewRevealedCb?.());
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(true);
+
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+  });
+
+  it("drops the text re-raster toggle when the view is cached mid-toggle", async () => {
+    await renderProvider();
+    act(() => flushFrame());
+    act(() => flushFrame());
+    const root = document.documentElement;
+
+    act(() => viewRevealedCb?.());
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(true);
+
+    act(() => viewCachedCb?.());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+  });
+
   it("skips the post-reveal repaint when the view is re-hidden before the second frame", async () => {
     await renderProvider();
     act(() => flushFrame());
@@ -356,6 +387,47 @@ describe("WorktreeStoreProvider — wake fan-out scheduling (#10362)", () => {
     act(() => vi.advanceTimersByTime(5000));
     flushRepaintGate();
     expect(repaintMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-rasters text again on the 1 s backstop only, never on the 3 s one", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await renderProvider();
+    act(() => flushFrame());
+    act(() => flushFrame());
+    const root = document.documentElement;
+
+    act(() => viewRevealedCb?.());
+    flushRepaintGate();
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+
+    act(() => vi.advanceTimersByTime(1000));
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(true);
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+
+    // The 3 s backstop is terminal-only: a late text pass would be pure cost.
+    act(() => vi.advanceTimersByTime(2000));
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+  });
+
+  it("removes an in-flight text re-raster toggle when the provider unmounts", async () => {
+    const { unmount } = await renderProvider();
+    act(() => flushFrame());
+    act(() => flushFrame());
+    const root = document.documentElement;
+
+    act(() => viewRevealedCb?.());
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(true);
+
+    unmount();
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
+    act(() => flushFrame());
+    expect(root.hasAttribute("data-reveal-reraster")).toBe(false);
   });
 
   it("cancels a prior switch's pending backstops on re-reveal (no stacking)", async () => {

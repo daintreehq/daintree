@@ -173,7 +173,7 @@ function Path({ path, copied, onCopy }: { path?: string; copied: boolean; onCopy
           )}
           <span
             ref={spanRef}
-            className="w-full pl-7 pr-2 py-1 text-left text-xs font-mono rounded bg-surface-canvas border border-overlay text-text-secondary truncate transition-colors group-hover/path:border-border-strong group-hover/path:text-text-primary"
+            className="w-full pl-7 pr-2 py-1 text-left text-xs rounded bg-surface-canvas border border-overlay text-text-secondary truncate transition-colors group-hover/path:border-border-strong group-hover/path:text-text-primary"
           >
             {display}
           </span>

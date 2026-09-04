@@ -464,6 +464,14 @@
     U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
+/* Post-reveal text re-raster (src/utils/revealTextReraster.ts). An inherited,
+ * visually inert text-shadow is a pure paint invalidation: it repaints every
+ * text run without relayout or reshaping, so a cached project view's first
+ * raster after re-attach is replaced by a fresh one two frames later. */
+html[data-reveal-reraster] {
+  text-shadow: 0 0 0 transparent;
+}
+
 /* Type scale below Tailwind's floor. A lot of this chrome lives under 12px, and
  * without names for those tiers every author picked a pixel value by eye.
  * Emitted to :root (plain @theme, not inline) so plain CSS and CodeMirror/inline

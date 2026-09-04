@@ -27,6 +27,7 @@ import { worktreeClient } from "@/clients/worktreeClient";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { flushPendingPerfMarks } from "@/utils/performance";
 import { markSwitch, setActiveSwitchTrace } from "@/utils/switchTrace";
+import { scheduleRevealTextReraster } from "@/utils/revealTextReraster";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 
@@ -1104,6 +1105,21 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     }
     cleanups.push(clearRevealBackstops);
 
+    // DOM text re-raster after reveal (see revealTextReraster.ts): the first
+    // raster after re-attach has shown wrong glyphs in the file tree after a
+    // long dwell away; a later raster of the same tiles is always right. One
+    // pass right after reveal, one on the 1 s backstop for a late settle.
+    let cancelTextReraster: (() => void) | null = null;
+    function scheduleTextReraster() {
+      cancelTextReraster?.();
+      cancelTextReraster = scheduleRevealTextReraster();
+    }
+    function clearTextReraster() {
+      cancelTextReraster?.();
+      cancelTextReraster = null;
+    }
+    cleanups.push(clearTextReraster);
+
     // Deterministic warm-activation wake (#9679 hardening): main fires this the
     // moment it re-attaches this cached view behind the anti-flash bridge. The
     // visibilitychange/resume listeners above never fire for a plain
@@ -1134,6 +1150,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       // working terminal if the round trip left it on a button or the body.
       restoreTerminalFocusOnReveal();
       scheduleRepaint("initial");
+      scheduleTextReraster();
       // Cancel any backstops still pending from a prior switch so rapid
       // back-and-forth switching can't stack passes, then arm this switch's.
       clearRevealBackstops();
@@ -1144,6 +1161,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             // switched away again the view is hidden and this no-ops.
             if (document.visibilityState === "visible") {
               scheduleRepaint(delay === 1000 ? "backstop-1000" : "backstop-3000");
+              if (delay === 1000) scheduleTextReraster();
             }
           }, delay)
         );
@@ -1156,6 +1174,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       // parked (and possibly frozen) in the LRU cache.
       flushPendingPerfMarks();
       clearRevealBackstops();
+      clearTextReraster();
       if (wakeRafId !== null) {
         cancelAnimationFrame(wakeRafId);
         wakeRafId = null;
