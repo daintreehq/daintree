@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Mock } from "vitest";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
@@ -178,7 +179,7 @@ let storageManager: PluginStorageManager;
 let ambientWorktreeFetch: ReturnType<typeof vi.fn>;
 let projectWorktreeFetch: ReturnType<typeof vi.fn>;
 /** The app-global worktree lookup storage falls back to for an UNBOUND host. */
-let ambientWorktreePathLookup: ReturnType<typeof vi.fn>;
+let ambientWorktreePathLookup: Mock<() => Promise<string | undefined>>;
 
 /** Assert a promise rejected with the frozen `PROJECT_VIEW_UNAVAILABLE` AppError. */
 async function expectProjectViewUnavailable(promise: Promise<unknown>): Promise<void> {
@@ -306,7 +307,9 @@ beforeEach(async () => {
   });
   // The ambient worktree — inside B, the focused project. A spy, so a bound
   // host reaching for it at all is a test failure rather than a silent leak.
-  ambientWorktreePathLookup = vi.fn(async () => path.join(projectRootOf(PROJECT_B), "main"));
+  ambientWorktreePathLookup = vi.fn<() => Promise<string | undefined>>(async () =>
+    path.join(projectRootOf(PROJECT_B), "main")
+  );
   storageManager = new PluginStorageManager({
     getPluginsRoot: () => path.join(tmpDir, "user-plugins", "plugins"),
     getActiveWorktreePath: ambientWorktreePathLookup,
