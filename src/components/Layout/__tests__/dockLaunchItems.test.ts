@@ -71,7 +71,9 @@ vi.mock("@/utils/logger", () => ({
 
 import {
   buildDockLaunchModel,
+  activateDockLaunchCue,
   activateDockLaunchItem,
+  DOCK_LAUNCH_CUE_LABELS,
   buildPresetChoices,
   buildPresetRows,
   getDockLaunchRowItem,
@@ -84,6 +86,7 @@ import {
   type DockLaunchRow,
 } from "../dockLaunchItems";
 import type { TerminalRecipe } from "@shared/types";
+import { TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
 import { PANEL_LIMIT_ERROR_SUFFIX } from "@/services/actions/definitions/panelLimitError";
 
 const AGENTS: DockLaunchAgent[] = [
@@ -421,6 +424,48 @@ describe("buildDockLaunchModel — browse rows", () => {
     // With recipes present the cue is gone, so it can't be navigated to.
     const withSome = build({ recipes: [recipe({ id: "r-1", name: "Deploy" })] });
     expect(createRecipeRows(withSome)).toEqual([]);
+  });
+
+  it("footers the More band with Manage agents and then Customize toolbar", () => {
+    const actionCues = build().browseRows.filter((row) => row.band === "actions");
+
+    // Both rows unconditionally: unlike the recipe and setup cues, neither
+    // depends on inventory. Order is the assertion — Manage agents has held
+    // this footer alone, and moving it would relocate a row under the cursor.
+    expect(actionCues.map((row) => (row.kind === "cue" ? row.cue : row.kind))).toEqual([
+      "manage-agents",
+      "customize-toolbar",
+    ]);
+    expect(new Set(actionCues.map((row) => row.rowKey)).size).toBe(2);
+  });
+
+  it("labels the toolbar cue with the plugin tray's own wording", () => {
+    // The issue asks for one string, not a second that agrees today: the launcher
+    // and the tray point at the same settings page, so a copy edit to either has
+    // to move both.
+    expect(DOCK_LAUNCH_CUE_LABELS["customize-toolbar"]).toBe(TOOLBAR_CUSTOMIZE_LABEL);
+  });
+});
+
+describe("activateDockLaunchCue", () => {
+  it("sends each settings cue to its own tab", () => {
+    activateDockLaunchCue("customize-toolbar", "wt-1", "menu");
+    expect(actionDispatchMock).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "toolbar" },
+      { source: "menu" }
+    );
+
+    // Pinned alongside it because routing used to end in an unconditional
+    // dispatch to `agents`: the two destinations are one edit away from being
+    // swapped, and either swap is silent.
+    actionDispatchMock.mockClear();
+    activateDockLaunchCue("manage-agents", "wt-1", "menu");
+    expect(actionDispatchMock).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "agents" },
+      { source: "menu" }
+    );
   });
 });
 

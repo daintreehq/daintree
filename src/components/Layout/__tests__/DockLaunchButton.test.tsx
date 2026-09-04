@@ -367,6 +367,7 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
 });
 
 import { DockLaunchButton } from "../DockLaunchButton";
+import { TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
 import type { DockLaunchAgent } from "../DockLaunchMenuItems";
 
 const AGENTS: DockLaunchAgent[] = [
@@ -1414,6 +1415,44 @@ describe("DockLaunchButton", () => {
       "recipe.editor.open",
       expect.anything(),
       expect.anything()
+    );
+  });
+
+  it("footers the More band with both action cues under one heading", () => {
+    const { getAllByTestId, getByText } = renderButton();
+
+    // `shouldShowBandLabel` prints a heading only on a band's first row, so a
+    // second "More" would mean the pair had drifted into separate bands.
+    const more = getAllByTestId("dock-launcher-band").filter((el) => el.textContent === "More");
+    expect(more).toHaveLength(1);
+    expect(getByText("Manage agents")).toBeTruthy();
+    expect(getByText(TOOLBAR_CUSTOMIZE_LABEL)).toBeTruthy();
+  });
+
+  it("opens the toolbar settings tab from the Customize toolbar cue", () => {
+    const { getByText } = renderButton();
+
+    fireEvent.click(getByText(TOOLBAR_CUSTOMIZE_LABEL));
+    expect(actionDispatchMock).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "toolbar" },
+      { source: "menu" }
+    );
+  });
+
+  it("lands on the Customize toolbar cue at the end of the browse list", () => {
+    // The footer is the last thing End can reach, so this is also the assertion
+    // that the row took an index in the flat navigation space at all.
+    const { container } = renderButton();
+    const input = searchInput(container);
+
+    fireEvent.keyDown(input, { key: "End" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(actionDispatchMock).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "toolbar" },
+      { source: "menu" }
     );
   });
 

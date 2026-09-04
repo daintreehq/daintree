@@ -20,6 +20,7 @@ import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { getRecipeScope } from "@/utils/recipeScope";
 import { logError } from "@/utils/logger";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
+import { TOOLBAR_CUSTOMIZE_LABEL } from "./toolbarMenuStrings";
 import type {
   ActionSource,
   AgentAvailabilityState,
@@ -176,7 +177,11 @@ export const DOCK_LAUNCH_CATEGORY_LABELS: Record<DockLaunchItem["category"], str
 };
 
 /** A row that runs something other than a launchable item. */
-export type DockLaunchCueId = "create-recipe" | "setup-agents" | "manage-agents";
+export type DockLaunchCueId =
+  | "create-recipe"
+  | "setup-agents"
+  | "manage-agents"
+  | "customize-toolbar";
 
 /** Heading for each named provenance group, matching the old preset submenu. */
 export const DOCK_LAUNCH_PRESET_GROUP_LABELS: Record<DockLaunchPresetGroup, string> = {
@@ -190,6 +195,9 @@ export const DOCK_LAUNCH_CUE_LABELS: Record<DockLaunchCueId, string> = {
   "create-recipe": "Create a recipe",
   "setup-agents": "Set up agents",
   "manage-agents": "Manage agents",
+  // The plugin tray's own entry, word for word: two routes to one settings page
+  // that disagreed about its name would read as two destinations (#12218).
+  "customize-toolbar": TOOLBAR_CUSTOMIZE_LABEL,
 };
 
 interface DockLaunchRowBase {
@@ -648,6 +656,15 @@ export function buildDockLaunchModel({
   }
 
   browseRows.push({ kind: "cue", rowKey: "manage-agents", band: "actions", cue: "manage-agents" });
+  // Second, not first: Manage agents has held this footer alone and the launcher
+  // is an agent list before it is anything else. The pair reads outward from
+  // what gets launched to where the launchers sit.
+  browseRows.push({
+    kind: "cue",
+    rowKey: "customize-toolbar",
+    band: "actions",
+    cue: "customize-toolbar",
+  });
 
   return {
     recentAgents,
@@ -820,15 +837,25 @@ export function activateDockLaunchCue(
   activeWorktreeId: string | null,
   source: ActionSource
 ): void {
-  if (cue === "create-recipe") {
-    activateCreateRecipeCue(activeWorktreeId, source);
-    return;
+  switch (cue) {
+    case "create-recipe":
+      activateCreateRecipeCue(activeWorktreeId, source);
+      return;
+    case "setup-agents":
+      window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
+      return;
+    case "manage-agents":
+      void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source });
+      return;
+    case "customize-toolbar":
+      void actionService.dispatch("app.settings.openTab", { tab: "toolbar" }, { source });
+      return;
   }
-  if (cue === "setup-agents") {
-    window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
-    return;
-  }
-  void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source });
+  // Every cue names its own destination. This routed on two `if`s and then fell
+  // through to the agents tab, so a cue added without a branch opened the wrong
+  // settings page and nothing — not a type error, not a test — said so.
+  const _exhaustive: never = cue;
+  return _exhaustive;
 }
 
 /**
