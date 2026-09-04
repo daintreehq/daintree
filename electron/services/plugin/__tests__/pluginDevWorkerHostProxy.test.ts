@@ -4,12 +4,20 @@ import { PluginDevWorkerHostProxy } from "../pluginDevWorkerHostProxy.js";
 
 const flush = () => new Promise((r) => setImmediate(r));
 
+const GLOBAL_IDENTITY = {
+  instanceId: "acme.demo",
+  manifestId: "acme.demo",
+  origin: "global" as const,
+  projectId: null,
+  projectRoot: null,
+};
+
 function makeProxy() {
   const sent: any[] = [];
   const post = vi.fn((msg: any) => {
     sent.push(msg);
   });
-  const proxy = new PluginDevWorkerHostProxy("acme.demo", post);
+  const proxy = new PluginDevWorkerHostProxy("acme.demo", post, GLOBAL_IDENTITY);
   return { proxy, post, sent };
 }
 
@@ -603,7 +611,7 @@ describe("PluginDevWorkerHostProxy host-call post failure (#10526)", () => {
     const post = vi.fn(() => {
       throw new Error("DataCloneError: value could not be cloned");
     });
-    const proxy = new PluginDevWorkerHostProxy("acme.demo", post);
+    const proxy = new PluginDevWorkerHostProxy("acme.demo", post, GLOBAL_IDENTITY);
     await expect(proxy.host.getWorktrees()).rejects.toThrow(/could not be cloned/);
     // The proxy isn't wedged — the failed call posted exactly once and rejected.
     expect(post).toHaveBeenCalledTimes(1);

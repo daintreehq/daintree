@@ -1,8 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import type { PluginPanelBadge, PluginPanelBadgeColor } from "@shared/types/plugin";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelBadges, usePluginPanelBadgeStore } from "@/store/pluginPanelBadgeStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
 /**
  * Live badges a plugin set on this panel via `host.setPanelBadge` (#10585),
@@ -41,8 +42,10 @@ function BadgeIndicator({ pluginId, badge }: { pluginId: string; badge: PluginPa
   // nothing (same reasoning as PluginViewContent). `pluginId` here is the
   // instance key main broadcasts, which is what the store keys on — and the
   // `?? pluginId` fallback keeps the pre-snapshot render fail-open.
+  // The fallback is the manifest id, never the raw key: this renders before the
+  // first snapshot lands, and a machine-local project id is not a name.
   const pluginName = usePluginRuntimeStore(
-    (s) => s.pluginMetaById.get(pluginId)?.displayName ?? pluginId
+    (s) => s.pluginMetaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId)
   );
   const indicator =
     badge.kind === "dot" ? (
@@ -74,15 +77,30 @@ export function PluginPanelBadges({ panelId }: { panelId: string }) {
   const init = usePluginPanelBadgeStore((s) => s.init);
   useEffect(() => init(), [init]);
 
-  // The badge store and the runtime store are subscribed independently — a
-  // panel can carry badges long before anything else in this view has pulled
-  // the plugin list, and without this the labels would name plugins by raw id
-  // until some other surface happened to initialise it.
-  const initPluginRuntime = usePluginRuntimeStore((s) => s.init);
-  useEffect(() => initPluginRuntime(), [initPluginRuntime]);
-
   const badges = usePanelBadges(panelId);
-  const entries = Object.entries(badges).sort(([a], [b]) => a.localeCompare(b));
+  const entries = useMemo(
+    () => Object.entries(badges).sort(([a], [b]) => a.localeCompare(b)),
+    [badges]
+  );
+
+  // Pull the plugin list when a badge arrives from a plugin we have no snapshot
+  // for. `init()` would not do: it only pulls for whoever subscribes *first*,
+  // and by the time a panel renders the toolbar has long since initialised the
+  // store — so a plugin that never announced itself (`daintree-plugin dev`
+  // broadcasts no provenance) would keep its raw id here forever. Keyed on the
+  // owners actually missing rather than on mount, so the common case where
+  // every owner is already known costs no round-trip, and a badge pushed later
+  // still triggers exactly one pull.
+  const refreshPluginRuntime = usePluginRuntimeStore((s) => s.refresh);
+  const hasUnresolvedOwner = usePluginRuntimeStore((s) =>
+    entries.some(([pluginId]) => !s.pluginMetaById.has(pluginId))
+  );
+  useEffect(() => {
+    // No loop: a pull that resolves the owner flips this false, and one that
+    // does not leaves the boolean unchanged, so the effect does not re-fire.
+    if (hasUnresolvedOwner) refreshPluginRuntime();
+  }, [hasUnresolvedOwner, refreshPluginRuntime]);
+
   if (entries.length === 0) return null;
 
   return (

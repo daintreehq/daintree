@@ -128,6 +128,34 @@ describe("usePluginRuntimeStore", () => {
     ).toBe("gregpriday.video-manager");
   });
 
+  it("keeps a project plugin and an installed plugin sharing a manifest id apart", async () => {
+    // The reason the map is single-keyed on the instance id rather than also
+    // aliased by manifest name: both of these are `acme.tool`, and a bare alias
+    // would let whichever came last overwrite the other's name and disabled
+    // state (`ProjectPluginInfo.collidesWithGlobal` exists for this case).
+    listMock.mockResolvedValue([
+      makePlugin({ id: "acme.tool", displayName: "Acme Tool (installed)" }),
+      makePlugin({
+        id: "acme.tool",
+        displayName: "Acme Tool (project)",
+        projectId: "b6700c7a",
+        disabled: true,
+      }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().pluginMetaById.size).toBe(2));
+    const state = usePluginRuntimeStore.getState();
+    expect(state.pluginMetaById.get("acme.tool")?.displayName).toBe("Acme Tool (installed)");
+    expect(state.pluginMetaById.get("project__b6700c7a__acme.tool")?.displayName).toBe(
+      "Acme Tool (project)"
+    );
+    // Only the project copy is disabled — the global one is untouched.
+    expect(state.disabledPluginIds.has("project__b6700c7a__acme.tool")).toBe(true);
+    expect(state.disabledPluginIds.has("acme.tool")).toBe(false);
+  });
+
   it("keys the disabled set by instance id so two projects' copies stay separate", async () => {
     listMock.mockResolvedValue([
       makePlugin({ id: "acme.tool", projectId: "proj-a", disabled: true }),

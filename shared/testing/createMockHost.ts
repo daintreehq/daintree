@@ -268,6 +268,12 @@ export interface MockHostState {
 
 export interface CreateMockHostOptions {
   pluginId?: string;
+  /**
+   * Project root for a project-owned `pluginId` (one shaped
+   * `project__{projectId}__{manifestId}`). Defaults to a synthetic path; ignored
+   * for an app-global plugin, which has no project.
+   */
+  projectRoot?: string;
   activeWorktree?: PluginWorktreeSnapshot | null;
   worktrees?: PluginWorktreeSnapshot[];
   /**
@@ -748,12 +754,16 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
   // production does.
   const mockManifestId = pluginManifestIdFromInstanceKey(pluginId);
   const mockProjectId = projectIdFromPluginInstanceKey(pluginId);
+  // `projectRoot` is null iff `projectId` is — a mock that claimed a project
+  // with no root would hand plugin authors a shape production never produces.
+  const mockProjectRoot =
+    mockProjectId === null ? null : (options.projectRoot ?? `/projects/${mockProjectId}`);
   const pluginInfo: PluginIdentity = Object.freeze({
     instanceId: pluginId,
     manifestId: mockManifestId,
     origin: mockProjectId === null ? ("global" as const) : ("project" as const),
     projectId: mockProjectId,
-    projectRoot: null,
+    projectRoot: mockProjectRoot,
   });
 
   const host: PluginHostApi & MockHostState = {

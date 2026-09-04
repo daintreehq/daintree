@@ -2270,6 +2270,9 @@ export class PluginService {
     const { host, revoke } = this.createHost(pluginId);
     const workerHost = new PluginDevWorkerHost({
       pluginId,
+      // The host's own identity, so the worker-side proxy reports the real
+      // binding instead of reconstructing one from the instance key.
+      identity: host.pluginInfo,
       pluginDir: plugin.dir,
       bundlePath: plugin.resolvedMain,
       mode: plugin.devMode ? "dev" : "prod",

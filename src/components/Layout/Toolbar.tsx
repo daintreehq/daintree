@@ -62,6 +62,7 @@ import {
 import { buildLauncherToolbarMeta, useLauncherToolbarCatalog } from "./launcherToolbarCatalog";
 import { LauncherToolbarButton } from "./LauncherToolbarButton";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -1876,7 +1877,10 @@ export function Toolbar({
 
   const pluginTrayGroups = useMemo(
     () =>
-      groupPluginToolbarButtons(pluginConfigs, (id) => pluginMetaById.get(id)?.displayName ?? id),
+      groupPluginToolbarButtons(
+        pluginConfigs,
+        (id) => pluginMetaById.get(id)?.displayName ?? pluginManifestIdFromInstanceKey(id)
+      ),
     [pluginConfigs, pluginMetaById]
   );
 
