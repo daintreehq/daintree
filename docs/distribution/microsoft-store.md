@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Microsoft Store is one of two Windows distribution channels. The `.github/workflows/release-windows.yml` workflow (one of the three per-OS release workflows — #8052) builds an x64 `.appx` package for the Store on tag push, archives it to Cloudflare R2 (the macOS / Linux binaries land there independently from their own workflows), and submits it to Microsoft Store certification via the [`msstore`](https://github.com/microsoft/msstore-cli) CLI — provided in-workflow by the `microsoft/microsoft-store-apppublisher@v1.3` action, not a manual download. The submission step runs `msstore reconfigure` with the four Entra credential flags, then `msstore publish . --appId <productId> --inputDirectory .\release`.
+The Microsoft Store is one of two Windows distribution channels. The `.github/workflows/release-windows.yml` workflow (one of the three per-OS app-release workflows — #8052; `release-packages.yml` is a fourth workflow but publishes the plugin npm packages on their own tags, not the app) builds an x64 `.appx` package for the Store on tag push, archives it to Cloudflare R2 (the macOS / Linux binaries land there independently from their own workflows), and submits it to Microsoft Store certification via the [`msstore`](https://github.com/microsoft/msstore-cli) CLI — provided in-workflow by the `microsoft/microsoft-store-apppublisher@v1.3` action, not a manual download. The submission step runs `msstore reconfigure` with the four Entra credential flags, then `msstore publish . --appId <productId> --inputDirectory .\release`.
 
 Alongside the Store `.appx`, the same workflow also ships NSIS `.exe` installers — x64 (built on `windows-latest`) and native arm64 (built on `windows-11-arm`) — which are the non-Store Windows distribution path, auto-updated via electron-updater. The `.appx` is x64-only. So the Store package is one of several Windows release artifacts, not the sole output.
 
@@ -82,14 +82,17 @@ The `appx` block in `electron-builder.config.cjs` carries identity values that m
 
 ```js
 appx: {
-  identityName: "<from Partner Center Product Identity>",
-  publisher: "CN=<from Partner Center Product Identity>",
+  identityName: "GregPriday.Daintree",          // from Partner Center Product Identity
+  publisher: "CN=<publisher GUID>",             // from Partner Center Product Identity
   publisherDisplayName: "Greg Priday",
   applicationId: "Daintree",
   displayName: "Daintree",
   languages: ["en-US"],
+  setBuildNumber: true,                          // electron-builder stamps the MSIX build number
 }
 ```
+
+The identity values are populated in `electron-builder.config.cjs` today — the real `publisher` GUID is in the file; it is elided here rather than duplicated, since a copy in prose is one more place to drift.
 
 A mismatch between `identityName` / `publisher` and the Partner Center values fails `msstore submission update` with `Invalid Identity` / `package publisher must match the developer account's publisher identity`. Update the config in lockstep if Partner Center ever reissues the identity.
 
@@ -140,7 +143,7 @@ Stable URLs:
 
 Pair the screenshots with the Policy 11.16 AI disclosure in the listing metadata; the listing copy in [`docs/distribution/microsoft-store.md#listing-copy`](#listing-copy) already covers it.
 
-**Local iteration.** `npm run screenshots:dev` runs the same spec locally (on macOS or Linux). The PNGs land in `artifacts/screenshots/`. Local output is for layout iteration only — the canonical store assets are always the windows-latest workflow's output.
+**Local iteration.** `npm run screenshots:dev` runs the same spec locally (on macOS or Linux). The PNGs land in `artifacts/screenshots/`. Local output is for layout iteration only — the canonical store assets are always the `macos-14` `Marketing Screenshots` workflow's output.
 
 ## References
 
@@ -150,3 +153,4 @@ Pair the screenshots with the Policy 11.16 AI disclosure in the listing metadata
 - [Windows App Certification Kit](https://learn.microsoft.com/en-us/windows/uwp/debug-test-perf/windows-app-certification-kit)
 - [Microsoft Store Policies](https://learn.microsoft.com/en-us/windows/apps/publish/store-policies)
 - Internal: [`docs/release.md`](../release.md) (macOS signing, R2 publishing, the rest of the release pipeline)
+- Internal: [`asar-integrity.md`](./asar-integrity.md) (the fuse the Store re-sign has to survive)

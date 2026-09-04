@@ -1,6 +1,6 @@
 # Notification, banner & signal-routing system
 
-How a runtime signal reaches the user. `CLAUDE.md` spends two of its longest rule blocks ("notify() Usage" and "Runtime Signals") defining a five-surface taxonomy and a Tier 0–4b escalation model; this doc maps those rules to the machinery that enforces them. The rules are the policy, the code below is the mechanism — when they drift, the code wins and the rule should be corrected.
+How a runtime signal reaches the user. The agent rule [`.claude/rules/user-signals.md`](../../.claude/rules/user-signals.md) carries the abbreviated policy — the `notify()` gate, the five-surface taxonomy, and the Tier 0–4b escalation model; this doc maps that policy to the machinery that enforces it. The rule is the policy, the code below is the mechanism — when they drift, the code wins and the rule should be corrected.
 
 ## The five delivery surfaces
 
@@ -48,11 +48,11 @@ The durable surface. Every non-`transient` `notify()` writes a `NotificationHist
 
 ### Toast (most-restricted default)
 
-The default `notify()` placement and the _most-restricted_ surface despite being the default of convenience. Gated by focus + priority (see [Routing](#routing-the-notify-pipeline)). `useNotificationStore` caps the visible stack at `MAX_VISIBLE_TOASTS` (3) and prefers evicting the oldest non-error toast so an error survives a flurry of successes (`src/store/notificationStore.ts`, issue #5861). Evicted toasts are re-marked unseen in the inbox so they aren't lost.
+The default `notify()` placement and the _most-restricted_ surface despite being the default of convenience. Gated by focus + priority (see [Priority routing matrix](#priority-routing-matrix)). `useNotificationStore` caps the visible stack at `MAX_VISIBLE_TOASTS` (3) and prefers evicting the oldest non-error toast so an error survives a flurry of successes (`src/store/notificationStore.ts`, issue #5861). Evicted toasts are re-marked unseen in the inbox so they aren't lost.
 
 ## `notify()` — the single renderer entry point
 
-`src/lib/notify.ts` (~1170 LOC) is the only public API for creating any notification. Every call (1) writes a persistent history entry and (2) routes display output by priority + focus.
+`src/lib/notify.ts` is the only public API for creating any notification. Every call (1) writes a persistent history entry and (2) routes display output by priority + focus.
 
 ### The payload union and the ReactNode constraint
 
@@ -83,7 +83,18 @@ Rather than every call site re-running the four-question checklist, a kind-based
 
 ### The banned combination
 
-`notify({ type: "error", priority: "low" })` is **lint-banned** (`eslint.config.js:424-426`, issue #6885): a low-priority error skips the toast and lands inbox-only, silently dropping an error the user needs to see now. Use `console.warn` for diagnostic-only failures, or raise the priority. A second rule (`eslint.config.js:443-445`, issue #8097) flags _action-free_ error notifications: an `error` notify with no `action`/`actions` must either wire a recovery action (Title-Message-Action) or carry the documented `// eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok` escape hatch when the surrounding UI is itself the recovery surface.
+`notify({ type: "error", priority: "low" })` is **lint-banned** (issue #6885): a low-priority error skips the toast and lands inbox-only, silently dropping an error the user needs to see now. Use `console.warn` for diagnostic-only failures, or raise the priority.
+
+Three sibling rules live beside it in the renderer `no-restricted-syntax` block of `eslint.config.js`. All four share one escape hatch — `// eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok` plus a rationale:
+
+| Rule | Bans | Way out |
+| --- | --- | --- |
+| Banned error+low (#6885) | `type: "error"` with `priority: "low"` | raise the priority, or `console.warn` |
+| Action-free error (#8097) | `type: "error"` with no `action`/`actions` | wire a recovery action (Title-Message-Action), or annotate when the surrounding UI _is_ the recovery surface |
+| Unprotected success toast (#8249) | `type: "success"` with none of `transient: true`, `priority: "low"`, or a `correlationId` | pick one of the three, or drop the notify — the in-place UI change is usually the signal |
+| Missing `context.eventKind` | an inline-literal payload with no `context.eventKind` | add the kind so `EVENT_POLICY` can resolve priority/placement/duration centrally |
+
+The last rule skips spread-bearing payloads (`notify({ ...payload })`) and variable-reference contexts, neither of which can be checked statically; the remaining legacy sites carry the annotation.
 
 ### Suppression, dedup, escalation, rate-limiting
 
@@ -135,22 +146,24 @@ Session mute crosses the process boundary: `setSessionQuietUntil` (`src/lib/noti
 Top-of-app global banners all contend for a **single slot** through `GlobalBannerCoordinator` (`src/components/Recovery/GlobalBannerCoordinator.tsx`), mounted once (lazily) in `src/components/Layout/AppLayout.tsx`. `useGlobalBannerPriority` (`src/components/Recovery/useGlobalBannerPriority.ts`) resolves the highest-priority active banner:
 
 ```
-host-crash          backendStatus !== "connected"        (backend unusable now)
+host-crash           backendStatus !== "connected"        (backend unusable now)
   ↓
-watchdog-disabled   watchdogStatus === "disabled"         (deadlock detector down)
+watchdog-disabled    watchdogStatus === "disabled"        (deadlock detector down)
   ↓
-safe-mode           safeMode && !dismissed                (panels not restored after crash loop)
+safe-mode            safeMode && !dismissed               (panels not restored after crash loop)
   ↓
 restore-confirmation restoreVisible                       (session-recovered, auto-dismiss timer)
   ↓
-forge-token         tokenUnhealthy                        (expired creds; forge data broken now)
+missing-prerequisite prerequisiteVisible                  (a fatal tool — Git, Node — isn't installed)
   ↓
-cloud-sync          cloudSyncService !== null             (environmental warning)
+forge-token          tokenUnhealthy                       (expired creds; forge data broken now)
   ↓
-rosetta             rosettaVisible                        (x64 build translated on Apple Silicon)
+cloud-sync           cloudSyncService !== null            (environmental warning)
+  ↓
+rosetta              rosettaVisible                       (x64 build translated on Apple Silicon)
 ```
 
-Rationale for the order lives inline in `useGlobalBannerPriority.ts`: watchdog sits below host-crash (a live host failure outranks a downed monitor) and above safe-mode (the watchdog protects against the _next_ crash; safe-mode is a consequence of the _previous_ one); `restore-confirmation` stays above `forge-token` because its auto-dismiss timer only runs while mounted, so it must keep that window; `forge-token` outranks `cloud-sync` because an expired token is an active failure while cloud-sync is a persistent environmental condition; `rosetta` sits last because nothing in the app can change it — any more actionable banner deserves the slot first.
+Rationale for the order lives inline in `useGlobalBannerPriority.ts`: watchdog sits below host-crash (a live host failure outranks a downed monitor) and above safe-mode (the watchdog protects against the _next_ crash; safe-mode is a consequence of the _previous_ one); `restore-confirmation` stays above everything below it because its auto-dismiss timer only runs while mounted, so it must keep that window; `missing-prerequisite` (#11763) sits below the recovery block — a downed backend is the more urgent read, and the banner self-clears because it re-checks on window focus — but above `forge-token` on blast radius, since an expired token breaks one panel's data while a missing Git breaks every git operation in the app; `forge-token` outranks `cloud-sync` because an expired token is an active failure while cloud-sync is a persistent environmental condition; `rosetta` sits last because nothing in the app can change it — any more actionable banner deserves the slot first.
 
 **Suppressed banners unmount — they are not CSS-hidden.** The coordinator returns exactly one component; the losers are removed from the tree. This is deliberate: mount-driven effects (most notably `RestoreConfirmationBanner`'s auto-dismiss timer) must not run while the banner is invisible. A CSS-hide would leave those timers ticking behind a higher-priority banner.
 
@@ -160,7 +173,7 @@ New top-of-app global banners belong in this coordinator, not as additional layo
 
 ## Tier model → enforcing code
 
-`CLAUDE.md`'s "Runtime Signals" Tier 0–4b model, mapped to the machinery:
+The Tier 0–4b model from `.claude/rules/user-signals.md`, mapped to the machinery:
 
 | Tier | Meaning | Surface / enforcing code |
 | --- | --- | --- |
@@ -171,7 +184,7 @@ New top-of-app global banners belong in this coordinator, not as additional layo
 | **4a** | Coordinator-arbitrated global | `GlobalBannerCoordinator` + `useGlobalBannerPriority`; suppressed banners unmount; suppressible ones add a `priority:"low"` inbox fallback |
 | **4b** | Region-scoped global | Banner mounted within its own region (settings, worktree dashboard); no top-of-app slot contention |
 
-Cross-cutting routing inside `notify()` (suppression, escalation, rate-limit, quiet gates) sits _underneath_ this — it decides whether a Tier-2/3 _toast or inbox_ signal actually fires, independent of where on the tier ladder the producer chose to sit. Promote/demote heuristics (auto-recovering states stay Tier 1; a stuck state >30s or exhausted retries promotes to Tier 3; multi-terminal failures escalate to Tier 4) are policy in `CLAUDE.md`, not encoded in a single switch — they guide where a producer wires its signal.
+Cross-cutting routing inside `notify()` (suppression, escalation, rate-limit, quiet gates) sits _underneath_ this — it decides whether a Tier-2/3 _toast or inbox_ signal actually fires, independent of where on the tier ladder the producer chose to sit. Promote/demote heuristics (auto-recovering states stay Tier 1; a stuck state >30s or exhausted retries promotes to Tier 3; multi-terminal failures escalate to Tier 4) are policy in `.claude/rules/user-signals.md`, not encoded in a single switch — they guide where a producer wires its signal.
 
 ## Pointers
 
@@ -180,7 +193,7 @@ Cross-cutting routing inside `notify()` (suppression, escalation, rate-limit, qu
 - Grid-bar selection: `selectGridBarNotification` (`src/store/notificationStore.ts`).
 - History/retention/snooze: `src/store/slices/notificationHistorySlice.ts`.
 - Banner precedence: `src/components/Recovery/useGlobalBannerPriority.ts`.
-- Lint enforcement: `eslint.config.js:424` (banned error+low) and (action-free error).
+- Lint enforcement: the renderer `no-restricted-syntax` block in `eslint.config.js` — banned error+low, action-free error, unprotected success toast, missing `context.eventKind`.
 
 ## Related docs
 

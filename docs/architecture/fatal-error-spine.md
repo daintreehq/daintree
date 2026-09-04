@@ -32,7 +32,18 @@ app.quit();
 
 - `setSignalShutdown()` tells the `before-quit` handler in `shutdown.ts` to skip the agent-count confirmation dialog (one of the `canShowDialog` conditions). The dialog is a foot-gun when the OS is asking the app to terminate.
 - `app.quit()` enters the `before-quit` cleanup chain. The chain disposes services, closes the database, and on success calls `cleanupOnExit()` → marker removed.
-- The safety-belt timer is a last-resort `app.exit(1)` (a **dirty** exit, never `process.exit(0)`) so a stuck dispose call cannot wedge the process while still reporting the correct exit code to process supervisors (systemd/nodemon). It is sized at the named `SAFETY_BELT_TIMEOUT_MS` constant (`shutdownConfig.ts`) = `CLEANUP_TIMEOUT_MS + 3_000 + 2_500` (10s + 3s + 2.5s = 15.5s): `CLEANUP_TIMEOUT_MS` covers the cleanup chain, the 3s is a historical buffer, and the 2.5s is the `closeTelemetry()` budget (Sentry init-wait cap 500ms + close timeout 2000ms). `.unref()` so this timer never holds the event loop open on its own.
+- The safety-belt timer is a last-resort `app.exit(1)` (a **dirty** exit, never `process.exit(0)`) so a stuck dispose call cannot wedge the process while still reporting the correct exit code to process supervisors (systemd/nodemon). Its size is derived, not hand-picked — every constant lives in `electron/lifecycle/shutdownConfig.ts` and each strictly outlasts the budget below it (lesson #7151):
+
+  | Constant | Value | Bounds |
+  | --- | --- | --- |
+  | `CLEANUP_TIMEOUT_MS` | 10 s | the `before-quit` cleanup race itself |
+  | `PROJECT_GRACEFUL_KILL_TIMEOUT_MS` | 4 s | one project's graceful terminal kill inside that chain — above the host's own per-terminal budget, and partial results are kept when it fires (#12180) |
+  | `SHUTDOWN_TAIL_TIMEOUT_MS` | 5 s | the post-race tail (`closeTelemetry()` — Sentry init-wait 500 ms + `close(2000)` twice over — plus the uncapped `contentTracing.stopRecording()`) |
+  | `SHUTDOWN_DEADLINE_MS` | 17 s | `CLEANUP_TIMEOUT_MS + SHUTDOWN_TAIL_TIMEOUT_MS + 2 s` — the absolute deadline for a whole shutdown run, so the terminal action (`app.exit()`, or the update install) always fires |
+  | `SAFETY_BELT_TIMEOUT_MS` | 20 s | `SHUTDOWN_DEADLINE_MS + 3 s` — the signal handler's belt |
+
+  Read the constants rather than the numbers here; the derivation is the contract. `.unref()` so this timer never holds the event loop open on its own.
+
 - The belt handle is stored via `setSafetyBeltTimer()` (in `signalShutdownState.ts`) so `shutdown.ts` can call `clearSafetyBeltTimer()` before each of its `app.exit()` calls. Defusing the belt first means a slow `closeTelemetry()` can't let the timer fire after a normal exit and clobber the exit code with `exit(1)`. The handle lives in `signalShutdownState.ts` rather than `appLifecycle.ts` so `shutdown.ts` can cancel it without a cross-module import cycle.
 - A second signal within 2000ms force-exits with status 1 — escape hatch when shutdown stalls. Repeats outside that window are ignored (cleanup is already running).
 
@@ -52,7 +63,7 @@ app.quit();
 
 The `BrowserWindow.on("session-end")` event maps to Win32's `WM_ENDSESSION` and fires on **planned** termination: user logoff, standard shutdown, restart, Windows Update reboot, and Fast Startup (which is logoff + kernel hibernate). It does **not** fire on `TerminateProcess` / `taskkill /F` — those bypass the message pump entirely; the dirty-marker fallback covers them.
 
-**Best-effort, not guaranteed.** Windows' default `HungAppTimeout` is 5 seconds. The full safety-belt budget is `SAFETY_BELT_TIMEOUT_MS` = 15.5 seconds. The OS will frequently kill the process mid-chain. This is acceptable because:
+**Best-effort, not guaranteed.** Windows' default `HungAppTimeout` is 5 seconds; the full safety-belt budget is `SAFETY_BELT_TIMEOUT_MS`, several times that. The OS will frequently kill the process mid-chain. This is acceptable because:
 
 1. Without the handler, the marker is _always_ left on disk after a Windows shutdown — every reboot would look like a crash. With the handler, the chain at least _starts_, and on a fast machine often completes (DB close + a couple of service disposes is sub-second).
 2. The dirty-marker fallback is honest about truncation: a partial cleanup that gets killed at 5s leaves `running.lock` on disk, the next launch shows the pending-crash banner, and `CrashRecoveryService` surfaces session-state from the last backup. This is the same UX as a real crash, which is the right outcome for "we got killed mid-cleanup".
@@ -118,7 +129,7 @@ The bottom four rows are exactly the cases the marker is designed for. On next l
 
 - `electron/lifecycle/appLifecycle.ts` — signal registration, Windows `session-end` registration
 - `electron/lifecycle/shutdown.ts` — `before-quit` cleanup chain, `isQuitting` / `isConfirmingQuit` guards, marker-on-success-only policy
-- `electron/lifecycle/shutdownConfig.ts` — `CLEANUP_TIMEOUT_MS`
+- `electron/lifecycle/shutdownConfig.ts` — `CLEANUP_TIMEOUT_MS`, `PROJECT_GRACEFUL_KILL_TIMEOUT_MS`, `SHUTDOWN_TAIL_TIMEOUT_MS`, `SHUTDOWN_DEADLINE_MS`, `SAFETY_BELT_TIMEOUT_MS`
 - `electron/lifecycle/signalShutdownState.ts` — `setSignalShutdown` / `isSignalShutdown` flag
 - `electron/setup/globalErrorHandlers.ts` — `uncaughtException` / `unhandledRejection`
 - `electron/services/CrashRecoveryService.ts` — marker write/read/delete, session-state backups

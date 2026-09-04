@@ -4,7 +4,7 @@ Multi-process topology, IPC transports, multi-window isolation.
 
 ## Why this doc exists
 
-`docs/development.md` shows a two-box Main ↔ Renderer diagram. That is the on-ramp, not the reality. Daintree actually runs as **four+ process classes** plus **per-project renderer isolation**, and the boundaries between them use three different IPC transports with different failure semantics. This is the single largest reverse-engineering trap in the codebase: a "Main process singleton" is not one singleton, a "the renderer" is one of N independent V8 contexts, and a crash in one host does not look like a crash in another. Read this before touching anything that crosses a process boundary.
+`docs/development.md` shows a two-box Main ↔ Renderer diagram. That is the on-ramp, not the reality. Daintree actually runs as **five+ process classes** plus **per-project renderer isolation**, and the boundaries between them use three different IPC transports with different failure semantics. This is the single largest reverse-engineering trap in the codebase: a "Main process singleton" is not one singleton, a "the renderer" is one of N independent V8 contexts, and a crash in one host does not look like a crash in another. Read this before touching anything that crosses a process boundary.
 
 ## Process inventory
 
@@ -12,11 +12,14 @@ Multi-process topology, IPC transports, multi-window isolation.
 | --- | --- | --- | --- | --- |
 | **Main** | `electron/main.ts` → `electron/bootstrap.ts` | — (the Electron main process) | one per app | Owns everything: forks the hosts, owns `BrowserWindow`s, registers IPC handlers, holds global services |
 | **Renderer (per-project view)** | `src/main.tsx` loaded into a `WebContentsView` | — | **one V8 context per cached project** (`ProjectViewManager`) | Site Isolation; an OOM/crash in one project view doesn't take the window down |
-| **PTY host** | `electron/pty-host.ts` (~1023 LOC) + `electron/pty-host/` | `daintree-pty-host` (single, app-global) | one per app | node-pty is native and can segfault/OOM; isolating it keeps terminal crashes off the main thread and out of the window |
-| **Workspace host** | `electron/workspace-host.ts` (~790 LOC) + `electron/workspace-host/` | `daintree-workspace-host:<basename>-<sha1[0:8]>` (**one per open project**) | one per project | git polling + file watchers are CPU/FD heavy and can wedge on a bad repo; per-project isolation contains the blast radius and lets `inotify`/`EMFILE` exhaustion be scoped |
-| **Watchdog host** | `electron/watchdog-host.ts` (128 LOC) + `electron/watchdog-host-core.ts` (202 LOC) | `daintree-watchdog` (single) | one per app | Detects a _frozen main process_ — must live outside main so a main-thread deadlock can't also freeze the detector. SIGKILLs main when it stops sending pings |
+| **PTY host** | `electron/pty-host.ts` + `electron/pty-host/` | `daintree-pty-host` (single, app-global; **sharded per project** behind `DAINTREE_PTY_FABRIC` — [pty-host-fabric.md](./pty-host-fabric.md)) | one per app | node-pty is native and can segfault/OOM; isolating it keeps terminal crashes off the main thread and out of the window |
+| **Workspace host** | `electron/workspace-host.ts` + `electron/workspace-host/` | `daintree-workspace-host:<basename>-<sha1[0:8]>` (**one per open project**) | one per project | git polling + file watchers are CPU/FD heavy and can wedge on a bad repo; per-project isolation contains the blast radius and lets `inotify`/`EMFILE` exhaustion be scoped |
+| **Watchdog host** | `electron/watchdog-host.ts` + `electron/watchdog-host-core.ts` | `daintree-watchdog` (single) | one per app | Detects a _frozen main process_ — must live outside main so a main-thread deadlock can't also freeze the detector. SIGKILLs main when it stops sending pings |
+| **Plugin worker** | `electron/plugin-dev-worker.ts` (+ `-bootstrap`), managed by `electron/services/plugin/PluginDevWorkerHost.ts` | `daintree-plugin-<dev\|prod>:<pluginId>-<sha1[0:8]>` (**one per activated plugin**) | one per loaded plugin | Third-party code must not share an isolate with the host. Per-plugin isolation gives each its own crash budget, its own `execArgv` permission flags, and a dispose path that reclaims it when idle. `mode: "dev"` additionally watches the bundle for hot reload |
 
-Each UtilityProcess is forked from a `*-bootstrap.js` (`pty-host-bootstrap.ts`, `workspace-host-bootstrap.ts`, `watchdog-host-bootstrap.ts`) with `stdio: "pipe"` (not `"inherit"` — fd 2 may point at a dead pty on AppImage GUI launches, #5588) and `cwd: os.homedir()`. Each tags itself with `DAINTREE_UTILITY_PROCESS_KIND` in `env`.
+Each UtilityProcess is forked from a `*-bootstrap.js` (`pty-host-bootstrap.ts`, `workspace-host-bootstrap.ts`, `watchdog-host-bootstrap.ts`, `plugin-dev-worker-bootstrap.ts`) with `stdio: "pipe"` (not `"inherit"` — fd 2 may point at a dead pty on AppImage GUI launches, #5588). The three long-lived hosts fork with `cwd: os.homedir()` and tag themselves with `DAINTREE_UTILITY_PROCESS_KIND` in `env`; a plugin worker instead forks at its plugin's own directory.
+
+Two more process classes exist but are not part of the steady-state topology: an **assistant native host** (`electron/services/assistant-host/`, contract landed, nothing spawns it yet — see [assistant-native-host.md](./assistant-native-host.md)), and the **paint-fabric surface views** behind `DAINTREE_PAINT_FABRIC_VIEWS` (sibling `WebContentsView`s, not utility processes — see [terminal-paint-fabric.md](./terminal-paint-fabric.md)).
 
 ### Topology
 
@@ -98,7 +101,7 @@ These look similar and are the easiest thing to get wrong. They serve different 
 ## Multi-window & per-project view isolation
 
 - **`electron/window/WindowRegistry.ts`** — `WindowContext` per `BrowserWindow`: `{ windowId, webContentsId, browserWindow, projectPath, abortController, services, cleanup }`. Indexes `webContentsId → windowId` (including extra app views) and tracks focus history / primary window.
-- **`electron/window/ProjectViewManager.ts`** (~1554 LOC) — per-project `WebContentsView` lifecycle. Each project gets its own `WebContentsView` with an **independent V8 context** (Site Isolation). `switchTo()` swaps the visible view (a cached view returns in <16 ms). View state is `"loading" | "active" | "cached"`. Cached views are CPU-throttled (`Emulation.setCPUThrottlingRate`) or Efficiency-frozen (`Page.setWebLifecycleState`). A paint gate keeps the outgoing view on screen until the incoming one paints (soft 1500 ms / hard 4000 ms) so the user never sees an unpainted frame.
+- **`electron/window/ProjectViewManager.ts`** — per-project `WebContentsView` lifecycle. Each project gets its own `WebContentsView` with an **independent V8 context** (Site Isolation). `switchTo()` swaps the visible view (a cached view returns in <16 ms). View state is `"loading" | "active" | "cached"`. Cached views are CPU-throttled (`Emulation.setCPUThrottlingRate`) or Efficiency-frozen (`Page.setWebLifecycleState`). A paint gate keeps the outgoing view on screen until the incoming one paints (soft 1500 ms / hard 4000 ms) so the user never sees an unpainted frame.
 - **LRU eviction** — `evictStaleViews(reason)` (`"lru" | "pressure" | "limit-change"`) destroys the least-recently-used views once `views.size` exceeds `maxCachedViews` (user setting, clamped 1–5; default 1). Under a low-memory floor the cap is overridden to 1 **per pass** (`maxCachedViews` is never mutated). Eviction is **pure LRU, not size-first** (#8602): the biggest renderer is usually the project you're working in, so size-first would evict the most valuable view. On eviction the view's port is cleaned up via the registered eviction callback.
 
 ### Global vs per-window services
@@ -146,16 +149,18 @@ The PTY host and workspace host share an almost-identical fork/exit/restart loop
 | **PTY host** (`daintree-pty-host`) | node-pty processes, scrollback, backpressure (`pty-host/`), FD monitor, resource governor | Main (`PtyClient`), renderers (direct via MessagePort) | broker over UtilityProcess channel; `terminal-port` MessagePort per window |
 | **Workspace host** (per project) | `WorkspaceService`, `WorktreeMonitor`, file watchers, `PRIntegrationService`, forge polling | Main (`WorkspaceClient` / `WorkspaceHostProcess`), renderer views | broker over UtilityProcess channel; `worktree-port` MessagePort per view; forge RPC round-trips back to main |
 | **Watchdog host** (`daintree-watchdog`) | deadlock-kill timer + kill flag | Main only | `ping`/`sleep`/`wake`/`dispose` (one-way `postMessage`) |
+| **Plugin worker** (per plugin) | one plugin's `activate()`, its imperative registrations, its managed processes and fs watchers | Main (`PluginDevWorkerHost` → `PluginService`) | structured `postMessage` over the UtilityProcess channel |
 | **Renderer view** (per project) | Zustand stores, xterm instances, React tree — all V8-local | Main (IPC), PTY host + workspace host (direct MessagePort) | `window.electron.*` (invoke), `EVENTS_PUSH` (on), MessagePorts |
 
 ## Pointers into the code
 
 - Brokered RPC: `electron/services/rpc/RequestResponseBroker.ts`, `src/utils/clientBrokerError.ts`.
-- PTY host main-side: `electron/services/PtyClient.ts` (~1214 LOC), `electron/services/pty/PtyHostLifecycle.ts`. Host process: `electron/pty-host.ts`, `electron/pty-host/`.
-- Workspace host main-side: `electron/services/WorkspaceClient.ts` (~655 LOC), `electron/services/WorkspaceHostProcess.ts`, `electron/services/workspace-client/WorkspaceHostPool.ts`. Host process: `electron/workspace-host.ts`, `electron/workspace-host/`.
+- PTY host main-side: `electron/services/PtyClient.ts`, `electron/services/pty/PtyHostLifecycle.ts`, and the shard router in `electron/services/pty/`. Host process: `electron/pty-host.ts`, `electron/pty-host/`.
+- Workspace host main-side: `electron/services/WorkspaceClient.ts`, `electron/services/WorkspaceHostProcess.ts`, `electron/services/workspace-client/WorkspaceHostPool.ts`. Host process: `electron/workspace-host.ts`, `electron/workspace-host/`.
 - Ports: `electron/window/portDistribution.ts` (PTY), `electron/services/WorktreePortBroker.ts` (workspace), `src/clients/terminalClient.ts` (renderer handshake consumer).
 - Windows/views: `electron/window/WindowRegistry.ts`, `electron/window/ProjectViewManager.ts`, `electron/window/serviceRefs.ts`, `electron/window/globalServicesInit.ts`, `electron/window/perWindowInit.ts`, `electron/window/windowServices.ts`.
 - Watchdog: `electron/watchdog-host-core.ts`, `electron/watchdog-host.ts`, `electron/services/MainProcessWatchdogClient.ts`.
+- Plugin workers: `electron/plugin-dev-worker.ts`, `electron/services/plugin/PluginDevWorkerHost.ts`, `electron/services/PluginService.ts`.
 - Crash-guard alignment: `electron/services/__tests__/crashGuardAlignment.test.ts`.
 
 ## Related docs
@@ -164,3 +169,7 @@ The PTY host and workspace host share an almost-identical fork/exit/restart loop
 - [terminal-identity.md](./terminal-identity.md) — terminal ID scheme that flows across the same boundaries.
 - [store-init-order.md](./store-init-order.md) — the renderer side of the per-V8-context singleton rule.
 - [fatal-error-spine.md](./fatal-error-spine.md) — how fatal errors and crash attribution surface across processes.
+- [crash-recovery-and-safe-mode.md](./crash-recovery-and-safe-mode.md) — the five liveness guards that watch these processes, and how each failure surfaces.
+- [resource-governance.md](./resource-governance.md) — the freeze / LRU-eviction / paint-gate policy `ProjectViewManager` applies to the views described here.
+- [pty-host-fabric.md](./pty-host-fabric.md) — the per-project PTY host shards behind `DAINTREE_PTY_FABRIC`.
+- [ipc-services.md](./ipc-services.md) — the service/handler/client layering that rides these transports.

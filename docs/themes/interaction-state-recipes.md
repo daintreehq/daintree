@@ -78,7 +78,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 "palette-row relative border border-transparent transition-colors aria-selected:bg-overlay-raised aria-selected:text-text-primary";
 ```
 
-**Usage:** Do not respell this — import `PALETTE_ROW_CLASS` from `src/components/ui/paletteRowStyles.ts`, which 15 production component files and 17 rendered row definitions already share. Selected items do not add hover overlay; unselected items get `hover:bg-overlay-subtle`.
+**Usage:** Do not respell this — import `PALETTE_ROW_CLASS` from `src/components/ui/paletteRowStyles.ts`, which eighteen production component files already share (palettes, the quick switcher, pilot rows, branch and recipe pickers, the dock launch button). Selected items do not add hover overlay; unselected items get `hover:bg-overlay-subtle`.
 
 `selection-outline` is its own semantic token, not a member of the resting border ladder, because it is the row's only non-text indicator and so carries WCAG 1.4.11 alone: `overlay-raised` clears only ~1.1-1.2:1 against the palette surface, far short of 3:1. It is derived from each theme's `text-primary` (42% dark / 53% light) and gated at 3:1 against _both_ the selected fill and the surrounding surface by `getThemeContrastWarnings`. The fill is the binding pair — on dark the row lifts toward the rail, so a rail that looks safe against the surface can still vanish into the row it marks.
 

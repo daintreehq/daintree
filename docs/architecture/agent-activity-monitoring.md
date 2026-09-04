@@ -2,7 +2,9 @@
 
 Agent activity monitoring is the system that decides whether a live agent terminal is working, waiting for input, completed, or exited. It is a first class product surface: panel badges, toolbar counts, notifications, listener events, project eviction order, and orchestration workflows all depend on it.
 
-This document is the canonical architecture note for agent terminal activity detection. Manual verification lives in [activity-testing.md](../activity-testing.md). Terminal identity rules live in [terminal-identity.md](./terminal-identity.md).
+This document is the canonical architecture note for agent terminal activity detection. Manual verification lives in [activity-testing.md](../activity-testing.md). Terminal identity rules live in [terminal-identity.md](./terminal-identity.md), and the rationale for building it this way — plus the rubric every new proposal is measured against — is in [agent-state-tracking-strategy.md](./agent-state-tracking-strategy.md).
+
+The `agent:state-changed` events this pipeline emits are also a public surface: `terminal.waitUntilIdle` and the turn-outcome classifier both consume them ([mcp-server.md](./mcp-server.md)), and the fleet-size signal in [resource-governance.md](./resource-governance.md) counts terminals by their FSM state. Changing a transition changes all three.
 
 ## First Principles
 

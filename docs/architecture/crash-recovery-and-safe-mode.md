@@ -45,7 +45,7 @@ All five are wired during boot in `electron/main.ts`: `initializeCrashLoopGuard(
 
 - `electron/watchdog-host.ts` — the UtilityProcess entry point. Forked by `MainProcessWatchdogClient` via `utilityProcess.fork()` (service name `daintree-watchdog`). Receives the main PID as `--main-pid=<pid>` argv.
 - `electron/watchdog-host-core.ts` — pure, dependency-injected logic (`createWatchdog(deps)`), extracted so the kill state machine is testable without a UtilityProcess. Exports the constants and the `watchdog-kill.flag` payload builder.
-- `electron/watchdog-host-bootstrap.ts` — 18-line shim that the client actually forks (`watchdog-host-bootstrap.js`); it loads the host.
+- `electron/watchdog-host-bootstrap.ts` — the tiny shim the client actually forks (`watchdog-host-bootstrap.js`); it loads the host.
 - `electron/services/MainProcessWatchdogClient.ts` — the main-side manager: pings, restarts the host with backoff, routes sleep/wake, and emits the `onDisabled` event when it gives up.
 
 ### Heartbeat contract
@@ -81,7 +81,7 @@ When the cap is hit, deadlock detection is **off for the rest of the session**. 
 
 ## 2. CrashRecoveryService (session snapshot & restore)
 
-`electron/services/CrashRecoveryService.ts` (~1158 LOC) owns the dirty-exit marker, the rolling session backup, and the restore flow. The marker invariants live in [fatal-error-spine.md](./fatal-error-spine.md); this section covers the snapshot and restore mechanics.
+`electron/services/CrashRecoveryService.ts` owns the dirty-exit marker, the rolling session backup, and the restore flow. The marker invariants live in [fatal-error-spine.md](./fatal-error-spine.md); this section covers the snapshot and restore mechanics.
 
 ### What is snapshotted
 
@@ -122,7 +122,7 @@ The watchdog kill flag, when fresh, overrides the classified `cause` to `"watchd
 
 ### Restore-confirmation flow (renderer)
 
-`CrashRecoveryDialog` (`src/components/Recovery/CrashRecoveryDialog.tsx`, ~753 LOC) renders the pending crash. It is shown _before_ the main app tree — note the in-code caveat that `notify()` is dead here because the Toaster isn't mounted yet, so recovery failures surface inline via `InlineStatusBanner` with a "Send diagnostics" action (`CrashRecoveryDialog.tsx`).
+`CrashRecoveryDialog` (`src/components/Recovery/CrashRecoveryDialog.tsx`) renders the pending crash. It is shown _before_ the main app tree — note the in-code caveat that `notify()` is dead here because the Toaster isn't mounted yet, so recovery failures surface inline via `InlineStatusBanner` with a "Send diagnostics" action (`CrashRecoveryDialog.tsx`).
 
 - With panels: a checkbox list of recoverable panels. Suspect panels are **deselected by default** once `crashCount >= 1` (`shouldDeselectSuspects`). The user restores the selected subset (`{ kind: "restore", panelIds }`) or continues fresh.
 - `crashCount >= 2` → `isInCrashLoop`: the "restore automatically next time" toggle is replaced by an "Auto-restore paused — too many consecutive crashes" notice.
@@ -137,7 +137,7 @@ The watchdog kill flag, when fresh, overrides the classified `cause` to `"watchd
 
 ## 3. CrashLoopGuardService & safe mode
 
-`electron/services/CrashLoopGuardService.ts` (~367 LOC) counts consecutive **dirty** launches and decides three things at boot: relaunch eligibility, safe-mode entry, and the hard stop.
+`electron/services/CrashLoopGuardService.ts` counts consecutive **dirty** launches and decides three things at boot: relaunch eligibility, safe-mode entry, and the hard stop.
 
 ### State & thresholds
 
@@ -166,7 +166,7 @@ A malformed `crash-loop-state.json` is **quarantined**, not deleted: renamed to 
 
 ## 4. GpuCrashMonitorService (GPU-crash handling)
 
-`electron/services/GpuCrashMonitorService.ts` (~226 LOC) listens on `app.on("child-process-gone")` and acts only on `details.type === "GPU"` with a real crash reason (not `"clean-exit"`/`"killed"`). It must install the listener **before the first window** (`main.ts`) or startup GPU crashes are missed.
+`electron/services/GpuCrashMonitorService.ts` listens on `app.on("child-process-gone")` and acts only on `details.type === "GPU"` with a real crash reason (not `"clean-exit"`/`"killed"`). It must install the listener **before the first window** (`main.ts`) or startup GPU crashes are missed.
 
 Sliding window: `GPU_CRASH_THRESHOLD = 3` within `GPU_CRASH_WINDOW_MS = 5 * 60 * 1000`. Two escalation tiers:
 
@@ -183,7 +183,7 @@ There is no GPU banner — recovery is a transparent relaunch.
 
 ## 5. PTY-host health & the host-crash banner
 
-The PTY host is its own UtilityProcess; if it wedges, terminals freeze but main is fine. `electron/services/pty/PtyHealthWatchdog.ts` (~278 LOC) owns the heartbeat for a single host run, delegated from `PtyClient`.
+The PTY host is its own UtilityProcess; if it wedges, terminals freeze but main is fine. `electron/services/pty/PtyHealthWatchdog.ts` owns the heartbeat for a single host run, delegated from `PtyClient`.
 
 Each interval tick: increment `missedHeartbeats`, send `{ type: "health-check" }`; the next `pong` resets the counter (`recordPong`) and records an RTT sample. At `missedHeartbeats >= maxMissedHeartbeats` it **force-kills the host with `process.kill(child.pid, "SIGKILL")`** — `UtilityProcess.kill()` only sends SIGTERM, so the OS-level SIGKILL is required for a truly wedged host — and emits a `host-crash-details` event (`HostCrashPayload`, `crashType: "SIGNAL_TERMINATED"`).
 
@@ -202,21 +202,22 @@ This is the **most-urgent global banner** (top of the priority list) because the
 
 ## 6. Global banner coordination & local-error suppression
 
-All seven top-of-app recovery banners compete for a **single slot**. `useGlobalBannerPriority` (`src/components/Recovery/useGlobalBannerPriority.ts`) computes the winner; `GlobalBannerCoordinator` (mounted once in `App.tsx`) renders exactly one and **unmounts** the rest (so e.g. `RestoreConfirmationBanner`'s auto-dismiss timer only runs while visible).
+All eight top-of-app recovery banners compete for a **single slot**. `useGlobalBannerPriority` (`src/components/Recovery/useGlobalBannerPriority.ts`) computes the winner; `GlobalBannerCoordinator` (lazily mounted once in `src/components/Layout/AppLayout.tsx`) renders exactly one and **unmounts** the rest (so e.g. `RestoreConfirmationBanner`'s auto-dismiss timer only runs while visible).
 
 Precedence (high → low):
 
 ```
-host-crash         backendStatus !== "connected"   — backend unusable now
-watchdog-disabled  watchdogStatus === "disabled"    — deadlock detector gone
-safe-mode          safeMode && !dismissed           — panels held back after a crash loop
-restore-confirmation                                — informational "session recovered"
-forge-token                                         — expired forge credentials
-cloud-sync                                          — synced-folder warning
-rosetta                                             — x64 build translated on Apple Silicon
+host-crash           backendStatus !== "connected" — backend unusable now
+watchdog-disabled    watchdogStatus === "disabled" — deadlock detector gone
+safe-mode            safeMode && !dismissed        — panels held back after a crash loop
+restore-confirmation                               — informational "session recovered"
+missing-prerequisite                               — a fatal tool (Git, Node) isn't installed
+forge-token                                        — expired forge credentials
+cloud-sync                                         — synced-folder warning
+rosetta                                            — x64 build translated on Apple Silicon
 ```
 
-Watchdog ranks below host-crash (a live failure beats a downed monitor) and above safe-mode (the watchdog protects against the _next_ crash; safe-mode is a consequence of the _previous_ one).
+Watchdog ranks below host-crash (a live failure beats a downed monitor) and above safe-mode (the watchdog protects against the _next_ crash; safe-mode is a consequence of the _previous_ one). `missing-prerequisite` (#11763) sits below the recovery block because a downed backend is the more urgent read and the prerequisite banner self-clears on the next window focus, and above `forge-token` on blast radius — an expired token breaks one panel's data, a missing Git breaks every git operation. The full ladder and the notification machinery behind it are in [notification-system.md](./notification-system.md).
 
 ### The local-error suppression rule
 
@@ -231,7 +232,7 @@ Suppression is **sticky-on / delayed-off**: it turns true synchronously with ren
 
 ## WaitingWatchdog (stuck-waiting agent detection)
 
-`electron/services/pty/WaitingWatchdog.ts` (~118 LOC) is a different beast — it detects an **agent stuck in `waiting`**, not a process failure, and belongs to the agent-activity layer ([agent-activity-monitoring.md](./agent-activity-monitoring.md), [agent-state-tracking-strategy.md](./agent-state-tracking-strategy.md)). Included here only to disambiguate it from the process watchdogs above.
+`electron/services/pty/WaitingWatchdog.ts` is a different beast — it detects an **agent stuck in `waiting`**, not a process failure, and belongs to the agent-activity layer ([agent-activity-monitoring.md](./agent-activity-monitoring.md), [agent-state-tracking-strategy.md](./agent-state-tracking-strategy.md)). Included here only to disambiguate it from the process watchdogs above.
 
 It fires only when an agent has been `idle` longer than `maxWaitingSilenceMs` (a ~10-minute ceiling) **and** a streak of consecutive probes finds no sign of life. It is heavily veto-biased: a spinner, a recent working-pattern match, fresh PTY data, high CPU, or _any_ active child process in the process tree all reset the fail streak. The process-tree probe is the **sole dead-vote signal** — `null` (validator unavailable or threw) is ambiguous and resets the streak. Only after `failThreshold` consecutive unambiguous dead votes does `onFire` trigger. It does not kill anything and is unrelated to the host-crash banner.
 
@@ -258,6 +259,7 @@ It fires only when an agent has been `idle` longer than `maxWaitingSilenceMs` (a
 | `src/components/Recovery/SafeModeBanner.tsx` | Safe-mode banner + quarantine list |
 | `src/components/Recovery/WatchdogDisabledBanner.tsx` | Degraded-detector banner |
 | `src/components/Recovery/HostCrashBanner.tsx` | PTY-host-down banner (via `backendStatus`) |
+| `src/components/Recovery/MissingPrerequisiteBanner.tsx` | Missing fatal tool (Git, Node) banner; re-checks on window focus |
 
 ## See also
 

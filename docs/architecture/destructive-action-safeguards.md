@@ -2,7 +2,7 @@
 
 Living per-action audit and rubric for destructive UI surfaces. Triggered by #7880 (a single-click commit + push button that silently substituted a fallback commit message and required force-push recovery on `origin/develop`). Tracked by #7881.
 
-This document is the **source of truth** for which actions are considered destructive, what safeguard each one currently has, and what should change. CLAUDE.md carries the abbreviated rubric ("Destructive Action Tiers"); this file is the long-form inventory and the index of follow-up issues.
+This document is the **source of truth** for which actions are considered destructive, what safeguard each one currently has, and what should change. The agent rule [`.claude/rules/user-signals.md`](../../.claude/rules/user-signals.md) carries the abbreviated rubric under "Destructive action tiers"; this file is the long-form inventory and the index of follow-up issues.
 
 ## Rubric
 
@@ -15,7 +15,7 @@ Four tiers, calibrated to **reversibility × blast radius**. The boundary betwee
 | **D2** | Shared-state mutation; recovery requires coordination (force-push, file restore, external tool) | `ConfirmDialog` + content preview before the mutation fires. Preview must show actual content (diff, message, file list, target branch) — a count alone is insufficient. | `git.push`, `worktree.delete`, `worktree.resource.teardown`, force-push, merge PR, close issue / PR, branch delete on a shared branch. |
 | **D3** | Catastrophic blast radius; no recovery path | `ConfirmDialog` with `typedNameTarget` (user types entity name). | Delete repo, delete project with worktrees, teardown cloud environment, bulk delete crossing worktree boundaries. |
 
-**Hard rules** (extracted to CLAUDE.md verbatim — duplicated here for the audit):
+**Hard rules** (abbreviated in `.claude/rules/user-signals.md` — stated in full here for the audit):
 
 1. **No silent fallback defaults.** Never substitute a derived value (commit message, branch name, file path) without showing it to the user first. Commit submission gates on an explicitly authored message — not "ai-note OR last-commit-message" silent chain. This is the #7880 root cause; any "if X is empty, use Y" path on a destructive submission is a review blocker.
 2. **`danger` metadata classifies the action's target tier, not just current wiring.** Setting `danger:"confirm"` asserts "this action is destructive enough to need a confirm gate" and produces two real behavioral effects: exclusion from `ActionService.repeatLast` eligibility (`src/services/ActionService.ts`) and from the `useActionPalette` MRU rail (`src/hooks/useActionPalette.ts`). The matching `ConfirmDialog` at the call site is the **wiring**, tracked separately in this audit's "UI confirm" column. Direction: **classification leads wiring.** If a `ConfirmDialog` is wired, the metadata MUST be `danger:"confirm"` (else the action leaks into MRU). The reverse — that every `danger:"confirm"` already has a dialog — is the _goal state_ the audit drives toward; gaps appear as TBD follow-ups, not silent contradictions.
@@ -26,7 +26,7 @@ Four tiers, calibrated to **reversibility × blast radius**. The boundary betwee
    - **Initial focus on Cancel** for `variant="destructive"`. The Cancel button carries `data-confirm-role="cancel"` and the Confirm button carries `data-confirm-role="confirm"`; `AppDialog`'s focus effect targets the marker, falling back to the first tabbable element if the consumer renders custom Footer `children`. Override with `initialFocus="first" | "confirm" | "none"` when the destructive surface demands it.
    - **Cancel-left, Primary-right** button order (Apple HIG / modern web). Daintree deliberately diverges from Fluent 2's Primary-left layout — the destructive button is never the first thing the keyboard or pointer lands on.
    - **Typed-name gate** uses `aria-required="true"` and `aria-invalid` when the value is non-empty and unmatched, so assistive tech announces the gate state during the type-to-confirm flow.
-   - **Dev-only microcopy guards.** `ConfirmDialog` `warnOnce`s on `title` starting with "Are you sure" and on body text containing "cannot be undone" / "can't be undone". Both rules sit on the entity-naming / specific-consequence requirements from CLAUDE.md and fire once per session.
+   - **Dev-only microcopy guards.** `ConfirmDialog` `warnOnce`s on `title` starting with "Are you sure" and on body text containing "cannot be undone" / "can't be undone". Both rules sit on the entity-naming / specific-consequence requirements in `.claude/rules/user-signals.md` and fire once per session.
 
 ## Audit table
 
@@ -295,4 +295,4 @@ This is a separate signal from the MRU exclusion documented in Hard rule #2 — 
 - This document is the source of truth for which actions are considered destructive and what tier they belong to. Updates are part of any PR that adds a new destructive action, changes an `ActionDanger` value, or wires a new `ConfirmDialog`.
 - When filing follow-up issues, link them in the **Follow-up** column. Closed follow-ups can be replaced with the merge commit SHA.
 - Regression guard: `src/services/actions/__tests__/actionDefinitions.quality.test.ts` asserts that the actions listed in the test's `EXPECTED_CONFIRM_DANGER` set carry `danger:"confirm"`. Adding a new destructive action means updating that set and updating this table.
-- Cross-reference: CLAUDE.md "Destructive Action Tiers" rule carries the abbreviated rubric; this document carries the full inventory.
+- Cross-reference: `.claude/rules/user-signals.md` ("Destructive action tiers") carries the abbreviated rubric; this document carries the full inventory.

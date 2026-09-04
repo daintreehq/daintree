@@ -2,7 +2,7 @@
 
 Per-event routing audit for the dev-preview lifecycle signals. The bulk of the table was shipped by a batch of now-merged PRs (#9090, #9091, #9093, #9094, #9097, #9101, #9102) plus the precedent rows (#8274/#8275, #9088) — each introduced one or more lifecycle signals. This document is the single source of truth so downstream call sites don't re-derive notification policy and reviewers have a fixed reference to check against. New PRs that add dev-preview signals must add their rows here (see Maintenance).
 
-CLAUDE.md carries the abbreviated Runtime Signals tier ladder; this file is the per-event audit and the rationale traceable to the `notify()` four-question gate.
+The agent rule [`.claude/rules/user-signals.md`](../../.claude/rules/user-signals.md) carries the abbreviated runtime-signal tier ladder; this file is the per-event audit and the rationale traceable to the `notify()` four-question gate. For the machinery those tiers ride on, see [notification-system.md](./notification-system.md).
 
 ## Runtime Signal Tiers
 
@@ -57,13 +57,13 @@ Rules specific to the timeline: recording an event is always Tier 0 and MUST NOT
 
 ## Hard Rules
 
-Non-negotiables for any dev-preview signal call site. These are derived from CLAUDE.md Runtime Signals and the `notify()` four-question gate, scoped to dev-preview.
+Non-negotiables for any dev-preview signal call site. These are derived from the runtime-signal tiers and the `notify()` four-question gate in [`.claude/rules/user-signals.md`](../../.claude/rules/user-signals.md), scoped to dev-preview.
 
 1. **No toast for normal running/stopped/start transitions.** The panel chrome IS the receipt. A toast on `running` or `stopped` is redundant with the `panel-state-*` border and the toolbar status pill. Tier 0 or Tier 1 only.
 
 2. **No Tier 4 global banner for pane-local failures.** Tier 4 is reserved for host-level crashes that affect every panel. A dev-preview crash, OOM, or port conflict is pane-local — use Tier 2 (warning with recovery) or Tier 3 (error with recovery).
 
-3. **No `notify({ type: "error", priority: "low" })`.** CLAUDE.md explicitly bans this because the toast is silently dropped while the error is still real. The lint rule `no-restricted-syntax` in `eslint.config.js` (renderer block) enforces this across all renderer call sites. If the error is actionable, it needs `priority: "high"` and a Tier 2 or Tier 3 surface. If it truly can't be acted on, it's Tier 0 (silent log), not a low-priority notification.
+3. **No `notify({ type: "error", priority: "low" })`.** `.claude/rules/user-signals.md` explicitly bans this because the toast is silently dropped while the error is still real. The lint rule `no-restricted-syntax` in `eslint.config.js` (renderer block) enforces this across all renderer call sites. If the error is actionable, it needs `priority: "high"` and a Tier 2 or Tier 3 surface. If it truly can't be acted on, it's Tier 0 (silent log), not a low-priority notification.
 
 4. **Tier 2 (warning) for failures with explicit recovery context in the same pane.** When the user can fix the problem without leaving the panel — freeing a port, clicking Retry, canceling an idle-stop countdown — use an inline warning banner. The banner carries the action.
 
@@ -81,7 +81,7 @@ Non-negotiables for any dev-preview signal call site. These are derived from CLA
 
 ## Decision Checklist
 
-For each new dev-preview event, answer these before choosing a tier and surface. Adapted from the CLAUDE.md `notify()` four-question gate.
+For each new dev-preview event, answer these before choosing a tier and surface. Adapted from the `notify()` four-question gate in `.claude/rules/user-signals.md`.
 
 1. **Does the event require immediate user action?** If no → Tier 0 or Tier 1. If yes and the action is in the same pane → Tier 2 or Tier 3.
 
@@ -91,7 +91,7 @@ For each new dev-preview event, answer these before choosing a tier and surface.
 
 4. **Would a toast interrupt without adding recovery value?** If the user sees the toast, reads it, and can take no different action than they would have without it → demote to Tier 1 (inbox) or Tier 0. Toasts are the most restricted surface; use them only when interruption is warranted.
 
-5. **Is the event durable across relaunch?** If yes → inbox entry (`priority: "low"`) in addition to the frame state. The inbox survives session restart; the `panel-state-*` border does not. (Note: `placement: "grid-bar"` bypasses priority routing and renders inline regardless; see `src/lib/notify.ts` line ~837.)
+5. **Is the event durable across relaunch?** If yes → inbox entry (`priority: "low"`) in addition to the frame state. The inbox survives session restart; the `panel-state-*` border does not. (Note: `placement: "grid-bar"` bypasses priority routing and renders inline regardless.)
 
 6. **Does the event affect multiple worktrees or panes?** If yes → consider escalation. A single-pane port conflict is Tier 2; a port conflict that blocks every dev server in the project may warrant Tier 3 with a broader recovery message. The escalation test: does the user need to act differently because more than one pane is affected?
 
@@ -99,9 +99,10 @@ For each new dev-preview event, answer these before choosing a tier and surface.
 
 ## Reference
 
-- **CLAUDE.md** — "Runtime Signals" tier ladder (Tier 0–4), `notify()` four-question gate, `panel-state-*` CSS vocabulary, and the `notify()` Usage checklist.
-- **`src/lib/notify.ts`** — `EVENT_POLICY` manifest (lines 75–132): `baseInterruption`, `preferredSurface`, `defaultDurationMs` per `NotificationEventKind`. `resolveEventPolicyDefaults()` (line 181) fills gaps only — explicit caller fields always win. `priority: "low"` routes inbox-only, never toasts. The `type: "error"` + `priority: "low"` combination is lint-banned.
-- **`src/index.css`** — `panel-state-working`, `panel-state-waiting`, `panel-state-hibernated` CSS classes (lines ~1786–1905). Each uses `color-mix` with a semantic token at a fixed opacity + concentric ring/outer layers. Suppressed under `prefers-reduced-motion` and given `forced-colors` fallbacks.
+- **[`.claude/rules/user-signals.md`](../../.claude/rules/user-signals.md)** — the runtime-signal tier ladder, the `notify()` four-question gate, and the microcopy rules. Loads automatically when an agent touches a matching file.
+- **[notification-system.md](./notification-system.md)** — the app-wide notification/banner machinery this table routes into.
+- **`src/lib/notify.ts`** — the `EVENT_POLICY` manifest: `baseInterruption`, `preferredSurface`, `defaultDurationMs` per `NotificationEventKind`. `resolveEventPolicyDefaults()` fills gaps only — explicit caller fields always win. `priority: "low"` routes inbox-only, never toasts. The `type: "error"` + `priority: "low"` combination is lint-banned.
+- **`src/index.css`** — the `panel-state-*` classes (`working`, `waiting`, `hibernated`, `compiling`, `arming`). Each uses `color-mix` with a semantic token at a fixed opacity plus concentric ring/outer layers driven by the `--panel-state-edge-*` vars. Suppressed under `prefers-reduced-motion` and given `forced-colors` fallbacks.
 - **`src/components/DevPreview/useDevPreviewLoadLifecycle.ts`** — Six state signals (`isWebviewReady`, `isLoading`, `isSlowLoad`, `webviewLoadError`, `webviewCrashed`, `reconnectAttempt`) and nine webview event listeners that feed the lifecycle events in the routing table.
 - **`src/components/DevPreview/DevPreviewPane.tsx`** — Signal surface wiring: `panel-state-working` CSS class, `DevPreviewStuckBanner`, reconnect indicator, load error overlay, `BlockedNavBanner`, crash banner, unresponsive banner, force-kill banner, console auto-open on error/stall.
 - **`src/hooks/useDevServer.ts`** — Dev server status states, `stuckTier`, `phaseLabel`, `forceKilled`.
@@ -112,4 +113,4 @@ For each new dev-preview event, answer these before choosing a tier and surface.
 
 - This document is the source of truth for dev-preview event routing. Every PR that adds a new dev-preview lifecycle signal must add its row to the Event Routing Table and run the Decision Checklist.
 - When a row's issue is closed, the `NEW` placeholder is replaced with the merge commit or closed issue reference.
-- Cross-reference: `CLAUDE.md` "Runtime Signals" carries the abbreviated tier ladder; this file carries the per-event audit.
+- Cross-reference: `.claude/rules/user-signals.md` carries the abbreviated tier ladder; this file carries the per-event audit.

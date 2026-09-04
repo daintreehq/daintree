@@ -2,7 +2,7 @@
 
 Human-facing reference for the Daintree IDE's internals. This is the entry point for `docs/`.
 
-The agent-facing working contract is the root [`CLAUDE.md`](../CLAUDE.md) plus the path-scoped rules in `.claude/rules/`, which load when an agent touches matching files — the day-to-day design rules (accent restraint, motion timing, destructive-action tiers, notify() usage) live in `.claude/rules/design-system.md` and `.claude/rules/user-signals.md`. `docs/` is the long-form reference a human reads. Where an agent rule carries an abbreviated ladder, the matching `docs/` file owns the full rationale and the per-item audit — when the two drift, the code wins and the agent rule should be corrected.
+The agent-facing working contract is the root [`CLAUDE.md`](../CLAUDE.md) plus the path-scoped rules in `.claude/rules/`, which load when an agent touches matching files: `design-system.md` (colour vocabulary, accent restraint, motion, loading gates, icons), `user-signals.md` (microcopy, notify() routing, the runtime-signal tiers, the destructive-action tiers), `overlay-focus.md`, `actions-and-mcp.md`, `ipc-channels.md`, `testing.md`, and `perf-benchmarks.md`. `docs/` is the long-form reference a human reads. Where an agent rule carries an abbreviated ladder, the matching `docs/` file owns the full rationale and the per-item audit — when the two drift, the code wins and the agent rule should be corrected.
 
 ## Start here
 
@@ -29,14 +29,14 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 
 | Doc | Purpose |
 | --- | --- |
-| [process-and-window-model.md](./architecture/process-and-window-model.md) | Multi-process topology, IPC transports, multi-window isolation. |
-| [state-management.md](./architecture/state-management.md) | The renderer store layer — two store flavors, panel listeners, persistence. |
+| [process-and-window-model.md](./architecture/process-and-window-model.md) | Multi-process topology (main, per-project renderers, PTY/workspace/watchdog hosts, per-plugin workers), the three IPC transports, and multi-window isolation. |
+| [state-management.md](./architecture/state-management.md) | The renderer store layer — the two store flavors, the panel-listener subsystem, and the two persistence paths. |
 | [store-init-order.md](./architecture/store-init-order.md) | Cross-store accessor module and the ESM init ordering that avoids TDZ cycles. |
 | [ipc-services.md](./architecture/ipc-services.md) | The backend/bridge surface — services, IPC handlers, `window.electron` namespaces, clients. |
-| [action-system.md](./architecture/action-system.md) | Central typed dispatch for menus, keybindings, context menus, and agent automation. |
+| [action-system.md](./architecture/action-system.md) | Central typed dispatch for menus, keybindings, context menus, and agent automation — and the manifest that is the MCP tool surface. |
 | [mcp-server.md](./architecture/mcp-server.md) | The local MCP HTTP server that lets agents drive the IDE via built-in actions — including how to connect an external client. |
 | [mcp-context-condensation.md](./architecture/mcp-context-condensation.md) | Authoring standard and CI budgets for the prose and schemas the MCP surface sends a model every turn. |
-| [assistant-native-host.md](./architecture/assistant-native-host.md) | The structured `utilityProcess` boundary for the Daintree Assistant runtime — contract defined, runtime deferred. |
+| [assistant-native-host.md](./architecture/assistant-native-host.md) | The structured `utilityProcess` boundary for the Daintree Assistant runtime — contract and process wrapper landed, nothing spawns it yet. |
 | [notification-system.md](./architecture/notification-system.md) | How a runtime signal reaches the user — the five-surface taxonomy and routing machinery. |
 | [destructive-action-safeguards.md](./architecture/destructive-action-safeguards.md) | Living per-action audit and rubric for destructive UI surfaces. |
 | [dev-preview-event-routing.md](./architecture/dev-preview-event-routing.md) | Per-event routing audit for dev-preview lifecycle signals. |
@@ -60,7 +60,7 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 | [plugins/project-local.md](./plugins/project-local.md) | Plugins a project ships in its own repository — on-disk layout, the committed `dist/` contract, the trust gate, hot reload, contribution scoping. |
 | [plugins/agent-brief.md](./plugins/agent-brief.md) | The brief to hand an AI agent that is writing a project plugin — the rules that decide whether it loads, and a skeleton that needs no build tooling. |
 
-The plugin sub-index links onward to getting-started, manifest reference, contribution points, host API, agent extensions, distribution, the dev loop, trust model, architecture, and the [1.0 freeze plan](./plugins/freeze-plan.md) (the roadmap to a stable, freezeable plugin API).
+The plugin sub-index links onward to getting-started, the manifest reference, contribution points, the host API, agent extensions, forge providers, distribution, the dev loop, the trust model, and the plugin architecture.
 
 ## Themes
 
@@ -113,3 +113,6 @@ Some topics split a human "how to verify / why" doc from an "how it's built" doc
 - [architecture/fatal-error-spine.md](./architecture/fatal-error-spine.md) ↔ [architecture/crash-recovery-and-safe-mode.md](./architecture/crash-recovery-and-safe-mode.md) — the on-exit marker contract vs. the runtime recovery/liveness subsystem.
 - [architecture/state-management.md](./architecture/state-management.md) ↔ [architecture/store-init-order.md](./architecture/store-init-order.md) — the store layer vs. the cross-store init ordering.
 - [voice-input.md](./voice-input.md) ↔ [architecture/ipc-services.md](./architecture/ipc-services.md) — the feature flow vs. the IPC layer it rides on.
+- [architecture/action-system.md](./architecture/action-system.md) ↔ [architecture/mcp-server.md](./architecture/mcp-server.md) — the dispatch layer vs. the server that turns it into a tool surface; [architecture/mcp-context-condensation.md](./architecture/mcp-context-condensation.md) is the authoring standard for the prose both carry.
+- [architecture/notification-system.md](./architecture/notification-system.md) ↔ [architecture/dev-preview-event-routing.md](./architecture/dev-preview-event-routing.md) — the app-wide signal machinery vs. one subsystem's per-event audit against it.
+- [architecture/terminal-lifecycle.md](./architecture/terminal-lifecycle.md) ↔ [architecture/terminal-identity.md](./architecture/terminal-identity.md) — the runtime status of a PTY panel vs. what is running inside it.

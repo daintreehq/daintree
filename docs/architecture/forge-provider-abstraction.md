@@ -51,6 +51,11 @@ Added to `plugin.json`'s `contributes` field, validated by `ForgeProviderContrib
 {
   "name": "daintree.github",
   "version": "0.1.0",
+  "displayName": "GitHub",
+  "category": "forge",
+  "main": "main/index.js",
+  "engines": { "daintree": ">=0.11.0" },
+  "capabilities": [],
   "contributes": {
     "forgeProviders": [
       {
@@ -64,8 +69,18 @@ Added to `plugin.json`'s `contributes` field, validated by `ForgeProviderContrib
           "required-checks",
           "draft-prs",
           "assignees",
-          "releases"
-        ]
+          "releases",
+          "batch-branch-prs",
+          "identity",
+          "clone"
+        ],
+        "slots": {
+          "settingsTab": "github.forgeSettingsTab",
+          "icon": "github.providerIcon",
+          "statsDropdown": "github.statsDropdown",
+          "bulkCreateWorktreeDialog": "github.bulkCreateWorktreeDialog",
+          "issueSelector": "github.issueSelector"
+        }
       }
     ],
     "fileDecorationProviders": [{ "id": "worktree-diff-review", "scopes": ["worktree-diff:*"] }]
@@ -73,16 +88,19 @@ Added to `plugin.json`'s `contributes` field, validated by `ForgeProviderContrib
 }
 ```
 
-The optional `settingsScopeRef` / `viewRefs` fields are part of the schema but the built-in GitHub plugin omits them.
-
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. The built-in GitHub plugin uses bare `github`. |
 | `name` | yes | Display label in Preferences → Forge Integrations. |
 | `matches` | yes | Exact hostnames for git remote URLs; first matching provider wins. Matching is case-insensitive and strips a leading `www.` from both the remote URL hostname and each entry. Glob, wildcard, suffix, and regular-expression patterns are not supported. |
-| `capabilities` | no | Free-form strings the host does not interpret. UI consumers query them to decide what affordances to surface. Suggested vocabulary: `issues`, `pulls`, `reviews`, `approvals`, `merge-trains`, `required-checks`, `draft-prs`, `assignees`, `releases`, `project-boards`, `milestones`. |
-| `settingsScopeRef` | no | ID prefix in this plugin's `settings` contributions—used to group provider settings under one heading. |
+| `kind` | no | `"local"` or `"network"`. |
+| `capabilities` | no | Free-form strings the host does not interpret. UI consumers query them to decide what affordances to surface. Suggested vocabulary: `issues`, `pulls`, `reviews`, `approvals`, `merge-trains`, `required-checks`, `draft-prs`, `assignees`, `releases`, `project-boards`, `milestones`, `batch-branch-prs`, `identity`, `clone`. |
+| `credentialFields` | no | Declares the credential inputs the host's settings UI should render for this provider. |
+| `slots` | no | Manifest-declared view slots the host mounts for this provider: `settingsTab`, `icon`, `statsDropdown`, `bulkCreateWorktreeDialog`, `issueSelector`. This is how the host stays forge-neutral while still rendering provider chrome in its own surfaces. |
+| `settingsScopeRef` | no | ID prefix in this plugin's `settings` contributions — used to group provider settings under one heading. |
 | `viewRefs` | no | IDs of `views` contributions that should appear under this provider's panel section. |
+
+The schema is `.strict()`: an unknown field in a `forgeProviders` entry is rejected loudly rather than ignored.
 
 Eager registration (manifest-driven) populates the Preferences UI and remote-routing table before any plugin code runs. The implementation handler is bound lazily on first use, matching the existing contribution-point lifecycle in `electron/services/PluginService.ts`.
 
@@ -240,18 +258,7 @@ Settings UI for auth is contributed by each plugin's own `settings` contribution
 
 The shared interface delegates to each provider's native query. Client-side filtering across paged results is forbidden — GitHub uses GraphQL `pullRequests(headRefName: $branch)`, future GitLab plugins will use REST `/projects/:id/merge_requests?source_branch=`, etc.
 
-Detection events become provider-aware:
-
-```ts
-interface ForgeLinkedEvent {
-  worktreeId: string;
-  providerId: string;
-  issue?: ResourceRef;
-  pr?: { ref: ResourceRef; state: NormalizedPRState; title: string; url: string };
-}
-```
-
-This replaces today's GitHub-specific `PR_DETECTED` payload.
+Detection events became provider-aware in the same shape as the snapshot projection — a `providerId` plus optional `issue` / `pr` refs carrying the normalized state — replacing the old GitHub-specific `PR_DETECTED` payload. The live types are in [`shared/types/forge.ts`](../../shared/types/forge.ts); read them there rather than from a sketch here.
 
 ## Rate Limiting
 
@@ -276,9 +283,9 @@ The optional `findPRsByBranches(repo, branches): Map<string, PR | null>` capabil
 
 Other forge providers can omit the capability — the host degrades gracefully — or implement it natively (GitLab's REST `/projects/:id/merge_requests?source_branch[]=...` accepts repeated query params for the same effect).
 
-## Worktree Snapshot: Breaking Change
+## Worktree Snapshot: the provider-agnostic projection
 
-`PluginWorktreeSnapshot` in `shared/utils/pluginWorktreeSnapshot.ts` currently leaks GitHub-shaped fields (`issueNumber`, `issueTitle`, `prNumber`, `prUrl`, `prState`, `prTitle`). These get replaced with a provider-agnostic projection:
+`PluginWorktreeSnapshot` in `shared/utils/pluginWorktreeSnapshot.ts` used to leak GitHub-shaped fields (`issueNumber`, `issueTitle`, `prNumber`, `prUrl`, `prState`, `prTitle`). It now hands plugins a provider-agnostic `linked` projection instead, deep-cloned then frozen so the host's live reference can never be mutated by plugin code:
 
 ```ts
 interface PluginWorktreeSnapshot {
@@ -291,7 +298,7 @@ interface PluginWorktreeSnapshot {
 }
 ```
 
-This is an `@daintreehq/plugin-sdk` **breaking change** — major version bump. The plugin-snapshot allowlist (`shared/utils/pluginWorktreeSnapshot.ts`) is updated and the `engines.daintree` compatibility gate filters out plugins built against the old shape.
+This was an `@daintreehq/plugin-sdk` **breaking change**. `buildLinkedProjection` keeps one back-compat path: a legacy snapshot that never populated `linked` is projected from the old `prNumber`/`issueNumber` fields under the builtin GitHub provider id, so a stale record still resolves. New code must read `linked`, never the legacy fields.
 
 ## GitHub as Built-In Plugin
 
@@ -346,12 +353,12 @@ if (provider?.releases) {
 
 The `capabilities` array in the manifest is _informational_ (used for the Preferences UI to display "GitHub supports: issues, pulls, reviews, required-checks, releases"). Behavior gates on whether the implementation field is present at runtime. This keeps the gate honest: a plugin can't claim a capability in the manifest and fail to implement it.
 
-## Migration Plan
+## Migration plan (completed — kept as the record of order)
 
-The refactor lands across multiple PRs in this order:
+The refactor landed across multiple PRs in this order. It is retained because the sequencing is the reusable part: each step was independently shippable, and the contract was allowed to move until GitHub was fully rehomed.
 
 1. **Foundation types and manifest schema.** `shared/types/forge.ts` defining `ForgeProviderImpl`, `Issue`, `PR`, `Release`, `RepoRef`, etc. Manifest schema extension for `forgeProviders`. Zero behavior change.
-2. **Host registry.** `electron/services/ForgeProviderRegistry.ts`. Tracks registered providers, exposes `getActiveProvider(repoRef)` for remote-URL routing.
+2. **Host registry.** `electron/services/forgeProviderRegistry.ts`. Tracks registered providers and resolves a remote URL to one (`forgeProviderResolver.ts`), with `forgeHealthRelay.ts` / `forgeMatcherRelay.ts` fanning provider state to the renderer.
 3. **SDK host API.** `registerForgeProvider` added to `PluginHostApi`. Snapshot shape updated (breaking).
 4. **Built-in plugin loader.** `PluginService` scans `plugins/builtin/` before user plugins. Built-ins skip the install-time capability dialog.
 5. **GitHub built-in plugin: services.** Rehome `electron/services/github/*` into `plugins/builtin/github/main/`. Register via the new contribution point.
@@ -360,7 +367,7 @@ The refactor lands across multiple PRs in this order:
 8. **`PRIntegrationService` rewrite.** Replace direct GitHub calls with `ForgeProviderRegistry.getActiveProvider(...).findPRByBranch(...)`. Snapshot consumers updated to read `linked.*`.
 9. **Settings UI.** Provider section in Preferences → Forge Integrations, rendering the GitHub plugin's auth UI.
 
-Each step is a separate PR. The contract is allowed to evolve while GitHub is being migrated (steps 1–7); after step 7, the contract freezes and v1 of `@daintreehq/plugin-sdk` ships.
+Each step was a separate PR. The contract was allowed to evolve while GitHub was being migrated (steps 1–7); after step 7 it froze. Note two naming drifts against the plan above: the host registry shipped as `electron/services/forgeProviderRegistry.ts` (lowercase), and the `github.*` action aliases from step 7 have since been removed.
 
 ## Non-Goals (For This Stage)
 
@@ -384,9 +391,27 @@ Each step is a separate PR. The contract is allowed to evolve while GitHub is be
 
 This document uses "forge" rather than "VCS" / "version control" / "git host" / "code host" because the abstraction covers the whole developer-platform layer above git, not git itself. The term is established in the open-source ecosystem — Gitea, Forgejo, and SourceHut all self-identify as forges, and ForgeFed is the cross-forge federation specification. "VCS provider" would narrowly suggest source-control mechanics, which are handled separately and not in scope here.
 
+## Where the code lives (as built)
+
+| Concern | File |
+| --- | --- |
+| Provider contract, domain shapes, capability sub-interfaces | `shared/types/forge.ts` |
+| Manifest contribution schema | `ForgeProviderContributionSchema` in `electron/schemas/plugin.ts` |
+| Host registry + hostname routing | `electron/services/forgeProviderRegistry.ts`, `forgeProviderResolver.ts` |
+| Renderer-facing provider state relays | `electron/services/forgeHealthRelay.ts`, `forgeMatcherRelay.ts` |
+| main-side RPC server for the workspace host | `electron/services/forgeRpcServer.ts` |
+| workspace-host RPC client | `electron/workspace-host/forgeBridge.ts` |
+| Forge audit trail | `electron/services/forge/forgeAuditService.ts`, `auditLog.ts` |
+| IPC handlers (reads / settings / resolution) | `electron/ipc/handlers/forgeData.ts`, `forgeSettings.ts`, `forgeResolution.ts` |
+| Host-owned actions | `src/services/actions/definitions/forgeActions.ts` |
+| The built-in GitHub plugin | `plugins/builtin/github/` |
+| Plugin-facing worktree projection | `shared/utils/pluginWorktreeSnapshot.ts` |
+
 ## Related
 
 - [`docs/plugins/contribution-points.md`](../plugins/contribution-points.md) — full contribution point reference (this doc adds the `forgeProviders` entry)
 - [`docs/plugins/host-api.md`](../plugins/host-api.md) — host API reference (this doc adds `registerForgeProvider`)
 - [`docs/plugins/architecture.md`](../plugins/architecture.md) — plugin lifecycle, disposal, renderer host model
 - [`docs/architecture/action-system.md`](./action-system.md) — action dispatcher patterns (`forge.*` actions plug in here)
+- [`docs/architecture/mcp-server.md`](./mcp-server.md) — the MCP-facing `forge.*` surface: tier membership, `danger`, rate-limit bucket, and dedup per action
+- [`docs/architecture/ipc-services.md`](./ipc-services.md) — the workspace-host boundary the RPC bridge crosses

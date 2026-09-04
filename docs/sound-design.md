@@ -20,7 +20,7 @@ Builds are **deterministic** — a seeded PRNG (mulberry32, seed `0xCA0917`) rep
 
 ## Brand Identity: "Digital Ecology"
 
-Daintree's metaphor is a forest daintree — a living ecosystem where AI agents work like organisms. This is expressed literally in the DSP architecture: a digital FM shimmer is fed **into** a physically modeled wooden resonator, so the technology literally passes through the wood. The tail of every sound is purely organic — physically modeled wood resonance fading naturally. This is "digital ecology" expressed as signal flow.
+Daintree is named after the rainforest, and the metaphor is a living ecosystem where AI agents work like organisms (see [brand/digital-ecology.md](./brand/digital-ecology.md)). This is expressed literally in the DSP architecture: a digital FM shimmer is fed **into** a physically modeled wooden resonator, so the technology literally passes through the wood. The tail of every sound is purely organic — physically modeled wood resonance fading naturally. This is "digital ecology" expressed as signal flow.
 
 ### Design Principles
 

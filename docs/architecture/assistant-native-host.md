@@ -1,6 +1,6 @@
 # Assistant native-host boundary
 
-Status: contract defined, runtime deferred. This doc specifies the boundary between the `daintree-assistant` runtime and Daintree's main/renderer surfaces (#10649). The protocol types live in [`shared/types/ipc/assistantHost.ts`](../../shared/types/ipc/assistantHost.ts); their Zod validators live in the assistant-native-host section of [`electron/schemas/ipc.ts`](../../electron/schemas/ipc.ts). For the broader process topology this plugs into, see [process-and-window-model.md](./process-and-window-model.md); for the MCP event surfaces it reuses, see [mcp-server.md](./mcp-server.md).
+Status: **contract defined and the process wrapper landed; nothing spawns it yet.** This doc specifies the boundary between the `daintree-assistant` runtime and Daintree's main/renderer surfaces (#10649). The protocol types live in [`shared/types/ipc/assistantHost.ts`](../../shared/types/ipc/assistantHost.ts); their Zod validators live in the assistant-native-host section of [`electron/schemas/ipc.ts`](../../electron/schemas/ipc.ts). Since the contract landed, two more pieces have: `AssistantHostProcess` (`electron/services/assistant-host/AssistantHostProcess.ts`) — the `utilityProcess.fork()` wrapper that hands over the descriptor on `parentPort`, validates every inbound message against the shared schema before forwarding, and resolves `waitForReady()` on `host:ready` — and `resolveAssistantHostEntry` (`resolveHostEntry.ts`), which locates the package's `dist/host.js` by working outward from the CLI bin path, since the package is installed independently of Daintree and can't be `require.resolve()`d from the app's module graph. Neither has a caller: no IPC channel is registered and no session constructs the host. For the broader process topology this plugs into, see [process-and-window-model.md](./process-and-window-model.md); for the MCP event surfaces it reuses, see [mcp-server.md](./mcp-server.md).
 
 ## Why this exists
 
@@ -61,6 +61,6 @@ These are the load-bearing rules every future wiring step must preserve. They en
 
 ## What is not in scope yet
 
-- No utility process is spawned and no IPC channel is registered — this slice is the contract and its validation only.
-- No conversation transcript renders natively until the `@daintreehq/daintree-assistant` package emits `turn:start`/`turn:token`/`turn:end`. Until then the xterm pane remains the conversation surface.
+- **Nothing constructs `AssistantHostProcess`.** No session provisions a host, no IPC channel is registered, and no renderer surface subscribes. The wrapper and the entry resolver exist; the wiring does not.
+- No conversation transcript renders natively until the `@daintreehq/daintree-assistant` package emits `turn:start`/`turn:token`/`turn:end`. Until then the xterm pane remains the conversation surface, and the CLI/Ink path stays both the default and the fallback.
 - Workflow-ledger events are additive: when the ledger lands, its records layer onto this timeline without changing the event shapes above.

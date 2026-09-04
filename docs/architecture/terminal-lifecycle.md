@@ -23,7 +23,7 @@ Load-bearing gates wired on it: `journalAgentSession` (`electron/services/pty/ag
 - `exited`: terminal process exited (used for post-mortem review).
 - `error`: terminal hit a terminal-level error (future use).
 
-`TerminalFlowStatus` is a subset of the above that comes from PTY host flow-control events. The `FutureSABFlowStatus` set (`suspended` | `paused-user`) is carved out of `PersistableFlowStatus` at the type level (`shared/types/panel.ts`) so the buffer and store paths cannot persist a skeleton value as durable state.
+`TerminalFlowStatus` is a subset of the above that comes from PTY host flow-control events, and `TerminalRuntimeStatus = PersistableFlowStatus | "background" | "exited" | "error"` is built on top of it. The `FutureSABFlowStatus` set (`suspended` | `paused-user`) is carved out of `PersistableFlowStatus` at the type level (`shared/types/panel.ts`) so the buffer and store paths cannot persist a skeleton value as durable state.
 
 ## Transition sources
 
@@ -35,7 +35,7 @@ Load-bearing gates wired on it: `journalAgentSession` (`electron/services/pty/ag
 
 `data-loss` is a **transient pulse**, not a durable runtime state. The PTY host emits it when the IPC fallback queue discards bytes during a heavy-output burst. The host policy is **drop-don't-block**: blocking the producer to guarantee delivery risks freezing the main process under a runaway flood, so bytes are intentionally discarded and the gap is surfaced instead of hidden.
 
-Because it is a pulse, it is excluded from persistence at the type level: `PersistableFlowStatus = Exclude<TerminalFlowStatus, "data-loss">` (`shared/types/panel.ts`). The renderer store never freezes the terminal on `data-loss`; it fires the marker and immediately resumes the prior status.
+Because it is a pulse, it is excluded from persistence at the type level, alongside the FUTURE_SAB skeleton values: `PersistableFlowStatus = Exclude<TerminalFlowStatus, "data-loss" | FutureSABFlowStatus>` (`shared/types/panel.ts`). The renderer store never freezes the terminal on `data-loss`; it fires the marker and immediately resumes the prior status.
 
 ### Recovery contract
 
@@ -49,3 +49,11 @@ Because it is a pulse, it is excluded from persistence at the type level: `Persi
 
 - Runtime status is not persisted; it is derived from live events and UI visibility.
 - Flow-control events are treated as higher priority than visibility (e.g., `paused-backpressure` overrides `background`).
+
+## Related
+
+- [terminal-identity.md](./terminal-identity.md) — the identity model these statuses hang off, and the exit gate that demotes agent chrome.
+- [agent-activity-monitoring.md](./agent-activity-monitoring.md) — the FSM that turns PTY output into `working` / `waiting` / `completed`, which is a different axis from runtime status.
+- [pty-host-fabric.md](./pty-host-fabric.md) — how the lifecycle ledger and session journal hold across per-project host shards.
+- [resource-governance.md](./resource-governance.md) — what produces `paused-resource-governor`, and the pause/resume triage behind it.
+- [process-and-window-model.md](./process-and-window-model.md) — the transports terminal bytes and lifecycle events travel over.

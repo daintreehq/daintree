@@ -75,6 +75,7 @@ Migrations are individual files `NNN-name.ts` in `electron/services/migrations/`
 |     025 | `025-upgrade-voice-correction-model.ts`                                |
 |     026 | `026-remove-full-tool-surface.ts`                                      |
 |     027 | `027-upgrade-voice-transcription-model.ts`                             |
+|     028 | `028-quiet-sound-and-flash-defaults.ts`                                |
 
 The table is a snapshot; `electron/services/migrations/index.ts` is the source of truth. There is no `001`; the chain starts at `002`. Migration files are numbered, not strictly contiguous — `006` is a permanent gap.
 

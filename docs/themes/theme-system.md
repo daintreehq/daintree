@@ -73,7 +73,7 @@ Component-specific styling does not belong in this layer.
 
 **See [Canonical Interaction State Recipes](./interaction-state-recipes.md)** for hover/focus implementation patterns when working with component overrides.
 
-Component CSS owns the public override surface. Themes can target specific UI regions through `extensions` without expanding the global semantic contract. The allowed extension keys are the typed `ExtensionKey` union (`EXTENSION_KEYS` in `shared/theme/types.ts`), gated and classified OPTIONAL vs REQUIRED by the registry in `shared/theme/extensionRegistry.ts` (e.g. `panel-grid-bg` is registered there and consumed in `src/index.css`).
+Component CSS owns the public override surface. Themes can target specific UI regions through `extensions` without expanding the global semantic contract. The allowed extension keys are the typed `ExtensionKey` union (`EXTENSION_KEYS` in `shared/theme/types.ts` — 102 keys today), gated and classified OPTIONAL vs REQUIRED by the registry in `shared/theme/extensionRegistry.ts` (e.g. `panel-grid-bg` is registered there and consumed in `src/index.css`). A key not in the union is not a theme decision the host will honour — adding one is an edit to both files.
 
 | Component | File | Variable prefix |
 | --- | --- | --- |
@@ -101,7 +101,7 @@ Extensions are applied as bare CSS custom properties on `:root` (e.g., `"toolbar
 
 - `getAppThemeCssVariables()` in `shared/theme/themes.ts` converts a scheme into CSS variables.
 - `applyAppThemeToRoot()` in `src/theme/applyAppTheme.ts` applies those variables to the root element, clears stale extension vars between switches, and sets `data-theme`, `data-colorMode`, `color-scheme`, and `.dark`/`.light` classes.
-- `applyColorVisionMode()` (in `src/theme/applyAppTheme.ts`) overrides tokens for colorblind simulation — 39 for "red-green", 28 for "blue-yellow". The override tables live in `shared/theme/colorVisionOverrides.ts` (`RED_GREEN_OVERRIDES`, `BLUE_YELLOW_OVERRIDES`, and the union `ALL_CVD_TOKENS`).
+- `applyColorVisionMode()` (in `src/theme/applyAppTheme.ts`) overrides tokens for colorblind simulation. The tables live in `shared/theme/colorVisionOverrides.ts`, and they are **derived rather than hand-listed**: each map starts from a literal seed of base tokens (status, activity, PR state, terminal ANSI, syntax, category) and is then expanded by `withStatusSurfaces()` — which mints the matching `*-surface` fill at `CVD_STATUS_SURFACE_ALPHA` — and `withDiffSurfaces()`, which mints each status colour's diff background, edit background and gutter. So the exported `RED_GREEN_OVERRIDES` / `BLUE_YELLOW_OVERRIDES` are meaningfully larger than their seeds, and `ALL_CVD_TOKENS` is their union. Count them from the code rather than from a number here. Seed values must be 3- or 6-digit hex: `hexToRgba` produces `rgba(NaN, …)` for anything else, which CSS silently drops.
 - Tailwind-facing aliases live in `src/index.css`.
 
 ## Import Flow
@@ -136,7 +136,7 @@ DAINTREE_TOUR_THEME=bondi DAINTREE_TOUR_COMPARE=movile npm run theme:tour
 
 Interactive mode injects a control panel (bottom-right, shadow-rooted and deliberately unthemed) with a clickable scene list, prev/next, a **compare** button that hot-swaps two themes without leaving the scene, and a live contrast readout computed from the CSS variables actually painted. Auto mode writes `artifacts/theme-tour/<theme>/NN-<scene>.png` (gitignored).
 
-Scenes cover the workbench, a multi-pane fleet, terminal with seeded ANSI, sidebar hover and search, context menu, filter popover, action palette, project switcher, notifications, review hub, settings, the theme picker with hero art, the destructive confirm dialog, an agent **working**, an agent **waiting**, and the dock. The two agent scenes drive the real agent-state FSM via `e2e/helpers/fakeAgent.ts` rather than faking a CSS class.
+The 19 scenes (`SCENES` in that spec) are: `workbench`, `fleet`, `terminal`, `terminal-selection`, `sidebar-hover`, `sidebar-search`, `context-menu`, `filter-popover`, `action-palette`, `project-switcher`, `notifications`, `review-hub`, `file-viewer`, `settings`, `appearance` (the theme picker with hero art), `confirm` (the destructive dialog), `agent-working`, `agent-waiting`, and `dock`. The two agent scenes drive the real agent-state FSM via `e2e/helpers/fakeAgent.ts` rather than faking a CSS class, which is why the fake `claude` has to be on `PATH` before launch.
 
 The full authoring-and-review process — including the Codex review loop, the tier model for contrast budgets, and the traps that pass every test in the repo — lives in `.claude/skills/daintree-theme-creator/resources/theme-review-workflow.md`.
 
@@ -192,3 +192,13 @@ Additional checks when reviewing a theme that authors the material extension key
 | `src/styles/components/settings.css` | Settings dialog component vars |
 | `src/styles/components/pulse.css` | Pulse component vars |
 | `src/styles/components/panels.css` | Panel shell component vars |
+
+## Related
+
+- [theme-tokens.md](./theme-tokens.md) — the full semantic token reference, layer by layer, with derivation rules and the OKLCH audit gates.
+- [component-contract.md](./component-contract.md) — which primitive, which colour vocabulary, which scale, and the five `component-contract` ESLint rules that police them.
+- [interaction-state-recipes.md](./interaction-state-recipes.md) — the canonical class string per interactive role.
+- [visual-guide.md](./visual-guide.md) — what every token looks like in the running app, surface by surface.
+- [status-success-policy.md](./status-success-policy.md) — the rule green has to pass before it gets to persist.
+- [`.claude/rules/design-system.md`](../../.claude/rules/design-system.md) — the abbreviated agent rule that loads when you touch a themed file.
+- `.claude/skills/daintree-theme-creator/` — the authoring and review skill, including `theme-review-workflow.md` and `theme-preview-images.md`.

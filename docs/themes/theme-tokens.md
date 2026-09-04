@@ -129,7 +129,12 @@ Fixed hue families across all themes. Each theme tunes brightness/saturation.
 | `status-warning` | Amber — caution states | Required |
 | `status-danger` | Red — error/destructive states | Required |
 | `status-info` | Blue — neutral informational | Required |
-| `status-danger-surface` | Validation wash for invalid fields | Derived: `danger` at 8-10% alpha |
+| `status-success-surface` | Pre-baked tinted wash for success banners/pills | Derived: `success` at 8% (light) / 10% (dark), scaled by `strategy.statusSurfaceOpacity` |
+| `status-warning-surface` | Wash for caution banners/pills | Derived: same rule |
+| `status-danger-surface` | Validation wash for invalid fields | Derived: same rule |
+| `status-info-surface` | Wash for informational banners/pills | Derived: same rule |
+
+The four `*-surface` washes are built with `withAlpha` (plain `rgba` for a hex input) rather than `color-mix(…, transparent)` — the `color-mix` form black-shifts on light backgrounds in oklab under Chromium.
 
 ## Activity Tokens
 
@@ -147,18 +152,21 @@ Drive state chips in panel headers and worktree card indicators.
 
 A single-knob color input (`overlay-base`) drives the entire opacity ladder.
 
-| Token              | Purpose                           | Dark default | Light default |
-| ------------------ | --------------------------------- | ------------ | ------------- |
-| `overlay-base`     | Tint color for the ladder         | `#ffffff`    | `#000000`     |
-| `overlay-subtle`   | Lightest interactive tint         | base 2%      | base 2%       |
-| `overlay-soft`     | Hover state on list items         | base 3%      | base 3%       |
-| `overlay-medium`   | Active/selected item, focus fills | base 4%      | base 5%       |
-| `overlay-strong`   | Stronger fills, secondary hover   | base 6%      | base 8%       |
-| `overlay-emphasis` | Maximum-contrast fill             | base 10%     | base 12%      |
-| `overlay-hover`    | General hover                     | tint 5%      | tint 3%       |
-| `overlay-active`   | General active/pressed            | tint 8%      | tint 6%       |
-| `overlay-selected` | Selected state                    | tint 4%      | tint 5%       |
-| `overlay-elevated` | Elevated hover                    | tint 6%      | tint 8%       |
+| Token | Purpose | Dark default | Light default |
+| --- | --- | --- | --- |
+| `overlay-base` | Tint color for the ladder | `#ffffff` | `#000000` |
+| `overlay-subtle` | Lightest interactive tint | base 2% | base 2% |
+| `overlay-soft` | Hover state on list items | base 3% | base 3% |
+| `overlay-medium` | Active/selected item, focus fills | base 4% | base 5% |
+| `overlay-strong` | Stronger fills, secondary hover | base 6% | base 8% |
+| `overlay-emphasis` | Maximum-contrast fill | base 10% | base 12% |
+| `overlay-hover` | General hover | tone 5% | base 6.5% |
+| `overlay-active` | General active/pressed | tone 8% | base 11% |
+| `overlay-selected` | Selected state | tone 4% | base 8% |
+| `overlay-elevated` | Elevated hover | tone 6% | base 10% |
+| `overlay-raised` | Palette/menu selected-row fill | aliases `overlay-selected` | `color-mix(elevated 92%, text-primary)` |
+
+Two things the table can't show. **Dark and light take their tint from different places** for the last five rows: dark composites the neutral polarity tone, light composites the hued `overlay-base`, and the light alphas are roughly doubled — the eye's luminance discrimination is compressed near white, so mirroring dark's alphas left light's fills sub-threshold. **`overlay-raised` is not an alpha at all on light**: it is a real opaque plane mixed toward `text-primary`, an upward lift over the recessed containers rather than an ink wash, which is what makes a selected palette row read on a near-white surface. On dark it aliases `overlay-selected` byte-for-byte.
 
 **See [Canonical Interaction State Recipes](./interaction-state-recipes.md)** for hover/focus implementation patterns using these overlay tokens.
 
@@ -168,10 +176,10 @@ Set `overlay-base` to a hued color to tint all hover and fill states (e.g. Fiord
 
 Selected-state pill backgrounds (e.g. active filter chips). Tint-derived so they stay neutral across hued themes rather than picking up the accent or overlay hue.
 
-| Token                       | Dark default  | Light default |
-| --------------------------- | ------------- | ------------- |
-| `filter-selected-bg-soft`   | `tint` at 8%  | `tint` at 6%  |
-| `filter-selected-bg-strong` | `tint` at 12% | `tint` at 10% |
+| Token                       | Dark default  | Light default         |
+| --------------------------- | ------------- | --------------------- |
+| `filter-selected-bg-soft`   | `tint` at 8%  | `overlay-base` at 8%  |
+| `filter-selected-bg-strong` | `tint` at 12% | `overlay-base` at 12% |
 
 ## Wash Tokens
 
@@ -185,13 +193,15 @@ Atmospheric tinted fills using `overlay-base`:
 
 ## Scrim Tokens
 
-| Token                | Dark default       | Light default     |
-| -------------------- | ------------------ | ----------------- |
-| `scrim-soft`         | `rgba(0,0,0,0.2)`  | `rgba(0,0,0,0.3)` |
-| `scrim-medium`       | `rgba(0,0,0,0.45)` | `rgba(0,0,0,0.5)` |
-| `scrim-strong`       | `rgba(0,0,0,0.62)` | `rgba(0,0,0,0.7)` |
-| `scrim-blur`         | `12px`             | `12px`            |
-| `scrim-blur-palette` | `4px`              | `4px`             |
+| Token                | Dark default       | Light default         |
+| -------------------- | ------------------ | --------------------- |
+| `scrim-soft`         | `rgba(0,0,0,0.2)`  | `overlay-base` at 22% |
+| `scrim-medium`       | `rgba(0,0,0,0.45)` | `overlay-base` at 36% |
+| `scrim-strong`       | `rgba(0,0,0,0.62)` | `overlay-base` at 55% |
+| `scrim-blur`         | `12px`             | `12px`                |
+| `scrim-blur-palette` | `4px`              | `4px`                 |
+
+Light scrims are **hued and lighter than dark's**, deliberately: a flat 50%-black scrim over a near-white workbench reads as a heavy slab, so the mid scrim drops toward 36% and routes through `overlay-base` (each theme's cool near-black tint) to stay on-temperature. Dark scrims are unchanged black.
 
 `scrim-blur` (modal/dialog backdrops, `AppDialog`) and `scrim-blur-palette` (command/panel palettes, `AppPaletteDialog`) control the backdrop blur depth behind the scrim — optical depth, which scrim color alpha cannot fake. This axis is legitimately pulled in both directions: fog biomes thicken it (16-20px reads as mist arriving), arid/clarity biomes sharpen it (0-4px dims without hazing) — `0px` is legal. Scrim _color_ stays on the `scrim-*` color tokens, so WCAG scrim-contrast gates are unaffected by blur changes.
 
@@ -442,31 +452,33 @@ Import and add to `shared/theme/builtInThemes/index.ts`.
 
 ## Token Count Summary
 
-| Group           | Count                                                 |
-| --------------- | ----------------------------------------------------- |
-| Surface         | 11                                                    |
-| Text            | 6                                                     |
-| Border          | 5                                                     |
-| Accent          | 9 (6 primary + 3 secondary)                           |
-| Focus           | 1                                                     |
-| Status          | 5                                                     |
-| Activity        | 5                                                     |
-| Overlay         | 10 (base + 5 ladder + hover/active/selected/elevated) |
-| Filter-selected | 2                                                     |
-| Wash            | 3                                                     |
-| Scrim           | 5 (3 colors + 2 blur depths)                          |
-| Shadow          | 4 (color + ambient + floating + dialog)               |
-| Tint            | 1                                                     |
-| Material/Radius | 4                                                     |
-| PR state        | 4                                                     |
-| Search          | 6                                                     |
-| Terminal        | 22 (6 base + 16 ANSI)                                 |
-| Syntax          | 10                                                    |
-| Category        | 12                                                    |
-| UI Utility      | 15                                                    |
-| Form            | 2 (knob-base + state-modified)                        |
-| Diff            | 8                                                     |
-| **Total**       | **150**                                               |
+| Group | Count |
+| --- | --- |
+| Surface | 11 |
+| Text | 6 |
+| Border | 6 (5 ladder + `selection-outline`) |
+| Accent | 9 (6 primary + 3 secondary) |
+| Focus | 1 (`focus-ring`) |
+| Status | 8 (4 colors + 4 `*-surface` washes) |
+| Activity | 5 |
+| Overlay | 11 (base + 5 ladder + hover/active/selected/elevated/raised) |
+| Filter-selected | 2 |
+| Wash | 3 |
+| Scrim | 5 (3 colors + 2 blur depths) |
+| Shadow | 4 (color + ambient + floating + dialog) |
+| Tint | 1 |
+| Material/Radius | 4 (3 material + `radius-scale`) |
+| PR state | 4 |
+| Search | 6 |
+| Terminal | 22 (6 base + 16 ANSI) |
+| Syntax | 10 |
+| Category | 12 |
+| UI Utility | 15 (4 scrollbar + 3 panel-state + 2 state-chip + 2 label-pill + 2 grain + focus-ring-offset + chrome-noise-texture) |
+| Form | 2 (`knob-base` + `state-modified`) |
+| Diff | 8 |
+| **Total** | **155** |
+
+This must equal `APP_THEME_TOKEN_KEYS.length` in `shared/theme/types.ts`, which is the contract — if the two disagree, the array wins and this table is stale.
 
 ## Tailwind Consumption
 
@@ -481,3 +493,11 @@ bg-activity-working     text-category-blue
 ```
 
 No component should reference hex values or know which theme is active.
+
+## Related
+
+- [theme-system.md](./theme-system.md) — the palette → semantic token → component variable pipeline that produces everything here.
+- [visual-guide.md](./visual-guide.md) — what these tokens look like in the running app, surface by surface.
+- [interaction-state-recipes.md](./interaction-state-recipes.md) — the canonical class string per interactive role.
+- [component-contract.md](./component-contract.md) — which vocabulary and which scale to spell them in.
+- [status-success-policy.md](./status-success-policy.md) — the extra rule `status-success` has to pass.
