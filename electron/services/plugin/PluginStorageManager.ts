@@ -42,9 +42,11 @@ interface PluginStorageManagerDeps {
 
 /**
  * The project / worktree a storage call belongs to, when the caller knows it —
- * a project-bound plugin host pins its own target here so a project or worktree
- * switch can't move its file. An absent or `null` member means unbound, and that
- * scope falls back to the app-global active project / worktree.
+ * a project-bound plugin host pins its own target here so another project's
+ * focus can't move its file. Within the binding a worktree switch still moves
+ * the `"worktree"`-scoped file, which is what that scope means. An absent or
+ * `null` member means unbound, and that scope falls back to the app-global
+ * active project / worktree.
  */
 export interface ExplicitStorageTarget {
   readonly projectRoot?: string | null;
