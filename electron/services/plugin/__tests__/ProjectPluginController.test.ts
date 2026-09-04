@@ -288,6 +288,7 @@ describe("watching an undecided project (#12212)", () => {
       decidedAt: 0,
       knownPluginIds: [],
       stagedPluginIds: [],
+      mutedPluginIds: [],
     });
     h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
     await h.controller.onProjectOpened(PROJECT_A, ROOT_A);

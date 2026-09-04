@@ -31,6 +31,7 @@ function plugin(
     capabilities: [],
     dirName: id,
     state,
+    muted: false,
     collidesWithGlobal: false,
     ...extra,
   };
