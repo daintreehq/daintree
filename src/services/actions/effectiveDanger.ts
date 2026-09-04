@@ -3,6 +3,7 @@ import { dispatchCarriesRecipeId } from "@shared/utils/dispatchRecipeId";
 import {
   dispatchCarriesTerminalCommand,
   dispatchCarriesTerminalCwd,
+  TERMINAL_LAUNCH_ACTION_ID,
 } from "@shared/utils/dispatchTerminalCommand";
 
 export { dispatchCarriesRecipeId, readDispatchRecipeId } from "@shared/utils/dispatchRecipeId";
@@ -11,15 +12,8 @@ export {
   dispatchCarriesTerminalCwd,
   readDispatchTerminalCommand,
   readDispatchTerminalCwd,
+  TERMINAL_LAUNCH_ACTION_ID,
 } from "@shared/utils/dispatchTerminalCommand";
-
-/**
- * The one action whose `cwd`/`command` arguments spawn a shell (#12216). The
- * elevation below is scoped to it by id rather than keyed on the argument alone
- * — see {@link readDispatchTerminalCommand} for why `command` cannot be a
- * global signal the way `recipeId` is.
- */
-const TERMINAL_LAUNCH_ACTION_ID = "terminal.new";
 
 /**
  * Host-derived confirmation tier for one dispatch (#11860).

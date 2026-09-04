@@ -1,4 +1,26 @@
 /**
+ * The one action whose `cwd`/`command` arguments spawn a shell (#12216).
+ *
+ * Lives beside the readers rather than in the renderer, because three gates now
+ * scope the same rule by this id: the renderer's danger elevation, the
+ * main-process bound-session refusal, and the target-policy record's
+ * `confirmationMayEscalate`. A copy per process is a copy that can be updated in
+ * one place and forgotten in the other two.
+ */
+export const TERMINAL_LAUNCH_ACTION_ID = "terminal.new";
+
+const TERMINAL_COMMAND_ARG = "command";
+const TERMINAL_CWD_ARG = "cwd";
+
+/**
+ * The launch arguments the elevation keys on, named once here so a caller that
+ * has no ARGS to read — the target-policy record is built at discovery time from
+ * the declared input schema alone — still asks about the same two fields the
+ * readers below do.
+ */
+export const TERMINAL_LAUNCH_ARGS: readonly string[] = [TERMINAL_COMMAND_ARG, TERMINAL_CWD_ARG];
+
+/**
  * The launch target a `terminal.new` dispatch asks for: a command to run, a
  * directory to open in, or neither.
  *
@@ -11,12 +33,12 @@
  * and the renderer's elevation resolve the same dispatch by one rule.
  */
 export function readDispatchTerminalCommand(args: unknown): string | undefined {
-  return readNonEmptyStringField(args, "command");
+  return readNonEmptyStringField(args, TERMINAL_COMMAND_ARG);
 }
 
 /** The directory a dispatch asks the new terminal to open in. */
 export function readDispatchTerminalCwd(args: unknown): string | undefined {
-  return readNonEmptyStringField(args, "cwd");
+  return readNonEmptyStringField(args, TERMINAL_CWD_ARG);
 }
 
 /** Whether a dispatch asks a terminal to run a command. */

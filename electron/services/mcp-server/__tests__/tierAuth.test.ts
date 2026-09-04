@@ -1595,6 +1595,62 @@ describe("filterIntrospectionResultForSession", () => {
         expect(plain.confirmationMayEscalate).toBe(false);
       });
 
+      // The shell-launch elevation (#12216) is scoped to `terminal.new` by id,
+      // so the record has to be too. `terminal.new` is statically `safe` and
+      // carries no `recipeId`: reading `recipeId` alone reported "no dialog" for
+      // the one target whose launch arguments always raise one.
+      it("flags terminal.new's launch arguments as escalating", () => {
+        // External tier: `terminal.new` sits on the flat external allowlist
+        // rather than a ladder rung, so that is the caller that can reach it —
+        // and the workspace-bound external session is the one this flag most
+        // has to be honest for.
+        const external = {
+          permittedActionIds: new Set([...permitted, "terminal.new"]),
+          policySnapshot: snapshot({ tier: "external", rendererOwnedOrigin: false }),
+        };
+
+        for (const properties of [{ command: { type: "string" } }, { cwd: { type: "string" } }]) {
+          const policy = policyOf(
+            lookup(
+              makeEntry({ id: "terminal.new", inputSchema: { type: "object", properties } }),
+              external
+            )
+          );
+          expect(policy.danger).toBe("safe");
+          expect(policy.confirmationMayEscalate).toBe(true);
+        }
+
+        // No launch arguments in the schema, so no dispatch of it can escalate.
+        const plainTerminalNew = policyOf(
+          lookup(
+            makeEntry({
+              id: "terminal.new",
+              inputSchema: { type: "object", properties: { focusPolicy: { type: "string" } } },
+            }),
+            external
+          )
+        );
+        expect(plainTerminalNew.confirmationMayEscalate).toBe(false);
+      });
+
+      // Scoped by id, not keyed on the field name: `command` is an ordinary
+      // argument that other safe actions take without running anything, and
+      // flagging every one of them would train clients to ignore the field.
+      it("does not flag a command argument on any other target", () => {
+        const policy = policyOf(
+          lookup(
+            makeEntry({
+              id: "terminal.list",
+              inputSchema: {
+                type: "object",
+                properties: { command: { type: "string" }, cwd: { type: "string" } },
+              },
+            })
+          )
+        );
+        expect(policy.confirmationMayEscalate).toBe(false);
+      });
+
       it("never reports escalation for a target already declared confirm", () => {
         const policy = policyOf(
           lookup(

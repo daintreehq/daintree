@@ -71,6 +71,7 @@ import {
   buildMcpConfirmPreview,
   buildTerminalKillBatchTargets,
   resolveMcpConfirmPreviewTarget,
+  resolveMcpConfirmSubject,
   resolveWorktreeDeleteGate,
   tagMcpSpawnSource,
   worktreeDeleteGateRefusal,
@@ -2086,6 +2087,36 @@ describe("resolveMcpConfirmPreviewTarget (#11538)", () => {
     ).toBeUndefined();
   });
 
+  it("previews a terminal.new that names a launch target (#12216)", () => {
+    // The elevation these arguments earn makes this modal the only gate on an
+    // agent-initiated shell, and the collapsed argument summary redacts every
+    // command long enough to be worth reading.
+    expect(
+      resolveMcpConfirmPreviewTarget("terminal.new", { command: "npm run deploy" }, undefined)
+    ).toEqual({ kind: "terminalLaunch", command: "npm run deploy", cwd: undefined });
+
+    expect(
+      resolveMcpConfirmPreviewTarget("terminal.new", { cwd: "/repo/other" }, undefined)
+    ).toEqual({ kind: "terminalLaunch", command: undefined, cwd: "/repo/other" });
+  });
+
+  it("gives a plain terminal.new no preview, matching the elevation", () => {
+    // Nothing elevated it, so there is no modal to fill — and a card for a bare
+    // "open a terminal" would be noise on a dispatch nobody is asked about.
+    expect(
+      resolveMcpConfirmPreviewTarget("terminal.new", { focusPolicy: "auto" }, undefined)
+    ).toBeUndefined();
+    expect(resolveMcpConfirmPreviewTarget("terminal.new", undefined, undefined)).toBeUndefined();
+  });
+
+  it("does not preview a command argument on some other action", () => {
+    // Scoped by id, exactly as the elevation is: `system.checkCommand` takes a
+    // `command` and explicitly runs nothing.
+    expect(
+      resolveMcpConfirmPreviewTarget("system.checkCommand", { command: "node" }, undefined)
+    ).toBeUndefined();
+  });
+
   it("returns undefined when worktree.delete args carry no worktreeId", () => {
     expect(
       resolveMcpConfirmPreviewTarget("worktree.delete", { force: true }, undefined)
@@ -2239,6 +2270,62 @@ describe("resolveMcpConfirmPreviewTarget (#11538)", () => {
         )
       ).toBeUndefined();
     });
+  });
+});
+
+describe("resolveMcpConfirmSubject for a terminal launch (#12216)", () => {
+  beforeEach(() => {
+    mocks.worktrees.clear();
+    mocks.viewStoreThrows = false;
+  });
+
+  afterEach(() => {
+    mocks.worktrees.clear();
+    mocks.viewStoreThrows = false;
+  });
+
+  it("names the worktree the chosen directory is, from the store", () => {
+    mocks.worktrees.set("wt-1", { id: "wt-1", path: "/repo/feature", branch: "feat/x" });
+
+    expect(
+      resolveMcpConfirmSubject({ kind: "terminalLaunch", command: "ls", cwd: "/repo/feature" })
+    ).toBe("feat/x");
+  });
+
+  it("falls back to the name for a detached worktree carrying an empty branch", () => {
+    mocks.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo/detached",
+      branch: "",
+      name: "detached",
+    });
+
+    expect(
+      resolveMcpConfirmSubject({
+        kind: "terminalLaunch",
+        command: undefined,
+        cwd: "/repo/detached",
+      })
+    ).toBe("detached");
+  });
+
+  it("keeps the generic title rather than putting a caller's path in it", () => {
+    // The title is the dialog's accessible name; a directory that is no
+    // worktree root resolves to nothing rather than echoing the argument.
+    expect(
+      resolveMcpConfirmSubject({ kind: "terminalLaunch", command: "ls", cwd: "/tmp/elsewhere" })
+    ).toBeUndefined();
+    expect(
+      resolveMcpConfirmSubject({ kind: "terminalLaunch", command: "ls", cwd: undefined })
+    ).toBeUndefined();
+  });
+
+  it("fails soft when no worktree view store is mounted", () => {
+    mocks.viewStoreThrows = true;
+
+    expect(
+      resolveMcpConfirmSubject({ kind: "terminalLaunch", command: "ls", cwd: "/repo/feature" })
+    ).toBeUndefined();
   });
 });
 

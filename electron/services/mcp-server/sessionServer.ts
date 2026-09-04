@@ -15,6 +15,11 @@ import {
   ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 import { dispatchCarriesRecipeId } from "../../../shared/utils/dispatchRecipeId.js";
+import {
+  readDispatchTerminalCommand,
+  readDispatchTerminalCwd,
+  TERMINAL_LAUNCH_ACTION_ID,
+} from "../../../shared/utils/dispatchTerminalCommand.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
@@ -991,15 +996,31 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
       }
 
-      // A dispatch can need confirmation for either of two reasons, and neither
-      // is satisfiable here. The first is the manifest's own `danger:
-      // "confirm"`, collected into `withheldIds` above. The second is
-      // args-conditional (#11860): the host elevates any agent-sourced dispatch
-      // carrying a `recipeId` to `"confirm"`, so a statically-`safe` composite
-      // like `worktree.createWithRecipe` clears the withheld set and would then
-      // raise the very dialog this guard exists to avoid. Read through the same
-      // extraction point the elevation uses, so the refusal and the elevation
-      // can never disagree about what names a recipe.
+      // Which launch argument elevated a `terminal.new` dispatch, in the
+      // resolver's own precedence — a command is the stronger claim, so it wins
+      // when both are present. Scoped by action id for the reason the resolver
+      // is: `command` is an ordinary field name that other safe actions take
+      // without running anything.
+      const terminalLaunchArg =
+        actionId === TERMINAL_LAUNCH_ACTION_ID
+          ? readDispatchTerminalCommand(args) !== undefined
+            ? "command"
+            : readDispatchTerminalCwd(args) !== undefined
+              ? "cwd"
+              : undefined
+          : undefined;
+
+      // A dispatch can need confirmation for any of three reasons, and none of
+      // them is satisfiable here. The first is the manifest's own `danger:
+      // "confirm"`, collected into `withheldIds` above. The other two are
+      // args-conditional: the host elevates any agent-sourced dispatch carrying
+      // a `recipeId` to `"confirm"` (#11860), so a statically-`safe` composite
+      // like `worktree.createWithRecipe` clears the withheld set, and it
+      // elevates a `terminal.new` carrying `command` or `cwd` for the same
+      // reason (#12216) — both would then raise the very dialog this guard
+      // exists to avoid. Read through the same extraction points the elevation
+      // uses, so the refusal and the elevation can never disagree about which
+      // dispatches are gated.
       const boundConfirmRefusal = withheldIds.has(actionId)
         ? `Action '${actionId}' requires confirmation, and this MCP session is bound to workspace ` +
           `'${workspaceBinding?.workspaceId}', which runs in the background with no one ` +
@@ -1012,7 +1033,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
             `to approve the dialog. The action was not run — call it without a 'recipeId', run the ` +
             `recipe from Daintree, or connect without a workspace binding.`
-          : undefined;
+          : terminalLaunchArg !== undefined
+            ? `Action '${actionId}' was called with a '${terminalLaunchArg}', so it would start a shell and ` +
+              `requires confirmation. This MCP session is bound to workspace ` +
+              `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
+              `to approve the dialog. The action was not run — call it without 'command' or 'cwd', open ` +
+              `the terminal from Daintree, or connect without a workspace binding.`
+            : undefined;
 
       if (boundConfirmRefusal !== undefined) {
         const message = boundConfirmRefusal;
