@@ -1,15 +1,22 @@
-import { useCallback, useMemo } from "react";
+import { Fragment, useCallback, useMemo } from "react";
 import type React from "react";
 import { Copy, ExternalLink, FileDiff } from "lucide-react";
-import { AtSign, FileText, FolderOpen, Folders } from "@/components/icons";
+import { AtSign, FileText, FolderOpen, Folders, Package } from "@/components/icons";
 import {
   ContextMenuActionItem,
   ContextMenuItem,
+  ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
-import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
+import {
+  usePluginContextMenuItems,
+  type PluginContextMenuItemEntry,
+} from "@/hooks/usePluginContextMenuItems";
 import { useInsertFileReference } from "@/hooks/useInsertFileReference";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
@@ -186,11 +193,31 @@ export function isFileRowMenuKey(event: {
  * browser's `Show contents` / `Set as root` for a folder); the core itself is
  * identical everywhere, so a file never gains or loses `Copy path` by which
  * panel it happens to be listed in.
+ *
+ * The root is the direct actions only — the opens, reveal, insert — with the
+ * copies and the plugin contributions nested (#12206). That keeps it the same
+ * height on every row and with any number of plugins installed, so the folder
+ * prefix reads as the first group of one menu rather than as a lid on a
+ * ten-item column.
  */
 export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuController {
   const { worktreePath, worktreeId, copyTreeRunSource } = surface;
   const filePluginItems = usePluginContextMenuItems("file");
   const { canInsert, insert } = useInsertFileReference();
+
+  // Bucketed here rather than in `renderItems`: that runs once per row, and a
+  // Review Hub listing thousands of changed files would rebuild the same map
+  // for every one of them. Insertion order is the plugins' contribution order,
+  // so the submenu doesn't reshuffle between renders.
+  const pluginGroups = useMemo(() => {
+    const byPluginId = new Map<string, PluginContextMenuItemEntry[]>();
+    for (const entry of filePluginItems) {
+      const bucket = byPluginId.get(entry.pluginId);
+      if (bucket) bucket.push(entry);
+      else byPluginId.set(entry.pluginId, [entry]);
+    }
+    return [...byPluginId.entries()];
+  }, [filePluginItems]);
 
   const reveal = useMemo(() => revealCopy(), []);
   const insertShortcutHint = isMac() ? "⌘I" : "Ctrl+I";
@@ -310,7 +337,10 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
               </ContextMenuActionItem>
             </>
           )}
-          {(showOpenDiff || showOpenCurrent) && <ContextMenuSeparator />}
+          <ContextMenuItem onSelect={() => handleReveal(absolutePath)}>
+            <FolderOpen className={ICON_CLASS} />
+            {reveal.label}
+          </ContextMenuItem>
           {/* Disabled rather than hidden when nothing resolves: the gesture is
               the point of the menu entry, and a row that silently drops it
               would read as broken. The agent is resolved from typing history,
@@ -324,60 +354,104 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
             Insert file reference
             <ContextMenuShortcut>{insertShortcutHint}</ContextMenuShortcut>
           </ContextMenuItem>
-          {/* Always enabled for a worktree: the row's ignore status isn't known
-              here, and CopyTree still applies its own .gitignore-aware
-              discovery (reporting when nothing was eligible), so this stays
-              safe for an ignored path. Absent for a workspace root — CopyTree
-              is worktree-scoped, so leaving it on would be a dead item
-              (#11482). */}
-          {worktreeId !== null && (
-            <ContextMenuItem onSelect={() => handleCopyContext(target)}>
-              <Folders className={ICON_CLASS} />
-              Copy context
-            </ContextMenuItem>
-          )}
+          {/* Reveal and Insert render unconditionally, so the direct-action
+              block above is never empty and this separator never leads. */}
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => copyToClipboard(absolutePath, "Couldn't copy path")}>
-            <Copy className={ICON_CLASS} />
-            Copy path
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => copyToClipboard(relativePath, "Couldn't copy path")}>
-            <Copy className={ICON_CLASS} />
-            Copy relative path
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => copyToClipboard(name, "Couldn't copy file name")}>
-            <Copy className={ICON_CLASS} />
-            Copy file name
-          </ContextMenuItem>
-          {showCopyFileContents && (
-            <ContextMenuItem onSelect={() => handleCopyFileContents(absolutePath)}>
+          {/* Nested for the same reason the worktree card nests its own Copy:
+              four near-identical rows read as one choice, not four, and the
+              root stays the length of the things the menu is actually opened
+              for. Always present — the three path copies never gate. */}
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
               <Copy className={ICON_CLASS} />
-              Copy file contents
-            </ContextMenuItem>
+              Copy
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {/* First and set apart, mirroring the worktree card: this runs
+                  CopyTree over the row, it does not put a string on the
+                  clipboard. Always enabled for a worktree — the row's ignore
+                  status isn't known here, and CopyTree still applies its own
+                  .gitignore-aware discovery (reporting when nothing was
+                  eligible), so this stays safe for an ignored path. Absent for
+                  a workspace root, where CopyTree is worktree-scoped and it
+                  would be a dead item (#11482). */}
+              {worktreeId !== null && (
+                <>
+                  <ContextMenuItem onSelect={() => handleCopyContext(target)}>
+                    <Folders className={ICON_CLASS} />
+                    Copy context
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                </>
+              )}
+              <ContextMenuItem onSelect={() => copyToClipboard(absolutePath, "Couldn't copy path")}>
+                <Copy className={ICON_CLASS} />
+                Copy path
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => copyToClipboard(relativePath, "Couldn't copy path")}>
+                <Copy className={ICON_CLASS} />
+                Copy relative path
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => copyToClipboard(name, "Couldn't copy file name")}>
+                <Copy className={ICON_CLASS} />
+                Copy file name
+              </ContextMenuItem>
+              {showCopyFileContents && (
+                <ContextMenuItem onSelect={() => handleCopyFileContents(absolutePath)}>
+                  <Copy className={ICON_CLASS} />
+                  Copy file contents
+                </ContextMenuItem>
+              )}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+          {/* Plugins reach every file surface through this one submenu, or none
+              of them (#11757). Nested so the root is the same height whatever
+              is installed, and grouped by plugin so two extensions offering
+              similarly named items stay tellable apart — the same shape the
+              worktree card's Extensions uses. Rendered only when something
+              contributes: an empty submenu is a dead end. */}
+          {pluginGroups.length > 0 && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  <Package className={ICON_CLASS} />
+                  Extensions
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent>
+                  {pluginGroups.map(([pluginId, entries], groupIndex) => (
+                    <Fragment key={pluginId}>
+                      {pluginGroups.length > 1 && groupIndex > 0 && <ContextMenuSeparator />}
+                      {pluginGroups.length > 1 && <ContextMenuLabel>{pluginId}</ContextMenuLabel>}
+                      {/* Still the shared section, one call per group: it owns
+                          the action source, the namespaced keys and the
+                          dispatch, and a second copy of that here is how the
+                          two drift. The separators are the shell's now, so it
+                          renders none. The dispatched args name the clicked
+                          file so a plugin item receives its subject rather than
+                          `undefined`. */}
+                      <PluginContextMenuSection
+                        items={entries}
+                        leadingSeparator={false}
+                        dispatchArgs={{
+                          path: absolutePath,
+                          ...(worktreePath && { worktreePath }),
+                          ...(status && { status }),
+                        }}
+                      />
+                    </Fragment>
+                  ))}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+            </>
           )}
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleReveal(absolutePath)}>
-            <FolderOpen className={ICON_CLASS} />
-            {reveal.label}
-          </ContextMenuItem>
-          {/* Plugins reach every file surface through this one section, or
-              none of them (#11757). The dispatched args name the clicked file
-              so a plugin item receives its subject rather than `undefined`. */}
-          <PluginContextMenuSection
-            items={filePluginItems}
-            dispatchArgs={{
-              path: absolutePath,
-              ...(worktreePath && { worktreePath }),
-              ...(status && { status }),
-            }}
-          />
         </>
       );
     },
     [
       worktreePath,
       worktreeId,
-      filePluginItems,
+      pluginGroups,
       canInsert,
       insert,
       insertAriaKeyshortcuts,

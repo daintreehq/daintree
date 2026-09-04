@@ -75,6 +75,16 @@ function renderSidebar(overrides: Partial<React.ComponentProps<typeof DiffFileSi
   return { onSelect, ...utils };
 }
 
+/**
+ * Opens a nested submenu and hands back its content. `SubContent` is
+ * Presence-gated, so its items are not in the DOM until the trigger fires;
+ * clicked rather than hovered because Radix opens synchronously on click.
+ */
+async function openSubmenu(menu: HTMLElement, name: string): Promise<HTMLElement> {
+  fireEvent.click(within(menu).getByRole("menuitem", { name }));
+  return screen.findByRole("menu", { name });
+}
+
 beforeAll(async () => {
   await primeRadix();
 });
@@ -95,7 +105,8 @@ describe("DiffFileSidebar — file row menu", () => {
 
     const menu = await screen.findByRole("menu");
     expect(within(menu).getByRole("menuitem", { name: /Open file/ })).toBeTruthy();
-    expect(within(menu).getByRole("menuitem", { name: /Copy path/ })).toBeTruthy();
+    const copy = await openSubmenu(menu, "Copy");
+    expect(within(copy).getByRole("menuitem", { name: "Copy path" })).toBeTruthy();
     expect(screen.queryByText(OUTER_SENTINEL)).toBeNull();
   });
 
@@ -139,8 +150,9 @@ describe("DiffFileSidebar — file row menu", () => {
     fireEvent.contextMenu(screen.getByTestId("diff-sidebar-file").parentElement!);
     const menu = await screen.findByRole("menu");
 
-    expect(within(menu).queryByRole("menuitem", { name: "Copy context" })).toBeNull();
-    expect(within(menu).getByRole("menuitem", { name: /Copy path/ })).toBeTruthy();
+    const copy = await openSubmenu(menu, "Copy");
+    expect(within(copy).queryByRole("menuitem", { name: "Copy context" })).toBeNull();
+    expect(within(copy).getByRole("menuitem", { name: "Copy path" })).toBeTruthy();
   });
 
   it("offers no row menu at all when the worktree root has not resolved", async () => {
@@ -154,7 +166,9 @@ describe("DiffFileSidebar — file row menu", () => {
     fireEvent.contextMenu(screen.getByTestId("diff-sidebar-file").parentElement!);
 
     expect(await screen.findByText(OUTER_SENTINEL)).toBeTruthy();
-    expect(screen.queryByRole("menuitem", { name: /Copy path/ })).toBeNull();
+    // The row menu's own root row, not one of its nested copies — a closed
+    // submenu is absent from the DOM either way and would prove nothing.
+    expect(screen.queryByRole("menuitem", { name: "Copy" })).toBeNull();
   });
 
   it("stands the global menu key down only while rows have a menu to open", () => {
@@ -180,7 +194,8 @@ describe("DiffFileSidebar — file row menu", () => {
 
     fireEvent.contextMenu(screen.getByTestId("diff-sidebar-file").parentElement!);
     const menu = await screen.findByRole("menu");
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Acme thing" }));
+    const extensions = await openSubmenu(menu, "Extensions");
+    fireEvent.click(within(extensions).getByRole("menuitem", { name: "Acme thing" }));
 
     const call = dispatchMock.mock.calls.find(([id]) => id === "acme.do");
     expect(call).toBeDefined();
