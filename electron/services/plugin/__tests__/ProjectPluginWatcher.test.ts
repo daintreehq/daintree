@@ -450,30 +450,36 @@ describe("ProjectPluginWatcher", () => {
     expect(await waitFor(() => reload.mock.calls.length > 0)).toBe(true);
     // Nothing was loaded before, so nothing is named. Asking the controller to
     // rescan at all is what loads the plugin that arrived with the folder.
-    expect((reload.mock.calls[0] as [string, string, string[]])[2]).toEqual([]);
+    // Exactly once: the latch is spent by the settle that discharges it, and a
+    // replayed burst over identical bytes must not reconcile a second time.
+    await settleFor(200);
+    expect(reload.mock.calls).toEqual([[PROJECT_ID, root, []]]);
+    expect(watcher.isWatching(PROJECT_ID)).toBe(true);
   });
 
-  it("holds an appearing folder's reconcile behind .git/index.lock", async () => {
+  it("carries an appearing folder's reconcile across a git-lock deferral", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), `dt-ppw-appears-lock-${randomUUID()}-`));
     roots.push(root);
     await fsp.mkdir(path.join(root, ".daintree"), { recursive: true });
     const gitDir = path.join(root, ".git");
     await fsp.mkdir(gitDir, { recursive: true });
-    const { watcher, reload, loaded } = makeWatcher({ gitDir });
+    const { watcher, reload, loaded } = makeWatcher({
+      gitDir,
+      timings: { ...FAST, gitLockMaxDeferMs: 120 },
+    });
     loaded.clear();
     await watcher.ensure(PROJECT_ID, root);
 
-    // The deferral reschedules the settle, so the appearance has to survive
-    // however many polls the checkout takes rather than being spent on the
-    // first one.
+    // Held for the whole appearance, so the first settle cannot do anything
+    // but defer and reschedule — the ceiling is what eventually releases it.
+    // The reconcile has to survive that round trip instead of being spent on a
+    // settle that never reached the controller, which is the case a checkout
+    // hits every time.
     await fsp.writeFile(path.join(gitDir, "index.lock"), "");
     await movePopulatedPluginsFolderInto(root);
-    await settleFor(400);
-    expect(reload).not.toHaveBeenCalled();
 
-    await fsp.rm(path.join(gitDir, "index.lock"));
     expect(await waitFor(() => reload.mock.calls.length > 0)).toBe(true);
-    expect((reload.mock.calls[0] as [string, string, string[]])[2]).toEqual([]);
+    expect(reload.mock.calls).toEqual([[PROJECT_ID, root, []]]);
   });
 
   it("registers an app-quit disposer", async () => {

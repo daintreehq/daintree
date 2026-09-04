@@ -578,6 +578,11 @@ export class ProjectPluginWatcher {
     }
     state.running = true;
     const generation = state.generation;
+    // Claimed inside the settle, but only discharged once the controller has
+    // actually been told. A reconcile that threw on the way there has not
+    // happened, so the catch puts the latch back rather than letting a folder
+    // that fingerprints as unchanged against its own seed go dark.
+    let forced = false;
 
     try {
       if (await this.deferForGitOperation(state, generation)) return;
@@ -647,7 +652,7 @@ export class ProjectPluginWatcher {
       // paths above both return and reschedule, so a flag spent before them
       // would be spent on a settle that never got as far as the controller. A
       // checkout — the case the latch exists for — takes the git-lock path.
-      const forced = state.forceReconcile;
+      forced = state.forceReconcile;
       state.forceReconcile = false;
 
       const rowByDir = new Map(scan.plugins.map((p) => [p.dirName, p] as const));
@@ -682,6 +687,7 @@ export class ProjectPluginWatcher {
       });
 
       await this.deps.reload(state.projectId, state.projectRoot, targets);
+      forced = false;
       if (this.isStale(state, generation)) return;
       this.commitFingerprints(state, nextFingerprints);
 
@@ -697,6 +703,7 @@ export class ProjectPluginWatcher {
         viewGenerationsAllocated: this.deps.viewGenerationsAllocated(),
       });
     } catch (err) {
+      if (forced && !state.stopped && !this.disposed) state.forceReconcile = true;
       logger.warn("Project plugin hot reload failed", {
         projectId: state.projectId,
         error: formatErrorMessage(err, "reload failed"),
