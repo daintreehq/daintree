@@ -33,7 +33,16 @@ import {
   type ForgeCreateIssuePreview,
   type ForgeIssueCommentPreview,
 } from "@/components/Forge/forgeWritePreview";
-import { readDispatchRecipeId } from "@/services/actions/effectiveDanger";
+import {
+  readDispatchRecipeId,
+  readDispatchTerminalCommand,
+  readDispatchTerminalCwd,
+  TERMINAL_LAUNCH_ACTION_ID,
+} from "@/services/actions/effectiveDanger";
+import {
+  formatTerminalLaunchPreviewLines,
+  type TerminalLaunchPreview,
+} from "@/lib/mcpTerminalLaunchPreview";
 import { MAX_AGENT_RECIPE_TERMINALS, useRecipeStore } from "@/store/recipeStore";
 import {
   resolveWorktreeLocation,
@@ -163,7 +172,15 @@ export type McpConfirmPreviewTarget =
    * and filing into the wrong one is the mistake nothing used to catch.
    */
   | ({ kind: "forgeCreateIssue" } & ForgeCreateIssuePreview)
-  | ({ kind: "forgeAddIssueComment" } & ForgeIssueCommentPreview);
+  | ({ kind: "forgeAddIssueComment" } & ForgeIssueCommentPreview)
+  /**
+   * The launch target a `terminal.new` dispatch named (#12216). Synchronous and
+   * argument-derived like the forge kinds, and for the same reason: the
+   * elevation these arguments earn makes the modal the only gate on an
+   * agent-initiated shell, and `ArgumentsDisclosure` redacts every command long
+   * enough to be worth reading.
+   */
+  | ({ kind: "terminalLaunch" } & TerminalLaunchPreview);
 
 /** Section heading rendered above each kind's preview lines. */
 const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
@@ -176,6 +193,7 @@ const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   terminalKillBatch: "Terminals",
   forgeCreateIssue: "Issue to be filed",
   forgeAddIssueComment: "Comment to be posted",
+  terminalLaunch: "Terminal to be opened",
 };
 
 export function mcpConfirmPreviewTitle(target: McpConfirmPreviewTarget): string {
@@ -501,6 +519,17 @@ export function resolveMcpConfirmPreviewTarget(
         }
       : undefined;
   }
+  // `terminal.new`'s launch arguments (#12216). Scoped by action id, exactly as
+  // `resolveEffectiveActionDanger` scopes the elevation that opens this modal:
+  // `command` is an ordinary field name other safe actions take without running
+  // anything. A dispatch naming neither is not elevated and gets no card.
+  if (actionId === TERMINAL_LAUNCH_ACTION_ID) {
+    const command = readDispatchTerminalCommand(args);
+    const cwd = readDispatchTerminalCwd(args);
+    return command === undefined && cwd === undefined
+      ? undefined
+      : { kind: "terminalLaunch", command, cwd };
+  }
   // Any dispatch carrying a recipe id — `recipe.run` and the two composites that
   // reach the same effect — previews the terminals it would start. Keyed on the
   // argument rather than an action allowlist so it can't drift out of step with
@@ -553,6 +582,22 @@ export function resolveMcpConfirmSubject(
     if (target.kind === "recipe") {
       const recipe = useRecipeStore.getState().getRecipeById(target.resolvedRecipeId);
       return recipe?.name !== undefined && recipe.name.length > 0 ? recipe.name : undefined;
+    }
+    // The worktree the chosen directory IS, named from the store rather than
+    // from the path itself — the title must not become a place to render
+    // caller-supplied text. A cwd that is no worktree root, or none at all,
+    // resolves to nothing and keeps the generic title; the card names the
+    // directory and command in full either way.
+    if (target.kind === "terminalLaunch") {
+      if (target.cwd === undefined) return undefined;
+      for (const worktree of getCurrentViewStore().getState().worktrees.values()) {
+        if (worktree.path !== target.cwd) continue;
+        // `||`, not `??`: a detached worktree carries `branch: ""` as readily
+        // as `undefined`, and `??` would keep the empty string over the name.
+        const name = worktree.branch || worktree.name;
+        return name.length > 0 ? name : undefined;
+      }
+      return undefined;
     }
   } catch {
     return undefined;
@@ -693,6 +738,9 @@ export async function buildMcpConfirmPreview(
   }
   if (target.kind === "forgeAddIssueComment") {
     return { lines: formatForgeIssueCommentPreviewLines(target) };
+  }
+  if (target.kind === "terminalLaunch") {
+    return { lines: formatTerminalLaunchPreviewLines(target) };
   }
   const operation = target.kind === "gitPush" ? "push" : "pull-rebase";
   try {
@@ -848,6 +896,11 @@ function withPreviewedWorktreeCwd(
     if (args === null || typeof args !== "object" || Array.isArray(args)) return args;
     return { ...args, recipeId: target.resolvedRecipeId };
   }
+  // `terminal.new`'s `cwd` is the directory the CALLER named, not a worktree
+  // selector the host resolved — there is nothing to re-resolve and so nothing
+  // to pin, and rewriting the args around it would strip selectors the action
+  // resolves for itself.
+  if (target.kind === "terminalLaunch") return args;
   // Named per kind rather than left to a fall-through: every remaining kind
   // happens to carry a path today, and a future one that does not would
   // otherwise silently pin `cwd: undefined` onto a dispatch.

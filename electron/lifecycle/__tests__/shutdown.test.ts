@@ -181,7 +181,10 @@ vi.mock("../../services/NotificationService.js", () => ({
   notificationService: notificationServiceMock,
 }));
 
-const pluginServiceMock = vi.hoisted(() => ({ setWorkspaceClient: vi.fn() }));
+const pluginServiceMock = vi.hoisted(() => ({
+  setWorkspaceClient: vi.fn(),
+  shutdownManagedProcesses: vi.fn(async () => {}),
+}));
 vi.mock("../../services/PluginService.js", () => ({
   pluginService: pluginServiceMock,
 }));
@@ -916,6 +919,52 @@ describe("registerShutdownHandler", () => {
       });
 
       expect(pluginServiceMock.setWorkspaceClient).toHaveBeenCalledWith(null);
+    });
+
+    it("waits for the plugin-spawned children to be killed before exiting (#12216)", async () => {
+      // Held open so the assertion proves ORDERING, not just that the call
+      // happened: an immediately-resolved mock would pass either way.
+      let releaseSweep: (() => void) | undefined;
+      pluginServiceMock.shutdownManagedProcesses.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseSweep = resolve;
+          })
+      );
+
+      const { beforeQuitCb } = await setup({});
+      const quitting = beforeQuitCb(makeEvent());
+
+      // Electron signals nothing to a `child_process.spawn` tree on quit, so
+      // without this sweep a plugin's dev server simply outlives the app.
+      await vi.waitFor(() => {
+        expect(pluginServiceMock.shutdownManagedProcesses).toHaveBeenCalled();
+      });
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      releaseSweep?.();
+      await quitting;
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+    });
+
+    it("still exits cleanly when the plugin process sweep rejects (#12216)", async () => {
+      pluginServiceMock.shutdownManagedProcesses.mockRejectedValueOnce(new Error("sweep boom"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+      expect(pluginServiceMock.shutdownManagedProcesses).toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[MAIN] Plugin managed-process shutdown failed:",
+        expect.any(Error)
+      );
+      warnSpy.mockRestore();
     });
 
     it("still exits cleanly when a moved disposal throws", async () => {

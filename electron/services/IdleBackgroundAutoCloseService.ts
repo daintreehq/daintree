@@ -14,6 +14,7 @@ import { getHibernationService } from "./HibernationService.js";
 import { helpSessionService } from "./HelpSessionService.js";
 import { writeHibernatedMarker } from "./pty/terminalSessionPersistence.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
+import { notifyProjectPluginsClosed } from "../window/projectPluginLifecycle.js";
 import { logInfo, logError } from "../utils/logger.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -534,6 +535,15 @@ export class IdleBackgroundAutoCloseService {
     projectStore.updateProjectStatus(projectId, "closed", {
       autoParkedAt: now,
     });
+
+    // Reclaiming the project's memory has to include its plugins: without this
+    // the sweep leaves the workers, startup timers, spawned children and the
+    // native watcher resident, which is the opposite of what an auto-close is
+    // for. Fire-and-forget and self-logging, so a plugin's teardown cannot fail
+    // the sweep. The controller's next-switch sweep stays as defence in depth —
+    // a duplicate close is a no-op.
+    notifyProjectPluginsClosed(projectId);
+
     const updated = projectStore.getProjectById(projectId);
     if (updated) {
       try {

@@ -1762,7 +1762,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Open a new terminal in the active worktree, ready for commands. This creates a visible panel and starts a shell process that consumes resources until it is closed. Launch an agent instead when the intent is to start an AI CLI rather than a plain shell.",
+      "Open a new terminal, ready for commands. This creates a visible panel and starts a shell process that consumes resources until it is closed. Defaults to the active worktree, and can instead open at a chosen directory and run something there immediately. Launch an agent instead when the intent is to start an AI CLI rather than a plain shell.",
     enabled: true,
     id: "terminal.new",
     inputSchema: {
@@ -1780,6 +1780,18 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           enum: ["auto", "preserve", "take"],
           description:
             'Whether the new panel takes keyboard focus: "auto" (default) takes it unless the assistant owns input, "preserve" never takes it, "take" always does. Prefer preserve for background spawns so the user is not interrupted.',
+        },
+        cwd: {
+          description:
+            "Absolute directory to open the terminal in. Defaults to the active worktree's root. Supplying this requires a confirmation.",
+          type: "string",
+          minLength: 1,
+        },
+        command: {
+          description:
+            "Shell command to run in the new terminal immediately, instead of leaving it at a prompt. Supplying this requires a confirmation.",
+          type: "string",
+          minLength: 1,
         },
       },
     },

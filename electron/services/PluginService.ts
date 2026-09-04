@@ -2918,6 +2918,20 @@ export class PluginService {
   }
 
   /**
+   * App-quit teardown for every child a plugin spawned via `host.process.spawn`
+   * (#12216). Called from `lifecycle/shutdown.ts` — the per-plugin `killAll` on
+   * the unload cascade only covers a plugin going away, and nothing was
+   * unloading these at quit, so a plugin's dev server outlived the app.
+   *
+   * Deliberately narrower than `dispose()`: quit wants the OS children gone,
+   * not a full registry teardown with its contribution broadcasts and a second
+   * best-effort MCP shutdown that `shutdown.ts` already runs on its own.
+   */
+  async shutdownManagedProcesses(): Promise<void> {
+    await this.processManager?.shutdownAll();
+  }
+
+  /**
    * Test seam: inject a {@link PluginProcessManager} wired to a controllable
    * fake spawner so host-level spawn/unload behavior can be exercised without
    * forking a real `node:child_process`. Production never calls this.

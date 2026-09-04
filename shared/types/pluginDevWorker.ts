@@ -52,6 +52,7 @@ export type PluginHostCallMethod =
   | "storage.set"
   | "storage.delete"
   | "fs.readFile"
+  | "fs.readFileBytes"
   | "fs.writeFile"
   | "fs.readdir"
   | "fs.stat"
@@ -415,7 +416,7 @@ export interface ShowConfirmParams {
   options: PluginConfirmOptions;
 }
 
-/** Params for `fs.readFile` / `fs.readdir` / `fs.stat` (`host-call`). */
+/** Params for `fs.readFile` / `fs.readFileBytes` / `fs.readdir` / `fs.stat` (`host-call`). */
 export interface FsPathParams {
   path: string;
   /**

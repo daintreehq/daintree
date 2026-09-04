@@ -340,7 +340,14 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // refused plugin is reported rather than absent, and that a re-scan still
   // stages an id the project has never run. Three tools against a 120 B floor
   // cannot land inside the old ceiling's headroom at any wording.
-  const MAX_COHORT_TOTAL_BYTES = 52_500;
+  // 52_500 → 52_553 for #12224, which adds no tool: `terminal.new` grew 252 →
+  // 342 B because it now takes `cwd` and `command`, and a caller that cannot
+  // see it can open a terminal somewhere other than the active worktree and run
+  // something in it will not reach for it. 342 B is mid-pack against the 400 B
+  // per-description ceiling, and the prose names the capability without
+  // restating the schema, so there is nothing to tighten. This is the measured
+  // total of all 167 descriptions, not a rounded allowance.
+  const MAX_COHORT_TOTAL_BYTES = 52_553;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

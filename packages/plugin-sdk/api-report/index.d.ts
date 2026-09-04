@@ -3152,6 +3152,18 @@ interface PluginFsApi {
      */
     readFile(filePath: string, options?: PluginHostCallOptions): Promise<string>;
     /**
+     * Read a file as raw bytes, for the content UTF-8 decoding would corrupt —
+     * an image, a font, an archive, anything a plugin wants to hash or hand to a
+     * view as a data URL. Same capability gate, containment and cancellation as
+     * {@link readFile}, and the same absence of a size cap.
+     *
+     * A separate method rather than an `encoding`-shaped option on `readFile`:
+     * the return type stays unambiguous at every call site, the existing
+     * text contract is untouched, and no `string | Uint8Array` union is baked
+     * permanently into the published SDK surface.
+     */
+    readFileBytes(filePath: string, options?: PluginHostCallOptions): Promise<Uint8Array>;
+    /**
      * Write UTF-8 text to a file, creating it if absent (parent directories must
      * already exist within scope). Rejects on a missing write capability or an
      * out-of-scope path. Recorded in the audit trail. No cancellation signal —

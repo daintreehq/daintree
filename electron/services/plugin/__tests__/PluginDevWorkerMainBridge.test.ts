@@ -693,6 +693,157 @@ describe("PluginDevWorkerMainBridge", () => {
     await expect(pending).rejects.toThrow(/reloaded/);
   });
 
+  it("fails pending invokes when the worker crashes (#12216)", async () => {
+    const { host, workerHost, bridge } = makeBridge();
+    bridge.waitForActivation().catch(() => {});
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerAction",
+      params: {
+        descriptor: {
+          id: "greet",
+          title: "Greet",
+          description: "",
+          category: "Demo",
+          kind: "command",
+          danger: "safe",
+        },
+      },
+    });
+    const wrapper = host.registerAction.mock.calls[0][1] as (a: unknown) => Promise<unknown>;
+    const pending = wrapper({});
+    pending.catch(() => {});
+
+    // A crash, not a reload: the host respawns a worker that has never seen
+    // this request id, so nothing will ever reply to it. Before #12216 the
+    // caller simply waited forever.
+    workerHost.emit("exit", 139, false);
+
+    await expect(pending).rejects.toThrow(/crashed \(code 139\)/);
+  });
+
+  it("fails pending invokes when the worker exits expectedly (#12216)", async () => {
+    const { host, workerHost, bridge } = makeBridge();
+    bridge.waitForActivation().catch(() => {});
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerAction",
+      params: {
+        descriptor: {
+          id: "greet",
+          title: "Greet",
+          description: "",
+          category: "Demo",
+          kind: "command",
+          danger: "safe",
+        },
+      },
+    });
+    const wrapper = host.registerAction.mock.calls[0][1] as (a: unknown) => Promise<unknown>;
+    const pending = wrapper({});
+    pending.catch(() => {});
+
+    workerHost.emit("exit", 0, true);
+
+    await expect(pending).rejects.toThrow(/stopped before invocation completed/);
+  });
+
+  it("aborts in-flight host calls when the worker dies (#12216)", async () => {
+    const { host, workerHost, bridge } = makeBridge();
+    bridge.waitForActivation().catch(() => {});
+    let seenSignal: AbortSignal | undefined;
+    host.fs.readFile.mockImplementation((async (_p: string, opts: { signal?: AbortSignal }) => {
+      seenSignal = opts.signal;
+      return new Promise<string>(() => {});
+    }) as unknown as () => Promise<string>);
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "h1",
+      method: "fs.readFile",
+      params: { path: "/repo/a.txt" },
+    });
+    await flush();
+
+    workerHost.emit("exit", 139, false);
+    // The worker is gone, so the read has nowhere to deliver — cancel the I/O
+    // rather than let it complete against a dead generation.
+    expect(seenSignal?.aborted).toBe(true);
+  });
+
+  it("retires the crashed generation's registrations and subscriptions (#12216)", async () => {
+    const { host, workerHost, bridge, clear } = makeBridge();
+    bridge.waitForActivation().catch(() => {});
+    const disposeProvider = vi.fn();
+    host.registerFileDecorationProvider.mockReturnValueOnce(disposeProvider);
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerFileDecorationProvider",
+      params: { descriptor: { id: "acme.demo.deco" } },
+    });
+    await flush();
+
+    workerHost.emit("exit", 139, false);
+
+    // A crash is the same generation boundary a reload is: the replacement
+    // re-runs activate() and re-registers, so anything left behind is a
+    // duplicate it cannot address.
+    expect(disposeProvider).toHaveBeenCalledTimes(1);
+    expect(clear).toHaveBeenCalled();
+  });
+
+  it("drops a late host-result from a crashed generation (#12216)", async () => {
+    const { host, workerHost, bridge } = makeBridge();
+    bridge.waitForActivation().catch(() => {});
+    let settle: ((v: string) => void) | undefined;
+    host.fs.readFile.mockImplementation(
+      () =>
+        new Promise<string>((res) => {
+          settle = res;
+        })
+    );
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "h1",
+      method: "fs.readFile",
+      params: { path: "/repo/a.txt" },
+    });
+    await flush();
+
+    workerHost.emit("exit", 139, false);
+    workerHost.sent.length = 0;
+
+    // The replacement worker's requestId counter restarts from scratch, so a
+    // result from the dead generation could otherwise be delivered against a
+    // colliding id.
+    settle?.("stale contents");
+    await flush();
+
+    expect(workerHost.sent.filter((m) => m.type === "host-result")).toEqual([]);
+  });
+
+  it("leaves an idle bridge's generation intact on an expected exit (#12216)", async () => {
+    const clear = vi.fn();
+    const { host, workerHost, bridge } = makeBridge({ clear });
+    bridge.waitForActivation().catch(() => {});
+    const disposeProvider = vi.fn();
+    host.registerFileDecorationProvider.mockReturnValueOnce(disposeProvider);
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerFileDecorationProvider",
+      params: { descriptor: { id: "acme.demo.deco" } },
+    });
+    await flush();
+    clear.mockClear();
+
+    // A reload already emitted `reloading` and retired the generation before
+    // this lands, so the exit itself must not tear registrations down a second
+    // time — that would drop what the incoming generation just registered.
+    workerHost.emit("exit", 0, true);
+
+    expect(disposeProvider).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+  });
+
   it("drops a subscription event queued before a reload (generation guard) (#10526)", async () => {
     const { host, workerHost, bridge } = makeBridge();
     bridge.waitForActivation().catch(() => {});

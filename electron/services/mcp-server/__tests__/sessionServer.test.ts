@@ -5410,6 +5410,53 @@ describe("workspace-bound external sessions (#11789)", () => {
       expect(deps.dispatchAction).toHaveBeenCalled();
     });
 
+    it("refuses a terminal.new whose launch arguments elevate it (#12216)", async () => {
+      // Same shape as the recipe case and the same reason: `terminal.new` is on
+      // the external allowlist, declares `danger: "safe"` and carries no
+      // `recipeId`, so it escapes both existing arms — and a call naming a
+      // `command` or a `cwd` is elevated host-side into a dialog raised in a
+      // background workspace nobody is watching.
+      for (const args of [{ command: "rm -rf /tmp/x" }, { cwd: "/repo/feature" }]) {
+        const deps = boundDeps({
+          requestManifest: vi
+            .fn()
+            .mockResolvedValue([
+              makeManifestEntry("terminal.list"),
+              makeManifestEntry("terminal.new"),
+            ]),
+        });
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const result = await callTool(server, { name: "terminal.new", arguments: args });
+
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result.content)).toContain("CONFIRMATION_REQUIRED");
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+      }
+    });
+
+    it("still opens a plain terminal in a bound session", async () => {
+      // Per-dispatch, so a `terminal.new` naming no launch target keeps working
+      // — refusing the action id would take "open a terminal" off the bound
+      // surface entirely.
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockResolvedValue([
+            makeManifestEntry("terminal.list"),
+            makeManifestEntry("terminal.new"),
+          ]),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "terminal.new", arguments: {} });
+
+      expect(result.isError).toBeFalsy();
+      expect(deps.dispatchAction).toHaveBeenCalled();
+    });
+
     it("leaves the rest of the bound surface dispatchable", async () => {
       const deps = boundDeps();
       const server = createSessionServer(SESSION, deps);

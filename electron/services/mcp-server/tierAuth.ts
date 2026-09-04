@@ -2,6 +2,10 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { ActionDispatchResult, ActionManifestEntry } from "../../../shared/types/actions.js";
 import { deriveBand, BAND_OVERRIDES } from "../../../shared/utils/actionRiskBand.js";
 import { toWireSchema } from "../../../shared/utils/mcpWireSchema.js";
+import {
+  TERMINAL_LAUNCH_ACTION_ID,
+  TERMINAL_LAUNCH_ARGS,
+} from "../../../shared/utils/dispatchTerminalCommand.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import type { HelpTokenValidator } from "./shared.js";
@@ -361,25 +365,40 @@ export interface TargetPolicySessionSnapshot {
 /** The `recipeId` argument that elevates a safe dispatch to confirm (#11860). */
 const RECIPE_ID_ARG = "recipeId";
 
+function schemaProperties(inputSchema: unknown): Record<string, unknown> | undefined {
+  if (inputSchema === null || typeof inputSchema !== "object" || Array.isArray(inputSchema)) {
+    return undefined;
+  }
+  const properties = (inputSchema as { properties?: unknown }).properties;
+  if (properties === null || typeof properties !== "object" || Array.isArray(properties)) {
+    return undefined;
+  }
+  return properties as Record<string, unknown>;
+}
+
 /**
  * Whether this target's own arguments can raise it from `safe` to
  * confirmation-gated.
  *
  * Read off the declared input schema rather than an action allowlist, mirroring
- * `resolveEffectiveActionDanger`, which keys the elevation on the ARGUMENT for
- * exactly that reason: an allowlist would need updating for every future
- * composite and would silently under-gate the one someone forgets. A target that
- * cannot accept a `recipeId` can never be elevated by one.
+ * `resolveEffectiveActionDanger`, which keys the recipe elevation on the
+ * ARGUMENT for exactly that reason: an allowlist would need updating for every
+ * future composite and would silently under-gate the one someone forgets. A
+ * target that cannot accept a `recipeId` can never be elevated by one.
+ *
+ * The shell-launch elevation (#12216) is the one rule that is NOT argument-only
+ * — `command` is an ordinary field name, so the resolver scopes it to
+ * `terminal.new` by id — and this mirrors that scoping rather than reproducing
+ * it, reading the id and the field names from the same module the resolver
+ * does. `terminal.new` is statically `safe` and carries no `recipeId`, so
+ * without this arm the record would promise no dialog for the one target whose
+ * launch arguments always raise one.
  */
-function acceptsRecipeId(inputSchema: unknown): boolean {
-  if (inputSchema === null || typeof inputSchema !== "object" || Array.isArray(inputSchema)) {
-    return false;
-  }
-  const properties = (inputSchema as { properties?: unknown }).properties;
-  if (properties === null || typeof properties !== "object" || Array.isArray(properties)) {
-    return false;
-  }
-  return RECIPE_ID_ARG in (properties as Record<string, unknown>);
+function acceptsEscalatingArgs(id: string, inputSchema: unknown): boolean {
+  const properties = schemaProperties(inputSchema);
+  if (properties === undefined) return false;
+  if (RECIPE_ID_ARG in properties) return true;
+  return id === TERMINAL_LAUNCH_ACTION_ID && TERMINAL_LAUNCH_ARGS.some((arg) => arg in properties);
 }
 
 /**
@@ -464,7 +483,8 @@ export function buildTargetPolicy(
   if (typeof record.enabled !== "boolean") return null;
   const callable = record.enabled;
   const annotations = buildAnnotations(record as ActionManifestEntry);
-  const confirmationMayEscalate = danger === "safe" && acceptsRecipeId(record.inputSchema);
+  const confirmationMayEscalate =
+    danger === "safe" && acceptsEscalatingArgs(id, record.inputSchema);
 
   // The digest covers only what a caller's own code is built against. Live
   // session state is deliberately absent: `callable`, `effectiveTier`,

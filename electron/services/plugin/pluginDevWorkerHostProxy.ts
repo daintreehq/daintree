@@ -705,6 +705,8 @@ export class PluginDevWorkerHostProxy {
       fs: {
         readFile: (filePath, options) =>
           this.call<string>("fs.readFile", { path: filePath }, options?.signal),
+        readFileBytes: (filePath, options) =>
+          this.call<Uint8Array>("fs.readFileBytes", { path: filePath }, options?.signal),
         writeFile: (filePath, contents) =>
           this.call<void>("fs.writeFile", { path: filePath, contents }),
         readdir: (dirPath, options) =>

@@ -5066,7 +5066,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Open a new terminal in the active worktree, ready for commands. This creates a visible panel and starts a shell process that consumes resources until it is closed. Launch an agent instead when the intent is to start an AI CLI rather than a plain shell.",
+    "description": "Open a new terminal, ready for commands. This creates a visible panel and starts a shell process that consumes resources until it is closed. Defaults to the active worktree, and can instead open at a chosen directory and run something there immediately. Launch an agent instead when the intent is to start an AI CLI rather than a plain shell.",
     "examples": undefined,
     "id": "terminal.new",
     "keywords": undefined,

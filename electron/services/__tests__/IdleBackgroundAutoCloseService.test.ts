@@ -111,6 +111,13 @@ const helpSessionServiceMock = vi.hoisted(() => ({
 
 vi.mock("../HelpSessionService.js", () => ({ helpSessionService: helpSessionServiceMock }));
 
+// Mocked rather than exercised: the real seam dynamically imports the whole
+// PluginService module graph, which this sweep test has no business loading.
+const pluginLifecycleMock = vi.hoisted(() => ({
+  notifyProjectPluginsClosed: vi.fn<(projectId: string) => void>(),
+}));
+vi.mock("../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
+
 import { IdleBackgroundAutoCloseService } from "../IdleBackgroundAutoCloseService.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
@@ -268,6 +275,18 @@ describe("IdleBackgroundAutoCloseService", () => {
       );
     });
 
+    it("unloads the reclaimed project's plugins (#12216)", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const service = makeService();
+      await runCheck(service);
+
+      // The whole point of the sweep is reclaiming memory; leaving the plugin
+      // workers, timers and spawned children resident defeats it. Before
+      // #12216 nothing ran the unload cascade on this path.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("proj-1");
+    });
+
     it("skips a project that still has a terminal", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
@@ -276,6 +295,8 @@ describe("IdleBackgroundAutoCloseService", () => {
       await runCheck(service);
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
       expect(broadcastToRendererMock).not.toHaveBeenCalled();
+      // A project the sweep declined to close keeps its plugins.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
     });
 
     it("a live assistant blocks the reclaim, and is never capture-revoked (#11807)", async () => {

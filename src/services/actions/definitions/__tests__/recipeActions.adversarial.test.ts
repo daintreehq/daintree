@@ -584,11 +584,17 @@ describe("recipeActions adversarial", () => {
       // not, and a human pick is never elevated.
       const def = definitionFor("recipe.editor.open");
 
-      expect(resolveEffectiveActionDanger(def.danger, "agent", { recipeId: "r1" })).toBe("confirm");
-      expect(resolveEffectiveActionDanger(def.danger, "agent", { worktreeId: "wt-a" })).toBe(
-        "safe"
-      );
-      expect(resolveEffectiveActionDanger(def.danger, "user", { recipeId: "r1" })).toBe("safe");
+      expect(
+        resolveEffectiveActionDanger("recipe.editor.open", def.danger, "agent", { recipeId: "r1" })
+      ).toBe("confirm");
+      expect(
+        resolveEffectiveActionDanger("recipe.editor.open", def.danger, "agent", {
+          worktreeId: "wt-a",
+        })
+      ).toBe("safe");
+      expect(
+        resolveEffectiveActionDanger("recipe.editor.open", def.danger, "user", { recipeId: "r1" })
+      ).toBe("safe");
     });
 
     it("refuses to claim an editor opened when nothing is listening", async () => {
