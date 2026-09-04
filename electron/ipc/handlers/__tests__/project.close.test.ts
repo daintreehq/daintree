@@ -47,6 +47,15 @@ vi.mock("../../../projectMenuState.js", () => ({
   refreshProjectMenuState: refreshProjectMenuStateMock,
 }));
 
+// Unmocked this resolves through the real fire-and-forget dynamic import, which
+// pulls in the whole of `PluginService` and proves nothing about the call. It is
+// the canonical close edge that `project:sleep` and the idle sweep copy, so it
+// needs a baseline of its own (#12231).
+const pluginLifecycleMock = vi.hoisted(() => ({
+  notifyProjectPluginsClosed: vi.fn<(projectId: string) => void>(),
+}));
+vi.mock("../../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
+
 const teardownMock = vi.hoisted(() => ({
   gracefulTeardownAndJournalProject:
     vi.fn<(...args: unknown[]) => Promise<{ confirmed: boolean; terminalsKilled: number }>>(),
@@ -164,6 +173,14 @@ describe("project:close handler", () => {
     expect(refreshProjectMenuStateMock.mock.invocationCallOrder[0]).toBeGreaterThan(
       projectStoreMock.updateProjectStatus.mock.invocationCallOrder[0]
     );
+
+    // Every plugin the project owns unloads with it, after the "closed" write —
+    // that write is the commit point for the close.
+    expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledTimes(1);
+    expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("project-active");
+    expect(
+      pluginLifecycleMock.notifyProjectPluginsClosed.mock.invocationCallOrder[0]!
+    ).toBeGreaterThan(projectStoreMock.updateProjectStatus.mock.invocationCallOrder[0]!);
   });
 
   it("rejects closing the active project when not killing terminals", async () => {
@@ -455,6 +472,8 @@ describe("project:close handler", () => {
       expect(projectStoreMock.clearProjectState).not.toHaveBeenCalled();
       expect(projectStoreMock.clearCurrentProject).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      // The project is still open with live agents behind it.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
     });
 
     it("waits for the capture to settle before tearing the project down", async () => {
@@ -606,8 +625,10 @@ describe("project:close handler", () => {
     expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("project-bg", "background");
     expect(worktreeService.pauseProject).toHaveBeenCalledWith("/test/project-bg");
     // Backgrounding leaves every terminal running, the assistant's included —
-    // revoking here would kill the live session it is meant to preserve.
+    // revoking here would kill the live session it is meant to preserve. The
+    // project is still open, so its plugins stay loaded for the same reason.
     expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+    expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
   });
 
   it("does NOT call pauseProject when killing terminals", async () => {

@@ -3862,7 +3862,7 @@ export class PluginService {
     await this.syncProjectPluginWatcher(projectId, projectRoot);
   }
 
-  /** The user closed this project: unload everything it owns. */
+  /** This project stopped being live: unload everything it owns. */
   async onProjectClosed(projectId: string): Promise<void> {
     // Stop the watcher first: it is the one thing that could otherwise queue a
     // reload behind the teardown.
@@ -3999,10 +3999,11 @@ export class PluginService {
    */
   private async syncProjectPluginWatcher(projectId: string, projectRoot?: string): Promise<void> {
     const trust = this.projectPlugins.getTrustState(projectId);
-    // A close can land while an open is still awaiting its snapshot push, and
-    // the idle auto-close service and the free-memory IPC flip a row to
-    // "closed" without ever reaching `onProjectClosed`. Re-reading the row here
-    // is what keeps either from leaving a live native watcher behind.
+    // A close can land while an open is still awaiting its snapshot push, every
+    // close notification is fire-and-forget, and the project store's own status
+    // reconciliation flips a row to "closed" without ever reaching
+    // `onProjectClosed`. Re-reading the row here is what keeps any of them from
+    // leaving a live native watcher behind.
     if (
       this.disposed ||
       this.isProjectRowClosed(projectId) ||

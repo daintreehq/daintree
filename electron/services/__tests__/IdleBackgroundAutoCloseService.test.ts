@@ -284,7 +284,33 @@ describe("IdleBackgroundAutoCloseService", () => {
       // The whole point of the sweep is reclaiming memory; leaving the plugin
       // workers, timers and spawned children resident defeats it. Before
       // #12216 nothing ran the unload cascade on this path.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledTimes(1);
       expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("proj-1");
+
+      // Order is load-bearing, not cosmetic: the status write is the commit
+      // point, so close intent must not be published before the row carries it.
+      expect(projectStoreMock.updateProjectStatus.mock.invocationCallOrder[0]!).toBeLessThan(
+        pluginLifecycleMock.notifyProjectPluginsClosed.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("notifies once per parked project, not once per sweep", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeIdleProject("proj-1"),
+        makeIdleProject("proj-2"),
+      ]);
+      const service = makeService();
+      await runCheck(service);
+
+      // A single-close fixture cannot tell "per successful project" apart from
+      // "once per sweep" — a regression that hoisted the call out of the loop
+      // would pass it. Two closes is the smallest fixture that can.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledTimes(2);
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed.mock.calls.map(([id]) => id)).toEqual([
+        "proj-1",
+        "proj-2",
+      ]);
     });
 
     it("skips a project that still has a terminal", async () => {
@@ -390,6 +416,11 @@ describe("IdleBackgroundAutoCloseService", () => {
         expect.anything()
       );
       expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalledWith("proj-1");
+
+      // Per successfully parked project, not per candidate and not once per
+      // sweep: proj-1 never closed, so its plugins must still be running.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledTimes(1);
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("proj-2");
 
       const skipLogs = logInfoMock.mock.calls.filter(
         ([event]) => event === "idle-background-auto-close-skip-live-assistant"
@@ -502,6 +533,9 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
       expect(evictProjectRendererMock).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      // Representative LATE bail: the notification hangs off the status write,
+      // so a project that bails after the revoke keeps its plugins.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
     });
 
     it("a failed capture-revoke of a dead session degrades gracefully and never blocks the reclaim", async () => {

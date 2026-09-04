@@ -56,6 +56,13 @@ const teardownMock = vi.hoisted(() => ({
 }));
 vi.mock("../../../services/pty/projectSessionJournal.js", () => teardownMock);
 
+// Unmocked this resolves through the real fire-and-forget dynamic import, so
+// deleting the notify from the remove path left this whole file green (#12231).
+const pluginLifecycleMock = vi.hoisted(() => ({
+  notifyProjectPluginsClosed: vi.fn<(projectId: string) => void>(),
+}));
+vi.mock("../../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
+
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
@@ -119,6 +126,15 @@ describe("project:remove handler", () => {
 
     // The row is gone, so a window still bound to it has no project open (#11136).
     expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+
+    // A removed project's plugins must not outlive it, and the notify has to
+    // land BEFORE the row goes: afterwards the controller can no longer resolve
+    // the project to reconcile it away.
+    expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledTimes(1);
+    expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("proj-1");
+    expect(
+      pluginLifecycleMock.notifyProjectPluginsClosed.mock.invocationCallOrder[0]!
+    ).toBeLessThan(removeOrder);
   });
 
   it("fails closed: does NOT remove the project when the teardown is unconfirmed", async () => {
@@ -149,6 +165,8 @@ describe("project:remove handler", () => {
     expect(projectStoreMock.removeProject).not.toHaveBeenCalled();
     expect(windowStateMock.pruneWindowStateForPath).not.toHaveBeenCalled();
     expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
+    // The row survives with its agents still running, so its plugins do too.
+    expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
   });
 
   it("fails closed when the teardown throws: the old swallow-and-remove is gone", async () => {
