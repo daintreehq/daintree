@@ -42,6 +42,15 @@ const STATE_LABEL: Record<ProjectPluginState, string> = {
   invalid: "Unreadable",
 };
 
+/**
+ * Picker option ids are namespaced by origin because a project plugin may share
+ * its manifest id with an installed one — the `collidesWithGlobal` case. They
+ * are two different plugins whose switches mean different things (mute vs hide),
+ * so a bare id would select both panes at once and repeat itself in the DOM.
+ */
+const PROJECT_OPTION_PREFIX = "project:";
+const INSTALLED_OPTION_PREFIX = "installed:";
+
 function projectPluginStatus(plugin: ProjectPluginInfo): string {
   if (plugin.muted && plugin.state !== "invalid") return "Off";
   return STATE_LABEL[plugin.state];
@@ -459,14 +468,16 @@ export function ProjectPluginsTab() {
   const options: ProjectPluginOption[] = useMemo(
     () => [
       ...projectPlugins.map((p) => ({
-        id: p.id,
+        id: `${PROJECT_OPTION_PREFIX}${p.id}`,
+        pluginId: p.id,
         name: p.displayName,
         origin: "project" as const,
         status: projectPluginStatus(p),
         active: p.state === "active",
       })),
       ...installedOnly.map((p) => ({
-        id: p.instanceId,
+        id: `${INSTALLED_OPTION_PREFIX}${p.instanceId}`,
+        pluginId: p.instanceId,
         name: p.manifest.displayName ?? p.instanceId,
         origin: "installed" as const,
         status: p.disabled ? "Off" : "Installed",
@@ -479,8 +490,12 @@ export function ProjectPluginsTab() {
   // A selection that has gone away — the folder changed, a plugin was
   // uninstalled — falls back to the overview rather than rendering an empty
   // pane for an id nothing describes any more.
-  const selectedProjectPlugin = projectPlugins.find((p) => p.id === selectedId);
-  const selectedInstalled = installedOnly.find((p) => p.instanceId === selectedId);
+  const selectedProjectPlugin = selectedId.startsWith(PROJECT_OPTION_PREFIX)
+    ? projectPlugins.find((p) => p.id === selectedId.slice(PROJECT_OPTION_PREFIX.length))
+    : undefined;
+  const selectedInstalled = selectedId.startsWith(INSTALLED_OPTION_PREFIX)
+    ? installedOnly.find((p) => p.instanceId === selectedId.slice(INSTALLED_OPTION_PREFIX.length))
+    : undefined;
   const showOverview = !selectedProjectPlugin && !selectedInstalled;
 
   return (

@@ -324,6 +324,39 @@ describe("ProjectPluginsTab", () => {
     expect(names.filter((n) => n.startsWith("Acme Dashboard"))).toHaveLength(1);
   });
 
+  it("keeps a colliding project and installed plugin apart in the picker and the pane", async () => {
+    // The `collidesWithGlobal` case: same manifest id, two different plugins
+    // whose switches mean different things. Picking one must open exactly one
+    // pane, and the two rows must not share a DOM id.
+    pluginApi.list.mockResolvedValue([installed()]);
+    seed([
+      projectPlugin({
+        id: "acme.tools",
+        instanceId: `project__${PROJECT_ID}__acme.tools`,
+        displayName: "Acme Tools (project)",
+        collidesWithGlobal: true,
+      }),
+    ]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId("project-plugin-selector-trigger"));
+    const list = await screen.findByRole("listbox");
+    const ids = [...list.querySelectorAll("[id^='project-plugin-selector-item-']")].map(
+      (el) => el.id
+    );
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    fireEvent.click(await screen.findByText("Acme Tools (project)"));
+
+    expect(await screen.findByTestId("project-plugin-detail")).toBeTruthy();
+    expect(screen.queryByTestId("installed-plugin-detail")).toBeNull();
+
+    await select("Acme Tools");
+    expect(await screen.findByTestId("installed-plugin-detail")).toBeTruthy();
+    expect(screen.queryByTestId("project-plugin-detail")).toBeNull();
+  });
+
   it("falls back to the overview when the selected plugin disappears", async () => {
     seed([projectPlugin()]);
     render(<ProjectPluginsTab />);

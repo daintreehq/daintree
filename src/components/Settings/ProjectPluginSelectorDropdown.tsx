@@ -12,7 +12,14 @@ export const PROJECT_PLUGINS_OVERVIEW_ID = "overview";
  * installed one is hidden (still running, filtered out of this project's views).
  */
 export interface ProjectPluginOption {
+  /**
+   * Opaque selection key, unique across both origins. A project plugin can
+   * share its manifest id with an installed one, so the caller namespaces this;
+   * filtering uses `pluginId` so that namespacing never becomes search text.
+   */
   id: string;
+  /** The plugin's own id, as someone would type it into the filter. */
+  pluginId: string;
   name: string;
   origin: "project" | "installed";
   /** Short state word beside the name — "Running", "Staged", "Off", "Unreadable". */
@@ -63,7 +70,9 @@ export function ProjectPluginSelectorDropdown({
     return [
       { kind: "overview", id: PROJECT_PLUGINS_OVERVIEW_ID },
       ...options
-        .filter((p) => !q || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q))
+        .filter(
+          (p) => !q || p.name.toLowerCase().includes(q) || p.pluginId.toLowerCase().includes(q)
+        )
         .map((plugin) => ({ kind: "plugin" as const, id: plugin.id, plugin })),
     ];
   }, [options, filterQuery]);
