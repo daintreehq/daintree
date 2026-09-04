@@ -166,12 +166,11 @@ export default function TourPanel({ panelId, pluginId, initialArgs, persistState
     [run, pluginId, filePath, rootPath]
   );
 
-  // Inline styles off the host's own CSS custom properties, NOT Tailwind
-  // classes. The view renders inside Daintree's document, so every `:root`
-  // token is in scope — but Tailwind only generates a rule for class names it
-  // finds in Daintree's own source at build time, and this file is delivered at
-  // runtime. A utility Daintree happens to use elsewhere works; one it doesn't
-  // silently renders as nothing.
+  // Inline styles off the host's own CSS custom properties. The view renders
+  // inside Daintree's document, so every `:root` token is in scope, and a panel
+  // built on them follows a theme switch with no work here. What else the
+  // styling contract allows a view — utility classes among it — is
+  // `docs/plugins/views.md`'s to state; it moves faster than a sample does.
   return h(
     "div",
     {

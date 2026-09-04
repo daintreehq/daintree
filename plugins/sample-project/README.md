@@ -11,4 +11,4 @@ What this root buys is the one gate that does apply: `npm run check:plugin-manif
 Not to be confused with two neighbours that look similar and are not:
 
 - `plugins/sample/` holds **installed** plugins. `file-tree` and `rich-daintree` each have a Vite build step and a committed `view/*.js` artifact (`check:sample-views` regenerates and byte-diffs `file-tree`'s); `hello-daintree` contributes no view at all. Copying their structure into a project plugin brings a toolchain a project plugin is specifically designed not to need.
-- `plugins/fixtures/project-local/` is a discovery, schema, and watcher probe. It registers no action and its view returns a plain object instead of rendering React, so it proves the loader works and nothing about how to build a UI.
+- `plugins/fixtures/project-local/` is a discovery, schema, and watcher probe. It registers no action, and its view exists to be asserted against rather than read, so it proves the loader works and nothing about how to build a UI.
