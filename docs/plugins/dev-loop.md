@@ -251,6 +251,69 @@ describe("plan-from-issue", () => {
 
 `createMockHost` implements the `PluginHostApi` surface with in-memory state, mirrors the real host's validation and capability gating, and records every call for assertion — dispatched actions land on `host.dispatchedActions` as `{ actionId, args }` (the `DispatchedActionRecord` type), alongside `registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, and the rest. Good for covering handler logic without spinning up an Electron instance. See [Host API → Testing against a mock host](./host-api.md#testing-against-a-mock-host).
 
+### Testing a raw-ESM project plugin
+
+A hand-written project plugin has no build and no SDK import, and the same mock host tests it. Import `createMockHost` by relative path from a Daintree checkout, import your worker entry by file URL, and drive the handlers exactly the way `PluginService` does: context first, payload second. That last part is the point of the test, because it is the convention a first plugin gets wrong.
+
+```ts
+// test/worker.test.ts — run from inside the Daintree checkout, or point the
+// relative import at yours.
+import { pathToFileURL } from "node:url";
+import { describe, it, expect } from "vitest";
+import { createMockHost } from "../../../shared/testing/createMockHost";
+
+const ctx = { projectId: "p1", worktreeId: "w1", webContentsId: 1, pluginId: "acme.dashboard" };
+
+describe("worker", () => {
+  it("answers read-file with the file's text", async () => {
+    const host = createMockHost({
+      pluginId: "acme.dashboard",
+      capabilities: ["fs:project-read", "fs:project-write"],
+    });
+    await host.fs.writeFile("/proj/notes.md", "# hi"); // seeds the in-memory fs
+
+    const { activate } = await import(pathToFileURL("dist/index.mjs").href);
+    await activate(host);
+
+    const { handler } = host.registeredHandlers.find((h) => h.channel === "read-file")!;
+    await expect(handler(ctx, { path: "/proj/notes.md" })).resolves.toBe("# hi");
+  });
+});
+```
+
+The view mounts under jsdom with the bridge stubbed. `dist/panel.js` bare-imports `react`, which the app resolves through its import map; under vitest it resolves from `node_modules`, so run the test where `react` is installed (the Daintree checkout, or add it as a devDependency of the plugin).
+
+```ts
+// test/panel.test.tsx
+// @vitest-environment jsdom
+import { pathToFileURL } from "node:url";
+import { createElement, act } from "react";
+import { createRoot } from "react-dom/client";
+import { it, expect, vi } from "vitest";
+
+it("renders the worktree name it pulls on mount", async () => {
+  (window as unknown as { electron: unknown }).electron = {
+    plugin: {
+      invoke: vi.fn(async () => ({ name: "feature-x" })),
+      on: () => () => {},
+      onPanel: () => () => {},
+    },
+  };
+  const { default: Panel } = await import(pathToFileURL("dist/panel.js").href);
+  const root = document.createElement("div");
+  await act(async () => {
+    createRoot(root).render(
+      createElement(Panel, {
+        panelId: "panel-1",
+        pluginId: "acme.dashboard",
+        disposeSignal: new AbortController().signal,
+      })
+    );
+  });
+  expect(root.textContent).toContain("feature-x");
+});
+```
+
 A headless-Daintree Playwright harness for full-lifecycle E2E (contribution registration, MCP spawn) is planned but does not exist yet — there's no `@daintreehq/plugin-testing/electron` entry point today.
 
 ## Publishing to npm (optional)

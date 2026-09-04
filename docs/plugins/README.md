@@ -39,7 +39,9 @@ The two entry points are at the top of this page. Everything below is reference 
 | [Getting started](./getting-started.md) | Scaffold, build, and install your first plugin |
 | [Manifest reference](./manifest.md) | Every field `plugin.json` accepts, and what the schema rejects |
 | [Contribution points](./contribution-points.md) | All sixteen contribution types — shape, example, status, project-scope availability |
-| [Host API](./host-api.md) | The runtime `host` object your `activate()` receives, and the renderer hooks |
+| [Host API](./host-api.md) | The runtime `host` object your `activate()` receives, the calling conventions, and the renderer hooks |
+| [Patterns](./patterns.md) | The working patterns a real plugin is made of: pull then push, watch and badge, open files, launch an agent, own the canvas |
+| [Views](./views.md) | What a view gets in the DOM, the tokens to style with, media, and what doesn't work inline |
 | [Development loop](./dev-loop.md) | The `daintree-plugin` CLI, hot reload, debugging, testing |
 
 **Plugins that belong to a project**

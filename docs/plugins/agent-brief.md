@@ -10,7 +10,9 @@ Paste this, with the two placeholders filled in:
 
 > Write a Daintree project plugin for this repository. It goes at `<projectRoot>/.daintree/plugins/<publisher>.<name>/`, is committed like any other source, and loads only while this project is open in Daintree.
 >
-> Read `docs/plugins/agent-brief.md` from the Daintree repository first — it has the load rules and a zero-build skeleton. If you can't reach that file, ask me to paste it. Then read `docs/plugins/project-local.md` for the full contract, and `docs/plugins/contribution-points.md` for the contribution you're adding.
+> Read `docs/plugins/agent-brief.md` from the Daintree repository first — it has the load rules and a zero-build skeleton. If you can't reach that file, ask me to paste it. Then read `docs/plugins/project-local.md` for the full contract, `docs/plugins/patterns.md` for the working patterns, and `docs/plugins/contribution-points.md` for the contribution you're adding.
+>
+> Write it into the project's registered root checkout, not into a worktree. Only the root's `.daintree/plugins/` is scanned, so a plugin committed in a worktree does not load until that commit reaches the root.
 >
 > What it should do: **&lt;describe the panel, command, or surface&gt;**
 
@@ -29,7 +31,9 @@ The whole design exists so that an agent working in a fresh worktree can write a
 | The full contract — layout, trust, binding, hot reload, what a project plugin may and may not contribute | [project-local.md](./project-local.md) |
 | Every field `plugin.json` accepts | [manifest.md](./manifest.md) |
 | The shape of the contribution you're adding — panels, views, commands, toolbar buttons, context menus, keybindings, settings | [contribution-points.md](./contribution-points.md) |
-| What `host` can do inside `activate()` | [host-api.md](./host-api.md) |
+| What `host` can do inside `activate()`, and the calling conventions | [host-api.md](./host-api.md) |
+| What your view gets in the DOM, and how to style it so it reads as native | [views.md](./views.md) |
+| Working patterns: pull then push, watch and badge, open files, launch an agent, own the canvas | [patterns.md](./patterns.md) |
 | What the capability tokens actually mean, and what they don't | [trust-model.md](./trust-model.md) |
 | The watcher loop and the `daintree-plugin` CLI | [dev-loop.md](./dev-loop.md) |
 
@@ -50,7 +54,7 @@ Run the agent in **your own project**, not in the Daintree checkout, and give it
 
 ## The rules that decide whether it loads
 
-Twelve things an agent gets wrong on the first attempt, grouped by how the failure shows up. The middle group is the dangerous one: the plugin loads, looks healthy in the manager, and does nothing.
+Sixteen things an agent gets wrong on the first attempt, grouped by how the failure shows up. The middle two groups are the dangerous ones: the plugin loads, looks healthy in the manager, and either does nothing or does the wrong thing.
 
 **Refused at validation — the manager shows `Unreadable` with the first schema issue, prefixed by its field path.**
 
@@ -65,13 +69,20 @@ Twelve things an agent gets wrong on the first attempt, grouped by how the failu
 6. **Activation is lazy.** `activationEvents` defaults to `[]`, so `activate()` does not run at project open — it runs the first time a contribution is _used_. Anything registered imperatively therefore does not exist yet. This is why a command must **also** be declared in `contributes.commands`: the manifest entry is what puts it in the palette and what triggers activation, and the `host.registerAction` call in `activate()` is what gives it a handler with host access. Declare both, with the same id. Use `"activationEvents": ["onStartupFinished"]` only for genuine background work.
 7. **The filesystem-convention handler does not exist here.** An installed plugin may drop a handler at `src/<commandId>.js` for the host to import; a project plugin may not, because that would run repository source in the main process, outside the worker every other plugin gets its crash isolation from. Register from `activate()` instead.
 8. **Nothing reaches a view on its own.** `window.electron.plugin.on(pluginId, channel, …)` only receives what the worker sends with `host.postToPanel` or `host.broadcastToRenderer`. There is no ambient `"worktree"` channel. Pushes are not buffered either, so a push during `activate()` is gone before the view mounts — have the view pull on mount, then push updates.
-9. **`host.registerAction` and `host.registerHandler` return promises.** Await them inside `activate`, or activation can resolve before the registration lands.
+9. **`host.registerAction` and `host.registerHandler` return promises.** Await them inside `activate`, or activation can resolve before the registration lands. `activate()` has a 5-second budget: register everything, then start scans and polls without awaiting them.
+
+**Loads, and does the wrong thing.**
+
+10. **A `registerHandler` callback receives the IPC context first and your payload second: `(ctx, args)`.** `ctx` is `{ projectId, worktreeId, webContentsId, pluginId }`. Read the payload from the first parameter and every argument-taking channel receives that object instead, while the argument-less channels keep working, so the panel looks healthy and the buttons do nothing. This is the single most common bug in a first plugin. `registerAction` handlers are different: they receive `(args)` only.
+11. **Your runtime id is the instance key, not your manifest name.** `host.pluginId` and `PanelViewProps.pluginId` are `project__{projectId}__{manifestId}`. Manifest `actionId`s in `toolbarButtons`, `keybindings` and `contextMenus` are written as `{manifestId}.{id}` and rewritten to the instance namespace at load, so the manifest stays portable. Your panel kind registers as `project:{projectId}/{manifestId}/{kindId}`, and that is the string `panel.openPluginPanel` wants. Until #12211 adds `host.pluginInfo()`, the only way to build it is from `host.pluginId`.
+12. **Declaring `shell:exec` puts a confirm dialog on every command** unless the command narrows it with `"requires": []` (or the capabilities it actually uses). An "open the panel" command should never confirm.
+13. **`project`-scope settings are committed to the repository.** They are the right place for team defaults and the wrong place for a machine path such as a Python interpreter. `user` scope is shared across every project. A per-machine scope is tracked in #12213.
 
 **Works for you, broken for everyone who clones.**
 
-10. **`dist/` must be committed, and rebuilt in the same commit as the source change.** This is invisible on the machine that built it. A branch with stale `dist/` is stale for everyone; a branch missing it entirely still shows the panels and commands, because the manifest parses — using them then produces an activation, missing-handler, or view-import error.
-11. **The plugin's `.gitignore` needs both `!dist/` and `!dist/**`** — the first so git descends into the directory, the second so the files inside survive a parent rule matching contents. Neither helps if an ancestor rule ignores `.daintree/` or the plugin directory itself: git never reaches a nested `.gitignore` inside an excluded directory, so that rule has to be relaxed at the level that sets it.
-12. **Only the registered project root is scanned — never a worktree.** Worktrees are views of the project, not separate scan roots. An agent that writes the plugin inside its own worktree will not see it load until that commit reaches the root checkout Daintree has open. Expect to merge before you can test.
+14. **`dist/` must be committed, and rebuilt in the same commit as the source change.** This is invisible on the machine that built it. A branch with stale `dist/` is stale for everyone; a branch missing it entirely still shows the panels and commands, because the manifest parses — using them then produces an activation, missing-handler, or view-import error.
+15. **The plugin's `.gitignore` needs both `!dist/` and `!dist/**`** — the first so git descends into the directory, the second so the files inside survive a parent rule matching contents. Neither helps if an ancestor rule ignores `.daintree/` or the plugin directory itself: git never reaches a nested `.gitignore` inside an excluded directory, so that rule has to be relaxed at the level that sets it.
+16. **Only the registered project root is scanned — never a worktree.** Worktrees are views of the project, not separate scan roots. An agent that writes the plugin inside its own worktree will not see it load until that commit reaches the root checkout Daintree has open. Expect to merge before you can test.
 
 Two more things that are not failures, and get misread as one. A new manifest id in an already-trusted project is **staged**: parsed, announced once, and listed with a one-click **Activate** — it does not run until you click, and that is by design. And the directory name is not compared to the manifest `name`; matching them is convention that every tool assumes, not a load rule.
 
@@ -103,7 +114,7 @@ Four files. Replace `acme.dashboard` throughout with your own `<publisher>.<name
   "description": "A panel for this project.",
   "main": "dist/index.mjs",
   "engines": { "daintree": ">=0.11.0" },
-  "capabilities": [],
+  "capabilities": ["fs:project-read"],
   "contributes": {
     "commands": [
       {
@@ -163,6 +174,14 @@ export async function activate(host) {
   // worker sends it, and a push made here would land before any view exists.
   await host.registerHandler("worktree", async () => await host.getActiveWorktree());
 
+  // Handlers receive the IPC context FIRST and the view's payload second.
+  // Reading the payload from the first parameter is the most common first bug.
+  await host.registerHandler("read-file", async (_ctx, args) => {
+    const { path } = args ?? {};
+    if (typeof path !== "string") throw new Error("read-file needs a path");
+    return await host.fs.readFile(path); // contained to the project root by default
+  });
+
   return () => {};
 }
 ```
@@ -189,7 +208,7 @@ export default function Panel({ panelId, pluginId }) {
 
 Use the `pluginId` prop rather than hardcoding your manifest name — for a project plugin the runtime id is an instance key, not the manifest id.
 
-What the no-build path costs: the React hooks in `@daintreehq/plugin-sdk/react` resolve only in a bundle built with `@daintreehq/plugin-vite`, so a raw view uses the `window.electron.plugin` bridge directly as above; and the view can import `react` plus its own relative modules, but not arbitrary bare npm specifiers, TypeScript, JSX, or CSS. If you need those, build inside a Daintree checkout where the workspace packages resolve — outside one there is no published toolchain yet. [dev-loop.md](./dev-loop.md) covers the watcher.
+What the no-build path costs: the React hooks in `@daintreehq/plugin-sdk/react` resolve only in a bundle built with `@daintreehq/plugin-vite`, so a raw view uses the `window.electron.plugin` bridge directly as above; and the view can import `react` plus its own relative modules, but not arbitrary bare npm specifiers, TypeScript, JSX, or CSS files. If you need those, build inside a Daintree checkout where the workspace packages resolve — outside one there is no published toolchain yet. [dev-loop.md](./dev-loop.md) covers the watcher. Styling does not need a build: a `<style>` element and Daintree's own CSS tokens work as-is, and Tailwind utility classes do not. [views.md](./views.md) has the tokens and the rules.
 
 ## Owning the project's main surface
 
@@ -216,11 +235,23 @@ git check-ignore -v --no-index .daintree/plugins/acme.dashboard/dist/index.mjs  
 git ls-files --error-unmatch .daintree/plugins/acme.dashboard/dist/index.mjs     # expect: the path
 ```
 
+## When a button does nothing
+
+The plugin loaded, the panel renders, a command or a button does nothing, or the wrong thing. In order of likelihood:
+
+1. **The handler read `ctx` as its payload** (rule 10). Log the first parameter: if it has `projectId` and `webContentsId`, that is the context, not your args.
+2. **`dist/` is stale.** The host runs what is on disk. Check the file's mtime against your edit; if you build, check the watcher is running.
+3. **The `actionId` in the manifest is wrong.** It is `{manifestId}.{commandId}`, and the host rewrites it to the instance namespace. `{commandId}` alone or the instance key by hand both resolve to nothing.
+4. **The action threw.** A thrown error from a command surfaces as a toast; a thrown render error shows the panel's diagnostics pane, whose "Copy diagnostics" carries the stack. `host.logger` lines are in the plugin manager's detail pane for the plugin.
+5. **A capability is missing.** `host.fs`, `host.git`, `host.process` and `sendToActiveAgent` reject with a `PERMISSION_REQUIRED:` prefix when the manifest does not declare the token; `host.process`, `fs.writeFile`, `git` writes and `sendToActiveAgent` also raise a one-time consent dialog on first use, which is easy to miss behind a terminal.
+
 Edits to `plugin.json` or `dist/` reload the plugin live, per plugin directory, about 200 ms after writes stop. Settings and `host.storage` survive a reload; module-scope state in the worker and React state in the views do not. No restart is ever required — anything that genuinely needed one is not offered to project plugins.
 
 ## See also
 
 - [project-local.md](./project-local.md) — the full contract this brief compresses
+- [patterns.md](./patterns.md) — the working patterns, each with the exact host calls
+- [views.md](./views.md) — what a view gets in the DOM and how to style it
 - [README.md](./README.md) — the plugin documentation index
 - `plugins/fixtures/project-local/` — a discovery/schema/watcher fixture at the real path, not the skeleton above: it registers no action and its view returns a plain object rather than React
 - `plugins/sample/rich-daintree/` — a fuller plugin exercising most contribution points

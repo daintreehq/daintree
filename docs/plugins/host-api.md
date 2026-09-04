@@ -6,6 +6,22 @@ The canonical import source is `@daintreehq/plugin-sdk`. Types referenced here l
 
 > `@daintreehq/plugin-sdk` is not yet published on npm, so the imports shown below won't resolve from the registry today. The package exists in-repo at `packages/plugin-sdk` (workspace-linked, so these imports build inside the Daintree repo) and re-exports the types from `shared/types/plugin-sdk.ts`. Outside the workspace, point your `tsconfig.json` `paths` at that directory, or import the types by relative path.
 
+## Calling conventions
+
+Every callback a plugin hands the host has a fixed shape, and the one for `registerHandler` is the one every first plugin gets wrong. The whole set, in one place:
+
+| You register | Your function receives | Notes |
+| --- | --- | --- |
+| `registerAction(descriptor, handler)` | `(args)` | The dispatched args payload only. No `host`, no context; close over `host` from `activate()` if the handler needs it. |
+| `registerHandler(channel, handler)` (untyped) | `(ctx, ...args)` | **Context first.** `ctx` is `{ projectId, worktreeId, webContentsId, pluginId }`; the arguments the view passed to `invoke(pluginId, channel, ...args)` follow it. Read the payload from the first parameter and you get the context object instead. |
+| `registerHandler(channel, schema, handler)` (typed) | `(ctx, args)` | Same order; `args` is the single, schema-parsed payload. |
+| `postToPanel(channel, payload)` | view: `on(pluginId, channel, cb)` receives `payload` | Broadcast to every open instance of the kind. `usePluginEvent` in a bundled view. |
+| `postToPanel(channel, payload, panelId)` | view: `onPanel(pluginId, channel, panelId, cb)` receives `payload` | One instance only, disjoint from the broadcast. `usePluginPanelEvent` in a bundled view. |
+| `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, `settings.onDidChange`, `storage.onDidChange` | `(event)` | One frozen argument. A listener that throws three times in a row is unsubscribed. |
+| Filesystem-convention command, `src/{id}.js` | `(args)` | Installed plugins only; a project plugin registers from `activate()` instead. |
+
+An argument-less handler ignores both parameters and works whichever way it was written, which is why the bug in an argument-taking one hides: the panel looks healthy and only the buttons that pass something do nothing. If a handler's first parameter has a `webContentsId`, it is reading the context.
+
 ## Activation
 
 A plugin's main module exports an `activate` function:
@@ -195,7 +211,8 @@ Unregistered automatically on plugin unload.
 Low-level IPC for plugin-specific communication between main and renderer. Rarely needed — most plugins use `registerAction` and UI components via the SDK's React hooks.
 
 ```ts
-// main side (in activate)
+// main side (in activate). The IPC context is the FIRST parameter; the
+// view's payload is the second. `(opts) => …` would receive the context.
 host.registerHandler("sync-now", async (ctx, opts) => {
   // ctx.projectId, ctx.worktreeId, ctx.webContentsId, ctx.pluginId
   return { synced: true, timestamp: Date.now() };
