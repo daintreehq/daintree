@@ -328,6 +328,7 @@ export function useContentGridContext({
   // hook's "use memo" block on any unrelated toolbar update.
   const leftButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.leftButtons));
   const rightButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.rightButtons));
+  const pinnedButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.pinnedButtons));
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   // Re-derive grid agents when a plugin loads/unloads mid-session so its agents
   // appear / disappear with current icon/name/color (#9879).
@@ -774,12 +775,13 @@ export function useContentGridContext({
           availability: agentAvailability?.[id],
         };
       });
-    return sortAgentsByToolbarPin(agents, leftButtons, agentSettings, rightButtons);
+    return sortAgentsByToolbarPin(agents, leftButtons, agentSettings, rightButtons, pinnedButtons);
   }, [
     agentAvailability,
     gridSelectedAgentIds,
     leftButtons,
     rightButtons,
+    pinnedButtons,
     agentSettings,
     pluginAgentRegistry,
   ]);

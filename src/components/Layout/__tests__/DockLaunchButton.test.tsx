@@ -62,8 +62,8 @@ vi.mock("@/components/PanelPalette/PanelKindIcon", () => ({
 
 vi.mock("@/store/recipeStore", () => ({
   useRecipeStore: Object.assign(
-    (selector: (s: { recipes: typeof mockRecipes }) => unknown) =>
-      selector({ recipes: mockRecipes }),
+    (selector: (s: { recipes: typeof mockRecipes; currentProjectId: string | null }) => unknown) =>
+      selector({ recipes: mockRecipes, currentProjectId: mockCurrentProjectId }),
     {
       getState: () => ({ runRecipeWithResults: runRecipeWithResultsMock }),
     }
@@ -124,6 +124,9 @@ let mockToolbarLayout: {
 } = { pinnedButtons: {}, leftButtons: [], rightButtons: [] };
 const setAgentPinnedMock = vi.fn();
 const setPanelButtonOnToolbarMock = vi.fn();
+const setLauncherItemOnToolbarMock = vi.fn();
+// Drives `recipeToolbarSourceId`: a project-scoped recipe's pin id carries it.
+let mockCurrentProjectId: string | null = null;
 const positionAgentButtonMock = vi.fn();
 const toggleButtonVisibilityMock = vi.fn();
 
@@ -228,6 +231,7 @@ vi.mock("@/store/toolbarPreferencesStore", () => {
   const getState = () => ({
     layout: mockToolbarLayout,
     setPanelButtonOnToolbar: setPanelButtonOnToolbarMock,
+    setLauncherItemOnToolbar: setLauncherItemOnToolbarMock,
     positionAgentButton: positionAgentButtonMock,
     toggleButtonVisibility: toggleButtonVisibilityMock,
   });
@@ -494,6 +498,8 @@ beforeEach(() => {
   refreshAvailabilityMock.mockClear();
   mockToolbarLayout = { pinnedButtons: {}, leftButtons: [], rightButtons: [] };
   setAgentPinnedMock.mockReset();
+  setLauncherItemOnToolbarMock.mockReset();
+  mockCurrentProjectId = null;
   setPanelButtonOnToolbarMock.mockReset();
   positionAgentButtonMock.mockReset();
   toggleButtonVisibilityMock.mockReset();
@@ -1974,16 +1980,129 @@ describe("DockLaunchButton", () => {
       expect(pinControl(rowFor(container, "Dev Preview"))).toBeTruthy();
     });
 
-    it("withholds the pin from rows with nothing to pin to", () => {
+    it("offers a pin on every row the toolbar used to have no id for (#12217)", () => {
+      // The three classes the issue names. Each was launchable from here and
+      // could not reach the toolbar from anywhere.
       mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
       const { container } = renderButton({
         agents: [{ id: "my-plugin-agent", name: "Plugin agent", availability: "ready" }],
       });
 
-      expect(pinControl(rowFor(container, "My recipe"))).toBeNull();
-      expect(pinControl(rowFor(container, "Review"))).toBeNull();
-      // Not a built-in agent, so there is no toolbar button id to write.
-      expect(pinControl(rowFor(container, "Plugin agent"))).toBeNull();
+      expect(pinControl(rowFor(container, "My recipe"))).toBeTruthy();
+      expect(pinControl(rowFor(container, "Review"))).toBeTruthy();
+      expect(pinControl(rowFor(container, "Plugin agent"))).toBeTruthy();
+    });
+
+    it("leaves every launcher row pinnable, so none is reachable but unreachable", () => {
+      // The exhaustiveness check the issue asks for: "if a row is in the list,
+      // it should be pinnable". Only the cue rows, which launch nothing, may
+      // carry no pin.
+      mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+      const { container } = renderButton({
+        agents: [{ id: "my-plugin-agent", name: "Plugin agent", availability: "ready" }],
+      });
+
+      // Classified by `data-row-kind`, not by matching display text: deriving
+      // the exceptions from labels lets a cue that wrongly GAINED a pin pass
+      // silently, because it would just drop out of the unpinnable list.
+      const byKind = new Map<string, { withPin: number; withoutPin: number }>();
+      for (const row of options(container)) {
+        const kind = row.getAttribute("data-row-kind") ?? "unknown";
+        const tally = byKind.get(kind) ?? { withPin: 0, withoutPin: 0 };
+        if (pinControl(row)) tally.withPin += 1;
+        else tally.withoutPin += 1;
+        byKind.set(kind, tally);
+      }
+
+      // Both directions, per kind, with non-zero representatives — so neither
+      // half can pass by the rows simply not being rendered.
+      expect(byKind.get("item")?.withoutPin).toBe(0);
+      expect(byKind.get("item")?.withPin).toBeGreaterThan(0);
+      expect(byKind.get("cue")?.withPin).toBe(0);
+      expect(byKind.get("cue")?.withoutPin).toBeGreaterThan(0);
+    });
+
+    it("scopes a project-owned recipe's pin id to its project (#12217)", () => {
+      // `.daintree/recipes/*.json` is tracked in git and a legacy file carries
+      // no id, so `ProjectIdentityFiles` derives `inrepo-<filename>` — two
+      // projects each holding a `dev.json` produce the same string. Without the
+      // project in the key, pinning one project's recipe shows and launches the
+      // other project's.
+      mockCurrentProjectId = "project-a";
+      mockRecipes = [
+        { id: "inrepo-dev", name: "Dev", worktreeId: undefined, projectId: "project-a" },
+      ];
+      const { container } = renderButton();
+
+      fireEvent.click(pinControl(rowFor(container, "Dev"))!);
+
+      expect(setLauncherItemOnToolbarMock).toHaveBeenCalledWith(
+        "launcher:recipe:project-a:inrepo-dev",
+        true
+      );
+    });
+
+    it("leaves a genuinely global recipe's pin id unscoped", () => {
+      // A global recipe is meant to be reachable from every project; qualifying
+      // it would strand its pin on the next project switch.
+      mockCurrentProjectId = "project-a";
+      mockRecipes = [{ id: "g-1", name: "Global recipe", worktreeId: undefined }];
+      const { container } = renderButton();
+
+      fireEvent.click(pinControl(rowFor(container, "Global recipe"))!);
+
+      expect(setLauncherItemOnToolbarMock).toHaveBeenCalledWith("launcher:recipe:g-1", true);
+    });
+
+    it("writes a launcher-item pin through its own setter, not the panel one", () => {
+      mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+      const { container } = renderButton();
+      const pin = pinControl(rowFor(container, "My recipe"))!;
+      expect(pin.getAttribute("data-pinned")).toBe("false");
+
+      fireEvent.click(pin);
+
+      expect(setLauncherItemOnToolbarMock).toHaveBeenCalledWith("launcher:recipe:r-1", true);
+      expect(setPanelButtonOnToolbarMock).not.toHaveBeenCalled();
+    });
+
+    it("reads a launcher item's pin from the explicit true alone", () => {
+      // No default slot to fall through to, so a position without the flag is
+      // not a pin — unlike the four fixed panel buttons.
+      mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+      mockToolbarLayout = {
+        pinnedButtons: {},
+        leftButtons: ["launcher:recipe:r-1"],
+        rightButtons: [],
+      };
+      const { container } = renderButton();
+      expect(pinControl(rowFor(container, "My recipe"))?.getAttribute("data-pinned")).toBe("false");
+
+      mockToolbarLayout = {
+        pinnedButtons: { "launcher:recipe:r-1": true },
+        leftButtons: [],
+        rightButtons: [],
+      };
+      const second = renderButton();
+      expect(pinControl(rowFor(second.container, "My recipe"))?.getAttribute("data-pinned")).toBe(
+        "true"
+      );
+    });
+
+    it("keeps a plugin agent off the built-in agent store", () => {
+      // Its id is not a `BuiltInAgentId`, so `dispatchToolbarVisibility` has no
+      // entry to write and a pin routed there would silently do nothing.
+      const { container } = renderButton({
+        agents: [{ id: "my-plugin-agent", name: "Plugin agent", availability: "ready" }],
+      });
+
+      fireEvent.click(pinControl(rowFor(container, "Plugin agent"))!);
+
+      expect(setLauncherItemOnToolbarMock).toHaveBeenCalledWith(
+        "launcher:agent:my-plugin-agent",
+        true
+      );
+      expect(setAgentPinnedMock).not.toHaveBeenCalled();
     });
 
     it("withholds the pin from the create-recipe cue", () => {
@@ -2141,13 +2260,24 @@ describe("DockLaunchButton", () => {
     });
 
     it("leaves the pin phrase off rows that cannot be pinned", () => {
-      // The phrase is a promise about a key that works — a recipe row has no
-      // pin target, so announcing Alt+P there would send the user nowhere.
+      // The phrase is a promise about a key that works. Since #12217 every
+      // launchable row can take it, so the rows it must stay off are the cues —
+      // which navigate rather than launching and have nothing to pin.
+      mockRecipes = [];
+      const { container } = renderButton();
+      const cue = rowFor(container, "Create a recipe");
+
+      expect(cue.getAttribute("aria-label")).not.toContain("Alt+P");
+      expect(cue.getAttribute("aria-keyshortcuts")).toBeNull();
+    });
+
+    it("announces Alt+P on a recipe row now that it goes somewhere (#12217)", () => {
       mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
       const { container } = renderButton();
+      const row = rowFor(container, "My recipe");
 
-      expect(rowFor(container, "My recipe").getAttribute("aria-label")).not.toContain("Alt+P");
-      expect(rowFor(container, "My recipe").getAttribute("aria-keyshortcuts")).toBeNull();
+      expect(row.getAttribute("aria-label")).toContain("Press Alt+P to pin to toolbar");
+      expect(row.getAttribute("aria-keyshortcuts")).toBe("Alt+P");
     });
 
     it("leaves the unavailable-agent warning to the description, not the name", () => {
@@ -2295,11 +2425,12 @@ describe("DockLaunchButton", () => {
         expect([band, signatures.size]).toEqual([band, 1]);
       }
 
-      // The rows that can hold a control still reserve both, so revealing one on
-      // hover moves nothing; the recipe band keeps only its disclosure column.
+      // Every launchable row reserves both, so revealing one on hover moves
+      // nothing. The recipe band joined them in #12217 — it now carries a pin,
+      // and withholding the slot would leave that control nowhere to appear.
       expect(slotsOf(rowFor(container, "Claude"))).toBe("disclosure,shortcut,pin");
-      expect(slotsOf(rowFor(container, "My recipe"))).toBe("disclosure");
-      expect(pinControl(rowFor(container, "My recipe"))).toBeNull();
+      expect(slotsOf(rowFor(container, "My recipe"))).toBe("disclosure,shortcut,pin");
+      expect(pinControl(rowFor(container, "My recipe"))).toBeTruthy();
     });
 
     it("activates from the row itself, not only from an inner control", () => {
@@ -2401,7 +2532,10 @@ describe("DockLaunchButton", () => {
         expect(setAgentPinnedMock).not.toHaveBeenCalled();
       });
 
-      it("does nothing when the selected row has nothing to pin", () => {
+      it("pins the selected recipe through the launcher-item setter (#12217)", () => {
+        // This row used to be the "nothing to pin" case. Asserting only that the
+        // agent and panel setters stayed idle would now pass while the recipe
+        // was in fact being pinned, so the assertion is positive.
         mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
         const { container } = renderButton();
         const input = searchInput(container);
@@ -2409,8 +2543,24 @@ describe("DockLaunchButton", () => {
 
         fireEvent.keyDown(input, { key: "p", code: "KeyP", altKey: true });
 
+        expect(setLauncherItemOnToolbarMock).toHaveBeenCalledWith("launcher:recipe:r-1", true);
         expect(setAgentPinnedMock).not.toHaveBeenCalled();
         expect(setPanelButtonOnToolbarMock).not.toHaveBeenCalled();
+      });
+
+      it("does nothing when the selected row has nothing to pin", () => {
+        // A cue navigates rather than launching, so it is the only kind of row
+        // left with no pin target at all.
+        mockRecipes = [];
+        const { container } = renderButton();
+        const input = searchInput(container);
+        fireEvent.change(input, { target: { value: "create a recipe" } });
+
+        fireEvent.keyDown(input, { key: "p", code: "KeyP", altKey: true });
+
+        expect(setAgentPinnedMock).not.toHaveBeenCalled();
+        expect(setPanelButtonOnToolbarMock).not.toHaveBeenCalled();
+        expect(setLauncherItemOnToolbarMock).not.toHaveBeenCalled();
       });
     });
   });

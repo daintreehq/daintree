@@ -17,6 +17,12 @@ import {
   isAssistantOnlyAgentId,
 } from "@shared/config/agentIds";
 import type { AnyToolbarButtonId, ToolbarPinnedState } from "@/../../shared/types/toolbar";
+// `@shared/...` because these are value imports — the type-only spelling above
+// is erased at compile time and never has to resolve at runtime.
+import {
+  decodeLauncherItemToolbarButtonId,
+  isLauncherItemToolbarButtonId,
+} from "@shared/types/toolbar";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { getAgentConfig } from "@/config/agents";
@@ -170,7 +176,8 @@ const BUILT_IN_TOOLBAR_GROUPS: ReadonlyMap<AnyToolbarButtonId, ToolbarButtonGrou
  *
  * Dispatch order mirrors `isToolbarButtonVisible` below: agent ids first,
  * registered plugin contributions second (registry membership is the
- * discriminator, never string-parsing the dotted id), then the built-in table,
+ * discriminator, never string-parsing the dotted id), launcher items third
+ * (#12217 — a prefix the other two can never carry), then the built-in table,
  * and finally the trailing `utilities` fallback for anything unclassified.
  */
 export function getToolbarButtonGroup(
@@ -179,6 +186,16 @@ export function getToolbarButtonGroup(
 ): ToolbarButtonGroup {
   if (isBuiltInAgentId(buttonId)) return "agents";
   if (isPluginContribution) return "utilities";
+  // Launcher items (#12217) group by the category their id declares, so a
+  // pinned plugin agent stands with the built-in agents and a pinned Review
+  // panel with the panel buttons rather than all of them landing in the
+  // trailing `utilities` catch-all. A recipe is neither, so it does.
+  const launcherItem = decodeLauncherItemToolbarButtonId(buttonId);
+  if (launcherItem) {
+    if (launcherItem.category === "agent") return "agents";
+    if (launcherItem.category === "panel") return "panels";
+    return "utilities";
+  }
   return BUILT_IN_TOOLBAR_GROUPS.get(buttonId) ?? "utilities";
 }
 
@@ -215,5 +232,11 @@ export function isToolbarButtonVisible(
     return isAgentToolbarVisible(agentSettings?.agents?.[buttonId], agentAvailability?.[buttonId]);
   }
   if (isPluginContribution) return pinnedButtons[buttonId] === true;
+  // Launcher items invert the built-in default for the same reason plugin
+  // contributions do (#12217): they already reach the user through the
+  // launcher, so a top-level slot is opt-in and needs the explicit `true` the
+  // pin writes. Without this, "absent means visible" would put every launcher
+  // item that ever held a position onto the toolbar.
+  if (isLauncherItemToolbarButtonId(buttonId)) return pinnedButtons[buttonId] === true;
   return pinnedButtons[buttonId] !== false;
 }

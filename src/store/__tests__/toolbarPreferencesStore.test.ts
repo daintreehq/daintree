@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyToolbarButtonId, PluginToolbarButtonId } from "@/../../shared/types/toolbar";
-import { TOOLBAR_BUTTON_PRIORITIES } from "@shared/types/toolbar";
+import { TOOLBAR_BUTTON_PRIORITIES, launcherItemToolbarButtonId } from "@shared/types/toolbar";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 
 // Mirror the production agent IDs so the v5 migration is exercised against
@@ -337,6 +337,152 @@ describe("toolbarPreferencesStore", () => {
       store.getState().sweepStalePluginPinnedButtons([]);
 
       expect(store.getState().layout).toBe(layoutBefore);
+    });
+
+    it("leaves a launcher item alone even when its source id is dotted (#12217)", async () => {
+      // The collision this guard exists for: a plugin-contributed recipe's id is
+      // `publisher.name`, so the bare `key.includes(".")` test reads its pin as a
+      // plugin button this snapshot has never heard of and drops it. The pin is
+      // an explicit `true` here — the exemption below would also save it — and a
+      // `false` cannot occur, because unpinning a launcher item deletes the key.
+      const store = await loadStore();
+      const dotted = launcherItemToolbarButtonId("recipe", "acme.deploy");
+      const plain = launcherItemToolbarButtonId("panel", "review");
+      store.getState().setLauncherItemOnToolbar(dotted, true);
+      store.getState().setLauncherItemOnToolbar(plain, true);
+      store.getState().toggleButtonVisibility("acme.foo.gone" as AnyToolbarButtonId, "right");
+
+      store.getState().sweepStalePluginPinnedButtons([]);
+
+      const { pinnedButtons } = store.getState().layout;
+      expect(pinnedButtons[dotted]).toBe(true);
+      expect(pinnedButtons[plain]).toBe(true);
+      // The genuine stale plugin key still goes.
+      expect(pinnedButtons["acme.foo.gone"]).toBeUndefined();
+    });
+  });
+
+  describe("setLauncherItemOnToolbar (#12217)", () => {
+    const recipeId = launcherItemToolbarButtonId("recipe", "0f8c-1d2e");
+
+    it("records the pin as an explicit true and gives it a position", async () => {
+      // Only an explicit `true` grants a launcher item a slot, and the arrays
+      // reconcile last-writer-wins across project views — so the flag is the
+      // durable record and the position is derived from it.
+      const store = await loadStore();
+      store.getState().setLauncherItemOnToolbar(recipeId, true);
+
+      const { pinnedButtons, leftButtons, rightButtons } = store.getState().layout;
+      expect(pinnedButtons[recipeId]).toBe(true);
+      expect([...leftButtons, ...rightButtons]).toContain(recipeId);
+    });
+
+    it("places the pin beside the launcher, not at the end of the row", async () => {
+      const store = await loadStore();
+      store.getState().setLauncherItemOnToolbar(recipeId, true);
+
+      const { leftButtons } = store.getState().layout;
+      expect(leftButtons[leftButtons.indexOf("launcher") + 1]).toBe(recipeId);
+    });
+
+    it("deletes the key and the position on unpin rather than writing a false", async () => {
+      // Absence and `false` are the same answer for a launcher item, so a
+      // `false` would record nothing while leaving a key and a slot behind for
+      // a recipe that may be deleted tomorrow.
+      const store = await loadStore();
+      store.getState().setLauncherItemOnToolbar(recipeId, true);
+      store.getState().setLauncherItemOnToolbar(recipeId, false);
+
+      const { pinnedButtons, leftButtons, rightButtons } = store.getState().layout;
+      expect(recipeId in pinnedButtons).toBe(false);
+      expect([...leftButtons, ...rightButtons]).not.toContain(recipeId);
+    });
+
+    it("does not duplicate the position when an already-pinned item is pinned again", async () => {
+      const store = await loadStore();
+      store.getState().setLauncherItemOnToolbar(recipeId, true);
+      const layoutBefore = store.getState().layout;
+
+      store.getState().setLauncherItemOnToolbar(recipeId, true);
+
+      // A no-op down to the reference, so the persist layer doesn't churn.
+      expect(store.getState().layout).toBe(layoutBefore);
+      const positions = [
+        ...store.getState().layout.leftButtons,
+        ...store.getState().layout.rightButtons,
+      ];
+      expect(positions.filter((id) => id === recipeId)).toHaveLength(1);
+    });
+
+    it("is a no-op when unpinning something that was never pinned", async () => {
+      const store = await loadStore();
+      const layoutBefore = store.getState().layout;
+
+      store.getState().setLauncherItemOnToolbar(recipeId, false);
+
+      expect(store.getState().layout).toBe(layoutBefore);
+    });
+
+    it("seeds no default for any other button", async () => {
+      // Nothing may ever backfill `pinnedButtons` (#11667) — the pin writes one
+      // key and one key only.
+      const store = await loadStore();
+      store.getState().setLauncherItemOnToolbar(recipeId, true);
+
+      expect(Object.keys(store.getState().layout.pinnedButtons)).toEqual([recipeId]);
+    });
+
+    it("adopts an existing right-side position instead of inserting a second one", async () => {
+      // Seeded directly, because the obvious construction — pin, move right,
+      // unpin, repin — deletes the position on the unpin, so the branch under
+      // test never sees one and an implementation that always inserted left
+      // would pass.
+      const store = await loadStore();
+      store.setState((state) => ({
+        layout: { ...state.layout, rightButtons: [...state.layout.rightButtons, recipeId] },
+      }));
+
+      store.getState().setLauncherItemOnToolbar(recipeId, true);
+
+      const { leftButtons, rightButtons } = store.getState().layout;
+      expect(rightButtons.filter((id) => id === recipeId)).toHaveLength(1);
+      expect(leftButtons).not.toContain(recipeId);
+      expect(store.getState().layout.pinnedButtons[recipeId]).toBe(true);
+    });
+
+    it("strips the id from BOTH arrays on unpin", async () => {
+      // A cross-side duplicate is reachable from older profiles, and filtering
+      // only the side the pin happened to create would leave the other behind
+      // rendering a button whose pin is gone.
+      const store = await loadStore();
+      store.setState((state) => ({
+        layout: {
+          ...state.layout,
+          leftButtons: [...state.layout.leftButtons, recipeId],
+          rightButtons: [...state.layout.rightButtons, recipeId],
+          pinnedButtons: { ...state.layout.pinnedButtons, [recipeId]: true },
+        },
+      }));
+
+      store.getState().setLauncherItemOnToolbar(recipeId, false);
+
+      const { leftButtons, rightButtons, pinnedButtons } = store.getState().layout;
+      expect(leftButtons).not.toContain(recipeId);
+      expect(rightButtons).not.toContain(recipeId);
+      expect(recipeId in pinnedButtons).toBe(false);
+    });
+
+    it("clears a position left behind with no pin entry", async () => {
+      // The other half of the same repair: an id positioned but unpinned is a
+      // dead slot, and the unpin path is what removes it.
+      const store = await loadStore();
+      store.setState((state) => ({
+        layout: { ...state.layout, leftButtons: [...state.layout.leftButtons, recipeId] },
+      }));
+
+      store.getState().setLauncherItemOnToolbar(recipeId, false);
+
+      expect(store.getState().layout.leftButtons).not.toContain(recipeId);
     });
   });
 

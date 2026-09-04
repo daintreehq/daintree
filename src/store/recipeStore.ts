@@ -3,6 +3,9 @@ import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types
 import { isPluginRecipe } from "@shared/types/project";
 import type { PluginRecipeMetadataPatch } from "@shared/types/project";
 import { usePanelStore } from "./panelStore";
+import { useToolbarPreferencesStore } from "./toolbarPreferencesStore";
+import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
+import { recipeToolbarSourceId } from "@/utils/recipeScope";
 import { preflightSpawnBatchLimit } from "./panelLimitStore";
 import { countPanelsTowardLimit } from "./slices/panelRegistry/panelCount";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
@@ -251,6 +254,28 @@ export { MAX_TERMINALS_PER_RECIPE };
  * radius without blocking legitimate agent use.
  */
 export const MAX_AGENT_RECIPE_TERMINALS = 3;
+
+/**
+ * Drop a permanently-deleted recipe's toolbar pin (#12217).
+ *
+ * Guarded on the pin actually existing, because the setter writes through
+ * Zustand `persist` and every write ships this view's whole layout — including
+ * its side arrays, which reconcile last-writer-wins. An unconditional call on
+ * each delete would let a stale view overwrite a sibling's toolbar arrangement
+ * while "cleaning up" a pin that was never there.
+ */
+function clearRecipeToolbarPin(recipe: TerminalRecipe, currentProjectId: string | null): void {
+  const buttonId = launcherItemToolbarButtonId(
+    "recipe",
+    recipeToolbarSourceId(recipe, currentProjectId)
+  );
+  const toolbar = useToolbarPreferencesStore.getState();
+  const { pinnedButtons, leftButtons, rightButtons } = toolbar.layout;
+  const hasPin = buttonId in pinnedButtons;
+  const isPositioned = leftButtons.includes(buttonId) || rightButtons.includes(buttonId);
+  if (!hasPin && !isPositioned) return;
+  toolbar.setLauncherItemOnToolbar(buttonId, false);
+}
 
 let loadRecipesRequestId = 0;
 
@@ -725,6 +750,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       } else {
         await projectClient.deleteRecipe(recipe.projectId!, id);
       }
+      // Only after the backend confirms, and only for a genuine delete. The
+      // key and its toolbar slot would otherwise outlive the recipe forever,
+      // and unlike a plugin unload (which also fires for an update) this is
+      // permanent (#12217). Rolled-back deletions fall through to the catch and
+      // keep the pin, which is why this sits after the await rather than beside
+      // the optimistic `set` above.
+      clearRecipeToolbarPin(recipe, get().currentProjectId);
     } catch (error) {
       logError("Failed to persist recipe deletion", error);
       set({
@@ -821,6 +853,14 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         } else {
           await projectClient.deleteRecipe(recipe.projectId!, recipeId);
         }
+        // The original is gone for good, so its pin goes with it — otherwise a
+        // recipe the user "moved into the repo" leaves a dead key and slot
+        // behind while the promoted copy, which has a different id, carries no
+        // pin (#12217). Deliberately clearing rather than transferring: the
+        // promoted recipe is project-scoped where the original may not have
+        // been, so the two are not the same toolbar identity and silently
+        // moving a pin across that boundary would be a guess.
+        clearRecipeToolbarPin(recipe, get().currentProjectId);
       } catch (error) {
         // In-repo write succeeded; roll back only the delete portion
         logError("Failed to delete original recipe", error);

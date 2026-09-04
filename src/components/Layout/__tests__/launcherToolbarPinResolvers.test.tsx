@@ -5,6 +5,10 @@ import {
   getLauncherPanelButtonIdForKind,
   isPanelButtonOnToolbar,
   isLauncherPanelButtonId,
+  decodeLauncherItemToolbarButtonId,
+  isLauncherItemOnToolbar,
+  isLauncherItemToolbarButtonId,
+  launcherItemToolbarButtonId,
 } from "@shared/types/toolbar";
 import { isAgentButtonOnToolbar } from "../../../../shared/utils/agentPinned";
 
@@ -80,9 +84,10 @@ describe("getLauncherPanelButtonIdForKind", () => {
     expect([...LAUNCHER_PANEL_BUTTON_IDS].filter((id) => !mapped.has(id))).toEqual([]);
   });
 
-  it("returns undefined for kinds with no toolbar button", () => {
-    // Panel kinds that ship in the launcher but have no button: they need a
-    // resolver that says so rather than one that throws or guesses.
+  it("returns undefined for kinds outside the fixed four", () => {
+    // Since #12217 these are pinnable through a launcher-item id instead; what
+    // this resolver still has to say is that they own none of the four fixed
+    // button ids, rather than throwing or guessing one.
     expect(getLauncherPanelButtonIdForKind("review")).toBeUndefined();
     expect(getLauncherPanelButtonIdForKind("diff")).toBeUndefined();
     expect(getLauncherPanelButtonIdForKind("file")).toBeUndefined();
@@ -119,5 +124,79 @@ describe("isAgentButtonOnToolbar (#11680)", () => {
 
   it("lets an explicit hide win over a position", () => {
     expect(isAgentButtonOnToolbar({ pinned: false }, "ready", true)).toBe(false);
+  });
+});
+
+describe("launcher item button ids (#12217)", () => {
+  it("round-trips a source id that contains the characters the id space is built from", () => {
+    // A plugin-contributed recipe's id is `publisher.name`, and nothing stops a
+    // recipe or plugin kind id carrying a colon either. The encoding splits on
+    // the first two colons and takes the rest verbatim, so neither escapes.
+    for (const sourceId of [
+      "acme.deploy",
+      "with:colons:inside",
+      "0f8c1d2e-3a4b-5c6d-7e8f-901234567890",
+      "inrepo-ship-it",
+      "Ünïcøde ✨",
+    ]) {
+      const id = launcherItemToolbarButtonId("recipe", sourceId);
+      expect(decodeLauncherItemToolbarButtonId(id)).toEqual({ category: "recipe", sourceId });
+    }
+  });
+
+  it("keeps the three categories apart for one source id", () => {
+    // An agent, a panel kind and a recipe may all be called `review`. Three
+    // rows sharing one key would make pinning any of them pin all three.
+    const ids = (["agent", "panel", "recipe"] as const).map((category) =>
+      launcherItemToolbarButtonId(category, "review")
+    );
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it("never mints an id a built-in or plugin button could also own", () => {
+    // The prefix is what keeps `sweepStalePluginPinnedButtons` from reading a
+    // dotted launcher id as a plugin button it no longer recognises.
+    expect(isLauncherItemToolbarButtonId(launcherItemToolbarButtonId("agent", "acme.helper"))).toBe(
+      true
+    );
+    expect(isLauncherItemToolbarButtonId("claude")).toBe(false);
+    expect(isLauncherItemToolbarButtonId("dev-server")).toBe(false);
+    expect(isLauncherItemToolbarButtonId("acme.deploy")).toBe(false);
+    expect(isLauncherItemToolbarButtonId("plugin-tray")).toBe(false);
+  });
+
+  it("rejects a malformed id rather than guessing at its parts", () => {
+    expect(decodeLauncherItemToolbarButtonId("launcher:")).toBeNull();
+    expect(decodeLauncherItemToolbarButtonId("launcher:recipe")).toBeNull();
+    // An empty source id would mint a key no catalog entry can ever match.
+    expect(decodeLauncherItemToolbarButtonId("launcher:recipe:")).toBeNull();
+    expect(decodeLauncherItemToolbarButtonId("launcher::abc")).toBeNull();
+    // A category outside the three the launcher has.
+    expect(decodeLauncherItemToolbarButtonId("launcher:cue:create-recipe")).toBeNull();
+    expect(decodeLauncherItemToolbarButtonId("not-a-launcher:recipe:abc")).toBeNull();
+  });
+
+  it("does not resolve inherited Object properties as categories", () => {
+    // The category segment is compared, never used to index a lookup table —
+    // this is the regression test that keeps it that way.
+    expect(decodeLauncherItemToolbarButtonId("launcher:constructor:x")).toBeNull();
+    expect(decodeLauncherItemToolbarButtonId("launcher:toString:x")).toBeNull();
+    expect(decodeLauncherItemToolbarButtonId("launcher:__proto__:x")).toBeNull();
+  });
+
+  it("reads only an explicit promotion as on the toolbar", () => {
+    // Unlike the fixed panel buttons, a launcher item has no default slot to
+    // fall through to, so absence and `false` are the same answer and nothing
+    // may seed either (#11667).
+    const id = launcherItemToolbarButtonId("recipe", "r1");
+    expect(isLauncherItemOnToolbar(id, {})).toBe(false);
+    expect(isLauncherItemOnToolbar(id, { [id]: false })).toBe(false);
+    expect(isLauncherItemOnToolbar(id, { [id]: true })).toBe(true);
+  });
+
+  it("does not read an inherited Object property as a pin", () => {
+    // `pinnedButtons` is a plain object carrying arbitrary string keys.
+    const id = launcherItemToolbarButtonId("recipe", "constructor");
+    expect(isLauncherItemOnToolbar(id, {})).toBe(false);
   });
 });

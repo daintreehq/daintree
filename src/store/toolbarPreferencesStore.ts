@@ -6,13 +6,14 @@ import type {
   ToolbarButtonId,
   AnyToolbarButtonId,
   LauncherPanelButtonId,
+  LauncherItemToolbarButtonId,
   PluginToolbarButtonId,
   ToolbarPinnedState,
 } from "@/../../shared/types/toolbar";
 // `@shared/...`, not the `@/../../shared/...` spelling the type-only import
 // above uses: that path is erased at compile time and never has to resolve at
 // runtime, but a value import does.
-import { LAUNCHER_PANEL_BUTTON_IDS } from "@shared/types/toolbar";
+import { LAUNCHER_PANEL_BUTTON_IDS, isLauncherItemToolbarButtonId } from "@shared/types/toolbar";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import {
   mergeRecordByWriterDelta,
@@ -459,6 +460,26 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
    */
   positionAgentButton: (buttonIds: AnyToolbarButtonId | AnyToolbarButtonId[]) => void;
   /**
+   * Pin or unpin a launcher row that owns no toolbar button id of its own —
+   * a plugin or user-defined agent, a panel kind outside the fixed four, or a
+   * recipe (#12217).
+   *
+   * Asymmetric on purpose, and differently from `setPanelButtonOnToolbar`.
+   * Pinning writes the explicit `true` that `isLauncherItemOnToolbar` reads and
+   * positions the button beside the launcher if it has no slot. Unpinning
+   * *deletes* the key and strips the id from both arrays rather than writing a
+   * `false`: for a launcher item absence and `false` are the same answer (only
+   * an explicit `true` grants a button), so a `false` would record nothing while
+   * leaving a key and a slot behind for a recipe that may be deleted tomorrow.
+   * `setPluginButtonPromoted` deletes for the same reason; it keeps its array
+   * entry only because the v9 migration deliberately preserves plugin ids a user
+   * dragged there, and no launcher item can have one that a pin didn't create.
+   *
+   * Nothing here ever writes a default — the row's absence from the map is what
+   * says "not pinned" (#11667).
+   */
+  setLauncherItemOnToolbar: (buttonId: LauncherItemToolbarButtonId, onToolbar: boolean) => void;
+  /**
    * Prune `pinnedButtons` entries for plugin buttons that are no longer in
    * the loaded plugin set. `pinnedButtons` is renderer-local persisted state
    * with no main-process access, so an uninstalled plugin's stale hide entry
@@ -467,8 +488,10 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
    * canonical namespace (#9281) — built-in button IDs (`sidebar-toggle`,
    * `notification-center`, agent IDs like `claude`, etc.) contain only
    * hyphens or single tokens, never dots, so `key.includes(".")` cleanly
-   * separates the two. No-ops (returns state unchanged) when nothing is
-   * stale so the per-snapshot call doesn't churn the persist layer.
+   * separates the two. Launcher-item ids (#12217) are the one exception that
+   * can carry a dot without being a plugin button, and are excluded by prefix
+   * before the dot test decides. No-ops (returns state unchanged) when nothing
+   * is stale so the per-snapshot call doesn't churn the persist layer.
    *
    * Explicit promotions (`true`, #11304) are exempt — see the filter below.
    */
@@ -587,12 +610,53 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             layout: { ...state.layout, pinnedButtons: pinned },
           };
         }),
+      setLauncherItemOnToolbar: (buttonId, onToolbar) =>
+        set((state) => {
+          const current = state.layout.pinnedButtons[buttonId];
+          if (onToolbar) {
+            if (current === true) return state;
+            const pinned: ToolbarPinnedState = { ...state.layout.pinnedButtons, [buttonId]: true };
+            const isPositioned =
+              state.layout.leftButtons.includes(buttonId) ||
+              state.layout.rightButtons.includes(buttonId);
+            if (isPositioned) {
+              return { layout: { ...state.layout, pinnedButtons: pinned } };
+            }
+            return {
+              layout: {
+                ...state.layout,
+                pinnedButtons: pinned,
+                ...positionLauncherButton(state.layout, [buttonId]),
+              },
+            };
+          }
+
+          const leftButtons = state.layout.leftButtons.filter((id) => id !== buttonId);
+          const rightButtons = state.layout.rightButtons.filter((id) => id !== buttonId);
+          if (
+            current === undefined &&
+            leftButtons.length === state.layout.leftButtons.length &&
+            rightButtons.length === state.layout.rightButtons.length
+          ) {
+            return state;
+          }
+          const pinned: ToolbarPinnedState = { ...state.layout.pinnedButtons };
+          delete pinned[buttonId];
+          return { layout: { ...state.layout, pinnedButtons: pinned, leftButtons, rightButtons } };
+        }),
       sweepStalePluginPinnedButtons: (validIds) =>
         set((state) => {
           const validSet = new Set(validIds);
           const staleKeys = Object.keys(state.layout.pinnedButtons).filter(
             (key) =>
               key.includes(".") &&
+              // A launcher item's source id can itself be dotted — a
+              // plugin-contributed recipe's id is `publisher.name` — so the dot
+              // test alone reads one as a plugin button this snapshot has never
+              // heard of and drops the user's pin (#12217). The prefix is the
+              // discriminator; `key.includes(".")` stays the one for everything
+              // else.
+              !isLauncherItemToolbarButtonId(key) &&
               !validSet.has(key) &&
               // Never reclaim an explicit promotion (#11304). A `complete`
               // broadcast means "a plugin unloaded", not "a plugin was
