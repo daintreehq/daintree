@@ -164,6 +164,7 @@ import { PluginService } from "../../PluginService.js";
 import { PLUGIN_PROCESS_STREAM_CHANNEL } from "../../../../shared/types/ipc/pluginProcess.js";
 import type { ProcessStreamSink } from "../PluginProcessManager.js";
 import type { LoadedPlugin } from "../PluginServiceTypes.js";
+import type { WorktreeSnapshot } from "../../../../shared/types/workspace-host.js";
 
 const PLUGIN_ID = "acme.project-plugin";
 
@@ -176,6 +177,8 @@ let settingsManager: PluginSettingsManager;
 let storageManager: PluginStorageManager;
 let ambientWorktreeFetch: ReturnType<typeof vi.fn>;
 let projectWorktreeFetch: ReturnType<typeof vi.fn>;
+/** The app-global worktree lookup storage falls back to for an UNBOUND host. */
+let ambientWorktreePathLookup: ReturnType<typeof vi.fn>;
 
 /** Assert a promise rejected with the frozen `PROJECT_VIEW_UNAVAILABLE` AppError. */
 async function expectProjectViewUnavailable(promise: Promise<unknown>): Promise<void> {
@@ -290,10 +293,12 @@ beforeEach(async () => {
     getPluginsRoot: () => path.join(tmpDir, "user-plugins", "plugins"),
     getManifest: () => undefined,
   });
+  // The ambient worktree — inside B, the focused project. A spy, so a bound
+  // host reaching for it at all is a test failure rather than a silent leak.
+  ambientWorktreePathLookup = vi.fn(async () => path.join(projectRootOf(PROJECT_B), "main"));
   storageManager = new PluginStorageManager({
     getPluginsRoot: () => path.join(tmpDir, "user-plugins", "plugins"),
-    // The ambient worktree — inside B, the focused project.
-    getActiveWorktreePath: async () => path.join(projectRootOf(PROJECT_B), "main"),
+    getActiveWorktreePath: ambientWorktreePathLookup,
   });
   processStreamSink = null;
 });
@@ -544,6 +549,35 @@ describe("settings and storage roots", () => {
     }
   }
 
+  /** Where a worktree-scoped storage write lands for a given worktree root. */
+  function storageFileIn(root: string): string {
+    return path.join(root, ".daintree", "plugin-storage", `${PLUGIN_ID}.json`);
+  }
+
+  function worktreeSnapshot(root: string, isCurrent = false): WorktreeSnapshot {
+    return {
+      id: root,
+      worktreeId: `wt-${path.basename(root)}`,
+      path: root,
+      name: path.basename(root),
+      isCurrent,
+    };
+  }
+
+  /** A worktree inside A, the BOUND project — never the focused one. */
+  const inA = (name: string): string => path.join(projectRootOf(PROJECT_A), name);
+  /** The ambient worktree, inside focused B — where the bug used to write. */
+  const ambientB = (): string => path.join(projectRootOf(PROJECT_B), "main");
+
+  /** `hostBoundTo`, but keeping the deps so a test can unload the plugin. */
+  function hostAndDepsBoundTo(binding: PluginHostBinding): {
+    host: PluginHostApi;
+    deps: PluginHostFactoryDeps;
+  } {
+    const deps = makeHostDeps();
+    return { host: createHost(deps, PLUGIN_ID, binding).host, deps };
+  }
+
   it("writes a project-scoped setting into A's tree while B is the active project", async () => {
     const manager = settingsManager;
     const filePath = manager.resolveSettingsFilePath(
@@ -639,6 +673,151 @@ describe("settings and storage roots", () => {
     expect(await exists(path.join(projectRootOf(PROJECT_B), ".daintree"))).toBe(false);
   });
 
+  /*
+   * #12229 — the worktree half of the same confused deputy. `createHost` handed
+   * both resolvers a project root but never a worktree, so worktree-scoped
+   * storage fell through to `PluginStorageManager`'s app-global active-worktree
+   * callback: a host bound to A read and overwrote whichever worktree the app
+   * considered current, which is one of focused B's.
+   */
+  it("writes worktree-scoped storage into A's current worktree, never focused B's", async () => {
+    const host = hostBoundTo({ projectId: PROJECT_A, projectRoot: projectRootOf(PROJECT_A) });
+    // Mocks are configured AFTER the host: hostBoundTo calls makeHostDeps(),
+    // which reassigns both fetch spies.
+    projectWorktreeFetch.mockResolvedValue({
+      status: "ok",
+      projectId: PROJECT_A,
+      snapshots: [worktreeSnapshot(inA("main")), worktreeSnapshot(inA("feature-x"), true)],
+    });
+
+    await host.storage.set("cursor", 7, "worktree");
+
+    expect(JSON.parse(await fs.readFile(storageFileIn(inA("feature-x")), "utf8"))).toEqual({
+      cursor: 7,
+    });
+    expect(await host.storage.get("cursor", "worktree")).toBe(7);
+
+    // Nothing anywhere near B, and the ambient lookup was never reached for it.
+    expect(await exists(path.join(projectRootOf(PROJECT_B), ".daintree"))).toBe(false);
+    expect(await exists(storageFileIn(ambientB()))).toBe(false);
+    expect(ambientWorktreePathLookup).not.toHaveBeenCalled();
+    expect(ambientWorktreeFetch).not.toHaveBeenCalled();
+
+    await host.storage.delete("cursor", "worktree");
+    expect(JSON.parse(await fs.readFile(storageFileIn(inA("feature-x")), "utf8"))).toEqual({});
+  });
+
+  it("re-resolves A's current worktree on every call, following a mid-session switch", async () => {
+    // The project root is fixed for the host's lifetime; the active worktree is
+    // not — which is why the target resolves per call rather than at construction.
+    const host = hostBoundTo({ projectId: PROJECT_A, projectRoot: projectRootOf(PROJECT_A) });
+    projectWorktreeFetch.mockResolvedValue({
+      status: "ok",
+      projectId: PROJECT_A,
+      snapshots: [worktreeSnapshot(inA("main"), true), worktreeSnapshot(inA("feature-x"))],
+    });
+
+    await host.storage.set("cursor", 1, "worktree");
+
+    projectWorktreeFetch.mockResolvedValue({
+      status: "ok",
+      projectId: PROJECT_A,
+      snapshots: [worktreeSnapshot(inA("main")), worktreeSnapshot(inA("feature-x"), true)],
+    });
+
+    await host.storage.set("cursor", 2, "worktree");
+
+    expect(JSON.parse(await fs.readFile(storageFileIn(inA("main")), "utf8"))).toEqual({
+      cursor: 1,
+    });
+    expect(JSON.parse(await fs.readFile(storageFileIn(inA("feature-x")), "utf8"))).toEqual({
+      cursor: 2,
+    });
+    expect(await host.storage.get("cursor", "worktree")).toBe(2);
+  });
+
+  it("fails closed when A has no current worktree rather than falling back to B", async () => {
+    const host = hostBoundTo({ projectId: PROJECT_A, projectRoot: projectRootOf(PROJECT_A) });
+    projectWorktreeFetch.mockResolvedValue({
+      status: "ok",
+      projectId: PROJECT_A,
+      snapshots: [worktreeSnapshot(inA("main")), worktreeSnapshot(inA("feature-x"))],
+    });
+
+    await expect(host.storage.set("cursor", 7, "worktree")).rejects.toThrow(
+      'no active worktree — "worktree" scope has no target'
+    );
+    // Read and delete degrade quietly, matching the unset-key / already-absent
+    // returns the other scopes give when they have no target.
+    expect(await host.storage.get("cursor", "worktree")).toBeUndefined();
+    await expect(host.storage.delete("cursor", "worktree")).resolves.toBeUndefined();
+
+    expect(await exists(path.join(projectRootOf(PROJECT_A), ".daintree"))).toBe(false);
+    expect(await exists(path.join(projectRootOf(PROJECT_B), ".daintree"))).toBe(false);
+    expect(ambientWorktreePathLookup).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the worktree read answers for B through an A-bound host", async () => {
+    // The deputy wearing #12174's shape on the persistence side: a dependency
+    // answering with B's project id must not be relabelled as A's target.
+    const host = hostBoundTo({ projectId: PROJECT_A, projectRoot: projectRootOf(PROJECT_A) });
+    projectWorktreeFetch.mockResolvedValue({
+      status: "ok",
+      projectId: PROJECT_B,
+      snapshots: [worktreeSnapshot(ambientB(), true)],
+    });
+
+    await expect(host.storage.set("cursor", 7, "worktree")).rejects.toThrow(
+      'no active worktree — "worktree" scope has no target'
+    );
+
+    expect(await exists(path.join(projectRootOf(PROJECT_B), ".daintree"))).toBe(false);
+    expect(await exists(path.join(projectRootOf(PROJECT_A), ".daintree"))).toBe(false);
+  });
+
+  it("keeps an UNBOUND host's worktree-scoped storage on the ambient worktree", async () => {
+    // The other half of the fix: an installed or builtin plugin has no project
+    // of its own, so the app-global active worktree stays the only thing its
+    // worktree scope can mean. Failing this one closed would break every
+    // unbound plugin's storage.
+    const host = hostBoundTo(UNBOUND_PLUGIN_HOST_BINDING);
+
+    await host.storage.set("cursor", 7, "worktree");
+
+    expect(JSON.parse(await fs.readFile(storageFileIn(ambientB()), "utf8"))).toEqual({ cursor: 7 });
+    expect(ambientWorktreePathLookup).toHaveBeenCalled();
+    // Unbound short-circuits before the snapshot read — the ambient callback is
+    // the whole resolution.
+    expect(projectWorktreeFetch).not.toHaveBeenCalled();
+  });
+
+  it("no-ops a worktree-scoped set when the plugin unloads during target resolution", async () => {
+    const { host, deps } = hostAndDepsBoundTo({
+      projectId: PROJECT_A,
+      projectRoot: projectRootOf(PROJECT_A),
+    });
+    let release!: (value: unknown) => void;
+    projectWorktreeFetch.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      })
+    );
+
+    const pending = host.storage.set("cursor", 7, "worktree");
+    // Unloaded mid-resolution: the write is dropped rather than surfacing the
+    // "no target" throw a genuinely absent worktree would raise.
+    deps.plugins.delete(PLUGIN_ID);
+    release({
+      status: "ok",
+      projectId: PROJECT_A,
+      snapshots: [worktreeSnapshot(inA("feature-x"), true)],
+    });
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(await exists(path.join(projectRootOf(PROJECT_A), ".daintree"))).toBe(false);
+    expect(await exists(path.join(projectRootOf(PROJECT_B), ".daintree"))).toBe(false);
+  });
+
   it("fails closed for a malformed bound-but-rootless binding rather than writing into B", async () => {
     // A binding that names a project but carries no root is a loader bug. The
     // host resolves it to "", which both managers reject — the ambient
@@ -647,6 +826,10 @@ describe("settings and storage roots", () => {
 
     await expect(host.settings.set("token", "nowhere", "project")).rejects.toThrow();
     await expect(host.storage.set("cursor", 7, "project")).rejects.toThrow();
+    // Worktree scope too: the rootless binding can't name a project to filter
+    // the snapshot read by, so it resolves to "" rather than the ambient set.
+    await expect(host.storage.set("cursor", 7, "worktree")).rejects.toThrow();
+    expect(ambientWorktreePathLookup).not.toHaveBeenCalled();
 
     expect(await exists(path.join(projectRootOf(PROJECT_B), ".daintree"))).toBe(false);
     expect(await exists(path.join(projectRootOf(PROJECT_A), ".daintree"))).toBe(false);

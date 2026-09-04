@@ -21,7 +21,11 @@ import type { PluginPanelLifecycleBroker } from "./PluginPanelLifecycleBroker.js
 import type { PluginRendererDispatcher } from "./PluginRendererDispatcher.js";
 import type { PluginUIPromptDispatcher } from "./PluginUIPromptDispatcher.js";
 import { assertSettingsKey, type PluginSettingsManager } from "./PluginSettingsManager.js";
-import { assertStorageKey, type PluginStorageManager } from "./PluginStorageManager.js";
+import {
+  assertStorageKey,
+  type ExplicitStorageTarget,
+  type PluginStorageManager,
+} from "./PluginStorageManager.js";
 import { createListenerFailureState, invokeTrackedListener } from "./pluginCallbackUtils.js";
 import { isChannelSchema } from "./PluginChannelRegistry.js";
 
@@ -425,9 +429,9 @@ export function createHost(
    * default spawn cwd falls back rather than pointing into another project.
    *
    * Not every worktree-derived surface routes through here — worktree-scoped
-   * *storage* resolves its target through `PluginStorageManager`'s own active-
-   * worktree callback, which is still ambient for a bound host. That is a
-   * separate pre-existing gap, not something this read covers.
+   * *storage* resolves its target through `resolveBoundWorktreeTarget`, which
+   * reads the projected `getWorktreesResult` so it can name one worktree rather
+   * than flatten the set (#12229).
    */
   const fetchWorktreeSnapshots = async (): Promise<WorktreeSnapshot[]> => {
     const result = await fetchWorktreeSnapshotsResult();
@@ -560,6 +564,42 @@ export function createHost(
     projectId: boundProjectId,
     projectRoot: boundProjectRoot,
   });
+
+  /**
+   * The worktree a `"worktree"`-scoped storage call targets (#12229).
+   *
+   * The project-root counterpart, `boundScopeRoot`, is fixed for the host's
+   * lifetime; the active worktree is not — the user switches it while the host
+   * stays alive — so this resolves per call rather than once at construction.
+   *
+   * Deliberately reads `getWorktreesResult`, the same source `getActiveWorktree`
+   * projects from, so a plugin's storage target and its active-worktree read can
+   * never name different worktrees. Every unavailable reason (including a
+   * projection that threw, and an unload caught by that method's own liveness
+   * re-checks) collapses to `""`, which the manager rejects: for a filesystem
+   * target, failing closed beats salvaging a path out of a snapshot set the
+   * binding boundary already called malformed.
+   *
+   * Unbound returns `undefined` so the manager keeps its app-global lookup —
+   * an installed or builtin plugin has no project of its own, so the active
+   * worktree is the only thing its worktree scope can mean.
+   */
+  const resolveBoundWorktreeTarget = async (): Promise<string | undefined> => {
+    if (boundProjectId === null) return undefined;
+    const result = await getWorktreesResult();
+    if (result.status !== "ok") return "";
+    return result.worktrees.find((w) => w.isCurrent)?.path ?? "";
+  };
+
+  /**
+   * The target a storage call resolves against. Only `"worktree"` scope pays for
+   * the project-filtered snapshot read — `"user"` and `"project"` need nothing
+   * beyond the static root, and they are the hot path.
+   */
+  const storageTargetFor = async (scope: PluginStorageScope): Promise<ExplicitStorageTarget> =>
+    scope === "worktree"
+      ? { projectRoot: boundScopeRoot, worktreePath: await resolveBoundWorktreeTarget() }
+      : { projectRoot: boundScopeRoot };
 
   const host: PluginHostApi = {
     get pluginId() {
@@ -1525,9 +1565,11 @@ export function createHost(
         scope: PluginStorageScope = "user"
       ): Promise<T | undefined> => {
         assertStorageKey(pluginId, "get", key);
-        const filePath = await deps.storage.resolveStorageFilePath(pluginId, scope, {
-          projectRoot: boundScopeRoot,
-        });
+        const filePath = await deps.storage.resolveStorageFilePath(
+          pluginId,
+          scope,
+          await storageTargetFor(scope)
+        );
         // No active project/worktree (or unset key): read resolves to undefined
         // rather than throwing, matching the "unset key" return.
         if (!filePath || !isBound()) return undefined;
@@ -1545,9 +1587,11 @@ export function createHost(
           );
         }
         deps.storage.assertStorageSerializable(pluginId, key, value);
-        const filePath = await deps.storage.resolveStorageFilePath(pluginId, scope, {
-          projectRoot: boundScopeRoot,
-        });
+        const filePath = await deps.storage.resolveStorageFilePath(
+          pluginId,
+          scope,
+          await storageTargetFor(scope)
+        );
         // Re-check liveness after the async resolve so a racing unloadPlugin()
         // doesn't write into a torn-down plugin's storage file.
         if (!isBound()) return;
@@ -1562,9 +1606,11 @@ export function createHost(
       },
       delete: async (key: string, scope: PluginStorageScope = "user"): Promise<void> => {
         assertStorageKey(pluginId, "delete", key);
-        const filePath = await deps.storage.resolveStorageFilePath(pluginId, scope, {
-          projectRoot: boundScopeRoot,
-        });
+        const filePath = await deps.storage.resolveStorageFilePath(
+          pluginId,
+          scope,
+          await storageTargetFor(scope)
+        );
         // Missing target or unloaded plugin: a delete is a no-op rather than a
         // throw (matching the "already absent" return of the store).
         if (!filePath || !isBound()) return;
