@@ -189,10 +189,10 @@ type ViewerState =
   | { status: "pdf" }
   | { status: "error"; message: string };
 
-// Markdown gets a Source/Rendered switch mirroring FilePane's toggle. Typed at
-// the constant so the option values stay `FileRenderMode` rather than widening
-// to `string`; a two-entry list only — the browser preview has no diff mode.
-const MARKDOWN_MODE_OPTIONS: Array<{ value: FileRenderMode; label: string }> = [
+// Markdown and HTML both get a Source/Rendered switch mirroring FilePane's
+// toggle. Typed at the constant so the option values stay `FileRenderMode`
+// rather than widening to `string`; a two-entry list only — no diff mode here.
+const FILE_RENDER_MODE_OPTIONS: Array<{ value: FileRenderMode; label: string }> = [
   { value: "source", label: "Source" },
   { value: "rendered", label: "Rendered" },
 ];
@@ -240,12 +240,20 @@ export function FileBrowserViewer({
   hiddenCounts,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
-  // Sticky Source/Rendered choice for markdown, defaulting to the rendered view
-  // this pane has always shown. Deliberately not reset on file change: a reader
-  // paging through docs in source keeps source, mirroring FilePane (whose
-  // per-panel mode also survives a file swap). Non-markdown files simply hide
-  // the toggle, so a stale "source" never applies where it can't be honoured.
-  const [markdownMode, setMarkdownMode] = useState<FileRenderMode>("rendered");
+  // The reader's explicit Source/Rendered choice, `null` until they touch the
+  // toggle. Untouched, each renderable type opens on the default that suits it:
+  // markdown is a document you read rendered, while HTML in a repo is code you
+  // opened to read, and a page that renders near-blank otherwise looks like a
+  // broken file (#12205). Once chosen the mode is sticky and shared across both
+  // types, deliberately not reset on file change: a reader paging through docs
+  // in source keeps source, mirroring FilePane (whose per-panel mode also
+  // survives a file swap). Files that are neither simply hide the toggle, so a
+  // stale mode never applies where it can't be honoured.
+  const [explicitRenderMode, setExplicitRenderMode] = useState<FileRenderMode | null>(null);
+  const isMarkdown = filePath !== null && isMarkdownFilePath(filePath);
+  const isHtml = filePath !== null && isHtmlFilePath(filePath);
+  const isRenderable = isMarkdown || isHtml;
+  const renderMode: FileRenderMode = explicitRenderMode ?? (isHtml ? "source" : "rendered");
   // The same app-level reading size the file panel shows, so a document is the
   // size the reader last chose in whichever surface they opened it (#12134).
   const markdownFontSize = usePreferencesStore((state) => state.markdownFontSize);
@@ -479,11 +487,11 @@ export function FileBrowserViewer({
         </FileViewerToolbar.IconButton>
         {filePath && (
           <>
-            {isMarkdownFilePath(filePath) && (
+            {isRenderable && (
               <SegmentedToggle<FileRenderMode>
-                options={MARKDOWN_MODE_OPTIONS}
-                value={markdownMode}
-                onChange={setMarkdownMode}
+                options={FILE_RENDER_MODE_OPTIONS}
+                value={renderMode}
+                onChange={setExplicitRenderMode}
               />
             )}
             <FileViewerToolbar.Path
@@ -530,7 +538,7 @@ export function FileBrowserViewer({
               does not reach, and every other preview kind has no prose to
               tune. Sits ahead of the file actions so the controls that change
               what you are looking at stay left of the ones that leave. */}
-          {filePath !== null && isMarkdownFilePath(filePath) && markdownMode === "rendered" && (
+          {isMarkdown && renderMode === "rendered" && (
             <MarkdownTextSizeControl
               value={markdownFontSize}
               onValueChange={setMarkdownFontSize}
@@ -874,12 +882,20 @@ export function FileBrowserViewer({
         );
 
       case "html":
+        // Source is the same CodeViewer the non-markdown text branch uses, off
+        // content the preview read already returned — switching modes never
+        // costs a second read. A null previewUrl still renders HtmlViewer in
+        // rendered mode rather than silently showing source: its empty state
+        // says why and points at the Source segment, which now exists here.
+        if (renderMode === "source") {
+          return <CodeViewer content={state.content} filePath={filePath} className="h-full" />;
+        }
         return (
           <HtmlViewer previewUrl={state.previewUrl} reloadNonce={reloadNonce} title={fileName} />
         );
 
       case "text":
-        if (!isMarkdownFilePath(filePath)) {
+        if (!isMarkdown) {
           return <CodeViewer content={state.content} filePath={filePath} className="h-full" />;
         }
         // Source mode was never part of #11441: CodeViewer's root is already a
@@ -890,13 +906,13 @@ export function FileBrowserViewer({
         // lines here don't wrap (CodeViewer defaults `wrapLines` to false).
         // `min-h-0` only replaces MarkdownViewer's min-h-[300px] floor, which
         // used to overflow a preview shorter than 300px.
-        if (markdownMode === "source") {
+        if (renderMode === "source") {
           return (
             <MarkdownViewer
               content={state.content}
               filePath={filePath}
               rootPath={rootPath}
-              viewMode={markdownMode}
+              viewMode={renderMode}
               className="h-full min-h-0"
             />
           );
@@ -919,7 +935,7 @@ export function FileBrowserViewer({
               content={state.content}
               filePath={filePath}
               rootPath={rootPath}
-              viewMode={markdownMode}
+              viewMode={renderMode}
               fontSize={markdownFontSize}
               cacheBust={revision}
               className="min-h-full"

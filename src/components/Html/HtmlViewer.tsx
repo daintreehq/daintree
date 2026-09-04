@@ -28,8 +28,9 @@ export interface HtmlViewerProps {
  * token-scoped CSP; `sandbox="allow-scripts"` WITHOUT `allow-same-origin` gives
  * it an opaque origin, so its scripts run but it cannot reach the app, the
  * bridge, storage, or the network. Source mode stays on CodeViewer (owned by
- * FilePane), so this component is rendered-only — a thin, non-lazy iframe
- * wrapper with no heavy deps.
+ * whichever surface hosts this — FilePane, the file browser's viewer), so this
+ * component is rendered-only — a thin, non-lazy iframe wrapper with no heavy
+ * deps.
  */
 export function HtmlViewer({ previewUrl, reloadNonce, title, className }: HtmlViewerProps) {
   const src = useMemo(() => {

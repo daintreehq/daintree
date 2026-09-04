@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // module in ahead of its own mock.
 import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
 
-// FileBrowserViewer is the read-only preview beside the tree. #11319 adds a
-// Source/Rendered toggle for markdown, mirroring FilePane. Mock the heavy leaf
-// viewers so only FileBrowserViewer's own toolbar + mode wiring renders, and
-// capture the viewMode handed to MarkdownViewer — the seam the toggle drives.
+// FileBrowserViewer is the read-only preview beside the tree. #11319 added a
+// Source/Rendered toggle for markdown and #12205 extended it to HTML, mirroring
+// FilePane. Mock the heavy leaf viewers so only FileBrowserViewer's own toolbar
+// + mode wiring renders, and capture the viewMode handed to MarkdownViewer —
+// the seam the toggle drives for markdown. HTML has no such prop (HtmlViewer is
+// rendered-only), so there the mode shows up as which mock is on screen.
 const { readMock } = vi.hoisted(() => ({ readMock: vi.fn() }));
 vi.mock("@/clients/filesClient", () => ({
   filesClient: { read: readMock },
@@ -296,6 +298,10 @@ async function clickMode(label: "Source" | "Rendered") {
   });
 }
 
+// An HTML read as the pane really gets it: raw markup plus the sandboxed
+// preview URL main minted for it.
+const HTML_READ = { content: "<h1>hi</h1>\n", htmlPreviewUrl: "daintree-html://preview/1" };
+
 function currentViewMode(): string | null {
   return screen.getByTestId("markdown-viewer-mock").getAttribute("data-view-mode");
 }
@@ -334,7 +340,7 @@ beforeEach(() => {
   }
 });
 
-describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
+describe("FileBrowserViewer Source/Rendered toggle (#11319, #12205)", () => {
   it("shows the toggle and defaults to the rendered view for a markdown file", async () => {
     renderViewer("/repo/docs/spec.md");
     // Default preserves the pane's long-standing rendered-first behaviour.
@@ -366,10 +372,11 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
     await waitFor(() => expect(currentViewMode()).toBe("source"));
   });
 
-  it("drops the toggle and its stale source choice when switching to a non-markdown file", async () => {
+  it("drops the toggle and its stale source choice when switching to a non-renderable file", async () => {
     // Start on markdown in Source, then navigate to a .txt in the same viewer —
-    // the tree's real usage. Proves the markdown-only toggle disappears and the
-    // sticky "source" choice can't leak into the CodeViewer (non-markdown) branch.
+    // the tree's real usage. Proves the toggle disappears for a file with no
+    // rendered form, and the sticky "source" choice can't leak into the
+    // CodeViewer (non-renderable) branch.
     const { rerender } = renderViewer("/repo/docs/a.md");
     await waitFor(() => expect(currentViewMode()).toBe("rendered"));
     await clickMode("Source");
@@ -380,6 +387,72 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
     expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
     expect(screen.queryByTestId("markdown-viewer-mock")).toBeNull();
+  });
+
+  it("shows the toggle and defaults an HTML file to source (#12205)", async () => {
+    readMock.mockResolvedValue(HTML_READ);
+    renderViewer("/repo/page.html");
+
+    // The markup, not the sandboxed page: HTML in a repo is code you opened to
+    // read, and a page that renders near-blank reads as a broken file.
+    await screen.findByTestId("code-viewer-mock");
+    expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
+    expect(screen.getByRole("button", { name: "Source" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Rendered" })).toBeTruthy();
+  });
+
+  it("switches HTML between source and rendered without a second read", async () => {
+    // No htmlPreviewUrl: mode routing is driven by the toggle alone, never by
+    // whether main produced a preview. HtmlViewer owns the missing-URL copy.
+    readMock.mockResolvedValue({ content: "<h1>hi</h1>\n" });
+    renderViewer("/repo/page.html");
+    await screen.findByTestId("code-viewer-mock");
+
+    await clickMode("Rendered");
+    await screen.findByTestId("html-viewer-mock");
+    expect(screen.queryByTestId("code-viewer-mock")).toBeNull();
+
+    await clickMode("Source");
+    await screen.findByTestId("code-viewer-mock");
+
+    // Both surfaces come off the one read — the preview call already returned
+    // the raw markup, so toggling must never go back to the main process.
+    expect(readMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies each file type's own default until a mode is explicitly chosen", async () => {
+    readMock.mockResolvedValue(HTML_READ);
+    const { rerender } = renderViewer("/repo/docs/spec.md");
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+
+    // Untouched, the toggle is not carrying a choice around: each type opens on
+    // what suits it, so an HTML file lands on source even after rendered markdown.
+    rerender(viewerJsx("/repo/page.html"));
+    await screen.findByTestId("code-viewer-mock");
+    expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
+
+    rerender(viewerJsx("/repo/docs/spec.md"));
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+  });
+
+  it("shares the last explicit mode between markdown and HTML", async () => {
+    readMock.mockResolvedValue(HTML_READ);
+    const { rerender } = renderViewer("/repo/docs/spec.md");
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+    await clickMode("Source");
+    await waitFor(() => expect(currentViewMode()).toBe("source"));
+
+    // The explicit choice overrides HTML's source default only in the sense
+    // that it is the same value here; the load-bearing half is the return trip.
+    rerender(viewerJsx("/repo/page.html"));
+    await screen.findByTestId("code-viewer-mock");
+    await clickMode("Rendered");
+    await screen.findByTestId("html-viewer-mock");
+
+    // One toggle position for the viewer, not one per file type: choosing
+    // Rendered on the HTML file is what markdown shows on the way back.
+    rerender(viewerJsx("/repo/docs/spec.md"));
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
   });
 });
 
