@@ -556,6 +556,9 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf(props.panelRemovedSignal).toEqualTypeOf<AbortSignal>();
       // Optional: a panel can be spawned without a worktree (#11297).
       expectTypeOf(props.worktreeId).toEqualTypeOf<string | undefined>();
+      // Spreadable onto a `createPortal` container, which is the one place a
+      // view leaves the subtree the host marked as its style root (#12220).
+      expectTypeOf(props.styleRootAttributes).toEqualTypeOf<Readonly<Record<string, string>>>();
     });
 
     it("exposes the panel lifecycle contract as named SDK types", () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readHostCss } from "./hostCss";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,7 +52,10 @@ function skeletonBackgroundUtilities(source: string): string[] {
 }
 
 describe("skeleton surface-collision contract", () => {
-  const css = fs.readFileSync(INDEX_CSS, "utf8");
+  // Both halves of the host CSS: the `--color-*: var(--…)` aliases this guard
+  // resolves through moved into the design contract (#12220), and without them
+  // `colorAliases` returns an empty map and a real collision goes unnoticed.
+  const css = readHostCss();
   const source = fs.readFileSync(SKELETON, "utf8");
 
   it("the collision this guard exists for is still real", () => {

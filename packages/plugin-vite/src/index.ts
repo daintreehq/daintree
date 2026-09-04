@@ -68,6 +68,39 @@ const NODE_BUILTIN_EXTERNALS: readonly string[] = [
   ...builtinModules.map((m) => `node:${m}`),
 ];
 
+/**
+ * Vite plugin names that mean the build is running Tailwind itself, and CSS
+ * at-rules that mean a stylesheet is.
+ *
+ * Daintree compiles a plugin's Tailwind classes at runtime, against the running
+ * host's Tailwind and the running host's theme. A plugin that ALSO compiles
+ * Tailwind ships a second, independently-versioned copy of the same utilities:
+ * duplicate rules across two sheets, where document order replaces Tailwind's
+ * own utility ordering (`p-4` is meant to sort before `px-3`, and which sheet
+ * each came from would decide it instead). Preflight from a plugin sheet would
+ * restyle the host outright.
+ *
+ * Failing the build is the only place this is catchable. At runtime it looks
+ * like a plugin that is mostly styled, which is precisely the failure mode the
+ * runtime contract exists to remove.
+ */
+const TAILWIND_PLUGIN_NAMES = ["@tailwindcss/vite", "tailwindcss"] as const;
+
+/** Tailwind's stylesheet entry points, in both v3 and v4 spelling. */
+const TAILWIND_CSS_DIRECTIVES = [
+  '@import "tailwindcss"',
+  "@import 'tailwindcss'",
+  "@tailwind base",
+  "@tailwind components",
+  "@tailwind utilities",
+] as const;
+
+const CONTRACT_POINTER =
+  "Daintree compiles the Tailwind classes your view uses at runtime, against the host's own " +
+  "theme, so a plugin must not build its own Tailwind CSS — see docs/plugins/views.md. Use " +
+  "utility classes in your markup; ship any plain CSS you still need as root-scoped rules in " +
+  "`@layer components`. `@apply` is not part of the plugin contract.";
+
 /** Build target for a plugin entry. `"browser"` (default) is the renderer/panel
  * preset; `"node"` is for stdio MCP servers and other Node entries. */
 export type DaintreeBuildTarget = "browser" | "node";
@@ -156,6 +189,32 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
         },
       },
     }),
+    // `configResolved` rather than `config`: the plugin array is only complete
+    // once Vite has merged every source of configuration, so this is the first
+    // point at which "is Tailwind wired into this build" has a true answer.
+    configResolved(resolved) {
+      const offender = resolved.plugins.find((plugin) =>
+        (TAILWIND_PLUGIN_NAMES as readonly string[]).includes(plugin.name)
+      );
+      if (offender) {
+        throw new Error(
+          `[daintree-plugin-vite] this build wires the "${offender.name}" Vite plugin. ` +
+            CONTRACT_POINTER
+        );
+      }
+    },
+    // Catches the other half: a stylesheet pulling Tailwind in directly, which
+    // no plugin entry in the config would reveal.
+    transform(code, id) {
+      if (!/\.(?:css|pcss|postcss|scss|sass|less|styl|stylus)(?:\?|$)/.test(id)) return null;
+      const directive = TAILWIND_CSS_DIRECTIVES.find((candidate) => code.includes(candidate));
+      if (directive) {
+        throw new Error(
+          `[daintree-plugin-vite] ${id} contains \`${directive}\`. ` + CONTRACT_POINTER
+        );
+      }
+      return null;
+    },
     // Fail the build on any React subpath that is externalized (matched by the
     // regexes above) but is NOT served by the host import map. Without this the
     // bundle builds clean and only fails at load with an unresolved bare

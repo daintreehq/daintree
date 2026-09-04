@@ -159,6 +159,42 @@ await host.registerAction(
 
 `kind` is the registered kind id. For a project plugin that is `project:{projectId}/{manifestId}/{kindId}`, and until #12211 adds `host.pluginInfo()` the parts have to come from `host.pluginId` (the instance key `project__{projectId}__{manifestId}`). A `contextMenus` entry at `location: "file"` dispatches your command with `{ path, worktreePath, status }`, which is how "Show in Video Manager" appears on every file row.
 
+## Look like the app, with Tailwind
+
+Style views with Tailwind utility classes on Daintree's semantic tokens. The host compiles the classes your view uses at runtime, so this needs no build step and works identically in a raw `dist/panel.js` and a bundled view. The tokens are what make a panel follow theme switches for free; a row from the Videos dashboard:
+
+```jsx
+<div className="flex flex-col flex-1 min-h-0 bg-surface-panel text-text-primary">
+  <div className="flex items-center gap-2 border-b border-border-subtle px-3 py-2">
+    <span className="text-xs font-medium">Slate</span>
+    <span className="rounded-full bg-surface-inset px-2 py-0.5 text-2xs text-text-muted">
+      {videos.length}
+    </span>
+  </div>
+  <div className="flex-1 min-h-0 overflow-y-auto">
+    {videos.map((video) => (
+      <button
+        key={video.path}
+        onClick={() => open(video)}
+        className={`flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-surface-hover ${
+          video.path === selected ? "bg-surface-active" : ""
+        }`}
+      >
+        …
+      </button>
+    ))}
+  </div>
+</div>
+```
+
+Three things that trip up a first plugin:
+
+- **The stock palette is gone.** `bg-red-500` generates nothing at all — Daintree's theme deletes Tailwind's own colours so plugin panels cannot drift out of the design system. Use `status-danger` for the alarming thing and a `category-<hue>` for the categorical one.
+- **A conditional class must be a complete string.** The ternary above works because both branches are whole class names. `` `bg-surface-${tone}` `` never compiles, because that name exists in neither your source nor the DOM.
+- **`min-h-0` on every flex ancestor of a scroller.** Without it the panel's own scrollbar takes the overflow instead of your list. This is the single most common reason a plugin panel scrolls wrong.
+
+[views.md](./views.md) has the full vocabulary and the portal rule.
+
 ## Keep commands one click
 
 Declaring `shell:exec` raises every command the plugin registers to a confirm dialog. Narrow it per command with `requires`: `"requires": []` on the ones that only open a panel, the real list on the ones that run something. Give each command two or three `keywords` and a shared `category` so the palette groups them.

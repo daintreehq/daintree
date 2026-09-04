@@ -2,10 +2,15 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readHostCss } from "./hostCss";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
-const INDEX_CSS = path.join(REPO_ROOT, "src/index.css");
+// The radius and type tokens live in the design contract, which index.css
+// imports and the plugin Tailwind compiler reads as text (#12220). Both halves
+// are scanned as one: reading index.css alone would find no `--radius-*` at all
+// and turn every check below into an assertion over an empty map.
+const HOST_CSS = () => readHostCss();
 const TAILWIND_THEME_CSS = path.join(REPO_ROOT, "node_modules/tailwindcss/theme.css");
 const BUILT_IN_THEMES = path.join(REPO_ROOT, "shared/theme/builtInThemes");
 
@@ -270,8 +275,12 @@ function relative(file: string): string {
 }
 
 /** CSS with comments blanked out, so a commented-out rule can never satisfy a check. */
+function stripCssComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
 function readCss(cssPath: string): string {
-  return fs.readFileSync(cssPath, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  return stripCssComments(fs.readFileSync(cssPath, "utf8"));
 }
 
 /**
@@ -322,8 +331,7 @@ function varFallback(source: string, name: string): string | null {
 }
 
 /** Every `--name: value;` declaration in a stylesheet, last one wins. */
-function readDeclarations(cssPath: string, prefix: string): Map<string, string> {
-  const css = readCss(cssPath);
+function readDeclarationsFrom(css: string, prefix: string): Map<string, string> {
   const decls = new Map<string, string>();
   const re = new RegExp(String.raw`^\s*(${prefix}[\w-]*)\s*:\s*([^;]+);`, "gm");
   for (const m of css.matchAll(re)) {
@@ -432,15 +440,15 @@ describe("numeric scales contract (#12033)", () => {
     // Tailwind's stock steps are fixed constants. Any step we leave un-overridden
     // silently stops tracking --theme-radius-scale the moment someone uses it —
     // which is exactly how --radius-4xl was missed.
-    const stock = readDeclarations(TAILWIND_THEME_CSS, "--radius");
-    const ours = readDeclarations(INDEX_CSS, "--radius");
+    const stock = readDeclarationsFrom(readCss(TAILWIND_THEME_CSS), "--radius");
+    const ours = readDeclarationsFrom(stripCssComments(HOST_CSS()), "--radius");
     const missing = [...stock.keys()].filter((token) => !ours.has(token));
     expect(missing).toEqual([]);
     expect(stock.size).toBeGreaterThan(1);
   });
 
   it("derives every radius token from the theme radius scale", () => {
-    const ours = readDeclarations(INDEX_CSS, "--radius");
+    const ours = readDeclarationsFrom(stripCssComments(HOST_CSS()), "--radius");
     const SCALE = "--theme-radius-scale";
 
     const reaches = (token: string, seen = new Set<string>()): boolean => {
@@ -460,7 +468,7 @@ describe("numeric scales contract (#12033)", () => {
     // A --text-<name>--line-height sibling makes the utility set line-height too.
     // These steps replace bare arbitrary values that only ever set font-size, so
     // a paired leading here would reflow hundreds of call sites that inherit it.
-    const text = readDeclarations(INDEX_CSS, "--text-");
+    const text = readDeclarationsFrom(stripCssComments(HOST_CSS()), "--text-");
     const steps = ["--text-2xs", "--text-3xs", "--text-4xs"];
     expect(steps.filter((step) => !text.has(step))).toEqual([]);
     expect(steps.filter((step) => text.has(`${step}--line-height`))).toEqual([]);
@@ -474,9 +482,9 @@ describe("numeric scales contract (#12033)", () => {
       const m = value === undefined ? null : /^(-?\d*\.?\d+)rem$/.exec(value.trim());
       return m?.[1] === undefined ? Number.NaN : Number.parseFloat(m[1]);
     };
-    const ours = readDeclarations(INDEX_CSS, "--text-");
+    const ours = readDeclarationsFrom(stripCssComments(HOST_CSS()), "--text-");
     const ladder = [
-      rem(readDeclarations(TAILWIND_THEME_CSS, "--text-xs").get("--text-xs")),
+      rem(readDeclarationsFrom(readCss(TAILWIND_THEME_CSS), "--text-xs").get("--text-xs")),
       ...["--text-2xs", "--text-3xs", "--text-4xs"].map((step) => rem(ours.get(step))),
     ];
 
@@ -492,7 +500,7 @@ describe("numeric scales contract (#12033)", () => {
     // settings.css, the diff viewer and the CodeMirror chip styles consume these
     // as var(--text-*), which only works if the tokens are declared in a plain
     // @theme block rather than an inlined one.
-    const css = readCss(INDEX_CSS); // comments stripped: a `/* } */` must not close a block
+    const css = stripCssComments(HOST_CSS()); // comments stripped: a `/* } */` must not close a block
     let depth = 0;
     let inlineThemeDepth: number | null = null;
     const inlined: string[] = [];

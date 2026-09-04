@@ -24,6 +24,11 @@ import { Skeleton, SkeletonHint } from "@/components/ui/Skeleton";
 import { ContentFadeIn } from "@/components/ui/ContentFadeIn";
 import { PluginViewDiagnosticsFallback } from "@/components/Plugin/PluginViewDiagnosticsFallback";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import {
+  PLUGIN_STYLE_ROOT_PROPS,
+  preparePluginStyles,
+  registerPluginStyleRoot,
+} from "@/services/plugin/pluginStyleContract";
 
 /**
  * The resolved subset of `PanelKindConfig` a plugin view actually needs. Both
@@ -287,14 +292,29 @@ export function makePluginViewContent(
           // plugin load, which caps the module map at two namespaces per plugin
           // however many times the user retries. The first attempt keeps the
           // single-argument call so it stays a pure activation request.
+          // Started before activation is awaited so the Tailwind chunk, the
+          // ~10ms compile, and the view's own source read all overlap the
+          // activation round trip rather than queueing behind it (#12220).
+          const initialPath = recoveryComponentPath ?? componentPath;
+          const stylesReady = preparePluginStyles(initialPath);
           const recovered = requestRecoveryPath
             ? await window.electron?.plugin?.activateForView?.(kindId, true)
             : await window.electron?.plugin?.activateForView?.(kindId);
           if (typeof recovered === "string" && recovered.length > 0) {
             recoveryComponentPath = recovered;
           }
+          const viewPath = recoveryComponentPath ?? componentPath;
           try {
-            return await import(/* @vite-ignore */ recoveryComponentPath ?? componentPath);
+            const module: unknown = await import(/* @vite-ignore */ viewPath);
+            // Awaited AFTER the import, so the two run concurrently, but before
+            // the factory resolves — which is what makes the view's first paint
+            // styled instead of flashing unstyled. `preparePluginStyles` never
+            // rejects: a plugin that renders unstyled beats one that will not
+            // render, so a styling failure must not reach the error boundary.
+            // A recovery generation minted during activation re-prepares under
+            // its own URL; it is the same file, so this is all but free.
+            await (viewPath === initialPath ? stylesReady : preparePluginStyles(viewPath));
+            return module;
           } catch (err) {
             throw markImportStageFailure(err);
           }
@@ -443,6 +463,17 @@ export function makePluginViewContent(
     // re-rendering on it would be pointless churn.
     const lastErrorWasImportStage = useRef(false);
 
+    // A callback ref rather than an effect: this element lives INSIDE the
+    // Suspense boundary, so on the first render it does not exist yet and a
+    // mount effect on the parent would only ever see null. React 19 calls this
+    // when the node commits and invokes the returned cleanup when it unmounts,
+    // which is exactly the lifetime the observer registration wants — and it
+    // rides the existing mount/retry cycle rather than adding a second one.
+    const styleRootRef = useCallback(
+      (node: HTMLDivElement | null) => registerPluginStyleRoot(node),
+      []
+    );
+
     const handleRenderError = useCallback(
       (error: Error) => {
         lastErrorWasImportStage.current = isImportStageFailure(error);
@@ -499,7 +530,11 @@ export function makePluginViewContent(
               </div>
             }
           >
-            <ContentFadeIn className="flex flex-col flex-1 min-h-0 w-full">
+            <ContentFadeIn
+              className="flex flex-col flex-1 min-h-0 w-full"
+              ref={styleRootRef}
+              {...PLUGIN_STYLE_ROOT_PROPS}
+            >
               <LazyView
                 panelId={panelId}
                 pluginId={pluginId}
@@ -508,6 +543,7 @@ export function makePluginViewContent(
                 initialArgs={mountArgs}
                 persistState={persistState}
                 worktreeId={worktreeId}
+                styleRootAttributes={PLUGIN_STYLE_ROOT_PROPS}
               />
               <PluginViewMountReporter panelId={panelId} />
             </ContentFadeIn>

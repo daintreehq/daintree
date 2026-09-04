@@ -208,7 +208,93 @@ export default function Panel({ panelId, pluginId }) {
 
 Use the `pluginId` prop rather than hardcoding your manifest name — for a project plugin the runtime id is an instance key, not the manifest id.
 
-What the no-build path costs: the React hooks in `@daintreehq/plugin-sdk/react` resolve only in a bundle built with `@daintreehq/plugin-vite`, so a raw view uses the `window.electron.plugin` bridge directly as above; and the view can import `react` plus its own relative modules, but not arbitrary bare npm specifiers, TypeScript, JSX, or CSS files. If you need those, build inside a Daintree checkout where the workspace packages resolve — outside one there is no published toolchain yet. [dev-loop.md](./dev-loop.md) covers the watcher. Styling does not need a build: a `<style>` element and Daintree's own CSS tokens work as-is, and Tailwind utility classes do not. [views.md](./views.md) has the tokens and the rules.
+What the no-build path costs: the React hooks in `@daintreehq/plugin-sdk/react` resolve only in a bundle built with `@daintreehq/plugin-vite`, so a raw view uses the `window.electron.plugin` bridge directly as above; and the view can import `react` plus its own relative modules, but not arbitrary bare npm specifiers, TypeScript, JSX, or CSS files. If you need those, build inside a Daintree checkout where the workspace packages resolve — outside one there is no published toolchain yet. [dev-loop.md](./dev-loop.md) covers the watcher.
+
+## Styling: use Tailwind
+
+Write Tailwind utility classes. They work in a hand-written `dist/panel.js` exactly as in a bundled view, with no build step and no configuration — Daintree compiles the classes your view uses at runtime, against the host's own Tailwind and theme.
+
+Two things follow from that, and they are the whole contract:
+
+- **You get Daintree's vocabulary, not Tailwind's stock one.** `bg-surface-panel` compiles. `bg-red-500` compiles to _nothing_ — the host's theme deletes the stock palette on purpose, so plugin panels cannot drift out of the design system. If a colour class appears to do nothing, that is why.
+- **Generated rules are scoped to your view** and can never restyle host chrome.
+
+Everything ordinary works as Tailwind documents it: layout, spacing, sizing, typography, flexbox, grid, `hover:` / `focus-visible:` / `disabled:` / `group-hover:`, arbitrary values (`w-[327px]`), dynamic scales (`grid-cols-47`), container queries.
+
+**Not available:** stock palette colours; `dark:` (Daintree themes are runtime tokens, not a class — a semantic token is already theme-aware); `prose`; `@apply`.
+
+Prefer container queries (`@container`, `@sm:`) over viewport breakpoints — your panel is one pane in a grid and can be narrow while the window is wide.
+
+### The vocabulary
+
+<!-- BEGIN generated: plugin-style-vocabulary -->
+
+**Surfaces** — `bg-`, `border-`, `text-`
+
+`surface-canvas` `surface-sidebar` `surface-toolbar` `surface-panel` `surface-panel-elevated` `surface-dialog` `surface-grid` `surface-input` `surface-inset` `surface-hover` `surface-active` `surface-disabled` `surface-highlight`
+
+**Text** — `text-`
+
+`text-primary` `text-secondary` `text-muted` `text-placeholder` `text-inverse` `text-link`
+
+**Borders** — `border-`, `divide-`, `ring-`
+
+`border-default` `border-subtle` `border-strong` `border-divider` `border-interactive`
+
+**Status** — `bg-`, `text-`, `border-`
+
+`status-success` `status-warning` `status-danger` `status-info` `status-danger-surface` `status-success-surface` `status-warning-surface` `status-info-surface` `status-error` `status-error-surface`
+
+**Accent** — `bg-`, `text-`, `border-`
+
+`accent-primary` `accent-hover` `accent-foreground` `accent-primary-foreground` `accent-soft` `accent-muted` `accent-secondary` `accent-secondary-soft` `accent-secondary-muted`
+
+**Radii** — `rounded-`
+
+`xs` `sm` `md` `lg` `xl` `2xl` `3xl` `4xl`
+
+**Type scale below Tailwind's floor** — `text-`
+
+`2xs` `3xs` `4xs`
+
+**Durations** — `duration-`
+
+`75` `100` `120` `150` `200` `250` `300`
+
+**Easings** — `ease-`
+
+`snappy` `spring-critical` `out-expo` `exit` `panel-minimize`
+
+**Category hues** — `bg-`, `text-`, `border-`, as `category-<hue>` plus a variant suffix
+
+hues: `blue` `purple` `cyan` `green` `amber` `orange` `teal` `indigo` `rose` `pink` `violet` `slate`
+
+variants: `(bare)` `-subtle` `-text` `-border`
+
+**Custom variants** — write as `variant:utility`
+
+`reduce-motion:`
+
+<!-- END generated: plugin-style-vocabulary -->
+
+Every other non-colour utility Tailwind ships works too.
+
+```jsx
+// Panel root — `min-h-0` is what lets an inner scroller own the overflow.
+<div className="flex flex-col flex-1 min-h-0 bg-surface-panel text-text-primary">
+// Row
+<div className="flex items-center gap-2 px-3 py-2 hover:bg-surface-hover">
+// Subtle button
+<button className="rounded-md border border-border-subtle px-3 py-1.5 text-xs hover:bg-surface-hover">
+// Badge
+<span className="rounded-full bg-surface-inset px-2 py-0.5 text-2xs text-text-muted">
+```
+
+**Conditional classes must be complete strings.** `active ? "bg-surface-active" : ""` works; `` `bg-surface-${tone}` `` does not, because a name assembled from fragments never appears in your source or the DOM as a whole class.
+
+**Portals need a marked container.** `createPortal` leaves your style root, so spread `styleRootAttributes` from `PanelViewProps` onto the container: `createPortal(<div {...styleRootAttributes} className="p-4">…</div>, document.body)`.
+
+A `<style>` element still works for what utilities do not cover (keyframes, complex selectors); scope its selectors under a class on your root. Never ship compiled Tailwind CSS — `@daintreehq/plugin-vite` fails the build if you wire Tailwind into it. [views.md](./views.md) has the full rules.
 
 ## Owning the project's main surface
 

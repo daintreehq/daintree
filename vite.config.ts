@@ -21,6 +21,11 @@ import { HOST_IMPORTMAP_SPECIFIERS } from "./packages/plugin-vite/src/index";
 import { getFirstRenderPreloadSeeds } from "./shared/config/panelKindRegistry";
 import { formatErrorMessage } from "./shared/utils/errorMessage";
 import { computeFirstRenderPreloadFiles } from "./scripts/first-render-closure-lib.mjs";
+// Inlines the stylesheets the renderer's plugin Tailwind compiler compiles
+// against. Shared with vitest.config.ts so the adapter's contract tests see the
+// same bytes the app does — a plain `?raw` import would not, because Vitest
+// stubs every `.css` specifier (including `?raw`) to an empty string.
+import { pluginStyleContract } from "./scripts/lib/plugin-style-contract.mjs";
 
 const devServerConfig = getDevServerConfig();
 
@@ -1131,6 +1136,7 @@ export default defineConfig(({ command, mode }) => {
       minifyIdentifiers: false,
     },
     plugins: [
+      pluginStyleContract(),
       react(),
       babel({
         presets: [

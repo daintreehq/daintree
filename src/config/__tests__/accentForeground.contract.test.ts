@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readHostCss } from "./hostCss";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +14,8 @@ import { ACCENT_CONTRAST_PAIR, BUILT_IN_APP_SCHEMES } from "@shared/theme";
 // unreadable CTA. That is #11115.
 //
 // This guard closes the loop the validator structurally cannot: it resolves every color
-// utility through src/index.css's real variable graph and asserts that anything painting
+// utility through the real variable graph (src/styles/design-contract.css + src/index.css)
+// and asserts that anything painting
 // text on a solid accent fill lands on the same terminal token the validator checks.
 //
 // Nothing here is a hardcoded class name. The tokens come from the validator's own pair,
@@ -33,7 +35,6 @@ import { ACCENT_CONTRAST_PAIR, BUILT_IN_APP_SCHEMES } from "@shared/theme";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
-const INDEX_CSS_PATH = path.join(REPO_ROOT, "src/index.css");
 
 const SCAN_ROOTS = [
   path.join(REPO_ROOT, "src"),
@@ -839,7 +840,7 @@ function collectSourceFiles(dir: string): string[] {
 
 // ── Tests ──────────────────────────────────────────────────────────────
 
-const graph = buildColorGraph(fs.readFileSync(INDEX_CSS_PATH, "utf-8"));
+const graph = buildColorGraph(readHostCss());
 
 describe("accent color graph", () => {
   // If the wiring is renamed and these resolve nowhere, every scan below would pass

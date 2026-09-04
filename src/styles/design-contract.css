@@ -1,0 +1,526 @@
+/* Daintree's design contract: the token and variant vocabulary that both the
+ * host and every plugin view compile against.
+ *
+ * Two consumers read this file, which is why it lives on its own:
+ *   - `src/index.css` imports it, so the host builds exactly these tokens.
+ *   - The renderer's plugin Tailwind compiler
+ *     (`src/services/plugin/tailwind/pluginTailwindAdapter.ts`) imports the same
+ *     bytes as text and compiles plugin utility classes against them.
+ * Same bytes, one registry, so the two can never drift.
+ *
+ * Only `@theme`, `@custom-variant`, `@utility` and comments belong here, and
+ * `scripts/ci/check-design-contract.mjs` enforces that. Everything else the host
+ * needs — preflight, `@font-face`, component sheets, raw selectors, the static
+ * `@layer utilities` block — stays in `index.css`, because it is host chrome
+ * rather than plugin vocabulary. A raw class in the host's own
+ * `@layer utilities` block is NOT plugin API; anything plugins may use has to be
+ * an `@utility` here so Tailwind can order it against the rest.
+ *
+ * `--color-*: initial` below is load-bearing: it deletes Tailwind's stock
+ * palette, so `bg-red-500` compiles to nothing for the host AND for plugins.
+ * The design system is enforced by the compiler, not by a doc rule.
+ */
+
+/* Reduced-motion variant — composes OS-level `prefers-reduced-motion: reduce`
+ * with the Daintree "Reduce UI animations" toggle (`body[data-reduce-animations="true"]`).
+ * Use as `@variant reduce-motion { ... }` to write a single rule that applies
+ * under either trigger; preserves the same selector specificity as the
+ * pre-consolidation `body[data-reduce-animations="true"] X` mirror block.
+ *
+ * The body-attribute branch is written WITHOUT `&` so CSS nesting
+ * auto-prepends the ancestor — the slot content becomes a descendant of
+ * `body[data-reduce-animations="true"]`. Forms using `&` (either
+ * `body[...] &` or `&:is(body[...] *)`) misbehave when the `@variant`
+ * block is used at top level: `&` desugars to `:scope` and the resulting
+ * `:scope:is(body[...] *) .foo` selectors never match in production. */
+@custom-variant reduce-motion {
+  @media (prefers-reduced-motion: reduce) {
+    @slot;
+  }
+  body[data-reduce-animations="true"] {
+    @slot;
+  }
+}
+
+@theme inline {
+  --color-*: initial;
+
+  --color-white: #ffffff;
+  --color-black: #000000;
+
+  --color-surface-canvas: var(--theme-surface-canvas);
+  --color-surface-sidebar: var(--theme-surface-sidebar);
+  --color-surface-toolbar: var(--theme-surface-toolbar);
+  --color-surface-panel: var(--theme-surface-panel);
+  --color-surface-panel-elevated: var(--theme-surface-panel-elevated);
+  --color-surface-dialog: var(--theme-surface-dialog);
+  --color-surface-grid: var(--theme-surface-grid);
+  --color-surface-input: var(--theme-surface-input);
+  --color-surface-inset: var(--theme-surface-inset);
+  --color-surface-hover: var(--theme-surface-hover);
+  --color-surface-active: var(--theme-surface-active);
+  --color-surface-disabled: var(--theme-surface-disabled);
+  --color-text-primary: var(--theme-text-primary);
+  --color-text-secondary: var(--theme-text-secondary);
+  --color-text-muted: var(--theme-text-muted);
+  --color-text-placeholder: var(--theme-text-placeholder);
+  --color-text-inverse: var(--theme-text-inverse);
+  --color-text-link: var(--theme-text-link);
+  --color-border-default: var(--theme-border-default);
+  --color-border-subtle: var(--theme-border-subtle);
+  --color-border-strong: var(--theme-border-strong);
+  --color-border-divider: var(--theme-border-divider);
+  --color-border-interactive: var(--theme-border-interactive);
+  --color-selection-outline: var(--theme-selection-outline);
+  --color-accent-primary: var(--theme-accent-primary);
+  --color-accent-hover: var(--theme-accent-hover);
+  --color-accent-foreground: var(--theme-accent-foreground);
+  --color-accent-primary-foreground: var(--theme-accent-foreground);
+  --color-accent-soft: var(--theme-accent-soft);
+  --color-accent-muted: var(--theme-accent-muted);
+  --color-accent-rgb: var(--theme-accent-rgb);
+  --color-accent-secondary: var(--theme-accent-secondary);
+  --color-accent-secondary-soft: var(--theme-accent-secondary-soft);
+  --color-accent-secondary-muted: var(--theme-accent-secondary-muted);
+  --color-focus-ring: var(--theme-focus-ring);
+  --color-status-success: var(--theme-status-success);
+  --color-status-warning: var(--theme-status-warning);
+  --color-status-danger: var(--theme-status-danger);
+  --color-status-info: var(--theme-status-info);
+  --color-status-danger-surface: var(--theme-status-danger-surface);
+  --color-status-success-surface: var(--theme-status-success-surface);
+  --color-status-warning-surface: var(--theme-status-warning-surface);
+  --color-status-info-surface: var(--theme-status-info-surface);
+  --color-knob-base: var(--theme-knob-base);
+  --color-state-modified: var(--theme-state-modified);
+  --color-activity-active: var(--theme-activity-active);
+  --color-activity-idle: var(--theme-activity-idle);
+  --color-activity-working: var(--theme-activity-working);
+  --color-activity-waiting: var(--theme-activity-waiting);
+  --color-activity-completed: var(--theme-activity-completed);
+  --color-overlay-base: var(--theme-overlay-base);
+  --color-overlay-subtle: var(--theme-overlay-subtle);
+  --color-overlay-soft: var(--theme-overlay-soft);
+  --color-overlay-medium: var(--theme-overlay-medium);
+  --color-overlay: var(--theme-border-strong);
+  --color-overlay-strong: var(--theme-overlay-strong);
+  --color-overlay-emphasis: var(--theme-overlay-emphasis);
+  --color-overlay-hover: var(--theme-overlay-hover);
+  --color-overlay-active: var(--theme-overlay-active);
+  --color-overlay-selected: var(--theme-overlay-selected);
+  --color-overlay-elevated: var(--theme-overlay-elevated);
+  --color-overlay-raised: var(--theme-overlay-raised);
+  --color-filter-selected-bg-soft: var(--theme-filter-selected-bg-soft);
+  --color-filter-selected-bg-strong: var(--theme-filter-selected-bg-strong);
+  --color-wash-subtle: var(--theme-wash-subtle);
+  --color-wash-medium: var(--theme-wash-medium);
+  --color-wash-strong: var(--theme-wash-strong);
+  --color-scrim-soft: var(--theme-scrim-soft);
+  --color-scrim-medium: var(--theme-scrim-medium);
+  --color-scrim-strong: var(--theme-scrim-strong);
+  --color-shadow-color: var(--theme-shadow-color);
+  --shadow-ambient: var(--theme-shadow-ambient);
+  --shadow-floating: var(--theme-shadow-floating);
+  --shadow-dialog: var(--theme-shadow-dialog);
+  --color-tint: var(--theme-tint);
+  --color-pr-open: var(--theme-pr-open);
+  --color-pr-merged: var(--theme-pr-merged);
+  --color-pr-closed: var(--theme-pr-closed);
+  --color-pr-draft: var(--theme-pr-draft);
+  --color-search-highlight-background: var(--theme-search-highlight-background);
+  --color-search-highlight-text: var(--theme-search-highlight-text);
+  --color-search-selected-result-border: var(--theme-search-selected-result-border);
+  --color-search-selected-result-icon: var(--theme-search-selected-result-icon);
+  --color-search-match-badge-background: var(--theme-search-match-badge-background);
+  --color-search-match-badge-text: var(--theme-search-match-badge-text);
+  --color-terminal-background: var(--theme-terminal-background);
+  --color-terminal-foreground: var(--theme-terminal-foreground);
+  --color-terminal-muted: var(--theme-terminal-muted);
+  --color-terminal-cursor: var(--theme-terminal-cursor);
+  --color-terminal-cursor-accent: var(--theme-terminal-cursor-accent);
+  --color-terminal-selection: var(--theme-terminal-selection);
+  --color-terminal-black: var(--theme-terminal-black);
+  --color-terminal-red: var(--theme-terminal-red);
+  --color-terminal-green: var(--theme-terminal-green);
+  --color-terminal-yellow: var(--theme-terminal-yellow);
+  --color-terminal-blue: var(--theme-terminal-blue);
+  --color-terminal-magenta: var(--theme-terminal-magenta);
+  --color-terminal-cyan: var(--theme-terminal-cyan);
+  --color-terminal-white: var(--theme-terminal-white);
+  --color-terminal-bright-black: var(--theme-terminal-bright-black);
+  --color-terminal-bright-red: var(--theme-terminal-bright-red);
+  --color-terminal-bright-green: var(--theme-terminal-bright-green);
+  --color-terminal-bright-yellow: var(--theme-terminal-bright-yellow);
+  --color-terminal-bright-blue: var(--theme-terminal-bright-blue);
+  --color-terminal-bright-magenta: var(--theme-terminal-bright-magenta);
+  --color-terminal-bright-cyan: var(--theme-terminal-bright-cyan);
+  --color-terminal-bright-white: var(--theme-terminal-bright-white);
+  --color-syntax-comment: var(--theme-syntax-comment);
+  --color-syntax-punctuation: var(--theme-syntax-punctuation);
+  --color-syntax-number: var(--theme-syntax-number);
+  --color-syntax-string: var(--theme-syntax-string);
+  --color-syntax-operator: var(--theme-syntax-operator);
+  --color-syntax-keyword: var(--theme-syntax-keyword);
+  --color-syntax-function: var(--theme-syntax-function);
+  --color-syntax-link: var(--theme-syntax-link);
+  --color-syntax-quote: var(--theme-syntax-quote);
+  --color-syntax-chip: var(--theme-syntax-chip);
+  --color-category-blue: var(--theme-category-blue);
+  --color-category-purple: var(--theme-category-purple);
+  --color-category-cyan: var(--theme-category-cyan);
+  --color-category-green: var(--theme-category-green);
+  --color-category-amber: var(--theme-category-amber);
+  --color-category-orange: var(--theme-category-orange);
+  --color-category-teal: var(--theme-category-teal);
+  --color-category-indigo: var(--theme-category-indigo);
+  --color-category-rose: var(--theme-category-rose);
+  --color-category-pink: var(--theme-category-pink);
+  --color-category-violet: var(--theme-category-violet);
+  --color-category-slate: var(--theme-category-slate);
+  --color-diff-insert-background: var(--theme-diff-insert-background);
+  --color-diff-insert-edit-background: var(--theme-diff-insert-edit-background);
+  --color-diff-delete-background: var(--theme-diff-delete-background);
+  --color-diff-delete-edit-background: var(--theme-diff-delete-edit-background);
+  --color-diff-gutter-insert: var(--theme-diff-gutter-insert);
+  --color-diff-gutter-delete: var(--theme-diff-gutter-delete);
+  --color-diff-selected-background: var(--theme-diff-selected-background);
+  --color-diff-omit-gutter-line: var(--theme-diff-omit-gutter-line);
+  --radius: calc(0.625rem * var(--theme-radius-scale, 1));
+
+  --color-category-blue-subtle: color-mix(
+    in oklch,
+    var(--theme-category-blue) var(--category-subtle-mix),
+    var(--pill-surface)
+  );
+  --color-category-blue-text: color-mix(
+    in oklch,
+    var(--theme-category-blue) 85%,
+    var(--theme-text-primary)
+  );
+  --color-category-blue-border: color-mix(
+    in oklch,
+    var(--theme-category-blue) var(--category-border-mix),
+    var(--pill-surface)
+  );
+  --color-category-purple-subtle: color-mix(
+    in oklch,
+    var(--theme-category-purple) var(--category-subtle-mix),
+    var(--pill-surface)
+  );
+  --color-category-purple-text: color-mix(
+    in oklch,
+    var(--theme-category-purple) 85%,
+    var(--theme-text-primary)
+  );
+  --color-category-purple-border: color-mix(
+    in oklch,
+    var(--theme-category-purple) var(--category-border-mix),
+    var(--pill-surface)
+  );
+  --color-category-cyan-subtle: color-mix(
+    in oklch,
+    var(--theme-category-cyan) var(--category-subtle-mix),
+    var(--pill-surface)
+  );
+  --color-category-cyan-text: color-mix(
+    in oklch,
+    var(--theme-category-cyan) 85%,
+    var(--theme-text-primary)
+  );
+  --color-category-cyan-border: color-mix(
+    in oklch,
+    var(--theme-category-cyan) var(--category-border-mix),
+    var(--pill-surface)
+  );
+  --color-category-green-subtle: color-mix(
+    in oklch,
+    var(--theme-category-green) var(--category-subtle-mix),
+    var(--pill-surface)
+  );
+  --color-category-green-text: color-mix(
+    in oklch,
+    var(--theme-category-green) 85%,
+    var(--theme-text-primary)
+  );
+  --color-category-green-border: color-mix(
+    in oklch,
+    var(--theme-category-green) var(--category-border-mix),
+    var(--pill-surface)
+  );
+  --color-category-amber-subtle: color-mix(
+    in oklch,
+    var(--theme-category-amber) var(--category-subtle-mix),
+    var(--pill-surface)
+  );
+  --color-category-amber-text: color-mix(
+    in oklch,
+    var(--theme-category-amber) 85%,
+    var(--theme-text-primary)
+  );
+  --color-category-amber-border: color-mix(
+    in oklch,
+    var(--theme-category-amber) var(--category-border-mix),
+    var(--pill-surface)
+  );
+  --color-category-orange-subtle: color-mix(
+    in oklch,
+    var(--theme-category-orange) var(--category-subtle-mix),
+    var(--pill-surface)
+  );
+  --color-category-orange-text: color-mix(
+    in oklch,
+    var(--theme-category-orange) 85%,
+    var(--theme-text-primary)
+  );
+  --color-category-orange-border: color-mix(
+    in oklch,
+    var(--theme-category-orange) var(--category-border-mix),
+    var(--pill-surface)
+  );
+  --color-category-teal-subtle: color-mix(
+    in oklch,
+    var(--theme-category-teal) var(--category-subtle-mix),
+    var(--pill-surface)
+  );
+  --color-category-teal-text: color-mix(
+    in oklch,
+    var(--theme-category-teal) 85%,
+    var(--theme-text-primary)
+  );
+  --color-category-teal-border: color-mix(
+    in oklch,
+    var(--theme-category-teal) var(--category-border-mix),
+    var(--pill-surface)
+  );
+  --color-category-indigo-subtle: color-mix(
+    in oklch,
+    var(--theme-category-indigo) var(--category-subtle-mix),
+    var(--pill-surface)
+  );
+  --color-category-indigo-text: color-mix(
+    in oklch,
+    var(--theme-category-indigo) 85%,
+    var(--theme-text-primary)
+  );
+  --color-category-indigo-border: color-mix(
+    in oklch,
+    var(--theme-category-indigo) var(--category-border-mix),
+    var(--pill-surface)
+  );
+  --color-category-rose-subtle: color-mix(
+    in oklch,
+    var(--theme-category-rose) var(--category-subtle-mix),
+    var(--pill-surface)
+  );
+  --color-category-rose-text: color-mix(
+    in oklch,
+    var(--theme-category-rose) 85%,
+    var(--theme-text-primary)
+  );
+  --color-category-rose-border: color-mix(
+    in oklch,
+    var(--theme-category-rose) var(--category-border-mix),
+    var(--pill-surface)
+  );
+  --color-category-pink-subtle: color-mix(
+    in oklch,
+    var(--theme-category-pink) var(--category-subtle-mix),
+    var(--pill-surface)
+  );
+  --color-category-pink-text: color-mix(
+    in oklch,
+    var(--theme-category-pink) 85%,
+    var(--theme-text-primary)
+  );
+  --color-category-pink-border: color-mix(
+    in oklch,
+    var(--theme-category-pink) var(--category-border-mix),
+    var(--pill-surface)
+  );
+  --color-category-violet-subtle: color-mix(
+    in oklch,
+    var(--theme-category-violet) var(--category-subtle-mix),
+    var(--pill-surface)
+  );
+  --color-category-violet-text: color-mix(
+    in oklch,
+    var(--theme-category-violet) 85%,
+    var(--theme-text-primary)
+  );
+  --color-category-violet-border: color-mix(
+    in oklch,
+    var(--theme-category-violet) var(--category-border-mix),
+    var(--pill-surface)
+  );
+  --color-category-slate-subtle: color-mix(
+    in oklch,
+    var(--theme-category-slate) var(--category-subtle-mix),
+    var(--pill-surface)
+  );
+  --color-category-slate-text: color-mix(
+    in oklch,
+    var(--theme-category-slate) 85%,
+    var(--theme-text-primary)
+  );
+  --color-category-slate-border: color-mix(
+    in oklch,
+    var(--theme-category-slate) var(--category-border-mix),
+    var(--pill-surface)
+  );
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  /* Every step Tailwind ships must be overridden here, or the ones we skip keep
+   * their stock constants and stop tracking --theme-radius-scale. Bare `rounded`
+   * and its directional forms resolve through --radius, so they scale too. */
+  --radius-xs: calc(var(--radius) - 6px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --height-xs: 1.75rem;
+  --height-sm: 2rem;
+  --height-md: 2.5rem;
+  --height-lg: 3rem;
+  /* Legacy aliases (#12031). Every solid call site now spells the semantic
+   * token directly; these five survive only because Tailwind v4 generates
+   * utilities on demand from this namespace, and the alpha-modified forms
+   * still in the tree would stop generating without them.
+   *
+   * Two things still need them. The non-text alpha composites — background,
+   * ring and border tints over these five aliases — are deliberate and
+   * unreviewed, left to #12029. (Naming one of those utilities literally here
+   * would trip the accent guard in `accentGuard.contract.test.ts`, which reads
+   * this file as text and cannot tell a comment from a declaration.)
+   * And what #12065 left of the `text-daintree-text/NN` hierarchy ramp: the
+   * prose is off it, but the icon affordances, decorative glyphs, disabled
+   * states and opacity composites are still dim on purpose, each one recorded
+   * in `scripts/baselines/text-ramp-manifest.json`. They go when those do. */
+  --color-daintree-bg: var(--theme-surface-canvas);
+  --color-daintree-sidebar: var(--theme-surface-sidebar);
+  --color-daintree-border: var(--theme-border-default);
+  --color-daintree-text: var(--theme-text-primary);
+  --color-daintree-accent: var(--theme-accent-primary);
+  --color-surface: var(--theme-surface-panel);
+  --color-surface-highlight: var(--theme-surface-panel-elevated);
+  --color-grid-bg: var(--panel-grid-bg, var(--terminal-grid-bg, var(--theme-surface-grid)));
+  --color-status-error: var(--theme-status-danger);
+  --color-status-error-surface: var(--theme-status-danger-surface);
+  --color-state-active: var(--theme-activity-active);
+  --color-state-idle: var(--theme-activity-idle);
+  --color-state-working: var(--theme-activity-working);
+  --color-state-waiting: var(--theme-activity-waiting);
+  --color-server-running: var(--theme-status-success);
+  --color-server-stopped: var(--theme-activity-idle);
+  --color-server-starting: var(--theme-status-warning);
+  --color-server-error: var(--theme-status-danger);
+  --color-cat-blue: var(--theme-category-blue);
+  --color-cat-purple: var(--theme-category-purple);
+  --color-cat-cyan: var(--theme-category-cyan);
+  --color-cat-green: var(--theme-category-green);
+  --color-cat-amber: var(--theme-category-amber);
+  --color-cat-orange: var(--theme-category-orange);
+  --color-cat-teal: var(--theme-category-teal);
+  --color-cat-indigo: var(--theme-category-indigo);
+  --color-cat-rose: var(--theme-category-rose);
+  --color-cat-pink: var(--theme-category-pink);
+  --color-cat-violet: var(--theme-category-violet);
+  --color-cat-slate: var(--theme-category-slate);
+
+  --font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+}
+
+/* Type scale below Tailwind's floor. A lot of this chrome lives under 12px, and
+ * without names for those tiers every author picked a pixel value by eye.
+ * Emitted to :root (plain @theme, not inline) so plain CSS and CodeMirror/inline
+ * style consumers can reach the same steps via var().
+ *
+ * No paired --text-*--line-height: a size token without one emits font-size and
+ * nothing else, which is what the arbitrary values these replace did. Adding
+ * leading here would silently reflow every call site that inherits it today.
+ *
+ * These are fixed rem, deliberately NOT multiplied by a theme scalar the way
+ * --radius is by --theme-radius-scale. Radius scaling is theme aesthetics; text
+ * size is not something a colour scheme should decide. App-wide text scaling
+ * already exists as Chromium zoom (View ▸ Zoom In/Out), which scales rem and px
+ * alike. If a text scalar is ever wanted it has to cover the whole --text-*
+ * family at once — wiring it to these three steps alone would reproduce, for
+ * type, exactly the split-scale defect this scale exists to avoid.
+ */
+@theme {
+  --text-2xs: 0.6875rem;
+  --text-3xs: 0.625rem;
+  --text-4xs: 0.5625rem;
+}
+
+/* Motion token scale — single source of truth for durations and easings.
+ * Emitted to :root (plain @theme, not inline) so @keyframes rules can use var().
+ * Also generates Tailwind utilities (duration-*, ease-*) via the Tailwind v4
+ * theme namespace convention. Philosophy: every token is sub-300ms; interaction
+ * motion clarifies what happened, it never makes the user wait.
+ */
+@theme {
+  --duration-75: 75ms;
+  --duration-100: 100ms;
+  --duration-120: 120ms;
+  --duration-150: 150ms;
+  --duration-200: 200ms;
+  --duration-250: 250ms;
+  --duration-300: 300ms;
+  --default-transition-timing-function: ease-out;
+  --ease-snappy: cubic-bezier(0.2, 0, 0, 1);
+  --ease-spring-critical: linear(
+    0,
+    0.007,
+    0.029 2.2%,
+    0.118 4.7%,
+    0.625 14.4%,
+    0.826 19%,
+    0.902 24%,
+    0.962 29.8%,
+    0.984 33.3%,
+    1.004 37.8%,
+    1.01 42.4%,
+    1.011 52.2%,
+    1.001
+  );
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-exit: cubic-bezier(0.2, 0, 0.7, 0);
+  /* Tier-3 panel-motion accelerate-exit curve. Mirrors PANEL_MINIMIZE_EASING in
+     src/lib/animationUtils.ts; the parity contract in animationUtils.test.ts
+     enforces this. Pairs with --duration-120 for panel slide-out. */
+  --ease-panel-minimize: cubic-bezier(0.3, 0, 0.8, 0.15);
+}

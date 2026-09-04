@@ -605,6 +605,13 @@ describe("SkeletonHint", () => {
 
 describe("animate-hint-fade-in CSS contract", () => {
   const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+  // The `@custom-variant` definitions moved to the design contract, which the
+  // plugin Tailwind compiler consumes alongside index.css (#12220). The
+  // keyframe and the utility that uses the variant still live in index.css.
+  const contractCss = readFileSync(
+    resolve(__dirname, "../../../styles/design-contract.css"),
+    "utf8"
+  );
 
   it("declares the hint-fade-in keyframe", () => {
     expect(css).toMatch(/@keyframes\s+hint-fade-in\b/);
@@ -615,13 +622,13 @@ describe("animate-hint-fade-in CSS contract", () => {
   });
 
   it("declares the reduce-motion custom variant", () => {
-    expect(css).toMatch(/@custom-variant\s+reduce-motion\s*\{/);
-    expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+    expect(contractCss).toMatch(/@custom-variant\s+reduce-motion\s*\{/);
+    expect(contractCss).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
     // The body-attribute branch must NOT use `&` — at top-level `@variant`
     // usage, `&` desugars to `:scope` and the resulting selectors never
     // match. CSS nesting auto-prepends the ancestor. See the
-    // @custom-variant definition comment in src/index.css.
-    expect(css).toMatch(
+    // @custom-variant definition comment in styles/design-contract.css.
+    expect(contractCss).toMatch(
       /@custom-variant\s+reduce-motion[\s\S]*?body\[data-reduce-animations="true"\]\s*\{\s*@slot/
     );
   });

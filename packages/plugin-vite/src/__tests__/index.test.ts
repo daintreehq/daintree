@@ -162,3 +162,63 @@ describe("@daintreehq/plugin-vite — node target", () => {
     expect(daintreePlugin({ target: "node" }).resolveId).toBeUndefined();
   });
 });
+
+describe("@daintreehq/plugin-vite — Tailwind is a runtime contract, not a build step", () => {
+  /** Invoke a hook that Vite would normally call with its own context. */
+  function callHook<T>(hook: unknown, ...args: unknown[]): T {
+    const fn = typeof hook === "function" ? hook : (hook as { handler: unknown }).handler;
+    return (fn as (...a: unknown[]) => T).call({}, ...args);
+  }
+
+  function configResolvedWithPlugins(names: string[]): void {
+    const plugin = daintreePlugin();
+    callHook(plugin.configResolved, { plugins: names.map((name) => ({ name })) });
+  }
+
+  it("rejects a build that wires the Tailwind Vite plugin", () => {
+    expect(() => configResolvedWithPlugins(["vite:react-babel", "@tailwindcss/vite"])).toThrow(
+      /@tailwindcss\/vite/
+    );
+    // The message has to say what to do instead, or the author's next move is
+    // to work around the error rather than adopt the contract.
+    expect(() => configResolvedWithPlugins(["@tailwindcss/vite"])).toThrow(
+      /compiles the Tailwind classes your view uses at runtime/
+    );
+  });
+
+  it("allows a build with no Tailwind plugin", () => {
+    expect(() =>
+      configResolvedWithPlugins(["vite:react-babel", "daintree-plugin-vite"])
+    ).not.toThrow();
+  });
+
+  it("rejects a stylesheet that pulls Tailwind in directly", () => {
+    const plugin = daintreePlugin();
+    const transform = (code: string, id: string) => () => callHook(plugin.transform, code, id);
+
+    expect(transform('@import "tailwindcss";', "/p/src/panel.css")).toThrow(/tailwindcss/);
+    expect(transform("@tailwind utilities;", "/p/src/panel.css")).toThrow(/@tailwind utilities/);
+    // v3 spelling too — an author copying an old template is the likely case.
+    expect(transform("@tailwind base;\n@tailwind components;", "/p/a.scss")).toThrow(
+      /@tailwind base/
+    );
+  });
+
+  it("leaves ordinary plugin CSS and non-CSS modules alone", () => {
+    const plugin = daintreePlugin();
+
+    expect(
+      callHook(plugin.transform, "@layer components { .panel { color: red } }", "/p/src/panel.css")
+    ).toBeNull();
+    // A JS module mentioning the string must not trip the guard.
+    expect(
+      callHook(plugin.transform, 'const doc = "@tailwind utilities";', "/p/src/a.ts")
+    ).toBeNull();
+  });
+
+  it("does not add the guard to the node target, which has no views", () => {
+    const plugin = daintreePlugin({ target: "node" });
+    expect(plugin.configResolved).toBeUndefined();
+    expect(plugin.transform).toBeUndefined();
+  });
+});
