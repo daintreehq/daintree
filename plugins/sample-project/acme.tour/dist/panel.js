@@ -39,35 +39,57 @@ function daintreeFileUrl(filePath, rootPath) {
  * element is assigned — revoking early detaches the blob before the element has
  * finished reading it.
  */
+const MEDIA_MAX_BYTES = 256 * 1024 * 1024;
+
 function useMediaUrl(filePath, rootPath) {
   const [objectUrl, setObjectUrl] = useState(null);
+  const [mediaError, setMediaError] = useState(null);
 
   useEffect(() => {
+    // Cleared FIRST, on every run. The cleanup below revokes the previous URL,
+    // so leaving it in state would keep a dead `blob:` on screen the moment the
+    // path changes to one that does not fetch — or to nothing at all.
+    setObjectUrl(null);
+    setMediaError(null);
     if (!filePath || !rootPath) return;
+
     const controller = new AbortController();
     let url = null;
 
     fetch(daintreeFileUrl(filePath, rootPath), { signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error(`daintree-file responded ${response.status}`);
-        return response.blob();
-      })
-      .then((blob) => {
+      .then(async (response) => {
         if (controller.signal.aborted) return;
+        if (!response.ok) throw new Error(`daintree-file responded ${response.status}`);
+        // The protocol serves files of any size, and this buffers the whole
+        // thing into memory — so cap it, and check the declared length before
+        // reading the body rather than after.
+        const declared = Number(response.headers.get("content-length"));
+        if (Number.isFinite(declared) && declared > MEDIA_MAX_BYTES) {
+          // Drop the unread body so the protocol stream closes now.
+          void response.body?.cancel().catch(() => {});
+          throw new Error("File is too large to preview");
+        }
+        const blob = await response.blob();
+        if (controller.signal.aborted) return;
+        if (blob.size > MEDIA_MAX_BYTES) throw new Error("File is too large to preview");
         url = URL.createObjectURL(blob);
         setObjectUrl(url);
       })
-      .catch(() => {
-        if (!controller.signal.aborted) setObjectUrl(null);
+      .catch((err) => {
+        // An abort is an ordinary cleanup, not a failure worth showing.
+        if (controller.signal.aborted) return;
+        setMediaError(err instanceof Error ? err.message : String(err));
       });
 
     return () => {
       controller.abort();
+      // Revoked here, never straight after assignment — revoking early detaches
+      // the blob before the element has finished reading it.
       if (url) URL.revokeObjectURL(url);
     };
   }, [filePath, rootPath]);
 
-  return objectUrl;
+  return { objectUrl, mediaError };
 }
 
 /**
@@ -89,7 +111,7 @@ export default function TourPanel({ panelId, pluginId, initialArgs, persistState
   // needs on mount and treats anything arriving here as an update.
   const [panelsOpen, setPanelsOpen] = useState(null);
 
-  const audioUrl = useMediaUrl(initialArgs?.audioPath ?? "", rootPath);
+  const { objectUrl: audioUrl, mediaError } = useMediaUrl(initialArgs?.audioPath ?? "", rootPath);
   const persist = useRef(persistState);
   persist.current = persistState;
 
@@ -121,14 +143,27 @@ export default function TourPanel({ panelId, pluginId, initialArgs, persistState
     }
   }, [pluginId, filePath]);
 
+  // Every invoke is awaited and caught. A handler that throws rejects the
+  // invoke, and an uncaught rejection in an onClick is invisible — the button
+  // just appears to do nothing, which is the failure this whole sample exists
+  // to make unlikely.
+  const run = useCallback(async (work) => {
+    setError(null);
+    try {
+      await work();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
   const openAnother = useCallback(
-    () => window.electron.plugin.invoke(pluginId, "open-another"),
-    [pluginId]
+    () => run(() => window.electron.plugin.invoke(pluginId, "open-another")),
+    [run, pluginId]
   );
 
   const reveal = useCallback(
-    () => window.electron.plugin.invoke(pluginId, "reveal", { path: filePath, rootPath }),
-    [pluginId, filePath, rootPath]
+    () => run(() => window.electron.plugin.invoke(pluginId, "reveal", { path: filePath, rootPath })),
+    [run, pluginId, filePath, rootPath]
   );
 
   // Inline styles off the host's own CSS custom properties, NOT Tailwind
@@ -139,7 +174,21 @@ export default function TourPanel({ panelId, pluginId, initialArgs, persistState
   // silently renders as nothing.
   return h(
     "div",
-    { style: { display: "flex", flexDirection: "column", gap: 12, padding: 16, minHeight: 0 } },
+    {
+      // The shape views.md prescribes: the host's container is a column flex
+      // parent, and `minHeight: 0` is what lets this shrink below its content
+      // and hand overflow to an inner scroller instead of pushing the panel's
+      // own scrollbar around.
+      style: {
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        padding: 16,
+        minHeight: 0,
+        overflowY: "auto",
+      },
+    },
     h(
       "label",
       { style: { display: "flex", flexDirection: "column", gap: 4 } },
@@ -148,8 +197,8 @@ export default function TourPanel({ panelId, pluginId, initialArgs, persistState
         value: filePath,
         onChange: (event) => setFilePath(event.target.value),
         style: {
-          background: "var(--color-card)",
-          border: "1px solid var(--color-border)",
+          background: "var(--color-surface)",
+          border: "1px solid var(--color-border-subtle)",
           borderRadius: 6,
           color: "var(--color-text-primary)",
           padding: "6px 8px",
@@ -179,6 +228,10 @@ export default function TourPanel({ panelId, pluginId, initialArgs, persistState
           { style: { color: "var(--color-text-muted)" } },
           `${panelsOpen} tour panel(s) open — pushed from the worker`
         ),
-    audioUrl ? h("audio", { src: audioUrl, controls: true }) : null
+    mediaError
+      ? h("p", { style: { color: "var(--color-status-error)" } }, mediaError)
+      : audioUrl
+        ? h("audio", { key: audioUrl, src: audioUrl, controls: true })
+        : null
   );
 }

@@ -10,6 +10,6 @@ A miniature project root for the project-local plugin feature. `project-local/` 
 project-local/.daintree/plugins/acme.project-hello/
 ```
 
-The directory name equals the manifest `name`, which is what discovery expects. `dist/` is committed and hand-written — the plugin has no `src/` and no build, because the host never reads either.
+The directory name equals the manifest `name` — convention that every tool assumes, not something discovery checks. `dist/` is committed and hand-written — the plugin has no `src/` and no build, because the host never reads either.
 
 Deliberately minimal: it registers no action and its view returns a plain object instead of rendering React, so it proves discovery, schema and watcher behaviour and nothing about building a UI. For a project plugin worth copying, see [`plugins/sample-project/acme.tour/`](../sample-project/acme.tour/).

@@ -22,6 +22,22 @@ Every callback a plugin hands the host has a fixed shape, and the one for `regis
 
 An argument-less handler ignores both parameters and works whichever way it was written, which is why the bug in an argument-taking one hides: the panel looks healthy and only the buttons that pass something do nothing. If a handler's first parameter has a `webContentsId`, it is reading the context.
 
+```ts
+// Correct. `ctx` first, payload second.
+await host.registerHandler("describe-file", async (ctx, args: unknown) => {
+  const { path } = (args ?? {}) as { path?: string };
+  if (!path) throw new Error("describe-file requires a path");
+  return { path, projectId: ctx.projectId };
+});
+
+// Wrong. `args` is the context, so `path` is always undefined and this handler
+// throws on every call — rejecting that one `invoke` and nothing else. Every
+// argument-less channel keeps working, so the panel looks healthy.
+await host.registerHandler("describe-file", async (args: unknown) => {
+  const { path } = (args ?? {}) as { path?: string };
+});
+```
+
 `plugins/sample-project/acme.tour/` is a working plugin built against the untyped-handler, action, and targeted-push rows.
 
 ## Activation

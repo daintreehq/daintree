@@ -12,7 +12,7 @@
   "capabilities": ["fs:project-read"],
   "scopes": {
     "fs": {
-      "allowedPaths": ["${project}"]
+      "allowedPaths": ["${project}", "${worktree}"]
     }
   },
   "contributes": {

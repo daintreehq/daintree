@@ -47,7 +47,7 @@ Prose can drift; these cannot. Read them in preference to any doc that disagrees
 | --- | --- |
 | `electron/schemas/plugin.ts` | The zod schema that actually accepts or rejects your manifest, including the `scope` cross-checks and every refused project contribution, each with the error string you will see |
 | `plugins/fixtures/project-local/` | A minimal project plugin at the real path discovery scans. It is a discovery/schema/watcher fixture, not this skeleton: it registers no action and its view returns a plain object rather than rendering React, so do not copy it as a UI starting point |
-| `plugins/sample-project/acme.tour/` | **The canonical one to copy.** A zero-build project plugin exercising the whole surface this brief describes: an argument-taking channel, a targeted push, `panel.openPluginPanel` on itself, `file.openPanel`, a `daintree-file://` media fetch, `persistState`, and a badge |
+| `plugins/sample-project/acme.tour/` | **The canonical one to copy.** A zero-build project plugin with one working example of each thing this brief tells you to build: an argument-taking channel, a targeted push, `panel.openPluginPanel` on itself, `file.openPanel`, a `daintree-file://` media fetch, `persistState`, and a badge |
 | `plugins/sample/rich-daintree/` | A fuller plugin exercising most contribution points. An _installed_ plugin with a Vite build step — read it for contributions, not for structure |
 | `packages/plugin-sdk/` | The real `PluginHostApi` types behind the `host` object |
 

@@ -8,8 +8,19 @@
  * exactly the repositories this is meant to be dropped into.
  */
 
-/** Panels currently mounted, so pushes only go where something is listening. */
-const mountedPanels = new Set();
+/**
+ * `host.dispatch` does NOT throw when an action fails — it resolves
+ * `{ ok: false, error }`. Returning it raw is how a plugin ends up with a
+ * button that silently does nothing: the promise resolves, the view sees a
+ * truthy object, and the failure is never surfaced.
+ */
+async function dispatchOrThrow(host, actionId, args) {
+  const result = await host.dispatch(actionId, args);
+  if (!result?.ok) {
+    throw new Error(`${actionId} failed: ${result?.error?.message ?? "unknown error"}`);
+  }
+  return result.result;
+}
 
 /**
  * Runtime ids a project plugin has to build for itself, and the single thing
@@ -29,6 +40,12 @@ function panelKindId(projectId) {
 }
 
 export async function activate(host) {
+  // Per-activation, NOT module scope. A worker is reloaded by unloading and
+  // re-importing this module, and module-level state would then be shared with
+  // — or left over from — a previous activation. Anything that should outlive
+  // an activation belongs in `host.storage`, not in a module binding.
+  const mountedPanels = new Set();
+
   // `(ctx, ...args)` — the context is ALWAYS first and the view's payload is
   // second. Declaring `(args) => …` binds the context to `args` and drops the
   // payload with no error anywhere: argument-less channels keep working, so the
@@ -43,6 +60,12 @@ export async function activate(host) {
     // `host.fs.readFile` resolves to a UTF-8 STRING. There is no binary mode:
     // anything that isn't text — an image, an mp3 — is fetched by the view over
     // `daintree-file://` instead. See dist/panel.js.
+    //
+    // The manifest declares BOTH `${project}` and `${worktree}` for this to
+    // work. `${project}` expands to the MAIN worktree only, so declaring it
+    // alone fails PATH_NOT_ALLOWED for every path the moment the user is on a
+    // linked worktree — and passes in a single-worktree checkout, which is
+    // where it gets tested.
     const text = await host.fs.readFile(filePath);
     return {
       path: filePath,
@@ -58,7 +81,7 @@ export async function activate(host) {
   // is what makes it a second one rather than a focus of the first.
   await host.registerHandler("open-another", async (ctx) => {
     if (!ctx.projectId) throw new Error("open-another needs a project");
-    return await host.dispatch("panel.openPluginPanel", {
+    return await dispatchOrThrow(host, "panel.openPluginPanel", {
       kind: panelKindId(ctx.projectId),
       initialArgs: { openedBy: "tour" },
       reuseExisting: false,
@@ -73,30 +96,42 @@ export async function activate(host) {
     if (typeof filePath !== "string" || filePath.length === 0) {
       throw new Error("reveal requires a path");
     }
-    return await host.dispatch("file.openPanel", { path: filePath, rootPath });
+    return await dispatchOrThrow(host, "file.openPanel", { path: filePath, rootPath });
   });
 
   // A push is NOT buffered: one sent during activate() is gone before any view
   // mounts. Tracking the lifecycle is what makes a push land — the view pulls
   // its initial state on mount (the channels above), and only then does this
-  // have somewhere to send updates to.
-  // Awaited, like every `register*` call: activation can otherwise resolve
-  // before the subscription lands, and the first mount goes unobserved.
+  // have somewhere to send updates to. Awaited like every `register*` call, or
+  // activation can resolve before the subscription lands and the first mount
+  // goes unobserved.
+  //
+  // `mounted` is the ONLY phase with a live view on the other end. `hidden` and
+  // `backgrounded` tear the React subtree down while the panel record lives on
+  // — a sibling pane was maximized, a dock tab left, a project view cached — so
+  // a plugin that only removes on `removed` keeps pushing at panels that
+  // stopped listening, and shows a count that is never right again.
   const unsubscribe = await host.onDidChangePanelLifecycle((event) => {
     if (event.phase === "mounted") {
       mountedPanels.add(event.panelId);
-      // Targeted at one panelId, so a second instance doesn't get the first
-      // one's badge count. `postToPanel` with no panelId broadcasts instead —
-      // and a broadcast reaches `plugin.on` subscribers, never `plugin.onPanel`.
-      void host.postToPanel("tour-state", { panels: mountedPanels.size }, event.panelId);
-      void host.setPanelBadge(event.panelId, {
+    } else {
+      mountedPanels.delete(event.panelId);
+    }
+
+    // Fanned out to EVERY mounted panel, not just the one that changed — a
+    // second panel opening changes the first one's count too, and a push that
+    // only reaches the newcomer leaves every other panel stale.
+    for (const panelId of mountedPanels) {
+      // Targeted at one panelId, so each instance gets its own message.
+      // `postToPanel` with no panelId broadcasts instead — and a broadcast
+      // reaches `plugin.on` subscribers, never `plugin.onPanel`.
+      void host.postToPanel("tour-state", { panels: mountedPanels.size }, panelId);
+      void host.setPanelBadge(panelId, {
         kind: "label",
         text: String(mountedPanels.size),
         color: "default",
         tooltip: "Panels open in this tour",
       });
-    } else if (event.phase === "removed") {
-      mountedPanels.delete(event.panelId);
     }
   });
 
@@ -105,9 +140,12 @@ export async function activate(host) {
   // gives it a handler. An action handler takes `(args)` only — no context.
   await host.registerAction(
     {
-      // Must match the `contributes.commands` entry field for field — the host
-      // rejects a registration that claims authority the manifest never asked
-      // the user for.
+      // The id must match the `contributes.commands` entry, because that entry
+      // is what makes the command reachable. The host does not diff the rest —
+      // this descriptor REPLACES the manifest one at registration — but it does
+      // enforce that `requires` is a subset of the manifest's `capabilities`,
+      // so an action can never claim authority the user was not asked for.
+      // Keeping the two in step is convention, not a load rule.
       id: "open-tour",
       title: "Open Surface Tour",
       description: "Open the Surface Tour panel for this project.",
