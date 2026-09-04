@@ -315,7 +315,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onAgentDetected(callback: (data: AgentDetectedPayload) => void): () => void;
     onAgentExited(callback: (data: AgentExitedPayload) => void): () => void;
     onFallbackTriggered(callback: (data: AgentFallbackTriggeredPayload) => void): () => void;
-    onAllAgentsClear(callback: (data: { timestamp: number }) => void): () => void;
+    onAllAgentsClear(
+      callback: (data: { timestamp: number; shouldFlash: boolean }) => void
+    ): () => void;
     onActivity(callback: (data: TerminalActivityPayload) => void): () => void;
     onTrashed(callback: (data: { id: string; expiresAt: number }) => void): () => void;
     onRestored(callback: (data: { id: string }) => void): () => void;

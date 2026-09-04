@@ -1,15 +1,20 @@
 import type { Migration } from "../StoreMigrations.js";
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export const migration028: Migration = {
   version: 28,
   description: "Default sound and the all-clear flash off for existing installs (#12185)",
   up: (store) => {
-    const settings = store.get("notificationSettings") as Record<string, unknown> | undefined;
+    const raw = store.get("notificationSettings");
 
-    if (!settings) {
+    if (!isPlainObject(raw)) {
       console.log("[Migration 028] No notificationSettings found, skipping");
       return;
     }
+    const settings = raw;
 
     const changes: Record<string, unknown> = {};
 

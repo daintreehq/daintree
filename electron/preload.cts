@@ -1241,7 +1241,7 @@ function buildElectronApi(): ElectronAPI {
       onFallbackTriggered: (callback: (data: AgentFallbackTriggeredPayload) => void) =>
         _eventBusOn("agent:fallback-triggered", callback),
 
-      onAllAgentsClear: (callback: (data: { timestamp: number }) => void) =>
+      onAllAgentsClear: (callback: (data: { timestamp: number; shouldFlash: boolean }) => void) =>
         _eventBusOn("agent:all-clear", callback),
 
       onActivity: (callback: (data: TerminalActivityPayload) => void) =>

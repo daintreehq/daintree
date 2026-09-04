@@ -227,7 +227,13 @@ async function resetAgentService(
 ): Promise<void> {
   const bus = notificationBus();
   harness.modules.agentNotificationService.dispose();
-  bus.settings = { ...defaultNotificationSettings(), ...settings };
+  // The gate battery (PERF-322) represents a user who has sound turned on,
+  // so each row can grade its own named gate — master toggle, per-type,
+  // watch, spawn/boot grace, mute, quiet hours, escalation, all-clear —
+  // without every "must not fire" row being confounded by soundEnabled's
+  // product default (off, #12185). No case below overrides soundEnabled, so
+  // this is the effective baseline for the whole battery.
+  bus.settings = { ...defaultNotificationSettings(), soundEnabled: true, ...settings };
   bus.osDnd = undefined;
   harness.modules.store.set("appState", appStateForFleet(harness.fleet, "idle"));
   harness.modules.agentNotificationService.initialize();
