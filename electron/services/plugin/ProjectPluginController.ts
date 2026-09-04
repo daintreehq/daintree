@@ -205,11 +205,11 @@ export class ProjectPluginController {
     if (this.disposed) return;
     if (this.superseded(projectId, requested, requestedGeneration)) return;
 
-    // Safety net for the close paths this controller cannot be called from —
-    // the idle auto-close service, the free-memory IPC and the project store's
-    // own status reconciliation all flip a row to "closed" without routing
-    // through `project:close`. Sweeping on the next project switch bounds how
-    // long a closed project's plugins can outlive it to one user action.
+    // Safety net for closes this controller has not been told about yet — the
+    // notification is fire-and-forget, and the project store's own status
+    // reconciliation flips a row to "closed" without routing through one at all.
+    // Sweeping on the next project switch bounds how long a closed project's
+    // plugins can outlive it to one user action.
     for (const trackedId of [...this.entries.keys()]) {
       if (trackedId !== projectId && this.deps.isProjectClosed(trackedId)) {
         await this.onProjectClosed(trackedId);
@@ -271,9 +271,9 @@ export class ProjectPluginController {
   }
 
   /**
-   * The user closed this project. Every plugin it owns is unloaded now —
-   * contributions unregistered, `plugin://` authorities invalidated, workers
-   * killed by the unload cascade.
+   * This project stopped being live — closed, removed, slept or auto-parked.
+   * Every plugin it owns is unloaded now — contributions unregistered,
+   * `plugin://` authorities invalidated, workers killed by the unload cascade.
    *
    * Trust is NOT forgotten here. A close is not a revoke, and re-prompting on
    * every reopen would defeat the "once, at the folder" contract.

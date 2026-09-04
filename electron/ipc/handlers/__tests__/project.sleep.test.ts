@@ -289,7 +289,14 @@ describe("project:sleep", () => {
       // spawned children and the native watcher with it. Before #12216 nothing
       // ran the unload cascade here, so they survived until the user happened
       // to switch into a different project.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledTimes(1);
       expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("proj-1");
+
+      // Order is load-bearing, not cosmetic: the status write is the commit
+      // point, so close intent must not be published before the row carries it.
+      expect(projectStoreMock.updateProjectStatus.mock.invocationCallOrder[0]!).toBeLessThan(
+        pluginLifecycleMock.notifyProjectPluginsClosed.mock.invocationCallOrder[0]!
+      );
     });
 
     it("does not unload plugins for a project it refused to sleep (#12216)", async () => {
@@ -385,6 +392,9 @@ describe("project:sleep", () => {
       expect(result.terminalsKilled).toBe(2);
       expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed");
       expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.PROJECT_SLEPT, "proj-1");
+      // Same reason the status write survives: the row says closed, so the
+      // plugins behind it have to go too.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("proj-1");
     });
   });
 
@@ -410,6 +420,9 @@ describe("project:sleep", () => {
       expect(persistenceMock.writeHibernatedMarker).not.toHaveBeenCalled();
       expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
       expect(broadcastMock).not.toHaveBeenCalled();
+      // The project is still open with live agents behind it — unloading its
+      // plugins here would tear down half a project the user still has.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
     });
 
     it("surfaces a teardown rejection without marking the project closed", async () => {
@@ -418,6 +431,7 @@ describe("project:sleep", () => {
 
       await expect(invoke("proj-1")).rejects.toBeInstanceOf(AppError);
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
     });
   });
 
