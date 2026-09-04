@@ -41,6 +41,18 @@ packages/*/api-report/
 # regeneration fail that check.
 docs/keyboard-shortcuts.md
 
+# Generated manifest JSON Schemas — `npm run codegen:plugin-schema` output,
+# compared byte-for-byte by check:plugin-schema. Same reason as above: the
+# generator emits JSON.stringify's shape, so formatting them here would make
+# every regeneration fail one gate or the other.
+schemas/plugin.schema.json
+schemas/plugin.project.schema.json
+
+# Generated action reference — `npm run codegen:plugin-actions` output, compared
+# byte-for-byte by its test in src/services/actions/__tests__. Same reason as
+# the shortcut reference above.
+docs/plugins/actions.md
+
 # Assets
 build/
 *.ico

@@ -71,8 +71,19 @@ function c(value: string): string {
   return value.replace(/\*\//g, "* /").replace(/[\r\n]+/g, " ");
 }
 
+/**
+ * Where the generated JSON Schema for `plugin.json` is published. Stamping it
+ * into the scaffold is the point of generating it: an editor pointed at this
+ * URL flags a misspelled field as the author types it, which is the class of
+ * mistake that otherwise surfaces as a plugin that silently never loads.
+ * Structural rules only — the cross-field rules live in the host.
+ */
+const MANIFEST_SCHEMA_BASE_URL =
+  "https://raw.githubusercontent.com/daintreehq/daintree/develop/schemas";
+
 function manifest(ctx: ScaffoldContext, contributes: Record<string, unknown>): string {
   const obj = {
+    $schema: `${MANIFEST_SCHEMA_BASE_URL}/${ctx.projectLocal ? "plugin.project.schema.json" : "plugin.schema.json"}`,
     name: ctx.scopedName,
     version: "0.1.0",
     // Marks the plugin as project-local. Omitted entirely for an installed

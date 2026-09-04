@@ -101,6 +101,14 @@ export const WORKBENCH_TIER_TOOLS = [
   "notifications.recent",
   "errors.recent",
 
+  // Reads for the plugin-authoring loop (#12214). Both are pure reads — one
+  // parses a manifest already on disk, the other reports why a plugin is in the
+  // state it is in — and an agent writing a plugin needs them from the lowest
+  // tier it might be running at, since the alternative is guessing at a schema
+  // it cannot see.
+  "plugin.validate",
+  "plugin.diagnostics",
+
   "help.displayImage",
 ] as const satisfies readonly BuiltInActionId[];
 
@@ -220,6 +228,12 @@ export const ACTION_TIER_ADDONS = [
   // Runs a project-declared command as a real child process. Read-only
   // workbench sessions detect runners but must not execute them.
   "project.runCheck",
+
+  // Re-runs project plugin discovery and reconciliation — the write half of the
+  // authoring loop whose reads sit at workbench. It restarts running code, so a
+  // read-only session must not reach it, but within a project it does nothing a
+  // reopen would not (#12214).
+  "plugin.reloadProject",
 ] as const satisfies readonly BuiltInActionId[];
 
 export const SYSTEM_TIER_ADDONS = [

@@ -73,6 +73,14 @@ export interface PluginCliServerHandlers {
   devStart: (params: { pluginId: string }) => Promise<void>;
   /** Unload a dev plugin when the CLI's `dev` session stops. */
   devStop: (params: { pluginId: string }) => Promise<void>;
+  /**
+   * Trust and per-directory state for one project's committed plugins (#12214).
+   * Read-only, and the only way `daintree-plugin doctor` can report the state
+   * Daintree actually computed rather than one it guessed: trust lives in
+   * Daintree's own store, never in the repository, so there is nothing on disk
+   * for an offline check to read.
+   */
+  projectStatus: (params: { projectRoot: string }) => Promise<unknown>;
 }
 
 export interface PluginCliServerConfig {
@@ -144,6 +152,8 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
   const controlFilePath = config.controlFilePath ?? getCliControlFilePath();
   const authToken = config.authToken ?? crypto.randomBytes(32).toString("hex");
 
+  const ProjectStatusParamsSchema = z.object({ projectRoot: z.string().min(1) });
+
   async function dispatchMethod(method: string, params: unknown): Promise<unknown> {
     switch (method) {
       case "plugin.ping":
@@ -166,6 +176,10 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
         const p = DevParamsSchema.parse(params ?? {});
         await handlers.devStop(p);
         return { status: "ok" };
+      }
+      case "plugin.project.status": {
+        const p = ProjectStatusParamsSchema.parse(params ?? {});
+        return handlers.projectStatus(p);
       }
       default:
         throw new Error(`Unknown method: ${method}`);
@@ -361,6 +375,22 @@ export async function startPluginCliServer(): Promise<void> {
       devStop: ({ pluginId }) => {
         pluginService.unloadPlugin(pluginId);
         return Promise.resolve();
+      },
+      projectStatus: async ({ projectRoot }) => {
+        const { projectStore } = await import("./ProjectStore.js");
+        const normalized = path.resolve(projectRoot);
+        const project = projectStore
+          .getAllProjects()
+          .find((row) => path.resolve(row.path) === normalized);
+        // A path Daintree has never opened is a legitimate answer, not an
+        // error: the author may be checking a clone before adding it.
+        if (!project) return { known: false, projectId: null, trust: null, plugins: [] };
+        return {
+          known: true,
+          projectId: project.id,
+          trust: pluginService.getProjectPluginTrustState(project.id),
+          plugins: pluginService.listProjectPlugins(project.id),
+        };
       },
     },
   });

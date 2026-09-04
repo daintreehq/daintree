@@ -7,6 +7,7 @@ import {
 import { PluginIconTile } from "./pluginIcons";
 import { CapabilityRow } from "./capabilityMeta";
 import { PluginMcpServersSection } from "./PluginMcpServersSection";
+import { PluginLogsSection, usePluginLogs } from "./PluginLogsSection";
 import { PluginSettingsForm } from "@/components/Settings/PluginSettingsForm";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
@@ -217,7 +218,7 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
   );
 }
 
-type PluginDetailTab = "overview" | "settings" | "capabilities" | "mcp-servers";
+type PluginDetailTab = "overview" | "settings" | "capabilities" | "mcp-servers" | "logs";
 
 interface PluginDetailPaneProps {
   plugin: LoadedPluginInfo;
@@ -264,6 +265,12 @@ export function PluginDetailPane({
   const commands = plugin.manifest.contributes.commands ?? [];
   const panels = plugin.manifest.contributes.panels ?? [];
   const [activeTab, setActiveTab] = useState<PluginDetailTab>("overview");
+  // Read here rather than inside the tab body: the Logs tab is earned by
+  // content like every other tab past Overview (#11302), and the pane cannot
+  // decide whether to offer it without already knowing the buffer is non-empty.
+  // No owning project to pass: `LoadedPluginInfo` carries only the manifest id.
+  // The project-owned pane is `ProjectPluginDetailPane`, and it does scope.
+  const logs = usePluginLogs(plugin.manifest.name);
 
   // URL-installed plugins have an upstream to re-fetch and compare against;
   // file-installed plugins and built-ins don't, so the button stays disabled
@@ -289,6 +296,9 @@ export function PluginDetailPane({
     // Only plugins that actually contribute MCP servers get the runtime tab —
     // it surfaces subprocess health and restart, which is meaningless otherwise.
     ...(hasMcpServers ? [{ id: "mcp-servers", label: "MCP servers" }] : []),
+    // Same rule, applied to the log buffer: a plugin that has logged nothing
+    // offers no Logs tab rather than an empty one (#12214).
+    ...(logs.lines && logs.lines.length > 0 ? [{ id: "logs", label: "Logs" }] : []),
   ];
 
   // Selecting a *different* plugin remounts this subtree (the scroll wrapper is
@@ -470,6 +480,8 @@ export function PluginDetailPane({
       {currentTab === "mcp-servers" && hasMcpServers && (
         <PluginMcpServersSection pluginId={plugin.manifest.name} declared={mcpServers} />
       )}
+
+      {currentTab === "logs" && <PluginLogsSection {...logs} />}
     </div>
   );
 }

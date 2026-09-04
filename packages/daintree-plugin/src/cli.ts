@@ -6,6 +6,8 @@ import { runPackage } from "./commands/package.js";
 import { runInstall } from "./commands/install.js";
 import { runUninstall } from "./commands/uninstall.js";
 import { runDev } from "./commands/dev.js";
+import { runDoctor } from "./commands/doctor.js";
+import { runSchema } from "./commands/schema.js";
 
 function fail(message: string): never {
   console.error(message);
@@ -67,6 +69,51 @@ program
         }
         process.exit(1);
       }
+    } catch (err) {
+      fail((err as Error).message);
+    }
+  });
+
+program
+  .command("doctor")
+  .argument("<projectRoot>", "the project whose .daintree/plugins/ to check")
+  .description("Check every project plugin the way someone cloning this repository would see it")
+  .option("--offline", "skip the query to a running Daintree")
+  .action(async (projectRoot: string, opts: { offline?: boolean }) => {
+    try {
+      const result = await runDoctor(projectRoot, { offline: opts.offline });
+      console.log(`Project: ${result.projectRoot}`);
+      console.log(`Plugins: ${result.pluginsDir}`);
+      console.log(`Daintree: ${result.host.note}`);
+      if (result.plugins.length === 0) {
+        console.log("\nNo plugin directories found.");
+        return;
+      }
+      for (const plugin of result.plugins) {
+        const id = plugin.pluginId ?? "(unreadable manifest)";
+        const state = plugin.hostState ? ` — host state: ${plugin.hostState}` : "";
+        const mark = plugin.errors.length === 0 ? "✓" : "✗";
+        console.log(`\n${mark} ${plugin.dirName} → ${id}${state}`);
+        for (const warning of plugin.warnings) console.log(`  ⚠  ${warning}`);
+        for (const error of plugin.errors) console.error(`  ✗  ${error}`);
+      }
+      if (!result.ok) process.exit(1);
+    } catch (err) {
+      fail((err as Error).message);
+    }
+  });
+
+program
+  .command("schema")
+  .description(
+    "Print the JSON Schema for plugin.json, generated from Daintree's own manifest schema"
+  )
+  .option("--project", "the schema for a project plugin rather than an installed one")
+  .option("--out <file>", "write to a file instead of stdout")
+  .action(async (opts: { project?: boolean; out?: string }) => {
+    try {
+      const written = await runSchema({ project: opts.project, out: opts.out });
+      if (written) console.log(`Wrote ${written}`);
     } catch (err) {
       fail((err as Error).message);
     }

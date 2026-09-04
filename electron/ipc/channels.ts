@@ -991,6 +991,7 @@ export const CHANNELS = {
   PLUGIN_KEYBINDINGS: "plugin:keybindings",
   PLUGIN_CONTEXT_MENU_ITEMS: "plugin:context-menu-items",
   PLUGIN_VALIDATE_ACTION_IDS: "plugin:validate-action-ids",
+  PLUGIN_VALIDATE_MANIFEST: "plugin:validate-manifest",
   PLUGIN_ACTIONS_GET: "plugin:actions-get",
   PLUGIN_ACTIONS_REGISTER: "plugin:actions-register",
   PLUGIN_ACTIONS_UNREGISTER: "plugin:actions-unregister",

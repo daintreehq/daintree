@@ -1330,6 +1330,10 @@ export interface GeneratedIpcInvokeMap {
     args: [actionIds: string[]];
     result: void;
   };
+  "plugin:validate-manifest": {
+    args: [targetPath: string];
+    result: import("./pluginValidation.js").PluginManifestValidationResult;
+  };
   "plugin:visibility-default-set": {
     args: [pluginId: string, hidden: boolean];
     result: void;
@@ -1389,7 +1393,7 @@ export interface GeneratedIpcInvokeMap {
   "privacy:get-settings": {
     args: [];
     result: {
-      telemetryLevel: "off" | "errors" | "full";
+      telemetryLevel: "errors" | "off" | "full";
       logRetentionDays: 0 | 7 | 30 | 90;
       dataFolderPath: string;
     };
@@ -1407,7 +1411,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "privacy:set-telemetry-level": {
-    args: [level: "off" | "errors" | "full"];
+    args: [level: "errors" | "off" | "full"];
     result: void;
   };
   "project-history:peek": {
@@ -1557,7 +1561,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "sentry:get-consent-state": {
     args: [];
-    result: { level: "off" | "errors" | "full"; hasSeenPrompt: boolean };
+    result: { level: "errors" | "off" | "full"; hasSeenPrompt: boolean };
   };
   "shortcut-hints:get-counts": {
     args: [];

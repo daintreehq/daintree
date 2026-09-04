@@ -902,6 +902,13 @@ describe("McpServerService", () => {
         description: "Remove a worktree this MCP session created",
         danger: "confirm",
       }),
+      // Action-tier since #12214: re-running project plugin discovery restarts
+      // running code, so a read-only workbench session must not reach it.
+      createManifestEntry({
+        id: "plugin.reloadProject" as ActionId,
+        title: "Reload Project Plugins",
+        description: "Re-scan the open project's committed plugins",
+      }),
       createManifestEntry({
         id: "terminal.sendCommand" as ActionId,
         title: "Send Terminal Command",

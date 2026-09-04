@@ -29,6 +29,11 @@ import {
 } from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { PluginProcessManager } from "./plugin/PluginProcessManager.js";
+import {
+  actionHandlerArityHint,
+  appendHandlerHint,
+  channelHandlerArityHint,
+} from "./plugin/pluginHandlerHints.js";
 import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
@@ -2710,10 +2715,25 @@ export class PluginService {
       list.push(rest);
     }
 
+    // `this.plugins` is keyed by the REGISTRY key, which for a project plugin is
+    // its instance key (`project__{projectId}__{publisher.name}`) and not
+    // `manifest.name` — the manifest keeps the bare id it declares, and
+    // `loadPlugin` asserts the two agree rather than rewriting either. Keying
+    // this off `manifest.name` therefore dropped every project plugin from the
+    // snapshot, which is both the wrong set for a bug report and, since the log
+    // buffers and audit records are themselves keyed by the registry key, the
+    // one class of plugin whose author is reading these diagnostics (#12214).
+    //
+    // Indexed by manifest identity: each load parses and freezes its own
+    // manifest object, so two projects holding the same id still index apart.
+    const keyByManifest = new Map<Readonly<PluginManifest>, string>();
+    for (const [key, plugin] of this.plugins) keyByManifest.set(plugin.manifest, key);
+
     const plugins = this.listPlugins()
-      .filter((info) => this.plugins.has(info.manifest.name))
+      .filter((info) => keyByManifest.has(info.manifest))
       .map((info) => {
-        const pluginId = info.manifest.name;
+        // Non-null: the filter above admitted only manifests present in the index.
+        const pluginId = keyByManifest.get(info.manifest) as string;
         const buffer = this.logBuffers.get(pluginId);
         return {
           pluginId,
@@ -2913,9 +2933,13 @@ export class PluginService {
     this.hostGitFactory = factory;
   }
 
-  _registerFakePluginForTests(plugin: LoadedPlugin): void {
+  _registerFakePluginForTests(plugin: LoadedPlugin, instanceKey?: string): void {
     this.mintPluginAuthority(plugin.manifest.name, plugin.dir);
-    this.plugins.set(plugin.manifest.name, plugin);
+    // `instanceKey` mirrors the real `loadPlugin`, which keys a project plugin
+    // by `project__{projectId}__{name}` while leaving `manifest.name` bare.
+    // Without it a test cannot reproduce the shape the registry actually holds
+    // for a project plugin, which is where the two diverge (#12214).
+    this.plugins.set(instanceKey ?? plugin.manifest.name, plugin);
   }
 
   _unregisterFakePluginForTests(pluginId: string): void {
@@ -3391,6 +3415,17 @@ export class PluginService {
     return this.plugins.has(pluginId);
   }
 
+  /**
+   * The managed plugins directory this instance discovers user plugins from.
+   * Public because tests and the packaging flow construct the service with a
+   * temp root, so callers that need to reason about that root (the manifest
+   * validation handler's containment check) must read the live value rather
+   * than recompute the default.
+   */
+  getPluginsRoot(): string {
+    return this.pluginsRoot;
+  }
+
   registerHandler<TArgs, TResult>(
     pluginId: string,
     channel: string,
@@ -3510,6 +3545,11 @@ export class PluginService {
         // Contain at the boundary so a throwing handler can't propagate up
         // through `ipcMain.handle` as an unhandled rejection. The error still
         // surfaces to the renderer (rethrown after logging).
+        //
+        // Hint first, so the audit record and the renderer's toast both carry
+        // it — the failure this catches most often is a signature mistake the
+        // plugin's own stack trace cannot name (#12214).
+        appendHandlerHint(err, actionHandlerArityHint(actionHandler, err));
         console.error(`[PluginService] Action handler "${channel}" threw:`, err);
         // Audit at the dispatch boundary (#10463) so non-IPC callers (agent
         // automation, recipe dispatch) leave the same durable trail as a
@@ -3587,6 +3627,14 @@ export class PluginService {
       // process. The error still surfaces to the renderer (we rethrow after
       // logging) — the renderer-side wrapping in `usePluginActions` turns
       // that rejection into a user-facing toast.
+      //
+      // Only the legacy path is hinted (#12214). A typed registration is stored
+      // as the `(ctx, ...args)` adapter above, whose declared arity is 1 for a
+      // reason that has nothing to do with the author's own signature — hinting
+      // on it would accuse every typed handler of a mistake it did not make.
+      if (!channelSchema) {
+        appendHandlerHint(err, channelHandlerArityHint(handler, err));
+      }
       console.error(`[PluginService] Handler "${key}" threw:`, err);
       // Audit at the dispatch boundary (#10463). `channel` carries the plugin
       // channel string that failed (the IPC transport is always plugin:invoke);

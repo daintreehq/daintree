@@ -185,8 +185,14 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(52);
+    // 52 → 53 for #12214's `plugin:validate-manifest`, the on-disk manifest
+    // check behind the `plugin.validate` action.
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(53);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:validate-manifest",
+      expect.any(Function)
+    );
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:project-surfaces-get",
       expect.any(Function)

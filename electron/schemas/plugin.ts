@@ -1264,6 +1264,11 @@ export function getPluginManifestSchema(origin: PluginOrigin | boolean): PluginM
 function buildPluginManifestSchema(origin: PluginOrigin) {
   return z
     .strictObject({
+      // Editors and agents key completion and inline validation off `$schema`,
+      // and the object is strict, so without an explicit slot a manifest that
+      // names its own contract is refused for naming it. Accepted, never read:
+      // the host's authority is this schema, not whatever the URL resolves to.
+      $schema: z.string().optional(),
       name: z.string().min(1).max(64).regex(SCOPED_PLUGIN_NAME_PATTERN, {
         error: 'Plugin name must be in publisher.name format (e.g. "acme.linear-context")',
       }),

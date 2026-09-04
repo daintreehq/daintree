@@ -3231,6 +3231,69 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "title": "View all agents",
   },
   {
+    "category": "plugins",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Report why one plugin is in the state it is in: the load or activation failure it recorded, whether it is running, and the tail of the lines it wrote through the host logger. A project plugin whose manifest was refused is reported with its rejection, so one that never loaded is distinguishable from one that does not exist. An unknown id fails, listing the ids that do exist.",
+    "examples": [
+      {
+        "args": {
+          "pluginId": "acme.dashboard",
+        },
+        "description": "Find out why a plugin that should be running isn't.",
+      },
+      {
+        "args": {
+          "logLimit": 200,
+          "pluginId": "acme.dashboard",
+        },
+        "description": "Pull a deeper log tail while chasing an intermittent activation failure.",
+      },
+    ],
+    "id": "plugin.diagnostics",
+    "keywords": undefined,
+    "kind": "query",
+    "requiresArgs": true,
+    "title": "Read plugin diagnostics",
+  },
+  {
+    "category": "plugins",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Re-scan the open project's committed plugins and reconcile what is running against what is on disk, then report the state of every plugin directory found. This is how a newly written or rebuilt plugin is picked up without reopening the project. Trust and staging rules still apply, so an id the project has never run is listed but not executed.",
+    "examples": undefined,
+    "id": "plugin.reloadProject",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": false,
+    "title": "Reload project plugins",
+  },
+  {
+    "category": "plugins",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Check a plugin.json on disk against the schema Daintree actually loads with, and get back every rejection paired with the field path that caused it. The rules differ by where a plugin lives, so the reply names which set was applied and whether that came from the location on disk or from what the manifest claims about itself. Warnings are advisory and never stop a plugin loading.",
+    "examples": [
+      {
+        "args": {
+          "path": ".daintree/plugins/acme.dashboard",
+        },
+        "description": "Check a project plugin the agent just wrote, before reloading.",
+      },
+      {
+        "args": {
+          "path": ".daintree/plugins/acme.dashboard/plugin.json",
+        },
+        "description": "The same check, naming the manifest file directly.",
+      },
+    ],
+    "id": "plugin.validate",
+    "keywords": undefined,
+    "kind": "query",
+    "requiresArgs": true,
+    "title": "Validate plugin manifest",
+  },
+  {
     "category": "portal",
     "danger": "safe",
     "dangerRationale": undefined,

@@ -331,7 +331,16 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // 400 B per-description ceiling; the total simply reflects two more tools,
   // and the 120 B floor means neither could have been squeezed inside the old
   // ceiling's headroom without saying less than a caller needs.
-  const MAX_COHORT_TOTAL_BYTES = 51_600;
+  // 51_600 → 52_500 for #12214's three plugin-authoring tools: a manifest
+  // check, a diagnostics read, and the project re-scan. All three are in-app
+  // only, so the external total above does not move. They were written at 625,
+  // 546 and 502 B and cut to 381, 376 and 344 to sit under the 400 B
+  // per-description ceiling; what is left is the part a caller cannot work
+  // without — that the manifest rules differ by where a plugin lives, that a
+  // refused plugin is reported rather than absent, and that a re-scan still
+  // stages an id the project has never run. Three tools against a 120 B floor
+  // cannot land inside the old ceiling's headroom at any wording.
+  const MAX_COHORT_TOTAL_BYTES = 52_500;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
