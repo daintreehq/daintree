@@ -599,7 +599,15 @@ describe("PilotView", () => {
     // The snapshot is unchanged and suppressed upstream, so only the component's
     // own clock can move this. A tick that never reaches the render is the
     // React Compiler no-op this guards against.
-    await vi.advanceTimersByTimeAsync(120_000);
+    //
+    // Wrapped in `act` because the tick's `setState` fires outside a React
+    // event: unwrapped, the commit is handed to React's scheduler, which runs
+    // on a real MessageChannel task that fake timers do not control — so on a
+    // loaded CI shard the assertion below could read the DOM one or two ticks
+    // behind the clock ('2m'). `act` drains the work before it returns.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
 
     expect(age()).not.toContain("1m");
     expect(age()).toContain("3m");
