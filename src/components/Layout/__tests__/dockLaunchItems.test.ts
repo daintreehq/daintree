@@ -427,16 +427,25 @@ describe("buildDockLaunchModel — browse rows", () => {
   });
 
   it("footers the More band with Manage agents and then Customize toolbar", () => {
-    const actionCues = build().browseRows.filter((row) => row.band === "actions");
+    const actionRows = (model: ReturnType<typeof build>) =>
+      model.browseRows.filter((row) => row.band === "actions");
+    const cuesOf = (model: ReturnType<typeof build>) =>
+      actionRows(model).map((row) => (row.kind === "cue" ? row.cue : row.kind));
+    const FOOTER = ["manage-agents", "customize-toolbar"];
 
-    // Both rows unconditionally: unlike the recipe and setup cues, neither
-    // depends on inventory. Order is the assertion — Manage agents has held
-    // this footer alone, and moving it would relocate a row under the cursor.
-    expect(actionCues.map((row) => (row.kind === "cue" ? row.cue : row.kind))).toEqual([
-      "manage-agents",
-      "customize-toolbar",
-    ]);
-    expect(new Set(actionCues.map((row) => row.rowKey)).size).toBe(2);
+    // Order is the assertion — Manage agents has held this footer alone, and
+    // moving it would relocate a row out from under the cursor.
+    expect(cuesOf(build())).toEqual(FOOTER);
+    expect(new Set(actionRows(build()).map((row) => row.rowKey)).size).toBe(2);
+
+    // Unconditional, unlike the recipe and setup cues, which the inventory
+    // withdraws once it can offer the real thing. Both of these rows reach
+    // global settings pages, so nothing about what a project holds may hide
+    // the route to them — asserted against the shapes that DO move the other
+    // cues, since a gate copied from one of them would pass the default build.
+    expect(cuesOf(build({ recipes: [recipe({ id: "r-1", name: "Deploy" })] }))).toEqual(FOOTER);
+    expect(cuesOf(build({ agents: [], agentInventoryState: "loading" }))).toEqual(FOOTER);
+    expect(cuesOf(build({ agentInventoryState: "fallback" }))).toEqual(FOOTER);
   });
 
   it("labels the toolbar cue with the plugin tray's own wording", () => {
@@ -448,24 +457,30 @@ describe("buildDockLaunchModel — browse rows", () => {
 });
 
 describe("activateDockLaunchCue", () => {
-  it("sends each settings cue to its own tab", () => {
-    activateDockLaunchCue("customize-toolbar", "wt-1", "menu");
-    expect(actionDispatchMock).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      { tab: "toolbar" },
-      { source: "menu" }
-    );
+  it("sends each settings cue to its own tab, and nowhere else", () => {
+    // The call COUNT is half the assertion. Routing is a switch now, so a
+    // dropped `return` would open the right tab and then the next case's tab
+    // on top of it — which `toHaveBeenCalledWith` alone reads as a pass.
+    const dispatchedTabs = (cue: Parameters<typeof activateDockLaunchCue>[0]) => {
+      actionDispatchMock.mockClear();
+      activateDockLaunchCue(cue, "wt-1", "menu");
+      return actionDispatchMock.mock.calls;
+    };
 
-    // Pinned alongside it because routing used to end in an unconditional
-    // dispatch to `agents`: the two destinations are one edit away from being
-    // swapped, and either swap is silent.
-    actionDispatchMock.mockClear();
-    activateDockLaunchCue("manage-agents", "wt-1", "menu");
-    expect(actionDispatchMock).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      { tab: "agents" },
-      { source: "menu" }
-    );
+    // Pinned as a pair because routing used to end in an unconditional dispatch
+    // to `agents`: the two destinations are one edit away from being swapped,
+    // and either swap is silent.
+    expect(dispatchedTabs("customize-toolbar")).toEqual([
+      ["app.settings.openTab", { tab: "toolbar" }, { source: "menu" }],
+    ]);
+    expect(dispatchedTabs("manage-agents")).toEqual([
+      ["app.settings.openTab", { tab: "agents" }, { source: "menu" }],
+    ]);
+    // The recipe cue routes elsewhere entirely; falling into either settings
+    // case would be the same dropped `return` seen from above.
+    expect(dispatchedTabs("create-recipe")).toEqual([
+      ["recipe.editor.open", { worktreeId: "wt-1" }, { source: "menu" }],
+    ]);
   });
 });
 

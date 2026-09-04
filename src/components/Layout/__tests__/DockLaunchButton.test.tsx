@@ -368,6 +368,7 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
 
 import { DockLaunchButton } from "../DockLaunchButton";
 import { TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
+import { SlidersHorizontal } from "lucide-react";
 import type { DockLaunchAgent } from "../DockLaunchMenuItems";
 
 const AGENTS: DockLaunchAgent[] = [
@@ -1419,14 +1420,59 @@ describe("DockLaunchButton", () => {
   });
 
   it("footers the More band with both action cues under one heading", () => {
-    const { getAllByTestId, getByText } = renderButton();
+    const { container, getAllByTestId } = renderButton();
 
-    // `shouldShowBandLabel` prints a heading only on a band's first row, so a
-    // second "More" would mean the pair had drifted into separate bands.
-    const more = getAllByTestId("dock-launcher-band").filter((el) => el.textContent === "More");
-    expect(more).toHaveLength(1);
-    expect(getByText("Manage agents")).toBeTruthy();
-    expect(getByText(TOOLBAR_CUSTOMIZE_LABEL)).toBeTruthy();
+    // Walk the listbox in DOM order and file each option under the heading
+    // above it. Counting headings alone would not do: a row that drifted into
+    // another band leaves exactly one "More" behind and still renders its label
+    // somewhere on screen, which is all a `getByText` pair can see.
+    const under = new Map<string, string[]>();
+    let heading = "";
+    for (const node of listbox(container).querySelectorAll<HTMLElement>(
+      '[data-testid="dock-launcher-band"], [role="option"]'
+    )) {
+      if (node.getAttribute("data-testid") === "dock-launcher-band") {
+        heading = node.textContent ?? "";
+        continue;
+      }
+      under.set(heading, [...(under.get(heading) ?? []), node.textContent ?? ""]);
+    }
+
+    expect(getAllByTestId("dock-launcher-band").filter((el) => el.textContent === "More")).toHaveLength(1);
+    const more = under.get("More") ?? [];
+    expect(more).toHaveLength(2);
+    expect(more[0]).toContain("Manage agents");
+    expect(more[1]).toContain(TOOLBAR_CUSTOMIZE_LABEL);
+  });
+
+  it("draws the Customize toolbar cue with a glyph of its own", () => {
+    // Compared against a live render of the icon rather than Lucide's class
+    // string, which is the package's business and not a contract. Without this
+    // the row could regress to the `Workflow` the old cue ternary fell through
+    // to, or to the `Settings2` the row directly above it already carries, and
+    // every other assertion here would stay green.
+    const { container } = renderButton();
+    const glyphOf = (label: string) => {
+      const row = options(container).find((option) => option.textContent?.includes(label));
+      if (!row) throw new Error(`no option row for ${label}`);
+      return row.querySelector("svg")!.innerHTML;
+    };
+    const slidersGlyph = render(<SlidersHorizontal />).container.querySelector("svg")!.innerHTML;
+
+    expect(glyphOf(TOOLBAR_CUSTOMIZE_LABEL)).toBe(slidersGlyph);
+    expect(glyphOf(TOOLBAR_CUSTOMIZE_LABEL)).not.toBe(glyphOf("Manage agents"));
+  });
+
+  it("leaves the action cues out of search results", () => {
+    // Fuse is built from `searchItems` — agents, panels and recipes — and the
+    // placeholder promises exactly those. A cue that leaked into the ranked list
+    // would be an action offered where the user is picking something to launch.
+    const { container, queryByText } = renderButton();
+
+    fireEvent.change(searchInput(container), { target: { value: "customize" } });
+
+    expect(queryByText(TOOLBAR_CUSTOMIZE_LABEL)).toBeNull();
+    expect(queryByText("Manage agents")).toBeNull();
   });
 
   it("opens the toolbar settings tab from the Customize toolbar cue", () => {
