@@ -238,6 +238,7 @@ function makeHostDeps(): PluginHostFactoryDeps {
     fetchWorktreeSnapshotsForProjectResult: projectWorktreeFetch,
     recordPluginLog: vi.fn(),
     serializePluginBadges: () => ({}),
+    pluginDisplayName: (id: string) => id,
     pluginDataDir: () => path.join(tmpDir, "plugin-data"),
     isPathUnder: () => false,
     expandAllowedPathEntries: async () => [],

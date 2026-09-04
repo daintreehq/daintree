@@ -18,6 +18,7 @@
 // class instances. Requests that expect a reply carry a `requestId`.
 
 import type {
+  PluginIdentity,
   PluginIpcContext,
   PluginSettingsScope,
   PluginStorageScope,
@@ -124,7 +125,17 @@ export type PluginWorkerInvokeKind = "action" | "handler" | "file-decoration-met
 /** Messages sent main → worker. */
 export type PluginHostToWorkerMessage =
   /** Kick off: import the plugin bundle at `bundleUrl` and call `activate(proxy)`. */
-  | { type: "start"; bundleUrl: string; pluginId: string }
+  | {
+      type: "start";
+      bundleUrl: string;
+      pluginId: string;
+      /**
+       * The plugin's identity as the main-process host knows it. Sent rather
+       * than re-derived worker-side because `projectRoot` lives on the host's
+       * binding and cannot be recovered from the instance key alone.
+       */
+      identity: PluginIdentity;
+    }
   /** Graceful shutdown request — worker runs the plugin's cleanup then exits. */
   | { type: "dispose" }
   /** Reply to a worker `host-call`. */

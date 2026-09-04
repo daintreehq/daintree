@@ -12,6 +12,7 @@ import {
   PLUGIN_DEV_WORKER_KIND,
   PLUGIN_PROD_WORKER_KIND,
 } from "../../../shared/types/pluginDevWorker.js";
+import type { PluginIdentity } from "../../../shared/types/plugin.js";
 import type {
   PluginHostToWorkerMessage,
   PluginWorkerToHostMessage,
@@ -45,6 +46,13 @@ export const CRASH_WINDOW_MS = 30 * 60 * 1000;
 
 export interface PluginDevWorkerHostOptions {
   pluginId: string;
+  /**
+   * The plugin's identity as the host knows it, relayed to the worker so the
+   * proxy's `host.pluginInfo` answers with the real binding rather than a
+   * reconstruction. `projectRoot` in particular cannot be derived from the
+   * instance key.
+   */
+  identity: PluginIdentity;
   /** Plugin directory root (the symlink target). Used as the worker `cwd`. */
   pluginDir: string;
   /** Absolute path to the built bundle (`dist/index.js`) the worker imports. */
@@ -85,6 +93,7 @@ export class PluginDevWorkerHost extends EventEmitter {
   private isDisposed = false;
   private isReloading = false;
   readonly pluginId: string;
+  private readonly identity: PluginIdentity;
   private readonly pluginDir: string;
   private readonly bundlePath: string;
   private readonly serviceName: string;
@@ -117,6 +126,7 @@ export class PluginDevWorkerHost extends EventEmitter {
   constructor(options: PluginDevWorkerHostOptions) {
     super();
     this.pluginId = options.pluginId;
+    this.identity = options.identity;
     this.pluginDir = options.pluginDir;
     this.bundlePath = options.bundlePath;
     this.mode = options.mode ?? "dev";
@@ -473,6 +483,7 @@ export class PluginDevWorkerHost extends EventEmitter {
         type: "start",
         bundleUrl: pathToBundleUrl(this.bundlePath),
         pluginId: this.pluginId,
+        identity: this.identity,
       });
       if (this.readyResolve) {
         this.readyResolve();

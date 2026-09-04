@@ -18,6 +18,7 @@ import type {
   ActionHandler,
   PluginChannelSchema,
   PluginHostApi,
+  PluginIdentity,
   PluginIpcContext,
   PluginIpcHandler,
   PluginSettingsScope,
@@ -42,6 +43,7 @@ import type {
   PluginProcessDataChunk,
   PluginProcessMode,
 } from "../../../shared/types/plugin.js";
+import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
 import type {
   FileDecorationProviderDescriptor,
   FileDecorationProviderImpl,
@@ -86,6 +88,7 @@ export class PluginDevWorkerHostProxy {
   readonly host: PluginHostApi;
   private readonly post: Post;
   private readonly pluginId: string;
+  private readonly identity: PluginIdentity;
 
   private nextId = 1;
   private revoked = false;
@@ -97,9 +100,10 @@ export class PluginDevWorkerHostProxy {
   private readonly subscriptions = new Map<string, (payload: unknown) => void>();
   private readonly fileDecorationProviders = new Map<string, FileDecorationProviderImpl>();
 
-  constructor(pluginId: string, post: Post) {
+  constructor(pluginId: string, post: Post, identity: PluginIdentity) {
     this.pluginId = pluginId;
     this.post = post;
+    this.identity = identity;
     this.host = this.buildHost();
   }
 
@@ -314,9 +318,33 @@ export class PluginDevWorkerHostProxy {
     // object literal, not this class instance. Every other member is an arrow
     // function that closes over the class `this` lexically.
     const pluginId = this.pluginId;
+    // The identity the main-process host computed, relayed verbatim in the
+    // `start` message. Not reconstructed from `pluginId`: `projectRoot` lives on
+    // the host's binding and cannot be recovered from an instance key, and a
+    // project plugin — which reaches this worker like any other plugin with a
+    // `main` — would otherwise report a project with no root.
+    const pluginInfo = this.identity;
+    const manifestId = pluginInfo.manifestId;
+    const projectId = pluginInfo.projectId;
     const host: PluginHostApi = {
       get pluginId() {
         return pluginId;
+      },
+      pluginInfo,
+      panelKindId: (bareId: string) => {
+        if (typeof bareId !== "string" || bareId.length === 0) {
+          throw new Error(`Plugin "${pluginId}" panelKindId: bareId must be a non-empty string`);
+        }
+        const qualified = toRuntimePanelKindId(
+          { origin: pluginInfo.origin, pluginId: manifestId, kindId: bareId },
+          projectId
+        );
+        if (qualified === null) {
+          throw new Error(
+            `Plugin "${pluginId}" panelKindId: cannot qualify panel kind "${bareId}" for this plugin`
+          );
+        }
+        return qualified;
       },
       registerAction: (descriptor, handler) => {
         this.assertActivationOpen("registerAction");

@@ -1230,6 +1230,14 @@ const HEALTH_CHECK_INTERVAL_MS = 3_600_000;
 
 const PERF_PROJECT_PATH = "/perf/supervised-project";
 const PERF_PLUGIN_ID = "perfco.supervised";
+/** App-global, like every installed plugin — the probe never activates a project instance. */
+const PERF_PLUGIN_IDENTITY = {
+  instanceId: PERF_PLUGIN_ID,
+  manifestId: PERF_PLUGIN_ID,
+  origin: "global" as const,
+  projectId: null,
+  projectRoot: null,
+};
 const PERF_PLUGIN_DIR = "/perf/plugins/supervised";
 const PERF_PLUGIN_BUNDLE = "/perf/plugins/supervised/dist/index.js";
 const PTY_SERVICE_NAME = "daintree-pty-host:perf";
@@ -1340,6 +1348,7 @@ async function makePluginAdapter(): Promise<LadderAdapter> {
   let gaveUp = false;
   const host = new PluginDevWorkerHost({
     pluginId: PERF_PLUGIN_ID,
+    identity: PERF_PLUGIN_IDENTITY,
     pluginDir: PERF_PLUGIN_DIR,
     bundlePath: PERF_PLUGIN_BUNDLE,
     // Production mode: no bundle watcher, identical crash supervision. The
@@ -1567,6 +1576,7 @@ async function probeReplay(): Promise<ReplayResult> {
 
   const plugin = new PluginDevWorkerHost({
     pluginId: PERF_PLUGIN_ID,
+    identity: PERF_PLUGIN_IDENTITY,
     pluginDir: PERF_PLUGIN_DIR,
     bundlePath: PERF_PLUGIN_BUNDLE,
     mode: "prod",

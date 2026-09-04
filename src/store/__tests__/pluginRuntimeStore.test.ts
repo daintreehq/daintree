@@ -16,8 +16,15 @@ function makePlugin(opts: {
   displayName?: string;
   devMode?: boolean;
   disabled?: boolean;
+  /** Project-owned instance: `id` stays the manifest id, the key gets qualified. */
+  projectId?: string;
 }): LoadedPluginInfo {
+  const projectId = opts.projectId ?? null;
+  const instanceId = projectId === null ? opts.id : `project__${projectId}__${opts.id}`;
   return {
+    instanceId,
+    origin: projectId === null ? "global" : "project",
+    projectId,
     manifest: {
       name: opts.id,
       version: "1.0.0",
@@ -39,7 +46,6 @@ function makePlugin(opts: {
         recipes: [],
       },
     },
-    instanceId: opts.id,
     dir: `/plugins/${opts.id}`,
     loadedAt: 1,
     isBuiltin: false,
@@ -84,6 +90,86 @@ afterEach(() => {
 });
 
 describe("usePluginRuntimeStore", () => {
+  it("keys a project plugin's metadata by its instance id, not its manifest name", async () => {
+    // The regression in #12211: every contribution carries the instance key, so
+    // a map keyed by manifest name never matched and the raw key was rendered.
+    listMock.mockResolvedValue([
+      makePlugin({
+        id: "gregpriday.video-manager",
+        displayName: "Video Manager",
+        projectId: "b6700c7a",
+      }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().pluginMetaById.size).toBe(1));
+    const state = usePluginRuntimeStore.getState();
+    expect(state.pluginMetaById.get("project__b6700c7a__gregpriday.video-manager")).toEqual({
+      devMode: false,
+      displayName: "Video Manager",
+    });
+    // The bare manifest name is deliberately NOT a second key.
+    expect(state.pluginMetaById.has("gregpriday.video-manager")).toBe(false);
+  });
+
+  it("falls back to the manifest id, never the instance key, when no displayName is declared", async () => {
+    listMock.mockResolvedValue([
+      makePlugin({ id: "gregpriday.video-manager", projectId: "b6700c7a" }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().pluginMetaById.size).toBe(1));
+    expect(
+      usePluginRuntimeStore
+        .getState()
+        .pluginMetaById.get("project__b6700c7a__gregpriday.video-manager")?.displayName
+    ).toBe("gregpriday.video-manager");
+  });
+
+  it("keeps a project plugin and an installed plugin sharing a manifest id apart", async () => {
+    // The reason the map is single-keyed on the instance id rather than also
+    // aliased by manifest name: both of these are `acme.tool`, and a bare alias
+    // would let whichever came last overwrite the other's name and disabled
+    // state (`ProjectPluginInfo.collidesWithGlobal` exists for this case).
+    listMock.mockResolvedValue([
+      makePlugin({ id: "acme.tool", displayName: "Acme Tool (installed)" }),
+      makePlugin({
+        id: "acme.tool",
+        displayName: "Acme Tool (project)",
+        projectId: "b6700c7a",
+        disabled: true,
+      }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().pluginMetaById.size).toBe(2));
+    const state = usePluginRuntimeStore.getState();
+    expect(state.pluginMetaById.get("acme.tool")?.displayName).toBe("Acme Tool (installed)");
+    expect(state.pluginMetaById.get("project__b6700c7a__acme.tool")?.displayName).toBe(
+      "Acme Tool (project)"
+    );
+    // Only the project copy is disabled — the global one is untouched.
+    expect(state.disabledPluginIds.has("project__b6700c7a__acme.tool")).toBe(true);
+    expect(state.disabledPluginIds.has("acme.tool")).toBe(false);
+  });
+
+  it("keys the disabled set by instance id so two projects' copies stay separate", async () => {
+    listMock.mockResolvedValue([
+      makePlugin({ id: "acme.tool", projectId: "proj-a", disabled: true }),
+      makePlugin({ id: "acme.tool", projectId: "proj-b" }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().pluginMetaById.size).toBe(2));
+    const state = usePluginRuntimeStore.getState();
+    expect(state.disabledPluginIds.has("project__proj-a__acme.tool")).toBe(true);
+    expect(state.disabledPluginIds.has("project__proj-b__acme.tool")).toBe(false);
+  });
+
   it("derives the disabled set and per-plugin metadata from one snapshot", async () => {
     listMock.mockResolvedValue([
       makePlugin({ id: "acme.dev", displayName: "Acme Dev", devMode: true }),
@@ -114,6 +200,22 @@ describe("usePluginRuntimeStore", () => {
     expect(usePluginRuntimeStore.getState().pluginMetaById.get("acme.nameless")?.displayName).toBe(
       "acme.nameless"
     );
+  });
+
+  it("treats a blank displayName as absent rather than rendering an empty name", async () => {
+    // `displayName` is `z.string().optional()` with no min length, so a blank
+    // one is a well-formed manifest that would otherwise name the plugin "".
+    listMock.mockResolvedValue([
+      makePlugin({ id: "acme.blank", displayName: "" }),
+      makePlugin({ id: "acme.spaces", displayName: "   " }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().pluginMetaById.size).toBe(2));
+    const state = usePluginRuntimeStore.getState();
+    expect(state.pluginMetaById.get("acme.blank")?.displayName).toBe("acme.blank");
+    expect(state.pluginMetaById.get("acme.spaces")?.displayName).toBe("acme.spaces");
   });
 
   it("re-pulls on a provenance change and drops metadata for removed plugins", async () => {

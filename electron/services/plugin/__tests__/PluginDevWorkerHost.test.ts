@@ -64,6 +64,13 @@ async function loadModule(): Promise<typeof import("../PluginDevWorkerHost.js")>
 
 const OPTS = {
   pluginId: "acme.demo",
+  identity: {
+    instanceId: "acme.demo",
+    manifestId: "acme.demo",
+    origin: "global" as const,
+    projectId: null,
+    projectRoot: null,
+  },
   pluginDir: "/plugins/acme.demo",
   bundlePath: "/plugins/acme.demo/dist/index.js",
 };

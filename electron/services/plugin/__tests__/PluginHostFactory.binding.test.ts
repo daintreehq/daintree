@@ -144,6 +144,7 @@ function makeHarness(): Harness {
     fetchWorktreeSnapshotsForProjectResult: projectFetch,
     recordPluginLog,
     serializePluginBadges: () => ({}),
+    pluginDisplayName: (id: string) => id,
     pluginDataDir: () => path.join(path.sep, "tmp", "data"),
     isPathUnder: () => false,
     expandAllowedPathEntries: async () => [],
@@ -853,5 +854,77 @@ describe("createHost onDidWake (#12175)", () => {
     revoke();
 
     expect(() => host.onDidWake(vi.fn())).toThrow(/onDidWake/);
+  });
+});
+
+describe("host identity (#12211)", () => {
+  const PROJECT_INSTANCE = `project__${PROJECT_A}__acme.video-manager`;
+
+  it("reports a project plugin's identity without the plugin parsing its own id", () => {
+    const { deps } = makeHarness();
+    const { host } = createHost(deps, PROJECT_INSTANCE, BOUND);
+
+    // pluginId keeps its documented meaning — the instance key — because
+    // transport routing and settings/storage paths are keyed on it.
+    expect(host.pluginId).toBe(PROJECT_INSTANCE);
+    expect(host.pluginInfo).toEqual({
+      instanceId: PROJECT_INSTANCE,
+      manifestId: "acme.video-manager",
+      origin: "project",
+      projectId: PROJECT_A,
+      projectRoot: ROOT_A,
+    });
+  });
+
+  it("reports an app-global plugin as unbound with the id as its manifest id", () => {
+    const { deps } = makeHarness();
+    const { host } = createHost(deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    expect(host.pluginInfo).toEqual({
+      instanceId: PLUGIN_ID,
+      manifestId: PLUGIN_ID,
+      origin: "global",
+      projectId: null,
+      projectRoot: null,
+    });
+  });
+
+  it("qualifies a bare panel id into the project-scoped runtime kind id", () => {
+    const { deps } = makeHarness();
+    const { host } = createHost(deps, PROJECT_INSTANCE, BOUND);
+
+    expect(host.panelKindId("overview")).toBe(`project:${PROJECT_A}/acme.video-manager/overview`);
+  });
+
+  it("qualifies a bare panel id into the dotted global form for an unbound plugin", () => {
+    const { deps } = makeHarness();
+    const { host } = createHost(deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+
+    expect(host.panelKindId("overview")).toBe("acme.overview");
+  });
+
+  it("stays readable after the host is revoked — identity is static, not a registration", () => {
+    const { deps } = makeHarness();
+    const { host, revoke } = createHost(deps, PROJECT_INSTANCE, BOUND);
+    revoke();
+
+    expect(host.pluginInfo.manifestId).toBe("acme.video-manager");
+    expect(host.panelKindId("overview")).toBe(`project:${PROJECT_A}/acme.video-manager/overview`);
+  });
+
+  it("throws on an empty bare id rather than minting an unresolvable kind", () => {
+    const { deps } = makeHarness();
+    const { host } = createHost(deps, PROJECT_INSTANCE, BOUND);
+
+    expect(() => host.panelKindId("")).toThrow(/bareId must be a non-empty string/);
+  });
+
+  it("throws when a project-owned plugin's binding names no project", () => {
+    const { deps } = makeHarness();
+    // A malformed binding cannot name a project kind — refuse rather than
+    // aliasing the project kind onto the global one.
+    const { host } = createHost(deps, PROJECT_INSTANCE, UNBOUND_PLUGIN_HOST_BINDING);
+
+    expect(() => host.panelKindId("overview")).toThrow(/cannot qualify panel kind/);
   });
 });

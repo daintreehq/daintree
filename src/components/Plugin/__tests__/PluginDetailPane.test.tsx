@@ -64,6 +64,9 @@ beforeEach(() => {
 
 function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo {
   return {
+    instanceId: "acme.demo",
+    origin: "global",
+    projectId: null,
     manifest: {
       name: "acme.demo",
       version: "1.0.0",
@@ -85,7 +88,6 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
         recipes: [],
       },
     },
-    instanceId: "acme.demo",
     dir: "/plugins/acme.demo",
     loadedAt: 1,
     isBuiltin: false,

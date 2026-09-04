@@ -2,7 +2,9 @@ import { useCallback, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginPromptStore } from "@/store/pluginPromptStore";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { PluginInputBoxOptions } from "@shared/types/plugin";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
 /**
  * Compile a plugin-supplied validation pattern. A malformed pattern is ignored
@@ -30,6 +32,12 @@ function InputBoxForm({ options, pluginId, onSubmit, onCancel }: InputBoxFormPro
   const [showError, setShowError] = useState(false);
   const pattern = compilePattern(options.validationPattern);
   const isValid = pattern ? pattern.test(value) : true;
+  // Provenance copy names the plugin, and `pluginId` is the host's instance key
+  // — raw, a project-owned plugin would attribute the prompt to
+  // `project__{projectId}__{manifestId}`. Fallback is the manifest id (#12211).
+  const pluginName = usePluginRuntimeStore(
+    (s) => s.pluginMetaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId)
+  );
 
   const handleSubmit = () => {
     if (!isValid) {
@@ -72,7 +80,7 @@ function InputBoxForm({ options, pluginId, onSubmit, onCancel }: InputBoxFormPro
             {options.validationMessage || "The value doesn't match the required format"}
           </p>
         )}
-        <p className="text-xs text-text-secondary">Requested by the '{pluginId}' plugin</p>
+        <p className="text-xs text-text-secondary">Requested by the '{pluginName}' plugin</p>
       </AppDialog.Body>
 
       <AppDialog.Footer

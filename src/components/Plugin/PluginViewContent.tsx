@@ -12,6 +12,7 @@ import {
   type LazyExoticComponent,
 } from "react";
 import type { PanelViewProps } from "@shared/types/plugin";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import {
   clearViewRenderFailure,
   getPanelRemovedSignal,
@@ -217,7 +218,8 @@ export function makePluginViewContent(
     // the pane on pulls that changed nothing about this plugin.
     const devMode = usePluginRuntimeStore((s) => s.pluginMetaById.get(pluginId)?.devMode === true);
     const pluginDisplayName = usePluginRuntimeStore(
-      (s) => s.pluginMetaById.get(pluginId)?.displayName ?? pluginId
+      (s) =>
+        s.pluginMetaById.get(pluginId)?.displayName ?? pluginManifestIdFromInstanceKey(pluginId)
     );
 
     // Re-pull here rather than at mount, because at mount the plugin may not be

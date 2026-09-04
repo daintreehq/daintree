@@ -9,6 +9,11 @@ import { assertExtensionAllowed } from "../../utils/executablePathGuard.js";
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { resolveContainedPath, PluginPathNotAllowedError } from "./pluginFsContainment.js";
 import { PluginHostGit, type HostGitFactory } from "./pluginHostGit.js";
+import {
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
+} from "./projectPluginIdentity.js";
+import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
 import type { PluginProcessManager } from "./PluginProcessManager.js";
 import { PLUGIN_PTY_DEFAULT_COLS, PLUGIN_PTY_DEFAULT_ROWS } from "./PluginProcessManager.js";
 import type { PluginContributionBroadcaster } from "./PluginContributionBroadcaster.js";
@@ -51,6 +56,7 @@ import type { PluginDiagnosticsLogLine } from "../../../shared/types/ipc/pluginD
 import type {
   PluginIpcHandler,
   PluginHostApi,
+  PluginIdentity,
   PluginWorktreesResult,
   PluginWorktreesUnavailableReason,
   PluginActionContribution,
@@ -304,6 +310,8 @@ export interface PluginHostFactoryDeps {
     fields?: Record<string, unknown>
   ) => void;
   serializePluginBadges: (pluginId: string) => Record<string, PluginPanelBadge>;
+  /** User-facing name for a plugin id, for surfaces that name a plugin to a person. */
+  pluginDisplayName: (pluginId: string) => string;
   pluginDataDir: (pluginId: string) => string;
   isPathUnder: (root: string, candidate: string) => boolean;
   expandAllowedPathEntries: (
@@ -531,9 +539,51 @@ export function createHost(
     }
   };
 
+  // Identity is derived once, here, from the id and binding this host was built
+  // with. Deriving it host-side — through the canonical parser that owns the key
+  // format — is the whole point: it is what lets a plugin stop splitting its own
+  // id apart to find its manifest id or its project (#12211).
+  const manifestId = pluginManifestIdFromInstanceKey(pluginId);
+  // Origin comes from the KEY, not the binding. The key states what the plugin
+  // *is*; the binding states which project this host acts for, and the two
+  // disagreeing is a malformed binding, not a global plugin. Reading origin off
+  // the binding would silently downgrade such a host to "global" and hand back
+  // a dotted id that aliases a project kind onto a global one — the exact
+  // collision `toRuntimePanelKindId` refuses to mint.
+  const pluginInfo: PluginIdentity = Object.freeze({
+    instanceId: pluginId,
+    manifestId,
+    origin:
+      projectIdFromPluginInstanceKey(pluginId) === null
+        ? ("global" as const)
+        : ("project" as const),
+    projectId: boundProjectId,
+    projectRoot: boundProjectRoot,
+  });
+
   const host: PluginHostApi = {
     get pluginId() {
       return pluginId;
+    },
+    pluginInfo,
+    panelKindId: (bareId: string) => {
+      if (typeof bareId !== "string" || bareId.length === 0) {
+        throw new Error(`Plugin "${pluginId}" panelKindId: bareId must be a non-empty string`);
+      }
+      const qualified = toRuntimePanelKindId(
+        { origin: pluginInfo.origin, pluginId: manifestId, kindId: bareId },
+        boundProjectId
+      );
+      // Only reachable for a project-owned host with no project in its binding,
+      // or an id carrying the `/` the qualified form delimits on. Both would
+      // otherwise mint an id that resolves to no registered kind, so say so
+      // rather than hand back something that silently opens nothing.
+      if (qualified === null) {
+        throw new Error(
+          `Plugin "${pluginId}" panelKindId: cannot qualify panel kind "${bareId}" for this plugin`
+        );
+      }
+      return qualified;
     },
     registerAction: (descriptor, handler) => {
       if (revoked) {
@@ -1200,16 +1250,21 @@ export function createHost(
             .join("; ")}`
         );
       }
-      // Provenance: prefix the message with the plugin id so users can see
-      // which plugin raised the toast. pluginId is bound to the host closure
-      // at activation and cannot be spoofed.
+      // Provenance: prefix the message with the plugin's name so users can see
+      // which plugin raised the toast. Resolved host-side from the pluginId
+      // bound to this closure at activation, so it still cannot be spoofed —
+      // but it prints the manifest's display name rather than the raw id,
+      // which for a project-owned plugin is an instance key no user should be
+      // shown (#12211).
       //
-      // rateLimitKey scopes the rate-limit bucket per plugin+type. Without it
-      // plugin toasts fall into the global type-keyed bucket and a burst of
-      // unrelated system toasts could silently suppress a plugin's toast.
+      // rateLimitKey keeps the raw id: it is a bucket key, never rendered, and
+      // two plugins may legitimately share a display name. It scopes the
+      // rate-limit bucket per plugin+type — without it plugin toasts fall into
+      // the global type-keyed bucket and a burst of unrelated system toasts
+      // could silently suppress a plugin's toast.
       pushToRenderers(CHANNELS.NOTIFICATION_SHOW_TOAST, {
         type: parsed.data.type,
-        message: `${pluginId}: ${parsed.data.message}`,
+        message: `${deps.pluginDisplayName(pluginId)}: ${parsed.data.message}`,
         duration: parsed.data.durationMs,
         rateLimitKey: `plugin:${pluginId}:${parsed.data.type}`,
       });

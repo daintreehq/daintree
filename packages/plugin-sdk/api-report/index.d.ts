@@ -3616,8 +3616,61 @@ interface PluginHostActionsApi {
      */
     canDispatch(actionId: ActionId): Promise<PluginCanDispatchResult>;
 }
+/**
+ * Who this plugin is, as the host knows it — the facts a plugin previously had
+ * to recover by string-splitting its own {@link PluginHostApi.pluginId}
+ * (#12211). Every field is fixed for the life of the host: the binding is
+ * captured once when the host is built, never resolved per call.
+ */
+interface PluginIdentity {
+    /**
+     * The key this instance is indexed under host-side, byte-identical to
+     * {@link PluginHostApi.pluginId}. Present so a plugin passing identity around
+     * as one object never has to reach back for the bare id.
+     */
+    readonly instanceId: string;
+    /**
+     * The manifest id (`publisher.name`) — what belongs in anything the
+     * *repository* sees, since a project id is machine-local.
+     */
+    readonly manifestId: string;
+    /** `"project"` for a `.daintree/plugins` contribution, `"global"` otherwise. */
+    readonly origin: "global" | "project";
+    /** Owning project, or `null` for an app-global (installed/builtin) plugin. */
+    readonly projectId: string | null;
+    /** Absolute project root. Null iff `projectId` is null. */
+    readonly projectRoot: string | null;
+}
 interface PluginHostApi extends PluginActivationApi {
     readonly pluginId: string;
+    /**
+     * This plugin's own identity, frozen at activation. Read `manifestId` rather
+     * than parsing {@link pluginId}: for a project-owned plugin the id is an
+     * instance key, and splitting it by hand is exactly the coupling to the
+     * host's internal key format that this exists to remove (#12211).
+     *
+     * Always readable — it is static closure data, not a live registration, so
+     * unlike the registration surface it neither throws after `activate()`
+     * resolves nor goes quiet once the plugin unloads.
+     */
+    readonly pluginInfo: PluginIdentity;
+    /**
+     * Qualify one of this plugin's own `contributes.panels[].id` values into the
+     * runtime panel kind id that {@link PluginHostApi.dispatch}'s
+     * `panel.openPluginPanel` expects — `{manifestId}.{bareId}` for a global
+     * plugin, `project:{projectId}/{manifestId}/{bareId}` for a project-owned one.
+     *
+     * Resolution is scoped to this host's own binding, never inferred from the
+     * shape of the string, so a plugin can hand over a bare id and get back the
+     * qualified form without knowing which of the two it lives under.
+     *
+     * Throws on an empty `bareId`, and on a project-owned plugin whose binding
+     * carries no project (a malformed binding cannot name a project kind) — an
+     * authoring or host error either way, surfaced loudly rather than returning
+     * an id that resolves to nothing. Synchronous: pure closure data, no
+     * round-trip. Always callable, for the same reason as {@link pluginInfo}.
+     */
+    panelKindId(bareId: string): string;
     /**
      * Push a fire-and-forget payload to every renderer subscribed to
      * `(pluginId, channel)` via `window.electron.plugin.on(...)`. This is the
@@ -4062,4 +4115,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };

@@ -7,7 +7,7 @@
 
 import { PluginDevWorkerHostProxy } from "./services/plugin/pluginDevWorkerHostProxy.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
-import type { PluginActivate } from "../shared/types/plugin.js";
+import type { PluginActivate, PluginIdentity } from "../shared/types/plugin.js";
 import type {
   PluginHostToWorkerMessage,
   PluginWorkerToHostMessage,
@@ -43,11 +43,11 @@ let proxy: PluginDevWorkerHostProxy | null = null;
 let cleanup: (() => void) | null = null;
 let started = false;
 
-async function start(bundleUrl: string, pluginId: string): Promise<void> {
+async function start(bundleUrl: string, pluginId: string, identity: PluginIdentity): Promise<void> {
   if (started) return;
   started = true;
 
-  proxy = new PluginDevWorkerHostProxy(pluginId, post);
+  proxy = new PluginDevWorkerHostProxy(pluginId, post, identity);
 
   let mod: { activate?: unknown };
   try {
@@ -111,7 +111,7 @@ port.on("message", (rawMsg: unknown) => {
 
   switch (msg.type) {
     case "start":
-      void start(msg.bundleUrl, msg.pluginId);
+      void start(msg.bundleUrl, msg.pluginId, msg.identity);
       return;
     case "dispose":
       disposeAndExit();

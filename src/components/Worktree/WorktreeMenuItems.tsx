@@ -73,6 +73,8 @@ import type { ActionId } from "@shared/types/actions";
 import { OPERATION_LABEL, toRepoOperationState } from "@/components/Git/repoOperationCopy";
 import { resourceLifecycleVisibility } from "./utils/resourceLifecycle";
 import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuItems";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
 type MenuComponent = React.ElementType;
 type LaunchAgentIcon = React.ComponentType<{ className?: string }>;
@@ -313,6 +315,10 @@ export function WorktreeMenuItems({
   pluginItems,
 }: WorktreeMenuItemsProps) {
   const source = useMenuActionSource();
+  // Group labels in the Extensions submenu name a plugin to the user, and a
+  // contribution's `pluginId` is the instance key — raw, that prints a
+  // machine-local project id (#12211). Fallback is the manifest id, never the key.
+  const pluginMetaById = usePluginRuntimeStore((s) => s.pluginMetaById);
 
   /** A count is part of what the row does, so it belongs in the accessible
    *  name too — the muted trailing slot is `aria-hidden` decoration. */
@@ -1072,7 +1078,12 @@ export function WorktreeMenuItems({
         {pluginGroups.map(([pluginId, entries], groupIndex) => (
           <Fragment key={pluginId}>
             {pluginGroups.length > 1 && groupIndex > 0 && <C.Separator />}
-            {pluginGroups.length > 1 && <C.Label>{pluginId}</C.Label>}
+            {pluginGroups.length > 1 && (
+              <C.Label>
+                {pluginMetaById.get(pluginId)?.displayName ??
+                  pluginManifestIdFromInstanceKey(pluginId)}
+              </C.Label>
+            )}
             {entries.map((entry) => (
               <C.Item
                 key={`${entry.pluginId}:${entry.item.actionId}`}
