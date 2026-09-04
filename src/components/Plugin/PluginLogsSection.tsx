@@ -108,7 +108,7 @@ export function PluginLogsSection({ lines, loading, error, refresh }: PluginLogs
           disabled={loading}
           className="shrink-0 text-2xs"
         >
-          {loading ? <SpinningIcon icon={RefreshCw} /> : <RefreshCw />}
+          <SpinningIcon icon={RefreshCw} active={loading} />
           Refresh
         </Button>
       </div>

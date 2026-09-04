@@ -1,4 +1,4 @@
-import type { ProjectPluginInfo } from "@shared/types";
+import type { ProjectPluginInfo } from "@shared/types/plugin";
 import type { PluginDiagnosticsSnapshot } from "@shared/types/ipc/pluginDiagnostics";
 import type { PluginManifestValidationResult } from "@shared/types/ipc/pluginValidation";
 
