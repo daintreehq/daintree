@@ -65,6 +65,21 @@ async function makeProject(opts: { withGitDir?: boolean } = {}): Promise<{
   return { root, pluginDir, gitDir };
 }
 
+/**
+ * Build a complete plugin outside the project, then move the whole folder into
+ * place in one rename. That is the shape a checkout presents: the plugins root
+ * exists and is already populated in the same instant.
+ */
+async function movePopulatedPluginsFolderInto(root: string): Promise<void> {
+  const staging = await fsp.mkdtemp(path.join(os.tmpdir(), `dt-ppw-staged-${randomUUID()}-`));
+  roots.push(staging);
+  const pluginDir = path.join(staging, "plugins", "acme.hello");
+  await fsp.mkdir(path.join(pluginDir, "dist"), { recursive: true });
+  await fsp.writeFile(path.join(pluginDir, "plugin.json"), manifestJson("acme.hello"));
+  await fsp.writeFile(path.join(pluginDir, "dist", "index.js"), "export function activate() {}\n");
+  await fsp.rename(path.join(staging, "plugins"), path.join(root, ".daintree", "plugins"));
+}
+
 function makeWatcher(
   overrides: Partial<ProjectPluginWatcherDeps> & { gitDir?: string | null } = {}
 ): {
@@ -416,6 +431,49 @@ describe("ProjectPluginWatcher", () => {
     // The sentinel may already be arming when the explicit ensure() lands, and
     // the subscribe itself is async either way.
     expect(await waitFor(() => watcher.isWatching(PROJECT_ID))).toBe(true);
+  });
+
+  it("reconciles a plugin folder that appears already complete", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `dt-ppw-appears-${randomUUID()}-`));
+    roots.push(root);
+    await fsp.mkdir(path.join(root, ".daintree"), { recursive: true });
+    const { watcher, reload, loaded } = makeWatcher();
+    // Nothing of this project's has ever been loaded; the folder is brand new.
+    loaded.clear();
+    await watcher.ensure(PROJECT_ID, root);
+    expect(watcher.isWatching(PROJECT_ID)).toBe(false);
+
+    // No second ensure(): the sentinel is what has to notice this, and the arm
+    // it triggers seeds fingerprints that already match the folder's contents.
+    await movePopulatedPluginsFolderInto(root);
+
+    expect(await waitFor(() => reload.mock.calls.length > 0)).toBe(true);
+    // Nothing was loaded before, so nothing is named. Asking the controller to
+    // rescan at all is what loads the plugin that arrived with the folder.
+    expect((reload.mock.calls[0] as [string, string, string[]])[2]).toEqual([]);
+  });
+
+  it("holds an appearing folder's reconcile behind .git/index.lock", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `dt-ppw-appears-lock-${randomUUID()}-`));
+    roots.push(root);
+    await fsp.mkdir(path.join(root, ".daintree"), { recursive: true });
+    const gitDir = path.join(root, ".git");
+    await fsp.mkdir(gitDir, { recursive: true });
+    const { watcher, reload, loaded } = makeWatcher({ gitDir });
+    loaded.clear();
+    await watcher.ensure(PROJECT_ID, root);
+
+    // The deferral reschedules the settle, so the appearance has to survive
+    // however many polls the checkout takes rather than being spent on the
+    // first one.
+    await fsp.writeFile(path.join(gitDir, "index.lock"), "");
+    await movePopulatedPluginsFolderInto(root);
+    await settleFor(400);
+    expect(reload).not.toHaveBeenCalled();
+
+    await fsp.rm(path.join(gitDir, "index.lock"));
+    expect(await waitFor(() => reload.mock.calls.length > 0)).toBe(true);
+    expect((reload.mock.calls[0] as [string, string, string[]])[2]).toEqual([]);
   });
 
   it("registers an app-quit disposer", async () => {

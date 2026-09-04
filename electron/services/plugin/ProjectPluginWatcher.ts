@@ -113,6 +113,13 @@ interface WatchState {
   changedDirs: Set<string>;
   /** True when the burst touched the plugins root itself and cannot be attributed. */
   reloadAll: boolean;
+  /**
+   * The plugins folder appeared under the sentinel, so the next settle has to
+   * reach the controller even though the arm it triggered just seeded
+   * fingerprints matching what is on disk. Without it, a folder that arrives
+   * already populated fingerprints as unchanged and is never loaded.
+   */
+  forceReconcile: boolean;
   invalidRetries: number;
   /** The unreadable set the current retry budget belongs to. */
   invalidRetryKey: string;
@@ -302,6 +309,7 @@ export class ProjectPluginWatcher {
       timer: null,
       changedDirs: new Set(),
       reloadAll: false,
+      forceReconcile: false,
       invalidRetries: 0,
       invalidRetryKey: "",
       gitLockWaitStartedAt: null,
@@ -483,6 +491,10 @@ export class ProjectPluginWatcher {
         if (this.isStale(state, generation)) return;
         if (!existsSync(state.pluginsRoot)) return;
         this.disarmSentinel(state);
+        // Latched before the arm rather than after it: `doArm` subscribes
+        // part-way through, and an event landing on that fresh subscription
+        // can reach a settle before the continuation below runs.
+        state.forceReconcile = true;
         void this.arm(state).then(() => {
           // The folder appeared with content already in it, so reconcile once.
           if (!this.isStale(state, generation)) {
@@ -631,6 +643,12 @@ export class ProjectPluginWatcher {
       );
       state.reloadAll = false;
       state.changedDirs.clear();
+      // Claimed here rather than on entry: the git-lock and unreadable-manifest
+      // paths above both return and reschedule, so a flag spent before them
+      // would be spent on a settle that never got as far as the controller. A
+      // checkout — the case the latch exists for — takes the git-lock path.
+      const forced = state.forceReconcile;
+      state.forceReconcile = false;
 
       const rowByDir = new Map(scan.plugins.map((p) => [p.dirName, p] as const));
       const changed = new Set<string>();
@@ -648,8 +666,10 @@ export class ProjectPluginWatcher {
 
       // Nothing the host loads actually differs. The commonest cause is
       // FSEvents replaying writes that predate the subscription; a touch or a
-      // branch switch back to identical content lands here too.
-      if (changed.size === 0) {
+      // branch switch back to identical content lands here too. A folder that
+      // just appeared is the exception: it fingerprints as unchanged against
+      // its own seed, and nothing has told the controller it exists.
+      if (changed.size === 0 && !forced) {
         this.commitFingerprints(state, nextFingerprints);
         return;
       }
