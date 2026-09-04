@@ -1009,7 +1009,8 @@
                 "type": "string",
                 "enum": [
                   "user",
-                  "project"
+                  "project",
+                  "local"
                 ]
               },
               "options": {
