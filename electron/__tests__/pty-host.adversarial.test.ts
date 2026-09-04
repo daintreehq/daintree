@@ -221,6 +221,7 @@ vi.mock("../services/PtyManager.js", () => {
     });
     isSabMode = vi.fn(() => this.sabMode);
     setProcessTreeCache = vi.fn();
+    setLineageLedger = vi.fn();
     setImagePathProbe = vi.fn();
     setPtyPool = vi.fn();
     setAnalysisWorkerPool = vi.fn();
@@ -295,7 +296,20 @@ vi.mock("../services/ProcessTreeCache.js", () => ({
     start = vi.fn();
     stop = vi.fn();
     setPollInterval = vi.fn();
+    attachLineageLedger = vi.fn();
   },
+}));
+
+vi.mock("../services/TerminalLineageLedger.js", () => ({
+  TerminalLineageLedger: class {
+    hasRoots = vi.fn(() => false);
+    reconcile = vi.fn();
+    registerRoot = vi.fn();
+    markRootClosing = vi.fn();
+    getVerifiedOrphanPids = vi.fn(() => []);
+    dispose = vi.fn();
+  },
+  lineageFilePath: vi.fn(() => "/tmp/pty-lineage.json"),
 }));
 
 vi.mock("../services/pty/TerminalResourceMonitor.js", () => ({

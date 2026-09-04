@@ -22,6 +22,14 @@ function execProbe(
 
 const BACKOFF_MULTIPLIER = 1.5;
 const BACKOFF_CEILING_MS = 15_000;
+/**
+ * Backoff ceiling while a lineage ledger is tracking roots. The ledger can only
+ * record a descendant it actually sees, so the gap between sweeps is the window
+ * in which a process can spawn, detach, and become unreachable forever (#12203).
+ * The idle ceiling above is far too coarse for that; this keeps the window
+ * bounded without pinning the census at its base interval all night.
+ */
+const LINEAGE_BACKOFF_CEILING_MS = 5_000;
 
 export interface ProcessInfo {
   pid: number;
@@ -30,6 +38,22 @@ export interface ProcessInfo {
   command: string;
   cpuPercent: number; // CPU usage percentage (0-100)
   rssKb: number; // Resident Set Size in KB
+  /**
+   * OS-reported process start time, when the platform census carries one.
+   * Populated on Windows (`CreationDate` is already fetched for CPU deltas);
+   * absent on Unix, where `ps -eo` would need a fixed-width `lstart` column and
+   * the lineage ledger probes the handful of PIDs it cares about instead.
+   */
+  startTime?: string;
+}
+
+/**
+ * Lineage tracking hook. Declared structurally so the cache never imports the
+ * ledger — they are wired together in pty-host.ts.
+ */
+export interface LineageLedgerHook {
+  hasRoots(): boolean;
+  reconcile(census: ProcessTreeCache): void;
 }
 
 type RefreshCallback = () => void;
@@ -47,6 +71,7 @@ export class ProcessTreeCache {
   private refreshCallbacks: Set<RefreshCallback> = new Set();
   private lastError: Error | null = null;
   private loggedZeroSubscriberSkip: boolean = false;
+  private lineageLedger: LineageLedgerHook | null = null;
   private cpuSnapshots = new Map<
     string,
     { kernelTicks: bigint; userTicks: bigint; wallMs: number }
@@ -107,10 +132,33 @@ export class ProcessTreeCache {
   }
 
   private advanceBackoff(): void {
+    // Never below the configured base interval — a tight lineage ceiling caps
+    // how far we drift, it must not make the census poll faster than asked.
+    const ceiling = this.hasLineageRoots()
+      ? Math.max(LINEAGE_BACKOFF_CEILING_MS, this.pollIntervalMs)
+      : BACKOFF_CEILING_MS;
     this.currentIntervalMs = Math.min(
       Math.ceil(this.currentIntervalMs * BACKOFF_MULTIPLIER),
-      BACKOFF_CEILING_MS
+      ceiling
     );
+  }
+
+  /**
+   * Attach the lineage ledger. While it holds roots the census keeps sweeping
+   * even with no subscribers, and backs off to a tighter ceiling — the ledger
+   * can only record descendants it observes, and an unobserved descendant that
+   * detaches is unreachable forever.
+   */
+  attachLineageLedger(ledger: LineageLedgerHook | null): void {
+    this.lineageLedger = ledger;
+  }
+
+  private hasLineageRoots(): boolean {
+    try {
+      return this.lineageLedger?.hasRoots() ?? false;
+    } catch {
+      return false;
+    }
   }
 
   getCurrentIntervalMs(): number {
@@ -132,8 +180,11 @@ export class ProcessTreeCache {
   }
 
   async refresh(): Promise<void> {
-    // Skip refresh if nobody is listening - saves CPU especially on Windows
-    if (this.refreshCallbacks.size === 0) {
+    // Skip refresh if nobody is listening - saves CPU especially on Windows.
+    // A lineage ledger with live roots counts as a listener: it is the only
+    // record of descendants that have detached, and it can only be built from
+    // sweeps that actually ran (#12203).
+    if (this.refreshCallbacks.size === 0 && !this.hasLineageRoots()) {
       // Log once per lifecycle when we skip due to no subscribers. If
       // ProcessDetector instances aren't registering, detection goes silent —
       // this surfaces the cause instead of failing silently (#5813). Verbose-gated
@@ -183,6 +234,18 @@ export class ProcessTreeCache {
       this.lastError = err;
     } finally {
       this.isRefreshing = false;
+
+      // Fold the fresh census into the lineage ledger before subscribers run,
+      // so anything reading the ledger during a callback sees this sweep.
+      // Isolated from the census itself: a ledger fault must not blind
+      // detection, which is what every other subscriber depends on.
+      if (this.lineageLedger) {
+        try {
+          this.lineageLedger.reconcile(this);
+        } catch (err) {
+          console.error("[ProcessTreeCache] Lineage reconcile error:", err);
+        }
+      }
 
       // Invoke callbacks after isRefreshing is reset
       for (const callback of this.refreshCallbacks) {
@@ -396,6 +459,11 @@ export class ProcessTreeCache {
         command,
         cpuPercent,
         rssKb,
+        // Already fetched for the CPU-delta snapshot key above, so the lineage
+        // ledger gets its pid-reuse anchor on Windows for free.
+        ...(typeof p?.CreationDate === "string" && p.CreationDate
+          ? { startTime: p.CreationDate }
+          : {}),
       });
 
       const children = newChildrenMap.get(ppid) || [];

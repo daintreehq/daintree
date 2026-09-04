@@ -58,7 +58,7 @@ import {
 } from "./terminalActivityPatterns.js";
 import { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
 import { SemanticBufferManager } from "./SemanticBufferManager.js";
-import { ProcessTreeKiller } from "./ProcessTreeKiller.js";
+import { ProcessTreeKiller, type LineageKillSource } from "./ProcessTreeKiller.js";
 import { IdentityWatcher, type IdentityWatcherDelegate } from "./IdentityWatcher.js";
 import type { SpawnContext } from "./terminalSpawn.js";
 import { getLiveAgentId } from "./terminalTitle.js";
@@ -132,6 +132,12 @@ export interface TerminalProcessDependencies {
   ptyPool: PtyPool | null;
   sabModeEnabled?: boolean;
   processTreeCache: ProcessTreeCache | null;
+  /**
+   * Records descendants while they are still reachable so teardown can reach
+   * the ones that have since reparented to PID 1 (#12203). Null disables the
+   * widened kill set and restores live-walk-only behavior.
+   */
+  lineageLedger?: LineageKillSource | null;
   imagePathProbe?: ImagePathProbe | null;
   /**
    * When set, the analysis stack (headless mirror + ActivityMonitor) runs in
@@ -445,7 +451,11 @@ export class TerminalProcess {
     // The frontend xterm.js is the sole query responder for agent terminals.
 
     this.semanticBufferManager = new SemanticBufferManager(this.terminalInfo);
-    this.processTreeKiller = new ProcessTreeKiller(ptyProcess, deps.processTreeCache);
+    this.processTreeKiller = new ProcessTreeKiller(
+      ptyProcess,
+      deps.processTreeCache,
+      deps.lineageLedger ?? null
+    );
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
     this.foregroundProbe = new ForegroundProcessGroupProbe({
@@ -1068,7 +1078,16 @@ export class TerminalProcess {
     }
 
     this.writeQueue.dispose();
-    this.processTreeKiller.abort();
+    if (reason === "natural") {
+      // The shell exited on its own, so nothing else in this teardown reaps its
+      // process tree. Anything it spawned that had already reparented to PID 1
+      // is invisible to every live tree walk and would otherwise run forever
+      // (#12203) — the lineage ledger is the only record that can still reach
+      // it, and this is the only path that consults it on a natural exit.
+      this.processTreeKiller.reapAfterRootExit();
+    } else {
+      this.processTreeKiller.abort();
+    }
 
     // Release the master /dev/ptmx fd on Unix. Pooled terminals already do this
     // via destroyPty() on pool teardown; live terminals never called destroy(),

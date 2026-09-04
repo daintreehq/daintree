@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "child_process";
 import type { IPty } from "node-pty";
 import type { ProcessTreeCache } from "../../ProcessTreeCache.js";
-import { ProcessTreeKiller } from "../ProcessTreeKiller.js";
+import { ProcessTreeKiller, type LineageKillSource } from "../ProcessTreeKiller.js";
 
 vi.mock("child_process", () => ({ spawnSync: vi.fn() }));
 
@@ -38,10 +38,32 @@ function makePty(pid: number): IPty {
   } as unknown as IPty;
 }
 
-function makeTreeCache(descendants: number[]): ProcessTreeCache {
+function makeTreeCache(
+  descendants: number[],
+  subtrees: Record<number, number[]> = {}
+): ProcessTreeCache {
   return {
-    getDescendantPids: () => descendants,
+    getDescendantPids: (rootPid: number) =>
+      rootPid in subtrees ? subtrees[rootPid] : descendants,
+    getProcess: () => undefined,
   } as unknown as ProcessTreeCache;
+}
+
+function makeLineage(
+  orphansByRoot: Record<number, number[]>
+): LineageKillSource & { closed: number[] } {
+  const closed: number[] = [];
+  return {
+    closed,
+    registerRoot: () => {},
+    markRootClosing: (rootPid: number) => {
+      closed.push(rootPid);
+    },
+    getVerifiedOrphanPids: (rootPid, alreadyCovered) => {
+      const covered = new Set(alreadyCovered);
+      return (orphansByRoot[rootPid] ?? []).filter((pid) => !covered.has(pid));
+    },
+  };
 }
 
 function makeErrnoError(code: string, message?: string): NodeJS.ErrnoException {
@@ -363,5 +385,275 @@ describe("ProcessTreeKiller — Windows taskkill", () => {
     // The `shellPid === undefined` guard returns before the platform branch.
     expect(spawnSyncMock).not.toHaveBeenCalled();
     expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The lineage ledger widens the kill set to descendants that already reparented
+// to PID 1, which no tree walk can find (#12203). The ledger owns start-time
+// verification, so everything it hands back here is already proven to be ours.
+describe.skipIf(process.platform === "win32")("ProcessTreeKiller — lineage orphans", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let killSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    killSpy?.mockRestore();
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("SIGTERMs a reparented descendant the live walk cannot see", () => {
+    const killer = new ProcessTreeKiller(
+      makePty(1000),
+      makeTreeCache([], { 1000: [], 5001: [] }),
+      makeLineage({ 1000: [5001] })
+    );
+
+    killer.execute(false);
+
+    expect(killSpy).toHaveBeenCalledWith(5001, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(5001, "SIGCONT");
+  });
+
+  it("escalates a reparented descendant to SIGKILL after the grace window", () => {
+    const killer = new ProcessTreeKiller(
+      makePty(1000),
+      makeTreeCache([], { 1000: [], 5001: [] }),
+      makeLineage({ 1000: [5001] })
+    );
+
+    killer.execute(false);
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(killSpy).toHaveBeenCalledWith(5001, "SIGKILL");
+  });
+
+  it("signals an overlapping pid once, not twice", () => {
+    const killer = new ProcessTreeKiller(
+      makePty(1000),
+      makeTreeCache([2001], { 2001: [] }),
+      makeLineage({ 1000: [2001] })
+    );
+
+    killer.execute(true);
+
+    const sigterms = killSpy.mock.calls.filter(
+      (c: unknown[]) => c[0] === 2001 && c[1] === "SIGTERM"
+    );
+    expect(sigterms).toHaveLength(1);
+  });
+
+  it("includes children a detached member spawned after reparenting", () => {
+    const killer = new ProcessTreeKiller(
+      makePty(1000),
+      makeTreeCache([], { 1000: [], 5001: [6001] }),
+      makeLineage({ 1000: [5001] })
+    );
+
+    killer.execute(true);
+
+    expect(killSpy).toHaveBeenCalledWith(6001, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(5001, "SIGTERM");
+    // Leaves first: the detached wrapper's child is signalled before the wrapper.
+    const order = killSpy.mock.calls
+      .filter((c: unknown[]) => c[1] === "SIGTERM")
+      .map((c: unknown[]) => c[0]);
+    expect(order.indexOf(6001)).toBeLessThan(order.indexOf(5001));
+  });
+
+  it("marks the root closing so a recycled PID cannot inherit the lineage", () => {
+    const lineage = makeLineage({ 1000: [] });
+    const killer = new ProcessTreeKiller(makePty(1000), makeTreeCache([]), lineage);
+
+    killer.execute(true);
+
+    expect(lineage.closed).toEqual([1000]);
+  });
+
+  it("registers the shell PID as a lineage root on construction", () => {
+    const registered: number[] = [];
+    const lineage: LineageKillSource = {
+      registerRoot: (pid) => registered.push(pid),
+      markRootClosing: () => {},
+      getVerifiedOrphanPids: () => [],
+    };
+
+    new ProcessTreeKiller(makePty(1000), makeTreeCache([]), lineage);
+
+    expect(registered).toEqual([1000]);
+  });
+
+  it("does not register an invalid shell PID", () => {
+    const registered: number[] = [];
+    const lineage: LineageKillSource = {
+      registerRoot: (pid) => registered.push(pid),
+      markRootClosing: () => {},
+      getVerifiedOrphanPids: () => [],
+    };
+
+    new ProcessTreeKiller(makePty(0), makeTreeCache([]), lineage);
+
+    expect(registered).toEqual([]);
+  });
+
+  it("behaves exactly as before when no ledger is attached", () => {
+    const pty = makePty(1000);
+    const killer = new ProcessTreeKiller(pty, makeTreeCache([1001]));
+
+    killer.execute(true);
+
+    const signalled = new Set(killSpy.mock.calls.map((c: unknown[]) => c[0]));
+    expect(signalled).toEqual(new Set([1001, 1000]));
+  });
+});
+
+// A shell that exits on its own previously only cancelled the escalation timer,
+// leaving anything it had already detached running forever (#12203).
+describe.skipIf(process.platform === "win32")("ProcessTreeKiller — reapAfterRootExit", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let killSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    killSpy?.mockRestore();
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("reaps children the stale census still lists under the exited shell", () => {
+    // The census is up to one sweep old, so it still shows 5001 beneath the
+    // shell. The shell is gone, so 5001 is already reparented — subtracting a
+    // live walk here would signal nothing at all.
+    const killer = new ProcessTreeKiller(
+      makePty(1000),
+      makeTreeCache([], { 1000: [5001], 5001: [] }),
+      makeLineage({ 1000: [5001] })
+    );
+
+    killer.reapAfterRootExit();
+
+    expect(killSpy).toHaveBeenCalledWith(5001, "SIGTERM");
+  });
+
+  it("does not SIGKILL a stale-census PID the ledger cannot verify", () => {
+    // 7777 is only in the stale live walk — the ledger never identified it, so
+    // it must not be signalled on a path where the walk is untrustworthy.
+    const killer = new ProcessTreeKiller(
+      makePty(1000),
+      makeTreeCache([], { 1000: [7777], 5001: [] }),
+      makeLineage({ 1000: [5001] })
+    );
+
+    killer.reapAfterRootExit();
+    vi.advanceTimersByTime(500);
+
+    const touched = killSpy.mock.calls.map((c: unknown[]) => c[0]);
+    expect(touched).not.toContain(7777);
+    expect(touched).toContain(5001);
+  });
+
+  it("reaps a descendant left behind by a naturally exited shell", () => {
+    const killer = new ProcessTreeKiller(
+      makePty(1000),
+      makeTreeCache([], { 1000: [], 5001: [] }),
+      makeLineage({ 1000: [5001] })
+    );
+
+    killer.reapAfterRootExit();
+
+    expect(killSpy).toHaveBeenCalledWith(5001, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(5001, "SIGCONT");
+  });
+
+  it("never signals the shell PID — the OS may have recycled it", () => {
+    const killer = new ProcessTreeKiller(
+      makePty(1000),
+      makeTreeCache([], { 1000: [], 5001: [] }),
+      makeLineage({ 1000: [5001] })
+    );
+
+    killer.reapAfterRootExit();
+    vi.advanceTimersByTime(500);
+
+    const touched = killSpy.mock.calls.map((c: unknown[]) => c[0]);
+    expect(touched).not.toContain(1000);
+    expect(touched).toContain(5001);
+  });
+
+  it("does not touch the PTY handle — the shell is already gone", () => {
+    const pty = makePty(1000);
+    const killer = new ProcessTreeKiller(
+      pty,
+      makeTreeCache([], { 1000: [], 5001: [] }),
+      makeLineage({ 1000: [5001] })
+    );
+
+    killer.reapAfterRootExit();
+
+    expect(pty.kill).not.toHaveBeenCalled();
+  });
+
+  it("escalates surviving orphans to SIGKILL", () => {
+    const killer = new ProcessTreeKiller(
+      makePty(1000),
+      makeTreeCache([], { 1000: [], 5001: [] }),
+      makeLineage({ 1000: [5001] })
+    );
+
+    killer.reapAfterRootExit();
+    killSpy.mockClear();
+    vi.advanceTimersByTime(500);
+
+    expect(killSpy).toHaveBeenCalledWith(5001, "SIGKILL");
+  });
+
+  it("schedules nothing when there is no detached work to reap", () => {
+    const killer = new ProcessTreeKiller(
+      makePty(1000),
+      makeTreeCache([]),
+      makeLineage({ 1000: [] })
+    );
+
+    killer.reapAfterRootExit();
+    vi.advanceTimersByTime(500);
+
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op without a ledger", () => {
+    const pty = makePty(1000);
+    const killer = new ProcessTreeKiller(pty, makeTreeCache([1001]));
+
+    killer.reapAfterRootExit();
+    vi.advanceTimersByTime(500);
+
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(pty.kill).not.toHaveBeenCalled();
+  });
+
+  it("abort() cancels the pending escalation", () => {
+    const killer = new ProcessTreeKiller(
+      makePty(1000),
+      makeTreeCache([], { 1000: [], 5001: [] }),
+      makeLineage({ 1000: [5001] })
+    );
+
+    killer.reapAfterRootExit();
+    killSpy.mockClear();
+    killer.abort();
+    vi.advanceTimersByTime(500);
+
+    expect(killSpy).not.toHaveBeenCalled();
   });
 });

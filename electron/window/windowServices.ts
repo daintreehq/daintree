@@ -317,6 +317,17 @@ export async function setupWindowServices(
     // this never double-runs the probe and guarantees the #8625 invariant holds
     // before the fork rather than silently skipping it on a null promise.
     await (getEarlyPathRefreshPromise() ?? kickOffEarlyPathRefresh());
+    // Reap descendants a previous session left detached, before any new host
+    // can reuse their PIDs. Only orphans that reparented away from their PTY
+    // tree are persisted, and each is re-verified against its recorded start
+    // time before it is signalled (#12203). Awaited rather than fired off: a
+    // reap racing the fork could validate a PID the new host has just spawned.
+    try {
+      const { reapPersistedLineages } = await import("../services/TerminalLineageLedger.js");
+      await reapPersistedLineages(app.getPath("userData"));
+    } catch (err) {
+      console.warn("[MAIN] Previous-session lineage reap failed:", err);
+    }
     // Project-restoring boots send set-active-project with a project path
     // right after the host is ready, draining the pool — tell the host to
     // skip the homedir warm those drains would immediately kill (#10393).

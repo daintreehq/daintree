@@ -5,6 +5,7 @@ import type { AgentEvent } from "./AgentStateMachine.js";
 import type { AgentStateChangeTrigger } from "../schemas/agent.js";
 import type { PtyPool } from "./PtyPool.js";
 import type { ProcessTreeCache } from "./ProcessTreeCache.js";
+import type { LineageKillSource } from "./pty/ProcessTreeKiller.js";
 import type { DetectionResult } from "./ProcessDetector.js";
 import type { ImagePathProbe } from "./pty/ImagePathProbe.js";
 import type { AnalysisWorkerPool } from "./pty/analysis/AnalysisWorkerPool.js";
@@ -77,6 +78,7 @@ export class PtyManager extends EventEmitter {
   private agentStateService: AgentStateService;
   private ptyPool: PtyPool | null = null;
   private processTreeCache: ProcessTreeCache | null = null;
+  private lineageLedger: LineageKillSource | null = null;
   private imagePathProbe: ImagePathProbe | null = null;
   private analysisWorkerPool: AnalysisWorkerPool | null = null;
   private activeProjectId: string | null = null;
@@ -114,6 +116,10 @@ export class PtyManager extends EventEmitter {
 
   setProcessTreeCache(cache: ProcessTreeCache): void {
     this.processTreeCache = cache;
+  }
+
+  setLineageLedger(ledger: LineageKillSource | null): void {
+    this.lineageLedger = ledger;
   }
 
   setImagePathProbe(probe: ImagePathProbe): void {
@@ -501,6 +507,7 @@ export class PtyManager extends EventEmitter {
           ptyPool: this.ptyPool,
           sabModeEnabled: this.sabModeEnabled,
           processTreeCache: this.processTreeCache,
+          lineageLedger: this.lineageLedger,
           imagePathProbe: this.imagePathProbe,
           analysisWorkerPool: this.analysisWorkerPool,
         },

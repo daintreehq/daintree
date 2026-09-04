@@ -213,3 +213,99 @@ describe("TerminalProcess onExit — master fd release (#9539)", () => {
     expect(pty.destroy).toHaveBeenCalledTimes(1);
   });
 });
+
+
+// A shell that exits on its own used to only cancel the SIGKILL escalation
+// timer, so anything it had already detached (a `setsid` background job whose
+// wrapper exited) survived forever (#12203).
+describe.skipIf(process.platform === "win32")(
+  "TerminalProcess onExit — detached descendant cleanup",
+  () => {
+    let killSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      killSpy.mockRestore();
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    });
+
+    function ledgerFor(orphans: number[]) {
+      return {
+        registerRoot: vi.fn<(rootPid: number) => void>(),
+        markRootClosing: vi.fn<(rootPid: number) => void>(),
+        getVerifiedOrphanPids: vi.fn<
+          (rootPid: number, alreadyCovered: readonly number[]) => number[]
+        >(() => orphans),
+      };
+    }
+
+    it("reaps a reparented descendant when the shell exits naturally", () => {
+      const pty = createControllablePty();
+      const lineageLedger = ledgerFor([9001]);
+      createTerminal(pty, undefined, { lineageLedger });
+
+      pty.emitExit(0);
+
+      expect(killSpy).toHaveBeenCalledWith(9001, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(9001, "SIGCONT");
+    });
+
+    it("escalates the survivor to SIGKILL after the grace window", () => {
+      const pty = createControllablePty();
+      const lineageLedger = ledgerFor([9001]);
+      createTerminal(pty, undefined, { lineageLedger });
+
+      pty.emitExit(0);
+      killSpy.mockClear();
+      vi.advanceTimersByTime(500);
+
+      expect(killSpy).toHaveBeenCalledWith(9001, "SIGKILL");
+    });
+
+    it("registers the shell as a lineage root at construction", () => {
+      const pty = createControllablePty();
+      const lineageLedger = ledgerFor([]);
+      createTerminal(pty, undefined, { lineageLedger });
+
+      expect(lineageLedger.registerRoot).toHaveBeenCalledWith(123);
+    });
+
+    it("marks the root closing so a recycled PID cannot inherit the lineage", () => {
+      const pty = createControllablePty();
+      const lineageLedger = ledgerFor([]);
+      createTerminal(pty, undefined, { lineageLedger });
+
+      pty.emitExit(0);
+
+      expect(lineageLedger.markRootClosing).toHaveBeenCalledWith(123);
+    });
+
+    it("signals nothing when the terminal left no detached work", () => {
+      const pty = createControllablePty();
+      const lineageLedger = ledgerFor([]);
+      createTerminal(pty, undefined, { lineageLedger });
+
+      pty.emitExit(0);
+      vi.advanceTimersByTime(500);
+
+      expect(killSpy).not.toHaveBeenCalled();
+    });
+
+    it("natural exit without a ledger behaves exactly as before", () => {
+      const pty = createControllablePty();
+      createTerminal(pty);
+
+      pty.emitExit(0);
+      vi.advanceTimersByTime(500);
+
+      expect(killSpy).not.toHaveBeenCalled();
+    });
+  }
+);
