@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { notify } from "@/lib/notify";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useProjectStore } from "@/store/projectStore";
@@ -16,7 +16,10 @@ import { useProjectPluginStore } from "@/store/projectPluginStore";
  *   already answered for never asks again, whatever its contents do afterwards.
  * - `plugin:project-plugins-changed` is a full snapshot, pushed on every open,
  *   trust change and staged activation. The manager renders from it rather than
- *   refetching, which is why nothing here polls.
+ *   refetching, which is why nothing here polls. A manifest the host refused
+ *   arrives in it already described, and gets announced once here — the folder
+ *   is the user's own, so a plugin that will not parse is a mistake they can
+ *   fix rather than a fact about someone else's software (#12212).
  * - `plugin:project-plugin-staged` announces a manifest id this project has
  *   never had. Non-blocking, once per id: main records the id the moment it
  *   stages it, so an ignored or declined stage never re-announces.
@@ -33,6 +36,12 @@ import { useProjectPluginStore } from "@/store/projectPluginStore";
  */
 export function useProjectPluginBridge(): void {
   const viewProjectId = useProjectStore((s) => s.currentProject?.id ?? null);
+  // Snapshots re-push on every open, trust change and activation, so the same
+  // broken manifest arrives over and over. Keyed by the reason as well as the
+  // folder, so editing the manifest into a *different* error is announced again
+  // — that is progress the author wants to see — while re-reading the same one
+  // is not.
+  const announcedInvalid = useRef(new Set<string>());
 
   useEffect(() => {
     useProjectPluginStore.getState().setViewProjectId(viewProjectId);
@@ -44,7 +53,40 @@ export function useProjectPluginBridge(): void {
     });
 
     const offChanged = window.electron.events.on("plugin:project-plugins-changed", (payload) => {
+      const before = useProjectPluginStore.getState();
       useProjectPluginStore.getState().applySnapshot(payload);
+      // The store drops a snapshot for a project this view is not showing;
+      // announcing one it refused would name a folder the user is not looking at.
+      if (useProjectPluginStore.getState().projectId !== payload.projectId) return;
+      if (before.projectId !== null && before.projectId !== payload.projectId) {
+        announcedInvalid.current.clear();
+      }
+
+      for (const plugin of payload.plugins) {
+        if (plugin.state !== "invalid") continue;
+        const reason = plugin.error ?? "the manifest could not be read";
+        const key = `${payload.projectId}:${plugin.dirName}:${reason}`;
+        if (announcedInvalid.current.has(key)) continue;
+        announcedInvalid.current.add(key);
+        notify({
+          type: "error",
+          title: `Couldn't read the plugin in ${plugin.dirName}`,
+          // The reason already names the field path — it is the formatted first
+          // schema issue — and that path IS the fix, so it goes in whole.
+          message: reason,
+          // The staged announcement is passive because the sidebar carries the
+          // same fact persistently. This one is not: the plugin the user just
+          // wrote is not going to run, and nothing else will say so until they
+          // happen to open the plugin manager.
+          priority: "high",
+          action: {
+            label: "Open plugin manager",
+            onClick: () => usePluginManagerStore.getState().open(),
+          },
+          correlationId: `project-plugin-invalid:${payload.projectId}:${plugin.dirName}`,
+          context: { projectId: payload.projectId, eventKind: "settings" },
+        });
+      }
     });
 
     const offVisibility = window.electron.events.on(

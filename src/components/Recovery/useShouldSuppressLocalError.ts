@@ -46,6 +46,10 @@ const SLOT_IS_RECOVERY: Record<Exclude<GlobalBannerSlot, null>, boolean> = {
   // stay actionable — a missing Git doesn't make them un-fixable.
   "missing-prerequisite": false,
   "forge-token": false,
+  // Advisory: a consent question the user has not answered yet. Nothing about
+  // the backend is unhealthy, so a pane's own spawn or reconnect error is still
+  // both true and fixable while it is up.
+  "project-plugin-trust": false,
   "cloud-sync": false,
   rosetta: false,
 };

@@ -6,6 +6,7 @@ import os from "os";
 import { pathToFileURL } from "url";
 import { app } from "electron";
 import * as semver from "semver";
+import { createLogger } from "../utils/logger.js";
 // Aliased to avoid colliding with Vite's auto-injected ESM shim
 // (`import { createRequire } from 'module'; const require = createRequire(import.meta.url);`),
 // which it adds to every bundled chunk for CJS interop.
@@ -492,6 +493,14 @@ function isProjectPluginInstanceKey(pluginId: string): boolean {
 }
 
 /**
+ * Project-plugin lifecycle goes to the file logger, not `console.*`. A trust
+ * decision that failed to persist and a manifest that would not parse are both
+ * only diagnosable after the fact, and the packaged app has no console to read
+ * them from (#12212).
+ */
+const logger = createLogger("main:PluginService");
+
+/**
  * Read one project's trust record. Absence is the default and it means
  * disabled — discovery still runs, nothing executes.
  */
@@ -518,7 +527,7 @@ function readProjectPluginTrust(projectId: string): ProjectPluginTrustRecord | u
     };
   } catch (err) {
     // Fail closed: an unreadable record is not a grant.
-    console.warn("[PluginService] Failed to read project plugin trust:", err);
+    logger.warn("Failed to read project plugin trust", { projectId, error: err });
     return undefined;
   }
 }
@@ -527,11 +536,17 @@ function readProjectPluginTrust(projectId: string): ProjectPluginTrustRecord | u
  * Write (or clear) one project's trust record. Always rewrites the whole map —
  * electron-store dot-notation would nest on a key containing dots, and a
  * project id is opaque.
+ *
+ * Returns whether the record reached disk. A consent decision that silently
+ * failed to persist is the worst of both worlds: the session behaves as though
+ * the user answered, and the next launch asks again with no trace of why
+ * (#12212). The caller propagates a `false` to the renderer rather than
+ * assuming the write landed.
  */
 function writeProjectPluginTrust(
   projectId: string,
   record: ProjectPluginTrustRecord | undefined
-): void {
+): boolean {
   try {
     const all = {
       ...((store.get("projectPluginTrust") as Record<string, ProjectPluginTrustRecord>) ?? {}),
@@ -542,8 +557,13 @@ function writeProjectPluginTrust(
       all[projectId] = record;
     }
     store.set("projectPluginTrust", all);
+    return true;
   } catch (err) {
-    console.warn("[PluginService] Failed to write project plugin trust:", err);
+    logger.error("Failed to persist project plugin trust", err, {
+      projectId,
+      decision: record?.decision ?? "cleared",
+    });
+    return false;
   }
 }
 
@@ -3852,13 +3872,26 @@ export class PluginService {
     await this.pushSnapshotToProject(projectId);
   }
 
+  /**
+   * Record the user's answer. A decision that applied in memory but did not
+   * reach disk still rejects: the plugins are running, and the user needs to
+   * know the choice will be asked for again (#12212). The snapshot and the
+   * watcher are reconciled either way — the in-memory state changed regardless
+   * of whether the write landed.
+   */
   async setProjectPluginTrust(
     projectId: string,
     decision: ProjectPluginTrustDecision
   ): Promise<void> {
-    await this.projectPlugins.setTrust(projectId, decision);
+    let failure: unknown;
+    try {
+      await this.projectPlugins.setTrust(projectId, decision);
+    } catch (err) {
+      failure = err;
+    }
     await this.pushSnapshotToProject(projectId);
     await this.syncProjectPluginWatcher(projectId);
+    if (failure !== undefined) throw failure;
   }
 
   async activateStagedProjectPlugin(projectId: string, pluginId: string): Promise<void> {
@@ -3942,12 +3975,23 @@ export class PluginService {
   }
 
   /**
-   * A watcher exists for exactly the projects whose plugins are trusted and
-   * open. Trust is the gate: an untrusted project's folder is never watched,
-   * so a revoke or a "no" tears the native subscription down with everything
-   * else.
+   * A watcher exists for every open project that has not answered "no".
+   *
+   * Trust gates *execution*, not observation. Gating the watcher on
+   * `enabled` deadlocked the first plugin a project ever gets: trust cannot be
+   * granted before a plugin exists, and without a watcher the plugin is not
+   * noticed until the user switches projects and back — so an agent creating
+   * `.daintree/plugins/` in the project the user is looking at produced nothing
+   * at all (#12212). Watching while the decision is still open is safe because
+   * everything it can reach is parse-only: `discoverProjectPlugins` reads
+   * `plugin.json` and stops, and `reloadChanged` still refuses to load anything
+   * without a recorded grant.
+   *
+   * An explicit "no" is the one answer that stops it. A remembered `disabled`
+   * tears the native subscription down with everything else, as does a close.
    */
   private async syncProjectPluginWatcher(projectId: string, projectRoot?: string): Promise<void> {
+    const trust = this.projectPlugins.getTrustState(projectId);
     // A close can land while an open is still awaiting its snapshot push, and
     // the idle auto-close service and the free-memory IPC flip a row to
     // "closed" without ever reaching `onProjectClosed`. Re-reading the row here
@@ -3955,7 +3999,7 @@ export class PluginService {
     if (
       this.disposed ||
       this.isProjectRowClosed(projectId) ||
-      !this.projectPlugins.getTrustState(projectId).enabled
+      !(trust.enabled || trust.decision === null)
     ) {
       this.projectPluginWatcherRegistry?.stop(projectId);
       return;

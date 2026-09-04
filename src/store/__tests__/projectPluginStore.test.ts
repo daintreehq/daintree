@@ -299,6 +299,48 @@ describe("projectPluginStore", () => {
     expect(reloadProjectPlugins).not.toHaveBeenCalled();
   });
 
+  it("marks a reload in flight so its button can show progress", async () => {
+    useProjectPluginStore.getState().applySnapshot({
+      projectId: PROJECT,
+      plugins: [plugin("a", "invalid")],
+      trust: trust(),
+    });
+
+    let release!: () => void;
+    reloadProjectPlugins.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+    );
+
+    const inFlight = useProjectPluginStore.getState().reload();
+    expect(useProjectPluginStore.getState().reloading).toBe(true);
+
+    // A second press while the first is still out would double-scan the folder.
+    await useProjectPluginStore.getState().reload();
+    expect(reloadProjectPlugins).toHaveBeenCalledTimes(1);
+
+    release();
+    await inFlight;
+    expect(useProjectPluginStore.getState().reloading).toBe(false);
+  });
+
+  it("reports a failed reload and stops showing progress", async () => {
+    useProjectPluginStore.getState().applySnapshot({
+      projectId: PROJECT,
+      plugins: [plugin("a", "invalid")],
+      trust: trust(),
+    });
+    reloadProjectPlugins.mockRejectedValue(new Error("folder vanished"));
+
+    await useProjectPluginStore.getState().reload();
+
+    const state = useProjectPluginStore.getState();
+    expect(state.reloading).toBe(false);
+    expect(state.error).toContain("folder vanished");
+  });
+
   it("separates blocked plugins from staged ones for the indicator", () => {
     useProjectPluginStore.getState().applySnapshot({
       projectId: PROJECT,

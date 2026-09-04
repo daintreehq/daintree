@@ -6,6 +6,7 @@ import { MissingPrerequisiteBanner } from "./MissingPrerequisiteBanner";
 import { ForgeTokenBanner } from "./ForgeTokenBanner";
 import { CloudSyncBanner } from "./CloudSyncBanner";
 import { RosettaBanner } from "./RosettaBanner";
+import { ProjectPluginTrustBanner } from "@/components/Plugin/ProjectPluginTrustBanner";
 import { useEffect, useState } from "react";
 import { useGlobalBannerPriority } from "./useGlobalBannerPriority";
 import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
@@ -31,6 +32,8 @@ function activeBanner(slot: ReturnType<typeof useGlobalBannerPriority>) {
       return <MissingPrerequisiteBanner />;
     case "forge-token":
       return <ForgeTokenBanner />;
+    case "project-plugin-trust":
+      return <ProjectPluginTrustBanner />;
     case "cloud-sync":
       return <CloudSyncBanner />;
     case "rosetta":

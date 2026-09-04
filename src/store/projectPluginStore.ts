@@ -56,6 +56,8 @@ export interface ProjectPluginStoreState {
    * is known yet" — which is why it needs no separate loaded flag.
    */
   visibility: ProjectPluginVisibility;
+  /** True while a manual reload is in flight, so its button can show progress. */
+  reloading: boolean;
   /** Last mutation failure, surfaced inline by the manager. */
   error: string | null;
 }
@@ -95,6 +97,7 @@ const INITIAL: ProjectPluginStoreState = {
   activating: EMPTY_ACTIVATING,
   muting: EMPTY_ACTIVATING,
   visibility: EMPTY_VISIBILITY,
+  reloading: false,
   error: null,
 };
 
@@ -281,10 +284,14 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
     reload: async () => {
       const state = get();
       if (state.projectId !== null && !belongsToView(state, state.projectId)) return;
+      if (state.reloading) return;
+      set({ reloading: true, error: null });
       try {
         await window.electron.plugin.reloadProjectPlugins();
       } catch (err) {
         set({ error: formatErrorMessage(err, "Couldn't reload this project's plugins") });
+      } finally {
+        set({ reloading: false });
       }
     },
 

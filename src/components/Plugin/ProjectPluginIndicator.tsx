@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
@@ -31,8 +32,14 @@ function stateLabel(state: ProjectPluginInfo["state"]): string {
  * off is not a fault, and the popover is where the detail belongs.
  *
  * It renders only when there is something to act on: plugins that are blocked,
- * or staged and awaiting a click. A project whose plugins are all running shows
- * nothing at all, which is the point of the tier.
+ * staged and awaiting a click, or unreadable. A project whose plugins are all
+ * running shows nothing at all, which is the point of the tier.
+ *
+ * Unreadable earns a place here because a manifest the host refused is a fault
+ * the author has to fix, and before #12212 the only record of it anywhere was
+ * red text inside the plugin manager that nothing pointed at. It stays inside
+ * the same neutral chrome as the other states — the summary line names it, and
+ * the reason sits in the popover next to the reload that retries it.
  */
 export function ProjectPluginIndicator() {
   const [open, setOpen] = useState(false);
@@ -40,20 +47,27 @@ export function ProjectPluginIndicator() {
   const trust = useProjectPluginStore((s) => s.trust);
   const deciding = useProjectPluginStore((s) => s.deciding);
   const activating = useProjectPluginStore((s) => s.activating);
+  const reloading = useProjectPluginStore((s) => s.reloading);
   const error = useProjectPluginStore((s) => s.error);
   const decide = useProjectPluginStore((s) => s.decide);
   const activateStaged = useProjectPluginStore((s) => s.activateStaged);
+  const reload = useProjectPluginStore((s) => s.reload);
 
   const blocked = plugins.filter((p) => p.state === "blocked");
   const staged = plugins.filter((p) => p.state === "staged");
+  const invalid = plugins.filter((p) => p.state === "invalid");
   const enabled = trust?.enabled === true;
 
-  if (blocked.length === 0 && staged.length === 0) return null;
+  if (blocked.length === 0 && staged.length === 0 && invalid.length === 0) return null;
 
+  // Unreadable leads: it is the only one of the three that is a mistake rather
+  // than a state the user chose or a plugin waiting on them.
   const summary =
-    blocked.length > 0
-      ? `${blocked.length} project plugin${blocked.length === 1 ? "" : "s"} off`
-      : `${staged.length} project plugin${staged.length === 1 ? "" : "s"} staged`;
+    invalid.length > 0
+      ? `${invalid.length} project plugin${invalid.length === 1 ? "" : "s"} unreadable`
+      : blocked.length > 0
+        ? `${blocked.length} project plugin${blocked.length === 1 ? "" : "s"} off`
+        : `${staged.length} project plugin${staged.length === 1 ? "" : "s"} staged`;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -82,29 +96,52 @@ export function ProjectPluginIndicator() {
 
           <ul className="space-y-1">
             {plugins.map((plugin) => (
-              <li key={plugin.id} className="flex items-center gap-2 min-w-0">
-                <span className="text-2xs text-text-primary truncate flex-1 min-w-0">
-                  {plugin.displayName}
-                </span>
-                {plugin.state === "staged" ? (
-                  <Button
-                    variant="outline"
-                    size="xs"
-                    onClick={() => void activateStaged(plugin.id)}
-                    loading={activating.has(plugin.id)}
-                  >
-                    Activate
-                  </Button>
-                ) : (
-                  <span className="text-3xs text-text-secondary shrink-0">
-                    {stateLabel(plugin.state)}
+              <li key={plugin.id} className="min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-2xs text-text-primary truncate flex-1 min-w-0">
+                    {plugin.displayName}
                   </span>
+                  {plugin.state === "staged" ? (
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => void activateStaged(plugin.id)}
+                      loading={activating.has(plugin.id)}
+                    >
+                      Activate
+                    </Button>
+                  ) : (
+                    <span className="text-3xs text-text-secondary shrink-0">
+                      {stateLabel(plugin.state)}
+                    </span>
+                  )}
+                </div>
+                {/* The reason, where the state is. Naming the field that was
+                    rejected is the whole fix a typo'd manifest needs, and the
+                    plugin manager was the only place it existed. */}
+                {plugin.state === "invalid" && plugin.error && (
+                  <p className="mt-0.5 text-3xs text-text-secondary leading-tight break-words">
+                    {plugin.error}
+                  </p>
                 )}
               </li>
             ))}
           </ul>
 
           <div className="pt-2 border-t border-divider space-y-2">
+            {/* Re-reads the folder in place. Before #12212 the only way to pick
+                up a fixed manifest was to switch projects and back. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full"
+              onClick={() => void reload()}
+              loading={reloading}
+            >
+              <RefreshCw />
+              Reload from folder
+            </Button>
+
             {enabled ? (
               <>
                 <Button
