@@ -59,10 +59,13 @@ export function resolveLauncherToolbarButtonId(
     // The scoped identity, never the bare `recipe.id` — see
     // `recipeToolbarSourceId` on why a legacy in-repo id aliases across
     // projects.
-    return launcherItemToolbarButtonId(
-      "recipe",
-      recipeToolbarSourceId(item.recipe, currentProjectId)
-    );
+    const sourceId = recipeToolbarSourceId(item.recipe, currentProjectId);
+    // An id-less recipe would mint `launcher:recipe:` or `launcher:recipe:p:`,
+    // which the decoder rejects and no catalog entry can match. The schema
+    // forbids one, so this is the resolver refusing to mint what its own guard
+    // would throw away rather than a case that reaches us.
+    if (sourceId.length === 0 || sourceId.endsWith(":")) return null;
+    return launcherItemToolbarButtonId("recipe", sourceId);
   }
   return null;
 }

@@ -265,3 +265,19 @@ describe("buildLauncherToolbarMeta", () => {
     }
   });
 });
+
+describe("resolveLauncherToolbarButtonId — ids nothing can match", () => {
+  it("refuses to mint an id whose source half is empty", () => {
+    // `decodeLauncherItemToolbarButtonId` rejects an empty source, so minting
+    // one would put a key in `pinnedButtons` that no catalog entry can ever
+    // match and no surface can ever clear.
+    expect(resolveLauncherToolbarButtonId(agentItem(""), PROJECT_ID)).toBeNull();
+    expect(resolveLauncherToolbarButtonId(panelItem(""), PROJECT_ID)).toBeNull();
+    expect(resolveLauncherToolbarButtonId(recipeItem(""), PROJECT_ID)).toBeNull();
+    expect(resolveLauncherToolbarButtonId(recipeItem("", "", PROJECT_ID), PROJECT_ID)).toBeNull();
+  });
+
+  it("keeps those rows out of the catalog rather than adding an unusable entry", () => {
+    expect(buildLauncherToolbarCatalog([recipeItem("")], PROJECT_ID).size).toBe(0);
+  });
+});

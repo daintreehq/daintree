@@ -4,6 +4,8 @@ import type { UserAgentRegistry, UserAgentConfig } from "@shared/types";
 import { userAgentRegistryClient } from "@/clients/userAgentRegistryClient";
 import { setUserRegistry } from "../../shared/config/agentRegistry";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { useToolbarPreferencesStore } from "./toolbarPreferencesStore";
+import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
 
 interface UserAgentRegistryState {
   registry: UserAgentRegistry | null;
@@ -112,6 +114,25 @@ export const useUserAgentRegistryStore = create<UserAgentRegistryStore>()(
         if (result.success) {
           const registry = (await userAgentRegistryClient.get()) ?? {};
           set({ registry });
+          // A deleted user agent's toolbar pin goes with it (#12217). Not
+          // merely tidiness: `launcher:agent:{id}` carries no provenance, so a
+          // plugin agent that later registers the same id would inherit the pin
+          // the user made for this one. Only after the backend confirms — a
+          // failed removal keeps the agent, so its pin still describes
+          // something real.
+          const buttonId = launcherItemToolbarButtonId("agent", id);
+          const toolbar = useToolbarPreferencesStore.getState();
+          const { pinnedButtons, leftButtons, rightButtons } = toolbar.layout;
+          // Guarded on there being something to clear: the setter writes
+          // through `persist`, and every write ships this view's whole layout
+          // including its last-writer-wins side arrays.
+          if (
+            buttonId in pinnedButtons ||
+            leftButtons.includes(buttonId) ||
+            rightButtons.includes(buttonId)
+          ) {
+            toolbar.setLauncherItemOnToolbar(buttonId, false);
+          }
         } else {
           set({ error: result.error });
         }

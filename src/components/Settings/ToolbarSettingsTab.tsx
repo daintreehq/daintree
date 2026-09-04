@@ -53,6 +53,7 @@ import {
   getPluginAgentRegistrySnapshot,
 } from "@shared/config/pluginAgentRegistry";
 import { useRecipeStore } from "@/store/recipeStore";
+import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { resolveLauncherItemMetadata } from "@/components/Layout/launcherToolbarCatalog";
 import { LAUNCHABLE_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
 import { isAgentButtonOnToolbar } from "../../../shared/utils/agentPinned";
@@ -388,6 +389,10 @@ export function ToolbarSettingsTab() {
     getPluginAgentRegistrySnapshot,
     getPluginAgentRegistrySnapshot
   );
+  // The plugin snapshot is only one of the three tiers `getAgentConfig` merges;
+  // a user-defined agent lives here, so without this its row keeps a stale name
+  // and icon after an edit.
+  const userAgentRegistry = useUserAgentRegistryStore((s) => s.registry);
   const launcherItemRows = useMemo(() => {
     // Referenced, not merely listed as dependencies. `resolveLauncherItemMetadata`
     // reads both registries itself, so these snapshots exist only to invalidate
@@ -396,6 +401,7 @@ export function ToolbarSettingsTab() {
     // they are here to prevent.
     void panelKindRegistry;
     void pluginAgentRegistry;
+    void userAgentRegistry;
     const rows: Array<{ id: LauncherItemToolbarButtonId; metadata: ToolbarButtonMetadata }> = [];
     // `Object.entries` plus the guard rather than a filter over `Object.keys`:
     // both hand back a bare `string`, but only the guard narrows it, and the
@@ -411,7 +417,14 @@ export function ToolbarSettingsTab() {
     // Alphabetical, because the pin map's key order is insertion order and the
     // user has no way to see or reason about that.
     return rows.sort((a, b) => a.metadata.label.localeCompare(b.metadata.label));
-  }, [layout.pinnedButtons, recipes, currentProjectId, panelKindRegistry, pluginAgentRegistry]);
+  }, [
+    layout.pinnedButtons,
+    recipes,
+    currentProjectId,
+    panelKindRegistry,
+    pluginAgentRegistry,
+    userAgentRegistry,
+  ]);
 
   const resolveGroup = useCallback(
     (id: AnyToolbarButtonId) => getToolbarButtonGroup(id, pluginConfigs.has(id)),
