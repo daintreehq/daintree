@@ -8,12 +8,12 @@ type Set = PanelRegistryStoreApi["setState"];
  * Ceiling on one panel's persisted extension state, measured as serialized
  * JSON bytes.
  *
- * `extensionState` rides the panel record into SQLite on every layout save, so
- * an unbounded bag is an unbounded write amplification on a path the user never
- * sees. 64KB is far above what the state this exists for costs — a file
- * browser's expanded-path set, selection and sort is a few hundred bytes even
- * for a deep tree — and far below anything that would make a layout save
- * noticeable. A plugin wanting to persist more than this wants
+ * `extensionState` rides the panel record into the project's `state.json` on
+ * every layout save, so an unbounded bag is an unbounded write amplification on
+ * a path the user never sees. 64KB is far above what the state this exists for
+ * costs — a file browser's expanded-path set, selection and sort is a few
+ * hundred bytes even for a deep tree — and far below anything that would make a
+ * layout save noticeable. A plugin wanting to persist more than this wants
  * `host.storage`, which is per-plugin, off the layout path, and unbounded.
  */
 const MAX_EXTENSION_STATE_BYTES = 64 * 1024;

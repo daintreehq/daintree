@@ -24,6 +24,12 @@ interface ListDirectoryArgs {
 }
 
 export async function activate(host: PluginHostApi): Promise<void> {
+  // `(ctx, ...args)` — the IPC context is ALWAYS the first parameter and the
+  // view's payload is the second. A handler declared `(args) => …` binds `args`
+  // to the context and drops the payload silently: the argument-less channels
+  // keep working, so the panel looks healthy while every channel that takes an
+  // argument fails (#12215). `ctx` is unused here; it carries projectId,
+  // worktreeId, webContentsId and pluginId when a handler needs them.
   await host.registerHandler("list-directory", async (_ctx, args: unknown) => {
     const { dirPath } = (args ?? {}) as Partial<ListDirectoryArgs>;
     if (typeof dirPath !== "string" || dirPath.length === 0) {

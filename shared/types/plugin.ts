@@ -230,8 +230,11 @@ export const PLUGIN_STYLE_ROOT_ATTRIBUTE = "data-daintree-plugin-style-root";
  *
  * - `panelId` is the runtime panel instance id (the same value the host uses
  *   in `addPanelOptions` / IPC). Plugins should treat it as opaque.
- * - `pluginId` is the plugin's manifest `name` — useful for namespacing
- *   plugin-local storage keys and for logging.
+ * - `pluginId` is the plugin's RUNTIME id, sourced from
+ *   `PanelKindConfig.extensionId` — the bare manifest `name` for an installed
+ *   or builtin plugin, but the instance key `project__{projectId}__{manifestId}`
+ *   for a project plugin. Pass it back verbatim to `window.electron.plugin.*`;
+ *   a view that writes its own manifest name down instead addresses nothing.
  * - `disposeSignal` aborts on unmount AND when the host receives a
  *   `plugin:panel-kinds-changed` push that no longer contains this kind. The
  *   broadcast fires before the main process tears down plugin IPC handlers,
@@ -309,8 +312,9 @@ export interface PanelViewProps {
    * Keep it small. The bag rides the panel record into the layout save, and the
    * host refuses an update whose serialized form exceeds 64KB. Anything larger,
    * anything not JSON round-trippable, and anything that should outlive the
-   * panel belongs in `host.storage` instead. State here is stored in plain
-   * SQLite alongside the layout, so it is not a place for secrets.
+   * panel belongs in `host.storage` instead. State here rides the panel
+   * snapshot into the project's `state.json` as plaintext JSON, so it is not a
+   * place for secrets.
    *
    * Returns whether the stored state is now what you asked for: `false` when
    * the host rejected the update (over the cap, or not serializable), `true`

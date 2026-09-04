@@ -1199,6 +1199,12 @@ export default tseslint.config(
       // map). They're test fixtures, not part of the TS build graph — like
       // packages/*/dist (#10512).
       "plugins/sample/*/view/**",
+      // A project plugin's `dist/` is the same case on both halves: the worker
+      // entry is ESM imported by Node and the view is ESM served over
+      // `plugin://`, both hand-authored and shipped verbatim because the host
+      // compiles nothing. Linting them as TS-build-graph source flags the
+      // globals each half legitimately has and the other does not.
+      "plugins/sample-project/*/dist/**",
     ],
   }
 );

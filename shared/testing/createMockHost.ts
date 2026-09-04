@@ -345,7 +345,12 @@ export interface CreateMockHostOptions {
  * production constants are the source of truth. If the production regex or
  * sets change, mirror the change here.
  */
-const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
+// The `_` in the leading segment is load-bearing and was missing here until
+// #12215: a project plugin's ids are instance-qualified
+// (`project__{projectId}__{publisher}.{name}.{action}`), so without it this
+// mock rejected every `registerAction` a project plugin makes — the one kind of
+// plugin the agent brief tells authors to write — while production accepted it.
+const PLUGIN_ACTION_ID_RE = /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-zA-Z0-9._-]*$/;
 const PLUGIN_ACTION_KINDS = new Set(["command", "query"]);
 const PLUGIN_ACTION_DANGERS = new Set(["safe", "confirm"]);
 

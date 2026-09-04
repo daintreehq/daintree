@@ -47,7 +47,8 @@ Prose can drift; these cannot. Read them in preference to any doc that disagrees
 | --- | --- |
 | `electron/schemas/plugin.ts` | The zod schema that actually accepts or rejects your manifest, including the `scope` cross-checks and every refused project contribution, each with the error string you will see |
 | `plugins/fixtures/project-local/` | A minimal project plugin at the real path discovery scans. It is a discovery/schema/watcher fixture, not this skeleton: it registers no action and its view returns a plain object rather than rendering React, so do not copy it as a UI starting point |
-| `plugins/sample/rich-daintree/` | A fuller plugin exercising most contribution points |
+| `plugins/sample-project/acme.tour/` | **The canonical one to copy.** A zero-build project plugin with one working example of each thing this brief tells you to build: an argument-taking channel, a targeted push, `panel.openPluginPanel` on itself, `file.openPanel`, a `daintree-file://` media fetch, `persistState`, and a badge |
+| `plugins/sample/rich-daintree/` | A fuller plugin exercising most contribution points. An _installed_ plugin with a Vite build step — read it for contributions, not for structure |
 | `packages/plugin-sdk/` | The real `PluginHostApi` types behind the `host` object |
 
 Run the agent in **your own project**, not in the Daintree checkout, and give it the checkout as a read path. The plugin has to be written into your project, and a Claude Code session started inside the Daintree clone picks up that repo's root `CLAUDE.md` — a contributor guide about gitflow and `npm run check` that has nothing to do with authoring a plugin.
@@ -112,6 +113,7 @@ Four files. Replace `acme.dashboard` throughout with your own `<publisher>.<name
   "scope": "project",
   "displayName": "Dashboard",
   "description": "A panel for this project.",
+  "authors": [{ "name": "Your Name" }],
   "main": "dist/index.mjs",
   "engines": { "daintree": ">=0.11.0" },
   "capabilities": ["fs:project-read"],
