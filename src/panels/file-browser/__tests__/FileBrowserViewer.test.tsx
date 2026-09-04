@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // module in ahead of its own mock.
 import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
 
-// FileBrowserViewer is the read-only preview beside the tree. #11319 adds a
-// Source/Rendered toggle for markdown, mirroring FilePane. Mock the heavy leaf
-// viewers so only FileBrowserViewer's own toolbar + mode wiring renders, and
-// capture the viewMode handed to MarkdownViewer — the seam the toggle drives.
+// FileBrowserViewer is the read-only preview beside the tree. #11319 added a
+// Source/Rendered toggle for markdown and #12205 extended it to HTML, mirroring
+// FilePane. Mock the heavy leaf viewers so only FileBrowserViewer's own toolbar
+// + mode wiring renders, and capture the viewMode handed to MarkdownViewer —
+// the seam the toggle drives for markdown. HTML has no such prop (HtmlViewer is
+// rendered-only), so there the mode shows up as which mock is on screen.
 const { readMock } = vi.hoisted(() => ({ readMock: vi.fn() }));
 vi.mock("@/clients/filesClient", () => ({
   filesClient: { read: readMock },
@@ -57,11 +59,22 @@ vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
     />
   ),
 }));
+// Both leaves surface the props the branch hands them: which mock renders only
+// proves the routing, and an HTML source branch wired to empty content or the
+// wrong path would satisfy that while showing the reader nothing (#12205).
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
-  CodeViewer: () => <div data-testid="code-viewer-mock" />,
+  CodeViewer: (props: { content: string; filePath: string }) => (
+    <div
+      data-testid="code-viewer-mock"
+      data-content={props.content}
+      data-file-path={props.filePath}
+    />
+  ),
 }));
 vi.mock("@/components/Html/HtmlViewer", () => ({
-  HtmlViewer: () => <div data-testid="html-viewer-mock" />,
+  HtmlViewer: (props: { previewUrl: string | null }) => (
+    <div data-testid="html-viewer-mock" data-preview-url={props.previewUrl ?? ""} />
+  ),
 }));
 
 // Surfaces the `active` prop instead of letting the real component apply its
@@ -190,6 +203,7 @@ import type {
 import type { FolderListingStatus } from "../useFileBrowserTree";
 
 interface ViewerOpts {
+  panelId?: string;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
   revision?: string;
@@ -247,6 +261,7 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
   return (
     <TooltipProvider>
       <FileBrowserViewer
+        panelId={opts.panelId ?? "panel-1"}
         filePath={filePath}
         rootPath="/repo"
         fileName={fileName}
@@ -296,6 +311,23 @@ async function clickMode(label: "Source" | "Rendered") {
   });
 }
 
+// An HTML read as the pane really gets it: raw markup plus the sandboxed
+// preview URL main minted for it.
+const HTML_READ = { content: "<h1>hi</h1>\n", htmlPreviewUrl: "daintree-html://preview/1" };
+
+// Answers each path with its own bytes. Handing every read the same content
+// would let a viewer that never re-read on a file change pass the navigation
+// tests on the first file's stale state.
+function readByPath() {
+  readMock.mockImplementation(({ path }: { path: string }) =>
+    Promise.resolve(isHtmlPath(path) ? HTML_READ : { content: `# ${path}` })
+  );
+}
+
+function isHtmlPath(path: string): boolean {
+  return path.endsWith(".html");
+}
+
 function currentViewMode(): string | null {
   return screen.getByTestId("markdown-viewer-mock").getAttribute("data-view-mode");
 }
@@ -334,7 +366,7 @@ beforeEach(() => {
   }
 });
 
-describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
+describe("FileBrowserViewer Source/Rendered toggle (#11319, #12205)", () => {
   it("shows the toggle and defaults to the rendered view for a markdown file", async () => {
     renderViewer("/repo/docs/spec.md");
     // Default preserves the pane's long-standing rendered-first behaviour.
@@ -366,10 +398,11 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
     await waitFor(() => expect(currentViewMode()).toBe("source"));
   });
 
-  it("drops the toggle and its stale source choice when switching to a non-markdown file", async () => {
+  it("drops the toggle and its stale source choice when switching to a non-renderable file", async () => {
     // Start on markdown in Source, then navigate to a .txt in the same viewer —
-    // the tree's real usage. Proves the markdown-only toggle disappears and the
-    // sticky "source" choice can't leak into the CodeViewer (non-markdown) branch.
+    // the tree's real usage. Proves the toggle disappears for a file with no
+    // rendered form, and the sticky "source" choice can't leak into the
+    // CodeViewer (non-renderable) branch.
     const { rerender } = renderViewer("/repo/docs/a.md");
     await waitFor(() => expect(currentViewMode()).toBe("rendered"));
     await clickMode("Source");
@@ -380,6 +413,120 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
     expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
     expect(screen.queryByTestId("markdown-viewer-mock")).toBeNull();
+  });
+
+  it("shows the toggle and defaults an HTML file to source (#12205)", async () => {
+    readByPath();
+    renderViewer("/repo/page.html");
+
+    // The markup, not the sandboxed page: HTML in a repo is code you opened to
+    // read, and a page that renders near-blank reads as a broken file. Assert
+    // the bytes, not just the branch — a CodeViewer handed nothing would show
+    // the reader an empty pane while still satisfying the routing.
+    const source = await screen.findByTestId("code-viewer-mock");
+    expect(source.getAttribute("data-content")).toBe(HTML_READ.content);
+    expect(source.getAttribute("data-file-path")).toBe("/repo/page.html");
+    expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
+    // The segment the reader sees selected has to agree with what is on screen.
+    expect(screen.getByRole("button", { name: "Source" }).getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(screen.getByRole("button", { name: "Rendered" }).getAttribute("aria-pressed")).toBe(
+      "false"
+    );
+  });
+
+  it("switches HTML between source and rendered without a second read", async () => {
+    readMock.mockResolvedValue(HTML_READ);
+    renderViewer("/repo/page.html");
+    await screen.findByTestId("code-viewer-mock");
+
+    await clickMode("Rendered");
+    const rendered = await screen.findByTestId("html-viewer-mock");
+    // The preview URL main minted, not a null that would strand HtmlViewer on
+    // its "can't render this file" fallback.
+    expect(rendered.getAttribute("data-preview-url")).toBe(HTML_READ.htmlPreviewUrl);
+    expect(screen.queryByTestId("code-viewer-mock")).toBeNull();
+
+    await clickMode("Source");
+    await screen.findByTestId("code-viewer-mock");
+
+    // Both surfaces come off the one read — the preview call already returned
+    // the raw markup, so toggling must never go back to the main process.
+    expect(readMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies each file type's own default until a mode is explicitly chosen", async () => {
+    readByPath();
+    const { rerender } = renderViewer("/repo/docs/spec.md");
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+
+    // Untouched, the toggle is not carrying a choice around: each type opens on
+    // what suits it, so an HTML file lands on source even after rendered markdown.
+    rerender(viewerJsx("/repo/page.html"));
+    const source = await screen.findByTestId("code-viewer-mock");
+    // The HTML file's own bytes: a viewer that never re-read would still be
+    // holding the markdown text, and that renders through CodeViewer too.
+    expect(source.getAttribute("data-content")).toBe(HTML_READ.content);
+    expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
+
+    rerender(viewerJsx("/repo/docs/spec.md"));
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+  });
+
+  it("shares the last explicit mode between markdown and HTML", async () => {
+    readByPath();
+    const { rerender } = renderViewer("/repo/docs/spec.md");
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+    await clickMode("Source");
+    await waitFor(() => expect(currentViewMode()).toBe("source"));
+
+    // The explicit choice overrides HTML's source default only in the sense
+    // that it is the same value here; the load-bearing half is the return trip.
+    rerender(viewerJsx("/repo/page.html"));
+    await screen.findByTestId("code-viewer-mock");
+    await clickMode("Rendered");
+    await screen.findByTestId("html-viewer-mock");
+
+    // One toggle position for the viewer, not one per file type: choosing
+    // Rendered on the HTML file is what markdown shows on the way back.
+    rerender(viewerJsx("/repo/docs/spec.md"));
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+  });
+
+  it("keeps the explicit mode across a file with no rendered form", async () => {
+    readByPath();
+    const { rerender } = renderViewer("/repo/page.html");
+    await screen.findByTestId("code-viewer-mock");
+    await clickMode("Rendered");
+    await screen.findByTestId("html-viewer-mock");
+
+    // The toggle is hidden where it can't be honoured, but the choice behind it
+    // is only suspended, not discarded — the reader picked it once.
+    rerender(viewerJsx("/repo/src/notes.txt"));
+    await screen.findByTestId("code-viewer-mock");
+    expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
+
+    rerender(viewerJsx(null));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull());
+
+    rerender(viewerJsx("/repo/page.html"));
+    await screen.findByTestId("html-viewer-mock");
+  });
+
+  it("does not carry one panel's mode into the next panel's first file", async () => {
+    // A tab group renders one unkeyed viewer for whichever file browser is
+    // active, so a panel switch is a prop change, not a remount. Without the
+    // panel-id guard the choice made here would decide how panel two's HTML
+    // opens — landing it on the rendered page this issue is about.
+    readByPath();
+    const { rerender } = renderViewer("/repo/docs/spec.md", { panelId: "panel-1" });
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+    await clickMode("Rendered");
+
+    rerender(viewerJsx("/repo/page.html", { panelId: "panel-2" }));
+    await screen.findByTestId("code-viewer-mock");
+    expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
   });
 });
 
@@ -1150,6 +1297,12 @@ describe("FileBrowserViewer copy file contents (#12136)", () => {
       htmlPreviewUrl: "daintree-html://preview/1",
     });
     renderViewer("/repo/page.html");
+
+    // HTML opens on source now (#12205), so switch to the preview first —
+    // copying while the iframe is showing is what this case is here to prove.
+    await screen.findByTestId("code-viewer-mock");
+    await clickMode("Rendered");
+    await screen.findByTestId("html-viewer-mock");
 
     fireEvent.click(await screen.findByRole("button", { name: "Copy file contents" }));
 
