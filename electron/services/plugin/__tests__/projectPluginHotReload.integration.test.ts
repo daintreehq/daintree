@@ -96,6 +96,7 @@ function makeHarness(root: string): Harness {
     writeTrust: (projectId, record) => {
       if (record) trust.set(projectId, record);
       else trust.delete(projectId);
+      return true;
     },
     emitToProject: vi.fn(),
     isProjectClosed: () => false,

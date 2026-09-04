@@ -8,6 +8,7 @@ import {
   useMissingPrerequisiteStore,
   selectMissingPrerequisiteVisible,
 } from "@/store/missingPrerequisiteStore";
+import { useProjectPluginStore } from "@/store/projectPluginStore";
 
 export type GlobalBannerSlot =
   | "host-crash"
@@ -16,6 +17,7 @@ export type GlobalBannerSlot =
   | "restore-confirmation"
   | "missing-prerequisite"
   | "forge-token"
+  | "project-plugin-trust"
   | "cloud-sync"
   | "rosetta"
   | null;
@@ -27,6 +29,7 @@ export type GlobalBannerSlot =
 //   restore-confirmation — informational "session recovered" toast-banner
 //   missing-prerequisite — a fatal tool (Git, Node) isn't installed (#11763)
 //   forge-token        — a forge provider's credentials expired; auth failure, panel data broken
+//   project-plugin-trust — this project ships plugins and has not been answered for
 //   cloud-sync         — project sits in a synced folder; environmental warning
 //   rosetta            — x64 build translated on Apple Silicon; permanent perf warning
 // Watchdog sits below host-crash because a live host failure is more urgent
@@ -53,6 +56,14 @@ export type GlobalBannerSlot =
 // cloud-sync it's environmental with no acute failure, but it's even more
 // static — nothing in the app can change it, only reinstalling the native
 // build — so any more actionable banner deserves the slot first.
+// project-plugin-trust sits between forge-token and cloud-sync. It is a
+// question rather than a fault, so it yields to every active failure above it;
+// but it is the only banner here the user can actually answer, and nothing in
+// the project's plugins folder runs until they do, so it outranks the two
+// static environmental warnings below. It was a modal until #12212 — not
+// blocking the terminal an agent is typing into is the whole point of moving it
+// into this slot, and dismissing it records nothing because
+// `ProjectPluginIndicator` keeps carrying the offer in the sidebar footer.
 export function useGlobalBannerPriority(): GlobalBannerSlot {
   const backendStatus = usePanelStore((s) => s.backendStatus);
   const watchdogStatus = usePanelStore((s) => s.watchdogStatus);
@@ -65,6 +76,7 @@ export function useGlobalBannerPriority(): GlobalBannerSlot {
   const cloudSyncService = useCloudSyncBannerStore((s) => s.service);
   const rosettaVisible = useRosettaBannerStore((s) => s.visible);
   const prerequisiteVisible = useMissingPrerequisiteStore(selectMissingPrerequisiteVisible);
+  const projectPluginPrompt = useProjectPluginStore((s) => s.prompt);
 
   if (backendStatus !== "connected") return "host-crash";
   if (watchdogStatus === "disabled") return "watchdog-disabled";
@@ -72,6 +84,7 @@ export function useGlobalBannerPriority(): GlobalBannerSlot {
   if (restoreVisible) return "restore-confirmation";
   if (prerequisiteVisible) return "missing-prerequisite";
   if (tokenUnhealthy) return "forge-token";
+  if (projectPluginPrompt !== null) return "project-plugin-trust";
   if (cloudSyncService !== null) return "cloud-sync";
   if (rosettaVisible) return "rosetta";
   return null;

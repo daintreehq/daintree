@@ -258,6 +258,42 @@ describe("projectPluginStore", () => {
     expect(useProjectPluginStore.getState().prompt).toBeNull();
   });
 
+  it("keeps the gate down when the watcher re-emits after a dismissal", () => {
+    // Main re-emits from every watcher settle while a project is undecided, so
+    // an agent writing into `.daintree/plugins/` would otherwise re-pop the
+    // banner on every debounce cycle.
+    useProjectPluginStore.getState().setViewProjectId(PROJECT);
+    useProjectPluginStore.getState().openPrompt({ projectId: PROJECT, plugins: [] });
+    useProjectPluginStore.getState().dismissPrompt();
+
+    useProjectPluginStore.getState().openPrompt({ projectId: PROJECT, plugins: [] });
+
+    expect(useProjectPluginStore.getState().prompt).toBeNull();
+  });
+
+  it("still raises the gate for a different project after a dismissal", () => {
+    useProjectPluginStore.getState().openPrompt({ projectId: PROJECT, plugins: [] });
+    useProjectPluginStore.getState().dismissPrompt();
+
+    useProjectPluginStore.getState().setViewProjectId(OTHER);
+    useProjectPluginStore.getState().openPrompt({ projectId: OTHER, plugins: [] });
+
+    expect(useProjectPluginStore.getState().prompt?.projectId).toBe(OTHER);
+  });
+
+  it("lets the gate come back when a decision made after a dismissal fails", async () => {
+    setProjectPluginTrust.mockRejectedValueOnce(new Error("disk full"));
+    useProjectPluginStore.getState().openPrompt({ projectId: PROJECT, plugins: [] });
+    useProjectPluginStore.getState().dismissPrompt();
+
+    // The indicator is the way back in after a dismissal, and it calls `decide`
+    // directly. A failed answer must not leave the banner permanently muted.
+    await useProjectPluginStore.getState().decide("enabled");
+    useProjectPluginStore.getState().openPrompt({ projectId: PROJECT, plugins: [] });
+
+    expect(useProjectPluginStore.getState().prompt).not.toBeNull();
+  });
+
   it("ignores a snapshot describing a project this view is not showing", () => {
     useProjectPluginStore.getState().setViewProjectId(PROJECT);
     useProjectPluginStore.getState().applySnapshot({
@@ -297,6 +333,48 @@ describe("projectPluginStore", () => {
 
     expect(activateStagedProjectPlugin).not.toHaveBeenCalled();
     expect(reloadProjectPlugins).not.toHaveBeenCalled();
+  });
+
+  it("marks a reload in flight so its button can show progress", async () => {
+    useProjectPluginStore.getState().applySnapshot({
+      projectId: PROJECT,
+      plugins: [plugin("a", "invalid")],
+      trust: trust(),
+    });
+
+    let release!: () => void;
+    reloadProjectPlugins.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+    );
+
+    const inFlight = useProjectPluginStore.getState().reload();
+    expect(useProjectPluginStore.getState().reloading).toBe(true);
+
+    // A second press while the first is still out would double-scan the folder.
+    await useProjectPluginStore.getState().reload();
+    expect(reloadProjectPlugins).toHaveBeenCalledTimes(1);
+
+    release();
+    await inFlight;
+    expect(useProjectPluginStore.getState().reloading).toBe(false);
+  });
+
+  it("reports a failed reload and stops showing progress", async () => {
+    useProjectPluginStore.getState().applySnapshot({
+      projectId: PROJECT,
+      plugins: [plugin("a", "invalid")],
+      trust: trust(),
+    });
+    reloadProjectPlugins.mockRejectedValue(new Error("folder vanished"));
+
+    await useProjectPluginStore.getState().reload();
+
+    const state = useProjectPluginStore.getState();
+    expect(state.reloading).toBe(false);
+    expect(state.error).toContain("folder vanished");
   });
 
   it("separates blocked plugins from staged ones for the indicator", () => {

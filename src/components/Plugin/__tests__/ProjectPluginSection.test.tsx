@@ -10,6 +10,7 @@ import type { ProjectPluginInfo, ProjectPluginState } from "@shared/types/plugin
 
 const activateStagedProjectPlugin = vi.fn<(pluginId: string) => Promise<void>>();
 const setProjectPluginTrust = vi.fn<(decision: string) => Promise<void>>();
+const reloadProjectPlugins = vi.fn<() => Promise<void>>();
 
 function plugin(overrides: Partial<ProjectPluginInfo> & { state: ProjectPluginState }) {
   return {
@@ -34,9 +35,12 @@ function button(label: string): HTMLElement {
 beforeEach(() => {
   activateStagedProjectPlugin.mockReset().mockResolvedValue(undefined);
   setProjectPluginTrust.mockReset().mockResolvedValue(undefined);
+  reloadProjectPlugins.mockReset().mockResolvedValue(undefined);
   Object.defineProperty(window, "electron", {
     configurable: true,
-    value: { plugin: { activateStagedProjectPlugin, setProjectPluginTrust } },
+    value: {
+      plugin: { activateStagedProjectPlugin, setProjectPluginTrust, reloadProjectPlugins },
+    },
   });
 });
 
@@ -147,6 +151,21 @@ describe("ProjectPluginDetailPane", () => {
       />
     );
     expect(document.body.textContent).toContain("manifest.json is not valid JSON");
+  });
+
+  it("offers a reload for every state, including one that will not parse (#12212)", async () => {
+    // `plugin:project-reload` and `projectPluginStore.reload` both shipped
+    // unwired: switching projects and back was the only reload the UI had.
+    for (const state of ["active", "blocked", "staged", "invalid"] as const) {
+      render(<ProjectPluginDetailPane plugin={plugin({ state })} />);
+      await act(async () => {
+        button("Reload from folder").click();
+      });
+      cleanup();
+      __resetProjectPluginStoreForTesting();
+    }
+
+    expect(reloadProjectPlugins).toHaveBeenCalledTimes(4);
   });
 
   it("offers the folder-level enable while the project is untrusted", async () => {

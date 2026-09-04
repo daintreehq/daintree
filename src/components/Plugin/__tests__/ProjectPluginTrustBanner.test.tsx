@@ -1,42 +1,29 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ProjectPluginTrustDialog } from "../ProjectPluginTrustDialog";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ProjectPluginTrustBanner } from "../ProjectPluginTrustBanner";
 import {
   __resetProjectPluginStoreForTesting,
   useProjectPluginStore,
 } from "@/store/projectPluginStore";
 
-vi.mock("zustand/react/shallow", () => ({
-  useShallow: (fn: unknown) => fn,
-}));
-
-vi.mock("@/store", () => ({
-  usePortalStore: () => ({ isOpen: false, width: 0 }),
-}));
-
-vi.mock("@/hooks", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return { ...actual, useOverlayState: () => {} };
-});
-
-vi.mock("@/hooks/useAnimatedPresence", () => ({
-  useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
-    isVisible: isOpen,
-    shouldRender: isOpen,
-  }),
-}));
-
-vi.stubGlobal(
-  "ResizeObserver",
-  class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-);
-
 const setProjectPluginTrust = vi.fn<(decision: string) => Promise<void>>();
+
+beforeAll(() => {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+});
 
 function button(label: string): HTMLElement {
   const match = screen.getAllByRole("button").find((el) => (el.textContent ?? "").trim() === label);
@@ -69,28 +56,26 @@ function openPrompt() {
   });
 }
 
-describe("ProjectPluginTrustDialog", () => {
-  it("stays closed until the trust prompt arrives", () => {
-    render(<ProjectPluginTrustDialog />);
-    expect(document.querySelector('[data-testid="project-plugin-trust-dialog"]')).toBeNull();
+describe("ProjectPluginTrustBanner", () => {
+  it("renders nothing until the trust prompt arrives", () => {
+    const { container } = render(<ProjectPluginTrustBanner />);
+    expect(container.textContent).toBe("");
 
     openPrompt();
-    expect(document.querySelector('[data-testid="project-plugin-trust-dialog"]')).not.toBeNull();
+    expect(document.body.textContent).toContain("Daintree plugins");
   });
 
   it("names every plugin it is asking about rather than counting them", () => {
-    render(<ProjectPluginTrustDialog />);
+    render(<ProjectPluginTrustBanner />);
     openPrompt();
 
     const text = document.body.textContent ?? "";
     expect(text).toContain("Acme Dashboard");
-    expect(text).toContain("acme.dashboard");
     expect(text).toContain("Deploy Board");
-    expect(text).toContain("acme.deploy-board");
   });
 
   it("states plainly that the code is unsandboxed and names agents", () => {
-    render(<ProjectPluginTrustDialog />);
+    render(<ProjectPluginTrustBanner />);
     openPrompt();
 
     const text = (document.body.textContent ?? "").toLowerCase();
@@ -100,7 +85,7 @@ describe("ProjectPluginTrustDialog", () => {
   });
 
   it("offers exactly the three answers, and no per-capability choice", () => {
-    render(<ProjectPluginTrustDialog />);
+    render(<ProjectPluginTrustBanner />);
     openPrompt();
 
     expect(button("Keep disabled")).toBeTruthy();
@@ -108,7 +93,7 @@ describe("ProjectPluginTrustDialog", () => {
     expect(button("Always enable")).toBeTruthy();
 
     // A capability list here would read as a set of togglable permissions.
-    // There is no sandbox behind them, so the dialog must not imply one.
+    // There is no sandbox behind them, so the gate must not imply one.
     const text = (document.body.textContent ?? "").toLowerCase();
     expect(text).not.toContain("permission");
     expect(text).not.toContain("deny");
@@ -119,7 +104,7 @@ describe("ProjectPluginTrustDialog", () => {
     ["Enable for this session", "session"],
     ["Always enable", "enabled"],
   ])("sends %s as %s", async (label, decision) => {
-    render(<ProjectPluginTrustDialog />);
+    render(<ProjectPluginTrustBanner />);
     openPrompt();
 
     await act(async () => {
@@ -130,15 +115,27 @@ describe("ProjectPluginTrustDialog", () => {
     expect(useProjectPluginStore.getState().prompt).toBeNull();
   });
 
-  it("records nothing when the dialog is dismissed without an answer", () => {
-    render(<ProjectPluginTrustDialog />);
+  it("records nothing when it is dismissed without an answer", () => {
+    const { container } = render(<ProjectPluginTrustBanner />);
     openPrompt();
 
     act(() => {
-      useProjectPluginStore.getState().dismissPrompt();
+      screen.getByRole("button", { name: "Decide later" }).click();
     });
 
     expect(setProjectPluginTrust).not.toHaveBeenCalled();
-    expect(document.querySelector('[data-testid="project-plugin-trust-dialog"]')).toBeNull();
+    expect(useProjectPluginStore.getState().prompt).toBeNull();
+    expect(container.textContent).toBe("");
+  });
+
+  it("does not block: it renders as a status region, never a dialog", () => {
+    render(<ProjectPluginTrustBanner />);
+    openPrompt();
+
+    // The whole point of #12212 was that a modal stole focus from the terminal
+    // an agent was typing into. Nothing here may claim dialog semantics.
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(screen.getAllByRole("status").length).toBeGreaterThan(0);
   });
 });

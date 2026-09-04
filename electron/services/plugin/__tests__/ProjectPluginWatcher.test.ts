@@ -418,6 +418,63 @@ describe("ProjectPluginWatcher", () => {
     expect(await waitFor(() => watcher.isWatching(PROJECT_ID))).toBe(true);
   });
 
+  it("reconciles a plugin folder that appears already complete (#12212)", async () => {
+    // The headline case: an agent writes the whole plugin at once. `arm()`
+    // fingerprints what it finds, so without a forced reconcile the settle
+    // that follows sees nothing changed and stops before the controller —
+    // the project stays silent, which is the bug this issue is about.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `dt-ppw-whole-${randomUUID()}-`));
+    roots.push(root);
+    await fsp.mkdir(path.join(root, ".daintree"), { recursive: true });
+    // Nothing is loaded yet — this project has never had a plugin.
+    const { watcher, reload, loaded } = makeWatcher();
+    loaded.clear();
+    await watcher.ensure(PROJECT_ID, root);
+    expect(watcher.isWatching(PROJECT_ID)).toBe(false);
+
+    // Built elsewhere, then moved in as one unit, so no write ever lands
+    // inside the watched tree.
+    const staging = await fsp.mkdtemp(path.join(os.tmpdir(), `dt-ppw-stage-${randomUUID()}-`));
+    roots.push(staging);
+    const pluginDir = path.join(staging, "plugins", "acme.hello");
+    await fsp.mkdir(path.join(pluginDir, "dist"), { recursive: true });
+    await fsp.writeFile(path.join(pluginDir, "plugin.json"), manifestJson("acme.hello"));
+    await fsp.writeFile(
+      path.join(pluginDir, "dist", "index.js"),
+      "export function activate() {}\n"
+    );
+    await fsp.rename(path.join(staging, "plugins"), path.join(root, ".daintree", "plugins"));
+
+    expect(await waitFor(() => reload.mock.calls.length > 0)).toBe(true);
+    // Nothing was loaded, so there is nothing to name — the point is that the
+    // controller is asked to rescan at all.
+    expect((reload.mock.calls[0] as [string, string, string[]])[2]).toEqual([]);
+  });
+
+  it("follows .daintree inward when the project had neither directory (#12212)", async () => {
+    // `fs.watch` is not recursive: a sentinel parked on the project root never
+    // sees `plugins` created two levels down, so it has to migrate as each
+    // ancestor appears.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `dt-ppw-inward-${randomUUID()}-`));
+    roots.push(root);
+    const { watcher, reload, loaded } = makeWatcher();
+    loaded.clear();
+    await watcher.ensure(PROJECT_ID, root);
+    expect(watcher.isWatching(PROJECT_ID)).toBe(false);
+
+    await fsp.mkdir(path.join(root, ".daintree"), { recursive: true });
+    // Let the sentinel notice the ancestor and re-arm on it before the leaf
+    // directory appears.
+    await settleFor(200);
+
+    const pluginDir = path.join(root, ".daintree", "plugins", "acme.hello");
+    await fsp.mkdir(path.join(pluginDir, "dist"), { recursive: true });
+    await fsp.writeFile(path.join(pluginDir, "plugin.json"), manifestJson("acme.hello"));
+
+    expect(await waitFor(() => watcher.isWatching(PROJECT_ID))).toBe(true);
+    expect(await waitFor(() => reload.mock.calls.length > 0)).toBe(true);
+  });
+
   it("registers an app-quit disposer", async () => {
     const { root } = await makeProject();
     let quit!: () => void;

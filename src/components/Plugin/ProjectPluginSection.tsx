@@ -1,4 +1,4 @@
-import { AlertCircle, Package } from "lucide-react";
+import { AlertCircle, Package, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import { PluginLogsSection, usePluginLogs } from "@/components/Plugin/PluginLogsSection";
@@ -178,9 +178,11 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
   const trust = useProjectPluginStore((s) => s.trust);
   const deciding = useProjectPluginStore((s) => s.deciding);
   const activating = useProjectPluginStore((s) => s.activating);
+  const reloading = useProjectPluginStore((s) => s.reloading);
   const error = useProjectPluginStore((s) => s.error);
   const decide = useProjectPluginStore((s) => s.decide);
   const activateStaged = useProjectPluginStore((s) => s.activateStaged);
+  const reload = useProjectPluginStore((s) => s.reload);
 
   const declared = new Set(plugin.capabilities);
   const granted = BUILT_IN_PLUGIN_CAPABILITIES.filter((c) => declared.has(c));
@@ -258,6 +260,17 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
       )}
 
       <div className="space-y-2 pt-2 border-t border-border-default">
+        {/* Re-reads `.daintree/plugins/` in place. `plugin:project-reload` and
+            the store action behind it both shipped unwired, so switching
+            projects and back was the only reload the UI offered (#12212). It
+            sits above the trust controls because it is the one thing here that
+            is useful whatever the folder's state — including "unreadable",
+            where fixing the manifest and reloading is the whole loop. */}
+        <Button variant="outline" size="sm" onClick={() => void reload()} loading={reloading}>
+          <RefreshCw />
+          Reload from folder
+        </Button>
+
         {plugin.state === "staged" ? (
           <>
             <Button

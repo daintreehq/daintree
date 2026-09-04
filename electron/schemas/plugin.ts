@@ -1261,6 +1261,111 @@ export function getPluginManifestSchema(origin: PluginOrigin | boolean): PluginM
   );
 }
 
+/**
+ * Edit distance, capped: anything past `max` is "not a near miss" and the walk
+ * can stop. Only ever run against the handful of manifest field names, so the
+ * quadratic table is a few dozen cells.
+ */
+function editDistance(a: string, b: string, max: number): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      const value = Math.min(previous[j]! + 1, current[j - 1]! + 1, previous[j - 1]! + cost);
+      current[j] = value;
+      if (value < best) best = value;
+    }
+    if (best > max) return max + 1;
+    previous = current;
+  }
+  return previous[b.length]!;
+}
+
+/**
+ * The manifest field `key` was probably meant to be, or undefined when nothing
+ * is close enough to be worth guessing at. A singular/plural slip counts
+ * whatever its edit distance — `author` for `authors` is the one this was
+ * written for (#12212) — and otherwise a short field name gets one edit of
+ * latitude and a longer one gets two.
+ */
+export function suggestManifestKey(key: string, known: readonly string[]): string | undefined {
+  const lower = key.toLowerCase();
+  // Every candidate is scored before one is chosen. Returning on the first
+  // acceptable match let a plural shortcut win over an exact one that came
+  // later in the shape — `"Scopes"` matched `scope` and never reached `scopes`.
+  let best: string | undefined;
+  let bestRank = Number.POSITIVE_INFINITY;
+  for (const candidate of known) {
+    const candidateLower = candidate.toLowerCase();
+    // Rank, not distance: an exact match beats a plural slip beats an edit.
+    const rank =
+      candidateLower === lower
+        ? 0
+        : candidateLower === `${lower}s` || `${candidateLower}s` === lower
+          ? 1
+          : (() => {
+              const budget = Math.min(candidate.length, key.length) >= 5 ? 2 : 1;
+              const distance = editDistance(lower, candidateLower, budget);
+              return distance <= budget ? 1 + distance : Number.POSITIVE_INFINITY;
+            })();
+    if (rank < bestRank) {
+      best = candidate;
+      bestRank = rank;
+      if (rank === 0) break;
+    }
+  }
+  return best;
+}
+
+/**
+ * Turn a rejected manifest into the one line a plugin author can act on.
+ *
+ * An unrecognized key wins over whatever Zod reported first, because a key the
+ * schema has never heard of is almost always a typo, and a typo is the single
+ * most fixable thing in the list — `"author"` for `authors` cost a real
+ * debugging session with no signal anywhere but a red row in the plugin
+ * manager (#12212). Everything else keeps the existing `path: message` shape.
+ *
+ * Pure formatting over data the parse already produced: it reads nothing from
+ * disk and executes nothing, so it is safe on the pre-trust discovery path.
+ */
+export function describeManifestIssues(
+  issues: readonly z.core.$ZodIssue[],
+  schema: PluginManifestSchema
+): string {
+  // Only a ROOT unrecognized key can be scored against the manifest's own
+  // shape. A stray key nested under `contributes` is a different vocabulary
+  // entirely, and matching it against the root would suggest a field that is
+  // invalid exactly where the author put it — `version` inside `contributes`
+  // "did you mean version?" being the absurd case.
+  // An explicit type predicate: narrowing on `code` alone would be inferred,
+  // but adding the path test to the same expression loses it.
+  const unrecognized = issues.find(
+    (issue): issue is Extract<z.core.$ZodIssue, { code: "unrecognized_keys" }> =>
+      issue.code === "unrecognized_keys" && issue.path.length === 0
+  );
+  if (unrecognized) {
+    const suggestions = unrecognized.keys
+      .map((key) => {
+        const suggestion = suggestManifestKey(key, Object.keys(schema.shape));
+        return suggestion ? `did you mean "${suggestion}" instead of "${key}"?` : null;
+      })
+      .filter((hint): hint is string => hint !== null);
+    // A key nothing resembles is not more actionable than whatever Zod
+    // reported first, so it does not get to displace it.
+    if (suggestions.length > 0) {
+      return `${unrecognized.message} — ${suggestions.join(" ")}`;
+    }
+  }
+
+  const first = issues[0];
+  const where = first?.path.length ? `${first.path.join(".")}: ` : "";
+  return `${where}${first?.message ?? "manifest failed validation"}`;
+}
+
 function buildPluginManifestSchema(origin: PluginOrigin) {
   return z
     .strictObject({

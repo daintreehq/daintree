@@ -27,7 +27,10 @@ const listeners = new Map<string, (payload: unknown) => void>();
 let getProjectPlugins: ReturnType<typeof vi.fn>;
 let getProjectPluginVisibility: ReturnType<typeof vi.fn>;
 
-function row(state: ProjectPluginInfo["state"]): ProjectPluginInfo {
+function row(
+  state: ProjectPluginInfo["state"],
+  extra: Partial<ProjectPluginInfo> = {}
+): ProjectPluginInfo {
   return {
     projectId: "proj-a",
     id: "acme.dashboard",
@@ -38,6 +41,7 @@ function row(state: ProjectPluginInfo["state"]): ProjectPluginInfo {
     state,
     muted: false,
     collidesWithGlobal: false,
+    ...extra,
   };
 }
 
@@ -161,6 +165,94 @@ describe("useProjectPluginBridge", () => {
     expect(payload?.message).toContain("Acme Dashboard");
     expect(payload?.action?.label).toBe("Review");
     expect(payload?.context?.eventKind).toBe("settings");
+  });
+
+  it("routes the inbox row a suppressible global owes, so an outranked banner is recoverable", () => {
+    render(<Harness />);
+    emit("plugin:project-trust-prompt", {
+      projectId: "proj-a",
+      plugins: [{ id: "acme.dashboard", displayName: "Acme Dashboard" }],
+    });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    const payload = notify.mock.calls[0]?.[0];
+    // Inbox only. The banner is the timely surface; this is the backstop for
+    // when a host crash or safe-mode notice wins the single global slot.
+    expect(payload?.priority).toBe("low");
+    expect(payload?.supersedeKey).toBe("project-plugin-trust:proj-a");
+    expect(payload?.action?.label).toBe("Open plugin manager");
+  });
+
+  it("routes no inbox row for a prompt the store refused", () => {
+    render(<Harness />);
+    emit("plugin:project-trust-prompt", {
+      projectId: "proj-b",
+      plugins: [{ id: "acme.dashboard", displayName: "Acme Dashboard" }],
+    });
+
+    expect(useProjectPluginStore.getState().prompt).toBeNull();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("announces an unreadable manifest by folder and reason (#12212)", () => {
+    render(<Harness />);
+    emit("plugin:project-plugins-changed", {
+      projectId: "proj-a",
+      plugins: [row("invalid", { error: 'Unrecognized key: "author" — did you mean "authors"?' })],
+      trust: { projectId: "proj-a", decision: null, enabled: false, persisted: false },
+    });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    const payload = notify.mock.calls[0]?.[0];
+    expect(payload?.type).toBe("error");
+    expect(payload?.title).toContain("dashboard");
+    // The field path IS the fix, so the reason goes through whole.
+    expect(payload?.message).toContain('did you mean "authors"');
+    expect(payload?.action?.label).toBe("Open plugin manager");
+  });
+
+  it("announces the same broken manifest once, however often the snapshot re-pushes", () => {
+    render(<Harness />);
+    const push = () =>
+      emit("plugin:project-plugins-changed", {
+        projectId: "proj-a",
+        plugins: [row("invalid", { error: "authors: expected array" })],
+        trust: { projectId: "proj-a", decision: null, enabled: false, persisted: false },
+      });
+
+    // A snapshot re-pushes on every open, trust change and activation.
+    push();
+    push();
+    push();
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces again when the manifest fails a different way, because that is progress", () => {
+    render(<Harness />);
+    emit("plugin:project-plugins-changed", {
+      projectId: "proj-a",
+      plugins: [row("invalid", { error: 'Unrecognized key: "author"' })],
+      trust: { projectId: "proj-a", decision: null, enabled: false, persisted: false },
+    });
+    emit("plugin:project-plugins-changed", {
+      projectId: "proj-a",
+      plugins: [row("invalid", { error: "version: must be a valid semver" })],
+      trust: { projectId: "proj-a", decision: null, enabled: false, persisted: false },
+    });
+
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(notify.mock.calls[1]?.[0]?.message).toContain("semver");
+  });
+
+  it("says nothing about a project this view is not showing", () => {
+    render(<Harness />);
+    emit("plugin:project-plugins-changed", {
+      projectId: "proj-b",
+      plugins: [{ ...row("invalid", { error: "bad" }), projectId: "proj-b" }],
+      trust: { projectId: "proj-b", decision: null, enabled: false, persisted: false },
+    });
+
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it("keeps an unanswered prompt across a remount, because nothing will re-emit it", () => {

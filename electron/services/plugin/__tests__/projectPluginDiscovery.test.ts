@@ -111,6 +111,38 @@ describe("discoverProjectPlugins", () => {
     expect(result.plugins[0]!.error).toBeTruthy();
   });
 
+  it("points a singular field name at the plural one the schema has (#12212)", async () => {
+    const root = await makeProject();
+    // The real manifest that cost a debugging session: `author`, not `authors`.
+    await writePlugin(root, "dashboard", manifest("acme.dashboard", { author: "Acme" }));
+
+    const result = await discoverProjectPlugins(root);
+    expect(result.plugins[0]!.manifest).toBeUndefined();
+    expect(result.plugins[0]!.error).toContain("author");
+    expect(result.plugins[0]!.error).toContain('did you mean "authors"');
+  });
+
+  it("names the unrecognized key even when nothing is close enough to suggest", async () => {
+    const root = await makeProject();
+    await writePlugin(root, "dashboard", manifest("acme.dashboard", { wibble: 1 }));
+
+    const result = await discoverProjectPlugins(root);
+    expect(result.plugins[0]!.error).toContain("wibble");
+    expect(result.plugins[0]!.error).not.toContain("did you mean");
+  });
+
+  it("still reports the ordinary first issue when every key is recognized", async () => {
+    const root = await makeProject();
+    await writePlugin(
+      root,
+      "dashboard",
+      JSON.stringify({ name: "acme.dashboard", version: "not-semver", scope: "project" })
+    );
+
+    const result = await discoverProjectPlugins(root);
+    expect(result.plugins[0]!.error).toMatch(/^version: /);
+  });
+
   it("reports malformed JSON as an invalid row rather than throwing", async () => {
     const root = await makeProject();
     await writePlugin(root, "broken", "{ not json");

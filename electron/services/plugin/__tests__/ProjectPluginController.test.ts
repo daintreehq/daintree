@@ -72,6 +72,7 @@ function makeHarness(): Harness {
     writeTrust: vi.fn((projectId: string, record?: ProjectPluginTrustRecord) => {
       if (record === undefined) trust.delete(projectId);
       else trust.set(projectId, record);
+      return true;
     }),
     emitToProject: vi.fn((projectId: string, name: string, payload: unknown) => {
       events.push({ projectId, name, payload });
@@ -170,6 +171,133 @@ describe("trust gate", () => {
 
     expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
     expect(h.events.some((e) => e.name === "plugin:project-trust-prompt")).toBe(true);
+  });
+});
+
+describe("persistence failures are loud (#12212)", () => {
+  it("rejects the decision when the trust record did not reach disk", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    h.deps.writeTrust.mockReturnValue(false);
+
+    await expect(h.controller.setTrust(PROJECT_A, "enabled")).rejects.toThrow(/settings file/i);
+  });
+
+  it("still applies the decision it could not persist", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    h.deps.writeTrust.mockReturnValue(false);
+
+    await expect(h.controller.setTrust(PROJECT_A, "enabled")).rejects.toThrow();
+
+    // The grant is real for this session — refusing to run what the user just
+    // said yes to would be a second failure on top of the first.
+    expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(1);
+    // But it must not claim to be remembered, or nothing would re-offer it.
+    expect(h.controller.getTrustState(PROJECT_A)).toMatchObject({
+      decision: "enabled",
+      enabled: true,
+      persisted: false,
+    });
+  });
+
+  it("reports a failed revoke too, after unloading", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "enabled");
+    h.deps.writeTrust.mockReturnValue(false);
+
+    await expect(h.controller.setTrust(PROJECT_A, "disabled")).rejects.toThrow(/settings file/i);
+    expect(h.deps.unloadProjectPlugin).toHaveBeenCalled();
+  });
+
+  it("reports a decision the close race swallowed, rather than resolving as saved", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    // A stale click landing just after a close: the close has queued its
+    // teardown but not run it, so the entry is still there when the decision
+    // is accepted and gone by the time the decision's own task runs.
+    const close = h.controller.onProjectClosed(PROJECT_A);
+    const decision = h.controller.setTrust(PROJECT_A, "enabled");
+
+    await expect(decision).rejects.toThrow(/closed before the decision was saved/i);
+    await close;
+  });
+
+  it("refuses a decision for a project it holds no state for, rather than dropping it", async () => {
+    // Silently returning here let the renderer report a decision as saved that
+    // was never recorded anywhere.
+    await expect(h.controller.setTrust(PROJECT_A, "enabled")).rejects.toThrow(
+      /reopen the project/i
+    );
+    expect(h.deps.writeTrust).not.toHaveBeenCalled();
+  });
+
+  it("a session grant is not a failed write", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    h.deps.writeTrust.mockReturnValue(false);
+
+    // Nothing was meant to be written, so there is nothing to report.
+    await expect(h.controller.setTrust(PROJECT_A, "session")).resolves.toBeUndefined();
+    expect(h.deps.writeTrust).not.toHaveBeenCalled();
+  });
+});
+
+describe("what a failed write means for `persisted` (#12212)", () => {
+  it("does not un-persist a stored decision when only bookkeeping failed", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "enabled");
+    expect(h.controller.getTrustState(PROJECT_A).persisted).toBe(true);
+
+    // A new plugin appears and is staged, then activated — the write here is
+    // the known/staged bookkeeping, not the decision, which is already stored.
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard"), discovered("acme.later")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    h.deps.writeTrust.mockReturnValue(false);
+    await h.controller.activateStaged(PROJECT_A, "acme.later");
+
+    // The grant itself is still on disk; saying otherwise would re-offer a
+    // question the user already answered durably.
+    expect(h.controller.getTrustState(PROJECT_A).persisted).toBe(true);
+  });
+});
+
+describe("watching an undecided project (#12212)", () => {
+  it("reaches the prompt from a watcher edge, with no project switch", async () => {
+    // The folder was empty when the project opened, so there was nothing to
+    // consent to and no decision was recorded.
+    h.setDiscovery(ROOT_A, []);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.events.some((e) => e.name === "plugin:project-trust-prompt")).toBe(false);
+
+    // An agent writes the first plugin into it. The watcher's reload edge is
+    // the only thing that can notice before the user switches projects.
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.reloadChanged(PROJECT_A, ROOT_A, []);
+
+    expect(h.events.some((e) => e.name === "plugin:project-trust-prompt")).toBe(true);
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+  });
+
+  it("still refuses to reload into a project that answered no", async () => {
+    h.trust.set(PROJECT_A, {
+      decision: "disabled",
+      decidedAt: 0,
+      knownPluginIds: [],
+      stagedPluginIds: [],
+      mutedPluginIds: [],
+    });
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    h.events.length = 0;
+
+    await h.controller.reloadChanged(PROJECT_A, ROOT_A, ["acme.dashboard"]);
+
+    expect(h.events.some((e) => e.name === "plugin:project-trust-prompt")).toBe(false);
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
   });
 });
 

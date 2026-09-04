@@ -10,6 +10,7 @@ import type {
   DiscoveredProjectPlugin,
   ProjectPluginDiscoveryResult,
 } from "./projectPluginDiscovery.js";
+import { createLogger } from "../../utils/logger.js";
 
 /**
  * Everything the controller needs from the rest of the host, injected exactly
@@ -34,7 +35,8 @@ export interface ProjectPluginControllerDeps {
   /** Manifest ids already claimed by an installed or builtin plugin. */
   listGlobalPluginIds: () => Set<string>;
   readTrust: (projectId: string) => ProjectPluginTrustRecord | undefined;
-  writeTrust: (projectId: string, record: ProjectPluginTrustRecord | undefined) => void;
+  /** Persist (or clear) a trust record. Returns false when the write did not reach disk. */
+  writeTrust: (projectId: string, record: ProjectPluginTrustRecord | undefined) => boolean;
   /** Deliver a project-scoped push event to that project's renderers only. */
   emitToProject: (projectId: string, name: string, payload: unknown) => void;
   /** Current row status, so a project closed behind our back can be reconciled. */
@@ -65,8 +67,30 @@ interface ProjectEntry {
    */
   muted: Set<string>;
   discovered: DiscoveredProjectPlugin[];
+  /** directory name → the rejection already logged for it, so a rescan is quiet. */
+  loggedRejections: Map<string, string>;
   /** manifest id → instance key, for everything currently loaded. */
   loaded: Map<string, string>;
+}
+
+/**
+ * Project-plugin lifecycle reaches `daintree.log`. A manifest the host refused
+ * and a trust decision that would not persist are both invisible in a packaged
+ * app otherwise — the plugin manager's red row was the only record (#12212).
+ */
+const logger = createLogger("main:ProjectPluginController");
+
+/**
+ * What the user is told when a decision applied but did not reach disk. It
+ * names the consequence rather than the errno, because the only thing they can
+ * act on is that the answer will be asked for again.
+ */
+function persistFailure(decision: ProjectPluginTrustDecision): Error {
+  return new Error(
+    decision === "disabled"
+      ? "Daintree couldn't save this to its settings file, so these plugins stay off for now but this project may ask again next launch."
+      : "Daintree couldn't save this to its settings file, so these plugins are running now but the choice won't survive a restart."
+  );
 }
 
 const EVENT_TRUST_PROMPT = "plugin:project-trust-prompt";
@@ -107,7 +131,7 @@ export class ProjectPluginController {
   private serialize(projectId: string, task: () => Promise<void>): Promise<void> {
     const previous = this.chains.get(projectId) ?? Promise.resolve();
     const next = previous.then(task, task).catch((err: unknown) => {
-      console.error(`[ProjectPluginController] task for project ${projectId} threw:`, err);
+      logger.error("Queued project plugin task threw", err, { projectId });
     });
     this.chains.set(projectId, next);
     return next;
@@ -164,6 +188,7 @@ export class ProjectPluginController {
     // exactly what the user just turned off.
     if (!this.stillCurrent(projectId, entry, generation)) return;
     entry.discovered = discovered;
+    this.logRejectedManifests(entry, projectId);
 
     const valid = entry.discovered.filter(
       (d): d is DiscoveredProjectPlugin & { manifest: Readonly<PluginManifest> } =>
@@ -236,25 +261,59 @@ export class ProjectPluginController {
    */
   async setTrust(projectId: string, decision: ProjectPluginTrustDecision): Promise<void> {
     const pending = this.entries.get(projectId);
-    if (!pending) return;
+    // No entry means no project open under this id — every open runs
+    // `doOpen`, which creates one. Returning quietly here let the renderer
+    // report a decision as saved that was never recorded anywhere (#12212).
+    if (!pending) {
+      throw new Error(
+        "This project's plugins aren't loaded yet, so the decision wasn't saved. Reopen the project and try again."
+      );
+    }
     // Same reason as the close path: the decision invalidates anything already
     // in flight under the previous one.
     pending.generation++;
-    return this.serialize(projectId, () => this.doSetTrust(projectId, decision));
+    // `serialize` swallows rejections by design — it is a chain, and one task's
+    // failure must not poison the next. Carry the persist failure out of the
+    // task instead, so the caller (and through it the user) still sees it.
+    //
+    // A box rather than a bare `let`: TypeScript's control-flow analysis does
+    // not follow an assignment made inside the callback, so a plain
+    // `let failure: Error | null = null` stays narrowed to `null` and the
+    // `throw` below type-checks against `never` — correct at runtime, and a
+    // trap for the next edit.
+    const outcome: { failure: Error | null } = { failure: null };
+    await this.serialize(projectId, async () => {
+      outcome.failure = await this.doSetTrust(projectId, decision);
+    });
+    if (outcome.failure !== null) throw outcome.failure;
   }
 
-  private async doSetTrust(projectId: string, decision: ProjectPluginTrustDecision): Promise<void> {
+  /** Applies the decision. Returns the error to report, or null when it stuck. */
+  private async doSetTrust(
+    projectId: string,
+    decision: ProjectPluginTrustDecision
+  ): Promise<Error | null> {
     const entry = this.entries.get(projectId);
-    if (!entry) return;
+    // The entry existed when the decision was accepted and is gone by the time
+    // the task ran: a close raced the click. Reporting success here would
+    // reintroduce the silent drop the outer throw exists to prevent — the
+    // decision really was not recorded.
+    if (!entry) {
+      logger.warn("Project plugin trust decision lost to a close", { projectId, decision });
+      return new Error(
+        "This project closed before the decision was saved. Reopen it and try again."
+      );
+    }
 
     if (decision === "disabled") {
       entry.decision = "disabled";
       entry.persisted = true;
       entry.decidedAt = Date.now();
       await this.revoke(projectId, entry);
-      this.persist(projectId, entry);
+      const stored = this.persist(projectId, entry);
+      entry.persisted = stored;
       this.emitChanged(projectId);
-      return;
+      return stored ? null : persistFailure(decision);
     }
 
     entry.decision = decision;
@@ -274,9 +333,14 @@ export class ProjectPluginController {
       entry.staged.delete(d.manifest.name);
     }
 
-    this.persist(projectId, entry);
+    const stored = this.persist(projectId, entry);
+    // The renderer reads `persisted` to decide whether to keep offering the
+    // question. A session that believed a failed write reached disk would
+    // describe the grant as remembered and never re-offer it.
+    if (entry.decision === "enabled") entry.persisted = stored;
     await this.reconcileLoaded(projectId, entry, valid, { announceStaged: false });
     this.emitChanged(projectId);
+    return stored ? null : persistFailure(decision);
   }
 
   // --- hot-reload hook (§7.10) ------------------------------------------
@@ -322,7 +386,13 @@ export class ProjectPluginController {
     return this.serialize(projectId, async () => {
       const entry = this.entries.get(projectId);
       if (entry !== requested || entry.generation !== requestedGeneration) return;
-      if (!this.isEnabled(entry)) return;
+      // An undecided project is watched now (#12212), and its watcher edge has
+      // to reach `doOpen` or the first plugin a project ever gets would still
+      // wait for a project switch to be noticed. Nothing loads on that path:
+      // `doOpen` emits the prompt and returns while `decision` is null, and the
+      // unload loop below is a no-op because an ungranted project has nothing
+      // loaded. A remembered "no" is still refused outright.
+      if (!this.isEnabled(entry) && entry.decision !== null) return;
       for (const manifestId of manifestIds) {
         const instanceKey = entry.loaded.get(manifestId);
         if (instanceKey) this.unloadOne(entry, manifestId, instanceKey);
@@ -490,10 +560,7 @@ export class ProjectPluginController {
         try {
           this.deps.unloadProjectPlugin(instanceKey);
         } catch (err) {
-          console.error(
-            `[ProjectPluginController] unload of "${instanceKey}" threw during dispose:`,
-            err
-          );
+          logger.error("Unloading a project plugin threw during dispose", err, { instanceKey });
         }
       }
       entry.loaded.clear();
@@ -518,6 +585,7 @@ export class ProjectPluginController {
       staged: new Set(record?.stagedPluginIds ?? []),
       muted: new Set(record?.mutedPluginIds ?? []),
       discovered: [],
+      loggedRejections: new Map(),
       loaded: new Map(),
     };
     this.entries.set(projectId, entry);
@@ -529,13 +597,39 @@ export class ProjectPluginController {
   }
 
   /**
+   * A manifest the host refused is a fault the author has to fix, and until
+   * now the only record of it was red text in the plugin manager that nothing
+   * pointed at. Reading `error` here executes nothing — discovery has already
+   * produced the string by parsing.
+   */
+  private logRejectedManifests(entry: ProjectEntry, projectId: string): void {
+    const seen = new Map<string, string>();
+    for (const row of entry.discovered) {
+      if (row.manifest !== undefined) continue;
+      const reason = row.error ?? "manifest could not be read";
+      seen.set(row.dirName, reason);
+      // `doOpen` runs on every project switch and on every watcher
+      // reconciliation, so logging the whole scan each time would bury the log
+      // under a manifest the author has not got back to yet. Only transitions
+      // — newly broken, or broken a different way — are news.
+      if (entry.loggedRejections.get(row.dirName) === reason) continue;
+      logger.warn("Project plugin manifest rejected", {
+        projectId,
+        dirName: row.dirName,
+        error: reason,
+      });
+    }
+    entry.loggedRejections = seen;
+  }
+
+  /**
    * A session grant is memory-only by contract, so it writes nothing — not even
    * the `knownPluginIds` bookkeeping, which would otherwise leak the fact of the
    * grant into the next launch and silently promote a staged plugin to known.
    */
-  private persist(projectId: string, entry: ProjectEntry): void {
-    if (entry.decision !== "enabled" && entry.decision !== "disabled") return;
-    this.deps.writeTrust(projectId, {
+  private persist(projectId: string, entry: ProjectEntry): boolean {
+    if (entry.decision !== "enabled" && entry.decision !== "disabled") return true;
+    const stored = this.deps.writeTrust(projectId, {
       decision: entry.decision,
       // The timestamp of the TRUST decision, not of this write. Staging and
       // muting both persist through here, and stamping `Date.now()` on those
@@ -546,6 +640,17 @@ export class ProjectPluginController {
       stagedPluginIds: [...entry.staged],
       mutedPluginIds: [...entry.muted],
     });
+    if (!stored) {
+      // Bookkeeping writes (a staged id promoted to known) land here too, and
+      // they are not the decision. Only {@link doSetTrust} clears `persisted`,
+      // because only it knows the decision itself is the thing that failed —
+      // a failed metadata write leaves an earlier decision on disk untouched.
+      logger.warn("A project plugin trust write did not reach disk", {
+        projectId,
+        decision: entry.decision,
+      });
+    }
+    return stored;
   }
 
   private async reconcileLoaded(
@@ -632,10 +737,7 @@ export class ProjectPluginController {
       }
       entry.loaded.set(manifestId, instanceKey);
     } catch (err) {
-      console.error(
-        `[ProjectPluginController] load of "${manifestId}" for project ${projectId} threw:`,
-        err
-      );
+      logger.error("Loading a project plugin threw", err, { projectId, manifestId });
     }
   }
 
@@ -643,7 +745,7 @@ export class ProjectPluginController {
     try {
       this.deps.unloadProjectPlugin(instanceKey);
     } catch (err) {
-      console.error(`[ProjectPluginController] unload of "${instanceKey}" threw:`, err);
+      logger.error("Unloading a project plugin threw", err, { instanceKey });
     }
     entry.loaded.delete(manifestId);
   }
@@ -678,7 +780,7 @@ export class ProjectPluginController {
       try {
         this.deps.purgeConsentForInstance(instanceKey);
       } catch (err) {
-        console.error(`[ProjectPluginController] consent purge for "${instanceKey}" threw:`, err);
+        logger.error("Purging a project plugin's consent grants threw", err, { instanceKey });
       }
     }
   }

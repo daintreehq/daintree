@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 
-import { getPluginManifestSchema } from "../../schemas/plugin.js";
+import { describeManifestIssues, getPluginManifestSchema } from "../../schemas/plugin.js";
 import type { PluginManifest } from "../../../shared/types/plugin.js";
 
 /** Where a project keeps its own plugins, relative to the project root. */
@@ -189,12 +189,10 @@ async function inspectCandidate(
 
   const parsed = schema.safeParse(json);
   if (!parsed.success) {
-    const first = parsed.error.issues[0];
-    const where = first?.path.length ? `${first.path.join(".")}: ` : "";
     return {
       dirName,
       dir: realDir,
-      error: `${where}${first?.message ?? "manifest failed validation"}`,
+      error: describeManifestIssues(parsed.error.issues, schema),
     };
   }
 
