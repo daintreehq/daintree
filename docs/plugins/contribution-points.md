@@ -171,6 +171,7 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 | `canRestart` | no | Show a "restart" control in the panel header. |
 | `canConvert` | no | Allow conversion between compatible panel kinds. Rarely useful for plugins. |
 | `showInPalette` | no | Include in the "New Panel…" palette. Default `true`. |
+| `dockable` | no | Dockable by default. Declare `false` to opt the kind out of the dock. Rejected together with `hasPty: true` (`pty_panel_dock_opt_out_unsupported`) — a plugin PTY kind renders as a terminal, which is always dockable, so the opt-out could never be honoured. |
 
 **Icon IDs** — one shared set backs every surface that renders a plugin icon (the panel palette, panel headers, tabs, the dock, toolbar buttons, and the toolbar overflow menu), so an ID looks the same everywhere it appears:
 
@@ -182,7 +183,7 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 
 ## Views — _Shipped (panel surface)_
 
-Views are the React components that render inside a panel. A view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. `location: "panel"` is the only supported value; `"sidebar"` is rejected at manifest validation because the sidebar host does not exist yet. The contribution key is `views` (it was `experimental_views` before the 1.0 freeze — the old key is still accepted as a deprecated alias that logs a warning; the shape below is the frozen contract).
+Views are the React components that render inside a panel. A view binds to a panel slot declared in `contributes.panels` by matching its bare `id`; at plugin load the matching panel kind gains a `componentPath` resolved to a `plugin://` URL. The renderer host (`PluginViewHost`) lazy-imports the module over Daintree's `plugin://` protocol and mounts it under an `ErrorBoundary` + `Suspense`. `location: "panel"` is the only supported value; `"sidebar"` is rejected at manifest validation because the sidebar host does not exist yet. The contribution key is `views` (it was `experimental_views` until #10466 — the old key is still accepted as a deprecated alias that logs a warning).
 
 ```json
 {
@@ -218,7 +219,7 @@ The view schema is strict and carries no `name` or `description`: the matching p
 
 **Component contract:**
 
-> **Mixed availability.** `useHostChannel`, `usePluginEvent`, and `usePluginPanelEvent` (see [Host API → React hooks](./host-api.md#react-hooks)) resolve **only when your view is bundled with `@daintreehq/plugin-vite`** — the preset bundles the SDK into your plugin output, so the hooks ship inside your bundle rather than resolving through the host import map. The import map serves only React specifiers; a **raw, un-bundled `plugin://` view** that bare-imports `@daintreehq/plugin-sdk/react` fails at runtime with an unresolved specifier. For a hand-authored view without the build preset, subscribe through the `window.electron.plugin.on(pluginId, channel, cb)` / `.invoke(pluginId, channel, …args)` bridge directly — the same bridge the hooks wrap (the raw-ESM example follows the bundled one below). `useWorktree` / `useWorktrees` / `useSetting` / `useCommand` are still **Planned (F15/F36)** and resolve to nothing in v1; until they ship, read worktree context and settings through the `host` API passed to `activate()` and push it into the panel via `postToPanel`.
+> **Mixed availability.** `useHostChannel`, `usePluginEvent`, and `usePluginPanelEvent` (see [Host API → React hooks](./host-api.md#react-hooks--daintreehqplugin-sdkreact)) resolve **only when your view is bundled with `@daintreehq/plugin-vite`** — the preset bundles the SDK into your plugin output, so the hooks ship inside your bundle rather than resolving through the host import map. The import map serves only React specifiers; a **raw, un-bundled `plugin://` view** that bare-imports `@daintreehq/plugin-sdk/react` fails at runtime with an unresolved specifier. For a hand-authored view without the build preset, subscribe through the `window.electron.plugin.on(pluginId, channel, cb)` / `.invoke(pluginId, channel, …args)` bridge directly — the same bridge the hooks wrap (the raw-ESM example follows the bundled one below). `useWorktree` / `useWorktrees` / `useSetting` / `useCommand` are still **Planned (F15/F36)** and resolve to nothing in v1; until they ship, read worktree context and settings through the `host` API passed to `activate()` and push it into the panel via `postToPanel`.
 
 ```tsx
 // src/dashboard.tsx
@@ -492,7 +493,7 @@ Context menus follow the same `actionId` dispatch pattern as menu items, but a `
 
 ## MCP servers — _Shipped_
 
-Declares Model Context Protocol servers the plugin ships. The manifest key is `mcpServers` (it was `experimental_mcpServers` before the 1.0 freeze — the old key is still accepted as a deprecated alias that logs a warning). The runtime is live: `PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) spawns and supervises the stdio subprocess, and IPC handlers in `electron/ipc/handlers/pluginMcp.ts` wire start/restart/listTools/getFullSchema. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
+Declares Model Context Protocol servers the plugin ships. The manifest key is `mcpServers` (it was `experimental_mcpServers` until #10466 — the old key is still accepted as a deprecated alias that logs a warning). The runtime is live: `PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) spawns and supervises the stdio subprocess, and IPC handlers in `electron/ipc/handlers/pluginMcp.ts` wire start/restart/listTools/getFullSchema. See [Agent extensions → MCP servers](./agent-extensions.md#mcp-servers) for the full story.
 
 ```json
 {

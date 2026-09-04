@@ -2,7 +2,7 @@
 
 The `daintree-plugin` CLI provides the plugin author's tooling. Install it as a dev dependency or use `npx`.
 
-> `daintree-plugin` is not yet published on npm — the `npm install --save-dev daintree-plugin` and `npx daintree-plugin` commands below return E404 today. The CLI is tracked for publication; until it ships, build plugins by hand (see [Getting started](./getting-started.md)) and sideload them manually (see [Distribution → Sideload](./distribution.md#sideload)).
+> `daintree-plugin` is not yet published on npm — the `npm install --save-dev daintree-plugin` and `npx daintree-plugin` commands below return E404 today. The CLI lives in-repo at `packages/daintree-plugin` and the publish pipeline exists (`.github/workflows/release-packages.yml`, fired by a `daintree-plugin-v*` tag), so this is waiting on a release rather than on the tooling. Until it ships: run the CLI from a Daintree checkout (`npm run -w daintree-plugin …`), or build plugins by hand (see [Getting started](./getting-started.md)) and sideload them manually (see [Distribution → Sideload](./distribution.md#sideload)).
 
 ```bash
 npm install --save-dev daintree-plugin
@@ -17,8 +17,10 @@ npx daintree-plugin <command>
 Scaffolds a new plugin project. Interactive — prompts for publisher, display name, template.
 
 ```bash
-npx daintree-plugin new my-plugin
+npx daintree-plugin new my-plugin [--publisher acme] [--template command|view|mcp|full] [--project] [--yes]
 ```
+
+Every prompt has a flag, so the whole thing runs unattended: `--yes` skips the prompts and accepts defaults, and requires both a positional name and `--publisher`. That is the form to use from CI or from an agent.
 
 Creates `./my-plugin/` with:
 
@@ -118,17 +120,19 @@ One host method is a no-op for `dev`-loaded plugins: `registerForgeProvider`. Fo
 
 ### `daintree-plugin validate`
 
-Runs the manifest through Daintree's Zod schema and reports any errors.
+Runs the manifest through Daintree's Zod schema and reports any errors. It validates under the origin your manifest declares, so a `"scope": "project"` manifest is checked against the project rules.
 
 ```bash
-npx daintree-plugin validate
+npx daintree-plugin validate [--env]
 ```
+
+`--env` additionally resolves `${settings:…}` tokens against a `.daintree-plugin-env` file, so you can confirm an MCP server's `command` / `args` / `env` substitute the way you expect before spawning it for real.
 
 Example output:
 
 ```
 ✓ plugin.json is valid
-⚠  engines.daintree omitted — consider pinning a range, e.g. ^0.11.0
+⚠  engines.daintree omitted — consider pinning a range, e.g. >=0.11.0
 ⚠  commands[0].keywords is empty — 2–3 terms help discoverability in the palette
 ```
 
@@ -156,10 +160,10 @@ Useful in CI scripts and setup automation.
 ### `daintree-plugin uninstall <pluginId>`
 
 ```bash
-npx daintree-plugin uninstall acme.linear-planner
+npx daintree-plugin uninstall acme.linear-planner [--delete-settings]
 ```
 
-Equivalent to Preferences → Plugins → Uninstall.
+Equivalent to Preferences → Plugins → Uninstall. User-scope settings are **kept** by default so an API token survives a reinstall; `--delete-settings` removes them. Project-scope settings under a repository's `.daintree/` are never touched either way. TOFU consent pins are always revoked, so a reinstall re-prompts rather than inheriting prior approvals.
 
 ## Debugging
 
@@ -211,7 +215,9 @@ Default timeout is 5 seconds. Causes:
 
 **Changes don't show up after editing**
 
-There's no hot reload yet (see [The edit loop](#the-edit-loop)). Re-run `package` then `install` to load the new build.
+Which loop are you in? Under [`daintree-plugin dev`](#daintree-plugin-dev) a save rebuilds and respawns the plugin's **worker**, so `main`-side changes take effect — but the view-module generation does not advance, so an open panel keeps the bundle already in the renderer's ESM cache. Disable/enable the plugin, or reload the window, to pick up view changes mid-session (see [Contribution points → Worker reload vs. view-module replacement](./contribution-points.md#worker-reload-vs-view-module-replacement)). In the manual loop, re-run `package` then `install`; each install mints a fresh generation, so views do refresh.
+
+If neither explains it:
 
 - A stale `.dntr` got installed — confirm you packaged after your edit, and that the path you installed matches the freshly built file
 - A previous `activate()` threw partway through. The host rolls back every registration the plugin made before the throw — channels, imperative actions, and event/forge/worktree subscriptions are all undone automatically, so you don't strand stale registrations. Fix the error and re-run `package` then `install`; no Daintree restart is needed.
@@ -224,12 +230,12 @@ There's no hot reload yet (see [The edit loop](#the-edit-loop)). Re-run `package
 
 ## Testing
 
-> The standalone `@daintreehq/plugin-testing` package is not yet published (see [Status](./README.md)). The mock host it will eventually ship currently lives in-repo at `shared/testing/createMockHost.ts`; import it via a relative path for now. The example below mirrors `plugins/sample/hello-daintree/__tests__/activate.test.ts`.
+> `@daintreehq/plugin-testing` (`packages/plugin-testing`) exists and is workspace-linked, but is not yet published to npm (see [Status](./README.md)) — import it by relative path outside the workspace. It re-exports `createMockHost` and its record types from `shared/testing/createMockHost.ts`. The example below mirrors `plugins/sample/hello-daintree/__tests__/activate.test.ts`.
 
 ```ts
 // src/plan-from-issue.test.ts
 import { describe, it, expect } from "vitest";
-import { createMockHost } from "../../shared/testing/createMockHost"; // pending @daintreehq/plugin-testing
+import { createMockHost } from "@daintreehq/plugin-testing"; // workspace-linked; not yet on npm
 import planFromIssue from "./plan-from-issue";
 
 describe("plan-from-issue", () => {
@@ -243,7 +249,7 @@ describe("plan-from-issue", () => {
 });
 ```
 
-`createMockHost` implements the `PluginHostApi` surface with in-memory state and records dispatched actions as `{ actionId, args }` on `host.dispatchedActions` (see the `DispatchedActionRecord` type in `shared/testing/createMockHost.ts`). Good for covering command handler logic without spinning up an Electron instance.
+`createMockHost` implements the `PluginHostApi` surface with in-memory state, mirrors the real host's validation and capability gating, and records every call for assertion — dispatched actions land on `host.dispatchedActions` as `{ actionId, args }` (the `DispatchedActionRecord` type), alongside `registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, and the rest. Good for covering handler logic without spinning up an Electron instance. See [Host API → Testing against a mock host](./host-api.md#testing-against-a-mock-host).
 
 A headless-Daintree Playwright harness for full-lifecycle E2E (contribution registration, MCP spawn) is planned but does not exist yet — there's no `@daintreehq/plugin-testing/electron` entry point today.
 
@@ -256,6 +262,8 @@ If you publish `@daintreehq/plugin-sdk`-dependent utilities or shared code as np
 Recommended CI setup for plugins published to GitHub Releases:
 
 > The `daintree-plugin` commands in this workflow are not yet published on npm and will return E404 today. This YAML shows the intended setup once the CLI ships.
+>
+> (This is a workflow for **your** plugin's repository. Daintree's own package-publishing workflow is `.github/workflows/release-packages.yml`, which is a different thing.)
 
 ```yaml
 # .github/workflows/release.yml

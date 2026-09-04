@@ -67,7 +67,7 @@ Add a `forgeProviders` contribution to `plugin.json`. Daintree reads this eagerl
 | `settingsScopeRef` | no | ID prefix in this plugin's `settings` contributions, used to group provider settings. |
 | `viewRefs` | no | IDs of `views` contributions shown under this provider's panel section. |
 
-The `forgeProviders` contribution point is also documented in [Contribution points](./contribution-points.md#forge-providers).
+The `forgeProviders` contribution point is also documented in [Contribution points](./contribution-points.md#forge-providers--shipped).
 
 ## Register in activate()
 
@@ -229,7 +229,7 @@ Forge providers are built-in only, so their tests follow the existing `plugins/b
 ## Related
 
 - [Forge provider abstraction](../architecture/forge-provider-abstraction.md) — design rationale and the full interface narrative
-- [Contribution points → Forge providers](./contribution-points.md#forge-providers) — manifest entry reference
+- [Contribution points → Forge providers](./contribution-points.md#forge-providers--shipped) — manifest entry reference
 - [Host API → `registerForgeProvider`](./host-api.md#registerforgeprovider) — registration signature and rules
 - `shared/types/forge.ts` — the typed contract, source of truth
 - `plugins/builtin/github/` — the canonical worked example
