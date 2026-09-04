@@ -154,7 +154,7 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
 
   const ProjectStatusParamsSchema = z.object({ projectRoot: z.string().min(1) });
 
-async function dispatchMethod(method: string, params: unknown): Promise<unknown> {
+  async function dispatchMethod(method: string, params: unknown): Promise<unknown> {
     switch (method) {
       case "plugin.ping":
         return { status: "ok", pid: process.pid };

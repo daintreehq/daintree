@@ -20,8 +20,7 @@ export const pluginClient = {
   getDiagnosticsSnapshot: (): Promise<PluginDiagnosticsSnapshot> =>
     window.electron.plugin.getDiagnosticsSnapshot(),
 
-  getProjectPlugins: (): Promise<ProjectPluginInfo[]> =>
-    window.electron.plugin.getProjectPlugins(),
+  getProjectPlugins: (): Promise<ProjectPluginInfo[]> => window.electron.plugin.getProjectPlugins(),
 
   reloadProjectPlugins: (): Promise<void> => window.electron.plugin.reloadProjectPlugins(),
 } as const;
