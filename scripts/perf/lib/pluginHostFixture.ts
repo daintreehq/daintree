@@ -445,7 +445,21 @@ export class PluginWorker extends PluginChild {
     timeoutMs: number
   ): Promise<{ activateMs: number; hasCleanup: boolean } | null> {
     const started = performance.now();
-    this.send({ type: "start", bundleUrl: pathToFileURL(bundlePath).href, pluginId });
+    // The worker builds `host.pluginInfo` from this, so it is required even
+    // though this stand-in parent types the channel loosely. The fixture
+    // plugins are app-global, like every installed plugin.
+    this.send({
+      type: "start",
+      bundleUrl: pathToFileURL(bundlePath).href,
+      pluginId,
+      identity: {
+        instanceId: pluginId,
+        manifestId: pluginId,
+        origin: "global",
+        projectId: null,
+        projectRoot: null,
+      },
+    });
     const done = await this.waitFor(
       (message) => message.type === "activated" || message.type === "activate-error",
       timeoutMs
