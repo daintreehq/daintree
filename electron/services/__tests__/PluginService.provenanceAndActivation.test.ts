@@ -1370,6 +1370,38 @@ describe("project plugin load errors", () => {
     expect(service.getPluginLoadError(INSTANCE_KEY)).toBeUndefined();
   });
 
+  it("carries the failure into listPlugins, which the manager and bug reports read", async () => {
+    // The half of the gap `listProjectPlugins` does not cover. This row was
+    // built from the installed provenance record, which a project instance key
+    // is never written to — so PluginManagerView, PluginDetailPane and
+    // `getDiagnosticsSnapshot` (#12222) all described a plugin that had just
+    // thrown as a clean one.
+    const service = await openWithPlugin(
+      "export function activate() { throw new Error('project-boom'); }"
+    );
+    await service.activatePluginForView(PANEL_KIND_ID);
+
+    const row = service.listPlugins().find((p) => p.instanceId === INSTANCE_KEY);
+    expect(row?.origin).toBe("project");
+    expect(row?.loadError?.message).toContain("project-boom");
+
+    // Same field, read straight off that row — and the only thing a bug report
+    // filed against this plugin would have to go on.
+    const diagnostic = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === INSTANCE_KEY);
+    expect(diagnostic?.loadError?.message).toContain("project-boom");
+  });
+
+  it("reports a clean listPlugins row for a project plugin that ran", async () => {
+    const service = await openWithPlugin("export function activate() { return () => {}; }");
+    await service.activatePluginForView(PANEL_KIND_ID);
+
+    const row = service.listPlugins().find((p) => p.instanceId === INSTANCE_KEY);
+    expect(row?.origin).toBe("project");
+    expect(row?.loadError).toBeNull();
+  });
+
   it("reports a clean load for a project plugin whose activate() succeeds", async () => {
     const service = await openWithPlugin("export function activate() { return () => {}; }");
 

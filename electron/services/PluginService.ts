@@ -4758,7 +4758,17 @@ export class PluginService {
         originalUrl: record?.originalUrl ?? null,
         // A blocklisted plugin is a policy refusal, not a technical failure —
         // suppress any stale activation error so the UI shows only "Blocked".
-        loadError: blocklisted ? null : (record?.loadError ?? null),
+        //
+        // Read by INSTANCE key rather than off `record` (#12232). `record` is
+        // deliberately undefined for a project row — the install records are
+        // keyed by manifest id and belong to the global copy — so every other
+        // field above is *inapplicable* to a project plugin, but this one would
+        // be silently wrong: a plugin that loaded and then failed would report
+        // a clean load to the plugin manager and to the diagnostics snapshot
+        // (#12222), which both read this row. For a global plugin the instance
+        // key IS `manifest.name`, so this resolves to the same record field it
+        // was already reading.
+        loadError: blocklisted ? null : (this.getPluginLoadError(instanceId) ?? null),
         disabled,
         updateAvailable: record?.updateAvailable ?? null,
         devMode: record?.devMode ?? false,

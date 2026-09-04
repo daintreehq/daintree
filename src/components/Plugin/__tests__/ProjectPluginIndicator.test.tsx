@@ -228,4 +228,39 @@ describe("ProjectPluginIndicator", () => {
     expect(document.body.textContent).toContain("Cannot find module x");
     expect(document.body.textContent).not.toContain("Running");
   });
+
+  it("keeps the summary dot neutral for a failure, as its footer neighbour does", () => {
+    // `ProjectResourceBadge`, two rows down the same footer, flattens even
+    // `critical` to this neutral, and #12212 put an unreadable manifest inside
+    // the same chrome. An activation failure is the same kind of fault, so it
+    // gets the same treatment — the summary line is what carries the signal.
+    render(<ProjectPluginIndicator />);
+    snapshot([plugin("a.b", "active", { loadError: { message: "activate() threw", at: 1 } })], {
+      decision: "enabled",
+      enabled: true,
+      persisted: true,
+    });
+
+    const dot = screen
+      .getByRole("button", { name: /Project plugins/ })
+      .querySelector("span.rounded-full");
+    expect(dot?.className).toContain("bg-text-primary/25");
+    expect(dot?.className).not.toContain("status-danger");
+  });
+
+  it("gives an unreadable manifest and a failed one the same chrome", async () => {
+    render(<ProjectPluginIndicator />);
+    snapshot([
+      plugin("broken", "invalid", { error: "authors: expected array" }),
+      plugin("c.d", "active", { loadError: { message: "activate() threw", at: 1 } }),
+    ]);
+
+    await act(async () => {
+      screen.getByRole("button", { name: /Project plugins/ }).click();
+    });
+
+    // The store-level `error` line is the only status colour this widget owns,
+    // and nothing here set it.
+    expect(document.querySelector('[class*="status-danger"]')).toBe(null);
+  });
 });

@@ -4,7 +4,6 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { Button } from "@/components/ui/button";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
-import { cn } from "@/lib/utils";
 import type { ProjectPluginInfo } from "@shared/types/plugin";
 
 const MICRO_LABEL = "text-3xs font-medium uppercase tracking-wider text-text-secondary";
@@ -39,10 +38,14 @@ function rowLabel(plugin: ProjectPluginInfo): string {
  * carry the offer afterwards or the decision is one-way. This is that something:
  * a Tier-1 ambient chrome item in the sidebar footer, sharing the surface and
  * the neutral dot of `ProjectResourceBadge` rather than inventing a new element.
- * Never an accent — a folder full of plugins the user turned off is not a
- * fault, and the popover is where the detail belongs. The one exception is a
- * plugin that actually hit an error (#12232): the dot carries `status-danger`
- * then, as the single load-bearing signal in this region.
+ * Never an accent, and never a status colour — a folder full of plugins the
+ * user turned off is not a fault, and the popover is where the detail belongs.
+ * The dot stays neutral even for a genuine fault: `ProjectResourceBadge`, its
+ * neighbour in this same footer stack, flattens `critical` to the same neutral,
+ * and #12212 ruled an unreadable manifest into that chrome too. An activation
+ * failure (#12232) is the same kind of fault as an unreadable one, so it reads
+ * the same way here — the summary line names it, and the row below names the
+ * cause.
  *
  * It renders only when there is something to act on: plugins that are blocked,
  * staged and awaiting a click, unreadable, or broken. A project whose plugins
@@ -114,12 +117,7 @@ export function ProjectPluginIndicator() {
           className="px-4 py-2 border-t border-divider surface-chrome flex items-center shrink-0 w-full hover:bg-text-primary/[0.02] transition-colors cursor-pointer"
         >
           <div className="flex items-center gap-2 min-w-0">
-            <span
-              className={cn(
-                "inline-flex h-2 w-2 rounded-full shrink-0",
-                failed.length > 0 ? "bg-status-danger" : "bg-text-primary/25"
-              )}
-            />
+            <span className="inline-flex h-2 w-2 rounded-full bg-text-primary/25 shrink-0" />
             <span className="text-3xs text-text-secondary font-medium truncate">{summary}</span>
           </div>
         </button>
@@ -152,12 +150,7 @@ export function ProjectPluginIndicator() {
                       Activate
                     </Button>
                   ) : (
-                    <span
-                      className={cn(
-                        "text-3xs shrink-0",
-                        plugin.loadError ? "text-status-danger" : "text-text-secondary"
-                      )}
-                    >
+                    <span className="text-3xs text-text-secondary shrink-0">
                       {rowLabel(plugin)}
                     </span>
                   )}
