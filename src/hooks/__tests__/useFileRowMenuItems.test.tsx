@@ -230,13 +230,22 @@ describe("useFileRowMenuItems — canonical order", () => {
       { pluginId: "acme", item: { label: "Acme thing", actionId: "acme.do", location: "file" } },
     ];
     const menu = await openMenu();
-    const rendered = labels(menu);
 
     // The whole point of the nesting: the root is the same height whatever is
-    // installed, and a third party can no longer render past the core.
-    expect(rendered).not.toContain("Acme thing");
-    expect(rendered.at(-1)).toBe("Extensions");
-    expect(separatorCount(menu)).toBe(2);
+    // installed, and a third party can no longer render past the core. Pinned
+    // as a sequence so the second rule has to sit between Copy and Extensions
+    // rather than merely exist.
+    expect(structure(menu)).toEqual([
+      "Open diff",
+      "Open file",
+      "Open in editor",
+      "Reveal in Finder",
+      expect.stringContaining("Insert file reference"),
+      "---",
+      "Copy",
+      "---",
+      "Extensions",
+    ]);
 
     const extensions = await openSubmenu(menu, "Extensions");
     // A lone contributor needs no provenance label above its own items, and no
