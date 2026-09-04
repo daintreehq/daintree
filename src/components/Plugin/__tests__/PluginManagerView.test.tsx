@@ -68,6 +68,7 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
         recipes: [],
       },
     },
+    instanceId: "acme.demo",
     dir: "/plugins/acme.demo",
     loadedAt: 123,
     isBuiltin: false,
@@ -411,6 +412,7 @@ describe("PluginManagerView", () => {
   it("re-hydrates settings for the newly selected plugin when switching", async () => {
     const pluginA = makePluginWithSettings();
     const pluginB = makePluginWithSettings({
+      instanceId: "beta.demo",
       manifest: {
         ...makePlugin().manifest,
         name: "beta.demo",

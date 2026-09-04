@@ -74,6 +74,7 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
         recipes: [],
       },
     },
+    instanceId: "acme.demo",
     dir: "/plugins/acme.demo",
     loadedAt: 1,
     isBuiltin: false,

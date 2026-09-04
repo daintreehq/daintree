@@ -535,6 +535,9 @@ export interface GeneratedElectronAPI {
     getProjectPlugins(
       ...args: IpcInvokeMap["plugin:project-list"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-list"]["result"]>;
+    getProjectPluginVisibility(
+      ...args: IpcInvokeMap["plugin:project-visibility-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-visibility-get"]["result"]>;
     getProjectSurfaces(
       ...args: IpcInvokeMap["plugin:project-surfaces-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-surfaces-get"]["result"]>;
@@ -598,9 +601,18 @@ export interface GeneratedElectronAPI {
     setEnabled(
       ...args: IpcInvokeMap["plugin:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["plugin:set-enabled"]["result"]>;
+    setPluginVisibilityDefault(
+      ...args: IpcInvokeMap["plugin:visibility-default-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:visibility-default-set"]["result"]>;
+    setProjectPluginMuted(
+      ...args: IpcInvokeMap["plugin:project-set-muted"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-set-muted"]["result"]>;
     setProjectPluginTrust(
       ...args: IpcInvokeMap["plugin:project-set-trust"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-set-trust"]["result"]>;
+    setProjectPluginVisibility(
+      ...args: IpcInvokeMap["plugin:project-visibility-set"]["args"]
+    ): Promise<IpcInvokeMap["plugin:project-visibility-set"]["result"]>;
     setSettingValue(
       ...args: IpcInvokeMap["plugin:settings-set-value"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-set-value"]["result"]>;

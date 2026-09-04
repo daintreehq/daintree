@@ -20,6 +20,9 @@ import { useProjectPluginStore } from "@/store/projectPluginStore";
  * - `plugin:project-plugin-staged` announces a manifest id this project has
  *   never had. Non-blocking, once per id: main records the id the moment it
  *   stages it, so an ignored or declined stage never re-announces.
+ * - `plugin:project-plugin-visibility-changed` carries the per-project overlay
+ *   for INSTALLED plugins. Unlike the three above it has no cold-start emission,
+ *   so the initial value is pulled once on mount.
  *
  * The one fetch is a cold-start backstop for the snapshot. It cannot raise the
  * gate — `plugin:project-list` carries inventory, not consent — so a missed
@@ -44,6 +47,13 @@ export function useProjectPluginBridge(): void {
       useProjectPluginStore.getState().applySnapshot(payload);
     });
 
+    const offVisibility = window.electron.events.on(
+      "plugin:project-plugin-visibility-changed",
+      (payload) => {
+        useProjectPluginStore.getState().applyVisibility(payload);
+      }
+    );
+
     const offStaged = window.electron.events.on("plugin:project-plugin-staged", (payload) => {
       notify({
         type: "info",
@@ -60,6 +70,13 @@ export function useProjectPluginBridge(): void {
         // twice at a louder tier than it earns.
         context: { projectId: payload.projectId, eventKind: "settings" },
       });
+    });
+
+    // The visibility overlay has no cold-start push — main only emits it on a
+    // change — so unlike the plugin list this pull is the primary read, not a
+    // backstop.
+    safeFireAndForget(useProjectPluginStore.getState().loadVisibility(), {
+      context: "useProjectPluginBridge: initial project plugin visibility",
     });
 
     let cancelled = false;
@@ -95,6 +112,7 @@ export function useProjectPluginBridge(): void {
       cancelled = true;
       offPrompt();
       offChanged();
+      offVisibility();
       offStaged();
     };
   }, []);

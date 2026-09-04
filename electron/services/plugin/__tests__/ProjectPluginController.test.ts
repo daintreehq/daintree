@@ -393,6 +393,7 @@ describe("races", () => {
       decidedAt: 0,
       knownPluginIds: ["acme.dashboard"],
       stagedPluginIds: [],
+      mutedPluginIds: [],
     });
     h.deps.discover.mockImplementation(
       () =>
@@ -418,6 +419,7 @@ describe("races", () => {
       decidedAt: 0,
       knownPluginIds: ["acme.dashboard"],
       stagedPluginIds: [],
+      mutedPluginIds: [],
     });
     h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
     h.deps.discover.mockImplementation(async (root: string) => {
@@ -444,6 +446,7 @@ describe("hot-reload hook", () => {
       decidedAt: 0,
       knownPluginIds: ids,
       stagedPluginIds: [],
+      mutedPluginIds: [],
     });
   }
 
@@ -526,5 +529,119 @@ describe("hot-reload hook", () => {
     await h.controller.reloadChanged(PROJECT_A, ROOT_A, ["acme.dashboard"]);
 
     expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+  });
+});
+
+describe("per-plugin mute", () => {
+  function enable(projectId: string, ids: string[], muted: string[] = []): void {
+    h.trust.set(projectId, {
+      decision: "enabled",
+      decidedAt: 0,
+      knownPluginIds: ids,
+      stagedPluginIds: [],
+      mutedPluginIds: muted,
+    });
+  }
+
+  it("skips a muted plugin at the load call, not just in the record", async () => {
+    enable(PROJECT_A, ["acme.dashboard", "acme.linter"], ["acme.linter"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard"), discovered("acme.linter")]);
+
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.dashboard"]);
+    const linter = h.controller.listProjectPlugins(PROJECT_A).find((p) => p.id === "acme.linter")!;
+    expect(linter.muted).toBe(true);
+    expect(linter.state).toBe("blocked");
+  });
+
+  it("unloads a running plugin when it is muted, and reloads it when unmuted", async () => {
+    enable(PROJECT_A, ["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.dashboard"]);
+
+    await h.controller.setMuted(PROJECT_A, "acme.dashboard", true);
+    expect(h.deps.unloadProjectPlugin).toHaveBeenCalledWith(
+      makeProjectPluginInstanceKey(PROJECT_A, "acme.dashboard")
+    );
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual([]);
+
+    await h.controller.setMuted(PROJECT_A, "acme.dashboard", false);
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual(["acme.dashboard"]);
+  });
+
+  it("persists the muted id alongside staged, and leaves the trust decision alone", async () => {
+    enable(PROJECT_A, ["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    await h.controller.setMuted(PROJECT_A, "acme.dashboard", true);
+
+    const record = h.trust.get(PROJECT_A)!;
+    expect(record.mutedPluginIds).toEqual(["acme.dashboard"]);
+    expect(record.decision).toBe("enabled");
+    expect(h.controller.getTrustState(PROJECT_A).enabled).toBe(true);
+  });
+
+  it("never purges capability consent — muting is not revoking", async () => {
+    enable(PROJECT_A, ["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    await h.controller.setMuted(PROJECT_A, "acme.dashboard", true);
+
+    expect(h.deps.purgeConsentForInstance).not.toHaveBeenCalled();
+  });
+
+  it("keeps a muted plugin muted across a re-open", async () => {
+    enable(PROJECT_A, ["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setMuted(PROJECT_A, "acme.dashboard", true);
+    h.deps.loadProjectPlugin.mockClear();
+
+    await h.controller.onProjectClosed(PROJECT_A);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+    expect(h.controller.loadedManifestIds(PROJECT_A)).toEqual([]);
+  });
+
+  it("does not re-stage a muted plugin that disappeared and came back", async () => {
+    enable(PROJECT_A, [], ["acme.linter"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.linter")]);
+
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    // Muted ids are known, so nothing announces them as new arrivals.
+    expect(h.events.filter((e) => e.name === "plugin:project-plugin-staged")).toEqual([]);
+    expect(h.trust.get(PROJECT_A)!.knownPluginIds).toContain("acme.linter");
+    expect(h.trust.get(PROJECT_A)!.stagedPluginIds).toEqual([]);
+  });
+
+  it("clears the mute when a staged plugin is explicitly activated", async () => {
+    enable(PROJECT_A, [], ["acme.linter"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.linter")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    // Unmute first so the plugin reaches `staged`, then activate it.
+    await h.controller.setMuted(PROJECT_A, "acme.linter", false);
+    await h.controller.setMuted(PROJECT_A, "acme.linter", true);
+    await h.controller.setMuted(PROJECT_A, "acme.linter", false);
+    await h.controller.activateStaged(PROJECT_A, "acme.linter");
+
+    expect(h.trust.get(PROJECT_A)!.mutedPluginIds).toEqual([]);
+  });
+
+  it("is a no-op when the plugin is already in the requested state", async () => {
+    enable(PROJECT_A, ["acme.dashboard"]);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    const writes = h.deps.writeTrust.mock.calls.length;
+
+    await h.controller.setMuted(PROJECT_A, "acme.dashboard", false);
+
+    expect(h.deps.writeTrust.mock.calls.length).toBe(writes);
   });
 });

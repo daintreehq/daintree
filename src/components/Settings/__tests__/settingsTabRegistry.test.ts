@@ -20,16 +20,16 @@ const globalEntries = allEntries.filter((e) => e.scope === "global");
 const projectEntries = allEntries.filter((e) => e.scope === "project");
 
 describe("SETTINGS_REGISTRY", () => {
-  it("has 28 entries (20 global + 8 project)", () => {
-    expect(SETTINGS_REGISTRY).toHaveLength(28);
+  it("has 29 entries (20 global + 9 project)", () => {
+    expect(SETTINGS_REGISTRY).toHaveLength(29);
   });
 
   it("has 20 global entries", () => {
     expect(globalEntries).toHaveLength(20);
   });
 
-  it("has 8 project entries", () => {
-    expect(projectEntries).toHaveLength(8);
+  it("has 9 project entries", () => {
+    expect(projectEntries).toHaveLength(9);
   });
 
   it("has no duplicate tab IDs", () => {
@@ -78,9 +78,9 @@ describe("SETTINGS_REGISTRY", () => {
     expect(eager[0]!.id).toBe("general");
   });
 
-  it("has 27 lazy entries (19 global + 8 project)", () => {
+  it("has 28 lazy entries (19 global + 9 project)", () => {
     const lazy = SETTINGS_REGISTRY.filter((e) => e.importKind === "lazy");
-    expect(lazy).toHaveLength(27);
+    expect(lazy).toHaveLength(28);
   });
 
   it("all global entries belong to known global groups", () => {
@@ -148,8 +148,8 @@ describe("SETTINGS_REGISTRY", () => {
 });
 
 describe("PROJECT_TAB_IDS", () => {
-  it("has 8 entries matching the project registry", () => {
-    expect(PROJECT_TAB_IDS).toHaveLength(8);
+  it("has 9 entries matching the project registry", () => {
+    expect(PROJECT_TAB_IDS).toHaveLength(9);
     expect([...PROJECT_TAB_IDS].sort()).toEqual(projectEntries.map((e) => e.id).sort());
   });
 
@@ -229,12 +229,12 @@ describe("getSettingsNavGroups", () => {
     }
   });
 
-  it("returns single Project group for project scope with 8 entries", () => {
+  it("returns single Project group for project scope with 9 entries", () => {
     const groups = getSettingsNavGroups("project");
     expect(groups).toHaveLength(1);
     expect(groups[0]!.label).toBe("Project");
     expect(groups[0]!.scope).toBe("project");
-    expect(groups[0]!.entries).toHaveLength(8);
+    expect(groups[0]!.entries).toHaveLength(9);
   });
 
   it("project group entries match the registry order", () => {
@@ -248,6 +248,7 @@ describe("getSettingsNavGroups", () => {
       "project:commands",
       "project:notifications",
       "project:code-forge",
+      "project:plugins",
     ];
     expect(groups[0]!.entries.map((e) => e.id)).toEqual(expectedOrder);
   });
@@ -264,8 +265,8 @@ describe("settingsTabIds drift guard", () => {
 });
 
 describe("SettingsTab type coverage", () => {
-  it("union of registry IDs equals 28", () => {
+  it("union of registry IDs equals 29", () => {
     const allIds = new Set(SETTINGS_REGISTRY.map((e) => e.id));
-    expect(allIds.size).toBe(28);
+    expect(allIds.size).toBe(29);
   });
 });

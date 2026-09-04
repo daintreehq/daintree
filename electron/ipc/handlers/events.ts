@@ -91,6 +91,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:project-trust-prompt": "external",
   "plugin:project-plugins-changed": "external",
   "plugin:project-plugin-staged": "external",
+  "plugin:project-plugin-visibility-changed": "external",
   "forge:remote-changed": "external",
   "plugin:bg-update-available": "external",
   "run-history:update": "external",

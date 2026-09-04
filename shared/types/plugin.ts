@@ -867,7 +867,18 @@ export interface PluginPickPathFilter {
   extensions: string[];
 }
 
-export type PluginSettingsScope = "user" | "project";
+/**
+ * Where a `contributes.settings` value is stored.
+ *
+ * `"user"` is one file shared by every project. `"project"` is written into the
+ * repository (`<projectRoot>/.daintree/plugin-settings/`) and travels to every
+ * clone. `"local"` is the third case neither covers: per project AND per
+ * machine, held in Daintree's own state directory beside the rest of this
+ * machine's per-project plugin state, never in the repo. An interpreter path is
+ * the canonical example — committing it publishes one machine's layout, and
+ * putting it in user scope applies it to unrelated projects.
+ */
+export type PluginSettingsScope = "user" | "project" | "local";
 
 /**
  * Scope for the private {@link StorageApi} key/value store. Unlike
@@ -1369,6 +1380,17 @@ export interface PluginInstallProgressEvent {
 
 export interface LoadedPluginInfo {
   manifest: PluginManifest;
+  /**
+   * The key this plugin is registered under, which is what every id-taking API
+   * (settings, invoke, actions) expects.
+   *
+   * Equal to `manifest.name` for installed and builtin plugins. For a PROJECT
+   * plugin it is the instance key (`project__{projectId}__{name}`), and the
+   * manifest is left alone — so `manifest.name` alone cannot tell the two
+   * apart, and a consumer that filtered on it would treat a project plugin as
+   * an installed one.
+   */
+  instanceId: string;
   dir: string;
   loadedAt: number;
   /**
@@ -3190,6 +3212,61 @@ export interface ProjectPluginTrustRecord {
    * subsequent edit.
    */
   stagedPluginIds: string[];
+  /**
+   * Manifest ids the user switched off individually. Skipped by the reconcile
+   * exactly the way staged ids are, so a muted plugin is parsed and described
+   * but never run.
+   *
+   * Deliberately NOT a trust decision. Trust is granted once, at the folder, and
+   * stays there; muting is the ordinary case of two plugins in one repo where
+   * one should stay quiet. Keeping it a separate list is what lets the switch
+   * exist without giving trust a per-plugin granularity it does not have — and
+   * why unmuting re-loads rather than re-prompting.
+   */
+  mutedPluginIds: string[];
+}
+
+/**
+ * Per-project visibility for INSTALLED (global) plugins — the overlay that lets
+ * one installed plugin be on in project A and off in project B.
+ *
+ * Keyed by manifest id; `true` is an explicit allow and `false` an explicit
+ * deny. A plugin absent from the map takes the default, which is visible — so
+ * the overlay is empty in an app where nobody has changed anything, and every
+ * contribution filter short-circuits to the identity it had before this
+ * existed. Storing the tri-state rather than a bare deny list is what would let
+ * a future "off by default, opt in per project" mode flip the default without
+ * rewriting anyone's stored decisions.
+ *
+ * This lives in Daintree's own store keyed by project id, never in the
+ * repository — the same place VS Code keeps workspace enablement, and for the
+ * same reason: it is one person's choice about one checkout, not a fact about
+ * the project that every collaborator should inherit.
+ */
+export interface ProjectPluginVisibility {
+  /**
+   * Manifest ids hidden by DEFAULT — in every project that has not said
+   * otherwise. This is the half that makes "on only in the projects I pick"
+   * expressible: without it the only reachable shape is "on everywhere, minus
+   * the projects I have visited and switched off", which silently turns itself
+   * back on in every project created afterwards.
+   */
+  defaultHiddenPluginIds: string[];
+  /**
+   * Explicit decisions for THIS project, keyed by manifest id. An entry beats
+   * the default in either direction; absence takes the default.
+   */
+  overrides: Record<string, boolean>;
+}
+
+/**
+ * `plugin:project-plugin-visibility-changed` — the full overlay for one
+ * project, pushed to that project's renderers after any change so the settings
+ * tab is reactive rather than refetching.
+ */
+export interface ProjectPluginVisibilityChangedEvent {
+  projectId: string;
+  visibility: ProjectPluginVisibility;
 }
 
 /** Runtime state of one plugin directory found under a project's `.daintree/plugins/`. */
@@ -3219,6 +3296,13 @@ export interface ProjectPluginInfo {
   /** Directory name under `.daintree/plugins/`. Not required to equal `id`. */
   dirName: string;
   state: ProjectPluginState;
+  /**
+   * The user switched this plugin off on its own. Orthogonal to {@link state}:
+   * a muted plugin never loads, so it reads as `"blocked"` like any other
+   * plugin that is not running — this is what says the folder is trusted and
+   * this one plugin is the thing that was turned off.
+   */
+  muted: boolean;
   /** Why the directory was rejected. Set iff `state === "invalid"`. */
   error?: string;
   /**

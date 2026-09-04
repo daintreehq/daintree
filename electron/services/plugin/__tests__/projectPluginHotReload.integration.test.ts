@@ -68,6 +68,7 @@ function makeHarness(root: string): Harness {
         // Already known, so the reconcile loads it rather than staging it.
         knownPluginIds: [PLUGIN_ID],
         stagedPluginIds: [],
+        mutedPluginIds: [],
       },
     ],
   ]);

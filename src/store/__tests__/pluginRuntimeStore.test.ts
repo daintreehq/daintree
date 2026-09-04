@@ -39,6 +39,7 @@ function makePlugin(opts: {
         recipes: [],
       },
     },
+    instanceId: opts.id,
     dir: `/plugins/${opts.id}`,
     loadedAt: 1,
     isBuiltin: false,

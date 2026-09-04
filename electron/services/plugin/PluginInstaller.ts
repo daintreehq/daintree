@@ -27,6 +27,7 @@ import { resilientRename } from "../../utils/fs.js";
 import { getPluginMcpSupervisor } from "../PluginMcpSupervisor.js";
 import { getPluginMcpConsentService, getPluginMcpRateLimiter } from "../plugin-mcp/instances.js";
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
+import { clearProjectPluginVisibilityForPlugin } from "./projectPluginVisibility.js";
 import type {
   PluginManifest,
   PluginInstallError,
@@ -1088,6 +1089,19 @@ export class PluginInstaller {
       // kept. Shared with the upgrade path so both close the same gap (#10518 MCP,
       // #10524 capabilities).
       this._purgeConsentPins(pluginId, "uninstall");
+
+      // Drop every per-project visibility decision recorded about this id. A
+      // pluginId is author-controlled, so an overlay left behind would silently
+      // reapply one project's "hidden" to whatever reclaims the id later —
+      // the same reason consent is purged rather than kept above.
+      try {
+        clearProjectPluginVisibilityForPlugin(pluginId);
+      } catch (err) {
+        console.error(
+          `[PluginService] visibility purge during uninstall of "${pluginId}" threw:`,
+          err
+        );
+      }
 
       // Drop the plugin's rate-limit buckets so a same-name reinstall starts
       // with a full burst budget instead of inheriting throttle debt.

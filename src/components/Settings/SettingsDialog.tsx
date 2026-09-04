@@ -1127,6 +1127,11 @@ function ProjectFormTabContent({
         />
       );
 
+    // Reads the project-plugin store and the installed-plugin list directly —
+    // none of its state lives in the shared project form, so it takes no props.
+    case "project:plugins":
+      return <LazyComp />;
+
     default:
       // A project-scope registry entry exists but ProjectFormTabContent has no
       // matching case. Surfaces silent-null bugs when entries are added without

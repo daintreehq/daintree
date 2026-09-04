@@ -25,6 +25,7 @@ function Harness() {
 
 const listeners = new Map<string, (payload: unknown) => void>();
 let getProjectPlugins: ReturnType<typeof vi.fn>;
+let getProjectPluginVisibility: ReturnType<typeof vi.fn>;
 
 function row(state: ProjectPluginInfo["state"]): ProjectPluginInfo {
   return {
@@ -35,6 +36,7 @@ function row(state: ProjectPluginInfo["state"]): ProjectPluginInfo {
     capabilities: [],
     dirName: "dashboard",
     state,
+    muted: false,
     collidesWithGlobal: false,
   };
 }
@@ -49,6 +51,7 @@ beforeEach(() => {
   notify.mockReset();
   listeners.clear();
   getProjectPlugins = vi.fn(() => Promise.resolve([]));
+  getProjectPluginVisibility = vi.fn(() => Promise.resolve({}));
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
@@ -59,7 +62,7 @@ beforeEach(() => {
           return vi.fn();
         }),
       },
-      plugin: { getProjectPlugins },
+      plugin: { getProjectPlugins, getProjectPluginVisibility },
     },
   });
 });
@@ -70,13 +73,40 @@ afterEach(() => {
 });
 
 describe("useProjectPluginBridge", () => {
-  it("subscribes to exactly the three project-scoped pushes", () => {
+  it("subscribes to exactly the four project-scoped pushes", () => {
     render(<Harness />);
     expect([...listeners.keys()].sort()).toEqual([
       "plugin:project-plugin-staged",
+      "plugin:project-plugin-visibility-changed",
       "plugin:project-plugins-changed",
       "plugin:project-trust-prompt",
     ]);
+  });
+
+  it("pulls the visibility overlay on mount and applies later pushes", async () => {
+    getProjectPluginVisibility.mockReturnValue(Promise.resolve({ "acme.tools": false }));
+    render(<Harness />);
+
+    await waitFor(() => {
+      expect(useProjectPluginStore.getState().visibility).toEqual({ "acme.tools": false });
+    });
+
+    emit("plugin:project-plugin-visibility-changed", {
+      projectId: "proj-a",
+      visibility: { "acme.tools": true },
+    });
+    expect(useProjectPluginStore.getState().visibility).toEqual({ "acme.tools": true });
+  });
+
+  it("ignores a visibility push for a project this view is not showing", async () => {
+    render(<Harness />);
+    await waitFor(() => expect(getProjectPluginVisibility).toHaveBeenCalled());
+
+    emit("plugin:project-plugin-visibility-changed", {
+      projectId: "proj-b",
+      visibility: { "acme.tools": false },
+    });
+    expect(useProjectPluginStore.getState().visibility).toEqual({});
   });
 
   it("raises the gate from the trust prompt and from nothing else", () => {

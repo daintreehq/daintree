@@ -72,9 +72,15 @@ import type {
   ProjectPluginTrustDecision,
   ProjectPluginTrustRecord,
   ProjectPluginTrustState,
+  ProjectPluginVisibility,
 } from "../../shared/types/plugin.js";
 import { PluginInstalledRecordsStore } from "./plugin/PluginInstalledRecordsStore.js";
 import { PluginContributionBroadcaster } from "./plugin/PluginContributionBroadcaster.js";
+import {
+  getProjectPluginVisibility as readProjectPluginVisibility,
+  setPluginVisibilityDefault as writePluginVisibilityDefault,
+  setProjectPluginVisibility as writeProjectPluginVisibility,
+} from "./plugin/projectPluginVisibility.js";
 import {
   setPluginContributionScope,
   clearPluginContributionScope,
@@ -498,6 +504,9 @@ function readProjectPluginTrust(projectId: string): ProjectPluginTrustRecord | u
         : [],
       stagedPluginIds: Array.isArray(record.stagedPluginIds)
         ? record.stagedPluginIds.filter((id): id is string => typeof id === "string")
+        : [],
+      mutedPluginIds: Array.isArray(record.mutedPluginIds)
+        ? record.mutedPluginIds.filter((id): id is string => typeof id === "string")
         : [],
     };
   } catch (err) {
@@ -3793,6 +3802,56 @@ export class PluginService {
     await this.syncProjectPluginWatcher(projectId);
   }
 
+  /**
+   * Switch one of a project's own plugins off, or back on, without touching the
+   * folder-level trust decision. Same post-change snapshot push and watcher sync
+   * as a trust change — muting unloads a plugin, so the project's views have to
+   * be told what is no longer there.
+   */
+  async setProjectPluginMuted(projectId: string, pluginId: string, muted: boolean): Promise<void> {
+    await this.projectPlugins.setMuted(projectId, pluginId, muted);
+    await this.pushSnapshotToProject(projectId);
+    await this.syncProjectPluginWatcher(projectId);
+  }
+
+  /** The per-project visibility overlay for INSTALLED plugins. */
+  getProjectPluginVisibility(projectId: string): ProjectPluginVisibility {
+    return readProjectPluginVisibility(projectId);
+  }
+
+  /**
+   * Hide or show one installed plugin in one project. `null` clears the decision
+   * back to the default.
+   *
+   * The plugin keeps running — this is a visibility filter, not an unload — so
+   * the only thing that has to happen after the write is a rebroadcast of the
+   * scoped contribution channels. Nothing in the registries changed, so nothing
+   * else would fire, and the switch would otherwise take effect only on the next
+   * unrelated plugin event.
+   */
+  setProjectPluginVisibility(projectId: string, pluginId: string, visible: boolean | null): void {
+    if (!writeProjectPluginVisibility(projectId, pluginId, visible)) return;
+    this.announceVisibilityChange(projectId);
+  }
+
+  /**
+   * Set whether a plugin is hidden in projects that have not decided for
+   * themselves. Changes what every unanswered project sees, so the rebroadcast
+   * is the same one a per-project change triggers.
+   */
+  setPluginVisibilityDefault(projectId: string, pluginId: string, hidden: boolean): void {
+    if (!writePluginVisibilityDefault(pluginId, hidden)) return;
+    this.announceVisibilityChange(projectId);
+  }
+
+  private announceVisibilityChange(projectId: string): void {
+    this.broadcaster.broadcastVisibilityChanged();
+    broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+      name: "plugin:project-plugin-visibility-changed",
+      payload: { projectId, visibility: readProjectPluginVisibility(projectId) },
+    });
+  }
+
   // ----- project-local plugin hot reload (§7.10) -------------------------
 
   private projectPluginWatcherRegistry: ProjectPluginWatcher | null = null;
@@ -4476,6 +4535,7 @@ export class PluginService {
     const installed = this.records.getInstalledRecords();
 
     const toInfo = (
+      instanceId: string,
       p: { manifest: PluginManifest; dir: string; isBuiltin: boolean },
       loadedAt: number,
       isRunning: boolean,
@@ -4491,6 +4551,7 @@ export class PluginService {
       if (p.isBuiltin) {
         return {
           manifest: p.manifest,
+          instanceId,
           dir: p.dir,
           loadedAt,
           isBuiltin: true,
@@ -4511,6 +4572,7 @@ export class PluginService {
       const record = installed[p.manifest.name];
       return {
         manifest: p.manifest,
+        instanceId,
         dir: p.dir,
         loadedAt,
         isBuiltin: false,
@@ -4532,18 +4594,18 @@ export class PluginService {
       };
     };
 
-    // Plugins that loaded and are running this session.
-    const running = Array.from(this.plugins.values()).map((p) => toInfo(p, p.loadedAt, true));
+    // Plugins that loaded and are running this session. Iterated by ENTRY: the
+    // map key is the registry id, which diverges from `manifest.name` for a
+    // project plugin and is the only thing that names the instance.
+    const running = [...this.plugins].map(([id, p]) => toInfo(id, p, p.loadedAt, true));
 
     // Plugins skipped at launch because they were disabled. They carry no
     // `loadedAt` — the main module never ran — so it's reported as 0.
-    const skipped = Array.from(this.disabledPlugins.values()).map((p) => toInfo(p, 0, false));
+    const skipped = [...this.disabledPlugins].map(([id, p]) => toInfo(id, p, 0, false));
 
     // Plugins refused at launch by the blocklist / kill-switch (#10891). Also
     // never ran (`loadedAt: 0`); the reason drives the "Blocked" badge/banner.
-    const blocked = Array.from(this.blockedPlugins.values()).map((p) =>
-      toInfo(p, 0, false, p.reason)
-    );
+    const blocked = [...this.blockedPlugins].map(([id, p]) => toInfo(id, p, 0, false, p.reason));
 
     return [...running, ...skipped, ...blocked];
   }

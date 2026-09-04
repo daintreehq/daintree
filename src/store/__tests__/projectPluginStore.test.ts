@@ -17,6 +17,11 @@ const OTHER = "proj-b";
 const setProjectPluginTrust = vi.fn<(decision: string) => Promise<void>>();
 const activateStagedProjectPlugin = vi.fn<(pluginId: string) => Promise<void>>();
 const reloadProjectPlugins = vi.fn<() => Promise<void>>();
+const setProjectPluginMuted = vi.fn<(pluginId: string, muted: boolean) => Promise<void>>();
+const setProjectPluginVisibility =
+  vi.fn<(pluginId: string, visible: boolean | null) => Promise<void>>();
+const setPluginVisibilityDefault = vi.fn<(pluginId: string, hidden: boolean) => Promise<void>>();
+const getProjectPluginVisibility = vi.fn<() => Promise<unknown>>();
 
 function plugin(id: string, state: ProjectPluginState): ProjectPluginInfo {
   return {
@@ -27,6 +32,7 @@ function plugin(id: string, state: ProjectPluginState): ProjectPluginInfo {
     capabilities: [],
     dirName: id,
     state,
+    muted: false,
     collidesWithGlobal: false,
   };
 }
@@ -45,9 +51,23 @@ beforeEach(() => {
   setProjectPluginTrust.mockReset().mockResolvedValue(undefined);
   activateStagedProjectPlugin.mockReset().mockResolvedValue(undefined);
   reloadProjectPlugins.mockReset().mockResolvedValue(undefined);
+  setProjectPluginMuted.mockReset().mockResolvedValue(undefined);
+  setProjectPluginVisibility.mockReset().mockResolvedValue(undefined);
+  setPluginVisibilityDefault.mockReset().mockResolvedValue(undefined);
+  getProjectPluginVisibility
+    .mockReset()
+    .mockResolvedValue({ defaultHiddenPluginIds: [], overrides: {} });
   vi.stubGlobal("window", {
     electron: {
-      plugin: { setProjectPluginTrust, activateStagedProjectPlugin, reloadProjectPlugins },
+      plugin: {
+        setProjectPluginTrust,
+        activateStagedProjectPlugin,
+        reloadProjectPlugins,
+        setProjectPluginMuted,
+        setProjectPluginVisibility,
+        setPluginVisibilityDefault,
+        getProjectPluginVisibility,
+      },
     },
   });
 });
@@ -294,5 +314,121 @@ describe("projectPluginStore", () => {
     const state = useProjectPluginStore.getState();
     expect(hasBlockedProjectPlugins(state)).toBe(true);
     expect(stagedProjectPlugins(state).map((p) => p.id)).toEqual(["b"]);
+  });
+});
+
+describe("projectPluginStore mute and visibility", () => {
+  it("tracks a mute in flight and clears it once the call settles", async () => {
+    const store = useProjectPluginStore.getState();
+    store.setViewProjectId(PROJECT);
+    store.applySnapshot({
+      projectId: PROJECT,
+      plugins: [plugin("acme.dash", "active")],
+      trust: trust({ decision: "enabled", enabled: true, persisted: true }),
+    });
+
+    let release: (() => void) | undefined;
+    setProjectPluginMuted.mockReturnValue(
+      new Promise<void>((resolve) => {
+        release = () => resolve();
+      })
+    );
+
+    const pending = useProjectPluginStore.getState().setMuted("acme.dash", true);
+    expect(useProjectPluginStore.getState().muting.has("acme.dash")).toBe(true);
+
+    release!();
+    await pending;
+    expect(useProjectPluginStore.getState().muting.has("acme.dash")).toBe(false);
+  });
+
+  it("surfaces a failed mute and does not leave the row stuck pending", async () => {
+    const store = useProjectPluginStore.getState();
+    store.setViewProjectId(PROJECT);
+    store.applySnapshot({
+      projectId: PROJECT,
+      plugins: [plugin("acme.dash", "active")],
+      trust: trust({ decision: "enabled", enabled: true, persisted: true }),
+    });
+    setProjectPluginMuted.mockRejectedValue(new Error("main said no"));
+
+    await useProjectPluginStore.getState().setMuted("acme.dash", true);
+
+    expect(useProjectPluginStore.getState().error).toBe("main said no");
+    expect(useProjectPluginStore.getState().muting.has("acme.dash")).toBe(false);
+  });
+
+  it("names no project on the wire — main resolves it from the sender", async () => {
+    const store = useProjectPluginStore.getState();
+    store.setViewProjectId(PROJECT);
+    store.applySnapshot({
+      projectId: PROJECT,
+      plugins: [plugin("acme.dash", "active")],
+      trust: trust({ decision: "enabled", enabled: true, persisted: true }),
+    });
+
+    await useProjectPluginStore.getState().setMuted("acme.dash", true);
+
+    // Targeting another project is not expressible, which is the guarantee —
+    // not a renderer-side id check that a compromised renderer could skip.
+    expect(setProjectPluginMuted).toHaveBeenCalledWith("acme.dash", true);
+  });
+
+  it("applies a visibility change optimistically and rolls it back on failure", async () => {
+    const store = useProjectPluginStore.getState();
+    store.setViewProjectId(PROJECT);
+    store.applyVisibility({
+      projectId: PROJECT,
+      visibility: { defaultHiddenPluginIds: [], overrides: {} },
+    });
+    setProjectPluginVisibility.mockRejectedValue(new Error("main said no"));
+
+    await useProjectPluginStore.getState().setVisibility("acme.tools", false);
+
+    expect(useProjectPluginStore.getState().visibility.overrides).toEqual({});
+    expect(useProjectPluginStore.getState().error).toBe("main said no");
+  });
+
+  it("rolls back a failed default change too", async () => {
+    const store = useProjectPluginStore.getState();
+    store.setViewProjectId(PROJECT);
+    store.applyVisibility({
+      projectId: PROJECT,
+      visibility: { defaultHiddenPluginIds: [], overrides: {} },
+    });
+    setPluginVisibilityDefault.mockRejectedValue(new Error("main said no"));
+
+    await useProjectPluginStore.getState().setVisibilityDefault("acme.tools", true);
+
+    expect(useProjectPluginStore.getState().visibility.defaultHiddenPluginIds).toEqual([]);
+  });
+
+  it("ignores a visibility push addressed to another project", () => {
+    const store = useProjectPluginStore.getState();
+    store.setViewProjectId(PROJECT);
+    store.applyVisibility({
+      projectId: OTHER,
+      visibility: { defaultHiddenPluginIds: ["acme.tools"], overrides: {} },
+    });
+
+    expect(useProjectPluginStore.getState().visibility.defaultHiddenPluginIds).toEqual([]);
+  });
+
+  it("drops another project's visibility when the view names itself", () => {
+    const store = useProjectPluginStore.getState();
+    store.applySnapshot({
+      projectId: OTHER,
+      plugins: [],
+      trust: { ...trust(), projectId: OTHER },
+    });
+    store.applyVisibility({
+      projectId: OTHER,
+      visibility: { defaultHiddenPluginIds: ["acme.tools"], overrides: {} },
+    });
+
+    useProjectPluginStore.getState().setViewProjectId(PROJECT);
+
+    expect(useProjectPluginStore.getState().visibility.overrides).toEqual({});
+    expect(useProjectPluginStore.getState().visibility.defaultHiddenPluginIds).toEqual([]);
   });
 });

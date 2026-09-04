@@ -54,8 +54,16 @@ interface ProjectEntry {
   decision: ProjectPluginTrustDecision | null;
   /** True when `decision` came from electron-store rather than this session. */
   persisted: boolean;
+  /** Epoch ms of the trust decision itself. Never moved by a stage or a mute. */
+  decidedAt: number;
   known: Set<string>;
   staged: Set<string>;
+  /**
+   * Manifest ids switched off individually. Read at the point the reconcile
+   * decides whether to `load()`, never only at persist time — a mute that is
+   * written but not consulted leaves the plugin running and the switch lying.
+   */
+  muted: Set<string>;
   discovered: DiscoveredProjectPlugin[];
   /** manifest id → instance key, for everything currently loaded. */
   loaded: Map<string, string>;
@@ -242,6 +250,7 @@ export class ProjectPluginController {
     if (decision === "disabled") {
       entry.decision = "disabled";
       entry.persisted = true;
+      entry.decidedAt = Date.now();
       await this.revoke(projectId, entry);
       this.persist(projectId, entry);
       this.emitChanged(projectId);
@@ -250,6 +259,7 @@ export class ProjectPluginController {
 
     entry.decision = decision;
     entry.persisted = decision === "enabled";
+    entry.decidedAt = Date.now();
 
     // Everything visible at the moment of the grant is what the user just said
     // yes to, so it activates rather than staging. Staging exists for ids that
@@ -332,6 +342,12 @@ export class ProjectPluginController {
     const entry = this.entries.get(projectId);
     if (!entry || !this.isEnabled(entry)) return;
     if (!entry.staged.has(manifestId)) return;
+    // Refuse rather than un-mute. Activation and the off switch are two
+    // separate statements, and silently discarding the second to honour the
+    // first would drop a preference the user has to re-make without ever being
+    // told it was overridden. The UI hides Activate while muted, so reaching
+    // here means something else asked — and the answer is no.
+    if (entry.muted.has(manifestId)) return;
 
     const found = entry.discovered.find((d) => d.manifest?.name === manifestId);
     if (!found?.manifest) return;
@@ -345,6 +361,49 @@ export class ProjectPluginController {
       entry,
       found as DiscoveredProjectPlugin & { manifest: PluginManifest }
     );
+    this.emitChanged(projectId);
+  }
+
+  /**
+   * Switch one of the project's plugins off (or back on) on its own.
+   *
+   * Muting is NOT revoking. It unloads the plugin and stops it loading on
+   * future opens, and that is all: capability grants survive, the folder-level
+   * trust decision is untouched, and unmuting brings the plugin straight back
+   * without re-asking. That asymmetry is the whole point — the user is saying
+   * "not this one", not "I no longer trust this folder", and a mute that
+   * purged consent would quietly turn a preference into a second trust gate.
+   */
+  async setMuted(projectId: string, manifestId: string, muted: boolean): Promise<void> {
+    return this.serialize(projectId, () => this.doSetMuted(projectId, manifestId, muted));
+  }
+
+  private async doSetMuted(projectId: string, manifestId: string, muted: boolean): Promise<void> {
+    const entry = this.entries.get(projectId);
+    if (!entry) return;
+    if (entry.muted.has(manifestId) === muted) return;
+
+    if (muted) {
+      entry.muted.add(manifestId);
+      // A muted plugin is still a plugin this project has surfaced, so it stays
+      // known — otherwise unmuting would re-stage it as if it were new.
+      entry.known.add(manifestId);
+      const instanceKey = entry.loaded.get(manifestId);
+      if (instanceKey) this.unloadOne(entry, manifestId, instanceKey);
+      this.persist(projectId, entry);
+      this.emitChanged(projectId);
+      return;
+    }
+
+    entry.muted.delete(manifestId);
+    this.persist(projectId, entry);
+    if (this.isEnabled(entry)) {
+      const valid = entry.discovered.filter(
+        (d): d is DiscoveredProjectPlugin & { manifest: Readonly<PluginManifest> } =>
+          d.manifest !== undefined
+      );
+      await this.reconcileLoaded(projectId, entry, valid, { announceStaged: false });
+    }
     this.emitChanged(projectId);
   }
 
@@ -364,6 +423,8 @@ export class ProjectPluginController {
           capabilities: [],
           dirName: d.dirName,
           state: "invalid" as const,
+          // A directory with no readable manifest has no id to mute by.
+          muted: false,
           error: d.error ?? "manifest could not be read",
           collidesWithGlobal: false,
         };
@@ -374,6 +435,7 @@ export class ProjectPluginController {
         : entry.staged.has(manifestId)
           ? ("staged" as const)
           : ("blocked" as const);
+      const muted = entry.muted.has(manifestId);
       return {
         projectId,
         id: manifestId,
@@ -384,6 +446,7 @@ export class ProjectPluginController {
         capabilities: [...(d.manifest.capabilities ?? [])],
         dirName: d.dirName,
         state,
+        muted,
         collidesWithGlobal: globalIds.has(manifestId),
       };
     });
@@ -450,8 +513,10 @@ export class ProjectPluginController {
       generation: 0,
       decision: record?.decision ?? null,
       persisted: record !== undefined,
+      decidedAt: record?.decidedAt ?? 0,
       known: new Set(record?.knownPluginIds ?? []),
       staged: new Set(record?.stagedPluginIds ?? []),
+      muted: new Set(record?.mutedPluginIds ?? []),
       discovered: [],
       loaded: new Map(),
     };
@@ -472,9 +537,14 @@ export class ProjectPluginController {
     if (entry.decision !== "enabled" && entry.decision !== "disabled") return;
     this.deps.writeTrust(projectId, {
       decision: entry.decision,
-      decidedAt: Date.now(),
+      // The timestamp of the TRUST decision, not of this write. Staging and
+      // muting both persist through here, and stamping `Date.now()` on those
+      // would move the manager's audit line every time a plugin appeared or was
+      // switched off — reporting a consent the user never gave at that moment.
+      decidedAt: entry.decidedAt,
       knownPluginIds: [...entry.known],
       stagedPluginIds: [...entry.staged],
+      mutedPluginIds: [...entry.muted],
     });
   }
 
@@ -499,6 +569,21 @@ export class ProjectPluginController {
     for (const d of valid) {
       const manifestId = d.manifest.name;
       if (entry.staged.has(manifestId)) continue;
+
+      // The mute gate, at the point of use. A muted plugin still becomes known
+      // (so it never re-announces itself as new) and is still described by
+      // `listProjectPlugins`; it just never reaches `load()`. Deliberately
+      // BEFORE the known/staged promotion below so a plugin muted while it was
+      // absent stays muted when its folder comes back.
+      if (entry.muted.has(manifestId)) {
+        const loadedKey = entry.loaded.get(manifestId);
+        if (loadedKey) this.unloadOne(entry, manifestId, loadedKey);
+        if (!entry.known.has(manifestId)) {
+          entry.known.add(manifestId);
+          persistNeeded = true;
+        }
+        continue;
+      }
 
       if (!entry.known.has(manifestId)) {
         entry.known.add(manifestId);

@@ -1018,7 +1018,7 @@ export const SettingDefinitionObjectSchema = z
     label: z.string().min(1).optional(),
     description: z.string().min(1).optional(),
     default: z.unknown().optional(),
-    scope: z.enum(["user", "project"]).default("user"),
+    scope: z.enum(["user", "project", "local"]).default("user"),
     options: z.array(z.string().min(1)).min(1).optional(),
     min: z.number().optional(),
     max: z.number().optional(),

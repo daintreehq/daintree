@@ -1234,6 +1234,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "plugin:project-set-muted": {
+    args: [pluginId: string, muted: boolean];
+    result: void;
+  };
   "plugin:project-set-trust": {
     args: [decision: import("../plugin.js").ProjectPluginTrustDecision];
     result: void;
@@ -1241,6 +1245,14 @@ export interface GeneratedIpcInvokeMap {
   "plugin:project-surfaces-get": {
     args: [];
     result: Partial<Record<"emptyCanvas", import("../plugin.js").ProjectSurfaceClaim>>;
+  };
+  "plugin:project-visibility-get": {
+    args: [];
+    result: import("../plugin.js").ProjectPluginVisibility;
+  };
+  "plugin:project-visibility-set": {
+    args: [pluginId: string, visible: boolean | null];
+    result: void;
   };
   "plugin:recipe-metadata-update": {
     args: [recipeId: string, updates: import("../project.js").PluginRecipeMetadataPatch];
@@ -1316,6 +1328,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "plugin:validate-action-ids": {
     args: [actionIds: string[]];
+    result: void;
+  };
+  "plugin:visibility-default-set": {
+    args: [pluginId: string, hidden: boolean];
     result: void;
   };
   "plugin:worktree-status-get": {
