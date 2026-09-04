@@ -673,7 +673,9 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
       onDoubleClick={handleDoubleClick}
       style={{ paddingLeft: BASE_PADDING_PX + row.depth * INDENT_PER_DEPTH_PX }}
       className={cn(
-        "flex h-6 w-full cursor-default select-none items-center gap-1 rounded pr-2 font-mono text-xs",
+        // System UI font like every editor's explorer: chrome stays off the bundled
+        // web font's raster path, where the post-switch wrong glyphs lived.
+        "flex h-6 w-full cursor-default select-none items-center gap-1 rounded pr-2 text-xs",
         // Selection is a neutral surface lift, not an accent fill: the tree has
         // hover, selection and container focus all live at once, and the accent
         // is reserved for a single load-bearing signal per focus region.
