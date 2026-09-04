@@ -199,15 +199,17 @@ describe("TerminalLineageLedger", () => {
       ledger.reconcile(census);
       await flush();
 
-      // 200 detaches, then forks 300 while orphaned.
+      // 200 detaches, then forks 300 while orphaned. Adoption waits for 200 to
+      // be re-verified as still itself, so this takes an extra sweep.
       census.set([
         { pid: 100, ppid: 10 },
         { pid: 200, ppid: 1 },
         { pid: 300, ppid: 200 },
       ]);
-      ledger.reconcile(census);
-      await flush();
-      ledger.reconcile(census);
+      for (let i = 0; i < 3; i++) {
+        ledger.reconcile(census);
+        await flush();
+      }
 
       expect(
         ledger
@@ -218,7 +220,9 @@ describe("TerminalLineageLedger", () => {
     });
 
     it("never reports a PID whose start time could not be established", async () => {
-      mockExecFileAsync.mockRejectedValue(new Error("ps unavailable"));
+      mockExecFileAsync.mockRejectedValue(
+        Object.assign(new Error("spawn ps ENOENT"), { code: "ENOENT" })
+      );
       const ledger = new TerminalLineageLedger(null);
       const census = new FakeCensus([
         { pid: 100, ppid: 10 },
@@ -233,10 +237,14 @@ describe("TerminalLineageLedger", () => {
     });
 
     it("drops an entry whose census start time changed (PID reuse)", async () => {
+      // The Windows census carries CreationDate, so a recycled PID is caught
+      // during the sweep rather than waiting for a probe. The fixture uses the
+      // same value the probe reports, as production does — both sides render
+      // CreationDate.ToString("o").
       const ledger = new TerminalLineageLedger(null);
       const census = new FakeCensus([
         { pid: 100, ppid: 10 },
-        { pid: 200, ppid: 100, startTime: "original" },
+        { pid: 200, ppid: 100, startTime: startTimeFor(200) },
       ]);
       ledger.registerRoot(100);
       ledger.reconcile(census);
@@ -246,7 +254,7 @@ describe("TerminalLineageLedger", () => {
 
       census.set([
         { pid: 100, ppid: 10 },
-        { pid: 200, ppid: 999, startTime: "recycled" },
+        { pid: 200, ppid: 999, startTime: `${startTimeFor(200)}-recycled` },
       ]);
       ledger.reconcile(census);
 
@@ -468,9 +476,13 @@ describe("TerminalLineageLedger", () => {
     });
 
     it("does not let an unidentified orphan adopt a subtree", async () => {
-      // Probe failure leaves 200 unidentified. It must not be able to pull an
-      // unrelated subtree into the ledger on the strength of a PID alone.
-      mockExecFileAsync.mockRejectedValue(new Error("ps unavailable"));
+      // 200 never resolves, so it has no proof it is still ours. 300 resolves
+      // fine — if the guard were removed, 200 would launder 300 into the ledger
+      // and getTrackedPids would report it.
+      mockExecFileAsync.mockImplementation(async (_file: string, args: string[]) => {
+        const pids = readRequestedPids(args).filter((pid) => pid !== 200);
+        return { stdout: psOutput(pids), stderr: "" };
+      });
       const ledger = new TerminalLineageLedger(null);
       const census = new FakeCensus([
         { pid: 100, ppid: 10 },
@@ -488,12 +500,59 @@ describe("TerminalLineageLedger", () => {
       ledger.reconcile(census);
       await flush();
       ledger.reconcile(census);
+      await flush();
+      ledger.reconcile(census);
 
-      expect(ledger.getTrackedPids(100)).toEqual([]);
+      expect(ledger.getTrackedPids(100).map((t) => t.pid)).not.toContain(300);
+    });
+
+    it("drops a tracked orphan whose PID was recycled, so it cannot adopt", async () => {
+      // POSIX prune cannot see this: the census has no start time, so PID 200
+      // still "exists". Only re-verification catches that it is someone else
+      // now — and an orphan that is not ours must not pull in its children.
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+      census.set([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 1 },
+      ]);
+      ledger.reconcile(census);
+      await flush();
+      expect(ledger.getTrackedPids(100).map((t) => t.pid)).toEqual([200]);
+
+      // PID 200 now belongs to an unrelated process with a child of its own.
+      mockExecFileAsync.mockImplementation(async (_file: string, args: string[]) => {
+        const pids = readRequestedPids(args);
+        const lines = pids.map((pid) =>
+          pid === 200 ? `  200 ${startTimeFor(7)}` : `  ${pid} ${startTimeFor(pid)}`
+        );
+        return { stdout: lines.join("\n") + "\n", stderr: "" };
+      });
+      census.set([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 1 },
+        { pid: 300, ppid: 200 },
+      ]);
+      ledger.reconcile(census);
+      await flush();
+      ledger.reconcile(census);
+      await flush();
+
+      const pids = ledger.getTrackedPids(100).map((t) => t.pid);
+      expect(pids).not.toContain(200);
+      expect(pids).not.toContain(300);
     });
 
     it("requeues identification after a transient probe failure", async () => {
-      mockExecFileAsync.mockRejectedValueOnce(new Error("ps unavailable"));
+      mockExecFileAsync.mockRejectedValueOnce(
+        Object.assign(new Error("spawn ps ENOENT"), { code: "ENOENT" })
+      );
       const ledger = new TerminalLineageLedger(null);
       const census = new FakeCensus([
         { pid: 100, ppid: 10 },
@@ -686,13 +745,14 @@ describe("TerminalLineageLedger", () => {
     it("never destroys an earlier interrupted claim", () => {
       // An existing claim is another host's unreaped survivor list. Overwriting
       // it would discard the only record of those processes.
-      fs.writeFileSync(`${filePath}.reaping-earlier`, '{"earlier":true}');
+      // Exactly the destination the old fixed-name implementation deleted.
+      fs.writeFileSync(`${filePath}.reaping`, '{"earlier":true}');
       fs.writeFileSync(filePath, "{}");
 
       const claimed = claimShardLineageFile(tmpDir);
 
-      expect(fs.existsSync(`${filePath}.reaping-earlier`)).toBe(true);
-      expect(claimed).not.toBe(`${filePath}.reaping-earlier`);
+      expect(fs.existsSync(`${filePath}.reaping`)).toBe(true);
+      expect(claimed).not.toBe(`${filePath}.reaping`);
     });
 
     it("returns null when there is nothing to claim", () => {
@@ -810,7 +870,9 @@ describe("TerminalLineageLedger", () => {
     it("keeps the ledger when the probe could not run at all", async () => {
       // A blocked `ps` makes "already gone" and "cannot tell" look identical.
       // Deleting here would discard the only record of a live survivor.
-      mockExecFileAsync.mockRejectedValue(new Error("ps: Operation not permitted"));
+      mockExecFileAsync.mockRejectedValue(
+        Object.assign(new Error("spawn ps EPERM"), { code: "EPERM" })
+      );
       writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }]);
 
       await reapPersistedLineages(tmpDir);
@@ -821,7 +883,9 @@ describe("TerminalLineageLedger", () => {
     });
 
     it("gives up on an unresolvable ledger after a bounded number of launches", async () => {
-      mockExecFileAsync.mockRejectedValue(new Error("ps: Operation not permitted"));
+      mockExecFileAsync.mockRejectedValue(
+        Object.assign(new Error("spawn ps EPERM"), { code: "EPERM" })
+      );
       writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }], { attempts: 2 });
 
       await reapPersistedLineages(tmpDir);
@@ -831,9 +895,12 @@ describe("TerminalLineageLedger", () => {
     });
 
     it("deletes the ledger when the probe genuinely reports the PID gone", async () => {
-      // `ps` exits non-zero with empty stdout when no requested PID exists,
-      // but the call itself succeeded — that is evidence, not ambiguity.
-      mockExecFileAsync.mockImplementation(async () => ({ stdout: "", stderr: "" }));
+      // Real `ps -p` rejects with exit status 1 and empty stdout when none of
+      // the requested PIDs exist. The probe ran and gave an answer, so this is
+      // evidence of absence, not ambiguity.
+      mockExecFileAsync.mockImplementation(async () => {
+        throw Object.assign(new Error("Command failed: ps"), { code: 1, stdout: "" });
+      });
       writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }]);
 
       await reapPersistedLineages(tmpDir);

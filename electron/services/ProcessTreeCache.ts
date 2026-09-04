@@ -237,9 +237,15 @@ export class ProcessTreeCache {
 
       // Fold the fresh census into the lineage ledger before subscribers run,
       // so anything reading the ledger during a callback sees this sweep.
+      //
+      // Skipped when the sweep failed: `this.cache` still holds the previous
+      // snapshot, and presenting that as current would let the ledger count a
+      // just-registered root as missing — closing a healthy terminal's lineage
+      // on evidence that predates it.
+      //
       // Isolated from the census itself: a ledger fault must not blind
       // detection, which is what every other subscriber depends on.
-      if (this.lineageLedger) {
+      if (this.lineageLedger && outcome !== "error") {
         try {
           this.lineageLedger.reconcile(this);
         } catch (err) {
