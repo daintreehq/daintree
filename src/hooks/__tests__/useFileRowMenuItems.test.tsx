@@ -141,6 +141,22 @@ function separatorCount(menu: HTMLElement): number {
 }
 
 /**
+ * A menu's rows in DOM order — items, group labels and rules alike, with rules
+ * written as `---`.
+ *
+ * `labels()` sees only menuitems and `separatorCount()` only counts, so between
+ * them a rule moved to the top of a menu, or a group label rendered away from
+ * the group it names, reads as correct. Placement is the whole claim in a
+ * regrouped menu, so it gets an assertion that can see it. The content's own
+ * scroll-shadow overlays are `aria-hidden` and drop out.
+ */
+function structure(menu: HTMLElement): string[] {
+  return [...menu.children]
+    .filter((node) => node.getAttribute("aria-hidden") !== "true")
+    .map((node) => (node.getAttribute("role") === "separator" ? "---" : (node.textContent ?? "")));
+}
+
+/**
  * Opens a nested submenu and hands back its content.
  *
  * `SubContent` is Presence-gated: its items are not in the DOM at all until the
@@ -180,33 +196,33 @@ describe("useFileRowMenuItems — canonical order", () => {
   it("keeps only the direct actions at the root and nests the copies", async () => {
     const menu = await openMenu();
 
-    expect(labels(menu)).toEqual([
+    // The rule is asserted in place, not counted: it is the one thing here that
+    // can end up leading, trailing or doubled as items drop out.
+    expect(structure(menu)).toEqual([
       "Open diff",
       "Open file",
       "Open in editor",
       "Reveal in Finder",
       expect.stringContaining("Insert file reference"),
+      "---",
       "Copy",
     ]);
-    // One rule, between the direct actions and Copy. Counted rather than
-    // eyeballed: the separators are the only thing here that can end up
-    // leading, trailing or doubled as items drop out.
-    expect(separatorCount(menu)).toBe(1);
   });
 
   it("renders the copies in the documented order inside the Copy submenu", async () => {
     const menu = await openMenu();
     const copy = await openSubmenu(menu, "Copy");
 
-    expect(labels(copy)).toEqual([
+    // CopyTree is set apart from the clipboard strings, and the rule sits
+    // between them rather than merely existing somewhere in the submenu.
+    expect(structure(copy)).toEqual([
       "Copy context",
+      "---",
       "Copy path",
       "Copy relative path",
       "Copy file name",
       "Copy file contents",
     ]);
-    // CopyTree is set apart from the three clipboard strings.
-    expect(separatorCount(copy)).toBe(1);
   });
 
   it("nests plugin items under Extensions rather than trailing the root", async () => {
@@ -223,10 +239,9 @@ describe("useFileRowMenuItems — canonical order", () => {
     expect(separatorCount(menu)).toBe(2);
 
     const extensions = await openSubmenu(menu, "Extensions");
-    expect(labels(extensions)).toEqual(["Acme thing"]);
-    // A lone contributor needs no provenance label above its own items.
-    expect(within(extensions).queryByText("acme")).toBeNull();
-    expect(separatorCount(extensions)).toBe(0);
+    // A lone contributor needs no provenance label above its own items, and no
+    // rule to divide it from a group that isn't there.
+    expect(structure(extensions)).toEqual(["Acme thing"]);
   });
 
   it("groups the submenu by contributor when more than one plugin adds items", async () => {
@@ -239,11 +254,39 @@ describe("useFileRowMenuItems — canonical order", () => {
     const extensions = await openSubmenu(menu, "Extensions");
 
     // Grouped by contributor in first-seen order — acme's second item joins its
-    // first rather than staying where it happened to be contributed.
-    expect(labels(extensions)).toEqual(["Acme thing", "Acme other", "Beta thing"]);
-    expect(within(extensions).getByText("acme")).toBeTruthy();
-    expect(within(extensions).getByText("beta")).toBeTruthy();
-    expect(separatorCount(extensions)).toBe(1);
+    // first rather than staying where it happened to be contributed. Asserted
+    // as one sequence because a label that doesn't sit above its own group is
+    // worse than no label: it credits the wrong extension.
+    expect(structure(extensions)).toEqual([
+      "acme",
+      "Acme thing",
+      "Acme other",
+      "---",
+      "beta",
+      "Beta thing",
+    ]);
+  });
+
+  it("opens and closes the Copy submenu from the keyboard", async () => {
+    // Nesting is only honest if it is reachable without a mouse. Every other
+    // submenu test here opens by click, so a regression that kept the click
+    // path and broke ArrowRight — or lost the trigger on the way back out —
+    // would leave the whole suite green with the copies unreachable.
+    const menu = await openMenu();
+    const trigger = within(menu).getByRole("menuitem", { name: "Copy" });
+
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowRight" });
+
+    const copy = await screen.findByRole("menu", { name: "Copy" });
+    await waitFor(() => expect(copy.contains(document.activeElement)).toBe(true));
+
+    fireEvent.keyDown(copy, { key: "ArrowLeft" });
+
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "Copy" })).toBeNull());
+    // Back on the trigger, not stranded on the document — the root menu is
+    // still open and still navigable.
+    expect(document.activeElement).toBe(trigger);
   });
 
   it("renders no Extensions trigger, and no rule for one, with nothing installed", async () => {
@@ -275,10 +318,14 @@ describe("useFileRowMenuItems — conditional items", () => {
     expect(rendered).not.toContain("Open diff");
     expect(rendered).not.toContain("Open file");
     expect(rendered).not.toContain("Open in editor");
-    expect(rendered).toContain("Reveal in Finder");
     // With every open item gone the direct-action block is Reveal and Insert,
-    // so the rule below them still has something above it.
-    expect(separatorCount(menu)).toBe(1);
+    // so the rule below them still has something above it and never leads.
+    expect(structure(menu)).toEqual([
+      "Reveal in Finder",
+      expect.stringContaining("Insert file reference"),
+      "---",
+      "Copy",
+    ]);
 
     const copy = await openSubmenu(menu, "Copy");
     expect(labels(copy)).toContain("Copy path");
@@ -294,6 +341,14 @@ describe("useFileRowMenuItems — conditional items", () => {
     expect(rendered).toContain("Open diff");
     expect(rendered).not.toContain("Open file");
     expect(rendered).not.toContain("Open in editor");
+    // Two of the three opens gone still leaves the rule with items above it.
+    expect(structure(menu)).toEqual([
+      "Open diff",
+      "Reveal in Finder",
+      expect.stringContaining("Insert file reference"),
+      "---",
+      "Copy",
+    ]);
 
     const copy = await openSubmenu(menu, "Copy");
     expect(labels(copy)).toContain("Copy path");
