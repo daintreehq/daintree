@@ -310,6 +310,7 @@ vi.mock("../services/TerminalLineageLedger.js", () => ({
     dispose = vi.fn();
   },
   lineageFilePath: vi.fn(() => "/tmp/pty-lineage.json"),
+  beginTeardownProbeWindow: vi.fn(),
 }));
 
 vi.mock("../services/pty/TerminalResourceMonitor.js", () => ({

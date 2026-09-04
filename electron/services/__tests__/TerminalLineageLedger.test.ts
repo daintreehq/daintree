@@ -27,10 +27,13 @@ vi.mock("node:child_process", async () => {
 
 import {
   TerminalLineageLedger,
+  beginTeardownProbeWindow,
   claimShardLineageFile,
   currentBootEpochSec,
+  endTeardownProbeWindow,
   lineageFilePath,
   probeStartTimes,
+  probeStartTimesSync,
   reapPersistedLineages,
   type LineageCensus,
 } from "../TerminalLineageLedger.js";
@@ -115,6 +118,7 @@ describe("TerminalLineageLedger", () => {
   });
 
   afterEach(() => {
+    endTeardownProbeWindow();
     fs.rmSync(tmpDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
@@ -573,6 +577,30 @@ describe("TerminalLineageLedger", () => {
     });
   });
 
+  describe("getVerifiedOrphanPids", () => {
+    it("never returns init, this process, or its parent", async () => {
+      // The persisted reaper refuses these; the in-memory kill path is the
+      // other surface that signals, so it has to refuse them too.
+      mockSpawnSync.mockImplementation((_file: string, args: string[]) => ({
+        status: 0,
+        stdout: psOutput(readRequestedPids(args)),
+      }));
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+        { pid: process.pid, ppid: 100 },
+        { pid: process.ppid, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+      ledger.reconcile(census);
+
+      expect(ledger.getVerifiedOrphanPids(100, [])).toEqual([200]);
+    });
+  });
+
   describe("persistence", () => {
     it("persists only orphaned descendants", async () => {
       const ledger = new TerminalLineageLedger(filePath);
@@ -767,6 +795,18 @@ describe("TerminalLineageLedger", () => {
       killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     });
 
+    /** The single lineage file the sweep left behind, whatever its name. */
+    function readRetained(): {
+      path: string;
+      attempts?: number;
+      entries: Array<{ pid: number }>;
+    } | null {
+      const names = fs.readdirSync(tmpDir).filter((n) => n.startsWith("pty-lineage"));
+      if (names.length !== 1) return null;
+      const retainedPath = path.join(tmpDir, names[0]);
+      return { path: retainedPath, ...JSON.parse(fs.readFileSync(retainedPath, "utf8")) };
+    }
+
     function writeLedger(
       entries: Array<{ pid: number; startTime: string; rootPid: number }>,
       overrides: Record<string, unknown> = {}
@@ -878,8 +918,30 @@ describe("TerminalLineageLedger", () => {
       await reapPersistedLineages(tmpDir);
 
       expect(killSpy).not.toHaveBeenCalled();
-      expect(fs.existsSync(filePath)).toBe(true);
-      expect(JSON.parse(fs.readFileSync(filePath, "utf8")).attempts).toBe(1);
+      const retained = readRetained();
+      expect(retained?.attempts).toBe(1);
+      expect(retained?.entries.map((e) => e.pid)).toEqual([4242]);
+    });
+
+    it("keeps a retained survivor list off the path a new host will write", async () => {
+      // The retry file used to be rewritten in place. The pty-host forked
+      // moments later builds its own ledger at that same path, and its first
+      // reconcile with no orphans unlinks it — so the bounded-attempt path
+      // never survived a single terminal spawn.
+      mockExecFileAsync.mockRejectedValue(
+        Object.assign(new Error("spawn ps EPERM"), { code: "EPERM" })
+      );
+      writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }]);
+
+      await reapPersistedLineages(tmpDir);
+      expect(fs.existsSync(filePath)).toBe(false);
+
+      const ledger = new TerminalLineageLedger(filePath);
+      ledger.registerRoot(100);
+      ledger.reconcile(new FakeCensus([{ pid: 10, ppid: 1 }]));
+      await flush();
+
+      expect(readRetained()?.entries.map((e) => e.pid)).toEqual([4242]);
     });
 
     it("gives up on an unresolvable ledger after a bounded number of launches", async () => {
@@ -892,6 +954,7 @@ describe("TerminalLineageLedger", () => {
 
       // Retrying forever would leak the file just as surely as deleting early.
       expect(fs.existsSync(filePath)).toBe(false);
+      expect(fs.readdirSync(tmpDir).filter((n) => n.startsWith("pty-lineage"))).toEqual([]);
     });
 
     it("deletes the ledger when the probe genuinely reports the PID gone", async () => {
@@ -912,6 +975,26 @@ describe("TerminalLineageLedger", () => {
     it("is a no-op when the directory holds no ledgers", async () => {
       await expect(reapPersistedLineages(tmpDir)).resolves.toBeUndefined();
       expect(killSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("teardown probe window", () => {
+    it("shares one budget across every sync probe until it is released", () => {
+      // Host teardown disposes N terminals on one thread inside an ~1s window,
+      // and each disposal can run two verification passes. A per-invocation
+      // budget would let the first few claim the whole window.
+      beginTeardownProbeWindow(0);
+      expect(probeStartTimesSync([111]).size).toBe(0);
+      expect(probeStartTimesSync([222]).size).toBe(0);
+      expect(mockSpawnSync).not.toHaveBeenCalled();
+
+      endTeardownProbeWindow();
+      mockSpawnSync.mockImplementation((_file: string, args: string[]) => ({
+        status: 0,
+        stdout: psOutput(readRequestedPids(args)),
+      }));
+
+      expect(probeStartTimesSync([111]).get(111)).toBe(startTimeFor(111));
     });
   });
 

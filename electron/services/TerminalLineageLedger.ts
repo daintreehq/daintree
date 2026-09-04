@@ -278,12 +278,38 @@ export async function probeStartTimes(pids: number[]): Promise<Map<number, strin
 }
 
 /**
+ * Wall-clock deadline shared by every sync probe in one host teardown, or
+ * `null` outside one.
+ */
+let teardownProbeDeadlineMs: number | null = null;
+
+/**
+ * Arm the shared budget for a host teardown.
+ *
+ * {@link SYNC_PROBE_BUDGET_MS} is per invocation, but teardown disposes every
+ * terminal in turn on the host's only thread and each disposal can run two
+ * verification passes — up to 2N `ps` spawns, each otherwise entitled to the
+ * full budget, inside the ~1s Main allows before it force-kills the host. One
+ * deadline for the whole sequence is what the budget was always meant to be.
+ */
+export function beginTeardownProbeWindow(budgetMs: number = SYNC_PROBE_BUDGET_MS): void {
+  teardownProbeDeadlineMs = Date.now() + budgetMs;
+}
+
+/** Release the shared budget, restoring per-invocation behaviour. */
+export function endTeardownProbeWindow(): void {
+  teardownProbeDeadlineMs = null;
+}
+
+/**
  * Synchronous counterpart of {@link probeStartTimes}. Required at kill time:
  * `ProcessTreeKiller.execute()` runs synchronously, and its `immediate` path
  * runs inside `process.on("exit")` where no async work can complete.
  *
- * Bounded by {@link SYNC_PROBE_BUDGET_MS} in total, not per chunk. PIDs in a
- * chunk that is never reached stay unverified, and unverified means unsignalled.
+ * Bounded by {@link SYNC_PROBE_BUDGET_MS} in total, not per chunk, and by the
+ * teardown window from {@link beginTeardownProbeWindow} when one is armed. PIDs
+ * in a chunk that is never reached stay unverified, and unverified means
+ * unsignalled.
  */
 export function probeStartTimesSync(
   pids: number[],
@@ -292,7 +318,7 @@ export function probeStartTimesSync(
   const result = new Map<number, string>();
   if (pids.length === 0) return result;
 
-  const deadline = Date.now() + budgetMs;
+  const deadline = Math.min(Date.now() + budgetMs, teardownProbeDeadlineMs ?? Infinity);
 
   for (const group of chunk(pids, PROBE_CHUNK_SIZE)) {
     const remaining = deadline - Date.now();
@@ -397,6 +423,8 @@ export class TerminalLineageLedger {
    * a live probe.
    */
   private lastCensus: LineageCensus | null = null;
+  /** When {@link lastCensus} was folded in, the observation time for adoptions. */
+  private lastCensusAtMs = 0;
 
   constructor(
     private readonly filePath: string | null,
@@ -473,7 +501,9 @@ export class TerminalLineageLedger {
    */
   getVerifiedOrphanPids(rootPid: number, alreadyCovered: readonly number[]): number[] {
     const covered = new Set(alreadyCovered);
-    const candidates = this.getTrackedPids(rootPid).filter((c) => !covered.has(c.pid));
+    const candidates = this.getTrackedPids(rootPid).filter(
+      (c) => !covered.has(c.pid) && !isForbiddenTarget(c.pid)
+    );
     if (candidates.length === 0) return [];
 
     const current = probeStartTimesSync(candidates.map((c) => c.pid));
@@ -491,7 +521,9 @@ export class TerminalLineageLedger {
    */
   reconcile(census: LineageCensus): void {
     if (this.disposed) return;
+    const censusAtMs = Date.now();
     this.lastCensus = census;
+    this.lastCensusAtMs = censusAtMs;
     if (this.roots.size === 0) return;
 
     for (const [rootPid, entry] of this.roots) {
@@ -530,7 +562,7 @@ export class TerminalLineageLedger {
 
       if (entry.state === "active") {
         for (const pid of census.getDescendantPids(rootPid)) {
-          this.admit(entry, pid);
+          this.admit(entry, pid, censusAtMs);
         }
       }
 
@@ -600,7 +632,7 @@ export class TerminalLineageLedger {
     }
   }
 
-  private admit(entry: RootEntry, pid: number): void {
+  private admit(entry: RootEntry, pid: number, observedAtMs: number): void {
     if (entry.pids.has(pid) || !Number.isInteger(pid) || pid <= 1) return;
     if (this.trackedCount >= MAX_TRACKED_PIDS) {
       if (!this.loggedCapWarning) {
@@ -611,7 +643,7 @@ export class TerminalLineageLedger {
       }
       return;
     }
-    entry.pids.set(pid, { startTime: null, observedAtMs: Date.now(), orphaned: false });
+    entry.pids.set(pid, { startTime: null, observedAtMs, orphaned: false });
     this.trackedCount++;
     this.pendingIdentification.add(pid);
   }
@@ -715,8 +747,12 @@ export class TerminalLineageLedger {
       for (const [pid, tracked] of [...entry.pids]) {
         if (!tracked.orphaned || !tracked.startTime) continue;
         if (startTimes.get(pid) !== tracked.startTime) continue;
+        // The census, not now: this runs a full probe round-trip after the
+        // sweep that enumerated these children, and `observedAtMs` is the
+        // pid-reuse acceptance window. Stamping it here would widen that
+        // window by the probe's latency for adopted grandchildren alone.
         for (const child of census.getDescendantPids(pid)) {
-          this.admit(entry, child);
+          this.admit(entry, child, this.lastCensusAtMs);
         }
       }
     }
@@ -817,8 +853,7 @@ function deleteQuietly(filePath: string): void {
  */
 let claimSequence = 0;
 
-export function claimShardLineageFile(userDataPath: string, shardService?: string): string | null {
-  const source = lineageFilePath(userDataPath, shardService);
+function claimLineageFile(source: string): string | null {
   const claimed = `${source}${REAPING_SUFFIX}-${Date.now()}-${process.pid}-${++claimSequence}`;
   try {
     if (!fs.existsSync(source)) return null;
@@ -827,6 +862,10 @@ export function claimShardLineageFile(userDataPath: string, shardService?: strin
   } catch {
     return null;
   }
+}
+
+export function claimShardLineageFile(userDataPath: string, shardService?: string): string | null {
+  return claimLineageFile(lineageFilePath(userDataPath, shardService));
 }
 
 /** Returns true when the process is gone or was successfully signalled. */
@@ -970,7 +1009,21 @@ export async function reapPersistedLineages(userDataPath: string): Promise<void>
   );
   if (files.length === 0) return;
 
-  await Promise.all(files.map((name) => reapLineageFile(path.join(userDataPath, name))));
+  await Promise.all(
+    files.map((name) => {
+      const source = path.join(userDataPath, name);
+      // A live `.json` is claimed first, exactly as reapShardLineage does. The
+      // retry file the reaper writes for survivors it could not resolve would
+      // otherwise land back on the path the next pty-host constructs its own
+      // ledger at, and that host's first empty persist() unlinks it — the
+      // bounded-attempt path would never survive a single terminal spawn.
+      if (!name.includes(REAPING_SUFFIX)) {
+        const claimed = claimLineageFile(source);
+        return claimed ? reapLineageFile(claimed) : Promise.resolve();
+      }
+      return reapLineageFile(source);
+    })
+  );
 }
 
 /**

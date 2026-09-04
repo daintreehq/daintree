@@ -46,7 +46,11 @@ import {
 } from "./services/pty/analysis/AnalysisWorkerPool.js";
 import { PtyPool, getPtyPool, shouldEnablePtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
-import { TerminalLineageLedger, lineageFilePath } from "./services/TerminalLineageLedger.js";
+import {
+  TerminalLineageLedger,
+  beginTeardownProbeWindow,
+  lineageFilePath,
+} from "./services/TerminalLineageLedger.js";
 import { ImagePathProbe } from "./services/pty/ImagePathProbe.js";
 import { TerminalResourceMonitor } from "./services/pty/TerminalResourceMonitor.js";
 import { events } from "./services/events.js";
@@ -1677,6 +1681,11 @@ port.on("message", async (rawMsg: any) => {
 
 function cleanup(): void {
   console.log("[PtyHost] Disposing resources...");
+
+  // One synchronous `ps` budget for the whole teardown. Every terminal's
+  // disposal below can run two verification passes, and Main force-kills this
+  // host about a second after it asks for the exit.
+  beginTeardownProbeWindow();
 
   // Disconnect all renderer windows
   for (const windowId of Array.from(rendererConnections.keys())) {
