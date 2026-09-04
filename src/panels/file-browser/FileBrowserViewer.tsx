@@ -63,6 +63,8 @@ import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { FileBrowserChangeSummary } from "./FileBrowserChangeSummary";
 
 export interface FileBrowserViewerProps {
+  /** Owning panel's id, so a mode chosen in one panel stays in that panel. */
+  panelId: string;
   /** Absolute path of the selected file; null when nothing is selected. */
   filePath: string | null;
   /** Absolute worktree root — the containment root for reads and asset loads. */
@@ -207,6 +209,7 @@ const FILE_RENDER_MODE_OPTIONS: Array<{ value: FileRenderMode; label: string }> 
  * copy, so a file looks identical in either surface.
  */
 export function FileBrowserViewer({
+  panelId,
   filePath,
   rootPath,
   fileName,
@@ -254,6 +257,20 @@ export function FileBrowserViewer({
   const isHtml = filePath !== null && isHtmlFilePath(filePath);
   const isRenderable = isMarkdown || isHtml;
   const renderMode: FileRenderMode = explicitRenderMode ?? (isHtml ? "source" : "rendered");
+  // The panel id rides a sentinel because this component is not remounted per
+  // panel: a tab group renders one unkeyed GridPanel for whichever tab is
+  // active, so switching between two file browsers reuses this instance —
+  // `FileBrowserPane` guards its cursor the same way, and for the same reason.
+  // Adjusting state during render is React's documented alternative to an
+  // effect here: it re-renders before paint, so the new panel's first file is
+  // never briefly shown in the old panel's mode. Without it a Rendered choice
+  // made in one panel would decide how the next panel's first file opens, and
+  // an HTML file there would land on the very preview it is meant not to.
+  const [modeOwnerPanelId, setModeOwnerPanelId] = useState(panelId);
+  if (modeOwnerPanelId !== panelId) {
+    setModeOwnerPanelId(panelId);
+    setExplicitRenderMode(null);
+  }
   // The same app-level reading size the file panel shows, so a document is the
   // size the reader last chose in whichever surface they opened it (#12134).
   const markdownFontSize = usePreferencesStore((state) => state.markdownFontSize);

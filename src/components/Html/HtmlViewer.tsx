@@ -11,10 +11,11 @@ export interface HtmlViewerProps {
    */
   previewUrl: string | null;
   /**
-   * Bumped by FilePane on every (re)load so a rewritten file re-renders. The
-   * cross-origin sandboxed frame can't be `location.reload()`-ed from here, so a
-   * changing cache-buster query is the only way to force a fresh navigation; the
-   * daintree-html:// handler ignores the query when mapping to disk.
+   * Bumped by the host surface on every (re)load so a rewritten file
+   * re-renders. The cross-origin sandboxed frame can't be `location.reload()`-ed
+   * from here, so a changing cache-buster query is the only way to force a fresh
+   * navigation; the daintree-html:// handler ignores the query when mapping to
+   * disk.
    */
   reloadNonce: number;
   /** Accessible name for the frame (the file name). */
