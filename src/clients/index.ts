@@ -32,6 +32,7 @@ export { commandsClient } from "./commandsClient";
 export { editorClient } from "./editorClient";
 export { appThemeClient } from "./appThemeClient";
 export { globalRecipesClient } from "./globalRecipesClient";
+export { pluginClient } from "./pluginClient";
 export { pluginRecipesClient } from "./pluginRecipesClient";
 export { telemetryPreviewClient } from "./telemetryPreviewClient";
 export { connectivityClient } from "./connectivityClient";

@@ -631,6 +631,9 @@ export interface GeneratedElectronAPI {
     validateActionIds(
       ...args: IpcInvokeMap["plugin:validate-action-ids"]["args"]
     ): Promise<IpcInvokeMap["plugin:validate-action-ids"]["result"]>;
+    validateManifest(
+      ...args: IpcInvokeMap["plugin:validate-manifest"]["args"]
+    ): Promise<IpcInvokeMap["plugin:validate-manifest"]["result"]>;
   };
   pluginCapability: {
     acknowledgeConsent(

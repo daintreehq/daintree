@@ -270,6 +270,11 @@ export const BUILT_IN_ACTION_IDS = [
   "project.silenceNotificationKind",
   "project.detectRunners",
   "project.runCheck",
+
+  // -- pluginActions --
+  "plugin.validate",
+  "plugin.diagnostics",
+  "plugin.reloadProject",
   "project.getStats",
   "project.settings.open",
   "project.cloneRepo",
@@ -537,6 +542,11 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.sendCommand",
   "terminal.paste",
   "project.runCheck",
+  // Reloading a project's plugins unloads and re-runs every one of them,
+  // including whichever plugin made the call. Nothing a plugin declares grants
+  // it authority over its siblings, and self-unloading mid-dispatch is not a
+  // capability so much as a way to lose the call (#12214).
+  "plugin.reloadProject",
   "fleet.accept",
   "fleet.reject",
   "fleet.interrupt",

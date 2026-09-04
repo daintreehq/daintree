@@ -111,7 +111,7 @@
     "test-ratio:check": "node scripts/check-test-ratio.mjs",
     "test-ratio:update": "node scripts/check-test-ratio.mjs --update",
     "test-ratio:pr": "node scripts/check-pr-test-ratio.mjs",
-    "check": "npm run typecheck && npm run check:channels && npm run check:crash-loop-constants && npm run check:node-version && npm run check:ipc && npm run check:ipc-renderer && npm run check:ipc-handwritten && npm run check:help && npm run check:confirm-wiring && npm run check:keybindings && npm run check:plugin-manifests && npm run check:sample-views && npm run check:process-tools && npm run check:api-surface && npm run lint:ratchet && npm run format:check",
+    "check": "npm run typecheck && npm run check:channels && npm run check:crash-loop-constants && npm run check:node-version && npm run check:ipc && npm run check:ipc-renderer && npm run check:ipc-handwritten && npm run check:help && npm run check:confirm-wiring && npm run check:keybindings && npm run check:plugin-manifests && npm run check:plugin-schema && npm run check:sample-views && npm run check:process-tools && npm run check:api-surface && npm run lint:ratchet && npm run format:check",
     "fix": "npm run format && npm run lint:fix",
     "test:smoke": "node scripts/run-smoke.mjs",
     "test:freeze-harness": "node scripts/run-freeze-harness.mjs",
@@ -146,6 +146,8 @@
     "eval:turn-outcome": "tsx scripts/eval/turnOutcome.ts",
     "prepare": "husky",
     "codegen:keybindings": "tsx scripts/codegen/keyboard-shortcuts-doc.ts",
+    "codegen:plugin-schema": "tsx scripts/codegen/plugin-json-schema.ts",
+    "check:plugin-schema": "tsx scripts/codegen/plugin-json-schema.ts --check",
     "check:keybindings": "tsx scripts/codegen/keyboard-shortcuts-doc.ts --check"
   },
   "dependencies": {

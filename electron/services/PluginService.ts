@@ -29,6 +29,11 @@ import {
 } from "../schemas/plugin.js";
 import { getPluginMcpSupervisor } from "./PluginMcpSupervisor.js";
 import { PluginProcessManager } from "./plugin/PluginProcessManager.js";
+import {
+  actionHandlerArityHint,
+  appendHandlerHint,
+  channelHandlerArityHint,
+} from "./plugin/pluginHandlerHints.js";
 import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
@@ -3391,6 +3396,17 @@ export class PluginService {
     return this.plugins.has(pluginId);
   }
 
+  /**
+   * The managed plugins directory this instance discovers user plugins from.
+   * Public because tests and the packaging flow construct the service with a
+   * temp root, so callers that need to reason about that root (the manifest
+   * validation handler's containment check) must read the live value rather
+   * than recompute the default.
+   */
+  getPluginsRoot(): string {
+    return this.pluginsRoot;
+  }
+
   registerHandler<TArgs, TResult>(
     pluginId: string,
     channel: string,
@@ -3510,6 +3526,11 @@ export class PluginService {
         // Contain at the boundary so a throwing handler can't propagate up
         // through `ipcMain.handle` as an unhandled rejection. The error still
         // surfaces to the renderer (rethrown after logging).
+        //
+        // Hint first, so the audit record and the renderer's toast both carry
+        // it — the failure this catches most often is a signature mistake the
+        // plugin's own stack trace cannot name (#12214).
+        appendHandlerHint(err, actionHandlerArityHint(actionHandler, err));
         console.error(`[PluginService] Action handler "${channel}" threw:`, err);
         // Audit at the dispatch boundary (#10463) so non-IPC callers (agent
         // automation, recipe dispatch) leave the same durable trail as a
@@ -3587,6 +3608,14 @@ export class PluginService {
       // process. The error still surfaces to the renderer (we rethrow after
       // logging) — the renderer-side wrapping in `usePluginActions` turns
       // that rejection into a user-facing toast.
+      //
+      // Only the legacy path is hinted (#12214). A typed registration is stored
+      // as the `(ctx, ...args)` adapter above, whose declared arity is 1 for a
+      // reason that has nothing to do with the author's own signature — hinting
+      // on it would accuse every typed handler of a mistake it did not make.
+      if (!channelSchema) {
+        appendHandlerHint(err, channelHandlerArityHint(handler, err));
+      }
       console.error(`[PluginService] Handler "${key}" threw:`, err);
       // Audit at the dispatch boundary (#10463). `channel` carries the plugin
       // channel string that failed (the IPC transport is always plugin:invoke);

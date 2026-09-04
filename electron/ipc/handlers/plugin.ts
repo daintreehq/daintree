@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow, net } from "electron";
-import { open, writeFile, rm, access, stat } from "node:fs/promises";
+import { open, writeFile, readFile, realpath, rm, access, stat } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -20,6 +20,12 @@ import {
   type PluginAuditConfig,
 } from "../../../shared/types/ipc/pluginAudit.js";
 import type { PluginDiagnosticsSnapshot } from "../../../shared/types/ipc/pluginDiagnostics.js";
+import type {
+  PluginManifestIssue,
+  PluginManifestValidationResult,
+} from "../../../shared/types/ipc/pluginValidation.js";
+import { getPluginManifestSchema } from "../../schemas/plugin.js";
+import { collectManifestAdvisories } from "../../schemas/pluginManifestAdvisories.js";
 import { PLUGIN_METHOD_CHANNELS } from "./plugin.preload.js";
 import type * as PluginServiceModule from "../../services/PluginService.js";
 import { MAX_DNTR_BYTES } from "../../utils/pluginArchiveConstants.js";
@@ -92,6 +98,7 @@ import {
   PROJECT_PLUGIN_INSTANCE_PREFIX,
 } from "../../services/plugin/projectPluginIdentity.js";
 import type {
+  PluginOrigin,
   ProjectPluginInfo,
   ProjectPluginTrustDecision,
   ProjectPluginVisibility,
@@ -1182,6 +1189,152 @@ async function handleExportAuditLog(records: PluginActionAuditRecord[]): Promise
   return true;
 }
 
+// ── Manifest validation for plugin authors ────────────────────────────────
+
+/**
+ * `PLUGIN_DIR_SEGMENTS` is where a project keeps its committed plugins. Used
+ * only to decide the validation origin, never to gate access — a manifest being
+ * validated is very often not in its final home yet.
+ */
+const PROJECT_PLUGIN_DIR_SEGMENTS = [".daintree", "plugins"];
+
+function isPathUnder(root: string, candidate: string): boolean {
+  const rel = path.relative(root, candidate);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/**
+ * Validate an arbitrary on-disk `plugin.json` against the real manifest schema
+ * so a plugin-authoring agent can read the field paths it got wrong instead of
+ * inferring them from a plugin that silently failed to load.
+ *
+ * Path is confined to the sender's own project root or the managed plugins
+ * root. The reply is only a verdict on a file the caller named, but the read
+ * itself is the reach — an unconfined path would turn a schema check into a
+ * file-existence oracle over the whole filesystem, and the callers this exists
+ * for (an agent authoring into `.daintree/plugins/`, a user installing into
+ * `~/.daintree/plugins/`) are both inside those roots by construction.
+ */
+async function handleValidateManifest(
+  ctx: IpcContext,
+  targetPath: string
+): Promise<PluginManifestValidationResult> {
+  if (typeof targetPath !== "string" || targetPath.trim().length === 0) {
+    throw new Error("plugin manifest validation: path must be a non-empty string");
+  }
+  const svc = await getPluginService();
+  // Imported lazily, like `getPluginService` above: `ProjectStore` is a module
+  // singleton that reads `app.getPath("userData")` as it initializes, so a
+  // static import would drag Electron's `app` into every consumer of this
+  // module at import time — including tests that mock `electron` and have no
+  // reason to know this handler exists.
+  const { projectStore } = await import("../../services/ProjectStore.js");
+  const projectRoot = ctx.projectId
+    ? (projectStore.getProjectById(ctx.projectId)?.path ?? null)
+    : null;
+  const pluginsRoot = svc.getPluginsRoot();
+  // A relative path is resolved against the project root, never the main
+  // process's cwd — the caller is an agent working in the project, and cwd is
+  // wherever the app happened to launch from.
+  if (!isAbsolute(targetPath) && projectRoot === null) {
+    throw new Error(
+      `plugin manifest validation: "${targetPath}" is relative and the sender has no open project to resolve it against. Pass an absolute path.`
+    );
+  }
+  const resolved = isAbsolute(targetPath)
+    ? path.resolve(targetPath)
+    : path.resolve(projectRoot as string, targetPath);
+  const allowedRoots = [projectRoot, pluginsRoot].filter((root): root is string => root !== null);
+  const outside = (): Error =>
+    new Error(
+      `plugin manifest validation: "${targetPath}" is outside this project and the managed plugins directory. Validate a path under ${allowedRoots.join(" or ") || "an open project"}.`
+    );
+  if (!allowedRoots.some((root) => isPathUnder(path.resolve(root), resolved))) throw outside();
+
+  // Accept either the directory or the manifest itself — an agent that just
+  // wrote the file naturally names the file.
+  const dir = path.basename(resolved) === "plugin.json" ? path.dirname(resolved) : resolved;
+
+  // The lexical check above cannot see a symlink, and a project is a directory
+  // of files the user did not necessarily write. Re-check after canonicalising,
+  // mirroring `PluginService.isRealpathContained`: a path that resolves outside
+  // the allowed roots is refused even though its spelling sits inside them. A
+  // directory that does not resolve at all is left to the read below, which
+  // reports the missing manifest rather than a containment failure.
+  const realDir = await realpath(dir).catch(() => null);
+  if (realDir !== null) {
+    const realRoots = await Promise.all(
+      allowedRoots.map((root) => realpath(root).catch(() => path.resolve(root)))
+    );
+    if (!realRoots.some((root) => isPathUnder(root, realDir))) throw outside();
+  }
+
+  const manifestPath = path.join(dir, "plugin.json");
+
+  let raw: string;
+  try {
+    raw = await readFile(manifestPath, "utf8");
+  } catch {
+    throw new Error(`plugin manifest validation: no readable plugin.json at ${manifestPath}`);
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (err) {
+    return {
+      manifestPath,
+      origin: "user",
+      originSource: "declared-scope",
+      ok: false,
+      pluginId: null,
+      errors: [
+        { path: "(root)", message: formatErrorMessage(err, "plugin.json is not valid JSON") },
+      ],
+      warnings: [],
+    };
+  }
+
+  // Origin is a fact when the directory sits under a real discovery root, and a
+  // prediction otherwise. A manifest still being drafted elsewhere in the repo
+  // gets checked against the rules it will meet, keyed off its own `scope`.
+  const declaredScope = (json as { scope?: unknown } | null)?.scope;
+  let origin: PluginOrigin = declaredScope === "project" ? "project" : "user";
+  let originSource: PluginManifestValidationResult["originSource"] = "declared-scope";
+  const projectPluginsDir = projectRoot
+    ? path.join(projectRoot, ...PROJECT_PLUGIN_DIR_SEGMENTS)
+    : null;
+  if (projectPluginsDir && isPathUnder(projectPluginsDir, dir)) {
+    origin = "project";
+    originSource = "location";
+  } else if (isPathUnder(path.resolve(pluginsRoot), dir)) {
+    origin = "user";
+    originSource = "location";
+  }
+
+  const parsed = getPluginManifestSchema(origin).safeParse(json);
+  const rawName = (json as { name?: unknown } | null)?.name;
+  const pluginId = typeof rawName === "string" && rawName.length > 0 ? rawName : null;
+
+  if (!parsed.success) {
+    const errors: PluginManifestIssue[] = parsed.error.issues.map((issue) => ({
+      path: issue.path.length > 0 ? issue.path.join(".") : "(root)",
+      message: issue.message,
+    }));
+    return { manifestPath, origin, originSource, ok: false, pluginId, errors, warnings: [] };
+  }
+
+  return {
+    manifestPath,
+    origin,
+    originSource,
+    ok: true,
+    pluginId: parsed.data.name,
+    errors: [],
+    warnings: await collectManifestAdvisories({ dir, rawJson: json, manifest: parsed.data }),
+  };
+}
+
 // ── Plugin diagnostics snapshot ───────────────────────────────────────────
 
 async function handleGetDiagnosticsSnapshot(): Promise<PluginDiagnosticsSnapshot> {
@@ -1481,6 +1634,9 @@ export const pluginNamespace = defineIpcNamespace({
       withContext: true,
     }),
     validateActionIds: op(PLUGIN_METHOD_CHANNELS.validateActionIds, handleValidateActionIds),
+    validateManifest: op(PLUGIN_METHOD_CHANNELS.validateManifest, handleValidateManifest, {
+      withContext: true,
+    }),
     getActions: op(PLUGIN_METHOD_CHANNELS.getActions, handleActionsGet, { withContext: true }),
     registerAction: op(PLUGIN_METHOD_CHANNELS.registerAction, handleActionsRegister, {
       withContext: true,

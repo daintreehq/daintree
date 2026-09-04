@@ -19,6 +19,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   keybindings: "plugin:keybindings",
   contextMenuItems: "plugin:context-menu-items",
   validateActionIds: "plugin:validate-action-ids",
+  validateManifest: "plugin:validate-manifest",
   getActions: "plugin:actions-get",
   registerAction: "plugin:actions-register",
   unregisterAction: "plugin:actions-unregister",

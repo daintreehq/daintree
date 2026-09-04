@@ -40,6 +40,7 @@ function noopHandlers(): PluginCliServerHandlers {
     uninstall: vi.fn(async () => {}),
     devStart: vi.fn(async () => {}),
     devStop: vi.fn(async () => {}),
+    projectStatus: vi.fn(async () => ({ known: false, projectId: null, trust: null, plugins: [] })),
   };
 }
 
@@ -124,6 +125,29 @@ describe("createPluginCliServer", () => {
     expect(res.id).toBe(1);
     expect(res.result).toEqual({ status: "installed" });
     expect(handlers.install).toHaveBeenCalledWith({ path: "/tmp/foo.dntr" });
+  });
+
+  it("routes plugin.project.status to the project-status handler", async () => {
+    const handlers = noopHandlers();
+    server = makeServer(handlers);
+    await server.listen();
+
+    const res = await request({
+      id: 7,
+      method: "plugin.project.status",
+      params: { projectRoot: "/tmp/some-project" },
+    });
+    expect(res.id).toBe(7);
+    expect(res.result).toEqual({ known: false, projectId: null, trust: null, plugins: [] });
+    expect(handlers.projectStatus).toHaveBeenCalledWith({ projectRoot: "/tmp/some-project" });
+  });
+
+  it("rejects plugin.project.status without a project root", async () => {
+    server = makeServer();
+    await server.listen();
+
+    const res = await request({ id: 8, method: "plugin.project.status", params: {} });
+    expect(res.error).toBeDefined();
   });
 
   it("routes plugin.uninstall to the uninstall handler", async () => {
