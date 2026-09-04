@@ -6,6 +6,7 @@ const CARD_PATH = resolve(__dirname, "../ProjectPulseCard.tsx");
 const SUMMARY_PATH = resolve(__dirname, "../PulseSummary.tsx");
 const HEATMAP_PATH = resolve(__dirname, "../PulseHeatmap.tsx");
 const INDEX_CSS_PATH = resolve(__dirname, "../../../index.css");
+const DESIGN_CONTRACT_CSS_PATH = resolve(__dirname, "../../../styles/design-contract.css");
 const PULSE_CSS_PATH = resolve(__dirname, "../../../styles/components/pulse.css");
 const FLAME_PATH = resolve(__dirname, "../StreakFlame.tsx");
 
@@ -391,6 +392,9 @@ describe("Pulse — no surface can express failure (issue #11172)", () => {
     ["ProjectPulseCard.tsx", CARD_PATH],
     ["pulse.css", PULSE_CSS_PATH],
     ["index.css", INDEX_CSS_PATH],
+    // The design contract is the other half of the host CSS (#12220); a token
+    // that moved there would otherwise escape this scan entirely.
+    ["design-contract.css", DESIGN_CONTRACT_CSS_PATH],
   ])("%s carries no missed-day token, class, or label", async (_name, path) => {
     const content = await readFile(path, "utf-8");
     expect(content).not.toMatch(MISSED_DAY_SURFACE);

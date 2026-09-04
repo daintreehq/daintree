@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readHostCss } from "./hostCss";
+import { readHostCss } from "@/__tests__/support/hostCss";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
