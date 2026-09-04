@@ -135,13 +135,42 @@ export function findPanelIdForElement(el: Element | null): string | null {
   return host?.getAttribute("data-panel-id") ?? null;
 }
 
-export interface RescueContext {
+/**
+ * The per-panel half of the routing contract, split out so callers that need
+ * the same "may this agent take a draft right now?" test can share it rather
+ * than re-deriving it. `useInsertFileReference` classifies its own refusals and
+ * must apply exactly these rules to reach the same verdict.
+ */
+export interface RescueRoutability {
   panelsById: Record<string, PanelInstance>;
+  /** Panels mid-voice-submit: the editor is read-only and submits asynchronously. */
+  voiceSubmittingIds: ReadonlySet<string>;
+}
+
+/**
+ * May a draft be routed into this panel right now?
+ *
+ * Deliberately reason-free: the rescue path has nowhere to show one, and every
+ * clause here is a hard refusal rather than a ranking.
+ */
+export function isRescueTargetRoutable(ctx: RescueRoutability, id: string): boolean {
+  if (ctx.voiceSubmittingIds.has(id)) return false;
+  const panel = ctx.panelsById[id];
+  // Agent identity + live PTY + grid location. Excludes raw shells (no agent
+  // identity — routing a draft there would execute on Enter against a shell),
+  // exited panels, and dock/background panels.
+  if (!isAgentFleetActionEligible(panel)) return false;
+  // Mirrors `isHybridInputDisabled` in TerminalPane: a locked or restarting
+  // editor is read-only, and focus would fall back to the raw xterm.
+  if (panel.isInputLocked === true) return false;
+  if (panel.isRestarting === true) return false;
+  return true;
+}
+
+export interface RescueContext extends RescueRoutability {
   panelIds: string[];
   /** `terminalId` of the last agent the user actually typed into, if any. */
   lastTypedTerminalId: string | null;
-  /** Panels mid-voice-submit: the editor is read-only and submits asynchronously. */
-  voiceSubmittingIds: ReadonlySet<string>;
   /**
    * The global hybrid-input setting. With it off, `shouldShowHybridInputBar`
    * renders no draft bar for ANY panel — routing a character into a draft
@@ -180,19 +209,7 @@ export function resolveRescueTarget(ctx: RescueContext): string | null {
   if (!ctx.hybridInputEnabled) return null;
   if (!ctx.isBackendReady) return null;
 
-  const isRoutable = (id: string): boolean => {
-    if (ctx.voiceSubmittingIds.has(id)) return false;
-    const panel = ctx.panelsById[id];
-    // Agent identity + live PTY + grid location. Excludes raw shells (no agent
-    // identity — routing a draft there would execute on Enter against a shell),
-    // exited panels, and dock/background panels.
-    if (!isAgentFleetActionEligible(panel)) return false;
-    // Mirrors `isHybridInputDisabled` in TerminalPane: a locked or restarting
-    // editor is read-only, and focus would fall back to the raw xterm.
-    if (panel.isInputLocked === true) return false;
-    if (panel.isRestarting === true) return false;
-    return true;
-  };
+  const isRoutable = (id: string): boolean => isRescueTargetRoutable(ctx, id);
 
   if (ctx.lastTypedTerminalId !== null) {
     return isRoutable(ctx.lastTypedTerminalId) ? ctx.lastTypedTerminalId : null;

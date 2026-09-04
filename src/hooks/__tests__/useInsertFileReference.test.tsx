@@ -55,7 +55,8 @@ vi.mock("@/store/accessibilityAnnouncerStore", () => ({
 }));
 
 import type { PtyPanelData } from "@shared/types/panel";
-import { useInsertFileReference } from "../useInsertFileReference";
+import { shallow } from "zustand/shallow";
+import { resolveInsertTarget, useInsertFileReference } from "../useInsertFileReference";
 
 /**
  * Mirrors the fixture `typeAnywhere.test.ts` uses: PTY panels are
@@ -195,6 +196,144 @@ describe("useInsertFileReference — target resolution", () => {
     getViewWorkspaceIdMock.mockReturnValue(null);
     const { result } = renderHook(() => useInsertFileReference());
     expect(result.current.canInsert).toBe(false);
+  });
+});
+
+/**
+ * #12207: the menu could say "no" but never why, so one grey item stood in for
+ * seven unrelated situations. Each gate has to be distinguishable, and the
+ * order matters — the first gate reached is the one the user is told about.
+ */
+describe("useInsertFileReference — refusal reasons", () => {
+  it.each([
+    [
+      "no workspace identity",
+      () => getViewWorkspaceIdMock.mockReturnValue(null),
+      "workspace-unavailable",
+    ],
+    [
+      "a live fleet broadcast",
+      () => (fleetState.armedIds = new Set(["t-1", "t-2"])),
+      "fleet-broadcast-armed",
+    ],
+    [
+      "hybrid input switched off",
+      () => (inputState.hybridInputEnabled = false),
+      "hybrid-input-disabled",
+    ],
+    [
+      "a disconnected backend",
+      () => (panelState.backendStatus = "disconnected"),
+      "backend-unavailable",
+    ],
+    [
+      "a recovering backend",
+      () => (panelState.backendStatus = "recovering"),
+      "backend-unavailable",
+    ],
+    ["no agent at all", () => seedPanels(), "no-eligible-agent"],
+    [
+      "only a docked agent",
+      () => seedPanels(agentPanel("t-1", { location: "dock" })),
+      "no-eligible-agent",
+    ],
+    [
+      "two agents and no typing history",
+      () => seedPanels(agentPanel("t-1"), agentPanel("t-2")),
+      "multiple-eligible-agents",
+    ],
+  ])("names %s", (_label, seed, reason) => {
+    seed();
+    const { result } = renderHook(() => useInsertFileReference());
+    expect(result.current.canInsert).toBe(false);
+    expect(result.current.refusalReason).toBe(reason);
+  });
+
+  it.each([
+    ["locked", { isInputLocked: true }],
+    ["restarting", { isRestarting: true }],
+    ["exited", { runtimeStatus: "exited" as const }],
+  ])("blames the recorded agent, not the room, when it is %s", (_label, overrides) => {
+    seedPanels(agentPanel("t-1"), agentPanel("t-2", overrides));
+    inputState.lastTypedAgentTarget = { workspaceId: WORKSPACE_ID, terminalId: "t-2" };
+
+    const { result } = renderHook(() => useInsertFileReference());
+    expect(result.current.refusalReason).toBe("recorded-target-unavailable");
+  });
+
+  it("blames the recorded agent while it is mid-voice-submit", () => {
+    seedPanels(agentPanel("t-1"), agentPanel("t-2"));
+    inputState.lastTypedAgentTarget = { workspaceId: WORKSPACE_ID, terminalId: "t-2" };
+    inputState.voiceSubmittingPanels = new Set(["t-2"]);
+
+    const { result } = renderHook(() => useInsertFileReference());
+    expect(result.current.refusalReason).toBe("recorded-target-unavailable");
+  });
+
+  it("treats a sibling view's record as no record, so the refusal is the ambiguity", () => {
+    seedPanels(agentPanel("t-1"), agentPanel("t-2"));
+    inputState.lastTypedAgentTarget = { workspaceId: "ws-other", terminalId: "t-2" };
+
+    const { result } = renderHook(() => useInsertFileReference());
+    expect(result.current.refusalReason).toBe("multiple-eligible-agents");
+  });
+
+  it("reports the first gate reached when several are shut at once", () => {
+    // Armed fleet, hybrid off and a dead backend together: the order is the
+    // contract, so the user is told the one nearest the front.
+    fleetState.armedIds = new Set(["t-1", "t-2"]);
+    inputState.hybridInputEnabled = false;
+    panelState.backendStatus = "disconnected";
+    seedPanels();
+
+    const { result } = renderHook(() => useInsertFileReference());
+    expect(result.current.refusalReason).toBe("fleet-broadcast-armed");
+  });
+
+  it.each([
+    [
+      "the recorded agent",
+      () => {
+        seedPanels(agentPanel("t-1"), agentPanel("t-2"));
+        inputState.lastTypedAgentTarget = { workspaceId: WORKSPACE_ID, terminalId: "t-2" };
+      },
+    ],
+    ["the sole open agent", () => seedPanels(agentPanel("t-1"))],
+  ])("carries no reason once %s resolves", (_label, seed) => {
+    seed();
+    const { result } = renderHook(() => useInsertFileReference());
+    expect(result.current.canInsert).toBe(true);
+    expect(result.current.refusalReason).toBeNull();
+  });
+
+  /**
+   * The pane subscribes to this verdict through `useShallow`, which only bails
+   * if both halves compare equal. A verdict that churned on unrelated panel
+   * traffic would re-render the file browser on every agent-state flip — the
+   * exact cost the single-string selector was written to avoid.
+   */
+  it("stays shallow-equal across unrelated panel churn, so the pane does not re-render", () => {
+    // Built here rather than read back off the store double: the resolver is
+    // pure, and this keeps the panels the assertion talks about in one place.
+    const inputs = (...panels: PtyPanelData[]) => ({
+      panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
+      panelIds: panels.map((p) => p.id),
+      backendStatus: "connected" as const,
+      hybridInputEnabled: true,
+      voiceSubmittingIds: new Set<string>(),
+      lastTypedAgentTarget: null,
+      armedCount: 0,
+    });
+
+    const before = resolveInsertTarget(inputs(agentPanel("t-1"), agentPanel("t-2")));
+
+    const churned = resolveInsertTarget(
+      inputs(agentPanel("t-1", { agentState: "working" }), agentPanel("t-2"))
+    );
+    expect(shallow(before, churned)).toBe(true);
+
+    // A verdict that genuinely changed must NOT compare equal.
+    expect(shallow(before, resolveInsertTarget(inputs(agentPanel("t-1"))))).toBe(false);
   });
 });
 

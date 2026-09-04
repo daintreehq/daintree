@@ -364,6 +364,9 @@ const { insertFileReferenceMock, canInsertRef } = vi.hoisted(() => ({
 vi.mock("@/hooks/useInsertFileReference", () => ({
   useInsertFileReference: () => ({
     canInsert: canInsertRef.current,
+    // The pane only reads the boolean; the reason is here so the shared menu
+    // item renders the same shape it does in production.
+    refusalReason: canInsertRef.current ? null : "multiple-eligible-agents",
     insert: insertFileReferenceMock,
   }),
 }));
