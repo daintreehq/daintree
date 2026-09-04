@@ -65,6 +65,21 @@ async function makeProject(opts: { withGitDir?: boolean } = {}): Promise<{
   return { root, pluginDir, gitDir };
 }
 
+/**
+ * Build a complete plugin outside the watched tree and move it in as one unit,
+ * so no write ever lands inside the folder the watcher is waiting on — the
+ * shape an agent scaffold or a `git checkout` produces.
+ */
+async function movePopulatedPluginsFolderInto(root: string): Promise<void> {
+  const staging = await fsp.mkdtemp(path.join(os.tmpdir(), `dt-ppw-staged-${randomUUID()}-`));
+  roots.push(staging);
+  const pluginDir = path.join(staging, "plugins", "acme.hello");
+  await fsp.mkdir(path.join(pluginDir, "dist"), { recursive: true });
+  await fsp.writeFile(path.join(pluginDir, "plugin.json"), manifestJson("acme.hello"));
+  await fsp.writeFile(path.join(pluginDir, "dist", "index.js"), "export function activate() {}\n");
+  await fsp.rename(path.join(staging, "plugins"), path.join(root, ".daintree", "plugins"));
+}
+
 function makeWatcher(
   overrides: Partial<ProjectPluginWatcherDeps> & { gitDir?: string | null } = {}
 ): {
@@ -449,6 +464,59 @@ describe("ProjectPluginWatcher", () => {
     // Nothing was loaded, so there is nothing to name — the point is that the
     // controller is asked to rescan at all.
     expect((reload.mock.calls[0] as [string, string, string[]])[2]).toEqual([]);
+  });
+
+  it("carries an appearing folder's reconcile across a git-lock deferral", async () => {
+    // A `git checkout` that brings the folder with it holds `index.lock` for
+    // the whole appearance, so the first settle can only defer and reschedule.
+    // The forced reconcile has to survive that round trip rather than being
+    // spent on a settle that never reached the controller.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `dt-ppw-appears-lock-${randomUUID()}-`));
+    roots.push(root);
+    await fsp.mkdir(path.join(root, ".daintree"), { recursive: true });
+    const gitDir = path.join(root, ".git");
+    await fsp.mkdir(gitDir, { recursive: true });
+    const { watcher, reload, loaded } = makeWatcher({
+      gitDir,
+      timings: { ...FAST, gitLockMaxDeferMs: 120 },
+    });
+    loaded.clear();
+    await watcher.ensure(PROJECT_ID, root);
+
+    // Never released — the ceiling is what lets the settle through, which
+    // proves it went round defer-and-reschedule at least once.
+    await fsp.writeFile(path.join(gitDir, "index.lock"), "");
+    await movePopulatedPluginsFolderInto(root);
+
+    expect(await waitFor(() => reload.mock.calls.length > 0)).toBe(true);
+    expect(reload.mock.calls).toEqual([[PROJECT_ID, root, []]]);
+  });
+
+  it("keeps the reconcile pending when the reload throws", async () => {
+    // Fingerprints are staged, not committed, so a folder that arrived whole
+    // still fingerprints as unchanged against its own seed. Only the forced
+    // latch can drive the retry — losing it to a failed reload leaves the
+    // folder dark until the author touches a built file.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), `dt-ppw-throw-${randomUUID()}-`));
+    roots.push(root);
+    await fsp.mkdir(path.join(root, ".daintree"), { recursive: true });
+    const reload = vi.fn(async () => {
+      if (reload.mock.calls.length === 1) throw new Error("controller unavailable");
+      return undefined;
+    });
+    const { watcher, loaded } = makeWatcher({ reload });
+    loaded.clear();
+    await watcher.ensure(PROJECT_ID, root);
+
+    await movePopulatedPluginsFolderInto(root);
+    expect(await waitFor(() => reload.mock.calls.length > 0)).toBe(true);
+
+    // An empty directory under dist/: attributed to the plugin, so it wakes the
+    // settle, but the fingerprint only accounts files — nothing looks changed,
+    // so only the restored latch can drive the second reconcile.
+    await fsp.mkdir(path.join(root, ".daintree", "plugins", "acme.hello", "dist", "chunks"));
+    expect(await waitFor(() => reload.mock.calls.length > 1)).toBe(true);
+    expect(reload.mock.calls[1]).toEqual([PROJECT_ID, root, []]);
   });
 
   it("follows .daintree inward when the project had neither directory (#12212)", async () => {
