@@ -42,7 +42,13 @@ const OVERRIDES = new Map<string, Map<string, boolean>>();
 /** Manifest ids hidden in any project that has not decided for itself. */
 const DEFAULT_HIDDEN = new Set<string>();
 
-/** True once the store has been read, so the broadcaster never filters on an empty map. */
+/**
+ * True once the store has been read SUCCESSFULLY.
+ *
+ * Only a successful read sets it, so a transient failure is retried on the next
+ * call rather than leaving the overlay empty — and, more importantly, silently
+ * permanent — for the rest of the session.
+ */
 let hydrated = false;
 
 const STORE_KEY = "projectPluginVisibility";
@@ -64,36 +70,38 @@ function isNonEmptyString(value: unknown): value is string {
  */
 export function hydrateProjectPluginVisibility(): void {
   if (hydrated) return;
-  hydrated = true;
+  let raw: StoredVisibility | undefined;
   try {
-    const raw = store.get(STORE_KEY) as StoredVisibility | undefined;
-    if (!raw || typeof raw !== "object") return;
-
-    if (Array.isArray(raw.defaultHiddenPluginIds)) {
-      for (const id of raw.defaultHiddenPluginIds) {
-        if (isNonEmptyString(id)) DEFAULT_HIDDEN.add(id);
-      }
-    }
-
-    const projectOverrides = raw.projectOverrides;
-    if (!projectOverrides || typeof projectOverrides !== "object") return;
-    for (const [projectId, entries] of Object.entries(
-      projectOverrides as Record<string, unknown>
-    )) {
-      if (!isProjectWorkspaceId(projectId)) continue;
-      if (!entries || typeof entries !== "object") continue;
-      const map = new Map<string, boolean>();
-      for (const [pluginId, allowed] of Object.entries(entries as Record<string, unknown>)) {
-        if (!isNonEmptyString(pluginId)) continue;
-        if (typeof allowed !== "boolean") continue;
-        map.set(pluginId, allowed);
-      }
-      if (map.size > 0) OVERRIDES.set(projectId, map);
-    }
+    raw = store.get(STORE_KEY) as StoredVisibility | undefined;
   } catch (err) {
-    // Fail open: an unreadable profile is not a reason to hide a plugin the
-    // user never turned off.
+    // Fail open for READS — an unreadable profile is not a reason to hide a
+    // plugin the user never turned off — but stay unhydrated, so the next call
+    // tries again and, until one succeeds, `persist()` refuses to overwrite the
+    // rules on disk with the empty set we failed to load.
     console.warn("[projectPluginVisibility] Failed to read stored visibility:", err);
+    return;
+  }
+  hydrated = true;
+  if (!raw || typeof raw !== "object") return;
+
+  if (Array.isArray(raw.defaultHiddenPluginIds)) {
+    for (const id of raw.defaultHiddenPluginIds) {
+      if (isNonEmptyString(id)) DEFAULT_HIDDEN.add(id);
+    }
+  }
+
+  const projectOverrides = raw.projectOverrides;
+  if (!projectOverrides || typeof projectOverrides !== "object") return;
+  for (const [projectId, entries] of Object.entries(projectOverrides as Record<string, unknown>)) {
+    if (!isProjectWorkspaceId(projectId)) continue;
+    if (!entries || typeof entries !== "object") continue;
+    const map = new Map<string, boolean>();
+    for (const [pluginId, allowed] of Object.entries(entries as Record<string, unknown>)) {
+      if (!isNonEmptyString(pluginId)) continue;
+      if (typeof allowed !== "boolean") continue;
+      map.set(pluginId, allowed);
+    }
+    if (map.size > 0) OVERRIDES.set(projectId, map);
   }
 }
 
@@ -106,6 +114,14 @@ export function hydrateProjectPluginVisibility(): void {
  * and is gone on the next launch.
  */
 function persist(): void {
+  // Never write a profile we could not read. `persist()` rewrites the whole
+  // key, so persisting from an unhydrated (empty) map would delete every rule
+  // on disk on the strength of one failed read.
+  if (!hydrated) {
+    throw new Error(
+      "project plugin visibility: stored visibility could not be read, refusing to overwrite it"
+    );
+  }
   const projectOverrides: Record<string, Record<string, boolean>> = {};
   for (const [projectId, map] of OVERRIDES) {
     if (map.size === 0) continue;
@@ -144,10 +160,16 @@ export function isPluginVisibleInProject(pluginId: string, projectId: string | n
   // held only by accident of who the broadcaster calls in which order.
   hydrateProjectPluginVisibility();
   if (DEFAULT_HIDDEN.size === 0 && OVERRIDES.size === 0) return true;
-  if (projectId !== null && projectId.length > 0) {
-    const override = OVERRIDES.get(projectId)?.get(pluginId);
-    if (override !== undefined) return override;
-  }
+  // A view with no project binding sees the plugin, whatever the default says.
+  // Both halves of this overlay are statements about PROJECTS — "hidden in
+  // projects that have not decided" no less than "hidden in this one" — and a
+  // window that cannot name a project is not one of them. Applying the default
+  // there would let "only in the projects I pick" hide a plugin from the
+  // project picker too, which is both surprising and the one window where its
+  // absence is hardest to explain.
+  if (projectId === null || projectId.length === 0) return true;
+  const override = OVERRIDES.get(projectId)?.get(pluginId);
+  if (override !== undefined) return override;
   return !DEFAULT_HIDDEN.has(pluginId);
 }
 
@@ -191,16 +213,29 @@ export function setProjectPluginVisibility(
   const current = map?.get(pluginId) ?? null;
   if (current === visible) return false;
 
-  if (visible === null) {
-    if (!map) return false;
-    map.delete(pluginId);
-    if (map.size === 0) OVERRIDES.delete(projectId);
-  } else if (map) {
-    map.set(pluginId, visible);
-  } else {
-    OVERRIDES.set(projectId, new Map([[pluginId, visible]]));
+  const apply = (value: boolean | null): void => {
+    const target = OVERRIDES.get(projectId);
+    if (value === null) {
+      if (!target) return;
+      target.delete(pluginId);
+      if (target.size === 0) OVERRIDES.delete(projectId);
+      return;
+    }
+    if (target) target.set(pluginId, value);
+    else OVERRIDES.set(projectId, new Map([[pluginId, value]]));
+  };
+
+  apply(visible);
+  try {
+    persist();
+  } catch (err) {
+    // Put memory back the way disk still has it. The filter reads this map on
+    // every broadcast, so keeping a change that did not persist would hide the
+    // plugin for the rest of the session while the renderer — which rolled its
+    // optimistic update back on this same error — shows it as visible.
+    apply(current);
+    throw err;
   }
-  persist();
   return true;
 }
 
@@ -219,7 +254,16 @@ export function setPluginVisibilityDefault(pluginId: string, hidden: boolean): b
   if (DEFAULT_HIDDEN.has(pluginId) === hidden) return false;
   if (hidden) DEFAULT_HIDDEN.add(pluginId);
   else DEFAULT_HIDDEN.delete(pluginId);
-  persist();
+  try {
+    persist();
+  } catch (err) {
+    // Same atomicity rule as the per-project setter: a change that did not
+    // reach disk must not go on filtering broadcasts for the rest of the
+    // session.
+    if (hidden) DEFAULT_HIDDEN.delete(pluginId);
+    else DEFAULT_HIDDEN.add(pluginId);
+    throw err;
+  }
   return true;
 }
 
@@ -232,13 +276,34 @@ export function setPluginVisibilityDefault(pluginId: string, hidden: boolean): b
  */
 export function clearProjectPluginVisibilityForPlugin(pluginId: string): void {
   hydrateProjectPluginVisibility();
-  let changed = DEFAULT_HIDDEN.delete(pluginId);
+
+  const removedDefault = DEFAULT_HIDDEN.delete(pluginId);
+  const removedOverrides: Array<[string, boolean]> = [];
   for (const [projectId, map] of [...OVERRIDES]) {
-    if (!map.delete(pluginId)) continue;
-    changed = true;
+    const previous = map.get(pluginId);
+    if (previous === undefined) continue;
+    removedOverrides.push([projectId, previous]);
+    map.delete(pluginId);
     if (map.size === 0) OVERRIDES.delete(projectId);
   }
-  if (changed) persist();
+  if (!removedDefault && removedOverrides.length === 0) return;
+
+  try {
+    persist();
+  } catch (err) {
+    // Same atomicity rule as the setters. The uninstall path swallows this
+    // error, so without the revert a failed purge would leave the rules gone
+    // from memory but still on disk — and a plugin reclaiming this
+    // author-controlled id after a restart would inherit them, which is the
+    // exact leak this function exists to close.
+    if (removedDefault) DEFAULT_HIDDEN.add(pluginId);
+    for (const [projectId, previous] of removedOverrides) {
+      const map = OVERRIDES.get(projectId);
+      if (map) map.set(pluginId, previous);
+      else OVERRIDES.set(projectId, new Map([[pluginId, previous]]));
+    }
+    throw err;
+  }
 }
 
 /** Test isolation: drop the in-memory profile and force a re-read. */

@@ -384,9 +384,10 @@ function InstalledPluginPane({ plugin }: { plugin: LoadedPluginInfo }) {
             </p>
           </div>
           <p className="text-2xs text-text-secondary leading-relaxed">
-            Hiding keeps this plugin out of this project&apos;s panels, commands, toolbar buttons
-            and keyboard shortcuts. It stays installed and keeps running — this is which projects
-            see it, not whether it is loaded, so anything it does outside those surfaces carries on.
+            Hiding keeps this plugin out of this project&apos;s panels, commands, toolbar buttons,
+            keyboard shortcuts and context menus. It stays installed and keeps running, so anything
+            it contributes elsewhere — agents, recipes, forge providers, file decorations — carries
+            on here regardless. This is which projects see it, not whether it is loaded.
           </p>
         </>
       )}
