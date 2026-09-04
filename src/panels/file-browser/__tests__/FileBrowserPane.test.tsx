@@ -411,6 +411,23 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
   ),
   ContextMenuShortcut: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
   ContextMenuSeparator: () => null,
+  // Flat, always-rendered stand-ins for the submenu primitives (#12206). The
+  // real ones need a Radix menu root this harness never mounts, and gate their
+  // content behind an open state — so every nested "Copy path" assertion here
+  // would look for something that is not in the DOM and pass for the wrong
+  // reason. What this suite owns is which path each item names, not Radix's
+  // nesting; the hook's own suite drives the real submenus.
+  ContextMenuSub: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuSubTrigger: ({ children }: { children: React.ReactNode }) => (
+    <button type="button">{children}</button>
+  ),
+  // Marked rather than bare so a test can still tell a root row from a nested
+  // one — flattening is what makes the items reachable here, and it is also
+  // what would otherwise hide a regression that moved something up to the root.
+  ContextMenuSubContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-submenu-content="">{children}</div>
+  ),
+  ContextMenuLabel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
 // The view's own workspace root, behind a worktree-less browser (#11482). The
@@ -498,6 +515,7 @@ import {
   FILE_BROWSER_SIDEBAR_RESIZE_STEP_COARSE as COARSE_W,
 } from "../sidebarWidth";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { revealCopy } from "@/components/FileViewer/revealCopy";
 import {
   getFileBrowserRowGitStatus,
   type FileBrowserGitStatusIndex,
@@ -3009,6 +3027,28 @@ describe("FileBrowserPane tree navigation vs the viewer", () => {
     });
 
     expect(viewerWrites()).toEqual([FOLDER_ROW.path]);
+  });
+
+  it("reads as one menu: the folder prefix, then the shared direct actions", () => {
+    // The prefix lives here and the core lives in the shared hook, so nothing
+    // else asserts that they compose. Order only — this suite's menu stub
+    // renders no separators, and the hook's own suite counts those.
+    renderPane();
+
+    const menu = screen.getByTestId("file-tree-view");
+    expect(
+      within(menu)
+        .getAllByRole("button")
+        .filter((item) => item.closest("[data-submenu-content]") === null)
+        .map((item) => item.textContent ?? "")
+    ).toEqual([
+      "Show contents",
+      "Set as root",
+      "Refresh",
+      revealCopy().label,
+      expect.stringContaining("Insert file reference"),
+      "Copy",
+    ]);
   });
 
   it("reveals a collapsed viewer for both explicit folder routes", () => {

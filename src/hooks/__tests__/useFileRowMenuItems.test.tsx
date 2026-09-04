@@ -136,6 +136,41 @@ function labels(menu: HTMLElement): string[] {
     .map((item) => item.textContent ?? "");
 }
 
+function separatorCount(menu: HTMLElement): number {
+  return within(menu).queryAllByRole("separator").length;
+}
+
+/**
+ * A menu's rows in DOM order — items, group labels and rules alike, with rules
+ * written as `---`.
+ *
+ * `labels()` sees only menuitems and `separatorCount()` only counts, so between
+ * them a rule moved to the top of a menu, or a group label rendered away from
+ * the group it names, reads as correct. Placement is the whole claim in a
+ * regrouped menu, so it gets an assertion that can see it. The content's own
+ * scroll-shadow overlays are `aria-hidden` and drop out.
+ */
+function structure(menu: HTMLElement): string[] {
+  return [...menu.children]
+    .filter((node) => node.getAttribute("aria-hidden") !== "true")
+    .map((node) => (node.getAttribute("role") === "separator" ? "---" : (node.textContent ?? "")));
+}
+
+/**
+ * Opens a nested submenu and hands back its content.
+ *
+ * `SubContent` is Presence-gated: its items are not in the DOM at all until the
+ * trigger fires, so an assertion that skipped this step would look for nothing,
+ * find nothing, and pass for the wrong reason. Clicked rather than hovered —
+ * Radix opens synchronously on click, while the pointer path arms a 100ms timer
+ * this suite would then have to fake. The content is found by name because
+ * `SubContent` is labelled by its trigger and lands in a portal outside `menu`.
+ */
+async function openSubmenu(menu: HTMLElement, name: string): Promise<HTMLElement> {
+  fireEvent.click(within(menu).getByRole("menuitem", { name }));
+  return screen.findByRole("menu", { name });
+}
+
 beforeAll(async () => {
   await primeRadix();
 });
@@ -158,32 +193,116 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("useFileRowMenuItems — canonical order", () => {
-  it("renders the core in the documented order for a changed file", async () => {
+  it("keeps only the direct actions at the root and nests the copies", async () => {
     const menu = await openMenu();
 
-    expect(labels(menu)).toEqual([
+    // The rule is asserted in place, not counted: it is the one thing here that
+    // can end up leading, trailing or doubled as items drop out.
+    expect(structure(menu)).toEqual([
       "Open diff",
       "Open file",
       "Open in editor",
+      "Reveal in Finder",
       expect.stringContaining("Insert file reference"),
+      "---",
+      "Copy",
+    ]);
+  });
+
+  it("renders the copies in the documented order inside the Copy submenu", async () => {
+    const menu = await openMenu();
+    const copy = await openSubmenu(menu, "Copy");
+
+    // CopyTree is set apart from the clipboard strings, and the rule sits
+    // between them rather than merely existing somewhere in the submenu.
+    expect(structure(copy)).toEqual([
       "Copy context",
+      "---",
       "Copy path",
       "Copy relative path",
       "Copy file name",
       "Copy file contents",
-      "Reveal in Finder",
     ]);
   });
 
-  it("appends plugin items after the core rather than replacing it", async () => {
+  it("nests plugin items under Extensions rather than trailing the root", async () => {
     itemsRef.current = [
       { pluginId: "acme", item: { label: "Acme thing", actionId: "acme.do", location: "file" } },
     ];
     const menu = await openMenu();
-    const rendered = labels(menu);
 
-    expect(rendered.indexOf("Acme thing")).toBe(rendered.length - 1);
-    expect(rendered.indexOf("Acme thing")).toBeGreaterThan(rendered.indexOf("Reveal in Finder"));
+    // The whole point of the nesting: the root is the same height whatever is
+    // installed, and a third party can no longer render past the core. Pinned
+    // as a sequence so the second rule has to sit between Copy and Extensions
+    // rather than merely exist.
+    expect(structure(menu)).toEqual([
+      "Open diff",
+      "Open file",
+      "Open in editor",
+      "Reveal in Finder",
+      expect.stringContaining("Insert file reference"),
+      "---",
+      "Copy",
+      "---",
+      "Extensions",
+    ]);
+
+    const extensions = await openSubmenu(menu, "Extensions");
+    // A lone contributor needs no provenance label above its own items, and no
+    // rule to divide it from a group that isn't there.
+    expect(structure(extensions)).toEqual(["Acme thing"]);
+  });
+
+  it("groups the submenu by contributor when more than one plugin adds items", async () => {
+    itemsRef.current = [
+      { pluginId: "acme", item: { label: "Acme thing", actionId: "acme.do", location: "file" } },
+      { pluginId: "beta", item: { label: "Beta thing", actionId: "beta.do", location: "file" } },
+      { pluginId: "acme", item: { label: "Acme other", actionId: "acme.other", location: "file" } },
+    ];
+    const menu = await openMenu();
+    const extensions = await openSubmenu(menu, "Extensions");
+
+    // Grouped by contributor in first-seen order — acme's second item joins its
+    // first rather than staying where it happened to be contributed. Asserted
+    // as one sequence because a label that doesn't sit above its own group is
+    // worse than no label: it credits the wrong extension.
+    expect(structure(extensions)).toEqual([
+      "acme",
+      "Acme thing",
+      "Acme other",
+      "---",
+      "beta",
+      "Beta thing",
+    ]);
+  });
+
+  it("opens and closes the Copy submenu from the keyboard", async () => {
+    // Nesting is only honest if it is reachable without a mouse. Every other
+    // submenu test here opens by click, so a regression that kept the click
+    // path and broke ArrowRight — or lost the trigger on the way back out —
+    // would leave the whole suite green with the copies unreachable.
+    const menu = await openMenu();
+    const trigger = within(menu).getByRole("menuitem", { name: "Copy" });
+
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowRight" });
+
+    const copy = await screen.findByRole("menu", { name: "Copy" });
+    await waitFor(() => expect(copy.contains(document.activeElement)).toBe(true));
+
+    fireEvent.keyDown(copy, { key: "ArrowLeft" });
+
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "Copy" })).toBeNull());
+    // Back on the trigger, not stranded on the document — the root menu is
+    // still open and still navigable.
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("renders no Extensions trigger, and no rule for one, with nothing installed", async () => {
+    const menu = await openMenu();
+
+    expect(labels(menu)).not.toContain("Extensions");
+    expect(separatorCount(menu)).toBe(1);
   });
 });
 
@@ -208,9 +327,18 @@ describe("useFileRowMenuItems — conditional items", () => {
     expect(rendered).not.toContain("Open diff");
     expect(rendered).not.toContain("Open file");
     expect(rendered).not.toContain("Open in editor");
-    expect(rendered).toContain("Copy path");
-    expect(rendered).toContain("Copy context");
-    expect(rendered).toContain("Reveal in Finder");
+    // With every open item gone the direct-action block is Reveal and Insert,
+    // so the rule below them still has something above it and never leads.
+    expect(structure(menu)).toEqual([
+      "Reveal in Finder",
+      expect.stringContaining("Insert file reference"),
+      "---",
+      "Copy",
+    ]);
+
+    const copy = await openSubmenu(menu, "Copy");
+    expect(labels(copy)).toContain("Copy path");
+    expect(labels(copy)).toContain("Copy context");
   });
 
   it("drops the current-content items for a deleted file but keeps its diff", async () => {
@@ -222,15 +350,29 @@ describe("useFileRowMenuItems — conditional items", () => {
     expect(rendered).toContain("Open diff");
     expect(rendered).not.toContain("Open file");
     expect(rendered).not.toContain("Open in editor");
-    expect(rendered).toContain("Copy path");
+    // Two of the three opens gone still leaves the rule with items above it.
+    expect(structure(menu)).toEqual([
+      "Open diff",
+      "Reveal in Finder",
+      expect.stringContaining("Insert file reference"),
+      "---",
+      "Copy",
+    ]);
+
+    const copy = await openSubmenu(menu, "Copy");
+    expect(labels(copy)).toContain("Copy path");
   });
 
   it("drops Copy context on a surface with no worktree behind it", async () => {
     const menu = await openMenu({ surface: { worktreeId: null } });
-    expect(labels(menu)).not.toContain("Copy context");
+    const copy = await openSubmenu(menu, "Copy");
+
+    expect(labels(copy)).not.toContain("Copy context");
     // The rest of the core is unaffected — a file must not lose Copy path by
-    // which panel lists it.
-    expect(labels(menu)).toContain("Copy path");
+    // which panel lists it — and the rule that set CopyTree apart goes with it
+    // rather than leading the submenu.
+    expect(labels(copy)).toContain("Copy path");
+    expect(separatorCount(copy)).toBe(0);
   });
 
   it("disables Insert file reference when no agent resolves", async () => {
@@ -282,7 +424,8 @@ describe("useFileRowMenuItems — path semantics", () => {
       ["Copy file name", "index.ts"],
     ] as const) {
       const menu = await openMenu();
-      fireEvent.click(within(menu).getByRole("menuitem", { name: label }));
+      const copy = await openSubmenu(menu, "Copy");
+      fireEvent.click(within(copy).getByRole("menuitem", { name: label }));
       await waitFor(() => expect(writeText).toHaveBeenCalledWith(expected));
       writeText.mockClear();
       cleanup();
@@ -296,8 +439,9 @@ describe("useFileRowMenuItems — path semantics", () => {
     const menu = await openMenu({
       row: { absolutePath: "/elsewhere/pkg/a.ts", relativePath: "pkg/a.ts" },
     });
+    const copy = await openSubmenu(menu, "Copy");
 
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy relative path" }));
+    fireEvent.click(within(copy).getByRole("menuitem", { name: "Copy relative path" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("pkg/a.ts"));
   });
 
@@ -305,8 +449,9 @@ describe("useFileRowMenuItems — path semantics", () => {
     const writeText = navigator.clipboard.writeText as ReturnType<typeof vi.fn>;
     writeText.mockRejectedValueOnce(new Error("nope"));
     const menu = await openMenu();
+    const copy = await openSubmenu(menu, "Copy");
 
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy path" }));
+    fireEvent.click(within(copy).getByRole("menuitem", { name: "Copy path" }));
 
     await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
     const [payload] = notifyMock.mock.calls[0]!;
@@ -329,8 +474,9 @@ describe("useFileRowMenuItems — Copy file contents", () => {
         : Promise.resolve({ ok: true, result: undefined })
     );
     const menu = await openMenu();
+    const copy = await openSubmenu(menu, "Copy");
 
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy file contents" }));
+    fireEvent.click(within(copy).getByRole("menuitem", { name: "Copy file contents" }));
 
     await waitFor(() => {
       const call = dispatchMock.mock.calls.find(([id]) => id === "file.read");
@@ -351,8 +497,9 @@ describe("useFileRowMenuItems — Copy file contents", () => {
         : Promise.resolve({ ok: true, result: undefined })
     );
     const menu = await openMenu();
+    const copy = await openSubmenu(menu, "Copy");
 
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy file contents" }));
+    fireEvent.click(within(copy).getByRole("menuitem", { name: "Copy file contents" }));
 
     await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
     const [payload] = notifyMock.mock.calls[0]!;
@@ -378,8 +525,9 @@ describe("useFileRowMenuItems — Copy file contents", () => {
         : Promise.resolve({ ok: true, result: undefined })
     );
     const menu = await openMenu();
+    const copy = await openSubmenu(menu, "Copy");
 
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy file contents" }));
+    fireEvent.click(within(copy).getByRole("menuitem", { name: "Copy file contents" }));
 
     await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
     const [payload] = notifyMock.mock.calls[0]!;
@@ -405,7 +553,11 @@ describe("useFileRowMenuItems — Copy file contents", () => {
     ["a PDF", { absolutePath: "/repo/spec.pdf", name: "spec.pdf" }],
   ])("hides the item for %s", async (_case, row) => {
     const menu = await openMenu({ row });
-    expect(labels(menu)).not.toContain("Copy file contents");
+    // The submenu has to be opened first: its content is Presence-gated, so a
+    // check against the closed root would pass whether the item was dropped or
+    // not.
+    const copy = await openSubmenu(menu, "Copy");
+    expect(labels(copy)).not.toContain("Copy file contents");
   });
 
   it("copies an empty file as the empty string", async () => {
@@ -415,8 +567,9 @@ describe("useFileRowMenuItems — Copy file contents", () => {
         : Promise.resolve({ ok: true, result: undefined })
     );
     const menu = await openMenu();
+    const copy = await openSubmenu(menu, "Copy");
 
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy file contents" }));
+    fireEvent.click(within(copy).getByRole("menuitem", { name: "Copy file contents" }));
 
     // A truthiness gate on the read result would silently write nothing here.
     await waitFor(() => expect(writeTextMock).toHaveBeenCalledWith(""));
@@ -427,15 +580,17 @@ describe("useFileRowMenuItems — Copy file contents", () => {
     // Optimistic by design: the read is the real gate, and hiding everything
     // unfamiliar would drop the item for perfectly ordinary text files.
     const menu = await openMenu({ row: { absolutePath: "/repo/Makefile", name: "Makefile" } });
-    expect(labels(menu)).toContain("Copy file contents");
+    const copy = await openSubmenu(menu, "Copy");
+    expect(labels(copy)).toContain("Copy file contents");
   });
 });
 
 describe("useFileRowMenuItems — Copy context", () => {
   it("scopes CopyTree to the row's relative path and names the scope kind", async () => {
     const menu = await openMenu();
+    const copy = await openSubmenu(menu, "Copy");
 
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy context" }));
+    fireEvent.click(within(copy).getByRole("menuitem", { name: "Copy context" }));
 
     await waitFor(() => expect(copyContextMock).toHaveBeenCalledTimes(1));
     const [worktreeId, source, options, runSource] = copyContextMock.mock.calls[0]!;
@@ -449,8 +604,9 @@ describe("useFileRowMenuItems — Copy context", () => {
     const menu = await openMenu({
       row: { isDirectory: true, relativePath: "src", name: "src", status: null },
     });
+    const copy = await openSubmenu(menu, "Copy");
 
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy context" }));
+    fireEvent.click(within(copy).getByRole("menuitem", { name: "Copy context" }));
 
     await waitFor(() => expect(copyContextMock).toHaveBeenCalledTimes(1));
     const [, , options] = copyContextMock.mock.calls[0]!;
