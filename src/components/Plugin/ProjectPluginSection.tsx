@@ -32,10 +32,12 @@ const STATE_BADGE: Record<Exclude<ProjectPluginState, "active">, string> = {
  * exception is a staged plugin, whose whole affordance is the one click that
  * lets it run.
  *
- * `Failed` is its own signal rather than a fourth state badge: a plugin that
+ * `Error` is its own signal rather than a fourth state badge: a plugin that
  * loaded and then threw is still loaded, still holds its contributions, and is
  * still what the folder ships — the failure is a fact about the last run, not a
- * different kind of row.
+ * different kind of row. It stays that generic because the channel behind it
+ * carries a manifest command that could not be registered as well as an
+ * activation that threw, and only some of those mean "it never started".
  */
 function ProjectPluginRow({
   plugin,
@@ -99,7 +101,7 @@ function ProjectPluginRow({
             {failed && (
               <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
                 <AlertCircle className="w-3 h-3" aria-hidden="true" />
-                Failed
+                Error
               </span>
             )}
             {plugin.collidesWithGlobal && (
@@ -217,7 +219,7 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
           {plugin.loadError && (
             <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
               <AlertCircle className="w-3 h-3" aria-hidden="true" />
-              Failed
+              Error
             </span>
           )}
           {plugin.version && <span className={BADGE_CLASS}>v{plugin.version}</span>}
@@ -242,16 +244,16 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
         </div>
       )}
 
-      {/* The plugin loaded; running it is what failed. Same treatment as an
-          unreadable manifest above — both are the folder not working — but the
-          message says which of the two happened. The stack stays out of the
-          manager; the panel's own error boundary is where a developer reads it. */}
+      {/* The plugin loaded; running it is what went wrong. Same treatment as an
+          unreadable manifest above — both are the folder not working — and the
+          two can never appear together, since a manifest that failed discovery
+          never loads. The cause carries itself: prefixing it would have to name
+          a phase the channel doesn't record. The stack stays out of the manager;
+          the panel's own error boundary is where a developer reads it. */}
       {plugin.loadError && (
         <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
           <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-          <p className="text-2xs text-status-danger break-words">
-            Failed to start: {plugin.loadError.message}
-          </p>
+          <p className="text-2xs text-status-danger break-words">{plugin.loadError.message}</p>
         </div>
       )}
 

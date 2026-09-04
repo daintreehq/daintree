@@ -2390,11 +2390,13 @@ export class PluginService {
     // provenance `loadError` is owned by `onActivationResult`; this catch only
     // logs and unblocks startup.
     let timer: NodeJS.Timeout | undefined;
+    let timedOut = false;
     try {
       await Promise.race([
         bridge.waitForActivation(),
         new Promise<void>((_resolve, reject) => {
           timer = setTimeout(() => {
+            timedOut = true;
             reject(
               new Error(
                 `Plugin "${pluginId}" activate() did not settle within ${ACTIVATE_TIMEOUT_MS}ms`
@@ -2405,13 +2407,21 @@ export class PluginService {
         }),
       ]);
     } catch (err) {
-      // The worker didn't settle in time — typically a hanging `activate()` or a
-      // never-resolving top-level await in the bundle. The worker stays alive in
-      // isolation (it can't stall the main process); record the timeout as the
-      // provenance loadError so diagnostics surface why the plugin never came up.
-      // If activation eventually settles (or a dev reload follows),
+      // Only a timeout is this catch's to record. The bridge settles a failed
+      // activation twice — `onActivationResult` first, with the WORKER's error
+      // and stack, then a rejection carrying a freshly-built main-process
+      // `Error` — so recording every rejection here would overwrite the real
+      // plugin stack with this process's own and push a second, worse snapshot.
+      // The remaining rejection is a bridge disposal, which is a teardown, not
+      // an activation failure.
+      //
+      // On timeout the worker stays alive — typically a hanging `activate()` or
+      // a never-resolving top-level await — so record why the plugin never came
+      // up. If activation eventually settles (or a dev reload follows),
       // `onActivationResult` overwrites this.
-      this.recordPluginLoadError(pluginId, plugin, toPluginLoadError(err));
+      if (timedOut) {
+        this.recordPluginLoadError(pluginId, plugin, toPluginLoadError(err));
+      }
       console.error(`[PluginService] Plugin "${pluginId}" activation:`, err);
     } finally {
       if (timer) clearTimeout(timer);
@@ -5003,7 +5013,11 @@ export class PluginService {
       if (previous === undefined) return true;
       this.projectPluginLoadErrors.delete(pluginId);
     } else {
+      // A repeat of the same failure says nothing new, so keep `at` current but
+      // skip the push — otherwise a plugin failing every retry spams the
+      // renderer with snapshots whose rows are identical.
       if (previous?.message === loadError.message && previous.stack === loadError.stack) {
+        this.projectPluginLoadErrors.set(pluginId, loadError);
         return true;
       }
       this.projectPluginLoadErrors.set(pluginId, loadError);

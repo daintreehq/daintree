@@ -23,13 +23,13 @@ function stateLabel(state: ProjectPluginInfo["state"]): string {
 }
 
 /**
- * A plugin that loaded and then failed to run is still `active`, so the state
+ * A plugin that loaded and then hit an error is still `active`, so the state
  * alone would call it "Running" (#12232). The last outcome outranks the state
  * here — "Running" for something that threw on startup is the one label that
  * would actively mislead.
  */
 function rowLabel(plugin: ProjectPluginInfo): string {
-  return plugin.loadError ? "Failed" : stateLabel(plugin.state);
+  return plugin.loadError ? "Error" : stateLabel(plugin.state);
 }
 
 /**
@@ -41,11 +41,11 @@ function rowLabel(plugin: ProjectPluginInfo): string {
  * the neutral dot of `ProjectResourceBadge` rather than inventing a new element.
  * Never an accent — a folder full of plugins the user turned off is not a
  * fault, and the popover is where the detail belongs. The one exception is a
- * plugin that actually failed to run (#12232): the dot carries `status-danger`
+ * plugin that actually hit an error (#12232): the dot carries `status-danger`
  * then, as the single load-bearing signal in this region.
  *
  * It renders only when there is something to act on: plugins that are blocked,
- * staged and awaiting a click, unreadable, or failed. A project whose plugins
+ * staged and awaiting a click, unreadable, or broken. A project whose plugins
  * all loaded and ran shows nothing at all, which is the point of the tier.
  *
  * Unreadable earns a place here because a manifest the host refused is a fault
@@ -89,14 +89,16 @@ export function ProjectPluginIndicator() {
   // Ordered by how much it is a fault rather than a state the user chose, and
   // by how little else carries it. A decision that silently will not survive a
   // restart first — nothing else can show it, since a failed "always enable"
-  // still starts the plugins. Then a plugin that loaded and failed, whose row
-  // state says "Running" and so reads as healthy until this says otherwise.
+  // still starts the plugins. Then a plugin that loaded and hit an error, whose
+  // row state says "Running" and so reads as healthy until this says otherwise.
   // Then a manifest that will not parse, which its own row already labels
   // "Unreadable". Then the two ordinary resting states.
   const summary = unsaved
     ? "Project plugins on, but not saved"
     : failed.length > 0
-      ? `${failed.length} project plugin${failed.length === 1 ? "" : "s"} failed`
+      ? failed.length === 1
+        ? "1 project plugin has an error"
+        : `${failed.length} project plugins have errors`
       : invalid.length > 0
         ? `${invalid.length} project plugin${invalid.length === 1 ? "" : "s"} unreadable`
         : blocked.length > 0

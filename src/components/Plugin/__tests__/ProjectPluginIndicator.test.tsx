@@ -165,7 +165,7 @@ describe("ProjectPluginIndicator", () => {
       persisted: true,
     });
 
-    expect(document.body.textContent).toContain("1 project plugin failed");
+    expect(document.body.textContent).toContain("1 project plugin has an error");
   });
 
   it("leads with a failure over decisions the user already made", () => {
@@ -175,7 +175,7 @@ describe("ProjectPluginIndicator", () => {
       plugin("c.d", "active", { loadError: { message: "activate() threw", at: 1 } }),
     ]);
 
-    expect(document.body.textContent).toContain("1 project plugin failed");
+    expect(document.body.textContent).toContain("1 project plugin has an error");
     expect(document.body.textContent).not.toContain("project plugins off");
   });
 
@@ -188,7 +188,7 @@ describe("ProjectPluginIndicator", () => {
       plugin("c.d", "active", { loadError: { message: "activate() threw", at: 1 } }),
     ]);
 
-    expect(document.body.textContent).toContain("1 project plugin failed");
+    expect(document.body.textContent).toContain("1 project plugin has an error");
     expect(document.body.textContent).not.toContain("unreadable");
   });
 
