@@ -191,6 +191,60 @@ describe("plugin:validate-manifest", () => {
     await fs.rm(outside, { recursive: true, force: true });
   });
 
+  it("refuses a plugin.json that is itself a symlink out of the project", async () => {
+    // The directory is ordinary and genuinely inside the project; only the
+    // manifest escapes. Canonicalising the directory alone would let this read.
+    const outside = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "daintree-outside-"))
+    );
+    const outsideManifest = path.join(outside, "elsewhere.json");
+    await fs.writeFile(outsideManifest, JSON.stringify(VALID_MANIFEST), "utf8");
+    const dir = path.join(projectRoot, ".daintree", "plugins", "acme.linked");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.symlink(outsideManifest, path.join(dir, "plugin.json"), "file");
+    const handler = getValidateManifestHandler();
+
+    await expect(handler(senderEvent, ".daintree/plugins/acme.linked")).rejects.toThrow(
+      /outside this project/
+    );
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
+  it("reports a location-derived origin even when the JSON never parses", async () => {
+    const dir = path.join(projectRoot, ".daintree/plugins/acme.demo");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "plugin.json"), "{ not json", "utf8");
+    const handler = getValidateManifestHandler();
+
+    const result = (await handler(senderEvent, ".daintree/plugins/acme.demo")) as {
+      origin: string;
+      originSource: string;
+    };
+
+    // The file's location is a fact the parse failure does not erase.
+    expect(result.origin).toBe("project");
+    expect(result.originSource).toBe("location");
+  });
+
+  it("holds a manifest in the managed plugins root to the user rules", async () => {
+    const dir = path.join(pluginsRoot, "acme.installed");
+    await fs.mkdir(dir, { recursive: true });
+    // Declares project scope, but sits in the user root — location wins, and
+    // under the user origin `scope: "project"` is refused.
+    await fs.writeFile(path.join(dir, "plugin.json"), JSON.stringify(VALID_MANIFEST), "utf8");
+    const handler = getValidateManifestHandler();
+
+    const result = (await handler(senderEvent, path.join(dir, "plugin.json"))) as {
+      ok: boolean;
+      origin: string;
+      originSource: string;
+    };
+
+    expect(result.origin).toBe("user");
+    expect(result.originSource).toBe("location");
+    expect(result.ok).toBe(false);
+  });
+
   it("throws rather than reporting a verdict when no manifest is there", async () => {
     const handler = getValidateManifestHandler();
     await expect(handler(senderEvent, ".daintree/plugins/missing")).rejects.toThrow(

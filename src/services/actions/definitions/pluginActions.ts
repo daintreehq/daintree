@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { pluginClient } from "@/clients/pluginClient";
+import { parseProjectPluginInstanceKey } from "@shared/types/plugin";
 
 /**
  * The plugin-authoring feedback loop (#12214). An agent writing a plugin into a
@@ -139,24 +140,35 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
         idempotentHint: false,
         destructiveHint: false,
       },
-      run: async (args) => {
+      run: async (args, ctx) => {
         const limit = args.logLimit ?? DIAGNOSTICS_LOG_LIMIT_DEFAULT;
         const snapshot = await pluginClient.getDiagnosticsSnapshot();
-        // A project plugin runs under an instance key (`project__<projectId>__
-        // <publisher.name>`), never its bare manifest id — but the manifest id
-        // is the only one its author knows, since it is the one they wrote.
-        // Match either, or the case this action exists for reports "no such
-        // plugin" for a plugin that is right there.
-        const entry = snapshot.plugins.find(
-          (p) => p.pluginId === args.pluginId || p.pluginId.endsWith(`__${args.pluginId}`)
-        );
+
+        // A project plugin runs under an instance key
+        // (`project__{projectId}__{publisher.name}`), never its bare manifest
+        // id — but the manifest id is the only one its author knows, because it
+        // is the one they wrote. Parse the key rather than matching its tail: a
+        // suffix test also matches the SAME id owned by a different open
+        // project, and the snapshot is app-global, so it would hand this
+        // project's agent another project's log lines.
+        const matches = (candidate: string): boolean => {
+          if (candidate === args.pluginId) return true;
+          const parsed = parseProjectPluginInstanceKey(candidate);
+          if (!parsed || parsed.manifestId !== args.pluginId) return false;
+          // Only this caller's own project. Without a project on the sender
+          // there is no owner to compare against, so no instance key qualifies.
+          return ctx.projectId !== undefined && parsed.projectId === ctx.projectId;
+        };
+        const entry = snapshot.plugins.find((p) => matches(p.pluginId));
 
         if (entry) {
           // Rebuilt field by field rather than spread: the snapshot entry also
           // carries install provenance and the action audit trail, neither of
           // which belongs in an authoring diagnostic.
           return {
-            pluginId: entry.pluginId,
+            // The id the caller asked with, not the instance key it happens to
+            // run under — the key names a project and is not theirs to hold.
+            pluginId: args.pluginId,
             displayName: entry.displayName,
             version: entry.version,
             loaded: true,
@@ -204,10 +216,16 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
           };
         }
 
+        // Reported as manifest ids: an instance key names a project the caller
+        // may not own, and is not a value they could pass back here anyway.
         const known = [
-          ...snapshot.plugins.map((p) => p.pluginId),
+          ...snapshot.plugins.map(
+            (p) => parseProjectPluginInstanceKey(p.pluginId)?.manifestId ?? p.pluginId
+          ),
           ...projectPlugins.map((p) => p.id),
-        ].sort();
+        ]
+          .filter((id, index, all) => all.indexOf(id) === index)
+          .sort();
         throw new Error(
           known.length > 0
             ? `No plugin "${args.pluginId}". Known ids: ${known.join(", ")}`

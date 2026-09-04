@@ -1254,22 +1254,45 @@ async function handleValidateManifest(
   // Accept either the directory or the manifest itself — an agent that just
   // wrote the file naturally names the file.
   const dir = path.basename(resolved) === "plugin.json" ? path.dirname(resolved) : resolved;
+  const manifestPath = path.join(dir, "plugin.json");
 
   // The lexical check above cannot see a symlink, and a project is a directory
   // of files the user did not necessarily write. Re-check after canonicalising,
   // mirroring `PluginService.isRealpathContained`: a path that resolves outside
-  // the allowed roots is refused even though its spelling sits inside them. A
-  // directory that does not resolve at all is left to the read below, which
-  // reports the missing manifest rather than a containment failure.
-  const realDir = await realpath(dir).catch(() => null);
-  if (realDir !== null) {
-    const realRoots = await Promise.all(
-      allowedRoots.map((root) => realpath(root).catch(() => path.resolve(root)))
-    );
-    if (!realRoots.some((root) => isPathUnder(root, realDir))) throw outside();
+  // the allowed roots is refused even though its spelling sits inside them.
+  //
+  // Both the directory AND the manifest file, because they escape
+  // independently: an ordinary directory inside an allowed root can hold a
+  // `plugin.json` that is itself a symlink to anywhere, and `readFile` follows
+  // it. A path that does not resolve at all is left to the read below, which
+  // reports a missing manifest rather than a containment failure.
+  const realRoots = await Promise.all(
+    allowedRoots.map((root) => realpath(root).catch(() => path.resolve(root)))
+  );
+  const contained = (candidate: string): boolean =>
+    realRoots.some((root) => isPathUnder(root, candidate));
+  for (const candidate of [dir, manifestPath]) {
+    const real = await realpath(candidate).catch(() => null);
+    if (real !== null && !contained(real)) throw outside();
   }
 
-  const manifestPath = path.join(dir, "plugin.json");
+  // Origin is a fact when the directory sits under a real discovery root, and a
+  // prediction otherwise. A manifest still being drafted elsewhere in the repo
+  // gets checked against the rules it will meet, keyed off its own `scope`.
+  //
+  // Derived from location BEFORE the file is read, so a manifest that fails to
+  // parse still reports the origin its location implies. Keying this off the
+  // JSON meant unparseable input was always reported as a user-scope manifest,
+  // including one sitting in the project's own plugins directory.
+  const projectPluginsDir = projectRoot
+    ? path.join(projectRoot, ...PROJECT_PLUGIN_DIR_SEGMENTS)
+    : null;
+  const locationOrigin: PluginOrigin | null =
+    projectPluginsDir && isPathUnder(projectPluginsDir, dir)
+      ? "project"
+      : isPathUnder(path.resolve(pluginsRoot), dir)
+        ? "user"
+        : null;
 
   let raw: string;
   try {
@@ -1284,8 +1307,8 @@ async function handleValidateManifest(
   } catch (err) {
     return {
       manifestPath,
-      origin: "user",
-      originSource: "declared-scope",
+      origin: locationOrigin ?? "user",
+      originSource: locationOrigin ? "location" : "declared-scope",
       ok: false,
       pluginId: null,
       errors: [
@@ -1295,22 +1318,11 @@ async function handleValidateManifest(
     };
   }
 
-  // Origin is a fact when the directory sits under a real discovery root, and a
-  // prediction otherwise. A manifest still being drafted elsewhere in the repo
-  // gets checked against the rules it will meet, keyed off its own `scope`.
   const declaredScope = (json as { scope?: unknown } | null)?.scope;
-  let origin: PluginOrigin = declaredScope === "project" ? "project" : "user";
-  let originSource: PluginManifestValidationResult["originSource"] = "declared-scope";
-  const projectPluginsDir = projectRoot
-    ? path.join(projectRoot, ...PROJECT_PLUGIN_DIR_SEGMENTS)
-    : null;
-  if (projectPluginsDir && isPathUnder(projectPluginsDir, dir)) {
-    origin = "project";
-    originSource = "location";
-  } else if (isPathUnder(path.resolve(pluginsRoot), dir)) {
-    origin = "user";
-    originSource = "location";
-  }
+  const origin: PluginOrigin = locationOrigin ?? (declaredScope === "project" ? "project" : "user");
+  const originSource: PluginManifestValidationResult["originSource"] = locationOrigin
+    ? "location"
+    : "declared-scope";
 
   const parsed = getPluginManifestSchema(origin).safeParse(json);
   const rawName = (json as { name?: unknown } | null)?.name;

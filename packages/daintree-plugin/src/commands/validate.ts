@@ -9,6 +9,14 @@ export interface ValidateOptions {
   dir?: string;
   /** Resolve `${settings:KEY}` tokens against `.daintree-plugin-env`. */
   env?: boolean;
+  /**
+   * Force the discovery origin instead of inferring it from the manifest's own
+   * `scope`. `doctor` sets this: it walks `.daintree/plugins/`, so it KNOWS the
+   * origin, and inferring it would check a manifest that omits `scope` against
+   * the user rules it will never be loaded under — passing the very manifest
+   * the host rejects as `project_scope_required`.
+   */
+  origin?: PluginOrigin;
 }
 
 export interface ValidateResult {
@@ -81,7 +89,7 @@ export async function runValidate(opts: ValidateOptions = {}): Promise<ValidateR
   // packaged .dntr installs into. `"builtin"` is deliberately unreachable: the
   // reserved `daintree.*` namespace stays refused for third-party authors.
   const declaredScope = (json as { scope?: unknown } | null)?.scope;
-  const origin: PluginOrigin = declaredScope === "project" ? "project" : "user";
+  const origin: PluginOrigin = opts.origin ?? (declaredScope === "project" ? "project" : "user");
   const result = getPluginManifestSchema(origin).safeParse(json);
   if (!result.success) {
     for (const issue of result.error.issues) {

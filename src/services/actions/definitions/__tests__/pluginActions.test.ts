@@ -12,6 +12,7 @@ vi.mock("@/clients/pluginClient", () => ({ pluginClient: clientMocks }));
 import { registerPluginActions } from "../pluginActions";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 /**
  * These actions ignore the callbacks entirely — they reach main through the
@@ -70,14 +71,17 @@ function definition(id: string): AnyActionDefinition {
   return factory();
 }
 
-/** Every `ActionContext` field is optional, so the empty context needs no cast. */
+/** Every `ActionContext` field is optional, so a bare context needs no cast. */
 const EMPTY_CONTEXT: ActionContext = {};
 
 // Return type is inferred from `AnyActionDefinition`, so assertions are not
 // needed at the call sites and none is introduced here either.
-async function run(id: string, args: unknown = {}) {
-  return definition(id).run(args, EMPTY_CONTEXT);
+async function run(id: string, args: unknown = {}, ctx: ActionContext = EMPTY_CONTEXT) {
+  return definition(id).run(args, ctx);
 }
+
+/** A sender that owns `project-1`, which is what scopes an instance-key match. */
+const PROJECT_1: ActionContext = { projectId: "project-1" };
 
 function logLine(ts: number, message: string) {
   return { ts, level: "info" as const, message };
@@ -157,9 +161,53 @@ describe("plugin.diagnostics", () => {
       ],
     });
 
-    const result = await run("plugin.diagnostics", { pluginId: "acme.demo" });
+    const result = await run("plugin.diagnostics", { pluginId: "acme.demo" }, PROJECT_1);
     expect(result.loaded).toBe(true);
     expect(result.logLines).toEqual([{ ts: 9, level: "info", message: "project line" }]);
+    // Answers with the id the caller asked with; the instance key names a
+    // project and is not theirs to hold.
+    expect(result.pluginId).toBe("acme.demo");
+  });
+
+  it("never answers with another project's copy of the same plugin id", async () => {
+    clientMocks.getDiagnosticsSnapshot.mockResolvedValue({
+      plugins: [
+        snapshotEntry({
+          pluginId: "project__project-2__acme.demo",
+          logLines: [logLine(1, "other project's secret path")],
+        }),
+      ],
+    });
+
+    // The snapshot is app-global, so project-2's copy is visible here. It must
+    // not answer for project-1, and the failure must not quote its lines.
+    await expect(run("plugin.diagnostics", { pluginId: "acme.demo" }, PROJECT_1)).rejects.toThrow(
+      /No plugin "acme\.demo"/
+    );
+    expect(clientMocks.getDiagnosticsSnapshot).toHaveBeenCalled();
+  });
+
+  it("matches no instance key at all when the sender has no project", async () => {
+    clientMocks.getDiagnosticsSnapshot.mockResolvedValue({
+      plugins: [snapshotEntry({ pluginId: "project__project-1__acme.demo" })],
+    });
+
+    await expect(run("plugin.diagnostics", { pluginId: "acme.demo" })).rejects.toThrow(
+      /No plugin "acme\.demo"/
+    );
+  });
+
+  it("reports unknown ids as manifest ids, never as instance keys", async () => {
+    clientMocks.getDiagnosticsSnapshot.mockResolvedValue({
+      plugins: [snapshotEntry({ pluginId: "project__project-1__acme.other" })],
+    });
+
+    const message = await run("plugin.diagnostics", { pluginId: "acme.nope" }, PROJECT_1).then(
+      () => "resolved, but should have thrown",
+      (err: unknown) => formatErrorMessage(err, "threw without a message")
+    );
+    expect(message).toContain("acme.other");
+    expect(message).not.toContain("project__");
   });
 
   it("carries no install provenance or audit trail into the result", async () => {
@@ -190,6 +238,36 @@ describe("plugin.diagnostics", () => {
     const result = await run("plugin.diagnostics", { pluginId: "acme.demo", logLimit: 2 });
     expect(result.logLines.map((l: { message: string }) => l.message)).toEqual(["b", "c"]);
     expect(result.logLinesAvailable).toBe(3);
+  });
+
+  it("returns the newest 50 lines by default, not the whole buffer", async () => {
+    clientMocks.getDiagnosticsSnapshot.mockResolvedValue({
+      plugins: [
+        snapshotEntry({
+          logLines: Array.from({ length: 51 }, (_, i) => logLine(i, `line-${i}`)),
+        }),
+      ],
+    });
+
+    const result = await run("plugin.diagnostics", { pluginId: "acme.demo" });
+    expect(result.logLines).toHaveLength(50);
+    expect(result.logLines[0].message).toBe("line-1");
+    expect(result.logLinesAvailable).toBe(51);
+  });
+
+  it("propagates a snapshot read failure instead of reporting an empty buffer", async () => {
+    clientMocks.getDiagnosticsSnapshot.mockRejectedValue(new Error("IPC gone"));
+    await expect(run("plugin.diagnostics", { pluginId: "acme.demo" })).rejects.toThrow(/IPC gone/);
+  });
+
+  it("bounds the log tail in the schema, not only in the handler", () => {
+    const schema = definition("plugin.diagnostics").argsSchema;
+    const parse = (logLimit: unknown) => schema?.safeParse({ pluginId: "a.b", logLimit }).success;
+    expect(parse(0)).toBe(false);
+    expect(parse(501)).toBe(false);
+    expect(parse(1.5)).toBe(false);
+    expect(parse(1)).toBe(true);
+    expect(parse(500)).toBe(true);
   });
 
   it("reports a refused project plugin with its rejection rather than as missing", async () => {
@@ -234,7 +312,7 @@ describe("plugin.diagnostics", () => {
 
 describe("plugin.reloadProject", () => {
   it("reloads, then reports the state of every directory found", async () => {
-    clientMocks.getProjectPlugins.mockResolvedValue([
+    const projectRows = [
       {
         projectId: "p1",
         id: "acme.demo",
@@ -245,7 +323,19 @@ describe("plugin.reloadProject", () => {
         state: "staged",
         collidesWithGlobal: false,
       },
-    ]);
+    ];
+
+    // The list must be read AFTER the reload, or it reports pre-reload state
+    // and the action's whole promise is void. Asserted by ordering, not by the
+    // eventual value, which a list-then-reload implementation would also match.
+    let reloadFinished = false;
+    clientMocks.reloadProjectPlugins.mockImplementation(async () => {
+      reloadFinished = true;
+    });
+    clientMocks.getProjectPlugins.mockImplementation(async () => {
+      expect(reloadFinished).toBe(true);
+      return projectRows;
+    });
 
     const result = await run("plugin.reloadProject");
     expect(clientMocks.reloadProjectPlugins).toHaveBeenCalledOnce();
@@ -266,6 +356,19 @@ describe("plugin.reloadProject", () => {
     clientMocks.reloadProjectPlugins.mockRejectedValue(new Error("sender has no project"));
     await expect(run("plugin.reloadProject")).rejects.toThrow(/sender has no project/);
     expect(clientMocks.getProjectPlugins).not.toHaveBeenCalled();
+  });
+
+  it("still reloads for a project that has no plugins yet", async () => {
+    clientMocks.getProjectPlugins.mockResolvedValue([]);
+
+    const result = await run("plugin.reloadProject");
+    expect(clientMocks.reloadProjectPlugins).toHaveBeenCalledOnce();
+    expect(result.plugins).toEqual([]);
+  });
+
+  it("propagates a failure to list, even once the reload itself succeeded", async () => {
+    clientMocks.getProjectPlugins.mockRejectedValue(new Error("project closed mid-reload"));
+    await expect(run("plugin.reloadProject")).rejects.toThrow(/project closed mid-reload/);
   });
 
   it("refuses plugin-sourced dispatch, since it would unload the caller", () => {

@@ -2715,10 +2715,25 @@ export class PluginService {
       list.push(rest);
     }
 
+    // `this.plugins` is keyed by the REGISTRY key, which for a project plugin is
+    // its instance key (`project__{projectId}__{publisher.name}`) and not
+    // `manifest.name` — the manifest keeps the bare id it declares, and
+    // `loadPlugin` asserts the two agree rather than rewriting either. Keying
+    // this off `manifest.name` therefore dropped every project plugin from the
+    // snapshot, which is both the wrong set for a bug report and, since the log
+    // buffers and audit records are themselves keyed by the registry key, the
+    // one class of plugin whose author is reading these diagnostics (#12214).
+    //
+    // Indexed by manifest identity: each load parses and freezes its own
+    // manifest object, so two projects holding the same id still index apart.
+    const keyByManifest = new Map<Readonly<PluginManifest>, string>();
+    for (const [key, plugin] of this.plugins) keyByManifest.set(plugin.manifest, key);
+
     const plugins = this.listPlugins()
-      .filter((info) => this.plugins.has(info.manifest.name))
+      .filter((info) => keyByManifest.has(info.manifest))
       .map((info) => {
-        const pluginId = info.manifest.name;
+        // Non-null: the filter above admitted only manifests present in the index.
+        const pluginId = keyByManifest.get(info.manifest) as string;
         const buffer = this.logBuffers.get(pluginId);
         return {
           pluginId,
@@ -2918,9 +2933,13 @@ export class PluginService {
     this.hostGitFactory = factory;
   }
 
-  _registerFakePluginForTests(plugin: LoadedPlugin): void {
+  _registerFakePluginForTests(plugin: LoadedPlugin, instanceKey?: string): void {
     this.mintPluginAuthority(plugin.manifest.name, plugin.dir);
-    this.plugins.set(plugin.manifest.name, plugin);
+    // `instanceKey` mirrors the real `loadPlugin`, which keys a project plugin
+    // by `project__{projectId}__{name}` while leaving `manifest.name` bare.
+    // Without it a test cannot reproduce the shape the registry actually holds
+    // for a project plugin, which is where the two diverge (#12214).
+    this.plugins.set(instanceKey ?? plugin.manifest.name, plugin);
   }
 
   _unregisterFakePluginForTests(pluginId: string): void {

@@ -171,6 +171,58 @@ describe("runDoctor", () => {
     expect(result.plugins[0].errors.some((e) => e.includes("color"))).toBe(true);
   });
 
+  it("refuses a manifest that omits scope, which the host rejects under this root", async () => {
+    await initRepo();
+    // Every directory doctor walks lives under `.daintree/plugins/`, so the
+    // project rules apply whatever the manifest claims about itself. Inferring
+    // the origin from `scope` passed this exact manifest.
+    const { scope: _scope, ...withoutScope } = VALID_MANIFEST;
+    await writePlugin("acme.demo", withoutScope);
+    await commitAll();
+
+    const result = await runDoctor(projectRoot, { offline: true });
+    expect(result.plugins[0].errors.some((e) => e.includes("scope"))).toBe(true);
+    expect(result.ok).toBe(false);
+  });
+
+  it("refuses a build target that climbs out of the plugin directory", async () => {
+    await initRepo();
+    await fs.writeFile(path.join(projectRoot, "shared.mjs"), WORKER_ENTRY, "utf8");
+    await writePlugin("acme.demo", { ...VALID_MANIFEST, main: "../../../shared.mjs" });
+    await commitAll();
+
+    const result = await runDoctor(projectRoot, { offline: true });
+    // Committed, tracked, and valid ESM — and still unloadable, because the
+    // host refuses an entry path that leaves the plugin directory.
+    const escape = result.plugins[0].errors.find((e) => e.includes("outside the plugin directory"));
+    expect(escape).toBeDefined();
+    expect(result.ok).toBe(false);
+  });
+
+  it("keeps several plugin directories independent and reports them all", async () => {
+    await initRepo();
+    await writePlugin("acme.good", VALID_MANIFEST);
+    await writePlugin("acme.bad", {
+      ...VALID_MANIFEST,
+      contributes: {
+        ...VALID_MANIFEST.contributes,
+        panels: [{ id: "main", name: "Demo", iconId: "gauge" }],
+      },
+    });
+    // A directory with no manifest at all.
+    await fs.mkdir(path.join(projectRoot, ".daintree", "plugins", "acme.empty"), {
+      recursive: true,
+    });
+    await commitAll();
+
+    const result = await runDoctor(projectRoot, { offline: true });
+    expect(result.plugins.map((p) => p.dirName)).toEqual(["acme.bad", "acme.empty", "acme.good"]);
+    expect(result.plugins[0].errors.length).toBeGreaterThan(0);
+    expect(result.plugins[1].pluginId).toBeNull();
+    expect(result.plugins[2].errors).toEqual([]);
+    expect(result.ok).toBe(false);
+  });
+
   it("skips the git checks outside a repository and says so", async () => {
     await writePlugin("acme.demo", VALID_MANIFEST);
 

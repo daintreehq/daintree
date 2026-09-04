@@ -66,5 +66,13 @@ export function channelHandlerArityHint(handler: unknown, error: unknown): strin
 export function appendHandlerHint(error: unknown, hint: string | null): void {
   if (hint === null || !(error instanceof Error)) return;
   if (error.message.includes(HINT_MARKER)) return;
-  error.message = `${error.message}\n\n${hint}`;
+  try {
+    error.message = `${error.message}\n\n${hint}`;
+  } catch {
+    // A frozen or getter-only Error throws on assignment under strict mode.
+    // The hint is a convenience; the plugin's real failure is not, and it is
+    // about to be audited and rethrown. Losing the hint is the correct trade —
+    // letting the assignment throw would replace the authentic error with a
+    // TypeError about this line.
+  }
 }

@@ -46,11 +46,16 @@ describe("channelHandlerArityHint", () => {
     );
   });
 
-  it("stays quiet for a variadic adapter, whose arity says nothing about the author", () => {
-    // The typed-registration adapter is `(ctx, ...args)`, arity 1. The dispatch
-    // site gates on that separately; this asserts the shapes stay distinct.
+  it("cannot tell a variadic adapter from a one-parameter handler by arity alone", () => {
+    // The typed-registration adapter is `(ctx, ...args)` — rest parameters do
+    // not count toward `length`, so it reports arity 1 exactly like the mistake
+    // this hint describes. The helper therefore DOES fire on it, which is why
+    // the dispatch site gates the channel hint on `!channelSchema` rather than
+    // relying on arity. Asserting the false positive here is what keeps that
+    // gate from being deleted as redundant.
     const adapter = (_ctx: unknown, ..._args: unknown[]) => null;
     expect(adapter.length).toBe(1);
+    expect(channelHandlerArityHint(adapter, undefinedRead)).not.toBeNull();
   });
 });
 
@@ -76,6 +81,15 @@ describe("appendHandlerHint", () => {
     appendHandlerHint(err, "Daintree hint: twice.");
     expect(err.message).not.toContain("twice");
     expect(err.message.split("Daintree hint:")).toHaveLength(2);
+  });
+
+  it("leaves a frozen error intact instead of throwing over it", () => {
+    // A handler that throws a frozen Error would otherwise turn this
+    // convenience into a TypeError that replaces the real failure — before the
+    // audit record is written and before it is rethrown to the renderer.
+    const err = Object.freeze(new TypeError("boom"));
+    expect(() => appendHandlerHint(err, "Daintree hint: something.")).not.toThrow();
+    expect(err.message).toBe("boom");
   });
 
   it("is a no-op for a null hint and for a non-Error throw", () => {

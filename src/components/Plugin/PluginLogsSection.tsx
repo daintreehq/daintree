@@ -5,6 +5,7 @@ import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { pluginClient } from "@/clients/pluginClient";
 import type { PluginDiagnosticsLogLine } from "@shared/types/ipc/pluginDiagnostics";
+import { parseProjectPluginInstanceKey } from "@shared/types/plugin";
 
 /**
  * The per-plugin log ring buffer, surfaced where its author will look (#12214).
@@ -42,16 +43,26 @@ export function usePluginLogs(pluginId: string): PluginLogsState {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
+  // A monotonic request token, because `mountedRef` alone does not order
+  // overlapping reads: StrictMode's cleanup/setup pair flips it false then true
+  // again, and two rapid refreshes can resolve out of order. Only the newest
+  // request may write, so a slow first response cannot overwrite a fresh one.
+  const requestRef = useRef(0);
 
   const refresh = useCallback(async () => {
+    const request = ++requestRef.current;
     setLoading(true);
     try {
       const snapshot = await pluginClient.getDiagnosticsSnapshot();
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || request !== requestRef.current) return;
       // A project plugin runs under an instance key rather than its manifest
-      // id, so match either — the pane knows the plugin by its manifest name.
+      // id, and the pane knows it only by the manifest name. Parse the key
+      // rather than matching its tail, so the same id in another open project
+      // cannot answer for this one.
       const entry = snapshot.plugins.find(
-        (plugin) => plugin.pluginId === pluginId || plugin.pluginId.endsWith(`__${pluginId}`)
+        (plugin) =>
+          plugin.pluginId === pluginId ||
+          parseProjectPluginInstanceKey(plugin.pluginId)?.manifestId === pluginId
       );
       // `null` (not running, so no buffer) and `[]` (ran, logged nothing) are
       // different answers to an author's question, and the caller renders them
@@ -59,10 +70,10 @@ export function usePluginLogs(pluginId: string): PluginLogsState {
       setLines(entry ? entry.logLines : null);
       setError(null);
     } catch (err) {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || request !== requestRef.current) return;
       setError(formatErrorMessage(err, "Couldn't read this plugin's log buffer"));
     } finally {
-      if (mountedRef.current) setLoading(false);
+      if (mountedRef.current && request === requestRef.current) setLoading(false);
     }
   }, [pluginId]);
 

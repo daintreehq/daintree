@@ -310,7 +310,10 @@ export async function runDoctor(
   const plugins: DoctorPluginReport[] = [];
   for (const dirName of dirNames) {
     const dir = path.join(pluginsDir, dirName);
-    const { errors, warnings } = await runValidate({ dir });
+    // Origin is known, not inferred: everything here lives under
+    // `.daintree/plugins/`, so it is checked against the rules the host will
+    // actually apply — including the `scope: "project"` a manifest must declare.
+    const { errors, warnings } = await runValidate({ dir, origin: "project" });
     const manifest = await readManifest(dir);
     const pluginId = typeof manifest?.name === "string" ? manifest.name : null;
 
@@ -319,12 +322,25 @@ export async function runDoctor(
       typeof engines?.daintree === "string" ? caretEngineAdvisory(engines.daintree) : null;
     if (caret) errors.push(caret);
 
+    const realDir = await fs.realpath(dir).catch(() => path.resolve(dir));
     for (const [label, target] of buildTargets(manifest)) {
       if (path.isAbsolute(target) || target.includes("\\")) {
         errors.push(`${label} "${target}" must be a relative path using forward slashes`);
         continue;
       }
       const absolute = path.join(dir, target);
+      // The host resolves entry paths against the plugin directory and refuses
+      // anything that climbs out of it, so a `../` target is dead on arrival
+      // even though it exists and is committed. Checked after realpath, since a
+      // symlink inside the directory escapes just as effectively as `../`.
+      const realTarget = await fs.realpath(absolute).catch(() => path.resolve(absolute));
+      const relative = path.relative(realDir, realTarget);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        errors.push(
+          `${label} "${target}" resolves outside the plugin directory — the host refuses an entry path that climbs out of it, so this cannot load however it is committed`
+        );
+        continue;
+      }
       await checkEsmModule(absolute, label, errors, warnings);
       if (repoRoot) {
         // git speaks forward slashes on every platform; `path.relative` hands

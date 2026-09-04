@@ -30,8 +30,18 @@ vi.mock("@/store/projectStore", () => ({
 
 // PluginMcpServersSection polls this on mount when its tab is active.
 const pluginMcpListMock = vi.hoisted(() => vi.fn(() => Promise.resolve([])));
+// The Logs tab is earned by content, so the pane reads the diagnostics snapshot
+// on mount. Default it to a real EMPTY snapshot rather than leaving the method
+// missing: an absent method makes the read throw, and every "no extra tabs"
+// assertion below would then pass through the error path instead of proving
+// that an empty buffer offers no tab.
+const getDiagnosticsSnapshotMock = vi.hoisted(() =>
+  vi.fn(() => Promise.resolve({ plugins: [] as unknown[] }))
+);
 beforeEach(() => {
   pluginMcpListMock.mockClear();
+  getDiagnosticsSnapshotMock.mockClear();
+  getDiagnosticsSnapshotMock.mockResolvedValue({ plugins: [] });
   (globalThis as unknown as { window: Window }).window.electron = {
     pluginMcp: {
       list: pluginMcpListMock,
@@ -47,6 +57,7 @@ beforeEach(() => {
       deleteSettingValue: vi.fn(() => Promise.resolve()),
       revealSecretSetting: vi.fn(() => Promise.resolve(null)),
       pathExists: vi.fn(() => Promise.resolve(true)),
+      getDiagnosticsSnapshot: getDiagnosticsSnapshotMock,
     },
   } as unknown as Window["electron"];
 });
@@ -316,6 +327,52 @@ describe("PluginDetailPane content-gated tabs (#11302)", () => {
     renderOverview(makePlugin());
     const tabs = screen.getAllByRole("tab").map((t) => t.textContent);
     expect(tabs).toEqual(["Overview"]);
+  });
+
+  it("offers no Logs tab for a plugin whose buffer is empty", async () => {
+    renderOverview(makePlugin());
+    // Settle the snapshot read so this proves the empty-buffer case rather than
+    // just racing the effect.
+    await screen.findByRole("tab", { name: "Overview" });
+    expect(getDiagnosticsSnapshotMock).toHaveBeenCalled();
+    expect(screen.queryByRole("tab", { name: "Logs" })).toBeNull();
+  });
+
+  it("earns a Logs tab once the plugin has written lines, and renders them", async () => {
+    getDiagnosticsSnapshotMock.mockResolvedValue({
+      plugins: [
+        {
+          pluginId: "acme.demo",
+          displayName: "Acme Demo",
+          version: "1.0.0",
+          logLines: [{ ts: 1_700_000_000_000, level: "error", message: "activate failed" }],
+        },
+      ],
+    });
+
+    renderOverview(makePlugin());
+
+    const tab = await screen.findByRole("tab", { name: "Logs" });
+    fireEvent.click(tab);
+    expect(screen.getByText("activate failed")).toBeTruthy();
+  });
+
+  it("finds a project plugin's buffer through the instance key it runs under", async () => {
+    getDiagnosticsSnapshotMock.mockResolvedValue({
+      plugins: [
+        {
+          pluginId: `project__${"a".repeat(64)}__acme.demo`,
+          displayName: "Acme Demo",
+          version: "1.0.0",
+          logLines: [{ ts: 1_700_000_000_000, level: "info", message: "project line" }],
+        },
+      ],
+    });
+
+    renderOverview(makePlugin());
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Logs" }));
+    expect(screen.getByText("project line")).toBeTruthy();
   });
 
   it("hides Settings when the plugin declares none", () => {
