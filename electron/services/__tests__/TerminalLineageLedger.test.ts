@@ -209,7 +209,12 @@ describe("TerminalLineageLedger", () => {
       await flush();
       ledger.reconcile(census);
 
-      expect(ledger.getTrackedPids(100).map((t) => t.pid).sort()).toEqual([200, 300]);
+      expect(
+        ledger
+          .getTrackedPids(100)
+          .map((t) => t.pid)
+          .sort()
+      ).toEqual([200, 300]);
     });
 
     it("never reports a PID whose start time could not be established", async () => {
@@ -315,6 +320,200 @@ describe("TerminalLineageLedger", () => {
     });
   });
 
+  describe("bounded tracking", () => {
+    it("keeps trackedCount accurate across admit, prune and root drop", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+        { pid: 201, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+      expect(ledger.getTrackedCount()).toBe(2);
+
+      census.set([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+      ]);
+      ledger.reconcile(census);
+      expect(ledger.getTrackedCount()).toBe(1);
+
+      ledger.unregisterRoot(100);
+      expect(ledger.getTrackedCount()).toBe(0);
+      expect(ledger.hasRoots()).toBe(false);
+    });
+
+    it("returns capacity when a closing root drains automatically", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+      expect(ledger.getTrackedCount()).toBe(1);
+
+      ledger.markRootClosing(100);
+      census.set([]);
+      ledger.reconcile(census);
+
+      expect(ledger.getTrackedCount()).toBe(0);
+      expect(ledger.hasRoots()).toBe(false);
+    });
+
+    it("re-registering a recycled root PID releases the old lineage's capacity", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+      expect(ledger.getTrackedCount()).toBe(1);
+
+      ledger.registerRoot(100);
+
+      expect(ledger.getTrackedCount()).toBe(0);
+    });
+
+    it("stops admitting at the cap instead of evicting known descendants", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const procs: FakeProc[] = [{ pid: 100, ppid: 10 }];
+      // One more child than the 4096 cap allows.
+      for (let i = 0; i < 4097; i++) procs.push({ pid: 1000 + i, ppid: 100 });
+      const census = new FakeCensus(procs);
+      ledger.registerRoot(100);
+
+      ledger.reconcile(census);
+
+      expect(ledger.getTrackedCount()).toBe(4096);
+    });
+
+    it("dispose clears every root and the count", async () => {
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+
+      ledger.dispose();
+
+      expect(ledger.getTrackedCount()).toBe(0);
+      expect(ledger.hasRoots()).toBe(false);
+    });
+  });
+
+  describe("root lifecycle", () => {
+    it("closes an active root whose PID was handed to another process", async () => {
+      // A root is only keyed by PID. If that number is recycled, an unrelated
+      // process tree would be adopted wholesale unless the root notices.
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+
+      // The root is gone, but an unrelated process now holds its PID and has
+      // children of its own.
+      census.set([
+        { pid: 200, ppid: 1 },
+        { pid: 100, ppid: 55 },
+        { pid: 900, ppid: 100 },
+      ]);
+      ledger.reconcile(census);
+      await flush();
+      ledger.reconcile(census);
+
+      const pids = ledger.getTrackedPids(100).map((t) => t.pid);
+      expect(pids).toContain(200);
+      expect(pids).not.toContain(900);
+    });
+
+    it("closes an active root that vanished without a teardown", async () => {
+      // A terminal whose construction failed after the killer registered
+      // reaches no teardown path, so nothing would ever close its root.
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+
+      census.set([{ pid: 200, ppid: 1 }]);
+      ledger.reconcile(census);
+      await flush();
+      // The PID is free again and a stranger takes it, with children.
+      census.set([
+        { pid: 200, ppid: 1 },
+        { pid: 100, ppid: 77 },
+        { pid: 900, ppid: 100 },
+      ]);
+      ledger.reconcile(census);
+      await flush();
+      ledger.reconcile(census);
+
+      expect(ledger.getTrackedPids(100).map((t) => t.pid)).not.toContain(900);
+    });
+
+    it("does not let an unidentified orphan adopt a subtree", async () => {
+      // Probe failure leaves 200 unidentified. It must not be able to pull an
+      // unrelated subtree into the ledger on the strength of a PID alone.
+      mockExecFileAsync.mockRejectedValue(new Error("ps unavailable"));
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+
+      census.set([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 1 },
+        { pid: 300, ppid: 200 },
+      ]);
+      ledger.reconcile(census);
+      await flush();
+      ledger.reconcile(census);
+
+      expect(ledger.getTrackedPids(100)).toEqual([]);
+    });
+
+    it("requeues identification after a transient probe failure", async () => {
+      mockExecFileAsync.mockRejectedValueOnce(new Error("ps unavailable"));
+      const ledger = new TerminalLineageLedger(null);
+      const census = new FakeCensus([
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+      // First probe failed — nothing signallable yet.
+      expect(ledger.getTrackedPids(100)).toEqual([]);
+
+      // The next sweep must retry rather than abandon the PID forever.
+      ledger.reconcile(census);
+      await flush();
+      ledger.reconcile(census);
+
+      expect(ledger.getTrackedPids(100).map((t) => t.pid)).toEqual([200]);
+    });
+  });
+
   describe("persistence", () => {
     it("persists only orphaned descendants", async () => {
       const ledger = new TerminalLineageLedger(filePath);
@@ -375,6 +574,68 @@ describe("TerminalLineageLedger", () => {
       expect(readPersisted()).toBeNull();
     });
 
+    it("persists a detached member's own children too", async () => {
+      // 300's parent 200 is alive, so a "parent is missing" test would leave
+      // 300 unpersisted — and the restart that reaps 200 would let 300
+      // reparent to init and survive, recreating the bug one level down.
+      const ledger = new TerminalLineageLedger(filePath);
+      const census = new FakeCensus([
+        { pid: 10, ppid: 1 },
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 100 },
+        { pid: 300, ppid: 200 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+
+      census.set([
+        { pid: 10, ppid: 1 },
+        { pid: 100, ppid: 10 },
+        { pid: 200, ppid: 1 },
+        { pid: 300, ppid: 200 },
+      ]);
+      ledger.reconcile(census);
+      await flush();
+      ledger.reconcile(census);
+
+      expect(readPersisted()?.entries.map((e) => e.pid)).toEqual([200, 300]);
+    });
+
+    it("retries the write after a transient failure on an unchanged orphan set", async () => {
+      // The parent directory does not exist yet, so the atomic write throws.
+      const nestedDir = path.join(tmpDir, "nested");
+      const nestedPath = path.join(nestedDir, "pty-lineage.json");
+      const readNested = (): { entries: Array<{ pid: number }> } | null =>
+        fs.existsSync(nestedPath) ? JSON.parse(fs.readFileSync(nestedPath, "utf8")) : null;
+
+      const ledger = new TerminalLineageLedger(nestedPath);
+      const census = new FakeCensus([
+        { pid: 10, ppid: 1 },
+        { pid: 100, ppid: 10 },
+        { pid: 300, ppid: 100 },
+      ]);
+      ledger.registerRoot(100);
+      ledger.reconcile(census);
+      await flush();
+      census.set([
+        { pid: 10, ppid: 1 },
+        { pid: 100, ppid: 10 },
+        { pid: 300, ppid: 1 },
+      ]);
+
+      ledger.reconcile(census);
+      expect(readNested()).toBeNull();
+
+      // The orphan set is identical on the retry, so a signature recorded
+      // before the failed write would suppress it forever, leaving no
+      // crash-recovery record at all.
+      fs.mkdirSync(nestedDir);
+      ledger.reconcile(census);
+
+      expect(readNested()?.entries.map((e) => e.pid)).toEqual([300]);
+    });
+
     it("stamps the current boot epoch", async () => {
       const ledger = new TerminalLineageLedger(filePath);
       const census = new FakeCensus([
@@ -417,9 +678,21 @@ describe("TerminalLineageLedger", () => {
     it("renames the live file out of the way", () => {
       fs.writeFileSync(filePath, "{}");
       const claimed = claimShardLineageFile(tmpDir);
-      expect(claimed).toBe(`${filePath}.reaping`);
+      expect(claimed).toMatch(/pty-lineage\.json\.reaping-/);
       expect(fs.existsSync(filePath)).toBe(false);
-      expect(fs.existsSync(`${filePath}.reaping`)).toBe(true);
+      expect(fs.existsSync(claimed as string)).toBe(true);
+    });
+
+    it("never destroys an earlier interrupted claim", () => {
+      // An existing claim is another host's unreaped survivor list. Overwriting
+      // it would discard the only record of those processes.
+      fs.writeFileSync(`${filePath}.reaping-earlier`, '{"earlier":true}');
+      fs.writeFileSync(filePath, "{}");
+
+      const claimed = claimShardLineageFile(tmpDir);
+
+      expect(fs.existsSync(`${filePath}.reaping-earlier`)).toBe(true);
+      expect(claimed).not.toBe(`${filePath}.reaping-earlier`);
     });
 
     it("returns null when there is nothing to claim", () => {
@@ -532,6 +805,41 @@ describe("TerminalLineageLedger", () => {
         expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
       }
       expect(fs.existsSync(`${filePath}.reaping`)).toBe(false);
+    });
+
+    it("keeps the ledger when the probe could not run at all", async () => {
+      // A blocked `ps` makes "already gone" and "cannot tell" look identical.
+      // Deleting here would discard the only record of a live survivor.
+      mockExecFileAsync.mockRejectedValue(new Error("ps: Operation not permitted"));
+      writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }]);
+
+      await reapPersistedLineages(tmpDir);
+
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(fs.existsSync(filePath)).toBe(true);
+      expect(JSON.parse(fs.readFileSync(filePath, "utf8")).attempts).toBe(1);
+    });
+
+    it("gives up on an unresolvable ledger after a bounded number of launches", async () => {
+      mockExecFileAsync.mockRejectedValue(new Error("ps: Operation not permitted"));
+      writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }], { attempts: 2 });
+
+      await reapPersistedLineages(tmpDir);
+
+      // Retrying forever would leak the file just as surely as deleting early.
+      expect(fs.existsSync(filePath)).toBe(false);
+    });
+
+    it("deletes the ledger when the probe genuinely reports the PID gone", async () => {
+      // `ps` exits non-zero with empty stdout when no requested PID exists,
+      // but the call itself succeeded — that is evidence, not ambiguity.
+      mockExecFileAsync.mockImplementation(async () => ({ stdout: "", stderr: "" }));
+      writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }]);
+
+      await reapPersistedLineages(tmpDir);
+
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(fs.existsSync(filePath)).toBe(false);
     });
 
     it("is a no-op when the directory holds no ledgers", async () => {

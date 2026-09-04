@@ -12,6 +12,14 @@ const LEDGER_VERSION = 1;
 const LEDGER_FILE_PREFIX = "pty-lineage";
 const REAPING_SUFFIX = ".reaping";
 const PROBE_TIMEOUT_MS = 3000;
+/**
+ * Total wall-clock budget for one synchronous verification pass. Teardown runs
+ * on the pty-host's only thread — and the `immediate` path runs inside
+ * `process.on("exit")`, which Main force-kills after ~1s — so an unresponsive
+ * `ps` must not be able to stall it for chunks x PROBE_TIMEOUT_MS. PIDs left
+ * unverified when the budget runs out are simply not signalled.
+ */
+const SYNC_PROBE_BUDGET_MS = 2000;
 /** Largest `-p` list handed to a single `ps`. Keeps us far under ARG_MAX. */
 const PROBE_CHUNK_SIZE = 500;
 /**
@@ -32,6 +40,26 @@ const MAX_TRACKED_PIDS = 4096;
 const BOOT_EPOCH_TOLERANCE_SEC = 120;
 /** Grace period between the reaper's SIGTERM and its SIGKILL escalation. */
 const REAP_ESCALATION_DELAY_MS = 500;
+/**
+ * How many launches may fail to resolve a persisted ledger before it is
+ * discarded. A blocked or missing `ps` makes "already gone" and "cannot tell"
+ * look identical, and deleting on the first ambiguous read would throw away the
+ * only record of a survivor. Retrying forever would leak a file just as surely,
+ * so the ambiguity gets a bounded number of chances.
+ */
+const MAX_REAP_ATTEMPTS = 3;
+
+/**
+ * Pinned so the recorded identity string is reproducible. `lstart` renders
+ * through `localtime()` with locale-dependent month and day names, and the
+ * persisted ledger compares those strings across app launches — an unpinned
+ * locale or a timezone change would silently invalidate every entry.
+ */
+const PROBE_ENV = {
+  ...process.env,
+  LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8",
+  TZ: "UTC",
+};
 
 /**
  * The subset of {@link ProcessTreeCache} the ledger reads. Declared structurally
@@ -50,18 +78,31 @@ interface TrackedPid {
    * prove it is still the process we observed.
    */
   startTime: string | null;
-  /** True when the last census showed this PID reparented away from our tree. */
+  /**
+   * When the census that established this PID's ancestry was folded in. A
+   * process whose start time is *newer* than this cannot be the descendant we
+   * saw, so it is dropped rather than anchored.
+   */
+  observedAtMs: number;
+  /** True when the last census showed this PID outside the root's live tree. */
   orphaned: boolean;
 }
 
 interface RootEntry {
   /**
    * `active` roots discover new descendants each sweep. `closing` roots have
-   * had their terminal torn down: we stop discovering and only prune, so a
+   * had their terminal torn down: we stop discovering from the root, so a
    * recycled root PID can never adopt a dead terminal's lineage.
    */
   state: "active" | "closing";
   pids: Map<number, TrackedPid>;
+  /**
+   * The root's parent PID as first seen by the census. A root is only keyed by
+   * PID, and a PID outlives the process holding it — if this changes, the
+   * number has been handed to something that is not our shell, and the root
+   * must stop discovering before it adopts a stranger's process tree.
+   */
+  rootPpid: number | null;
 }
 
 export interface PersistedLineageEntry {
@@ -76,6 +117,15 @@ interface PersistedLineageFile {
   owner: string;
   updatedAt: number;
   entries: PersistedLineageEntry[];
+  /** Launches that read this file but could not resolve its PIDs. */
+  attempts?: number;
+}
+
+/** A probe result plus whether any chunk failed outright. */
+interface ProbeResult {
+  startTimes: Map<number, string>;
+  /** True when a chunk produced no usable output because of an error. */
+  failed: boolean;
 }
 
 /**
@@ -118,6 +168,10 @@ function parsePsStartTimes(stdout: string): Map<number, string> {
   return out;
 }
 
+function stripBom(text: string): string {
+  return text.replace(/^\uFEFF/, "");
+}
+
 function chunk(pids: number[], size: number): number[][] {
   const chunks: number[][] = [];
   for (let i = 0; i < pids.length; i += size) {
@@ -136,71 +190,95 @@ function windowsStartTimeScript(pids: number[]): string {
 }
 
 /**
- * Batched process start-time lookup. One subprocess per chunk rather than one
- * per PID — a busy agent terminal can produce dozens of new descendants per
- * sweep, and a spawn each would cost more than the census itself.
+ * Batched process start-time lookup, reporting whether the probe itself failed.
  *
- * PIDs that no longer exist are simply absent from the result. `ps` exits
- * non-zero when *none* of the requested PIDs exist, which is a normal outcome
- * here, so a rejected call with usable stdout is not treated as a failure.
+ * "No entry for this PID" and "the probe could not run" are different facts:
+ * the first means the process is gone, the second means we know nothing. Only
+ * the first may be treated as permission to forget a tracked descendant.
+ *
+ * One subprocess per chunk rather than one per PID — a busy agent terminal can
+ * produce dozens of new descendants per sweep, and a spawn each would cost more
+ * than the census itself.
  */
-export async function probeStartTimes(pids: number[]): Promise<Map<number, string>> {
-  const result = new Map<number, string>();
-  if (pids.length === 0) return result;
+async function probeStartTimesDetailed(pids: number[]): Promise<ProbeResult> {
+  const startTimes = new Map<number, string>();
+  let failed = false;
+  if (pids.length === 0) return { startTimes, failed };
 
   for (const group of chunk(pids, PROBE_CHUNK_SIZE)) {
     try {
-      if (process.platform === "win32") {
-        const { stdout } = await execFileAsync(
-          "powershell.exe",
-          ["-NoProfile", "-NonInteractive", "-NoLogo", "-Command", windowsStartTimeScript(group)],
-          {
-            windowsHide: true,
-            encoding: "utf8",
-            shell: false,
-            signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-          }
-        );
-        for (const [pid, startTime] of parsePsStartTimes(stdout.replace(/^﻿/, ""))) {
-          result.set(pid, startTime);
+      const { stdout } =
+        process.platform === "win32"
+          ? await execFileAsync(
+              "powershell.exe",
+              [
+                "-NoProfile",
+                "-NonInteractive",
+                "-NoLogo",
+                "-Command",
+                windowsStartTimeScript(group),
+              ],
+              {
+                windowsHide: true,
+                encoding: "utf8",
+                shell: false,
+                signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+              }
+            )
+          : await execFileAsync("ps", ["-o", "pid=,lstart=", "-p", group.join(",")], {
+              encoding: "utf8",
+              shell: false,
+              env: PROBE_ENV,
+              signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+            });
+      for (const [pid, startTime] of parsePsStartTimes(stripBom(stdout))) {
+        startTimes.set(pid, startTime);
+      }
+    } catch (err) {
+      // `ps` exits non-zero when every requested PID is gone, and the error
+      // still carries stdout for any that survived — that is a successful probe
+      // with a short answer, not a failure.
+      const stdout = (err as { stdout?: string })?.stdout;
+      if (typeof stdout === "string" && stdout.length > 0) {
+        for (const [pid, startTime] of parsePsStartTimes(stripBom(stdout))) {
+          startTimes.set(pid, startTime);
         }
         continue;
       }
-      const { stdout } = await execFileAsync(
-        "ps",
-        ["-o", "pid=,lstart=", "-p", group.join(",")],
-        { encoding: "utf8", shell: false, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) }
-      );
-      for (const [pid, startTime] of parsePsStartTimes(stdout)) {
-        result.set(pid, startTime);
-      }
-    } catch (err) {
-      // `ps` exits 1 when every requested PID is gone — the error still carries
-      // stdout for any that survived. Anything else leaves the group unresolved,
-      // which fails closed: unidentified PIDs are never signalled.
-      const stdout = (err as { stdout?: string })?.stdout;
-      if (typeof stdout === "string" && stdout.length > 0) {
-        for (const [pid, startTime] of parsePsStartTimes(stdout)) {
-          result.set(pid, startTime);
-        }
-      }
+      failed = true;
     }
   }
 
-  return result;
+  return { startTimes, failed };
+}
+
+/** {@link probeStartTimesDetailed} without the failure flag. */
+export async function probeStartTimes(pids: number[]): Promise<Map<number, string>> {
+  return (await probeStartTimesDetailed(pids)).startTimes;
 }
 
 /**
  * Synchronous counterpart of {@link probeStartTimes}. Required at kill time:
  * `ProcessTreeKiller.execute()` runs synchronously, and its `immediate` path
  * runs inside `process.on("exit")` where no async work can complete.
+ *
+ * Bounded by {@link SYNC_PROBE_BUDGET_MS} in total, not per chunk. PIDs in a
+ * chunk that is never reached stay unverified, and unverified means unsignalled.
  */
-export function probeStartTimesSync(pids: number[]): Map<number, string> {
+export function probeStartTimesSync(
+  pids: number[],
+  budgetMs: number = SYNC_PROBE_BUDGET_MS
+): Map<number, string> {
   const result = new Map<number, string>();
   if (pids.length === 0) return result;
 
+  const deadline = Date.now() + budgetMs;
+
   for (const group of chunk(pids, PROBE_CHUNK_SIZE)) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
     try {
+      const timeout = Math.min(PROBE_TIMEOUT_MS, remaining);
       const spawned =
         process.platform === "win32"
           ? spawnSync(
@@ -212,15 +290,16 @@ export function probeStartTimesSync(pids: number[]): Map<number, string> {
                 "-Command",
                 windowsStartTimeScript(group),
               ],
-              { windowsHide: true, encoding: "utf8", timeout: PROBE_TIMEOUT_MS }
+              { windowsHide: true, encoding: "utf8", timeout }
             )
           : spawnSync("ps", ["-o", "pid=,lstart=", "-p", group.join(",")], {
               encoding: "utf8",
-              timeout: PROBE_TIMEOUT_MS,
+              env: PROBE_ENV,
+              timeout,
             });
       const stdout = typeof spawned?.stdout === "string" ? spawned.stdout : "";
       if (!stdout) continue;
-      for (const [pid, startTime] of parsePsStartTimes(stdout.replace(/^﻿/, ""))) {
+      for (const [pid, startTime] of parsePsStartTimes(stripBom(stdout))) {
         result.set(pid, startTime);
       }
     } catch {
@@ -229,6 +308,30 @@ export function probeStartTimesSync(pids: number[]): Map<number, string> {
   }
 
   return result;
+}
+
+/**
+ * True when a process with this start time could be the descendant observed at
+ * `observedAtMs`. A process born *after* we saw the ancestry is a different
+ * process that inherited the PID, so anchoring to it would make the ledger
+ * "verify" a stranger for the rest of the terminal's life.
+ *
+ * Unparseable start times (an unexpected `ps` format, despite {@link PROBE_ENV})
+ * skip the check rather than disabling tracking outright — kill-time
+ * re-verification still applies.
+ */
+function couldPredateObservation(startTime: string, observedAtMs: number): boolean {
+  // PROBE_ENV pins TZ=UTC, so the zoneless `lstart` string denotes UTC. The
+  // Windows form is already a zoned ISO timestamp, which the suffix would
+  // break — fall back to parsing it as-is. (The guard is only load-bearing on
+  // POSIX anyway: the Windows census carries ppid and CreationDate in the same
+  // row, so there is no window between observing ancestry and learning
+  // identity.)
+  let parsed = Date.parse(`${startTime} UTC`);
+  if (Number.isNaN(parsed)) parsed = Date.parse(startTime);
+  if (Number.isNaN(parsed)) return true;
+  // `lstart` has one-second granularity; allow a second of slack.
+  return parsed <= observedAtMs + 1000;
 }
 
 /**
@@ -242,14 +345,23 @@ export function probeStartTimesSync(pids: number[]): Map<number, string> {
  * it is written down, and it stays written down after its parent dies and the
  * OS reparents it away.
  *
- * Two invariants keep the wider kill set safe:
+ * Three invariants keep the wider kill set safe:
  *
- * - **Every entry is anchored to a start time.** A PID with no recorded start
- *   time, or whose current start time differs, is never signalled — it is a
+ * - **Every entry is anchored to a start time taken no later than the census
+ *   that established its ancestry.** A PID with no recorded start time, or
+ *   whose start time differs at kill time, is never signalled — it is a
  *   different process now, not the one we observed (lesson #10950).
  * - **`closing` roots stop discovering.** Once a terminal is torn down its root
  *   PID can be recycled, so a recycled root must not be able to adopt the dead
- *   terminal's lineage.
+ *   terminal's lineage. A root whose PID vanishes closes automatically.
+ * - **Ambiguity never authorises a kill.** A probe that could not run is not
+ *   evidence that a process is gone, and is never treated as such.
+ *
+ * This is a mitigation, not a containment primitive: a descendant that forks,
+ * detaches, and is never sampled by the census is invisible to it. macOS offers
+ * no public process-lifecycle event stream that would close that window
+ * (`EVFILT_PROC` + `NOTE_TRACK` is `ENOTSUP`; EndpointSecurity is entitled), so
+ * the sampling interval bounds — but does not eliminate — the miss.
  */
 export class TerminalLineageLedger {
   private roots = new Map<number, RootEntry>();
@@ -259,7 +371,6 @@ export class TerminalLineageLedger {
   private identifyInFlight = false;
   private lastPersistedJson: string | null = null;
   private disposed = false;
-  private lastCensus: LineageCensus | null = null;
 
   constructor(
     private readonly filePath: string | null,
@@ -274,7 +385,7 @@ export class TerminalLineageLedger {
       // previous terminal's descendants.
       this.dropRoot(rootPid);
     }
-    this.roots.set(rootPid, { state: "active", pids: new Map() });
+    this.roots.set(rootPid, { state: "active", pids: new Map(), rootPpid: null });
   }
 
   /**
@@ -294,6 +405,11 @@ export class TerminalLineageLedger {
 
   hasRoots(): boolean {
     return this.roots.size > 0;
+  }
+
+  /** Total tracked PIDs across every root. Exposed for tests and diagnostics. */
+  getTrackedCount(): number {
+    return this.trackedCount;
   }
 
   /**
@@ -316,25 +432,18 @@ export class TerminalLineageLedger {
    * Tracked descendants the caller's live walk can no longer reach, filtered to
    * the ones the OS still reports with the exact start time we recorded.
    *
-   * This is the safety boundary for the widened kill set. Ledger entries are by
-   * construction old — that is what lets them outlive reparenting — so a PID
-   * being *present* proves nothing; only a matching start time proves it is
-   * still the process we observed (lesson #10950). Verification is synchronous
-   * because it runs inside teardown, including the `process.on("exit")` path
-   * where nothing async can complete.
+   * This is the safety boundary for the widened kill set, and it is the *only*
+   * set callers may signal. Ledger entries are by construction old — that is
+   * what lets them outlive reparenting — so a PID being present proves nothing;
+   * only a matching start time proves it is still the process we observed
+   * (lesson #10950). Verification is a live OS query on every platform, never a
+   * cached census read: the census can be seconds stale, which is exactly long
+   * enough for a PID to have been recycled.
    */
   getVerifiedOrphanPids(rootPid: number, alreadyCovered: readonly number[]): number[] {
     const covered = new Set(alreadyCovered);
-    const candidates = this.getTrackedPids(rootPid).filter((t) => !covered.has(t.pid));
+    const candidates = this.getTrackedPids(rootPid).filter((c) => !covered.has(c.pid));
     if (candidates.length === 0) return [];
-
-    if (process.platform === "win32") {
-      // The Windows census already carries CreationDate, so the last sweep's
-      // snapshot answers this without spawning anything.
-      return candidates
-        .filter((c) => this.lastCensus?.getProcess(c.pid)?.startTime === c.startTime)
-        .map((c) => c.pid);
-    }
 
     const current = probeStartTimesSync(candidates.map((c) => c.pid));
     return candidates.filter((c) => current.get(c.pid) === c.startTime).map((c) => c.pid);
@@ -350,16 +459,30 @@ export class TerminalLineageLedger {
    * PIDs are tracked but not signallable.
    */
   reconcile(census: LineageCensus): void {
-    if (this.disposed) return;
-    this.lastCensus = census;
-    if (this.roots.size === 0) return;
+    if (this.disposed || this.roots.size === 0) return;
 
     for (const [rootPid, entry] of this.roots) {
+      // A root that is gone — or whose PID now belongs to something else — can
+      // never legitimately gain descendants again, and leaving it `active`
+      // would let it adopt an unrelated process tree. Covers the terminal whose
+      // construction failed after its killer registered, which reaches no
+      // teardown path that would close it.
+      if (entry.state === "active") {
+        const rootProc = census.getProcess(rootPid);
+        if (!rootProc) {
+          entry.state = "closing";
+        } else if (entry.rootPpid === null) {
+          entry.rootPpid = rootProc.ppid;
+        } else if (entry.rootPpid !== rootProc.ppid) {
+          entry.state = "closing";
+        }
+      }
+
       // Prune first so the orphan flags below are current for *this* sweep.
       // Flagging after discovery would delay a freshly detached member's own
       // children by a full sweep.
       this.prune(entry, census);
-      this.flagOrphans(entry, census);
+      this.flagOrphans(entry, rootPid, census);
 
       if (entry.state === "active") {
         for (const pid of census.getDescendantPids(rootPid)) {
@@ -369,11 +492,14 @@ export class TerminalLineageLedger {
 
       // Descendants a detached member spawned after it left our tree are still
       // this terminal's work — a wrapper that reparents and then forks a build
-      // would otherwise leave that build unreachable. Only orphans need their
-      // own walk: anything still attached is already covered by the root walk
-      // above, and walking every tracked PID would be quadratic on a deep tree.
+      // would otherwise leave that build unreachable. Only *identified* orphans
+      // may adopt: an unidentified PID has no proof it is still ours, so it
+      // must not be able to pull an unrelated subtree into the ledger. Only
+      // orphans need their own walk at all — anything still attached is already
+      // covered by the root walk, and walking every tracked PID would be
+      // quadratic on a deep tree.
       for (const [pid, tracked] of [...entry.pids]) {
-        if (!tracked.orphaned) continue;
+        if (!tracked.orphaned || !tracked.startTime) continue;
         for (const child of census.getDescendantPids(pid)) {
           this.admit(entry, child);
         }
@@ -381,7 +507,7 @@ export class TerminalLineageLedger {
 
       // Second pass so anything just admitted is flagged (and so persisted)
       // without waiting for the next sweep.
-      this.flagOrphans(entry, census);
+      this.flagOrphans(entry, rootPid, census);
     }
 
     for (const [rootPid, entry] of [...this.roots]) {
@@ -396,7 +522,6 @@ export class TerminalLineageLedger {
 
   dispose(): void {
     this.disposed = true;
-    this.lastCensus = null;
     this.roots.clear();
     this.pendingIdentification.clear();
     this.trackedCount = 0;
@@ -412,7 +537,7 @@ export class TerminalLineageLedger {
         continue;
       }
       // Windows carries a start time in the census, so recycling is caught
-      // here. POSIX recycling is caught by the pre-signal re-verification.
+      // here too. POSIX recycling is caught by the pre-signal re-verification.
       if (tracked.startTime && proc.startTime && proc.startTime !== tracked.startTime) {
         entry.pids.delete(pid);
         this.trackedCount--;
@@ -423,15 +548,25 @@ export class TerminalLineageLedger {
   /**
    * Refresh the "has this left our tree" flag, which decides both what gets its
    * own discovery walk and what gets persisted for the next launch to reap.
+   *
+   * Defined as *unreachable from the root in this census*, not "its parent is
+   * missing". A detached wrapper's own children still have a live parent, so a
+   * parent-based test would leave them out of the persisted set and let them
+   * survive the very restart that reaps their wrapper.
    */
-  private flagOrphans(entry: RootEntry, census: LineageCensus): void {
+  private flagOrphans(entry: RootEntry, rootPid: number, census: LineageCensus): void {
+    const reachable = new Set(census.getDescendantPids(rootPid));
     for (const [pid, tracked] of entry.pids) {
       const proc = census.getProcess(pid);
       if (!proc) continue;
-      if (tracked.startTime === null && proc.startTime) {
+      if (
+        tracked.startTime === null &&
+        proc.startTime &&
+        couldPredateObservation(proc.startTime, tracked.observedAtMs)
+      ) {
         tracked.startTime = proc.startTime;
       }
-      tracked.orphaned = proc.ppid <= 1 || census.getProcess(proc.ppid) === undefined;
+      tracked.orphaned = !reachable.has(pid);
     }
   }
 
@@ -441,12 +576,12 @@ export class TerminalLineageLedger {
       if (!this.loggedCapWarning) {
         this.loggedCapWarning = true;
         console.warn(
-          `[TerminalLineageLedger] Tracking cap of ${MAX_TRACKED_PIDS} PIDs reached — new descendants will not be tracked`
+          `[TerminalLineageLedger] Tracking cap of ${MAX_TRACKED_PIDS} PIDs reached — detached descendants beyond this point will not be reaped`
         );
       }
       return;
     }
-    entry.pids.set(pid, { startTime: null, orphaned: false });
+    entry.pids.set(pid, { startTime: null, observedAtMs: Date.now(), orphaned: false });
     this.trackedCount++;
     this.pendingIdentification.add(pid);
   }
@@ -464,20 +599,36 @@ export class TerminalLineageLedger {
     const pids = [...this.pendingIdentification];
     this.pendingIdentification.clear();
     this.identifyInFlight = true;
-    void probeStartTimes(pids)
-      .then((startTimes) => {
+    void probeStartTimesDetailed(pids)
+      .then(({ startTimes, failed }) => {
         if (this.disposed) return;
         for (const entry of this.roots.values()) {
-          for (const [pid, tracked] of entry.pids) {
+          for (const [pid, tracked] of [...entry.pids]) {
             if (tracked.startTime !== null) continue;
             const startTime = startTimes.get(pid);
-            if (startTime) tracked.startTime = startTime;
+            if (!startTime) continue;
+            if (couldPredateObservation(startTime, tracked.observedAtMs)) {
+              tracked.startTime = startTime;
+              continue;
+            }
+            // Born after we saw the ancestry: the PID was recycled between the
+            // census and this probe, so this is not our descendant.
+            entry.pids.delete(pid);
+            this.trackedCount--;
+          }
+        }
+        // A probe that could not run leaves those PIDs permanently
+        // unsignallable unless they go back in the queue. Genuinely-dead PIDs
+        // requeued alongside them cost one lookup and are dropped by the next
+        // prune.
+        if (failed) {
+          for (const pid of pids) {
+            if (!startTimes.has(pid)) this.pendingIdentification.add(pid);
           }
         }
       })
       .catch(() => {
-        // Unidentified PIDs stay unsignallable — degrades to the live-walk-only
-        // behavior this ledger exists to widen.
+        for (const pid of pids) this.pendingIdentification.add(pid);
       })
       .finally(() => {
         this.identifyInFlight = false;
@@ -512,22 +663,26 @@ export class TerminalLineageLedger {
     // orphan unrecorded across exactly the window a crash is most likely in.
     const signature = JSON.stringify(entries);
     if (signature === this.lastPersistedJson) return;
-    this.lastPersistedJson = signature;
 
     try {
       if (entries.length === 0) {
         if (fs.existsSync(this.filePath)) fs.unlinkSync(this.filePath);
-        return;
+      } else {
+        const payload: PersistedLineageFile = {
+          version: LEDGER_VERSION,
+          bootEpochSec: currentBootEpochSec(),
+          owner: this.owner,
+          updatedAt: Date.now(),
+          entries,
+        };
+        resilientAtomicWriteFileSync(this.filePath, JSON.stringify(payload), "utf-8");
       }
-      const payload: PersistedLineageFile = {
-        version: LEDGER_VERSION,
-        bootEpochSec: currentBootEpochSec(),
-        owner: this.owner,
-        updatedAt: Date.now(),
-        entries,
-      };
-      resilientAtomicWriteFileSync(this.filePath, JSON.stringify(payload), "utf-8");
+      // Recorded only after the disk actually changed. Stamping it up front
+      // would let a transient EBUSY or disk-full suppress every future retry
+      // for an unchanged orphan set, silently leaving no recovery record.
+      this.lastPersistedJson = signature;
     } catch (err) {
+      this.lastPersistedJson = null;
       console.warn("[TerminalLineageLedger] Failed to persist lineage ledger:", err);
     }
   }
@@ -568,18 +723,16 @@ function deleteQuietly(filePath: string): void {
  * racing that shard's replacement. A restarted host writes a fresh file at the
  * original path, which would otherwise clobber the crashed host's survivors
  * before we ever read them.
+ *
+ * The claim name is unique per call: an earlier interrupted claim is another
+ * host's unreaped survivor list, and overwriting it would destroy the only
+ * record of those processes. The startup sweep picks up every claim it finds.
  */
-export function claimShardLineageFile(
-  userDataPath: string,
-  shardService?: string
-): string | null {
+export function claimShardLineageFile(userDataPath: string, shardService?: string): string | null {
   const source = lineageFilePath(userDataPath, shardService);
-  const claimed = `${source}${REAPING_SUFFIX}`;
+  const claimed = `${source}${REAPING_SUFFIX}-${Date.now()}-${process.pid}`;
   try {
     if (!fs.existsSync(source)) return null;
-    // An interrupted earlier reap leaves its own claim behind; it is picked up
-    // by the startup sweep, so drop it rather than failing this rename.
-    deleteQuietly(claimed);
     fs.renameSync(source, claimed);
     return claimed;
   } catch {
@@ -587,14 +740,17 @@ export function claimShardLineageFile(
   }
 }
 
-function killValidated(pid: number, signal: NodeJS.Signals): void {
+/** Returns true when the process is gone or was successfully signalled. */
+function killValidated(pid: number, signal: NodeJS.Signals): boolean {
   try {
     process.kill(pid, signal);
+    return true;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ESRCH") {
-      console.warn(`[TerminalLineageLedger] ${signal} pid=${pid}: ${(err as Error).message}`);
-    }
+    // ESRCH means it is already gone, which is the outcome we wanted.
+    if (code === "ESRCH") return true;
+    console.warn(`[TerminalLineageLedger] ${signal} pid=${pid}: ${(err as Error).message}`);
+    return false;
   }
 }
 
@@ -607,27 +763,41 @@ function isForbiddenTarget(pid: number): boolean {
   return pid <= 1 || pid === process.pid || pid === process.ppid;
 }
 
-async function reapEntries(entries: PersistedLineageEntry[]): Promise<number> {
+/**
+ * Signal the entries whose identity still matches. Returns the entries that
+ * could not be resolved or could not be killed — the caller must keep those,
+ * because forgetting them is the leak this whole file exists to prevent.
+ */
+async function reapEntries(entries: PersistedLineageEntry[]): Promise<PersistedLineageEntry[]> {
   const candidates = entries.filter((e) => !isForbiddenTarget(e.pid));
-  if (candidates.length === 0) return 0;
+  if (candidates.length === 0) return [];
 
-  const live = await probeStartTimes(candidates.map((e) => e.pid));
-  const confirmed = candidates.filter((e) => live.get(e.pid) === e.startTime);
-  if (confirmed.length === 0) return 0;
+  const { startTimes, failed } = await probeStartTimesDetailed(candidates.map((e) => e.pid));
+  if (failed && startTimes.size === 0) {
+    // We learned nothing — `ps` may be blocked by the utility-process sandbox.
+    // "Absent" and "unknown" are not the same fact, so keep the record.
+    return candidates;
+  }
+
+  const confirmed = candidates.filter((e) => startTimes.get(e.pid) === e.startTime);
+  if (confirmed.length === 0) return [];
 
   console.log(
     `[TerminalLineageLedger] Reaping ${confirmed.length} orphaned descendant(s) from a previous session`
   );
 
   if (process.platform === "win32") {
+    const survivors: PersistedLineageEntry[] = [];
     for (const entry of confirmed) {
-      spawnSync("taskkill", ["/T", "/F", "/PID", String(entry.pid)], {
+      const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(entry.pid)], {
         windowsHide: true,
         stdio: "ignore",
         timeout: 3000,
       });
+      // 128 is "process not found", which is the outcome we wanted.
+      if (result.status !== 0 && result.status !== 128) survivors.push(entry);
     }
-    return confirmed.length;
+    return survivors;
   }
 
   for (const entry of confirmed) {
@@ -641,13 +811,13 @@ async function reapEntries(entries: PersistedLineageEntry[]): Promise<number> {
 
   // Re-verify before escalating: a PID freed by the SIGTERM above may already
   // have been handed to an unrelated process.
-  const survivors = await probeStartTimes(confirmed.map((e) => e.pid));
+  const after = await probeStartTimesDetailed(confirmed.map((e) => e.pid));
+  const survivors: PersistedLineageEntry[] = [];
   for (const entry of confirmed) {
-    if (survivors.get(entry.pid) !== entry.startTime) continue;
-    killValidated(entry.pid, "SIGKILL");
+    if (after.startTimes.get(entry.pid) !== entry.startTime) continue;
+    if (!killValidated(entry.pid, "SIGKILL")) survivors.push(entry);
   }
-
-  return confirmed.length;
+  return survivors;
 }
 
 async function reapLineageFile(filePath: string): Promise<void> {
@@ -664,12 +834,26 @@ async function reapLineageFile(filePath: string): Promise<void> {
     return;
   }
 
+  let survivors: PersistedLineageEntry[];
   try {
-    await reapEntries(parsed.entries);
+    survivors = await reapEntries(parsed.entries);
   } catch (err) {
     console.warn("[TerminalLineageLedger] Reap failed:", err);
+    survivors = parsed.entries;
   }
-  deleteQuietly(filePath);
+
+  const attempts = (parsed.attempts ?? 0) + 1;
+  if (survivors.length === 0 || attempts >= MAX_REAP_ATTEMPTS) {
+    deleteQuietly(filePath);
+    return;
+  }
+
+  try {
+    const retained: PersistedLineageFile = { ...parsed, entries: survivors, attempts };
+    resilientAtomicWriteFileSync(filePath, JSON.stringify(retained), "utf-8");
+  } catch {
+    deleteQuietly(filePath);
+  }
 }
 
 /**
@@ -686,8 +870,7 @@ export async function reapPersistedLineages(userDataPath: string): Promise<void>
   }
 
   const files = names.filter(
-    (n) =>
-      n.startsWith(LEDGER_FILE_PREFIX) && (n.endsWith(".json") || n.endsWith(REAPING_SUFFIX))
+    (n) => n.startsWith(LEDGER_FILE_PREFIX) && (n.endsWith(".json") || n.includes(REAPING_SUFFIX))
   );
   if (files.length === 0) return;
 
@@ -698,10 +881,7 @@ export async function reapPersistedLineages(userDataPath: string): Promise<void>
  * Reap one shard's ledger after its pty-host exited. The in-memory ledger died
  * with the host, so the persisted orphan set is all that is left.
  */
-export async function reapShardLineage(
-  userDataPath: string,
-  shardService?: string
-): Promise<void> {
+export async function reapShardLineage(userDataPath: string, shardService?: string): Promise<void> {
   const claimed = claimShardLineageFile(userDataPath, shardService);
   if (!claimed) return;
   await reapLineageFile(claimed);

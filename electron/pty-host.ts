@@ -46,10 +46,7 @@ import {
 } from "./services/pty/analysis/AnalysisWorkerPool.js";
 import { PtyPool, getPtyPool, shouldEnablePtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
-import {
-  TerminalLineageLedger,
-  lineageFilePath,
-} from "./services/TerminalLineageLedger.js";
+import { TerminalLineageLedger, lineageFilePath } from "./services/TerminalLineageLedger.js";
 import { ImagePathProbe } from "./services/pty/ImagePathProbe.js";
 import { TerminalResourceMonitor } from "./services/pty/TerminalResourceMonitor.js";
 import { events } from "./services/events.js";

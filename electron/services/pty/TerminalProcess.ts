@@ -1677,6 +1677,11 @@ export class TerminalProcess {
 
   startProcessDetector(): void {
     const ptyPid = this.terminalInfo.ptyProcess.pid;
+    // Windows ConPTY can report PID 0 at spawn, leaving the killer's
+    // constructor nothing to register. This deferred path is where the real PID
+    // lands; without it those terminals silently run with no lineage tracking.
+    // registerRoot is idempotent for a PID it already holds.
+    this.processTreeKiller.registerRoot(ptyPid);
     if (
       Number.isInteger(ptyPid) &&
       ptyPid > 0 &&
@@ -1774,10 +1779,22 @@ export class TerminalProcess {
     this.sessionSnapshotter.flushSyncOnDispose();
     this.sessionSnapshotter.dispose();
 
-    this.teardown("dispose");
+    // `teardown` returns false when kill() or a natural exit already ran. That
+    // distinction decides which cleanup is safe here: the root-inclusive kill
+    // signals the shell PID, and once the shell has exited that number belongs
+    // to whatever the OS handed it to next — possibly hours ago, for a
+    // preserved agent terminal that sat in the registry until app shutdown.
+    // Only a teardown that actually transitioned a live terminal may use it;
+    // an already-exited one gets the ledger-only sweep, which signals nothing
+    // it has not just re-verified.
+    const wonTeardown = this.teardown("dispose");
     this.semanticBufferManager.dispose();
     this.disposeHeadless();
-    this.processTreeKiller.execute(true);
+    if (wonTeardown) {
+      this.processTreeKiller.execute(true);
+    } else {
+      this.processTreeKiller.reapAfterRootExit();
+    }
 
     // If the PTY never fired onExit (LRU eviction, app shutdown, or kill()
     // followed by dispose() before the kernel reaped the child), this is

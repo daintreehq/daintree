@@ -43,8 +43,7 @@ function makeTreeCache(
   subtrees: Record<number, number[]> = {}
 ): ProcessTreeCache {
   return {
-    getDescendantPids: (rootPid: number) =>
-      rootPid in subtrees ? subtrees[rootPid] : descendants,
+    getDescendantPids: (rootPid: number) => (rootPid in subtrees ? subtrees[rootPid] : descendants),
     getProcess: () => undefined,
   } as unknown as ProcessTreeCache;
 }
@@ -449,7 +448,29 @@ describe.skipIf(process.platform === "win32")("ProcessTreeKiller — lineage orp
     expect(sigterms).toHaveLength(1);
   });
 
-  it("includes children a detached member spawned after reparenting", () => {
+  it("signals a detached member's tracked child before the member itself", () => {
+    // Both are verified ledger members; the census only supplies the ordering.
+    const killer = new ProcessTreeKiller(
+      makePty(1000),
+      makeTreeCache([], { 1000: [], 5001: [6001], 6001: [] }),
+      makeLineage({ 1000: [5001, 6001] })
+    );
+
+    killer.execute(true);
+
+    const order = killSpy.mock.calls
+      .filter((c: unknown[]) => c[1] === "SIGTERM")
+      .map((c: unknown[]) => c[0]);
+    expect(order).toContain(6001);
+    expect(order).toContain(5001);
+    // Leaves first: the detached wrapper's child is signalled before the wrapper.
+    expect(order.indexOf(6001)).toBeLessThan(order.indexOf(5001));
+  });
+
+  it("never signals a cached-subtree PID the ledger did not verify", () => {
+    // 6001 sits under verified 5001 in the seconds-stale census but is NOT in
+    // the verified set — it may have exited and had its PID recycled. Expanding
+    // a verified parent's cached subtree would kill whatever holds it now.
     const killer = new ProcessTreeKiller(
       makePty(1000),
       makeTreeCache([], { 1000: [], 5001: [6001] }),
@@ -457,14 +478,31 @@ describe.skipIf(process.platform === "win32")("ProcessTreeKiller — lineage orp
     );
 
     killer.execute(true);
+    vi.advanceTimersByTime(500);
 
-    expect(killSpy).toHaveBeenCalledWith(6001, "SIGTERM");
-    expect(killSpy).toHaveBeenCalledWith(5001, "SIGTERM");
-    // Leaves first: the detached wrapper's child is signalled before the wrapper.
-    const order = killSpy.mock.calls
-      .filter((c: unknown[]) => c[1] === "SIGTERM")
-      .map((c: unknown[]) => c[0]);
-    expect(order.indexOf(6001)).toBeLessThan(order.indexOf(5001));
+    const touched = killSpy.mock.calls.map((c: unknown[]) => c[0]);
+    expect(touched).toContain(5001);
+    expect(touched).not.toContain(6001);
+  });
+
+  it("late-registers a root whose PID was not available at construction", () => {
+    const registered: number[] = [];
+    const lineage: LineageKillSource = {
+      registerRoot: (pid) => registered.push(pid),
+      markRootClosing: () => {},
+      getVerifiedOrphanPids: () => [],
+    };
+
+    // Windows ConPTY reports PID 0 at spawn; the real PID lands later.
+    const killer = new ProcessTreeKiller(makePty(0), makeTreeCache([]), lineage);
+    expect(registered).toEqual([]);
+
+    killer.registerRoot(4242);
+    killer.registerRoot(4242);
+
+    // Registered once — a repeat would reset the lineage and discard what we
+    // have already observed.
+    expect(registered).toEqual([4242]);
   });
 
   it("marks the root closing so a recycled PID cannot inherit the lineage", () => {

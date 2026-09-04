@@ -214,7 +214,6 @@ describe("TerminalProcess onExit — master fd release (#9539)", () => {
   });
 });
 
-
 // A shell that exits on its own used to only cancel the SIGKILL escalation
 // timer, so anything it had already detached (a `setsid` background job whose
 // wrapper exited) survived forever (#12203).
@@ -296,6 +295,38 @@ describe.skipIf(process.platform === "win32")(
       vi.advanceTimersByTime(500);
 
       expect(killSpy).not.toHaveBeenCalled();
+    });
+
+    it("disposing an already-exited terminal never signals the stale shell PID", () => {
+      // Preserved agent terminals sit in the registry after a natural exit and
+      // are disposed at app shutdown, possibly hours later. By then the shell
+      // PID belongs to whatever the OS handed it to next.
+      const pty = createControllablePty();
+      const lineageLedger = ledgerFor([9001]);
+      const terminal = createTerminal(pty, undefined, { lineageLedger });
+
+      pty.emitExit(0);
+      killSpy.mockClear();
+
+      terminal.dispose();
+      vi.advanceTimersByTime(500);
+
+      const touched = killSpy.mock.calls.map((c: unknown[]) => c[0]);
+      expect(touched).not.toContain(123);
+    });
+
+    it("disposing a still-live terminal does kill its whole tree", () => {
+      // Positive control for the guard above — a dispose that actually wins the
+      // lifecycle transition must still reap root and descendants.
+      const pty = createControllablePty();
+      const lineageLedger = ledgerFor([9001]);
+      const terminal = createTerminal(pty, undefined, { lineageLedger });
+
+      terminal.dispose();
+
+      const touched = killSpy.mock.calls.map((c: unknown[]) => c[0]);
+      expect(touched).toContain(123);
+      expect(touched).toContain(9001);
     });
 
     it("natural exit without a ledger behaves exactly as before", () => {

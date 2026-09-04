@@ -35,27 +35,44 @@ export interface LineageKillSource {
  */
 export class ProcessTreeKiller {
   private killTreeTimer: NodeJS.Timeout | null = null;
+  private registeredRootPid: number | null = null;
 
   constructor(
     private readonly ptyProcess: pty.IPty,
     private readonly processTreeCache: ProcessTreeCache | null,
     private readonly lineage: LineageKillSource | null = null
   ) {
-    const shellPid = this.ptyProcess.pid;
-    if (this.lineage && Number.isInteger(shellPid) && shellPid > 0) {
-      this.lineage.registerRoot(shellPid);
-    }
+    this.registerRoot(this.ptyProcess.pid);
   }
 
   /**
-   * Descendants the ledger knows about that the live walk can no longer reach,
-   * ordered leaves-first, plus any children they spawned after detaching.
+   * Register the shell PID as a lineage root. Called from the constructor, and
+   * again once a real PID lands for a Windows ConPTY terminal that spawned
+   * reporting PID 0 — without the second call those terminals would silently
+   * run with no lineage tracking at all.
    *
-   * The ledger has already re-verified every PID's start time, so everything
-   * returned here is proven to still be the process we observed rather than a
-   * recycled PID (lesson #10950). Their current subtrees are added from the
-   * live census: a wrapper that detached and then forked a build owns that
-   * build, and nothing else would reach it.
+   * Idempotent for a PID already registered by this killer: re-registering
+   * resets the lineage, which would discard descendants we have already seen.
+   */
+  registerRoot(shellPid: number | undefined): void {
+    if (!this.lineage) return;
+    if (!Number.isInteger(shellPid) || (shellPid as number) <= 0) return;
+    if (this.registeredRootPid === shellPid) return;
+    this.registeredRootPid = shellPid as number;
+    this.lineage.registerRoot(shellPid as number);
+  }
+
+  /**
+   * The kill set the live walk cannot reach: ledger members whose identity the
+   * ledger has just re-verified against the OS, ordered leaves-first.
+   *
+   * Membership is exactly the verified set — never a PID read out of the
+   * cached census. The census is seconds stale, so an unverified PID from it
+   * has no ownership proof at all, and expanding a verified parent's cached
+   * subtree would even re-admit a child that verification had explicitly
+   * rejected as recycled. Children a detached member spawned after leaving our
+   * tree are covered because the ledger's own sweep admits and identifies them;
+   * the census is used here only to order what is already proven.
    */
   private resolveOrphans(shellPid: number, live: number[]): number[] {
     if (!this.lineage) return [];
@@ -63,13 +80,15 @@ export class ProcessTreeKiller {
     const verified = this.lineage.getVerifiedOrphanPids(shellPid, live);
     if (verified.length === 0) return [];
 
+    const verifiedSet = new Set(verified);
     const ordered: number[] = [];
     const seen = new Set<number>([...live, shellPid]);
     for (const pid of verified) {
-      // getDescendantPids is post-order, so a detached wrapper's own children
-      // land ahead of it and the leaves-first contract holds across the union.
+      // getDescendantPids is post-order, so emitting a verified member's
+      // verified descendants first keeps the leaves-first contract across the
+      // union.
       for (const child of this.processTreeCache?.getDescendantPids(pid) ?? []) {
-        if (seen.has(child)) continue;
+        if (!verifiedSet.has(child) || seen.has(child)) continue;
         seen.add(child);
         ordered.push(child);
       }
