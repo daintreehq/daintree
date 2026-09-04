@@ -127,9 +127,9 @@ let hooksInstalled = false;
  * else in the perf harness imports — so the main-process graph can be loaded
  * outside Electron.
  *
- * `module.registerHooks` (synchronous, in-thread) is preferred, but it landed
- * in Node 22.15 and the repo pins 22.13 in `.nvmrc`, so the older
- * `module.register` is the fallback. Under Vitest neither runs the product
+ * `module.registerHooks` (synchronous, in-thread) is preferred on supported
+ * runtimes; `module.register` remains a defensive fallback for older Node 22
+ * installations. Under Vitest neither runs the product
  * graph — Vite's module runner resolves imports itself — so tests mock
  * `electron` with {@link perfElectronStub} instead.
  *

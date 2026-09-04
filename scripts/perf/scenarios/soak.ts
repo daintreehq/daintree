@@ -408,6 +408,7 @@ export const soakScenarios: PerfScenario[] = [
       "throughputFlushMisses",
       "cadenceShortfallCount",
       "batcherShortfallCount",
+      "gcObservationMisses",
     ],
     async run() {
       maybeRunGc();
@@ -522,14 +523,17 @@ export const soakScenarios: PerfScenario[] = [
       if (dual.copied !== expectedWrites * 2) copyPathMisses += 1;
       copyPathMisses += dual.zeroCopy;
 
-      // Corpus validity: nothing was rejected, no watermark was reached, and
-      // the GC observer actually saw the churn it exists to count.
+      // Corpus validity: nothing was rejected and no watermark was reached.
+      // Keep GC observation separate: a runtime that emits no minor-GC entry
+      // makes the GC comparison unusable, but must not make the batcher's
+      // delivery and backpressure predicates look as though they failed too.
       let batcherShortfallCount = 0;
+      let gcObservationMisses = 0;
       for (const arm of [single, dual]) {
         if (arm.accepted !== expectedWrites) batcherShortfallCount += 1;
         if (arm.rejected !== 0) batcherShortfallCount += 1;
         if (arm.rawPauses !== 0) batcherShortfallCount += 1;
-        if (arm.gc.minorGcCount === 0) batcherShortfallCount += 1;
+        if (arm.gc.minorGcCount === 0) gcObservationMisses += 1;
       }
 
       const gcRatio =
@@ -570,6 +574,7 @@ export const soakScenarios: PerfScenario[] = [
           throughputFlushMisses: cadence.throughputFlushMisses,
           cadenceShortfallCount: cadence.cadenceShortfallCount,
           batcherShortfallCount,
+          gcObservationMisses,
         },
         notes:
           `${(expectedBytes / (1024 * 1024)).toFixed(0)} MiB per arm: ` +

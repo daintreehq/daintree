@@ -327,7 +327,10 @@ let fixture: GitPipelineFixture | null = null;
 function git(cwd: string, args: string[]): void {
   execFileSync("git", args, {
     cwd,
-    stdio: "ignore",
+    // Keep setup quiet on success, but preserve Git's diagnostic when a
+    // fixture command fails. `stdio: "ignore"` reduced every failure to the
+    // command name and made transient filesystem/configuration faults opaque.
+    stdio: ["ignore", "ignore", "pipe"],
     env: {
       ...process.env,
       // Setup isolation only — product-path spawns keep the app's own
@@ -351,11 +354,16 @@ function fileBody(seed: string): string {
 }
 
 function writeBaseTree(repoPath: string, revision: string): void {
+  // Path count and file size are the workload; unique blob contents are not.
+  // Reuse one blob per revision so concurrent test workers do not make Git
+  // create hundreds of object-store temp files while this fixture is setting
+  // up. Every path is still materialised and every storm path still changes.
+  const body = fileBody(revision);
   for (let dir = 0; dir < BASE_FILE_DIRS; dir++) {
     const dirPath = join(repoPath, `module-${dir}`);
     mkdirSync(dirPath, { recursive: true });
     for (let file = 0; file < BASE_FILES_PER_DIR; file++) {
-      writeFileSync(join(dirPath, `file-${file}.txt`), fileBody(`${revision} ${dir}/${file}`));
+      writeFileSync(join(dirPath, `file-${file}.txt`), body);
     }
   }
 }
@@ -386,18 +394,16 @@ export function getGitPipelineFixture(): GitPipelineFixture {
   // Storm target branch: a commit that rewrites a large slice of the tree so
   // `git checkout` between the two branches floods the file watcher.
   git(mainPath, ["checkout", "-b", "storm-alt"]);
+  const stormBody = fileBody("storm-alt");
   for (let i = 0; i < STORM_MODIFIED_FILES; i++) {
     const dir = i % BASE_FILE_DIRS;
     const file = i % BASE_FILES_PER_DIR;
-    writeFileSync(
-      join(mainPath, `module-${dir}`, `file-${file}.txt`),
-      fileBody(`storm-alt ${dir}/${file}`)
-    );
+    writeFileSync(join(mainPath, `module-${dir}`, `file-${file}.txt`), stormBody);
   }
   const stormExtraDir = join(mainPath, "storm-extra");
   mkdirSync(stormExtraDir, { recursive: true });
   for (let i = 0; i < STORM_ADDED_FILES; i++) {
-    writeFileSync(join(stormExtraDir, `extra-${i}.txt`), fileBody(`storm-extra ${i}`));
+    writeFileSync(join(stormExtraDir, `extra-${i}.txt`), stormBody);
   }
   git(mainPath, ["add", "-A"]);
   git(mainPath, ["commit", "-m", "storm alternate tree"]);
@@ -415,16 +421,14 @@ export function getGitPipelineFixture(): GitPipelineFixture {
 
   const dirtyPath = join(root, "wt-dirty");
   git(mainPath, ["worktree", "add", dirtyPath, "-b", "wt-dirty-branch", "main"]);
+  const dirtyBody = fileBody("dirty");
   for (let i = 0; i < DIRTY_MODIFIED_FILES; i++) {
     const dir = i % BASE_FILE_DIRS;
     const file = i % BASE_FILES_PER_DIR;
-    writeFileSync(
-      join(dirtyPath, `module-${dir}`, `file-${file}.txt`),
-      fileBody(`dirty ${dir}/${file}`)
-    );
+    writeFileSync(join(dirtyPath, `module-${dir}`, `file-${file}.txt`), dirtyBody);
   }
   for (let i = 0; i < DIRTY_UNTRACKED_FILES; i++) {
-    writeFileSync(join(dirtyPath, `untracked-${i}.txt`), fileBody(`untracked ${i}`));
+    writeFileSync(join(dirtyPath, `untracked-${i}.txt`), dirtyBody);
   }
 
   const stormPath = join(root, "wt-storm");

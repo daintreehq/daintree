@@ -12,7 +12,7 @@ import {
 import { discoverProjectPlugins } from "../projectPluginDiscovery.js";
 
 /**
- * Driven with REAL `@parcel/watcher` subscriptions over REAL temp directories.
+ * Driven with REAL platform watcher subscriptions over REAL temp directories.
  * A debouncer exercised with synthetic events proves nothing about whether the
  * host ever sees a plugin rebuild, which is the entire feature.
  *
@@ -88,7 +88,10 @@ function makeWatcher(
 }
 
 /** Poll until `predicate` holds, or give up. Watcher latency is not fixed. */
-async function waitFor(predicate: () => boolean, timeoutMs = 4_000): Promise<boolean> {
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = process.platform === "win32" ? 20_000 : 4_000
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) return true;
@@ -188,17 +191,23 @@ describe("ProjectPluginWatcher", () => {
 
   it("coalesces a burst into one reload", async () => {
     const { root, pluginDir } = await makeProject();
-    const { watcher, reload } = makeWatcher();
+    // ReadDirectoryChangesW can deliver one physical write burst in several
+    // callback batches when the runner is saturated. Keep the assertion at
+    // exactly one reload, but give those native batches a realistic trailing
+    // window instead of asking the test-only 40ms cadence to bridge them.
+    const debounceMs = process.platform === "win32" ? 1_000 : FAST.debounceMs;
+    const { watcher, reload } = makeWatcher({
+      timings: { ...FAST, debounceMs },
+    });
     await watcher.ensure(PROJECT_ID, root);
 
-    for (let i = 0; i < 12; i++) {
-      await fsp.writeFile(
-        path.join(pluginDir, "dist", `chunk-${i}.js`),
-        `export const n = ${i};\n`
-      );
-    }
+    await Promise.all(
+      Array.from({ length: 12 }, (_, i) =>
+        fsp.writeFile(path.join(pluginDir, "dist", `chunk-${i}.js`), `export const n = ${i};\n`)
+      )
+    );
     expect(await waitFor(() => reload.mock.calls.length > 0)).toBe(true);
-    await settleFor(400);
+    await settleFor(process.platform === "win32" ? debounceMs + 200 : 400);
     expect(reload.mock.calls.length).toBe(1);
   });
 
@@ -365,7 +374,11 @@ describe("ProjectPluginWatcher", () => {
     });
     await watcher.ensure(PROJECT_ID, root);
 
-    await fsp.rm(pluginDir, { recursive: true, force: true });
+    // Moving the directory out of the watched root is the atomic shape a
+    // checkout presents. It avoids making this lower-level test depend on how
+    // ReadDirectoryChangesW batches every child deletion from a recursive rm;
+    // the end-to-end suite separately covers recursive deletion itself.
+    await fsp.rename(pluginDir, path.join(root, "removed-acme.hello"));
     expect(await waitFor(() => reload.mock.calls.length > 0)).toBe(true);
     expect((reload.mock.calls[0] as [string, string, string[]])[2]).toEqual(["acme.hello"]);
   });

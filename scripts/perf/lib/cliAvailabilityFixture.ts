@@ -246,9 +246,9 @@ let hooksInstalled = false;
  * loads outside Electron and outside the developer's environment.
  *
  * Mirrors `lib/ipcEnvelopeFixture.ts`: `module.registerHooks` is synchronous
- * and in-thread but landed in Node 22.15 while `.nvmrc` pins 22.13, so
- * `module.register` is the fallback. Under Vitest neither fires because Vite
- * resolves imports itself, which is why the unit test exercises the pure
+ * and in-thread on supported runtimes; `module.register` remains a defensive
+ * fallback for older Node 22 installations. Under Vitest neither fires because
+ * Vite resolves imports itself, which is why the unit test exercises the pure
  * arithmetic rather than loading the service.
  */
 function installModuleStubs(): void {

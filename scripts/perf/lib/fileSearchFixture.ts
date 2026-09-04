@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createPerfTempRoot } from "./tempRoots";
 import { createRng } from "./workloads";
@@ -127,10 +127,12 @@ function buildRelativePaths(count: number, seed: number): string[] {
   return [...paths];
 }
 
-function git(cwd: string, args: string[]): void {
-  execFileSync("git", args, {
+function git(cwd: string, args: string[], input?: string): string {
+  return execFileSync("git", args, {
     cwd,
-    stdio: "ignore",
+    encoding: "utf8",
+    input,
+    stdio: ["pipe", "pipe", "ignore"],
     env: {
       ...process.env,
       GIT_CONFIG_GLOBAL: "/dev/null",
@@ -145,7 +147,7 @@ function git(cwd: string, args: string[]): void {
 
 export interface FileSearchRepo {
   path: string;
-  /** Number of files actually written (directories are added by the service). */
+  /** Number of generated tracked paths (directories are added by the service). */
   fileCount: number;
 }
 
@@ -165,31 +167,24 @@ function buildRepo(root: string, name: string, fileCount: number, seed: number):
   git(repoPath, ["config", "core.fsmonitor", "false"]);
 
   const relativePaths = buildRelativePaths(fileCount, seed);
-  const madeDirs = new Set<string>();
-  for (const relative of relativePaths) {
-    const dir = relative.slice(0, relative.lastIndexOf("/"));
-    if (!madeDirs.has(dir)) {
-      mkdirSync(join(repoPath, dir), { recursive: true });
-      madeDirs.add(dir);
-    }
-    // Contents are irrelevant to path search; keep them tiny so fixture build
-    // stays I/O-cheap and the repo fits comfortably in the page cache.
-    writeFileSync(join(repoPath, relative), "//\n");
-  }
-
-  mkdirSync(join(repoPath, "dist"), { recursive: true });
-  writeFileSync(join(repoPath, GIT_ONLY_SENTINEL), "//\n");
-
-  git(repoPath, ["add", "-A"]);
+  // FileSearchService reads the index through `git ls-files`; it never opens
+  // these files. Register every path against one real blob in a single index
+  // transaction instead of creating ~15k two-byte files. That preserves the
+  // exact measured path corpus while avoiding minutes of Defender-bound setup
+  // on Windows hosted runners.
+  const blob = git(repoPath, ["hash-object", "-w", "--stdin"], "//\n").trim();
+  const indexInfo = [...relativePaths, GIT_ONLY_SENTINEL]
+    .map((relative) => `100644 ${blob}\t${relative}\n`)
+    .join("");
+  git(repoPath, ["update-index", "--index-info"], indexInfo);
   git(repoPath, ["commit", "-m", "fixture tree"]);
 
   return { path: repoPath, fileCount: relativePaths.length };
 }
 
 /**
- * Build both repos once per process. ~15k files of two bytes each; the git
- * index work dominates and runs a few seconds, which is why the scenarios that
- * use it are `heavy` tier.
+ * Build both repos once per process. ~15k realistic paths share one tiny blob
+ * in the index; the measured `git ls-files` and scoring work is unchanged.
  */
 export function getFileSearchFixture(): FileSearchFixture {
   if (fixture) return fixture;

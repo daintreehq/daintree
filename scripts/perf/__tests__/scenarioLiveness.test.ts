@@ -194,11 +194,23 @@ const CONTAINMENT_SLACK_MS = 1;
 const CHILD_TIMEOUT_MS = 120_000;
 
 /**
- * Four at a time. This file already competes with Vitest's own workers, and
- * several scenarios spawn real subprocesses; oversubscribing turns a liveness
- * check into a source of timing flakes elsewhere in the suite.
+ * Windows runs one child at a time. Its hosted runners pay much more for large
+ * temp trees and native watcher/process startup; overlapping those children
+ * caused access violations and three 120-second false liveness timeouts.
+ * macOS/Linux use two: pools of three or four reproduced transient `git add`
+ * failures in the large-tree fixtures while also starving unrelated timer
+ * tests during the full suite.
  */
-const CONCURRENCY = Math.max(2, Math.min(4, availableParallelism() - 1));
+const concurrencyCeiling = process.platform === "win32" ? 1 : 2;
+const CONCURRENCY = Math.max(1, Math.min(concurrencyCeiling, availableParallelism() - 1));
+
+/**
+ * The Windows pool is deliberately serial, so its full scenario sweep can
+ * legitimately outlast the 15-minute allowance used by the parallel POSIX
+ * pool. Individual children still have the two-minute deadline above: this
+ * wider outer bracket permits the expected queue, not an unbounded child.
+ */
+const LIVENESS_TIMEOUT_MS = process.platform === "win32" ? 30 * 60_000 : 15 * 60_000;
 
 interface DriverResult {
   id: string;
@@ -294,8 +306,14 @@ function explain(result: DriverResult): string {
   if (line !== undefined) {
     try {
       const parsed = JSON.parse(line) as { message?: string };
-      if (typeof parsed.message === "string")
-        return parsed.message.split("\n")[0] ?? parsed.message;
+      if (typeof parsed.message === "string") {
+        const messageLines = parsed.message
+          .split("\n")
+          .map((raw) => raw.trim())
+          .filter(Boolean)
+          .slice(0, 5);
+        if (messageLines.length > 0) return messageLines.join(" | ");
+      }
     } catch {
       // Not the driver's JSON line — fall through to stderr.
     }
@@ -542,41 +560,45 @@ describe("perf scenario liveness", () => {
     expect(accounted.size).toBe(new Set(matrixIds).size);
   });
 
-  it("runs every scenario in the matrix without throwing", async () => {
-    const configBefore = hashTree(CONFIG_DIR);
-    const historyBefore = hashTree(HISTORY_DIR);
+  it(
+    "runs every scenario in the matrix without throwing",
+    async () => {
+      const configBefore = hashTree(CONFIG_DIR);
+      const historyBefore = hashTree(HISTORY_DIR);
 
-    const results = await runPool([...liveIds, ...Object.keys(KNOWN_DEAD)]);
+      const results = await runPool([...liveIds, ...Object.keys(KNOWN_DEAD)]);
 
-    const failures: string[] = [];
-    for (const id of liveIds) {
-      const result = results.get(id)!;
-      if (result.exitCode !== 0) {
-        failures.push(`${id} DID NOT RUN (${result.elapsedMs}ms): ${explain(result)}`);
-        continue;
+      const failures: string[] = [];
+      for (const id of liveIds) {
+        const result = results.get(id)!;
+        if (result.exitCode !== 0) {
+          failures.push(`${id} DID NOT RUN (${result.elapsedMs}ms): ${explain(result)}`);
+          continue;
+        }
+        const parsed = parseOk(result);
+        if (parsed === null) {
+          failures.push(`${id} exited 0 but printed no parseable result line`);
+          continue;
+        }
+        failures.push(...verdicts(id, parsed));
       }
-      const parsed = parseOk(result);
-      if (parsed === null) {
-        failures.push(`${id} exited 0 but printed no parseable result line`);
-        continue;
+
+      // The other direction: a scenario on the known-dead inventory that has
+      // started working is a line to delete, not a silent improvement.
+      const revived = Object.keys(KNOWN_DEAD).filter((id) => results.get(id)?.exitCode === 0);
+      if (revived.length > 0) {
+        failures.push(`${revived.join(", ")} now RUN — delete them from KNOWN_DEAD in this file`);
       }
-      failures.push(...verdicts(id, parsed));
-    }
 
-    // The other direction: a scenario on the known-dead inventory that has
-    // started working is a line to delete, not a silent improvement.
-    const revived = Object.keys(KNOWN_DEAD).filter((id) => results.get(id)?.exitCode === 0);
-    if (revived.length > 0) {
-      failures.push(`${revived.join(", ")} now RUN — delete them from KNOWN_DEAD in this file`);
-    }
+      expect(failures.join("\n")).toBe("");
 
-    expect(failures.join("\n")).toBe("");
-
-    // The guard measures; it must never write a reference or a history entry.
-    const drift = [
-      describeTreeDrift(CONFIG_DIR, configBefore, hashTree(CONFIG_DIR)),
-      describeTreeDrift(HISTORY_DIR, historyBefore, hashTree(HISTORY_DIR)),
-    ].filter(Boolean);
-    expect(drift.join("\n")).toBe("");
-  }, 900_000);
+      // The guard measures; it must never write a reference or a history entry.
+      const drift = [
+        describeTreeDrift(CONFIG_DIR, configBefore, hashTree(CONFIG_DIR)),
+        describeTreeDrift(HISTORY_DIR, historyBefore, hashTree(HISTORY_DIR)),
+      ].filter(Boolean);
+      expect(drift.join("\n")).toBe("");
+    },
+    LIVENESS_TIMEOUT_MS
+  );
 });

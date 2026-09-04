@@ -31,9 +31,11 @@ describe("scenarioApplicability", () => {
 
 describe("partitionByPlatform", () => {
   it("leaves an undeclared matrix exactly as it found it", () => {
-    // No scenario declares `platforms` yet. The absent case must be today's
-    // behaviour to the letter, or this machinery changes numbers by existing.
-    const scenarios = getScenariosForMode("smoke");
+    // Platform declarations now exist, so isolate the absent case explicitly.
+    // Undeclared scenarios must retain today's behaviour to the letter.
+    const scenarios = getScenariosForMode("smoke").filter(
+      (scenario) => scenario.platforms === undefined
+    );
     const { runnable, skipped, diagnostic } = partitionByPlatform(scenarios, process.platform);
     expect(runnable).toEqual(scenarios);
     expect(skipped).toEqual([]);

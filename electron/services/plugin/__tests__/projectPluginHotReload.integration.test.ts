@@ -16,7 +16,7 @@ import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js
  * End-to-end hot reload, driven by real filesystem writes.
  *
  * A temp copy of `plugins/fixtures/project-local` gets a real
- * `@parcel/watcher` subscription, a real `discoverProjectPlugins`, and a real
+ * platform watcher subscription, a real `discoverProjectPlugins`, and a real
  * `ProjectPluginController`. Only the very last hop — the load itself — is
  * substituted, because the real one is `PluginService.loadPlugin` and needs
  * Electron; the stand-in reads the plugin's `dist/index.js` off disk, so the

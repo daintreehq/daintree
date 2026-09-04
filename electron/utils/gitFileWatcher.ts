@@ -1,10 +1,9 @@
 import { watch as fsWatch, FSWatcher } from "fs";
 import { readFile } from "fs/promises";
 import { join as pathJoin, dirname, isAbsolute, basename, normalize as pathNormalize } from "path";
-import parcelWatcher from "@parcel/watcher";
 import { getGitDir } from "./gitUtils.js";
 import { OPERATION_SENTINEL_NAMES } from "./gitRepoOperationState.js";
-import { parcelWatcherBackendOption } from "./parcelWatcherBackend.js";
+import { subscribeParcelWatcher } from "./parcelWatcherBackend.js";
 import { logWarn } from "./logger.js";
 
 const LINUX_INOTIFY_LIMIT_HELP =
@@ -19,7 +18,7 @@ const MACOS_EMFILE_LIMIT_HELP =
   "/etc/sysctl.conf may not be respected on macOS 14+.";
 
 /**
- * Native ignore globs for the parcel file watcher.
+ * Ignore globs for the cross-platform recursive watcher adapter.
  * Each bare directory name maps to a glob matching at any depth.
  * .git is included for both the bare worktree pointer file and
  * all child paths, replacing the old JS-side prefix check.
@@ -108,8 +107,8 @@ export interface GitFileWatcherOptions {
  * signal from a genuine subscription failure. Only the macOS FSEvents backend
  * emits it (for `kFSEventStreamEventFlagMustScanSubDirs` and its kernel/client
  * drop variants), and only through the channel that leaves the subscription
- * alive. Windows' superficially similar "Buffer overflow. Some events may have
- * been lost." travels the fatal channel instead, so it must NOT match here.
+ * alive. Windows fs.watch errors travel the ordinary fatal channel instead, so
+ * they must NOT match here.
  */
 function isRescanRequest(message: string): boolean {
   return /must be re-scanned/i.test(message);
@@ -233,7 +232,7 @@ export class GitFileWatcher {
       this.watchRemoteRefsDir(pathJoin(commonDir, "refs", "remotes", "origin"));
 
       if (this.watchWorktree) {
-        // Fire-and-forget: subscribe() schedules the native watcher
+        // Fire-and-forget: subscribe() schedules the platform watcher
         // asynchronously. Startup failures (ENOSPC, EMFILE) route through
         // onWatcherFailed / onInotifyLimitReached / onEmfileLimitReached
         // callbacks when the Promise rejects. WatcherController.handleWatcherFailed()
@@ -304,32 +303,30 @@ export class GitFileWatcher {
   }
 
   private startWorktreeWatcher(): void {
-    // The parcel file watcher drops overflow events without rescanning on
-    // every platform, and on Linux (IN_Q_OVERFLOW) drops them silently — only
-    // macOS (kFSEventStreamEventFlagMustScanSubDirs) and Windows
-    // (ERROR_NOTIFY_ENUM_DIR) raise an error, and neither re-enumerates. There
-    // is no equivalent to fs.watch's null-filename "global dirty" signal, so a
-    // lost batch is lost. Mitigation: WorktreeMonitor's
-    // 10s polling fallback catches missed events. On macOS, the primary
-    // overflow trigger — libuv FSEvents per-directory fd exhaustion — is
-    // eliminated by the single-stream-per-subtree design.
-    parcelWatcher
-      .subscribe(
-        this.worktreePath,
-        (err, events) => {
-          if (err) {
-            this.handleWorktreeWatcherError(err, "runtime");
-            return;
-          }
-          if (this.disposed || !events || events.length === 0) return;
-          // Passing the batch size preserves the burstCount-driven adaptive
-          // debounce ramp (100 files in a batch -> burstCount=100 ->
-          // maxDebounce) while clearing/setting the debounce timer once per
-          // batch instead of once per event.
-          this.handleWorktreeChange(events.length);
-        },
-        { ignore: WORKTREE_IGNORE_GLOBS, ...parcelWatcherBackendOption() }
-      )
+    // The recursive watcher is a dirty signal, never the authoritative state:
+    // native queues can overflow or coalesce events on every platform. A null
+    // filename from Windows fs.watch becomes a root-level dirty signal in the
+    // adapter; Parcel's Linux inotify backend can still drop an overflow
+    // silently. WorktreeMonitor's five-minute heartbeat bounds any missed
+    // change. On macOS, the primary overflow trigger — libuv FSEvents
+    // per-directory fd exhaustion — is eliminated by the single-stream-per-
+    // subtree design.
+    subscribeParcelWatcher(
+      this.worktreePath,
+      (err, events) => {
+        if (err) {
+          this.handleWorktreeWatcherError(err, "runtime");
+          return;
+        }
+        if (this.disposed || !events || events.length === 0) return;
+        // Passing the batch size preserves the burstCount-driven adaptive
+        // debounce ramp (100 files in a batch -> burstCount=100 ->
+        // maxDebounce) while clearing/setting the debounce timer once per
+        // batch instead of once per event.
+        this.handleWorktreeChange(events.length);
+      },
+      { ignore: WORKTREE_IGNORE_GLOBS }
+    )
       .then((sub) => {
         if (this.disposed) {
           sub.unsubscribe();
@@ -395,14 +392,14 @@ export class GitFileWatcher {
       return;
     }
 
-    // Everything else arrives via `Watcher::notifyError`, which calls back and
-    // then `clearCallbacks()` — the subscription is dead and will never deliver
-    // another event. Runtime failures therefore have to downgrade, not just
-    // startup ones: leaving a dead watcher in place let the controller keep
-    // claiming "recursive" (and its 5-minute heartbeat cadence) over a watcher
-    // observing nothing (#12042). Deliberately not gated on errno — Windows
-    // reports its failure modes (ReadDirectoryChangesW buffer overflow, an
-    // AV/indexer lock, an ancestor rename) as message-only errors, so matching
+    // Parcel's fatal channel clears its callbacks; the Windows adapter forwards
+    // fs.watch's runtime error channel. Either means the subscription is no
+    // longer trustworthy. Runtime failures therefore have to downgrade, not
+    // just startup ones: leaving a dead watcher in place let the controller
+    // keep claiming "recursive" (and its 5-minute heartbeat cadence) over a
+    // watcher observing nothing (#12042). Deliberately not gated on errno —
+    // Windows reports its failure modes (ReadDirectoryChangesW buffer overflow,
+    // an AV/indexer lock, an ancestor rename) as message-only errors, so matching
     // codes would leave the reporting platform uncovered. The linux/darwin
     // branches above stay for their user-facing limit messaging, not for the
     // downgrade itself.

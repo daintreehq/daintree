@@ -2,14 +2,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { watch, type FSWatcher } from "fs";
 import { readFile } from "fs/promises";
 import { join as pathJoin } from "path";
-import parcelWatcher from "@parcel/watcher";
 import { getGitDir } from "../gitUtils.js";
 import { GitFileWatcher } from "../gitFileWatcher.js";
+import { settleParcelWatcherLifecycle } from "../parcelWatcherBackend.js";
 
 const { subscribeMock } = vi.hoisted(() => ({ subscribeMock: vi.fn() }));
 
-vi.mock("@parcel/watcher", () => ({
-  default: { subscribe: subscribeMock },
+vi.mock("../parcelWatcherBackend.js", () => ({
+  subscribeParcelWatcher: subscribeMock,
+  settleParcelWatcherLifecycle: () => Promise.resolve(),
 }));
 
 vi.mock("fs", () => ({
@@ -50,18 +51,20 @@ function setupSubscribeMock() {
   let resolvePromise: ((sub: { unsubscribe: () => Promise<void> }) => void) | undefined;
   let rejectPromise: ((err: Error) => void) | undefined;
 
-  subscribeMock.mockImplementation(((
-    _dir: string,
-    cb: (err: Error | null, events: Array<{ type: string }>) => void,
-    opts?: Record<string, unknown>
-  ) => {
-    capturedCallback = cb;
-    capturedOptions = opts;
-    return new Promise<{ unsubscribe: () => Promise<void> }>((resolve, reject) => {
-      resolvePromise = resolve;
-      rejectPromise = reject;
-    });
-  }) as unknown as typeof parcelWatcher.subscribe);
+  subscribeMock.mockImplementation(
+    (
+      _dir: string,
+      cb: (err: Error | null, events: Array<{ type: string }>) => void,
+      opts?: Record<string, unknown>
+    ) => {
+      capturedCallback = cb;
+      capturedOptions = opts;
+      return new Promise<{ unsubscribe: () => Promise<void> }>((resolve, reject) => {
+        resolvePromise = resolve;
+        rejectPromise = reject;
+      });
+    }
+  );
 
   return {
     getCallback: () => capturedCallback,
@@ -98,6 +101,13 @@ function fireError(
   err: Error
 ) {
   cb?.(err, []);
+}
+
+/** Drain the serialized native lifecycle and its consumer promise callbacks. */
+async function flushParcelWatcherCallbacks(): Promise<void> {
+  await settleParcelWatcherLifecycle();
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 describe("GitFileWatcher", () => {
@@ -1020,7 +1030,7 @@ describe("GitFileWatcher", () => {
         mock.reject(enospcError);
 
         await Promise.resolve();
-        await vi.runAllTicks();
+        await flushParcelWatcherCallbacks();
 
         expect(onWatcherFailed).toHaveBeenCalledTimes(1);
       } finally {
@@ -1055,7 +1065,7 @@ describe("GitFileWatcher", () => {
         mock.reject(enospcError);
 
         await Promise.resolve();
-        await vi.runAllTicks();
+        await flushParcelWatcherCallbacks();
 
         expect(onInotifyLimitReached).toHaveBeenCalledTimes(1);
         expect(onWatcherFailed).toHaveBeenCalledTimes(1);
@@ -1091,7 +1101,7 @@ describe("GitFileWatcher", () => {
         mock.reject(otherError);
 
         await Promise.resolve();
-        await vi.runAllTicks();
+        await flushParcelWatcherCallbacks();
 
         expect(onInotifyLimitReached).not.toHaveBeenCalled();
         expect(onWatcherFailed).toHaveBeenCalledTimes(1);
@@ -1130,7 +1140,7 @@ describe("GitFileWatcher", () => {
         expect(onWatcherFailed).not.toHaveBeenCalled();
 
         await Promise.resolve();
-        await vi.runAllTicks();
+        await flushParcelWatcherCallbacks();
 
         expect(onInotifyLimitReached).toHaveBeenCalledTimes(1);
         expect(onWatcherFailed).toHaveBeenCalledTimes(1);
@@ -1166,7 +1176,7 @@ describe("GitFileWatcher", () => {
         mock.reject(emfileError);
 
         await Promise.resolve();
-        await vi.runAllTicks();
+        await flushParcelWatcherCallbacks();
 
         expect(onEmfileLimitReached).toHaveBeenCalledTimes(1);
         expect(onWatcherFailed).toHaveBeenCalledTimes(1);
@@ -1201,7 +1211,7 @@ describe("GitFileWatcher", () => {
         mock.reject(fseventError);
 
         await Promise.resolve();
-        await vi.runAllTicks();
+        await flushParcelWatcherCallbacks();
 
         expect(onEmfileLimitReached).toHaveBeenCalledTimes(1);
         expect(onWatcherFailed).toHaveBeenCalledTimes(1);
@@ -1237,7 +1247,7 @@ describe("GitFileWatcher", () => {
         mock.reject(otherError);
 
         await Promise.resolve();
-        await vi.runAllTicks();
+        await flushParcelWatcherCallbacks();
 
         expect(onEmfileLimitReached).not.toHaveBeenCalled();
         expect(onWatcherFailed).toHaveBeenCalledTimes(1);
@@ -1276,7 +1286,7 @@ describe("GitFileWatcher", () => {
         expect(onWatcherFailed).not.toHaveBeenCalled();
 
         await Promise.resolve();
-        await vi.runAllTicks();
+        await flushParcelWatcherCallbacks();
 
         expect(onEmfileLimitReached).toHaveBeenCalledTimes(1);
         expect(onWatcherFailed).toHaveBeenCalledTimes(1);
@@ -1695,56 +1705,11 @@ describe("GitFileWatcher", () => {
       expect(ignore).toContain("**/.git");
       expect(ignore).toContain("**/.git/**");
       expect(ignore).toHaveLength(expectedDirs.length + 2);
-    });
 
-    // The parcel backend is pinned so no arm probes watchman (a cmd.exe
-    // popen on Windows), and every re-arm after a teardown would repeat it.
-    it.each([
-      ["win32", "windows"],
-      ["darwin", "fs-events"],
-      ["linux", "inotify"],
-    ])("pins the %s watcher backend to %s", async (platform, backend) => {
-      const origPlatform = process.platform;
-      Object.defineProperty(process, "platform", { value: platform, configurable: true });
-      const mock = setupSubscribeMock();
-
-      try {
-        const gitWatcher = new GitFileWatcher({
-          worktreePath: "/repo",
-          branch: "main",
-          debounceMs: 300,
-          onChange: vi.fn(),
-          watchWorktree: true,
-        });
-        await gitWatcher.start();
-
-        expect(mock.getOptions()?.backend).toBe(backend);
-      } finally {
-        Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
-      }
-    });
-
-    it("leaves the backend unpinned on platforms parcel has no typed backend for", async () => {
-      const origPlatform = process.platform;
-      Object.defineProperty(process, "platform", { value: "freebsd", configurable: true });
-      const mock = setupSubscribeMock();
-
-      try {
-        const gitWatcher = new GitFileWatcher({
-          worktreePath: "/repo",
-          branch: "main",
-          debounceMs: 300,
-          onChange: vi.fn(),
-          watchWorktree: true,
-        });
-        await gitWatcher.start();
-
-        const options = mock.getOptions();
-        expect(options?.ignore).toBeDefined();
-        expect(options && "backend" in options).toBe(false);
-      } finally {
-        Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
-      }
+      mock.resolve();
+      await flushParcelWatcherCallbacks();
+      gitWatcher.dispose();
+      await flushParcelWatcherCallbacks();
     });
 
     it("events from non-ignored paths still fire onChange", async () => {
@@ -1841,7 +1806,7 @@ describe("GitFileWatcher", () => {
 
     const sub = mock.resolveSub();
     // Flush microtasks so the .then() callback stores worktreeSubscription
-    await vi.runAllTicks();
+    await flushParcelWatcherCallbacks();
     gitWatcher.dispose();
 
     expect(sub.unsubscribe).toHaveBeenCalledTimes(1);
@@ -1866,7 +1831,7 @@ describe("GitFileWatcher", () => {
     mock.resolve(sub);
 
     await Promise.resolve();
-    await vi.runAllTicks();
+    await flushParcelWatcherCallbacks();
 
     expect(sub.unsubscribe).toHaveBeenCalledTimes(1);
   });
@@ -1923,7 +1888,7 @@ describe("GitFileWatcher", () => {
       mock.reject(enospcError);
 
       await Promise.resolve();
-      await vi.runAllTicks();
+      await flushParcelWatcherCallbacks();
 
       expect(onWatcherFailed).not.toHaveBeenCalled();
       expect(onInotifyLimitReached).not.toHaveBeenCalled();
@@ -2000,7 +1965,7 @@ describe("GitFileWatcher", () => {
       mock.reject(enoentError);
 
       await Promise.resolve();
-      await vi.runAllTicks();
+      await flushParcelWatcherCallbacks();
 
       expect(onEmfileLimitReached).not.toHaveBeenCalled();
       expect(onWatcherFailed).toHaveBeenCalledTimes(1);
@@ -2030,7 +1995,7 @@ describe("GitFileWatcher", () => {
     };
     mock.resolve(sub);
 
-    await vi.runAllTicks();
+    await flushParcelWatcherCallbacks();
 
     // dispose() calls unsubscribe().catch(() => {}) — should not throw
     expect(() => gitWatcher.dispose()).not.toThrow();

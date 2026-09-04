@@ -19,7 +19,14 @@ beforeAll(() => {
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
 });
 
-afterEach(cleanup);
+afterEach(async () => {
+  cleanup();
+  // Radix FocusScope restores focus in a zero-delay timer on unmount. Let that
+  // callback run while this file's jsdom realm is still current; otherwise a
+  // reused worker can create the CustomEvent in the next realm and dispatch it
+  // at an element owned by this one.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
 
 function renderPanel(
   rows: BranchPickerRow[] = [],

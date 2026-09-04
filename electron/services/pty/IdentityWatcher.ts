@@ -154,6 +154,11 @@ export class IdentityWatcher {
   private committed = false;
   private promptStreak = 0;
   private sawPtyDescendant = false;
+  // A returned shell prompt can be emitted just before the foreground-PGID
+  // probe observes ownership moving back to the shell. Remember that output
+  // across poll ticks so a lingering background helper cannot hide the
+  // completed foreground-agent lifecycle.
+  private sawReturnedShellPromptOutput = false;
   // Latched once the foreground-PGID probe returns a usable reading on this
   // terminal, so a later null read is treated as a transient failure (fail
   // closed while an agent is committed) rather than an unsupported platform.
@@ -295,6 +300,7 @@ export class IdentityWatcher {
     this.committed = false;
     this.promptStreak = 0;
     this.sawPtyDescendant = false;
+    this.sawReturnedShellPromptOutput = false;
 
     // If the new command has no recognizable identity (e.g. `echo hi` after a
     // prior `npm run dev` that committed `npm`), clear any stale shell
@@ -402,6 +408,16 @@ export class IdentityWatcher {
       return;
     }
 
+    const hasRecentCommandFailureOutput = this.hasRecentCommandFailureOutput();
+    const hasReturnedShellPromptOutput = this.hasUnambiguousShellPromptInText(data, true);
+    if (
+      !hasRecentCommandFailureOutput &&
+      hasReturnedShellPromptOutput &&
+      (this.committed || Boolean(this.delegate.detectedAgentId))
+    ) {
+      this.sawReturnedShellPromptOutput = true;
+    }
+
     const foregroundShellIdle = this.readForegroundShellIdleForAgentDemotion();
     if (foregroundShellIdle.supported && !foregroundShellIdle.shellIdle) {
       return;
@@ -410,8 +426,8 @@ export class IdentityWatcher {
     // We only reach here past the guard above, so an agent identity is
     // committed — exclude the agent's own `❯`/`›` glyphs from prompt matching.
     if (
-      !this.hasRecentCommandFailureOutput() &&
-      this.hasUnambiguousShellPromptInText(data, true) &&
+      !hasRecentCommandFailureOutput &&
+      hasReturnedShellPromptOutput &&
       !this.hasAgentUiPromptFalsePositive(false)
     ) {
       this.clearShellCommandEvidenceAfterPromptReturn();
@@ -426,6 +442,7 @@ export class IdentityWatcher {
     this.committed = false;
     this.promptStreak = 0;
     this.sawPtyDescendant = false;
+    this.sawReturnedShellPromptOutput = false;
   }
 
   dispose(): void {
@@ -690,7 +707,10 @@ export class IdentityWatcher {
       this.sawPtyDescendant &&
       foregroundShellIdle.supported &&
       foregroundShellIdle.shellIdle &&
-      ptyDescendantCount === 0 &&
+      // A clean tree is sufficient by itself. If an agent leaves a background
+      // helper behind, pair foreground ownership with the shell prompt output
+      // observed during the hand-off instead of pinning identity indefinitely.
+      (ptyDescendantCount === 0 || this.sawReturnedShellPromptOutput) &&
       !hasRecentCommandFailureOutput;
     // Windows has no foreground-PGID probe. If the agent command had an observed
     // child and that child is now gone, treat that as the same lifecycle signal

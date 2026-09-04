@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   armBystanderProbe,
   bystanderMetrics,
@@ -149,17 +149,24 @@ describe("bystander probe", () => {
     expect(reading.blockedMs).toBeLessThanOrEqual(reading.windowMs);
   });
 
-  it("counts each tick once after arming", async () => {
+  it("keeps exactly one cadence timer after arming", async () => {
     // `reopen()` clears the pending timer before rescheduling. Without that a
     // second chain runs alongside the first, every tick is counted twice, and a
     // blocked loop looks half as blocked.
-    const probe = await armBystanderProbe({ cadenceMs: 10 });
-    await sleep(100);
-    const reading = probe.stop();
+    vi.useFakeTimers();
+    try {
+      const arming = armBystanderProbe({ cadenceMs: 10 });
+      await vi.advanceTimersByTimeAsync(10);
+      const probe = await arming;
 
-    // ~10 ticks in 100ms at a 10ms cadence. Two chains would put this near 20.
-    expect(reading.ticksObserved).toBeLessThan(16);
-    expect(reading.ticksObserved).toBeGreaterThan(3);
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(vi.getTimerCount()).toBe(1);
+      expect(probe.stop().ticksObserved).toBeGreaterThan(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns the same window from a second stop()", async () => {

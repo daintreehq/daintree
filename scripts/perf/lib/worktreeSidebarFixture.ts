@@ -12,6 +12,7 @@ import type {
   WorktreeSnapshot,
 } from "../../../shared/types/workspace-host";
 import type { Worktree } from "../../../shared/types/worktree";
+import { settleParcelWatcherLifecycle } from "../../../electron/utils/parcelWatcherBackend";
 import {
   gitSpawnMark,
   gitSpawnsSince,
@@ -508,10 +509,11 @@ export class TopologyHarness {
     await this.settle();
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
     this.svc.dispose();
+    await settleParcelWatcherLifecycle();
     releasePerfTempRoot(this.root);
   }
 }

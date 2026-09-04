@@ -986,9 +986,9 @@ export const EXPECTED_CONSENT_LADDER: ReadonlyArray<{
  * outside Electron. Only that specifier is touched, and only inside the forked
  * child — the parent never imports product main code.
  *
- * `module.registerHooks` (synchronous, in-thread) is preferred; it landed in
- * Node 22.15 and the repo pins 22.13 in `.nvmrc`, so the older
- * `module.register` is the fallback. Same seam, same reasoning, as
+ * `module.registerHooks` (synchronous, in-thread) is preferred on supported
+ * runtimes; `module.register` remains a defensive fallback for older Node 22
+ * installations. Same seam, same reasoning, as
  * `lib/projectViewFixture.ts`.
  */
 const ELECTRON_STUB_SOURCE = `
@@ -1094,7 +1094,9 @@ function installElectronStub(): void {
 
 // --- child: PluginService driver -------------------------------------------
 
-const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+function repoModuleUrl(relativePath: string): string {
+  return new URL(`../../../${relativePath}`, import.meta.url).href;
+}
 
 /** Bytes of `plugin.json` under a root. A deterministic input size. */
 function manifestBytesUnder(root: string): number {
@@ -1168,14 +1170,16 @@ function runServiceChild(): void {
     const moduleStart = performance.now();
     const [service, panelKinds, toolbar, agents, forge, keybindings, contextMenus] =
       await Promise.all([
-        import(`${REPO_ROOT}electron/services/PluginService.ts`) as Promise<LooseModule>,
-        import(`${REPO_ROOT}shared/config/panelKindRegistry.ts`) as Promise<LooseModule>,
-        import(`${REPO_ROOT}shared/config/toolbarButtonRegistry.ts`) as Promise<LooseModule>,
-        import(`${REPO_ROOT}shared/config/pluginAgentRegistry.ts`) as Promise<LooseModule>,
-        import(`${REPO_ROOT}electron/services/forgeProviderRegistry.ts`) as Promise<LooseModule>,
-        import(`${REPO_ROOT}electron/services/pluginKeybindingRegistry.ts`) as Promise<LooseModule>,
+        import(repoModuleUrl("electron/services/PluginService.ts")) as Promise<LooseModule>,
+        import(repoModuleUrl("shared/config/panelKindRegistry.ts")) as Promise<LooseModule>,
+        import(repoModuleUrl("shared/config/toolbarButtonRegistry.ts")) as Promise<LooseModule>,
+        import(repoModuleUrl("shared/config/pluginAgentRegistry.ts")) as Promise<LooseModule>,
+        import(repoModuleUrl("electron/services/forgeProviderRegistry.ts")) as Promise<LooseModule>,
         import(
-          `${REPO_ROOT}electron/services/pluginContextMenuRegistry.ts`
+          repoModuleUrl("electron/services/pluginKeybindingRegistry.ts")
+        ) as Promise<LooseModule>,
+        import(
+          repoModuleUrl("electron/services/pluginContextMenuRegistry.ts")
         ) as Promise<LooseModule>,
       ]);
     const moduleLoadMs = performance.now() - moduleStart;
@@ -1264,7 +1268,7 @@ function runServiceChild(): void {
     const batteryMs = performance.now() - started;
 
     const consent = (await import(
-      `${REPO_ROOT}electron/services/plugin-capability/instances.ts`
+      repoModuleUrl("electron/services/plugin-capability/instances.ts")
     )) as LooseModule;
     const consentService = consent.getPluginCapabilityConsentService();
     const target = join(dataDir, "consent.txt");

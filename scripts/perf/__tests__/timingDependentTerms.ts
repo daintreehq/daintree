@@ -1,12 +1,16 @@
 /**
  * Correctness terms the UNIT SUITE does not assert to be zero, and why.
  *
- * Each one's expectation includes "the timer had NOT fired yet", which is the
- * one shape a loaded machine can break without anything being wrong.
+ * Most expectations include "the timer had NOT fired yet", which is the one
+ * shape a loaded machine can break without anything being wrong.
  * `gradeFlushCadence` waits `PORT_BATCH_THROUGHPUT_DELAY_MS * 2 + 8` for the
  * real PortBatcher cadence; under Vitest's parallel workers — 61 perf files, or
  * 2,481 across the repository — that window slips and the scenario reports a
- * miss for a subject that is fine.
+ * miss for a subject that is fine. PERF-063's GC observation is the companion
+ * case: whether V8 schedules a minor collection during the fixed allocation
+ * corpus varies by runtime and heap state even though the batcher does the same
+ * work. A real perf run still fails closed when there is no GC sample, because
+ * its GC comparison would not be meaningful.
  *
  * They remain fully graded through `run.ts`, which is where a number is
  * actually taken and where nothing else is competing for the box. This
@@ -28,7 +32,7 @@
 export const TIMING_DEPENDENT_TERMS: Readonly<Record<string, readonly string[]>> = {
   // The PortBatcher idle -> latency -> throughput machine, in the three
   // scenarios that drive it.
-  "PERF-063": ["immediateFlushMisses", "throughputFlushMisses"],
+  "PERF-063": ["immediateFlushMisses", "throughputFlushMisses", "gcObservationMisses"],
   "PERF-370": ["immediateFlushMisses", "throughputFlushMisses"],
   "PERF-371": ["immediateFlushMisses", "throughputFlushMisses"],
 };

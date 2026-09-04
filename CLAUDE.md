@@ -2,7 +2,7 @@
 
 Electron IDE for orchestrating AI coding agents — many agent terminals running in parallel across git worktrees, with fleet broadcasting, a worktree dashboard, context injection, and an MCP control surface. 18 agent CLIs are supported; the roster lives in `shared/config/agents/` + `shared/config/agentRegistry.ts`. Product, repo, and config dir are all "Daintree" (`daintreehq/daintree`, `.daintree/`).
 
-**Stack:** Electron 42 (Chromium 148), React 19 + React Compiler, Vite 8, TypeScript 6, Tailwind CSS v4, Zustand 5, node-pty, simple-git, better-sqlite3 + drizzle, @xterm/xterm 6.1 beta. Node 22.13.0 (`.nvmrc`, guarded by `check:node-version`). Exact pins in `package.json`.
+**Stack:** Electron 42 (Chromium 148), React 19 + React Compiler, Vite 8, TypeScript 6, Tailwind CSS v4, Zustand 5, node-pty, simple-git, better-sqlite3 + drizzle, @xterm/xterm 6.1 beta. Node 22.23.2 (`.nvmrc`, guarded by `check:node-version`). Exact pins in `package.json`.
 
 **Research against our exact versions** — never assume older docs apply. Known traps: Electron 42 (unsigned macOS notifications silently emit `failed`; `Session.clearStorageData` drops `quotas`), xterm 6.x (canvas renderer, `windowsMode` and `fastScrollModifier` all removed; new event system), Tailwind v4 (`color-mix()` alpha semantics).
 

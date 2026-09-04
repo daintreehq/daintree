@@ -146,10 +146,10 @@ let hooksInstalled = false;
 
 /**
  * Remap the bare `electron` specifier so the main-process MCP graph loads
- * outside Electron. `module.registerHooks` is synchronous and in-thread but
- * landed in Node 22.15, and `.nvmrc` pins 22.13, so `module.register` is the
- * fallback. Under Vitest neither fires — Vite resolves imports itself — so the
- * test hands {@link perfMcpElectronStub} to `vi.mock` instead.
+ * outside Electron. `module.registerHooks` is synchronous and in-thread on
+ * supported runtimes; `module.register` remains a defensive fallback for older
+ * Node 22 installations. Under Vitest neither fires — Vite resolves imports
+ * itself — so the test hands {@link perfMcpElectronStub} to `vi.mock` instead.
  */
 function installElectronStub(): void {
   if (hooksInstalled) return;

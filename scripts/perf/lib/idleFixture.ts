@@ -1,4 +1,4 @@
-import { execFileSync, execSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { performance, type EventLoopUtilization } from "node:perf_hooks";
@@ -206,17 +206,13 @@ export function closeIdleWindow(open: OpenIdleWindow): IdleWindowReading {
 /**
  * Executables that ARE the process-tree probe, as Node starts them.
  *
- * Windows is the case that matters and the one a naive filter gets wrong:
- * `refreshWindows` goes through `exec`, so Node's own child is `cmd.exe` and
- * PowerShell is its grandchild — nothing the `ChildProcess.prototype.spawn`
- * hook can ever see. A `powershell`-only filter therefore reports a hard zero
- * on the platform #12042 happened on, which is the failure this whole file
- * exists to make impossible. `cmd.exe` is the honest countable proxy there:
- * inside these windows the only thing forking a shell is the poller.
+ * Windows is the case that matters: `refreshWindows` launches PowerShell
+ * directly with `execFile`, so the observer sees that executable rather than
+ * an intermediary `cmd.exe`.
  */
 const PROBE_EXECUTABLES: ReadonlySet<string> =
   process.platform === "win32"
-    ? new Set(["cmd.exe", "cmd", "powershell.exe", "powershell", "pwsh.exe", "pwsh"])
+    ? new Set(["powershell.exe", "powershell", "pwsh.exe", "pwsh"])
     : new Set(["ps"]);
 
 /** Spawns in the window whose executable is the process-tree probe itself. */
@@ -238,7 +234,7 @@ export interface ProbeFaultHandle {
 /**
  * Break the process-tree probe for real, then heal it.
  *
- * ProcessTreeCache resolves `ps` (POSIX) / `powershell` (Windows) off PATH on
+ * ProcessTreeCache resolves `ps` (POSIX) / `powershell.exe` (Windows) off PATH on
  * every poll, so prepending a directory holding a failing shim makes the
  * PRODUCT's own probe fail — no stubbing, no injected error, nothing the
  * service can tell apart from a sandboxed `ps` or a broken PATH on a real
@@ -252,9 +248,10 @@ export interface ProbeFaultHandle {
 export function installProcessProbeFault(): ProbeFaultHandle {
   const dir = createPerfTempRoot("daintree-perf-probe-fault-");
   if (process.platform === "win32") {
-    // cmd.exe resolves `powershell` against PATH + PATHEXT, and ProcessTreeCache
-    // reaches PowerShell through `exec` (a cmd.exe shell), so a .cmd wins.
-    writeFileSync(join(dir, "powershell.cmd"), "@echo off\r\nexit /b 1\r\n");
+    // ProcessTreeCache launches the explicit `powershell.exe` name. A `.cmd`
+    // shim only intercepted the obsolete shell-mediated path; an invalid PE at
+    // the exact executable name makes CreateProcess fail at the product seam.
+    writeFileSync(join(dir, "powershell.exe"), "not a Windows executable\r\n");
   } else {
     const shim = join(dir, "ps");
     writeFileSync(shim, "#!/bin/sh\nexit 1\n");
@@ -287,9 +284,10 @@ export function removeProcessProbeFault(handle: ProbeFaultHandle): void {
 export function processProbeWorks(): boolean {
   try {
     if (process.platform === "win32") {
-      execSync("powershell -NoProfile -NonInteractive -Command exit 0", {
+      execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "exit 0"], {
         stdio: "ignore",
         timeout: 20_000,
+        windowsHide: true,
       });
     } else {
       execFileSync("ps", ["-eo", "pid"], { stdio: "ignore", timeout: 10_000 });
