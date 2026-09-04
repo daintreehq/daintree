@@ -315,6 +315,38 @@ describe.skipIf(process.platform === "win32")(
       expect(touched).not.toContain(123);
     });
 
+    it("disposing after a natural exit escalates orphans without waiting", () => {
+      // dispose() can run inside process.on("exit"), where no timer fires — the
+      // SIGKILL has to happen synchronously or the orphan outlives the app.
+      const pty = createControllablePty();
+      const lineageLedger = ledgerFor([9001]);
+      const terminal = createTerminal(pty, undefined, { lineageLedger });
+
+      pty.emitExit(0);
+      killSpy.mockClear();
+      terminal.dispose();
+
+      expect(killSpy).toHaveBeenCalledWith(9001, "SIGKILL");
+    });
+
+    it("disposing after a kill still completes the pending escalation", () => {
+      // The opposite case: kill() left the shell alive mid-escalation, so
+      // dispose() must finish the job on the whole tree, shell included.
+      const pty = createControllablePty();
+      const lineageLedger = ledgerFor([9001]);
+      const terminal = createTerminal(pty, undefined, { lineageLedger });
+
+      terminal.kill("test");
+      killSpy.mockClear();
+      terminal.dispose();
+
+      const killed = killSpy.mock.calls
+        .filter((c: unknown[]) => c[1] === "SIGKILL")
+        .map((c: unknown[]) => c[0]);
+      expect(killed).toContain(123);
+      expect(killed).toContain(9001);
+    });
+
     it("disposing a still-live terminal does kill its whole tree", () => {
       // Positive control for the guard above — a dispose that actually wins the
       // lifecycle transition must still reap root and descendants.

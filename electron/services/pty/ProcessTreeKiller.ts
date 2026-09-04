@@ -236,8 +236,11 @@ export class ProcessTreeKiller {
    * forever (#12203). The shell is already gone here, so the ledger is the
    * entire answer — and for the same reason this must never signal the shell
    * PID, which the OS is free to have recycled.
+   *
+   * @param immediate SIGKILL synchronously instead of after the grace window,
+   *   for the `process.on("exit")` context where timers never fire.
    */
-  reapAfterRootExit(escalationDelayMs?: number): void {
+  reapAfterRootExit(immediate: boolean = false, escalationDelayMs?: number): void {
     this.abort();
 
     const shellPid = this.ptyProcess.pid;
@@ -262,6 +265,12 @@ export class ProcessTreeKiller {
     for (const pid of orphans) {
       this.signal(pid, "SIGTERM");
       this.signal(pid, "SIGCONT");
+    }
+
+    if (immediate) {
+      // `process.on("exit")` context — no timer will ever fire, so escalate now.
+      this.sigkillSweep(shellPid, { includeShell: false, includeLiveWalk: false });
+      return;
     }
 
     this.killTreeTimer = setTimeout(() => {

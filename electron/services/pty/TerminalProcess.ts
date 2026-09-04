@@ -1779,21 +1779,25 @@ export class TerminalProcess {
     this.sessionSnapshotter.flushSyncOnDispose();
     this.sessionSnapshotter.dispose();
 
-    // `teardown` returns false when kill() or a natural exit already ran. That
-    // distinction decides which cleanup is safe here: the root-inclusive kill
-    // signals the shell PID, and once the shell has exited that number belongs
-    // to whatever the OS handed it to next — possibly hours ago, for a
-    // preserved agent terminal that sat in the registry until app shutdown.
-    // Only a teardown that actually transitioned a live terminal may use it;
-    // an already-exited one gets the ledger-only sweep, which signals nothing
-    // it has not just re-verified.
     const wonTeardown = this.teardown("dispose");
     this.semanticBufferManager.dispose();
     this.disposeHeadless();
-    if (wonTeardown) {
-      this.processTreeKiller.execute(true);
+
+    // The root-inclusive kill signals the shell PID, which is only safe while
+    // that PID still belongs to our shell. After a *natural* exit it does not:
+    // a preserved agent terminal sits in the registry until app shutdown, by
+    // which point the OS may have handed its number to something unrelated
+    // hours earlier. Those get the ledger-only sweep, which signals nothing it
+    // has not just re-verified.
+    //
+    // A prior kill() is the opposite case — the shell is alive and mid-way
+    // through its 500ms escalation, which this call must complete synchronously
+    // because `process.on("exit")` will not run the timer.
+    const alreadyExitedNaturally = !wonTeardown && this.lifecycle.getExitReason() === "natural";
+    if (alreadyExitedNaturally) {
+      this.processTreeKiller.reapAfterRootExit(true);
     } else {
-      this.processTreeKiller.reapAfterRootExit();
+      this.processTreeKiller.execute(true);
     }
 
     // If the PTY never fired onExit (LRU eviction, app shutdown, or kill()
