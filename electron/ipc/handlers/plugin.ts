@@ -1309,7 +1309,7 @@ async function handleValidateManifest(
       manifestPath,
       origin: locationOrigin ?? "user",
       originSource: locationOrigin ? "location" : "declared-scope",
-      ok: false,
+      valid: false,
       pluginId: null,
       errors: [
         { path: "(root)", message: formatErrorMessage(err, "plugin.json is not valid JSON") },
@@ -1333,14 +1333,14 @@ async function handleValidateManifest(
       path: issue.path.length > 0 ? issue.path.join(".") : "(root)",
       message: issue.message,
     }));
-    return { manifestPath, origin, originSource, ok: false, pluginId, errors, warnings: [] };
+    return { manifestPath, origin, originSource, valid: false, pluginId, errors, warnings: [] };
   }
 
   return {
     manifestPath,
     origin,
     originSource,
-    ok: true,
+    valid: true,
     pluginId: parsed.data.name,
     errors: [],
     warnings: await collectManifestAdvisories({ dir, rawJson: json, manifest: parsed.data }),

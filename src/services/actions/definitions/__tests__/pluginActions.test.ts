@@ -117,7 +117,7 @@ describe("plugin.validate", () => {
       manifestPath: "/p/.daintree/plugins/acme.demo/plugin.json",
       origin: "project",
       originSource: "location",
-      ok: false,
+      valid: false,
       pluginId: "acme.demo",
       errors: [{ path: "contributes.panels.0.color", message: "Required" }],
       warnings: [],

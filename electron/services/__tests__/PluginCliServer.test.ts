@@ -416,6 +416,12 @@ describe("createPluginCliServer", () => {
       uninstall: vi.fn(async () => {}),
       devStart: vi.fn(async () => {}),
       devStop: vi.fn(async () => {}),
+      projectStatus: vi.fn(async () => ({
+        known: false,
+        projectId: null,
+        trust: null,
+        plugins: [],
+      })),
     });
     await server.listen();
 
@@ -433,6 +439,12 @@ describe("createPluginCliServer", () => {
       uninstall: vi.fn(async () => {}),
       devStart: vi.fn(async () => {}),
       devStop: vi.fn(async () => {}),
+      projectStatus: vi.fn(async () => ({
+        known: false,
+        projectId: null,
+        trust: null,
+        plugins: [],
+      })),
     });
     await server.listen();
     const token = server.authToken;

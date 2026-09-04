@@ -102,14 +102,14 @@ describe("plugin:validate-manifest", () => {
     const handler = getValidateManifestHandler();
 
     const result = (await handler(senderEvent, ".daintree/plugins/acme.demo")) as {
-      ok: boolean;
+      valid: boolean;
       origin: string;
       originSource: string;
       pluginId: string | null;
       errors: unknown[];
     };
 
-    expect(result.ok).toBe(true);
+    expect(result.valid).toBe(true);
     expect(result.origin).toBe("project");
     expect(result.originSource).toBe("location");
     expect(result.pluginId).toBe("acme.demo");
@@ -121,11 +121,11 @@ describe("plugin:validate-manifest", () => {
     const handler = getValidateManifestHandler();
 
     const result = (await handler(senderEvent, ".daintree/plugins/acme.demo/plugin.json")) as {
-      ok: boolean;
+      valid: boolean;
       manifestPath: string;
     };
 
-    expect(result.ok).toBe(true);
+    expect(result.valid).toBe(true);
     expect(result.manifestPath.endsWith("plugin.json")).toBe(true);
   });
 
@@ -140,11 +140,11 @@ describe("plugin:validate-manifest", () => {
     const handler = getValidateManifestHandler();
 
     const result = (await handler(senderEvent, ".daintree/plugins/acme.demo")) as {
-      ok: boolean;
+      valid: boolean;
       errors: Array<{ path: string; message: string }>;
     };
 
-    expect(result.ok).toBe(false);
+    expect(result.valid).toBe(false);
     expect(result.errors.some((e) => e.path.includes("color"))).toBe(true);
   });
 
@@ -155,12 +155,12 @@ describe("plugin:validate-manifest", () => {
     const result = (await handler(senderEvent, "src/draft-plugin")) as {
       origin: string;
       originSource: string;
-      ok: boolean;
+      valid: boolean;
     };
 
     expect(result.origin).toBe("project");
     expect(result.originSource).toBe("declared-scope");
-    expect(result.ok).toBe(true);
+    expect(result.valid).toBe(true);
   });
 
   it("refuses a path outside the project and the managed plugins directory", async () => {
@@ -235,14 +235,14 @@ describe("plugin:validate-manifest", () => {
     const handler = getValidateManifestHandler();
 
     const result = (await handler(senderEvent, path.join(dir, "plugin.json"))) as {
-      ok: boolean;
+      valid: boolean;
       origin: string;
       originSource: string;
     };
 
     expect(result.origin).toBe("user");
     expect(result.originSource).toBe("location");
-    expect(result.ok).toBe(false);
+    expect(result.valid).toBe(false);
   });
 
   it("throws rather than reporting a verdict when no manifest is there", async () => {
@@ -259,11 +259,11 @@ describe("plugin:validate-manifest", () => {
     const handler = getValidateManifestHandler();
 
     const result = (await handler(senderEvent, ".daintree/plugins/acme.demo")) as {
-      ok: boolean;
+      valid: boolean;
       errors: Array<{ path: string }>;
     };
 
-    expect(result.ok).toBe(false);
+    expect(result.valid).toBe(false);
     expect(result.errors[0].path).toBe("(root)");
   });
 
@@ -285,11 +285,11 @@ describe("plugin:validate-manifest", () => {
     const handler = getValidateManifestHandler();
 
     const result = (await handler(senderEvent, ".daintree/plugins/acme.demo")) as {
-      ok: boolean;
+      valid: boolean;
       warnings: string[];
     };
 
-    expect(result.ok).toBe(true);
+    expect(result.valid).toBe(true);
     expect(result.warnings.some((w) => w.includes("not-a-real-icon"))).toBe(true);
   });
 

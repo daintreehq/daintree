@@ -55,7 +55,7 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
         manifestPath: z.string(),
         origin: z.enum(["builtin", "user", "project"]),
         originSource: z.enum(["location", "declared-scope"]),
-        ok: z.boolean(),
+        valid: z.boolean(),
         pluginId: z.string().nullable(),
         errors: z.array(z.object({ path: z.string(), message: z.string() })),
         warnings: z.array(z.string()),

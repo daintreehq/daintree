@@ -11,7 +11,7 @@ export interface PluginManifestIssue {
  * Result of validating one on-disk `plugin.json` against the real manifest
  * schema — the same Zod schema the loader runs, not a reimplementation of it.
  *
- * `errors` being empty is the whole verdict: `warnings` are advisory and never
+ * `valid` is `errors.length === 0`: `warnings` are advisory and never
  * stop a plugin loading. `origin` is reported rather than assumed because the
  * schema is origin-keyed — a manifest valid under `user` can be refused under
  * `project` and vice versa — so an author reading a rejection needs to know
@@ -28,7 +28,14 @@ export interface PluginManifestValidationResult {
    * prediction of what would happen once it is placed.
    */
   originSource: "location" | "declared-scope";
-  ok: boolean;
+  /**
+   * Whether the manifest passed. Named `valid` rather than `ok` on purpose:
+   * `ok` is a forbidden key on any IPC return type (`ForbidIpcEnvelopeKeys`),
+   * because that shape is the result-envelope antipattern a handler is supposed
+   * to replace with a throw. This is a verdict about a file, not an envelope
+   * around a call — but the name would still read like one.
+   */
+  valid: boolean;
   /** Manifest `name`, when the JSON carried a usable one. */
   pluginId: string | null;
   errors: PluginManifestIssue[];

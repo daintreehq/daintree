@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { PluginDiagnosticsSnapshot } from "../../../shared/types/ipc/pluginDiagnostics.js";
 
 // Importing PluginService constructs its module singleton, which reads
 // `app.getVersion()` and transitively the eager ProjectStore (`getPath`).
@@ -14,37 +13,41 @@ vi.mock("electron", () => ({
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: vi.fn() }));
 
 import { PluginService } from "../PluginService.js";
+import type { LoadedPlugin } from "../plugin/PluginServiceTypes.js";
 import { makeProjectPluginInstanceKey } from "../../../shared/types/plugin.js";
 
 /**
- * The seam under test, declared structurally. Method syntax makes the parameter
- * bivariant, so a real `PluginService` is assignable here without an assertion
- * and this file adds no unsafe cast of its own.
+ * A real `LoadedPlugin`, filled to its required fields rather than asserted
+ * from a partial: the seam takes one, and spelling it out keeps this file free
+ * of unsafe casts while turning a change to the interface into a compile error
+ * here instead of a silent hole.
  */
-interface DiagnosticsSeam {
-  _registerFakePluginForTests(plugin: FakeLoadedPlugin, instanceKey?: string): void;
-  getDiagnosticsSnapshot(): PluginDiagnosticsSnapshot;
-}
-
-interface FakeLoadedPlugin {
-  manifest: { name: string; version: string; displayName: string };
-  dir: string;
-  isBuiltin: boolean;
-  loadedAt: number;
-}
-
-function fakePlugin(name: string): FakeLoadedPlugin {
+function fakePlugin(name: string): LoadedPlugin {
   return {
-    // A fresh object per call, exactly as two real loads of one id produce two
-    // separately parsed manifests.
-    manifest: { name, version: "1.0.0", displayName: name },
+    // A fresh manifest object per call, exactly as two real loads of one id
+    // produce two separately parsed manifests — which is what the snapshot's
+    // identity index keys on.
+    manifest: {
+      name,
+      version: "1.0.0",
+      displayName: name,
+      capabilities: [],
+      contributes: {
+        commands: [],
+        panels: [],
+        views: [],
+        toolbarButtons: [],
+        processTools: [],
+      },
+    } as unknown as LoadedPlugin["manifest"],
     dir: `/tmp/${name}`,
     isBuiltin: false,
     loadedAt: 1,
+    viewGeneration: 0,
   };
 }
 
-function newSeam(): DiagnosticsSeam {
+function newService(): PluginService {
   return new PluginService("/tmp/daintree-diagnostics-snapshot-root", "0.0.0");
 }
 
@@ -56,7 +59,7 @@ function newSeam(): DiagnosticsSeam {
  */
 describe("PluginService.getDiagnosticsSnapshot", () => {
   it("reports a project plugin under the instance key the registry holds", () => {
-    const seam = newSeam();
+    const seam = newService();
     const instanceKey = makeProjectPluginInstanceKey("a".repeat(64), "acme.demo");
     seam._registerFakePluginForTests(fakePlugin("acme.demo"), instanceKey);
 
@@ -69,7 +72,7 @@ describe("PluginService.getDiagnosticsSnapshot", () => {
   });
 
   it("still reports an installed plugin under its plain manifest id", () => {
-    const seam = newSeam();
+    const seam = newService();
     seam._registerFakePluginForTests(fakePlugin("acme.installed"));
 
     expect(seam.getDiagnosticsSnapshot().plugins.map((p) => p.pluginId)).toContain(
@@ -78,7 +81,7 @@ describe("PluginService.getDiagnosticsSnapshot", () => {
   });
 
   it("keeps two projects' copies of one id apart", () => {
-    const seam = newSeam();
+    const seam = newService();
     const keyA = makeProjectPluginInstanceKey("a".repeat(64), "acme.demo");
     const keyB = makeProjectPluginInstanceKey("b".repeat(64), "acme.demo");
     seam._registerFakePluginForTests(fakePlugin("acme.demo"), keyA);
