@@ -3428,7 +3428,11 @@ export interface ProjectPluginTrustState {
   decision: ProjectPluginTrustDecision | null;
   /** Whether project plugins are currently permitted to run. */
   enabled: boolean;
-  /** True when the decision came from electron-store rather than this session. */
+  /**
+   * True when the decision is durably on disk. A decision the store refused to
+   * write is still in force while the project stays open but is not remembered,
+   * so the next open reads whatever record it replaced.
+   */
   persisted: boolean;
 }
 

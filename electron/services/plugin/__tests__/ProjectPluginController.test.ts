@@ -157,6 +157,7 @@ describe("trust gate", () => {
     expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(1);
     expect(h.deps.writeTrust).not.toHaveBeenCalled();
     expect(h.trust.has(PROJECT_A)).toBe(false);
+    expect(h.controller.getTrustState(PROJECT_A).persisted).toBe(false);
   });
 
   it("a session grant does not survive a close", async () => {
@@ -514,6 +515,141 @@ describe("races", () => {
     expect(h.controller.loadedInstanceKeys()).toEqual([]);
   });
 
+  it("does not start a later plugin in the batch once a revoke lands mid-flight", async () => {
+    const started: string[] = [];
+    let reachedFirst!: () => void;
+    const firstLoadStarted = new Promise<void>((resolve) => {
+      reachedFirst = resolve;
+    });
+    let releaseFirst: (() => void) | undefined;
+    h.deps.loadProjectPlugin.mockImplementation(
+      async ({ manifest }: { manifest: Readonly<PluginManifest> }) => {
+        started.push(manifest.name);
+        if (started.length === 1) {
+          reachedFirst();
+          await new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+          });
+        }
+        return true;
+      }
+    );
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard"), discovered("acme.deploy")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    const trusting = h.controller.setTrust(PROJECT_A, "enabled");
+    await firstLoadStarted;
+    // Revoke lands while the first plugin of the batch is still activating.
+    const revoking = h.controller.setTrust(PROJECT_A, "disabled");
+    releaseFirst!();
+    await trusting;
+    await revoking;
+
+    // The second plugin must never have been handed to the loader at all —
+    // running its `activate` and unloading it afterwards is not the same thing.
+    expect(started).toEqual(["acme.dashboard"]);
+    expect(h.deps.unloadProjectPlugin).toHaveBeenCalledWith(
+      makeProjectPluginInstanceKey(PROJECT_A, "acme.dashboard")
+    );
+    expect(h.controller.loadedInstanceKeys()).toEqual([]);
+  });
+
+  it("never starts plugins when a revoke is queued before the enable task runs", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard"), discovered("acme.deploy")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    // Both requested in the same tick, so the enable's task has not started when
+    // the revoke bumps the generation. Reading the generation at task start would
+    // read the revoke's own bump and let the enable run anyway.
+    const trusting = h.controller.setTrust(PROJECT_A, "enabled");
+    const revoking = h.controller.setTrust(PROJECT_A, "disabled");
+    await trusting;
+    await revoking;
+
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+    expect(h.controller.getTrustState(PROJECT_A)).toEqual({
+      projectId: PROJECT_A,
+      decision: "disabled",
+      enabled: false,
+      persisted: true,
+    });
+  });
+
+  it("does not activate a staged plugin when a revoke is queued behind the click", async () => {
+    h.trust.set(PROJECT_A, {
+      decision: "enabled",
+      decidedAt: 0,
+      knownPluginIds: ["acme.dashboard"],
+      stagedPluginIds: ["acme.dashboard"],
+      mutedPluginIds: [],
+    });
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+
+    const activating = h.controller.activateStaged(PROJECT_A, "acme.dashboard");
+    const revoking = h.controller.setTrust(PROJECT_A, "disabled");
+    await activating;
+    await revoking;
+
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+  });
+
+  it("still opens a project whose reopen was requested before the close ran", async () => {
+    h.trust.set(PROJECT_A, {
+      decision: "enabled",
+      decidedAt: 0,
+      knownPluginIds: ["acme.dashboard"],
+      stagedPluginIds: [],
+      mutedPluginIds: [],
+    });
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    h.deps.loadProjectPlugin.mockClear();
+
+    // The reopen is requested while the close is still queued, so it captures
+    // the entry the close is about to delete. That must not swallow the open.
+    const closing = h.controller.onProjectClosed(PROJECT_A);
+    const reopening = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await closing;
+    await reopening;
+
+    expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(1);
+    expect(h.controller.loadedInstanceKeys()).toEqual([
+      makeProjectPluginInstanceKey(PROJECT_A, "acme.dashboard"),
+    ]);
+  });
+
+  it("does not open a project whose revoke lands during the cross-project sweep", async () => {
+    h.trust.set(PROJECT_A, {
+      decision: "enabled",
+      decidedAt: 0,
+      knownPluginIds: ["acme.dashboard", "acme.deploy"],
+      stagedPluginIds: [],
+      mutedPluginIds: [],
+    });
+    h.setDiscovery(ROOT_B, []);
+    await h.controller.onProjectOpened(PROJECT_B, ROOT_B);
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    h.deps.loadProjectPlugin.mockClear();
+
+    // A second known plugin appears, so this reopen has real work to do. But it
+    // sweeps B first, and that sweep awaits — revoke A from inside the
+    // synchronous `isProjectClosed` probe, immediately before that await, so the
+    // bump lands in the one window the entry guard cannot see.
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard"), discovered("acme.deploy")]);
+    h.deps.isProjectClosed.mockImplementation((id: string) => {
+      if (id !== PROJECT_B) return false;
+      void h.controller.setTrust(PROJECT_A, "disabled");
+      return true;
+    });
+
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    expect(h.deps.loadProjectPlugin).not.toHaveBeenCalled();
+  });
+
   it("drops a scan whose result arrived after the project closed", async () => {
     let releaseScan: ((plugins: DiscoveredProjectPlugin[]) => void) | undefined;
     h.trust.set(PROJECT_A, {
@@ -564,6 +700,130 @@ describe("races", () => {
 
     expect(order).toEqual(["scan-start", "scan-end", "scan-start", "scan-end"]);
     expect(h.deps.loadProjectPlugin).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a revoke that races a queued decision, a close, or a failing write (#12230)", () => {
+  function enabledRecord(): ProjectPluginTrustRecord {
+    return {
+      decision: "enabled",
+      decidedAt: 0,
+      knownPluginIds: ["acme.dashboard"],
+      stagedPluginIds: [],
+      mutedPluginIds: [],
+    };
+  }
+
+  it("still unloads and purges when an enable is queued behind the revoke", async () => {
+    h.trust.set(PROJECT_A, enabledRecord());
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    // A revoke is never treated as superseded: it owes an unload and a consent
+    // purge on its way past, even when the user immediately re-enables.
+    const revoking = h.controller.setTrust(PROJECT_A, "disabled");
+    const enabling = h.controller.setTrust(PROJECT_A, "enabled");
+    await revoking;
+    await enabling;
+
+    expect(h.deps.purgeConsentForInstance).toHaveBeenCalledWith(
+      makeProjectPluginInstanceKey(PROJECT_A, "acme.dashboard")
+    );
+    expect(h.controller.getTrustState(PROJECT_A).decision).toBe("enabled");
+  });
+
+  it("writes the revoke when a close is queued behind it", async () => {
+    h.trust.set(PROJECT_A, enabledRecord());
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    const revoking = h.controller.setTrust(PROJECT_A, "disabled");
+    const closing = h.controller.onProjectClosed(PROJECT_A);
+    await revoking;
+    await closing;
+
+    expect(h.trust.get(PROJECT_A)?.decision).toBe("disabled");
+  });
+
+  it("writes the revoke even when the close deleted the entry first", async () => {
+    h.trust.set(PROJECT_A, enabledRecord());
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    // The close is queued first and deletes the entry, so the revoke's task
+    // finds nothing live. It still owes the record and the consent purge.
+    const closing = h.controller.onProjectClosed(PROJECT_A);
+    const revoking = h.controller.setTrust(PROJECT_A, "disabled");
+    await closing;
+    await revoking;
+
+    expect(h.trust.get(PROJECT_A)?.decision).toBe("disabled");
+    expect(h.deps.purgeConsentForInstance).toHaveBeenCalledWith(
+      makeProjectPluginInstanceKey(PROJECT_A, "acme.dashboard")
+    );
+  });
+
+  it("does not flush bookkeeping when the batch's last load is invalidated", async () => {
+    h.trust.set(PROJECT_A, {
+      decision: "enabled",
+      decidedAt: 0,
+      knownPluginIds: ["acme.known"],
+      stagedPluginIds: [],
+      mutedPluginIds: [],
+    });
+    // The new plugin stages first (marking bookkeeping dirty), the known one
+    // loads last — so nothing is left to re-check the generation after it.
+    h.setDiscovery(ROOT_A, [discovered("acme.new"), discovered("acme.known")]);
+    let releaseLoad: (() => void) | undefined;
+    let reachedLoad!: () => void;
+    const loadStarted = new Promise<void>((resolve) => {
+      reachedLoad = resolve;
+    });
+    h.deps.loadProjectPlugin.mockImplementation(async () => {
+      reachedLoad();
+      await new Promise<void>((resolve) => {
+        releaseLoad = resolve;
+      });
+      return true;
+    });
+
+    const opening = h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await loadStarted;
+    const revoking = h.controller.setTrust(PROJECT_A, "disabled");
+    releaseLoad!();
+    await opening;
+    await revoking;
+
+    // The only write is the revoke's. Flushing the still-"enabled" record first
+    // would leave the store enabled if that second write were the one to fail.
+    expect(
+      h.deps.writeTrust.mock.calls.map((c) => (c[1] as ProjectPluginTrustRecord).decision)
+    ).toEqual(["disabled"]);
+  });
+
+  it("still revokes and still announces the change when the write throws", async () => {
+    h.trust.set(PROJECT_A, enabledRecord());
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    // A throwing store is not a returned `false`: without the try/catch around
+    // the write, this rejects the queued task, `serialize` swallows it, and
+    // `emitChanged` never runs — so the revoke lands but the renderer is never
+    // told, and keeps showing trust the host no longer grants.
+    h.deps.writeTrust.mockImplementation(() => {
+      throw new Error("EROFS: read-only file system");
+    });
+    h.events.length = 0;
+    await expect(h.controller.setTrust(PROJECT_A, "disabled")).rejects.toThrow(/settings file/i);
+
+    expect(h.controller.loadedInstanceKeys()).toEqual([]);
+    const changed = h.events.filter((e) => e.name === "plugin:project-plugins-changed").at(-1);
+    expect((changed!.payload as { trust: unknown }).trust).toEqual({
+      projectId: PROJECT_A,
+      decision: "disabled",
+      enabled: false,
+      persisted: false,
+    });
   });
 });
 

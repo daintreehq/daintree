@@ -148,6 +148,30 @@ export class ProjectPluginController {
   }
 
   /**
+   * Was a request captured at `generation` overtaken before its task ran?
+   *
+   * True only when the entry it was made against is STILL LIVE and its
+   * generation has moved — something invalidating is queued behind us. A
+   * *deleted* entry is deliberately not superseded: the close that removed it
+   * has already run, so an open queued after that close is the user asking for
+   * the project back, and swallowing it would leave them with nothing loaded.
+   *
+   * It does not ask what the superseding event WAS, so a warm re-open queued
+   * behind an enable is dropped along with one queued behind a revoke, and the
+   * rediscovery `doOpen` would have run is skipped. That direction is the safe
+   * one — it under-loads rather than starting something the user turned off,
+   * and the next switch into the project reconciles it.
+   */
+  private superseded(
+    projectId: string,
+    requested: ProjectEntry | undefined,
+    generation: number | undefined
+  ): boolean {
+    if (requested === undefined || generation === undefined) return false;
+    return this.entries.get(projectId) === requested && requested.generation !== generation;
+  }
+
+  /**
    * Called on every switch into a project, cold or warm. Idempotent: a
    * re-entry re-scans the folder and reconciles what is loaded against what is
    * on disk, which is also how a manual reload and the hot-reload phase will
@@ -161,11 +185,25 @@ export class ProjectPluginController {
   async onProjectOpened(projectId: string, projectRoot: string): Promise<void> {
     if (this.disposed) return;
     if (!projectId || !projectRoot) return;
-    return this.serialize(projectId, () => this.doOpen(projectId, projectRoot));
+    // Captured at REQUEST time, not when the queued task starts. A revoke or
+    // close asked for after this open bumps the generation synchronously but
+    // runs behind us in the chain, so a generation read at task start would be
+    // the already-bumped one, compare equal to itself, and let this open load
+    // plugins the user has just turned off (#12230).
+    const requested = this.entries.get(projectId);
+    return this.serialize(projectId, () =>
+      this.doOpen(projectId, projectRoot, requested, requested?.generation)
+    );
   }
 
-  private async doOpen(projectId: string, projectRoot: string): Promise<void> {
+  private async doOpen(
+    projectId: string,
+    projectRoot: string,
+    requested?: ProjectEntry,
+    requestedGeneration?: number
+  ): Promise<void> {
     if (this.disposed) return;
+    if (this.superseded(projectId, requested, requestedGeneration)) return;
 
     // Safety net for the close paths this controller cannot be called from —
     // the idle auto-close service, the free-memory IPC and the project store's
@@ -177,6 +215,12 @@ export class ProjectPluginController {
         await this.onProjectClosed(trackedId);
       }
     }
+
+    // The sweep awaits, so re-check before reading a generation off the entry:
+    // a revoke requested during it has already bumped the counter and queued
+    // behind us, and the read below would pick up that bump and then compare it
+    // against itself.
+    if (this.superseded(projectId, requested, requestedGeneration)) return;
 
     const entry = this.ensureEntry(projectId, projectRoot);
     entry.projectRoot = projectRoot;
@@ -222,7 +266,7 @@ export class ProjectPluginController {
       return;
     }
 
-    await this.reconcileLoaded(projectId, entry, valid, { announceStaged: true });
+    await this.reconcileLoaded(projectId, entry, valid, generation, { announceStaged: true });
     this.emitChanged(projectId);
   }
 
@@ -272,6 +316,9 @@ export class ProjectPluginController {
     // Same reason as the close path: the decision invalidates anything already
     // in flight under the previous one.
     pending.generation++;
+    // Captured with the entry the click was made against, so the task can tell
+    // a decision queued behind a newer one from the newest decision itself.
+    const generation = pending.generation;
     // `serialize` swallows rejections by design — it is a chain, and one task's
     // failure must not poison the next. Carry the persist failure out of the
     // task instead, so the caller (and through it the user) still sees it.
@@ -283,7 +330,7 @@ export class ProjectPluginController {
     // trap for the next edit.
     const outcome: { failure: Error | null } = { failure: null };
     await this.serialize(projectId, async () => {
-      outcome.failure = await this.doSetTrust(projectId, decision);
+      outcome.failure = await this.doSetTrust(projectId, decision, pending, generation);
     });
     if (outcome.failure !== null) throw outcome.failure;
   }
@@ -291,18 +338,42 @@ export class ProjectPluginController {
   /** Applies the decision. Returns the error to report, or null when it stuck. */
   private async doSetTrust(
     projectId: string,
-    decision: ProjectPluginTrustDecision
+    decision: ProjectPluginTrustDecision,
+    requested: ProjectEntry,
+    generation: number
   ): Promise<Error | null> {
     const entry = this.entries.get(projectId);
-    // The entry existed when the decision was accepted and is gone by the time
-    // the task ran: a close raced the click. Reporting success here would
-    // reintroduce the silent drop the outer throw exists to prevent — the
-    // decision really was not recorded.
     if (!entry) {
+      if (decision === "disabled") {
+        // A close ran between this revoke being requested and this task
+        // starting, taking the entry with it. The revoke is still owed: the
+        // record on disk is what the next open reads, so returning here would
+        // silently keep the grant the user just withdrew. `unloadAll` inside
+        // `revoke` is a no-op — it re-reads `this.entries`, which the close has
+        // already emptied — but the consent purge and the write are not: both
+        // run off the captured entry's own `known`/`discovered` sets.
+        requested.decision = "disabled";
+        await this.revoke(projectId, requested);
+        const stored = this.persist(projectId, requested);
+        requested.persisted = stored;
+        return stored ? null : persistFailure(decision);
+      }
+      // The entry existed when the decision was accepted and is gone by the time
+      // the task ran: a close raced the click. Reporting success here would
+      // reintroduce the silent drop the outer throw exists to prevent — the
+      // decision really was not recorded.
       logger.warn("Project plugin trust decision lost to a close", { projectId, decision });
       return new Error(
         "This project closed before the decision was saved. Reopen it and try again."
       );
+    }
+    // Superseded before this task even started: a newer decision bumped the
+    // generation and is queued behind us, so applying this one would start
+    // plugins the user has already said no to. Only an ENABLE is dropped this
+    // way — a revoke still has to unload and purge on its way past, and its
+    // record is the one the next launch reads.
+    if (decision !== "disabled" && !this.stillCurrent(projectId, requested, generation)) {
+      return null;
     }
 
     if (decision === "disabled") {
@@ -338,7 +409,7 @@ export class ProjectPluginController {
     // question. A session that believed a failed write reached disk would
     // describe the grant as remembered and never re-offer it.
     if (entry.decision === "enabled") entry.persisted = stored;
-    await this.reconcileLoaded(projectId, entry, valid, { announceStaged: false });
+    await this.reconcileLoaded(projectId, entry, valid, generation, { announceStaged: false });
     this.emitChanged(projectId);
     return stored ? null : persistFailure(decision);
   }
@@ -397,7 +468,7 @@ export class ProjectPluginController {
         const instanceKey = entry.loaded.get(manifestId);
         if (instanceKey) this.unloadOne(entry, manifestId, instanceKey);
       }
-      await this.doOpen(projectId, projectRoot);
+      await this.doOpen(projectId, projectRoot, entry, requestedGeneration);
     });
   }
 
@@ -405,10 +476,23 @@ export class ProjectPluginController {
 
   /** One-click activation of a plugin that was staged rather than run. */
   async activateStaged(projectId: string, manifestId: string): Promise<void> {
-    return this.serialize(projectId, () => this.doActivateStaged(projectId, manifestId));
+    // Same request-time capture as the open path: a revoke queued after this
+    // click still runs behind it, so the generation has to be the one the click
+    // was made under.
+    const requested = this.entries.get(projectId);
+    if (!requested) return;
+    const generation = requested.generation;
+    return this.serialize(projectId, () =>
+      this.doActivateStaged(projectId, manifestId, requested, generation)
+    );
   }
 
-  private async doActivateStaged(projectId: string, manifestId: string): Promise<void> {
+  private async doActivateStaged(
+    projectId: string,
+    manifestId: string,
+    requested: ProjectEntry,
+    generation: number
+  ): Promise<void> {
     const entry = this.entries.get(projectId);
     if (!entry || !this.isEnabled(entry)) return;
     if (!entry.staged.has(manifestId)) return;
@@ -418,6 +502,7 @@ export class ProjectPluginController {
     // told it was overridden. The UI hides Activate while muted, so reaching
     // here means something else asked — and the answer is no.
     if (entry.muted.has(manifestId)) return;
+    if (!this.stillCurrent(projectId, requested, generation)) return;
 
     const found = entry.discovered.find((d) => d.manifest?.name === manifestId);
     if (!found?.manifest) return;
@@ -429,7 +514,8 @@ export class ProjectPluginController {
     await this.load(
       projectId,
       entry,
-      found as DiscoveredProjectPlugin & { manifest: PluginManifest }
+      found as DiscoveredProjectPlugin & { manifest: PluginManifest },
+      generation
     );
     this.emitChanged(projectId);
   }
@@ -445,12 +531,27 @@ export class ProjectPluginController {
    * purged consent would quietly turn a preference into a second trust gate.
    */
   async setMuted(projectId: string, manifestId: string, muted: boolean): Promise<void> {
-    return this.serialize(projectId, () => this.doSetMuted(projectId, manifestId, muted));
+    const requested = this.entries.get(projectId);
+    if (!requested) return;
+    const generation = requested.generation;
+    return this.serialize(projectId, () =>
+      this.doSetMuted(projectId, manifestId, muted, requested, generation)
+    );
   }
 
-  private async doSetMuted(projectId: string, manifestId: string, muted: boolean): Promise<void> {
+  private async doSetMuted(
+    projectId: string,
+    manifestId: string,
+    muted: boolean,
+    requested: ProjectEntry,
+    generation: number
+  ): Promise<void> {
     const entry = this.entries.get(projectId);
     if (!entry) return;
+    // Muting only ever unloads, so it is safe to apply under anything queued
+    // behind it. Unmuting LOADS, so it gets the same treatment as an enable: a
+    // revoke or close waiting its turn means this must not start a plugin.
+    if (!muted && !this.stillCurrent(projectId, requested, generation)) return;
     if (entry.muted.has(manifestId) === muted) return;
 
     if (muted) {
@@ -460,6 +561,10 @@ export class ProjectPluginController {
       entry.known.add(manifestId);
       const instanceKey = entry.loaded.get(manifestId);
       if (instanceKey) this.unloadOne(entry, manifestId, instanceKey);
+      // Unguarded on purpose, unlike the flush at the end of `reconcileLoaded`.
+      // A revoke queued behind this rewrites the whole record — mute set and
+      // all — so nothing is lost by writing first, while a CLOSE queued behind
+      // it writes nothing at all, and skipping here would drop the mute.
       this.persist(projectId, entry);
       this.emitChanged(projectId);
       return;
@@ -472,7 +577,7 @@ export class ProjectPluginController {
         (d): d is DiscoveredProjectPlugin & { manifest: Readonly<PluginManifest> } =>
           d.manifest !== undefined
       );
-      await this.reconcileLoaded(projectId, entry, valid, { announceStaged: false });
+      await this.reconcileLoaded(projectId, entry, valid, generation, { announceStaged: false });
     }
     this.emitChanged(projectId);
   }
@@ -629,23 +734,35 @@ export class ProjectPluginController {
    */
   private persist(projectId: string, entry: ProjectEntry): boolean {
     if (entry.decision !== "enabled" && entry.decision !== "disabled") return true;
-    const stored = this.deps.writeTrust(projectId, {
-      decision: entry.decision,
-      // The timestamp of the TRUST decision, not of this write. Staging and
-      // muting both persist through here, and stamping `Date.now()` on those
-      // would move the manager's audit line every time a plugin appeared or was
-      // switched off — reporting a consent the user never gave at that moment.
-      decidedAt: entry.decidedAt,
-      knownPluginIds: [...entry.known],
-      stagedPluginIds: [...entry.staged],
-      mutedPluginIds: [...entry.muted],
-    });
-    if (!stored) {
-      // Bookkeeping writes (a staged id promoted to known) land here too, and
-      // they are not the decision. Only {@link doSetTrust} clears `persisted`,
-      // because only it knows the decision itself is the thing that failed —
-      // a failed metadata write leaves an earlier decision on disk untouched.
-      logger.warn("A project plugin trust write did not reach disk", {
+    let stored = false;
+    try {
+      stored = this.deps.writeTrust(projectId, {
+        decision: entry.decision,
+        // The timestamp of the TRUST decision, not of this write. Staging and
+        // muting both persist through here, and stamping `Date.now()` on those
+        // would move the manager's audit line every time a plugin appeared or was
+        // switched off — reporting a consent the user never gave at that moment.
+        decidedAt: entry.decidedAt,
+        knownPluginIds: [...entry.known],
+        stagedPluginIds: [...entry.staged],
+        mutedPluginIds: [...entry.muted],
+      });
+      if (!stored) {
+        // Bookkeeping writes (a staged id promoted to known) land here too, and
+        // they are not the decision. Only {@link doSetTrust} clears `persisted`,
+        // because only it knows the decision itself is the thing that failed —
+        // a failed metadata write leaves an earlier decision on disk untouched.
+        logger.warn("A project plugin trust write did not reach disk", {
+          projectId,
+          decision: entry.decision,
+        });
+      }
+    } catch (err) {
+      // A throwing store must not reject the task that owns the teardown: the
+      // unload already happened, and swallowing the change event here would
+      // leave the renderer showing trust the host no longer grants. The caller
+      // still learns it failed, from the `false` returned below.
+      logger.error("A project plugin trust write threw", err, {
         projectId,
         decision: entry.decision,
       });
@@ -657,6 +774,7 @@ export class ProjectPluginController {
     projectId: string,
     entry: ProjectEntry,
     valid: Array<DiscoveredProjectPlugin & { manifest: Readonly<PluginManifest> }>,
+    generation: number,
     opts: { announceStaged: boolean }
   ): Promise<void> {
     const present = new Set(valid.map((d) => d.manifest.name));
@@ -672,6 +790,18 @@ export class ProjectPluginController {
 
     let persistNeeded = false;
     for (const d of valid) {
+      // The whole batch runs under ONE generation, re-checked before each plugin
+      // because the previous one awaited. Letting `load` re-read `entry.generation`
+      // instead would read the value a revoke arriving mid-batch had already
+      // bumped and compare it against itself, so the next plugin's `activate`
+      // ran after the user said no and was only torn down afterwards (#12230).
+      //
+      // Returning rather than breaking also skips the bookkeeping write below:
+      // a revoke queued behind us is about to write "disabled", and flushing the
+      // still-"enabled" decision first would leave the store enabled if that
+      // second write is the one that fails.
+      if (!this.stillCurrent(projectId, entry, generation)) return;
+
       const manifestId = d.manifest.name;
       if (entry.staged.has(manifestId)) continue;
 
@@ -705,20 +835,26 @@ export class ProjectPluginController {
       }
 
       if (entry.loaded.has(manifestId)) continue;
-      await this.load(projectId, entry, d);
+      await this.load(projectId, entry, d, generation);
     }
 
-    if (persistNeeded) this.persist(projectId, entry);
+    // Re-checked because the last element of the loop awaits with no iteration
+    // left to catch it: flushing the still-"enabled" decision here, moments
+    // before the queued revoke writes "disabled", would leave the store enabled
+    // if that second write is the one that fails.
+    if (persistNeeded && this.stillCurrent(projectId, entry, generation)) {
+      this.persist(projectId, entry);
+    }
   }
 
   private async load(
     projectId: string,
     entry: ProjectEntry,
-    d: DiscoveredProjectPlugin & { manifest: Readonly<PluginManifest> }
+    d: DiscoveredProjectPlugin & { manifest: Readonly<PluginManifest> },
+    generation: number
   ): Promise<void> {
     const manifestId = d.manifest.name;
     const instanceKey = makeProjectPluginInstanceKey(projectId, manifestId);
-    const generation = entry.generation;
     try {
       const ok = await this.deps.loadProjectPlugin({
         projectId,
