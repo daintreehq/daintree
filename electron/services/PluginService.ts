@@ -3982,10 +3982,17 @@ export class PluginService {
    * granted before a plugin exists, and without a watcher the plugin is not
    * noticed until the user switches projects and back — so an agent creating
    * `.daintree/plugins/` in the project the user is looking at produced nothing
-   * at all (#12212). Watching while the decision is still open is safe because
-   * everything it can reach is parse-only: `discoverProjectPlugins` reads
-   * `plugin.json` and stops, and `reloadChanged` still refuses to load anything
-   * without a recorded grant.
+   * at all (#12212). Watching while the decision is still open runs no plugin
+   * code: `discoverProjectPlugins` parses `plugin.json` and stops, and
+   * `reloadChanged` still refuses to LOAD anything without a recorded grant.
+   *
+   * It is not free, though, and the comment that once claimed otherwise was
+   * wrong: arming a folder that already exists also fingerprints each plugin's
+   * build output to seed the hot-reload baseline. That is bounded stat traffic
+   * over a folder the user opened, not execution — but a project with many
+   * plugin directories pays it before deciding anything, and there is no
+   * per-project watcher budget yet. Worth revisiting if watcher count ever
+   * shows up in a profile.
    *
    * An explicit "no" is the one answer that stops it. A remembered `disabled`
    * tears the native subscription down with everything else, as does a close.

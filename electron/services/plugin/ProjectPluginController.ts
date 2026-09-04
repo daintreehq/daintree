@@ -67,6 +67,8 @@ interface ProjectEntry {
    */
   muted: Set<string>;
   discovered: DiscoveredProjectPlugin[];
+  /** directory name → the rejection already logged for it, so a rescan is quiet. */
+  loggedRejections: Map<string, string>;
   /** manifest id → instance key, for everything currently loaded. */
   loaded: Map<string, string>;
 }
@@ -186,7 +188,7 @@ export class ProjectPluginController {
     // exactly what the user just turned off.
     if (!this.stillCurrent(projectId, entry, generation)) return;
     entry.discovered = discovered;
-    this.logRejectedManifests(projectId, discovered);
+    this.logRejectedManifests(entry, projectId);
 
     const valid = entry.discovered.filter(
       (d): d is DiscoveredProjectPlugin & { manifest: Readonly<PluginManifest> } =>
@@ -273,11 +275,17 @@ export class ProjectPluginController {
     // `serialize` swallows rejections by design — it is a chain, and one task's
     // failure must not poison the next. Carry the persist failure out of the
     // task instead, so the caller (and through it the user) still sees it.
-    let failure: Error | null = null;
+    //
+    // A box rather than a bare `let`: TypeScript's control-flow analysis does
+    // not follow an assignment made inside the callback, so a plain
+    // `let failure: Error | null = null` stays narrowed to `null` and the
+    // `throw` below type-checks against `never` — correct at runtime, and a
+    // trap for the next edit.
+    const outcome: { failure: Error | null } = { failure: null };
     await this.serialize(projectId, async () => {
-      failure = await this.doSetTrust(projectId, decision);
+      outcome.failure = await this.doSetTrust(projectId, decision);
     });
-    if (failure !== null) throw failure;
+    if (outcome.failure !== null) throw outcome.failure;
   }
 
   /** Applies the decision. Returns the error to report, or null when it stuck. */
@@ -286,7 +294,16 @@ export class ProjectPluginController {
     decision: ProjectPluginTrustDecision
   ): Promise<Error | null> {
     const entry = this.entries.get(projectId);
-    if (!entry) return null;
+    // The entry existed when the decision was accepted and is gone by the time
+    // the task ran: a close raced the click. Reporting success here would
+    // reintroduce the silent drop the outer throw exists to prevent — the
+    // decision really was not recorded.
+    if (!entry) {
+      logger.warn("Project plugin trust decision lost to a close", { projectId, decision });
+      return new Error(
+        "This project closed before the decision was saved. Reopen it and try again."
+      );
+    }
 
     if (decision === "disabled") {
       entry.decision = "disabled";
@@ -294,6 +311,7 @@ export class ProjectPluginController {
       entry.decidedAt = Date.now();
       await this.revoke(projectId, entry);
       const stored = this.persist(projectId, entry);
+      entry.persisted = stored;
       this.emitChanged(projectId);
       return stored ? null : persistFailure(decision);
     }
@@ -316,6 +334,10 @@ export class ProjectPluginController {
     }
 
     const stored = this.persist(projectId, entry);
+    // The renderer reads `persisted` to decide whether to keep offering the
+    // question. A session that believed a failed write reached disk would
+    // describe the grant as remembered and never re-offer it.
+    if (entry.decision === "enabled") entry.persisted = stored;
     await this.reconcileLoaded(projectId, entry, valid, { announceStaged: false });
     this.emitChanged(projectId);
     return stored ? null : persistFailure(decision);
@@ -563,6 +585,7 @@ export class ProjectPluginController {
       staged: new Set(record?.stagedPluginIds ?? []),
       muted: new Set(record?.mutedPluginIds ?? []),
       discovered: [],
+      loggedRejections: new Map(),
       loaded: new Map(),
     };
     this.entries.set(projectId, entry);
@@ -584,15 +607,24 @@ export class ProjectPluginController {
    * pointed at. Reading `error` here executes nothing — discovery has already
    * produced the string by parsing.
    */
-  private logRejectedManifests(projectId: string, discovered: DiscoveredProjectPlugin[]): void {
-    for (const row of discovered) {
+  private logRejectedManifests(entry: ProjectEntry, projectId: string): void {
+    const seen = new Map<string, string>();
+    for (const row of entry.discovered) {
       if (row.manifest !== undefined) continue;
+      const reason = row.error ?? "manifest could not be read";
+      seen.set(row.dirName, reason);
+      // `doOpen` runs on every project switch and on every watcher
+      // reconciliation, so logging the whole scan each time would bury the log
+      // under a manifest the author has not got back to yet. Only transitions
+      // — newly broken, or broken a different way — are news.
+      if (entry.loggedRejections.get(row.dirName) === reason) continue;
       logger.warn("Project plugin manifest rejected", {
         projectId,
         dirName: row.dirName,
-        error: row.error ?? "manifest could not be read",
+        error: reason,
       });
     }
+    entry.loggedRejections = seen;
   }
 
   private persist(projectId: string, entry: ProjectEntry): boolean {
@@ -608,12 +640,12 @@ export class ProjectPluginController {
       stagedPluginIds: [...entry.staged],
       mutedPluginIds: [...entry.muted],
     });
-    // `persisted` is what the renderer reads to describe the decision. A
-    // session that believes a failed write reached disk would describe the
-    // grant as remembered and never re-offer it.
-    entry.persisted = stored;
     if (!stored) {
-      logger.warn("Project plugin trust decision did not reach disk", {
+      // Bookkeeping writes (a staged id promoted to known) land here too, and
+      // they are not the decision. Only {@link doSetTrust} clears `persisted`,
+      // because only it knows the decision itself is the thing that failed —
+      // a failed metadata write leaves an earlier decision on disk untouched.
+      logger.warn("A project plugin trust write did not reach disk", {
         projectId,
         decision: entry.decision,
       });

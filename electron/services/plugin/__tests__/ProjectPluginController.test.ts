@@ -211,6 +211,20 @@ describe("persistence failures are loud (#12212)", () => {
     expect(h.deps.unloadProjectPlugin).toHaveBeenCalled();
   });
 
+  it("reports a decision the close race swallowed, rather than resolving as saved", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+
+    // A stale click landing just after a close: the close has queued its
+    // teardown but not run it, so the entry is still there when the decision
+    // is accepted and gone by the time the decision's own task runs.
+    const close = h.controller.onProjectClosed(PROJECT_A);
+    const decision = h.controller.setTrust(PROJECT_A, "enabled");
+
+    await expect(decision).rejects.toThrow(/closed before the decision was saved/i);
+    await close;
+  });
+
   it("refuses a decision for a project it holds no state for, rather than dropping it", async () => {
     // Silently returning here let the renderer report a decision as saved that
     // was never recorded anywhere.
@@ -228,6 +242,26 @@ describe("persistence failures are loud (#12212)", () => {
     // Nothing was meant to be written, so there is nothing to report.
     await expect(h.controller.setTrust(PROJECT_A, "session")).resolves.toBeUndefined();
     expect(h.deps.writeTrust).not.toHaveBeenCalled();
+  });
+});
+
+describe("what a failed write means for `persisted` (#12212)", () => {
+  it("does not un-persist a stored decision when only bookkeeping failed", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "enabled");
+    expect(h.controller.getTrustState(PROJECT_A).persisted).toBe(true);
+
+    // A new plugin appears and is staged, then activated — the write here is
+    // the known/staged bookkeeping, not the decision, which is already stored.
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard"), discovered("acme.later")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    h.deps.writeTrust.mockReturnValue(false);
+    await h.controller.activateStaged(PROJECT_A, "acme.later");
+
+    // The grant itself is still on disk; saying otherwise would re-offer a
+    // question the user already answered durably.
+    expect(h.controller.getTrustState(PROJECT_A).persisted).toBe(true);
   });
 });
 

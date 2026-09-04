@@ -57,13 +57,20 @@ export function ProjectPluginIndicator() {
   const staged = plugins.filter((p) => p.state === "staged");
   const invalid = plugins.filter((p) => p.state === "invalid");
   const enabled = trust?.enabled === true;
+  // The decision applied but never reached disk, so the next launch will ask
+  // again. Nothing else can carry this: a failed "always enable" still STARTS
+  // the plugins, so every row goes active and the rejected call's error has no
+  // surface left to appear on (#12212).
+  const unsaved = trust?.decision === "enabled" && trust.persisted === false;
 
-  if (blocked.length === 0 && staged.length === 0 && invalid.length === 0) return null;
+  if (blocked.length === 0 && staged.length === 0 && invalid.length === 0 && !unsaved) return null;
 
-  // Unreadable leads: it is the only one of the three that is a mistake rather
-  // than a state the user chose or a plugin waiting on them.
-  const summary =
-    invalid.length > 0
+  // Ordered by how much it is a fault rather than a state the user chose: a
+  // decision that silently will not survive a restart first, then a manifest
+  // that will not parse, then the two ordinary resting states.
+  const summary = unsaved
+    ? "Project plugins on, but not saved"
+    : invalid.length > 0
       ? `${invalid.length} project plugin${invalid.length === 1 ? "" : "s"} unreadable`
       : blocked.length > 0
         ? `${blocked.length} project plugin${blocked.length === 1 ? "" : "s"} off`
@@ -141,6 +148,24 @@ export function ProjectPluginIndicator() {
               <RefreshCw />
               Reload from folder
             </Button>
+
+            {unsaved && (
+              <>
+                <p className="text-3xs text-text-secondary leading-tight">
+                  These plugins are running, but Daintree couldn&apos;t write the choice to its
+                  settings file — this project will ask again next launch.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => void decide("enabled")}
+                  loading={deciding === "enabled"}
+                >
+                  Retry
+                </Button>
+              </>
+            )}
 
             {enabled ? (
               <>

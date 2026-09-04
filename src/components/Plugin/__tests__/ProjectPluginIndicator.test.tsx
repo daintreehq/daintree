@@ -66,7 +66,11 @@ afterEach(() => {
 describe("ProjectPluginIndicator", () => {
   it("shows nothing when every plugin is running", () => {
     const { container } = render(<ProjectPluginIndicator />);
-    snapshot([plugin("a.b", "active")], { decision: "enabled", enabled: true });
+    snapshot([plugin("a.b", "active")], {
+      decision: "enabled",
+      enabled: true,
+      persisted: true,
+    });
     expect(container.textContent).toBe("");
   });
 
@@ -96,6 +100,43 @@ describe("ProjectPluginIndicator", () => {
     });
 
     expect(document.body.textContent).toContain('Unrecognized key: "author"');
+  });
+
+  it("holds a decision that applied but never reached disk (#12212)", async () => {
+    // A failed "always enable" still STARTS the plugins, so every row goes
+    // active and the rejected call's error has nowhere else to appear.
+    render(<ProjectPluginIndicator />);
+    snapshot([plugin("a.b", "active")], { decision: "enabled", enabled: true, persisted: false });
+
+    expect(document.body.textContent).toContain("not saved");
+  });
+
+  it("stays quiet once the decision is on disk", () => {
+    const { container } = render(<ProjectPluginIndicator />);
+    snapshot([plugin("a.b", "active")], { decision: "enabled", enabled: true, persisted: true });
+    expect(container.textContent).toBe("");
+  });
+
+  it("does not read a session grant as a failed write", () => {
+    // `session` is memory-only by contract — `persisted: false` is correct
+    // there and must not be reported as a fault.
+    const { container } = render(<ProjectPluginIndicator />);
+    snapshot([plugin("a.b", "active")], { decision: "session", enabled: true, persisted: false });
+    expect(container.textContent).toBe("");
+  });
+
+  it("offers a retry for the write that failed", async () => {
+    render(<ProjectPluginIndicator />);
+    snapshot([plugin("a.b", "active")], { decision: "enabled", enabled: true, persisted: false });
+
+    await act(async () => {
+      screen.getByRole("button", { name: /Project plugins/ }).click();
+    });
+    await act(async () => {
+      screen.getByRole("button", { name: "Retry" }).click();
+    });
+
+    expect(setProjectPluginTrust).toHaveBeenCalledWith("enabled");
   });
 
   it("offers a reload, so a fixed manifest does not need a project switch", async () => {

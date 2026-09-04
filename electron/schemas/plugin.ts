@@ -1293,17 +1293,28 @@ function editDistance(a: string, b: string, max: number): number {
  */
 export function suggestManifestKey(key: string, known: readonly string[]): string | undefined {
   const lower = key.toLowerCase();
+  // Every candidate is scored before one is chosen. Returning on the first
+  // acceptable match let a plural shortcut win over an exact one that came
+  // later in the shape — `"Scopes"` matched `scope` and never reached `scopes`.
   let best: string | undefined;
-  let bestDistance = Number.POSITIVE_INFINITY;
+  let bestRank = Number.POSITIVE_INFINITY;
   for (const candidate of known) {
     const candidateLower = candidate.toLowerCase();
-    if (candidateLower === lower) return candidate;
-    if (candidateLower === `${lower}s` || `${candidateLower}s` === lower) return candidate;
-    const budget = Math.min(candidate.length, key.length) >= 5 ? 2 : 1;
-    const distance = editDistance(lower, candidateLower, budget);
-    if (distance <= budget && distance < bestDistance) {
+    // Rank, not distance: an exact match beats a plural slip beats an edit.
+    const rank =
+      candidateLower === lower
+        ? 0
+        : candidateLower === `${lower}s` || `${candidateLower}s` === lower
+          ? 1
+          : (() => {
+              const budget = Math.min(candidate.length, key.length) >= 5 ? 2 : 1;
+              const distance = editDistance(lower, candidateLower, budget);
+              return distance <= budget ? 1 + distance : Number.POSITIVE_INFINITY;
+            })();
+    if (rank < bestRank) {
       best = candidate;
-      bestDistance = distance;
+      bestRank = rank;
+      if (rank === 0) break;
     }
   }
   return best;
@@ -1325,18 +1336,29 @@ export function describeManifestIssues(
   issues: readonly z.core.$ZodIssue[],
   schema: PluginManifestSchema
 ): string {
-  const unrecognized = issues.find((issue) => issue.code === "unrecognized_keys");
+  // Only a ROOT unrecognized key can be scored against the manifest's own
+  // shape. A stray key nested under `contributes` is a different vocabulary
+  // entirely, and matching it against the root would suggest a field that is
+  // invalid exactly where the author put it — `version` inside `contributes`
+  // "did you mean version?" being the absurd case.
+  // An explicit type predicate: narrowing on `code` alone would be inferred,
+  // but adding the path test to the same expression loses it.
+  const unrecognized = issues.find(
+    (issue): issue is Extract<z.core.$ZodIssue, { code: "unrecognized_keys" }> =>
+      issue.code === "unrecognized_keys" && issue.path.length === 0
+  );
   if (unrecognized) {
-    const keys = unrecognized.keys;
-    const suggestions = keys
+    const suggestions = unrecognized.keys
       .map((key) => {
         const suggestion = suggestManifestKey(key, Object.keys(schema.shape));
         return suggestion ? `did you mean "${suggestion}" instead of "${key}"?` : null;
       })
       .filter((hint): hint is string => hint !== null);
-    return suggestions.length > 0
-      ? `${unrecognized.message} — ${suggestions.join(" ")}`
-      : unrecognized.message;
+    // A key nothing resembles is not more actionable than whatever Zod
+    // reported first, so it does not get to displace it.
+    if (suggestions.length > 0) {
+      return `${unrecognized.message} — ${suggestions.join(" ")}`;
+    }
   }
 
   const first = issues[0];

@@ -14,6 +14,10 @@ import { useProjectPluginStore } from "@/store/projectPluginStore";
  *   thing in the renderer that may, and main emits it only when the folder holds
  *   a valid manifest and no decision is on record — so a project the user has
  *   already answered for never asks again, whatever its contents do afterwards.
+ *   The gate renders in the one global banner slot, which a host crash or a
+ *   safe-mode notice outranks, so it also routes the inbox row every
+ *   suppressible global owes: `priority: "low"`, superseded per project, so a
+ *   question the banner never got to ask is still answerable.
  * - `plugin:project-plugins-changed` is a full snapshot, pushed on every open,
  *   trust change and staged activation. The manager renders from it rather than
  *   refetching, which is why nothing here polls. A manifest the host refused
@@ -49,7 +53,28 @@ export function useProjectPluginBridge(): void {
 
   useEffect(() => {
     const offPrompt = window.electron.events.on("plugin:project-trust-prompt", (payload) => {
-      useProjectPluginStore.getState().openPrompt(payload);
+      const store = useProjectPluginStore.getState();
+      store.openPrompt(payload);
+      // Only when the store actually took it — a prompt for a project this view
+      // is not showing is refused there, and an inbox row for it would name a
+      // folder the user is not looking at.
+      if (useProjectPluginStore.getState().prompt !== payload) return;
+      notify({
+        type: "warning",
+        title: "This project ships plugins",
+        message:
+          "They haven't been run. Decide whether to enable this project's plugins in the plugin manager.",
+        // Inbox only: the banner is the timely surface, and this exists for the
+        // case where something outranked it. A toast as well would be the same
+        // question twice.
+        priority: "low",
+        action: {
+          label: "Open plugin manager",
+          onClick: () => usePluginManagerStore.getState().open(),
+        },
+        supersedeKey: `project-plugin-trust:${payload.projectId}`,
+        context: { projectId: payload.projectId, eventKind: "settings" },
+      });
     });
 
     const offChanged = window.electron.events.on("plugin:project-plugins-changed", (payload) => {

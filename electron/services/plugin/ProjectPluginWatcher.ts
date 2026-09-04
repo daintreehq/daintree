@@ -106,6 +106,24 @@ interface WatchState {
    * noticed instead of waiting for the next project switch.
    */
   sentinel: FSWatcher | null;
+  /**
+   * The directory {@link sentinel} is actually watching. `fs.watch` is not
+   * recursive, so a sentinel sitting on the project root cannot see
+   * `.daintree/plugins` being created two levels down — it has to migrate
+   * inward as each ancestor appears (#12212).
+   */
+  sentinelPath: string | null;
+  /**
+   * Reconcile on the next settle even when no fingerprint moved.
+   *
+   * Set when the plugins folder has just appeared. `arm()` seeds a fingerprint
+   * for everything it finds, so a folder that arrives complete — an agent
+   * writing the whole plugin, a checkout, an atomic rename — settles with
+   * nothing "changed" and would return before reaching the controller. The
+   * project would then stay silent until an unrelated write, which is the
+   * failure #12212 is about.
+   */
+  forceReconcile: boolean;
   rearmAttempts: number;
   arming: boolean;
   timer: ReturnType<typeof setTimeout> | null;
@@ -297,6 +315,8 @@ export class ProjectPluginWatcher {
       generation: 0,
       subscription: null,
       sentinel: null,
+      sentinelPath: null,
+      forceReconcile: false,
       rearmAttempts: 0,
       arming: false,
       timer: null,
@@ -475,16 +495,30 @@ export class ProjectPluginWatcher {
    * shape `TopologyWatcher` uses while `.git/worktrees/` does not exist.
    */
   private armSentinel(state: WatchState, generation: number): void {
-    if (state.sentinel) return;
     const daintreeDir = path.dirname(state.pluginsRoot);
     const parent = existsSync(daintreeDir) ? daintreeDir : state.projectRoot;
+    // Already watching the innermost directory that exists.
+    if (state.sentinel && state.sentinelPath === parent) return;
+    // Watching an outer one: `.daintree` has appeared since, and a
+    // non-recursive watch on the project root will never report
+    // `.daintree/plugins` being created inside it. Migrate inward.
+    if (state.sentinel) this.disarmSentinel(state);
     try {
       const sentinel = fsWatch(parent, { persistent: false }, () => {
         if (this.isStale(state, generation)) return;
-        if (!existsSync(state.pluginsRoot)) return;
+        if (!existsSync(state.pluginsRoot)) {
+          // Not the folder we are waiting for, but an ancestor of it may have
+          // just appeared — re-arm so the next level down is watched too.
+          this.armSentinel(state, generation);
+          return;
+        }
         this.disarmSentinel(state);
+        // The folder appeared, possibly with content already in it. `arm()`
+        // seeds a fingerprint for everything it finds, so without this the
+        // settle below would see nothing changed and stop short of the
+        // controller — no prompt, no invalid state, no log (#12212).
+        state.forceReconcile = true;
         void this.arm(state).then(() => {
-          // The folder appeared with content already in it, so reconcile once.
           if (!this.isStale(state, generation)) {
             state.reloadAll = true;
             this.schedule(state, this.timings.debounceMs);
@@ -493,6 +527,7 @@ export class ProjectPluginWatcher {
       });
       sentinel.on("error", () => this.disarmSentinel(state));
       state.sentinel = sentinel;
+      state.sentinelPath = parent;
     } catch {
       // Exotic filesystem or a watch-limit ceiling. The next project switch
       // re-arms; nothing is lost but the latency.
@@ -502,6 +537,7 @@ export class ProjectPluginWatcher {
   private disarmSentinel(state: WatchState): void {
     const sentinel = state.sentinel;
     state.sentinel = null;
+    state.sentinelPath = null;
     if (!sentinel) return;
     try {
       sentinel.close();
@@ -631,6 +667,10 @@ export class ProjectPluginWatcher {
       );
       state.reloadAll = false;
       state.changedDirs.clear();
+      // Claimed before the fingerprint compare, so a burst arriving mid-settle
+      // cannot lose the flag — and cleared here so it is spent exactly once.
+      const forced = state.forceReconcile;
+      state.forceReconcile = false;
 
       const rowByDir = new Map(scan.plugins.map((p) => [p.dirName, p] as const));
       const changed = new Set<string>();
@@ -649,7 +689,7 @@ export class ProjectPluginWatcher {
       // Nothing the host loads actually differs. The commonest cause is
       // FSEvents replaying writes that predate the subscription; a touch or a
       // branch switch back to identical content lands here too.
-      if (changed.size === 0) {
+      if (changed.size === 0 && !forced) {
         this.commitFingerprints(state, nextFingerprints);
         return;
       }

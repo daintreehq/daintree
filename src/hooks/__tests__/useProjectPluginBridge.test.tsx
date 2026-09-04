@@ -167,6 +167,33 @@ describe("useProjectPluginBridge", () => {
     expect(payload?.context?.eventKind).toBe("settings");
   });
 
+  it("routes the inbox row a suppressible global owes, so an outranked banner is recoverable", () => {
+    render(<Harness />);
+    emit("plugin:project-trust-prompt", {
+      projectId: "proj-a",
+      plugins: [{ id: "acme.dashboard", displayName: "Acme Dashboard" }],
+    });
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    const payload = notify.mock.calls[0]?.[0];
+    // Inbox only. The banner is the timely surface; this is the backstop for
+    // when a host crash or safe-mode notice wins the single global slot.
+    expect(payload?.priority).toBe("low");
+    expect(payload?.supersedeKey).toBe("project-plugin-trust:proj-a");
+    expect(payload?.action?.label).toBe("Open plugin manager");
+  });
+
+  it("routes no inbox row for a prompt the store refused", () => {
+    render(<Harness />);
+    emit("plugin:project-trust-prompt", {
+      projectId: "proj-b",
+      plugins: [{ id: "acme.dashboard", displayName: "Acme Dashboard" }],
+    });
+
+    expect(useProjectPluginStore.getState().prompt).toBeNull();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
   it("announces an unreadable manifest by folder and reason (#12212)", () => {
     render(<Harness />);
     emit("plugin:project-plugins-changed", {

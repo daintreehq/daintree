@@ -1,5 +1,6 @@
 import { ShieldAlert } from "lucide-react";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import type { ProjectPluginTrustDecision } from "@shared/types/plugin";
 
@@ -28,13 +29,34 @@ import type { ProjectPluginTrustDecision } from "@shared/types/plugin";
  */
 export function ProjectPluginTrustBanner() {
   const prompt = useProjectPluginStore((s) => s.prompt);
+
+  // The dialog this replaced was wrapped twice over — by `ModalHostLayer` and
+  // by itself. No global banner carries its own boundary, but none of the
+  // others is built from a payload that started life as JSON in a folder an
+  // agent writes to, and this one sits in the app's top chrome rather than in
+  // a modal that can be closed. A throw here would take the chrome with it.
+  return (
+    <ErrorBoundary
+      variant="component"
+      componentName="ProjectPluginTrustBanner"
+      resetKeys={[prompt?.projectId ?? "null"]}
+    >
+      <TrustBannerBody />
+    </ErrorBoundary>
+  );
+}
+
+function TrustBannerBody() {
+  const prompt = useProjectPluginStore((s) => s.prompt);
   const deciding = useProjectPluginStore((s) => s.deciding);
   const decide = useProjectPluginStore((s) => s.decide);
   const dismissPrompt = useProjectPluginStore((s) => s.dismissPrompt);
 
   if (prompt === null) return null;
 
-  const plugins = prompt.plugins;
+  // Defensive rather than trusting the payload's declared type: it crosses IPC
+  // from a `plugin.json` the host parsed but this renderer never validated.
+  const plugins = Array.isArray(prompt.plugins) ? prompt.plugins : [];
   const names = plugins.map((p) => p.displayName).join(", ");
   const answer = (decision: ProjectPluginTrustDecision) => () => {
     void decide(decision);
