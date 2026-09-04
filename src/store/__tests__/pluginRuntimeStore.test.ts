@@ -202,6 +202,22 @@ describe("usePluginRuntimeStore", () => {
     );
   });
 
+  it("treats a blank displayName as absent rather than rendering an empty name", async () => {
+    // `displayName` is `z.string().optional()` with no min length, so a blank
+    // one is a well-formed manifest that would otherwise name the plugin "".
+    listMock.mockResolvedValue([
+      makePlugin({ id: "acme.blank", displayName: "" }),
+      makePlugin({ id: "acme.spaces", displayName: "   " }),
+    ]);
+
+    usePluginRuntimeStore.getState().init();
+
+    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().pluginMetaById.size).toBe(2));
+    const state = usePluginRuntimeStore.getState();
+    expect(state.pluginMetaById.get("acme.blank")?.displayName).toBe("acme.blank");
+    expect(state.pluginMetaById.get("acme.spaces")?.displayName).toBe("acme.spaces");
+  });
+
   it("re-pulls on a provenance change and drops metadata for removed plugins", async () => {
     let fire: (() => void) | undefined;
     onProvenanceChangedMock.mockImplementation((cb) => {

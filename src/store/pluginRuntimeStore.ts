@@ -93,7 +93,10 @@ async function pullPluginRuntimeSnapshot(
         devMode: p.devMode,
         // Falls back to the manifest id, never the instance key: the key
         // carries a machine-local project id that is not a name for a person.
-        displayName: p.manifest.displayName ?? p.manifest.name,
+        // `||` rather than `??`: `displayName` is `z.string().optional()` with
+        // no min length, so a blank one is well-formed and would otherwise
+        // render as an empty label everywhere a plugin is named.
+        displayName: p.manifest.displayName?.trim() || p.manifest.name,
       });
     }
     // One commit: a consumer must never read a plugin's dev-mode flag from a

@@ -18,6 +18,7 @@ import {
   rootSeparatorCount,
   zeroCounts,
 } from "./worktreeMenuHarness";
+import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 const dispatch = vi.hoisted(() => vi.fn());
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
@@ -25,6 +26,7 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 afterEach(() => {
   cleanup();
   dispatch.mockClear();
+  _resetPluginRuntimeStoreForTest();
 });
 
 /** Every optional group present: the widest root the menu can produce. */
@@ -581,6 +583,41 @@ describe("WorktreeMenuItems — Extensions", () => {
       (el) => el.textContent
     );
     expect(labels).toEqual(["acme", "zeta"]);
+  });
+
+  it("labels a group with the plugin's display name, never its instance key", () => {
+    // A contribution's `pluginId` is the host's instance key, so a project-owned
+    // plugin's raw id carries a machine-local project id (#12211).
+    const instanceKey = "project__b6700c7a__gregpriday.video-manager";
+    usePluginRuntimeStore.setState({
+      pluginMetaById: new Map([[instanceKey, { devMode: false, displayName: "Video Manager" }]]),
+    });
+
+    const { container } = renderWorktreeMenu({
+      pluginItems: [
+        item(instanceKey, "Do the thing", "vm.go"),
+        item("zeta", "Zeta thing", "zeta.go"),
+      ],
+    });
+
+    const labels = Array.from(container.querySelectorAll("[data-menu-label]")).map(
+      (el) => el.textContent
+    );
+    expect(labels).toEqual(["Video Manager", "zeta"]);
+  });
+
+  it("labels a group with the manifest id before the runtime snapshot lands", () => {
+    const { container } = renderWorktreeMenu({
+      pluginItems: [
+        item("project__b6700c7a__gregpriday.video-manager", "Do the thing", "vm.go"),
+        item("zeta", "Zeta thing", "zeta.go"),
+      ],
+    });
+
+    const labels = Array.from(container.querySelectorAll("[data-menu-label]")).map(
+      (el) => el.textContent
+    );
+    expect(labels).toEqual(["gregpriday.video-manager", "zeta"]);
   });
 
   it("dispatches the plugin's own action id with the surface source", () => {
