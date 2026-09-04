@@ -4,7 +4,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
 import { render, screen, cleanup, fireEvent, within, waitFor } from "@testing-library/react";
 import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuItems";
-import type { InsertFileReferenceRefusalReason } from "@/hooks/useInsertFileReference";
+import type {
+  InsertFileReference,
+  InsertFileReferenceRefusalReason,
+} from "@/hooks/useInsertFileReference";
 
 // Typed rather than bare `vi.fn()`: the destructuring below reads positional
 // args off `mock.calls`, and an untyped double makes those `unknown[]` — which
@@ -54,11 +57,11 @@ vi.mock("@/hooks/useWorktreeActions", () => ({
 const { itemsRef, insertRef } = vi.hoisted(() => ({
   itemsRef: { current: [] as PluginContextMenuItemEntry[] },
   insertRef: {
-    current: { canInsert: true, refusalReason: null, insert: vi.fn(() => true) } as {
-      canInsert: boolean;
-      refusalReason: InsertFileReferenceRefusalReason | null;
-      insert: () => boolean;
-    },
+    current: {
+      canInsert: true,
+      refusalReason: null,
+      insert: vi.fn(() => true),
+    } as InsertFileReference,
   },
 }));
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({
@@ -412,15 +415,15 @@ describe("useFileRowMenuItems — Insert file reference refusal reasons", () => 
     ],
     [
       "backend-unavailable",
-      "Terminal service down",
-      "Insert file reference, the terminal service is down",
+      "No terminal service",
+      "Insert file reference, the terminal service is unavailable",
     ],
     [
       "recorded-target-unavailable",
       "Agent unavailable",
       "Insert file reference, that agent can't take input",
     ],
-    ["no-eligible-agent", "No agent in the grid", "Insert file reference, no agent is in the grid"],
+    ["no-eligible-agent", "No agent available", "Insert file reference, no agent is available"],
     [
       "multiple-eligible-agents",
       "Type to an agent",
@@ -440,16 +443,14 @@ describe("useFileRowMenuItems — Insert file reference refusal reasons", () => 
 
       expect(item.getAttribute("data-disabled")).not.toBeNull();
       expect(item.getAttribute("aria-label")).toBe(ariaLabel);
-      expect(item.textContent).toContain(meta);
+      // The element, not just the text: the reason has to be in the trailing
+      // meta slot, and it has to stay hidden from assistive tech because the
+      // accessible name above already carries it. A second announced copy is
+      // the failure `ContextMenuMeta` is `aria-hidden` to prevent.
+      const metaEl = within(item).getByText(meta);
+      expect(metaEl.getAttribute("aria-hidden")).toBe("true");
     });
   }
-
-  it("hides the reason from assistive tech, since the accessible name already carries it", async () => {
-    const item = await openDisabled("multiple-eligible-agents");
-
-    const meta = within(item).getByText("Type to an agent");
-    expect(meta.getAttribute("aria-hidden")).toBe("true");
-  });
 
   it("drops the shortcut hint while disabled — the keybinding would be a lie", async () => {
     const item = await openDisabled("no-eligible-agent");
@@ -470,16 +471,6 @@ describe("useFileRowMenuItems — Insert file reference refusal reasons", () => 
     for (const [, meta] of CASES) {
       expect(item.textContent).not.toContain(meta);
     }
-  });
-
-  it("degrades to a bare disabled row when a caller reports no reason at all", async () => {
-    insertRef.current = { canInsert: false, refusalReason: null, insert: vi.fn(() => false) };
-    const menu = await openMenu();
-    const item = within(menu).getByRole("menuitem", { name: /Insert file reference/ });
-
-    expect(item.getAttribute("data-disabled")).not.toBeNull();
-    expect(item.hasAttribute("aria-label")).toBe(false);
-    expect(item.textContent).not.toContain("⌘I");
   });
 });
 

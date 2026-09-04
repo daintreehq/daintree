@@ -50,12 +50,22 @@ const INSERT_REFUSAL_COPY = {
   "workspace-unavailable": { meta: "No workspace", detail: "no workspace" },
   "fleet-broadcast-armed": { meta: "Fleet armed", detail: "the fleet is armed" },
   "hybrid-input-disabled": { meta: "Input bar off", detail: "the hybrid input bar is off" },
-  "backend-unavailable": { meta: "Terminal service down", detail: "the terminal service is down" },
+  // One string for `disconnected` and `recovering` alike. The distinction that
+  // matters — wait, or act — is already on screen: `HostCrashBanner` renders
+  // for every non-connected status and says which, so a menu row repeating it
+  // in four words could only get it wrong.
+  "backend-unavailable": {
+    meta: "No terminal service",
+    detail: "the terminal service is unavailable",
+  },
   "recorded-target-unavailable": {
     meta: "Agent unavailable",
     detail: "that agent can't take input",
   },
-  "no-eligible-agent": { meta: "No agent in the grid", detail: "no agent is in the grid" },
+  // Deliberately not "no agent in the grid": this also fires when agents are
+  // there but none can take input — locked, restarting, mid-voice-submit — and
+  // naming the grid would then be false.
+  "no-eligible-agent": { meta: "No agent available", detail: "no agent is available" },
   "multiple-eligible-agents": { meta: "Type to an agent", detail: "type to an agent first" },
 } as const satisfies Record<InsertFileReferenceRefusalReason, { meta: string; detail: string }>;
 
@@ -232,6 +242,14 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
   const { worktreePath, worktreeId, copyTreeRunSource } = surface;
   const filePluginItems = usePluginContextMenuItems("file");
   const { canInsert, refusalReason, insert } = useInsertFileReference();
+  // Narrowed here, where the discriminated pair still correlates, and reduced
+  // to two primitives so `renderItems` keeps a stable dependency list.
+  // `undefined` rather than `null` for the absent case: that is what a DOM
+  // attribute prop takes to mean "don't render me".
+  const insertRefusalMeta = canInsert ? undefined : INSERT_REFUSAL_COPY[refusalReason].meta;
+  const insertRefusalLabel = canInsert
+    ? undefined
+    : `${INSERT_LABEL}, ${INSERT_REFUSAL_COPY[refusalReason].detail}`;
 
   // Bucketed here rather than in `renderItems`: that runs once per row, and a
   // Review Hub listing thousands of changed files would rebuild the same map
@@ -331,11 +349,6 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       // nothing here has read the file — so an unfamiliar binary still shows
       // the item and fails at the read with a reason.
       const showCopyFileContents = showOpenCurrent && isFileContentsCopyCandidate(absolutePath);
-      // Null only if a caller hands back `canInsert: false` with no reason —
-      // the hook always pairs them, and the item degrades to a bare disabled
-      // row rather than an empty slot.
-      const insertRefusal =
-        canInsert || refusalReason === null ? null : INSERT_REFUSAL_COPY[refusalReason];
 
       return (
         <>
@@ -388,16 +401,14 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
             disabled={!canInsert}
             {...(canInsert
               ? { "aria-keyshortcuts": insertAriaKeyshortcuts }
-              : insertRefusal !== null
-                ? { "aria-label": `${INSERT_LABEL}, ${insertRefusal.detail}` }
-                : {})}
+              : { "aria-label": insertRefusalLabel })}
           >
             <AtSign className={ICON_CLASS} />
             {INSERT_LABEL}
-            {insertRefusal === null ? (
-              canInsert && <ContextMenuShortcut>{insertShortcutHint}</ContextMenuShortcut>
+            {canInsert ? (
+              <ContextMenuShortcut>{insertShortcutHint}</ContextMenuShortcut>
             ) : (
-              <ContextMenuMeta>{insertRefusal.meta}</ContextMenuMeta>
+              <ContextMenuMeta>{insertRefusalMeta}</ContextMenuMeta>
             )}
           </ContextMenuItem>
           {/* Reveal and Insert render unconditionally, so the direct-action
@@ -499,7 +510,8 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       worktreeId,
       pluginGroups,
       canInsert,
-      refusalReason,
+      insertRefusalMeta,
+      insertRefusalLabel,
       insert,
       insertAriaKeyshortcuts,
       insertShortcutHint,

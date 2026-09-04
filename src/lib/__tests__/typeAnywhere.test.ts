@@ -374,6 +374,18 @@ describe("isRescueTargetRoutable", () => {
     expect(routable(agentPanel("t-1"), ["t-1"])).toBe(false);
   });
 
+  /**
+   * `isAgentFleetActionEligible` resolves a BUILT-IN runtime agent id, so a
+   * plugin- or user-contributed agent is not routable here even when it is
+   * live and in the grid. Pinned rather than left implicit: the module's own
+   * `isAgentTerminalFleetEligible` exists for the broader case (#11637), and
+   * whether routing should widen to match it is a decision about the rescue
+   * contract, not something to change by accident from the file menu.
+   */
+  it("refuses an agent with no built-in runtime id, such as a plugin agent", () => {
+    expect(routable(agentPanel("t-1", { launchAgentId: "some-plugin-agent" }))).toBe(false);
+  });
+
   it("refuses an id with no panel behind it", () => {
     expect(isRescueTargetRoutable({ panelsById: {}, voiceSubmittingIds: new Set() }, "gone")).toBe(
       false

@@ -11,34 +11,49 @@ vi.mock("@/store/viewWorkspaceId", () => ({ getViewWorkspaceId: getViewWorkspace
 
 // The real store graph pulls the whole app in; these four are all the hook
 // reads, and driving them directly is what makes the refusal matrix legible.
-const { asStore, panelState, inputState, fleetState, projectState } = vi.hoisted(() => ({
-  // Stands in for a Zustand hook: callable with a selector and carrying
-  // `getState`, which is the only shape this hook uses.
-  asStore: <S,>(state: S) => {
-    const hook = (selector: (s: S) => unknown) => selector(state);
-    hook.getState = () => state;
-    return hook;
-  },
-  panelState: {
-    panelsById: {} as Record<string, unknown>,
-    panelIds: [] as string[],
-    backendStatus: "connected" as string,
-    pingTerminal: vi.fn<(id: string) => void>(),
-  },
-  inputState: {
-    hybridInputEnabled: true,
-    voiceSubmittingPanels: new Set<string>(),
-    lastTypedAgentTarget: null as { workspaceId: string; terminalId: string } | null,
-    getDraftInput: vi.fn<(id: string, projectId?: string) => string>(() => ""),
-    setDraftInput: vi.fn<(id: string, value: string, projectId?: string) => void>(),
-    bumpExternalDraftRevision: vi.fn(),
-    recordLastTypedAgentTarget: vi.fn(),
-  },
-  fleetState: { armedIds: new Set<string>() },
-  projectState: { currentProject: { id: "proj-1" } as { id: string } | undefined },
-}));
+const { asStore, panelState, inputState, fleetState, projectState, panelSelectorRef } = vi.hoisted(
+  () => ({
+    // Stands in for a Zustand hook: callable with a selector and carrying
+    // `getState`, which is the only shape this hook uses.
+    asStore: <S,>(state: S) => {
+      const hook = (selector: (s: S) => unknown) => selector(state);
+      hook.getState = () => state;
+      return hook;
+    },
+    panelState: {
+      panelsById: {} as Record<string, unknown>,
+      panelIds: [] as string[],
+      backendStatus: "connected" as string,
+      pingTerminal: vi.fn<(id: string) => void>(),
+    },
+    inputState: {
+      hybridInputEnabled: true,
+      voiceSubmittingPanels: new Set<string>(),
+      lastTypedAgentTarget: null as { workspaceId: string; terminalId: string } | null,
+      getDraftInput: vi.fn<(id: string, projectId?: string) => string>(() => ""),
+      setDraftInput: vi.fn<(id: string, value: string, projectId?: string) => void>(),
+      bumpExternalDraftRevision: vi.fn(),
+      recordLastTypedAgentTarget: vi.fn(),
+    },
+    fleetState: { armedIds: new Set<string>() },
+    projectState: { currentProject: { id: "proj-1" } as { id: string } | undefined },
+    // Holds the hook's selector already bound to the live panel state, so a
+    // test can re-read the verdict without restating the store's shape.
+    panelSelectorRef: { current: null as (() => unknown) | null },
+  })
+);
 
-vi.mock("@/store", () => ({ usePanelStore: asStore(panelState) }));
+// Records the selector the hook hands over, which is the only handle a test has
+// on the `useShallow` wrapper the pane's re-render behaviour depends on.
+vi.mock("@/store", () => {
+  const store = asStore(panelState);
+  const usePanelStore = (selector: (s: typeof panelState) => unknown) => {
+    panelSelectorRef.current = () => selector(panelState);
+    return store(selector);
+  };
+  usePanelStore.getState = store.getState;
+  return { usePanelStore };
+});
 vi.mock("@/store/terminalInputStore", () => ({ useTerminalInputStore: asStore(inputState) }));
 vi.mock("@/store/fleetArmingStore", () => ({ useFleetArmingStore: asStore(fleetState) }));
 vi.mock("@/store/projectStore", () => ({ useProjectStore: asStore(projectState) }));
@@ -278,16 +293,66 @@ describe("useInsertFileReference — refusal reasons", () => {
     expect(result.current.refusalReason).toBe("multiple-eligible-agents");
   });
 
-  it("reports the first gate reached when several are shut at once", () => {
-    // Armed fleet, hybrid off and a dead backend together: the order is the
-    // contract, so the user is told the one nearest the front.
-    fleetState.armedIds = new Set(["t-1", "t-2"]);
-    inputState.hybridInputEnabled = false;
-    panelState.backendStatus = "disconnected";
-    seedPanels();
-
+  /**
+   * The gate ORDER is the contract, not an accident of how the branches fell
+   * out: with several shut at once the user is told about the one nearest the
+   * front. Pinned as adjacent pairs so an inversion anywhere in the chain
+   * fails a test that names both sides of it.
+   */
+  it.each([
+    [
+      "workspace over fleet",
+      () => {
+        getViewWorkspaceIdMock.mockReturnValue(null);
+        fleetState.armedIds = new Set(["t-1", "t-2"]);
+      },
+      "workspace-unavailable",
+    ],
+    [
+      "fleet over hybrid-off",
+      () => {
+        fleetState.armedIds = new Set(["t-1", "t-2"]);
+        inputState.hybridInputEnabled = false;
+      },
+      "fleet-broadcast-armed",
+    ],
+    [
+      "hybrid-off over backend",
+      () => {
+        inputState.hybridInputEnabled = false;
+        panelState.backendStatus = "disconnected";
+      },
+      "hybrid-input-disabled",
+    ],
+    [
+      "backend over an unroutable recorded target",
+      () => {
+        panelState.backendStatus = "disconnected";
+        seedPanels(agentPanel("t-1", { isInputLocked: true }));
+        inputState.lastTypedAgentTarget = { workspaceId: WORKSPACE_ID, terminalId: "t-1" };
+      },
+      "backend-unavailable",
+    ],
+    [
+      "an unroutable recorded target over the ambiguity behind it",
+      () => {
+        seedPanels(agentPanel("t-1"), agentPanel("t-2", { isRestarting: true }));
+        inputState.lastTypedAgentTarget = { workspaceId: WORKSPACE_ID, terminalId: "t-2" };
+      },
+      "recorded-target-unavailable",
+    ],
+    [
+      "fleet over the ambiguity behind it",
+      () => {
+        fleetState.armedIds = new Set(["t-1", "t-2"]);
+        seedPanels(agentPanel("t-1"), agentPanel("t-2"));
+      },
+      "fleet-broadcast-armed",
+    ],
+  ])("reports %s", (_label, seed, reason) => {
+    seed();
     const { result } = renderHook(() => useInsertFileReference());
-    expect(result.current.refusalReason).toBe("fleet-broadcast-armed");
+    expect(result.current.refusalReason).toBe(reason);
   });
 
   it.each([
@@ -307,12 +372,39 @@ describe("useInsertFileReference — refusal reasons", () => {
   });
 
   /**
-   * The pane subscribes to this verdict through `useShallow`, which only bails
-   * if both halves compare equal. A verdict that churned on unrelated panel
-   * traffic would re-render the file browser on every agent-state flip — the
-   * exact cost the single-string selector was written to avoid.
+   * The verdict reaches the pane through `useShallow`, which hands back the
+   * PREVIOUS object whenever both halves still compare equal. Identity is the
+   * whole mechanism: a fresh object on every panel-store update would re-render
+   * the file browser on every agent-state flip and status flush, which is the
+   * cost the original one-string selector was written to avoid.
+   *
+   * Asserted through the selector the hook actually registered, so removing
+   * `useShallow` from the hook fails this test — comparing two resolver results
+   * by value would not.
    */
-  it("stays shallow-equal across unrelated panel churn, so the pane does not re-render", () => {
+  it("hands the panel store a selector that keeps its verdict's identity across unrelated churn", () => {
+    seedPanels(agentPanel("t-1"), agentPanel("t-2"));
+    renderHook(() => useInsertFileReference());
+    const readVerdict = panelSelectorRef.current;
+    expect(readVerdict).not.toBeNull();
+    if (readVerdict === null) return;
+
+    const first = readVerdict();
+
+    // An agent-state flip on a panel that changes no part of the verdict.
+    seedPanels(agentPanel("t-1", { agentState: "working" }), agentPanel("t-2"));
+    expect(readVerdict()).toBe(first);
+
+    // A change that DOES move the verdict must not be memoised away.
+    seedPanels(agentPanel("t-1"));
+    expect(readVerdict()).not.toBe(first);
+  });
+
+  /**
+   * The other half of the same mechanism: `useShallow` can only bail if the
+   * resolver is itself stable under churn it does not care about.
+   */
+  it("resolves the same verdict either side of unrelated panel churn", () => {
     // Built here rather than read back off the store double: the resolver is
     // pure, and this keeps the panels the assertion talks about in one place.
     const inputs = (...panels: PtyPanelData[]) => ({

@@ -120,18 +120,21 @@ function reportRefused(): void {
   report("No agent is available for a file reference");
 }
 
-export interface InsertFileReference {
-  /** False when nothing resolves — the menu item disables and the shortcut no-ops. */
-  canInsert: boolean;
-  /**
-   * Why `canInsert` is false, for a surface that can say so; `null` while it is
-   * true. Paired with `canInsert` rather than replacing it: every consumer but
-   * the context menu only ever needed the boolean.
-   */
-  refusalReason: InsertFileReferenceRefusalReason | null;
+/**
+ * Discriminated on `canInsert` so "disabled with no reason" — the very state
+ * #12207 is about — cannot be constructed. Consumers that only ever wanted the
+ * boolean (`FileTreeView`'s Cmd+I gate) keep destructuring it and ignoring the
+ * rest.
+ */
+export type InsertFileReference = {
   /** Returns whether the reference was actually written. */
   insert: (absolutePath: string) => boolean;
-}
+} & (
+  | { canInsert: true; refusalReason: null }
+  /** Nothing resolves: the menu item disables, the shortcut no-ops, and the
+   * reason is what the row shows instead. */
+  | { canInsert: false; refusalReason: InsertFileReferenceRefusalReason }
+);
 
 /**
  * Send an `@file` reference to the agent the user was last talking to (#11577).
@@ -224,5 +227,10 @@ export function useInsertFileReference(): InsertFileReference {
     return true;
   }, []);
 
-  return { canInsert: resolution.targetId !== null, refusalReason: resolution.reason, insert };
+  // Rebuilt as the discriminated pair rather than spread: `targetId !== null`
+  // and `reason === null` are the same fact, and TypeScript will not infer that
+  // from the resolution object alone.
+  return resolution.reason === null
+    ? { canInsert: true, refusalReason: null, insert }
+    : { canInsert: false, refusalReason: resolution.reason, insert };
 }
