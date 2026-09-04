@@ -444,7 +444,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.moveToGrid` | Move to Grid | safe | `terminalId?` |
 | `terminal.moveToNewWorktree` | Move to New Worktree… | safe | `terminalId?` |
 | `terminal.moveToWorktree` | Move to Worktree | safe | `worktreeId`, `terminalId?` |
-| `terminal.new` | New Terminal | safe | `focusPolicy?`, `spawnedBy?` |
+| `terminal.new` | New Terminal | safe | `command?`, `cwd?`, `focusPolicy?`, `spawnedBy?` |
 | `terminal.openWorktreeEditor` | Open Focused Terminal's Worktree Folder | safe | — |
 | `terminal.openWorktreeIssue` | Open Focused Terminal's Worktree Issue | safe | — |
 | `terminal.openWorktreePR` | Open Focused Terminal's Worktree Pull Request | safe | — |
