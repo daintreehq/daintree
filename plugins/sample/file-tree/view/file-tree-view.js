@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { jsx, jsxs } from "react/jsx-runtime";
-//#region packages/plugin-sdk/dist/react.js
+//#region ../../daintree/packages/plugin-sdk/dist/react.js
 function getPluginHostBridge() {
 	const bridge = globalThis.electron?.plugin;
 	if (!bridge) throw new Error("@daintreehq/plugin-sdk/react: window.electron.plugin is unavailable — these hooks run only inside a Daintree plugin renderer view.");
@@ -36,7 +36,7 @@ function useHostChannel(pluginId, channel) {
 	};
 }
 //#endregion
-//#region packages/plugin-sdk/dist/files.js
+//#region ../../daintree/packages/plugin-sdk/dist/files.js
 var DEFAULT_FILE_SORT = {
 	key: "name",
 	direction: "asc"
