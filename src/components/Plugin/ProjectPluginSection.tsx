@@ -187,8 +187,9 @@ export function ProjectPluginDetailPane({ plugin }: { plugin: ProjectPluginInfo 
   const enabled = trust?.enabled === true;
   // The audience this pane serves is the one writing the plugin, so the log
   // buffer belongs here as much as on the installed-plugin pane (#12214). Keyed
-  // by manifest id; the hook resolves the instance key the plugin runs under.
-  const logs = usePluginLogs(plugin.id);
+  // by manifest id *and* owning project: the hook resolves the instance key the
+  // plugin runs under, and another open project can ship the same manifest id.
+  const logs = usePluginLogs(plugin.id, plugin.projectId);
 
   return (
     <div className="space-y-6">

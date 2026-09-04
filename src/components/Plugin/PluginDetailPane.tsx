@@ -268,6 +268,8 @@ export function PluginDetailPane({
   // Read here rather than inside the tab body: the Logs tab is earned by
   // content like every other tab past Overview (#11302), and the pane cannot
   // decide whether to offer it without already knowing the buffer is non-empty.
+  // No owning project to pass: `LoadedPluginInfo` carries only the manifest id.
+  // The project-owned pane is `ProjectPluginDetailPane`, and it does scope.
   const logs = usePluginLogs(plugin.manifest.name);
 
   // URL-installed plugins have an upstream to re-fetch and compare against;

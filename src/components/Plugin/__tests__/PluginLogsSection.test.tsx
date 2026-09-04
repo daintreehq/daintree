@@ -44,10 +44,51 @@ describe("usePluginLogs", () => {
       ],
     });
     const { usePluginLogs } = await load();
-    const { result } = renderHook(() => usePluginLogs("acme.demo"));
+    const { result } = renderHook(() => usePluginLogs("acme.demo", "project-1"));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.lines).toEqual([{ ts: 3, level: "info", message: "project line" }]);
+  });
+
+  it("never reads another open project's copy of the same manifest id", async () => {
+    getDiagnosticsSnapshot.mockResolvedValue({
+      plugins: [
+        // Deliberately first: a tail match on the instance key would take this
+        // one, which is the leak.
+        entry("project__project-2__acme.demo", [{ ts: 4, level: "info", message: "theirs" }]),
+        entry("project__project-1__acme.demo", [{ ts: 5, level: "info", message: "mine" }]),
+      ],
+    });
+    const { usePluginLogs } = await load();
+    const { result } = renderHook(() => usePluginLogs("acme.demo", "project-1"));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.lines).toEqual([{ ts: 5, level: "info", message: "mine" }]);
+  });
+
+  it("reports nothing when only another project runs that manifest id", async () => {
+    getDiagnosticsSnapshot.mockResolvedValue({
+      plugins: [entry("project__project-2__acme.demo", [{ ts: 6, level: "info", message: "x" }])],
+    });
+    const { usePluginLogs } = await load();
+    const { result } = renderHook(() => usePluginLogs("acme.demo", "project-1"));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.lines).toBeNull();
+  });
+
+  it("prefers an exact id match over an instance key earlier in the snapshot", async () => {
+    getDiagnosticsSnapshot.mockResolvedValue({
+      plugins: [
+        entry("project__project-2__acme.demo", [{ ts: 7, level: "info", message: "theirs" }]),
+        entry("acme.demo", [{ ts: 8, level: "info", message: "installed" }]),
+      ],
+    });
+    const { usePluginLogs } = await load();
+    const { result } = renderHook(() => usePluginLogs("acme.demo"));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.lines).toEqual([{ ts: 8, level: "info", message: "installed" }]);
   });
 
   it("distinguishes a plugin that is not running from one that logged nothing", async () => {

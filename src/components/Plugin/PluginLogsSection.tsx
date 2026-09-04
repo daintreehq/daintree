@@ -37,8 +37,12 @@ export interface PluginLogsState {
  * tab body because the tab has to be *earned by content* (#11302) — the pane
  * cannot decide whether to offer a Logs tab without already knowing whether
  * there is anything in it.
+ *
+ * `projectId` names the owning project of a project-owned plugin, and is what
+ * keeps two projects shipping the same manifest id apart. Omit it for an
+ * installed or builtin plugin, which is its own instance key.
  */
-export function usePluginLogs(pluginId: string): PluginLogsState {
+export function usePluginLogs(pluginId: string, projectId?: string): PluginLogsState {
   const [lines, setLines] = useState<PluginDiagnosticsLogLine[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -55,15 +59,24 @@ export function usePluginLogs(pluginId: string): PluginLogsState {
     try {
       const snapshot = await pluginClient.getDiagnosticsSnapshot();
       if (!mountedRef.current || request !== requestRef.current) return;
-      // A project plugin runs under an instance key rather than its manifest
-      // id, and the pane knows it only by the manifest name. Parse the key
-      // rather than matching its tail, so the same id in another open project
-      // cannot answer for this one.
-      const entry = snapshot.plugins.find(
-        (plugin) =>
-          plugin.pluginId === pluginId ||
-          parseProjectPluginInstanceKey(plugin.pluginId)?.manifestId === pluginId
-      );
+      // A project plugin appears in the app-global snapshot under its instance
+      // key (`project__{projectId}__{publisher.name}`), never its bare manifest
+      // id — and the pane knows it only by the manifest name. Two rules keep
+      // that resolution from answering with the wrong plugin's lines:
+      //
+      // 1. The exact id wins outright, so a scan is never decided by where a
+      //    project instance happens to sit in the app-global array.
+      // 2. A caller that names an owning project accepts only that project's
+      //    instance. Matching the key's tail alone also matches the SAME id in
+      //    another open project, which is the leak the action side already
+      //    guards against (see `plugin.diagnostics` in pluginActions).
+      const entry =
+        snapshot.plugins.find((plugin) => plugin.pluginId === pluginId) ??
+        snapshot.plugins.find((plugin) => {
+          const parsed = parseProjectPluginInstanceKey(plugin.pluginId);
+          if (!parsed || parsed.manifestId !== pluginId) return false;
+          return projectId === undefined || parsed.projectId === projectId;
+        });
       // `null` (not running, so no buffer) and `[]` (ran, logged nothing) are
       // different answers to an author's question, and the caller renders them
       // differently.
@@ -75,7 +88,7 @@ export function usePluginLogs(pluginId: string): PluginLogsState {
     } finally {
       if (mountedRef.current && request === requestRef.current) setLoading(false);
     }
-  }, [pluginId]);
+  }, [pluginId, projectId]);
 
   useEffect(() => {
     mountedRef.current = true;
