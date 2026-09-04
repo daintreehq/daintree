@@ -6,7 +6,11 @@ import type {
   DiscoveredProjectPlugin,
   ProjectPluginDiscoveryResult,
 } from "../projectPluginDiscovery.js";
-import type { PluginManifest, ProjectPluginTrustRecord } from "../../../../shared/types/plugin.js";
+import type {
+  PluginLoadError,
+  PluginManifest,
+  ProjectPluginTrustRecord,
+} from "../../../../shared/types/plugin.js";
 import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js";
 
 const PROJECT_A = "a".repeat(64);
@@ -50,6 +54,7 @@ interface Harness {
   controller: ProjectPluginController;
   deps: { [K in keyof ProjectPluginControllerDeps]: ReturnType<typeof vi.fn> };
   trust: Map<string, ProjectPluginTrustRecord>;
+  loadErrors: Map<string, PluginLoadError>;
   setDiscovery: (projectRoot: string, plugins: DiscoveredProjectPlugin[]) => void;
   events: Array<{ projectId: string; name: string; payload: unknown }>;
 }
@@ -57,6 +62,7 @@ interface Harness {
 function makeHarness(): Harness {
   const trust = new Map<string, ProjectPluginTrustRecord>();
   const byRoot = new Map<string, DiscoveredProjectPlugin[]>();
+  const loadErrors = new Map<string, PluginLoadError>();
   const events: Harness["events"] = [];
 
   const deps = {
@@ -68,6 +74,7 @@ function makeHarness(): Harness {
     unloadProjectPlugin: vi.fn(),
     purgeConsentForInstance: vi.fn(),
     listGlobalPluginIds: vi.fn(() => new Set<string>(["daintree.github"])),
+    getPluginLoadError: vi.fn((_instanceKey: string) => loadErrors.get(_instanceKey)),
     readTrust: vi.fn((projectId: string) => trust.get(projectId)),
     writeTrust: vi.fn((projectId: string, record?: ProjectPluginTrustRecord) => {
       if (record === undefined) trust.delete(projectId);
@@ -84,6 +91,7 @@ function makeHarness(): Harness {
     controller: new ProjectPluginController(deps as unknown as ProjectPluginControllerDeps),
     deps: deps as unknown as Harness["deps"],
     trust,
+    loadErrors,
     setDiscovery: (projectRoot, plugins) => byRoot.set(projectRoot, plugins),
     events,
   };
@@ -472,6 +480,86 @@ describe("listProjectPlugins", () => {
     const rows = h.controller.listProjectPlugins(PROJECT_A);
     expect(rows[0]).toMatchObject({ state: "invalid", error: "bad JSON", id: "broken" });
     expect(rows[0]!.instanceId).toBeUndefined();
+  });
+
+  it("keeps a loaded plugin active while attaching its load error", async () => {
+    const key = makeProjectPluginInstanceKey(PROJECT_A, "acme.dashboard");
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "enabled");
+    h.loadErrors.set(key, { message: "activate() threw", at: 1 });
+
+    const rows = h.controller.listProjectPlugins(PROJECT_A);
+    // The plugin loaded and holds its contributions — the failure is a fact
+    // about the last run, not a different kind of row.
+    expect(rows[0]!.state).toBe("active");
+    expect(rows[0]!.loadError).toEqual({ message: "activate() threw", at: 1 });
+  });
+
+  it("leaves loadError off a row with no error and off one that never loaded", async () => {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    expect(h.controller.listProjectPlugins(PROJECT_A)[0]!.loadError).toBeUndefined();
+    // A blocked row has no instance loaded, so its key is never even asked for.
+    expect(h.deps.getPluginLoadError).not.toHaveBeenCalled();
+
+    await h.controller.setTrust(PROJECT_A, "enabled");
+    expect(h.controller.listProjectPlugins(PROJECT_A)[0]!.loadError).toBeUndefined();
+  });
+});
+
+describe("notifyLoadErrorChanged", () => {
+  const key = makeProjectPluginInstanceKey(PROJECT_A, "acme.dashboard");
+
+  async function loadOne(): Promise<void> {
+    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
+    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
+    await h.controller.setTrust(PROJECT_A, "enabled");
+  }
+
+  it("pushes a fresh snapshot carrying the error for the loaded instance", async () => {
+    await loadOne();
+    h.loadErrors.set(key, { message: "boom", at: 2 });
+    h.events.length = 0;
+
+    h.controller.notifyLoadErrorChanged(key);
+
+    const changed = h.events.filter((e) => e.name === "plugin:project-plugins-changed");
+    expect(changed).toHaveLength(1);
+    const payload = changed[0]!.payload as { plugins: Array<{ loadError?: PluginLoadError }> };
+    expect(payload.plugins[0]!.loadError).toEqual({ message: "boom", at: 2 });
+  });
+
+  it("ignores a key for an instance this project no longer runs", async () => {
+    await loadOne();
+    await h.controller.setTrust(PROJECT_A, "disabled");
+    h.events.length = 0;
+
+    // The generation that produced this error has already been unloaded, so it
+    // describes nothing the rows still show.
+    h.controller.notifyLoadErrorChanged(key);
+
+    expect(h.events.filter((e) => e.name === "plugin:project-plugins-changed")).toHaveLength(0);
+  });
+
+  it("ignores a malformed key and an unknown project", async () => {
+    await loadOne();
+    h.events.length = 0;
+
+    h.controller.notifyLoadErrorChanged("acme.dashboard");
+    h.controller.notifyLoadErrorChanged(makeProjectPluginInstanceKey(PROJECT_B, "acme.dashboard"));
+
+    expect(h.events.filter((e) => e.name === "plugin:project-plugins-changed")).toHaveLength(0);
+  });
+
+  it("stays silent after dispose", async () => {
+    await loadOne();
+    h.controller.dispose();
+    h.events.length = 0;
+
+    h.controller.notifyLoadErrorChanged(key);
+
+    expect(h.events.filter((e) => e.name === "plugin:project-plugins-changed")).toHaveLength(0);
   });
 });
 

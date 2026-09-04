@@ -32,6 +32,7 @@ const windowRefMock = vi.hoisted(() => ({
   getProjectViewManager: vi.fn(() => null),
 }));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+const broadcastToProjectRenderersMock = vi.hoisted(() => vi.fn());
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProject: vi.fn((): { path: string } | null => null),
   getProjectById: vi.fn((_id: string): { path: string } | null => null),
@@ -59,6 +60,7 @@ vi.mock("../../window/windowRef.js", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
+  broadcastToProjectRenderers: broadcastToProjectRenderersMock,
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
@@ -66,13 +68,22 @@ vi.mock("../../store.js", () => ({
 vi.mock("../ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
-vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
-  registerPanelKind: vi.fn(),
-  unregisterPluginPanelKinds: vi.fn(),
-  onPanelKindRegistered: vi.fn(() => () => {}),
-  onPanelKindUnregistered: vi.fn(() => () => {}),
-  getPluginPanelKinds: vi.fn(() => []),
-}));
+vi.mock("../../../shared/config/panelKindRegistry.js", async () => {
+  // `toRuntimePanelKindId` is a pure id builder, and a project plugin's panels
+  // are registered under the id it returns — stubbing it to undefined would
+  // break the load before any of these assertions could run.
+  const actual = await vi.importActual<
+    typeof import("../../../shared/config/panelKindRegistry.js")
+  >("../../../shared/config/panelKindRegistry.js");
+  return {
+    registerPanelKind: vi.fn(),
+    unregisterPluginPanelKinds: vi.fn(),
+    onPanelKindRegistered: vi.fn(() => () => {}),
+    onPanelKindUnregistered: vi.fn(() => () => {}),
+    getPluginPanelKinds: vi.fn(() => []),
+    toRuntimePanelKindId: actual.toRuntimePanelKindId,
+  };
+});
 vi.mock("../../../shared/config/toolbarButtonRegistry.js", () => ({
   registerToolbarButton: vi.fn(),
   unregisterPluginToolbarButtons: vi.fn(),
@@ -182,11 +193,18 @@ const devWorkerMock = vi.hoisted(() => {
       } catch (err) {
         // Mirror the worker entry's failure shaping (formatErrorMessage + raw
         // Error stack) so provenance records match the real path.
+        const error = formatErrorMessage(err, "activate() threw");
         onResult?.({
           ok: false,
-          error: formatErrorMessage(err, "activate() threw"),
+          error,
           stack: err instanceof Error ? err.stack : undefined,
         });
+        // …and then reject, exactly as the real bridge does: `onActivationResult`
+        // carries the worker's error and stack, and `waitForActivation()`
+        // separately rejects with a freshly-built main-process Error whose stack
+        // points at the host. Resolving here would hide which of the two the
+        // owner ends up recording.
+        throw new Error(error, { cause: err });
       }
     });
     dispose = vi.fn(() => {
@@ -214,7 +232,11 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 
 import { PluginService } from "../PluginService.js";
 import { getPluginManifestSchema } from "../../schemas/plugin.js";
-import { type PluginIpcContext } from "../../../shared/types/plugin.js";
+import {
+  makeProjectPluginInstanceKey,
+  type PluginIpcContext,
+} from "../../../shared/types/plugin.js";
+import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
 import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
 import { stripPluginViewGeneration } from "../../../shared/utils/pluginViewUrl.js";
 
@@ -229,6 +251,10 @@ function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): P
 }
 
 let tmpDir: string;
+/** Temp roots created outside `tmpDir` (project roots), removed in `afterEach`. */
+const extraTempRoots: string[] = [];
+/** Services whose teardown the suite owns, so a native watcher can't outlive a test. */
+const openedServices: PluginService[] = [];
 
 function writePlugin(name: string, manifest: Record<string, unknown>): Promise<void> {
   const dir = path.join(tmpDir, name);
@@ -244,7 +270,17 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  for (const service of openedServices.splice(0)) {
+    try {
+      service.dispose();
+    } catch {
+      // A test may already have disposed it; teardown is best-effort.
+    }
+  }
   await fs.rm(tmpDir, { recursive: true, force: true });
+  for (const root of extraTempRoots.splice(0)) {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 describe("Plugin provenance persistence", () => {
@@ -1184,5 +1220,257 @@ describe("Deferred activation — activatePlugin", () => {
       []
     );
     expect(result).toBe("pong");
+  });
+});
+
+/**
+ * A project plugin loads under an instance key the installed-record store
+ * deliberately refuses to persist, so every `loadError` it wrote went nowhere
+ * and the host reported a clean load however activation had gone (#12232).
+ */
+describe("project plugin load errors", () => {
+  const PROJECT_ID = "a".repeat(64);
+  const PLUGIN_ID = "acme.project-boom";
+  const INSTANCE_KEY = makeProjectPluginInstanceKey(PROJECT_ID, PLUGIN_ID);
+  const PANEL_KIND_ID = ((): string => {
+    const id = toRuntimePanelKindId(
+      { origin: "project", pluginId: PLUGIN_ID, kindId: "main" },
+      PROJECT_ID
+    );
+    // Never coerce a null away here: `activatePluginForView` resolves an
+    // unknown kind id to `{ ok: true }`, so a bad id would make every
+    // assertion below pass without exercising anything.
+    if (id === null) throw new Error("could not build the project panel kind id");
+    return id;
+  })();
+
+  /**
+   * A project root holding one lazily-activated plugin — no `activationEvents`,
+   * so nothing runs until a view asks for it, which is exactly the path the
+   * issue reports.
+   */
+  async function writeProjectPlugin(body: string): Promise<string> {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-project-"));
+    extraTempRoots.push(projectRoot);
+    const dir = path.join(projectRoot, ".daintree", "plugins", PLUGIN_ID);
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "plugin.json"),
+      JSON.stringify({
+        name: PLUGIN_ID,
+        version: "1.0.0",
+        scope: "project",
+        main: "dist/index.js",
+        contributes: {
+          panels: [
+            { id: "main", name: "Boom", iconId: "puzzle", color: "var(--theme-category-orange)" },
+          ],
+          views: [{ id: "main", componentPath: "dist/panel.js", location: "panel" }],
+        },
+      })
+    );
+    await fs.writeFile(path.join(dir, "dist", "index.js"), body);
+    await fs.writeFile(path.join(dir, "dist", "panel.js"), "export default function Panel() {}");
+    // Trust is already granted and the id already known, so the reconcile loads
+    // the plugin rather than staging it behind a prompt.
+    storeMock._state.set("projectPluginTrust", {
+      [PROJECT_ID]: {
+        decision: "enabled",
+        decidedAt: 1,
+        knownPluginIds: [PLUGIN_ID],
+        stagedPluginIds: [],
+      },
+    });
+    return projectRoot;
+  }
+
+  async function openWithPlugin(body: string): Promise<PluginService> {
+    const projectRoot = await writeProjectPlugin(body);
+    const service = new PluginService(tmpDir);
+    // Registered before the awaits below: a throw in `initialize` or
+    // `onProjectOpened` would otherwise strand a service — and its native
+    // project-plugin watcher — with no caller left to dispose it.
+    openedServices.push(service);
+    await service.initialize();
+    await service.onProjectOpened(PROJECT_ID, projectRoot);
+    return service;
+  }
+
+  /** Rows from the most recent `plugin:project-plugins-changed` push. */
+  function lastPushedRows(): Array<{ loadError?: { message: string } }> | undefined {
+    const pushed = broadcastToProjectRenderersMock.mock.calls.filter(
+      (call) =>
+        (call[2] as { name?: string } | undefined)?.name === "plugin:project-plugins-changed"
+    );
+    return (
+      pushed.at(-1)?.[2] as
+        { payload: { plugins: Array<{ loadError?: { message: string } }> } } | undefined
+    )?.payload.plugins;
+  }
+
+  /** The bridge for the most recent activation, for driving stale callbacks. */
+  function latestBridge(): { deps: { onActivationResult?: (r: unknown) => void } } {
+    const bridge = devWorkerMock.bridges.at(-1);
+    if (!bridge) throw new Error("no worker bridge was created");
+    return bridge as unknown as { deps: { onActivationResult?: (r: unknown) => void } };
+  }
+
+  it("returns the real cause from activatePluginForView instead of a clean result", async () => {
+    const service = await openWithPlugin(
+      "export function activate() { throw new Error('project-boom'); }"
+    );
+    // The row is loaded but nothing has run it yet.
+    expect(service.getPluginLoadError(INSTANCE_KEY)).toBeUndefined();
+
+    const result = await service.activatePluginForView(PANEL_KIND_ID);
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toContain("project-boom");
+    const recorded = service.getPluginLoadError(INSTANCE_KEY);
+    expect(recorded?.message).toContain("project-boom");
+    // The plugin's own stack, not the host's: the activation rejection that
+    // follows `onActivationResult` carries a main-process Error built here, and
+    // letting it overwrite would throw away the only frame that says where in
+    // the plugin the failure was.
+    expect(recorded?.stack).toContain("index.js");
+
+    // A lazy failure has no controller mutation behind it, so without its own
+    // push the manager would keep describing this plugin as clean.
+    expect(lastPushedRows()?.[0]?.loadError?.message).toContain("project-boom");
+  });
+
+  it("keeps the instance key out of the persisted provenance record", async () => {
+    const service = await openWithPlugin(
+      "export function activate() { throw new Error('project-boom'); }"
+    );
+    await service.activatePluginForView(PANEL_KIND_ID);
+
+    // The whole reason the error lives in memory: the key names one machine's
+    // project id and must never reach `plugins.installed`.
+    const plugins = storeMock._state.get("plugins") as
+      { installed?: Record<string, unknown> } | undefined;
+    expect(Object.keys(plugins?.installed ?? {})).not.toContain(INSTANCE_KEY);
+    expect(Object.keys(plugins?.installed ?? {})).toHaveLength(0);
+  });
+
+  it("marks the row active and attaches the error, and drops both on unload", async () => {
+    const service = await openWithPlugin(
+      "export function activate() { throw new Error('project-boom'); }"
+    );
+    await service.activatePluginForView(PANEL_KIND_ID);
+
+    const [row] = service.listProjectPlugins(PROJECT_ID);
+    // It loaded and holds its contributions — the failure is about the last
+    // run, not a different kind of row.
+    expect(row?.state).toBe("active");
+    expect(row?.loadError?.message).toContain("project-boom");
+
+    // The unload cascade owns the error's lifetime: nothing outlives the load.
+    await service.setProjectPluginTrust(PROJECT_ID, "disabled");
+    expect(service.getPluginLoadError(INSTANCE_KEY)).toBeUndefined();
+  });
+
+  it("carries the failure into listPlugins, which the manager and bug reports read", async () => {
+    // The half of the gap `listProjectPlugins` does not cover. This row was
+    // built from the installed provenance record, which a project instance key
+    // is never written to — so PluginManagerView, PluginDetailPane and
+    // `getDiagnosticsSnapshot` (#12222) all described a plugin that had just
+    // thrown as a clean one.
+    const service = await openWithPlugin(
+      "export function activate() { throw new Error('project-boom'); }"
+    );
+    await service.activatePluginForView(PANEL_KIND_ID);
+
+    const row = service.listPlugins().find((p) => p.instanceId === INSTANCE_KEY);
+    expect(row?.origin).toBe("project");
+    expect(row?.loadError?.message).toContain("project-boom");
+
+    // Same field, read straight off that row — and the only thing a bug report
+    // filed against this plugin would have to go on.
+    const diagnostic = service
+      .getDiagnosticsSnapshot()
+      .plugins.find((p) => p.pluginId === INSTANCE_KEY);
+    expect(diagnostic?.loadError?.message).toContain("project-boom");
+  });
+
+  it("reports a clean listPlugins row for a project plugin that ran", async () => {
+    const service = await openWithPlugin("export function activate() { return () => {}; }");
+    await service.activatePluginForView(PANEL_KIND_ID);
+
+    const row = service.listPlugins().find((p) => p.instanceId === INSTANCE_KEY);
+    expect(row?.origin).toBe("project");
+    expect(row?.loadError).toBeNull();
+  });
+
+  it("reports a clean load for a project plugin whose activate() succeeds", async () => {
+    const service = await openWithPlugin("export function activate() { return () => {}; }");
+
+    const result = await service.activatePluginForView(PANEL_KIND_ID);
+
+    expect(result.ok).toBe(true);
+    expect(service.getPluginLoadError(INSTANCE_KEY)).toBeUndefined();
+    expect(service.listProjectPlugins(PROJECT_ID)[0]?.loadError).toBeUndefined();
+  });
+
+  it("clears the error when the same instance later activates cleanly", async () => {
+    const service = await openWithPlugin(
+      "export function activate() { throw new Error('project-boom'); }"
+    );
+    await service.activatePluginForView(PANEL_KIND_ID);
+    expect(service.getPluginLoadError(INSTANCE_KEY)?.message).toContain("project-boom");
+
+    // What a dev-mode reload does after the author fixes the bug: the same live
+    // bridge reports a fresh, successful outcome. Without the clear the plugin
+    // would read as broken for the rest of the session.
+    latestBridge().deps.onActivationResult?.({ ok: true });
+
+    expect(service.getPluginLoadError(INSTANCE_KEY)).toBeUndefined();
+    expect(service.listProjectPlugins(PROJECT_ID)[0]?.loadError).toBeUndefined();
+    expect(lastPushedRows()?.[0]?.loadError).toBeUndefined();
+  });
+
+  describe("a stale generation under the same instance key", () => {
+    /**
+     * A project plugin unloads and reloads under an identical key on every
+     * disable/enable, dev reload and project reopen, so the two generations are
+     * indistinguishable by id — only by object identity. These drive the first
+     * generation's callback after the second has replaced it.
+     */
+    async function reloadUnderSameKey(service: PluginService): Promise<void> {
+      await service.setProjectPluginTrust(PROJECT_ID, "disabled");
+      await service.setProjectPluginTrust(PROJECT_ID, "enabled");
+      expect(service.listProjectPlugins(PROJECT_ID)[0]?.state).toBe("active");
+    }
+
+    it("cannot pin its failure on the healthy instance that replaced it", async () => {
+      const service = await openWithPlugin("export function activate() { return () => {}; }");
+      await service.activatePluginForView(PANEL_KIND_ID);
+      const stale = latestBridge();
+
+      await reloadUnderSameKey(service);
+
+      stale.deps.onActivationResult?.({ ok: false, error: "stale-boom", stack: "stale" });
+
+      expect(service.getPluginLoadError(INSTANCE_KEY)).toBeUndefined();
+      expect(service.listProjectPlugins(PROJECT_ID)[0]?.loadError).toBeUndefined();
+    });
+
+    it("cannot clear the real error of the instance that replaced it", async () => {
+      const service = await openWithPlugin(
+        "export function activate() { throw new Error('project-boom'); }"
+      );
+      await service.activatePluginForView(PANEL_KIND_ID);
+      const stale = latestBridge();
+
+      await reloadUnderSameKey(service);
+      // The replacement re-runs the same throwing bundle, so it has its own
+      // real error — one the previous generation's late success must not wipe.
+      await service.activatePluginForView(PANEL_KIND_ID);
+      expect(service.getPluginLoadError(INSTANCE_KEY)?.message).toContain("project-boom");
+
+      stale.deps.onActivationResult?.({ ok: true });
+
+      expect(service.getPluginLoadError(INSTANCE_KEY)?.message).toContain("project-boom");
+    });
   });
 });

@@ -49,6 +49,71 @@ afterEach(() => {
   __resetProjectPluginStoreForTesting();
 });
 
+describe("ProjectPluginSection load errors", () => {
+  const failed = plugin({
+    state: "active",
+    loadError: { message: "activate() threw: no such module", at: 1 },
+  });
+
+  it("marks an active row Error when its last run threw", () => {
+    render(<ProjectPluginSection plugins={[failed]} selectedId={null} onSelect={() => {}} />);
+
+    // Loaded and failed at once: the row keeps its active styling and gains the
+    // failure signal rather than swapping to a fourth state badge.
+    const row = screen.getAllByRole("option")[1]!;
+    expect(row.textContent).toContain("Error");
+    expect(row.textContent).not.toContain("Off");
+    expect(row.textContent).not.toContain("Staged");
+  });
+
+  it("leaves a healthy active row unmarked", () => {
+    render(
+      <ProjectPluginSection
+        plugins={[plugin({ state: "active" })]}
+        selectedId={null}
+        onSelect={() => {}}
+      />
+    );
+
+    expect(screen.getAllByRole("option")[1]!.textContent).not.toContain("Error");
+  });
+
+  it("renders the real cause in the detail pane", () => {
+    render(<ProjectPluginDetailPane plugin={failed} />);
+
+    expect(screen.getByText(/activate\(\) threw: no such module/)).toBeTruthy();
+    expect(document.body.textContent).toContain("Error");
+  });
+
+  it("shows both signals when a failed plugin also clashes on id", () => {
+    render(
+      <ProjectPluginDetailPane
+        plugin={plugin({
+          state: "active",
+          collidesWithGlobal: true,
+          loadError: { message: "activate() threw", at: 1 },
+        })}
+      />
+    );
+
+    // Two separate semantic statuses, not two competing emphases — a clash and
+    // a broken run are different facts and the user needs both.
+    expect(document.body.textContent).toContain("activate() threw");
+    expect(document.body.textContent).toContain("An installed plugin already uses this id");
+  });
+
+  it("keeps the unreadable-manifest message distinct from a run failure", () => {
+    render(
+      <ProjectPluginDetailPane
+        plugin={plugin({ state: "invalid", error: "bad JSON", id: "broken" })}
+      />
+    );
+
+    expect(document.body.textContent).toContain("bad JSON");
+    expect(document.body.textContent).not.toContain("Error");
+  });
+});
+
 describe("ProjectPluginSection", () => {
   it("renders nothing when the project ships no plugins", () => {
     const { container } = render(
