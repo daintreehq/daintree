@@ -182,6 +182,24 @@ describe("pluginStyleRuntime — lifecycle", () => {
     expect(installedCss()).toContain("uppercase");
   });
 
+  it("styles a container marked after its content is already in place", async () => {
+    // A hand-written view can append a portal container and mark it afterwards.
+    // The content's own records were emitted while it was still outside every
+    // plugin root, so becoming a root is the only signal left to act on.
+    runtime.registerRoot(mountRoot());
+
+    const portal = document.createElement("div");
+    portal.innerHTML = `<span class="tracking-tighter"></span>`;
+    document.body.appendChild(portal);
+    await afterObserver();
+    expect(installedCss()).not.toContain("tracking-tighter");
+
+    portal.setAttribute(PLUGIN_STYLE_ROOT_ATTRIBUTE, "");
+    await afterObserver();
+
+    expect(installedCss()).toContain("tracking-tighter");
+  });
+
   it("styles a marked portal container rendered outside the view wrapper", async () => {
     // `createPortal` escapes the wrapper the host registered, which is why
     // `PanelViewProps.styleRootAttributes` exists. The generated CSS is scoped to

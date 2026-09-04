@@ -195,7 +195,15 @@ export async function createPluginStyleRuntime(
     for (const record of records) {
       if (record.type === "attributes") {
         const target = record.target;
-        if (target instanceof Element && target.closest(STYLE_ROOT_SELECTOR)) {
+        if (!(target instanceof Element)) continue;
+        if (record.attributeName === PLUGIN_STYLE_ROOT_ATTRIBUTE) {
+          // An element just BECAME a style root. Its subtree may already be
+          // populated — a portal container marked after it was appended — and
+          // that content produced no record of its own, so harvest it whole.
+          if (target.hasAttribute(PLUGIN_STYLE_ROOT_ATTRIBUTE)) harvestClasses(target, pending);
+          continue;
+        }
+        if (target.closest(STYLE_ROOT_SELECTOR)) {
           for (const token of target.classList) pending.add(token);
         }
         continue;
@@ -226,7 +234,10 @@ export async function createPluginStyleRuntime(
     attributes: true,
     // `attributeOldValue` is deliberately off: the runtime only ever adds
     // candidates, so the previous value of a `class` attribute tells it nothing.
-    attributeFilter: ["class"],
+    // The marker is watched alongside `class` because an element can become a
+    // style root after its content is already in place, and that content
+    // generated its records while it was still outside every plugin root.
+    attributeFilter: ["class", PLUGIN_STYLE_ROOT_ATTRIBUTE],
   });
 
   /**
