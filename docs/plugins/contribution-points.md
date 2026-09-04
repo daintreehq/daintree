@@ -166,7 +166,7 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 | `id` | yes | Namespaced at runtime as `{pluginId}.{id}`. |
 | `name` | yes | Display label in the panel header and palette. |
 | `iconId` | yes | One of the shared plugin icon IDs listed in `shared/config/pluginIconIds.ts`. An unrecognized ID falls back to the generic terminal glyph on panel surfaces; `daintree-plugin validate` warns about it. |
-| `color` | yes | Any CSS colour, used for the panel tab accent. The convention for plugin panels is a theme category token, `var(--theme-category-orange)`, so the accent follows the active theme; every fixture in the repo uses that form. |
+| `color` | yes | Any CSS colour, applied raw to the panel's icon on the palette and launcher surfaces — not to the active-tab indicator, which is a fixed accent. The convention for plugin panels is a theme category token, `var(--theme-category-orange)`, so it follows the active theme; every fixture in the repo uses that form. |
 | `hasPty` | no | `false` (default) for UI-only panels. `true` is reserved for PTY-backed panels, not available to plugins in v1. |
 | `canRestart` | no | Show a "restart" control in the panel header. |
 | `canConvert` | no | Allow conversion between compatible panel kinds. Rarely useful for plugins. |

@@ -94,7 +94,7 @@ Three behaviours shape what you see while iterating:
 - Reloads **defer while `.git/index.lock` exists**, so a branch switch or a pull reconciles against the settled tree rather than a half-applied one.
 - A **half-written `plugin.json` keeps the running version.** The re-read is retried with a short backoff; only a manifest still broken afterwards disables the plugin and leaves an `invalid` row in the plugin manager. A plugin directory that has _vanished_ unloads immediately, which is what a branch switch should do.
 
-Reloads are per plugin directory, not per project — rebuilding one plugin doesn't restart its siblings. Your `settings` values and `host.storage` survive a reload; module-scope state in the worker and React state in your views do not, exactly as for an installed plugin.
+Reloads are per plugin directory, not per project — rebuilding one plugin doesn't restart its siblings. Your `settings` values, `host.storage`, and any panel state written with `persistState` survive a reload — the first two are files keyed by identity, and the third lives on the panel record rather than in the plugin process. Module-scope state in the worker and React state in your views do not, exactly as for an installed plugin.
 
 Full detail, including the trust gate and the contribution restrictions, is in [Project-local plugins](./project-local.md).
 

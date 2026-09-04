@@ -1,0 +1,6 @@
+# `dist/` IS the load contract for a project plugin — the host never compiles
+# anything, so the committed files are what runs. Both lines are needed: the
+# first lets git descend into the directory, the second keeps the files inside
+# from being re-excluded by a parent rule matching contents.
+!dist/
+!dist/**

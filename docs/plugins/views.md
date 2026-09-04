@@ -126,12 +126,12 @@ Nothing reaches a view unless the worker sends it. The bridge is `window.electro
 | Call | Direction | Pairs with |
 | --- | --- | --- |
 | `invoke(pluginId, channel, ...args)` | View asks, worker answers | `host.registerHandler(channel, (ctx, ...args) => …)` |
-| `on(pluginId, channel, cb)` | Worker pushes to every open instance of the kind | `host.postToPanel(channel, payload)` |
+| `on(pluginId, channel, cb)` | Worker pushes to every `on` subscriber for this plugin and channel — across all its panel kinds, not one kind | `host.postToPanel(channel, payload)` |
 | `onPanel(pluginId, channel, panelId, cb)` | Worker pushes to one instance | `host.postToPanel(channel, payload, panelId)` |
 
 `on` and `onPanel` return an unsubscribe function; return it from your effect. Pushes are not buffered: a push during `activate()` is gone before any view mounts, so the shape that works is pull on mount, then subscribe to pushes for updates. [Patterns](./patterns.md#pull-on-mount-then-push) has the code.
 
-A bundled view gets the same three calls as hooks: `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` from `@daintreehq/plugin-sdk/react`. A raw `plugin://` view cannot import that subpath (the host import map serves only `react`), so it uses the bridge directly.
+A bundled view gets the same three calls as hooks: `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` from `@daintreehq/plugin-sdk/react`. A raw `plugin://` view cannot import that subpath — the host import map serves exactly five specifiers (`react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, `react-dom/client`) and nothing else — so it uses the bridge directly.
 
 ## Media and binary files
 
@@ -150,7 +150,7 @@ Fetch into a blob rather than pointing an element's `src` at the URL directly; t
 
 ## What doesn't work inline
 
-- Bare npm imports in a raw view. Only `react` resolves through the host import map; everything else must be a relative module you ship in `dist/`, or you bundle.
+- Bare npm imports in a raw view. Only the five React specifiers above resolve through the host import map; everything else must be a relative module you ship in `dist/`, or you bundle.
 - TypeScript, JSX or CSS files without a build. Hand-written views use `createElement` and a `<style>` string.
 - Reaching into Daintree's React components. They are not exported to plugins, and the ones you can find by path are internal and will move.
 - Module-scope state surviving a reload. Each reload re-imports your bundle under a fresh generation; keep anything worth keeping in `persistState` (survives remounts and reloads) or `host.storage` (survives everything).

@@ -1,0 +1,46 @@
+{
+  "name": "acme.tour",
+  "version": "0.1.0",
+  "scope": "project",
+  "displayName": "Surface Tour",
+  "description": "The canonical project plugin: zero build, hand-written ESM, and one working example of every part of the surface the agent brief tells you to build against.",
+  "authors": [{ "name": "Daintree", "role": "Maintainer" }],
+  "main": "dist/index.mjs",
+  "engines": {
+    "daintree": ">=0.34.0"
+  },
+  "capabilities": ["fs:project-read"],
+  "scopes": {
+    "fs": {
+      "allowedPaths": ["${project}"]
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "open-tour",
+        "title": "Open Surface Tour",
+        "description": "Open the Surface Tour panel for this project.",
+        "category": "Surface Tour",
+        "kind": "command",
+        "danger": "safe",
+        "requires": []
+      }
+    ],
+    "panels": [
+      {
+        "id": "tour",
+        "name": "Surface Tour",
+        "iconId": "puzzle",
+        "color": "var(--theme-category-orange)"
+      }
+    ],
+    "views": [
+      {
+        "id": "tour",
+        "componentPath": "dist/panel.js",
+        "location": "panel"
+      }
+    ]
+  }
+}

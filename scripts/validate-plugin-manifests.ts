@@ -58,11 +58,21 @@ export function validatePluginManifests(roots: PluginRoot[]): ManifestError[] {
  * sideloaded at runtime on the same footing (PluginService.loadFromDir at the
  * sideload root) so their `daintree.*` names pass the namespace guard. Validate
  * both with the same origin the runtime uses.
+ *
+ * `sample-project` is the third root because a project plugin is never loaded
+ * from `plugins/` at all — it loads from a project's own `.daintree/plugins/`,
+ * so no sideload footing exists to borrow. Validating it as `"builtin"` (the
+ * way `sample` is) would reject the `"scope": "project"` these manifests are
+ * required to carry, and the reserved `daintree.*` namespace is closed to them
+ * for the same reason. Kept out of `sample` so the build's sample copy steps,
+ * which mirror that root into the E2E sideload dir, don't stage a manifest the
+ * runtime would refuse.
  */
 function defaultRoots(base: string): PluginRoot[] {
   return [
     { dir: path.join(base, "builtin"), origin: "builtin" },
     { dir: path.join(base, "sample"), origin: "builtin" },
+    { dir: path.join(base, "sample-project"), origin: "project" },
   ];
 }
 
