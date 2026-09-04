@@ -432,7 +432,7 @@ describe("bookmark mutations stay gated once agent-reachable (#11908)", () => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
     const def = factory() as AnyActionDefinition;
-    return resolveEffectiveActionDanger(def.danger, source, args);
+    return resolveEffectiveActionDanger(id, def.danger, source, args);
   }
 
   it("gates closing a live pane and deleting a bookmark for an agent caller", () => {

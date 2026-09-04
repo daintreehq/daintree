@@ -38,11 +38,12 @@ export function registerTerminalSpawnActions(
       "Open a new terminal, ready for commands. This creates a visible panel and starts a shell process that consumes resources until it is closed. Defaults to the active worktree, and can instead open at a chosen directory and run something there immediately. Launch an agent instead when the intent is to start an AI CLI rather than a plain shell.",
     category: "terminal",
     kind: "command",
-    // Stays statically safe: a plain "New Terminal" must not be gated. A
-    // dispatch carrying `command` is elevated to "confirm" per-dispatch by
-    // `resolveEffectiveActionDanger` — the same argument-keyed shape recipe
-    // dispatches use, so agent-initiated shell execution is gated without
-    // over-gating the ordinary case.
+    // Stays statically safe: a plain "New Terminal" must not be gated. An
+    // agent- or plugin-sourced dispatch carrying `cwd` or `command` is elevated
+    // to "confirm" per-dispatch by `resolveEffectiveActionDanger`, so the shell
+    // authority those arguments carry is gated without confirmation-gating the
+    // ordinary case (#12216). Not `denyPluginDispatch`: that would also refuse
+    // a plugin opening a plain terminal, which stays legitimate.
     danger: "safe",
     scope: "renderer",
     argsSchema: z
@@ -54,7 +55,7 @@ export function registerTerminalSpawnActions(
           .min(1)
           .optional()
           .describe(
-            "Absolute directory to open the terminal in. Defaults to the active worktree's root."
+            "Absolute directory to open the terminal in. Defaults to the active worktree's root. Supplying this requires a confirmation."
           ),
         command: z
           .string()

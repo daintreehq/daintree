@@ -191,6 +191,15 @@ interface ManagedProcess {
   restartCount: number;
   /** True once `kill()`/unload signalled this process down — flips exit into the `killed` terminal state and suppresses `onCrash`. */
   killRequested: boolean;
+  /**
+   * True once the OS reaped the current child, which is EARLIER than `status`
+   * leaving `"running"` — terminal bookkeeping waits for stdio to drain. Reads
+   * that mean "is there a live OS process" (the concurrency cap, the stdin
+   * write guard) must use this, not `status`, or an exited child whose pipes a
+   * grandchild still holds would hold its slot and accept writes for the whole
+   * drain window.
+   */
+  childExited: boolean;
   /** Pending SIGKILL escalation timer, cleared when the child exits inside the grace window. */
   killTimer: ReturnType<typeof setTimeout> | null;
   /** Recorded terminal outcome once the process has exited, so late `onExit`/`onCrash` subscribers still fire. */
@@ -289,11 +298,18 @@ export class PluginProcessManager {
     this.stdioDrainMs = options.stdioDrainMs ?? PLUGIN_PROCESS_STDIO_DRAIN_MS;
   }
 
-  /** Count of RUNNING processes owned by `pluginId`. */
+  /**
+   * Count of processes owned by `pluginId` with a LIVE OS child. Keyed on
+   * `childExited` rather than `status` alone: terminal bookkeeping now waits
+   * for stdio to drain, so a reaped child can sit in `"running"` for up to the
+   * drain window and would otherwise keep holding a concurrency slot against a
+   * plugin replacing it.
+   */
   runningCount(pluginId: string): number {
     let n = 0;
     for (const p of this.processes.values()) {
-      if (p.pluginId === pluginId && p.status === "running") n++;
+      if (p.pluginId !== pluginId) continue;
+      if (p.status === "running" && !p.childExited) n++;
     }
     return n;
   }
@@ -342,6 +358,7 @@ export class PluginProcessManager {
       spawnedAt: Date.now(),
       restartCount: 0,
       killRequested: false,
+      childExited: false,
       killTimer: null,
       terminalOutcome: null,
       exitCallbacks: new Set(),
@@ -384,6 +401,10 @@ export class PluginProcessManager {
       return;
     }
     if (managed.mode !== "duplex" || managed.status !== "running") return;
+    // `status` alone is no longer proof of a live child: it stays "running"
+    // until stdio drains. Writing past the reap is the exact no-op the handle
+    // contract promises, so gate on the OS event.
+    if (managed.childExited) return;
     const stdin = managed.child?.stdin;
     if (!stdin) return;
     // Same closed-stream predicate as PluginMcpSupervisor.writeFrame — these
@@ -748,6 +769,7 @@ export class PluginProcessManager {
 
     managed.child = child;
     managed.pid = child.pid ?? null;
+    managed.childExited = false;
 
     this.auditor({
       pluginId: managed.pluginId,
@@ -817,6 +839,9 @@ export class PluginProcessManager {
     let exitSignal: NodeJS.Signals | null = null;
     child.on("exit", (code, signal) => {
       if (settled || managed.child !== child) return;
+      // Recorded before the drain wait so liveness reads (concurrency cap,
+      // stdin writes) see the reap immediately.
+      managed.childExited = true;
       // The exit code/signal are only ever authoritative here — `close` carries
       // its own arguments in Node, but this interface deliberately doesn't take
       // them, so the values are captured on the way past.
@@ -984,6 +1009,10 @@ export class PluginProcessManager {
   async restart(id: string): Promise<void> {
     const managed = this.processes.get(id);
     if (!managed) return;
+    // Fenced with `spawn()`: an onExit callback fired BY the quit sweep, or a
+    // plugin timer that survived into it, would otherwise respawn a child the
+    // sweep has already snapshotted and will never signal.
+    if (this.shuttingDown) return;
     if (managed.mode === "pty") {
       await this.restartPty(managed);
       return;
@@ -1105,7 +1134,11 @@ export class PluginProcessManager {
   async shutdownAll(): Promise<void> {
     this.shuttingDown = true;
 
-    const awaitingExit: ManagedProcess[] = [];
+    // Snapshot the exact child each entry holds NOW and signal only that
+    // object. Re-reading `managed.child` later could hand the SIGKILL to a
+    // replacement incarnation instead of the one this sweep set out to kill.
+    const targets: Array<{ managed: ManagedProcess; child: ManagedChildProcess }> = [];
+    const ptys: ManagedProcess[] = [];
     for (const managed of this.processes.values()) {
       if (managed.status !== "running") continue;
       managed.killRequested = true;
@@ -1116,41 +1149,41 @@ export class PluginProcessManager {
         managed.killTimer = null;
       }
       if (managed.mode === "pty") {
-        managed.pendingResize = null;
-        try {
-          managed.ptyBackend?.kill("SIGTERM");
-        } catch {
-          // best-effort — the pty-host reaps its own children regardless
-        }
+        ptys.push(managed);
         continue;
       }
-      if (!managed.child) continue;
-      try {
-        managed.child.kill("SIGTERM");
-      } catch {
-        // already gone — its exit handler does the bookkeeping
-      }
-      awaitingExit.push(managed);
+      if (!managed.child || managed.childExited) continue;
+      targets.push({ managed, child: managed.child });
     }
 
-    if (awaitingExit.length === 0) return;
+    if (targets.length === 0) {
+      for (const managed of ptys) this.signalPtyForShutdown(managed);
+      return;
+    }
 
     await new Promise<void>((resolve) => {
-      let remaining = awaitingExit.length;
+      let remaining = targets.length;
       let timer: ReturnType<typeof setTimeout> | null = null;
-      const settleOne = (): void => {
-        remaining -= 1;
-        if (remaining > 0) return;
-        if (timer) clearTimeout(timer);
+      let done = false;
+      const finish = (): void => {
+        if (done) return;
+        done = true;
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
         resolve();
       };
-      for (const managed of awaitingExit) {
-        const child = managed.child;
-        // Raced its own SIGTERM between the loop above and here.
-        if (!child) {
-          settleOne();
-          continue;
-        }
+      const settleOne = (): void => {
+        remaining -= 1;
+        if (remaining <= 0) finish();
+      };
+
+      // Listeners BEFORE the signal: a child that dies the instant it is
+      // signalled must not have its exit land before anything is listening,
+      // which would strand the sweep on the full grace window for a process
+      // that is already gone.
+      for (const { child } of targets) {
         let counted = false;
         child.on("exit", () => {
           if (counted) return;
@@ -1158,22 +1191,59 @@ export class PluginProcessManager {
           settleOne();
         });
       }
+
+      for (const { child } of targets) {
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // already gone — the exit listener above still settles it
+        }
+      }
+      // PTYs are signalled but never awaited: the pty-host owns their reaping
+      // and has its own descendant sweep (#12203), so blocking quit on its
+      // round trip would buy nothing.
+      for (const managed of ptys) this.signalPtyForShutdown(managed);
+
+      // Every child settled synchronously (a fake spawner, or a child already
+      // reaped) — no timer needed, and arming one would leave a referenced
+      // handle holding the quit chain open for the full grace window.
+      if (done) return;
+
       // Deliberately NOT unref'd: the whole point is to hold the quit chain
       // open long enough to prove the children are gone. `settleWithin` in
       // lifecycle/shutdown.ts backstops it if a child wedges past the grace.
       timer = setTimeout(() => {
         timer = null;
-        for (const managed of awaitingExit) {
-          if (managed.status !== "running" || !managed.child) continue;
+        for (const { managed, child } of targets) {
+          if (managed.childExited) continue;
           try {
-            managed.child.kill("SIGKILL");
+            // SIGKILL cannot be trapped, so the signal landing IS the kill;
+            // waiting for the reap would only add latency to a quit that has
+            // already done everything it can.
+            child.kill("SIGKILL");
           } catch {
             // best-effort
           }
         }
-        resolve();
+        finish();
       }, this.killGraceMs);
     });
+  }
+
+  /**
+   * SIGTERM one PTY-backed process for the quit sweep. Mirrors
+   * `terminatePty()` minus the escalation timer — an unref'd timer cannot fire
+   * during quit, and the pty-host reaps its own children anyway.
+   */
+  private signalPtyForShutdown(managed: ManagedProcess): void {
+    managed.pendingResize = null;
+    try {
+      // `killRequested` is already set, so a PTY still allocating adopts
+      // nothing: `startPty`'s post-await status check disposes whatever arrives.
+      managed.ptyBackend?.kill("SIGTERM");
+    } catch {
+      // best-effort — the pty-host reaps its own children regardless
+    }
   }
 
   /** Read-only snapshot for the `plugin-process:list` IPC, optionally scoped to one plugin. */

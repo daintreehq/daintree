@@ -262,9 +262,21 @@ export class PluginDevWorkerMainBridge {
   }
 
   private onReloading = (): void => {
-    // The new worker generation will re-register from scratch; drop the prior
-    // generation's activate-time registrations and tear down subscriptions so
-    // they don't double up. Pending invokes target a now-dead worker — fail them.
+    this.retireGeneration("Plugin reloaded before invocation completed");
+  };
+
+  /**
+   * Retire everything bound to the outgoing worker generation.
+   *
+   * Bumping `reloadGeneration` is the load-bearing part: request ids are a
+   * per-worker counter that restarts at 1, so a result from the outgoing
+   * generation settling late would otherwise be delivered to the incoming one
+   * under a colliding id. Registrations, subscriptions, providers and spawned
+   * processes go too — the replacement re-runs `activate()` and re-registers
+   * from its own module realm, so anything left behind is a duplicate the new
+   * generation cannot address.
+   */
+  private retireGeneration(reason: string): void {
     this.reloadGeneration++;
     this.clearPriorRegistrations();
     for (const dispose of this.subscriptionDisposers.values()) {
@@ -279,18 +291,24 @@ export class PluginDevWorkerMainBridge {
     this.disposeProcessHandles();
     this.abortAllHostCalls();
     for (const pending of this.pendingInvokes.values()) {
-      pending.reject(new Error("Plugin reloaded before invocation completed"));
+      pending.reject(new Error(reason));
     }
     this.pendingInvokes.clear();
-  };
+  }
 
   /**
-   * The worker process is gone (#12216). A reload announces itself first via
-   * `reloading` and has already settled everything by the time the exit lands,
-   * but a CRASH does not: the host respawns a fresh worker that has never seen
+   * The worker process is gone (#12216).
+   *
+   * An INTENTIONAL exit (reload, dispose) announces itself first — the host
+   * emits `reloading` before the kill — so the generation is already retired
+   * and only a straggler admitted in the gap needs settling.
+   *
+   * A CRASH announces nothing. The host respawns a worker that has never seen
    * the outstanding request ids, so without this every in-flight invoke hangs
-   * its caller forever — the renderer's action dispatch or IPC handler never
-   * settles, and nothing ever comes back to settle it.
+   * its caller forever, the crashed generation's subscriptions and providers
+   * stay registered against a worker that cannot serve them, and a late
+   * host-result can be delivered to the replacement under a colliding id. It
+   * is the same generation boundary a reload is, so it gets the same teardown.
    *
    * Deliberately no wall-clock timeout on `invoke` itself. This bridge carries
    * actions, IPC handlers and decoration calls whose legitimate durations
@@ -302,15 +320,20 @@ export class PluginDevWorkerMainBridge {
    */
   private onWorkerExit = (code: number, expected: boolean): void => {
     if (this.disposed) return;
+    if (!expected) {
+      this.retireGeneration(
+        `Plugin "${this.pluginId}" dev worker crashed (code ${code}) before invocation completed`
+      );
+      return;
+    }
+    // `reloading` already retired the generation; anything still here entered
+    // during the gap between that and the process actually going away.
     if (this.pendingInvokes.size === 0 && this.hostCallAborts.size === 0) return;
-    const reason = expected
-      ? `Plugin "${this.pluginId}" dev worker stopped before invocation completed`
-      : `Plugin "${this.pluginId}" dev worker crashed (code ${code}) before invocation completed`;
-    // In-flight host calls belong to the same dead generation: their results
-    // have nowhere to be delivered, so cancel the I/O rather than let it land.
     this.abortAllHostCalls();
     for (const pending of this.pendingInvokes.values()) {
-      pending.reject(new Error(reason));
+      pending.reject(
+        new Error(`Plugin "${this.pluginId}" dev worker stopped before invocation completed`)
+      );
     }
     this.pendingInvokes.clear();
   };
@@ -414,7 +437,13 @@ export class PluginDevWorkerMainBridge {
         error: formatErrorMessage(err, "host call failed"),
       });
     } finally {
-      this.hostCallAborts.delete(msg.requestId);
+      // Only if this controller is still the one registered: a worker that
+      // crashed mid-call is replaced by one whose requestId counter restarts
+      // from scratch, so an unconditional delete here can drop the SUCCESSOR's
+      // controller and leave its call unabortable.
+      if (this.hostCallAborts.get(msg.requestId) === controller) {
+        this.hostCallAborts.delete(msg.requestId);
+      }
     }
   }
 

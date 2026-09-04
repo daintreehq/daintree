@@ -27,9 +27,9 @@ import {
 import { deriveBand } from "../../shared/utils/actionRiskBand.js";
 import {
   RECIPE_DISPATCH_DANGER_RATIONALE,
-  TERMINAL_COMMAND_DISPATCH_DANGER_RATIONALE,
   dispatchCarriesRecipeId,
   resolveEffectiveActionDanger,
+  terminalLaunchDangerRationale,
 } from "./actions/effectiveDanger";
 
 /**
@@ -382,7 +382,7 @@ export class ActionService {
     const definition = this.registry.get(id);
     if (!definition) return null;
     const danger = dispatch
-      ? resolveEffectiveActionDanger(definition.danger, dispatch.source, dispatch.args)
+      ? resolveEffectiveActionDanger(id, definition.danger, dispatch.source, dispatch.args)
       : definition.danger;
     const elevated = danger !== definition.danger;
     return {
@@ -398,12 +398,12 @@ export class ActionService {
       // both clauses.
       ...(definition.dangerRationale
         ? { dangerRationale: definition.dangerRationale }
-        : elevated
+        : elevated && dispatch
           ? {
-              dangerRationale:
-                dispatch && dispatchCarriesRecipeId(dispatch.args)
-                  ? RECIPE_DISPATCH_DANGER_RATIONALE
-                  : TERMINAL_COMMAND_DISPATCH_DANGER_RATIONALE,
+              dangerRationale: dispatchCarriesRecipeId(dispatch.args)
+                ? RECIPE_DISPATCH_DANGER_RATIONALE
+                : (terminalLaunchDangerRationale(dispatch.args) ??
+                  RECIPE_DISPATCH_DANGER_RATIONALE),
             }
           : {}),
     };
@@ -558,7 +558,12 @@ export class ActionService {
     // elevation (an agent dispatch carrying a recipeId) is rejected before the
     // composite has created a worktree or fetched an issue — not prompted for
     // after the effects have already landed (#11860).
-    const effectiveDanger = resolveEffectiveActionDanger(definition.danger, source, validatedArgs);
+    const effectiveDanger = resolveEffectiveActionDanger(
+      actionId,
+      definition.danger,
+      source,
+      validatedArgs
+    );
     if (
       effectiveDanger === "confirm" &&
       (source === "plugin" || (source === "agent" && !options?.confirmed))

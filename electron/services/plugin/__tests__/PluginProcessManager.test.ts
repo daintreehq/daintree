@@ -503,43 +503,108 @@ describe("PluginProcessManager", () => {
       // The daemonizing case: the child exits but a surviving grandchild keeps
       // its stdout open, so `close` is never emitted. Without the cap the
       // handle would sit in `running` for the rest of the session.
-      const h = makeHarness({ stdioDrainMs: 20 });
+      // Fake timers rather than a real sleep — a wall-clock race is flaky on a
+      // loaded CI box, and this asserts the boundary exactly.
+      const h = makeHarness({ stdioDrainMs: 2_000 });
       const handle = await h.manager.spawn("acme.tool", pipeConfig());
       const exits: Array<{ exitCode: number | null }> = [];
       handle.onExit((info) => exits.push({ exitCode: info.exitCode }));
 
-      h.fakes[0]!.emitExitWithoutClose(0, null);
-      await flushMicrotasks();
-      expect(exits).toEqual([]);
+      vi.useFakeTimers();
+      try {
+        h.fakes[0]!.emitExitWithoutClose(0, null);
+        await vi.advanceTimersByTimeAsync(1_999);
+        expect(exits).toEqual([]);
 
-      await new Promise((r) => setTimeout(r, 40));
-      expect(exits).toEqual([{ exitCode: 0 }]);
-      expect(h.manager.list("acme.tool")[0]!.status).toBe("exited");
+        await vi.advanceTimersByTimeAsync(1);
+        expect(exits).toEqual([{ exitCode: 0 }]);
+        expect(h.manager.list("acme.tool")[0]!.status).toBe("exited");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("ignores a close from a child a restart already replaced", async () => {
       const h = makeHarness();
       const handle = await h.manager.spawn("acme.tool", pipeConfig());
       const first = h.fakes[0]!;
-      first.emitExit(0, null);
-      await flushMicrotasks();
+      // Exit WITHOUT close, so the outgoing incarnation is still unsettled when
+      // the restart replaces it — otherwise the closure's `settled` flag, not
+      // the stale-child identity guard, is what swallows the late event.
+      first.emitExitWithoutClose(0, null);
 
       await h.manager.restart(handle.id);
       const second = h.fakes[1]!;
+      await flushMicrotasks();
+      expect(h.manager.list("acme.tool")[0]!.status).toBe("running");
 
-      const exits: Array<{ exitCode: number | null }> = [];
-      handle.onExit((info) => exits.push({ exitCode: info.exitCode }));
-      exits.length = 0;
-
-      // A late settle from the outgoing incarnation must not terminate the
-      // live one.
+      // The outgoing child finally releases its pipes. It must not terminate
+      // the incarnation that replaced it.
       first.emitClose();
       await flushMicrotasks();
       expect(h.manager.list("acme.tool")[0]!.status).toBe("running");
 
-      second.emitExit(0, null);
+      const exits: Array<{ exitCode: number | null }> = [];
+      handle.onExit((info) => exits.push({ exitCode: info.exitCode }));
+      second.emitExit(4, null);
       await flushMicrotasks();
       expect(h.manager.list("acme.tool")[0]!.status).toBe("exited");
+      expect(exits).toEqual([{ exitCode: 4 }]);
+    });
+
+    it("settles a spawn that failed asynchronously, with no exit event", async () => {
+      // Node emits `error` then `close` WITHOUT `exit` for an ENOENT spawn.
+      // That used to leave the handle in `running` forever.
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", pipeConfig());
+      const crashes: Array<{ exitCode: number | null }> = [];
+      handle.onCrash((info) => crashes.push({ exitCode: info.exitCode }));
+
+      const fake = h.fakes[0]!;
+      fake.emitError(new Error("spawn ENOENT"));
+      fake.emitClose();
+      await flushMicrotasks();
+
+      expect(h.manager.list("acme.tool")[0]!.status).toBe("exited");
+      // No exit code was ever reported, so it reads as a crash of unknown cause
+      // rather than a clean exit.
+      expect(crashes).toEqual([{ exitCode: null }]);
+    });
+
+    it("frees the concurrency slot at exit, not at close", async () => {
+      // A child whose pipes a surviving grandchild still holds must not hold a
+      // concurrency slot for the whole drain window — the plugin would get a
+      // spurious PROCESS_LIMIT_REACHED replacing a process the OS already reaped.
+      const h = makeHarness({ stdioDrainMs: 10_000 });
+      const handles = [];
+      for (let i = 0; i < PLUGIN_PROCESS_MAX_CONCURRENT; i++) {
+        handles.push(await h.manager.spawn("acme.tool", pipeConfig()));
+      }
+      await expect(h.manager.spawn("acme.tool", pipeConfig())).rejects.toBeInstanceOf(
+        PluginProcessConcurrencyError
+      );
+
+      h.fakes[0]!.emitExitWithoutClose(0, null);
+      await flushMicrotasks();
+
+      // Still mid-drain, so not yet terminal — but the OS child is gone.
+      expect(h.manager.list("acme.tool")[0]!.status).toBe("running");
+      await expect(h.manager.spawn("acme.tool", pipeConfig())).resolves.toBeDefined();
+    });
+
+    it("stops writing to a duplex child's stdin once it has been reaped", async () => {
+      const h = makeHarness({ stdioDrainMs: 10_000 });
+      const handle = await h.manager.spawn("acme.tool", duplexConfig());
+      const fake = h.fakes[0]!;
+      h.manager.write(handle.id, "before\n");
+
+      fake.emitExitWithoutClose(0, null);
+      h.manager.write(handle.id, "after\n");
+      await flushMicrotasks();
+
+      // `write()` is a no-op after the child is gone, even while terminal
+      // bookkeeping is still waiting on the drain window.
+      expect(fake.stdinWrites.join("")).toBe("before\n");
     });
   });
 
@@ -566,12 +631,36 @@ describe("PluginProcessManager", () => {
       // The escalation `killAll` arms rides an unref'd timer that can never
       // fire before the app exits. This one is referenced, so a child that
       // ignores SIGTERM is actually force-killed rather than orphaned.
-      const h = makeHarness({ killGraceMs: 20 });
+      const h = makeHarness({ killGraceMs: 3_000 });
       await h.manager.spawn("acme.tool", pipeConfig());
 
-      await h.manager.shutdownAll();
+      vi.useFakeTimers();
+      try {
+        const swept = h.manager.shutdownAll();
+        await vi.advanceTimersByTimeAsync(2_999);
+        expect(h.fakes[0]!.killSignals).toEqual(["SIGTERM"]);
 
-      expect(h.fakes[0]!.killSignals).toEqual(["SIGTERM", "SIGKILL"]);
+        await vi.advanceTimersByTimeAsync(1);
+        await swept;
+        expect(h.fakes[0]!.killSignals).toEqual(["SIGTERM", "SIGKILL"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not respawn a handle a plugin restarts during the sweep", async () => {
+      // An onExit callback fired BY the sweep, or a surviving plugin timer,
+      // could otherwise start a child the sweep has already snapshotted and
+      // will never signal.
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", pipeConfig());
+      const swept = h.manager.shutdownAll();
+
+      await h.manager.restart(handle.id);
+      expect(h.fakes).toHaveLength(1);
+
+      h.fakes[0]!.emitExit(0, "SIGTERM");
+      await swept;
     });
 
     it("signals interactive processes without waiting on the pty host", async () => {

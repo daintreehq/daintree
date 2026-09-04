@@ -1,12 +1,25 @@
 import type { ActionDanger, ActionSource } from "@shared/types/actions";
 import { dispatchCarriesRecipeId } from "@shared/utils/dispatchRecipeId";
-import { dispatchCarriesTerminalCommand } from "@shared/utils/dispatchTerminalCommand";
+import {
+  dispatchCarriesTerminalCommand,
+  dispatchCarriesTerminalCwd,
+} from "@shared/utils/dispatchTerminalCommand";
 
 export { dispatchCarriesRecipeId, readDispatchRecipeId } from "@shared/utils/dispatchRecipeId";
 export {
   dispatchCarriesTerminalCommand,
+  dispatchCarriesTerminalCwd,
   readDispatchTerminalCommand,
+  readDispatchTerminalCwd,
 } from "@shared/utils/dispatchTerminalCommand";
+
+/**
+ * The one action whose `cwd`/`command` arguments spawn a shell (#12216). The
+ * elevation below is scoped to it by id rather than keyed on the argument alone
+ * — see {@link readDispatchTerminalCommand} for why `command` cannot be a
+ * global signal the way `recipeId` is.
+ */
+const TERMINAL_LAUNCH_ACTION_ID = "terminal.new";
 
 /**
  * Host-derived confirmation tier for one dispatch (#11860).
@@ -37,21 +50,49 @@ export {
  * ever shown: not a bypass, but a dead end for every legitimate caller.
  */
 export function resolveEffectiveActionDanger(
+  actionId: string,
   declaredDanger: ActionDanger,
   source: ActionSource,
   args: unknown
 ): ActionDanger {
   if (declaredDanger !== "safe") return declaredDanger;
-  if (source !== "agent") return declaredDanger;
-  if (dispatchCarriesRecipeId(args)) return "confirm";
-  // Same argument-keyed shape for `terminal.new`'s `command` (#12216): opening
-  // a terminal is safe, and opening one at a chosen `cwd` still only runs what
-  // the human types — but a `command` executes on the agent's behalf, which is
-  // the authority `recipe.run` gates. Raising the declared tier instead would
-  // confirmation-gate every plain "New Terminal", the over-gating #10577
-  // rejected.
-  if (dispatchCarriesTerminalCommand(args)) return "confirm";
+  if (source === "agent" && dispatchCarriesRecipeId(args)) return "confirm";
+  // `terminal.new`'s launch arguments (#12216). Same raise-only, per-dispatch
+  // shape, but scoped to the one action that spawns a shell from them rather
+  // than keyed on the argument globally: `command` is an ordinary field name,
+  // and gating every safe action that happens to take one would wrongly
+  // confirm `system.checkCommand`, which explicitly runs nothing.
+  //
+  // Applies to PLUGIN dispatch as well as agent. `terminal.sendCommand` and
+  // `terminal.paste` both carry `denyPluginDispatch` precisely because
+  // injecting a command into a terminal is what the capability model gates,
+  // and a `terminal.new` carrying a command is that same authority. Plugins
+  // have no confirm bypass, so elevating here is what refuses them — and
+  // unlike `denyPluginDispatch` it refuses only the dispatches that actually
+  // carry a launch target, leaving a plugin's plain "open a terminal" working.
+  //
+  // `cwd` is elevated too: the shell is launched as a login shell, so
+  // directory-sensitive startup hooks (direnv, auto-venv, PROMPT_COMMAND) can
+  // run on entry. That makes an arbitrary caller-chosen directory not reliably
+  // execution-free, which is the assumption gating `command` alone would rest on.
+  if (
+    actionId === TERMINAL_LAUNCH_ACTION_ID &&
+    (source === "agent" || source === "plugin") &&
+    (dispatchCarriesTerminalCommand(args) || dispatchCarriesTerminalCwd(args))
+  ) {
+    return "confirm";
+  }
   return declaredDanger;
+}
+
+/**
+ * Why a `terminal.new` dispatch was elevated, matching the resolver's own
+ * precedence: a command is the stronger claim, so it wins when both are present.
+ */
+export function terminalLaunchDangerRationale(args: unknown): string | undefined {
+  if (dispatchCarriesTerminalCommand(args)) return TERMINAL_COMMAND_DISPATCH_DANGER_RATIONALE;
+  if (dispatchCarriesTerminalCwd(args)) return TERMINAL_CWD_DISPATCH_DANGER_RATIONALE;
+  return undefined;
 }
 
 /**
@@ -65,3 +106,7 @@ export const RECIPE_DISPATCH_DANGER_RATIONALE =
 /** Counterpart for a dispatch that asks a new terminal to run a command. */
 export const TERMINAL_COMMAND_DISPATCH_DANGER_RATIONALE =
   "This call carries a command, so the new terminal runs it immediately rather than waiting for you to type. Agent-initiated shell execution is confirmation-gated wherever it happens.";
+
+/** Counterpart for a dispatch that only chooses where the terminal opens. */
+export const TERMINAL_CWD_DISPATCH_DANGER_RATIONALE =
+  "This call opens a terminal in a directory it chose. The shell starts as a login shell there, so directory-sensitive startup hooks in your shell configuration can run on entry.";
