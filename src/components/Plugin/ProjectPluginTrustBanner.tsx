@@ -18,8 +18,10 @@ import type { ProjectPluginTrustDecision } from "@shared/types/plugin";
  * re-stole it on every switch back into a project that was still undecided
  * (#12212). VS Code answers the same question with a Restricted Mode banner
  * plus a persistent status badge, and that split is what makes dismissal safe
- * here too: closing this records nothing, and `ProjectPluginIndicator` keeps
- * carrying the offer in the sidebar for as long as the plugins stay off.
+ * here too: closing this decides nothing, and `ProjectPluginIndicator` keeps
+ * carrying the offer in the sidebar for as long as the plugins stay off. The
+ * store remembers the dismissal for this view, because main re-emits the prompt
+ * from every watcher settle while a project is undecided.
  *
  * The three answers are unchanged. **Deliberately no per-capability choices:**
  * there is no sandbox behind them, so offering to deny filesystem access would

@@ -597,11 +597,6 @@ export class ProjectPluginController {
   }
 
   /**
-   * A session grant is memory-only by contract, so it writes nothing — not even
-   * the `knownPluginIds` bookkeeping, which would otherwise leak the fact of the
-   * grant into the next launch and silently promote a staged plugin to known.
-   */
-  /**
    * A manifest the host refused is a fault the author has to fix, and until
    * now the only record of it was red text in the plugin manager that nothing
    * pointed at. Reading `error` here executes nothing — discovery has already
@@ -627,6 +622,11 @@ export class ProjectPluginController {
     entry.loggedRejections = seen;
   }
 
+  /**
+   * A session grant is memory-only by contract, so it writes nothing — not even
+   * the `knownPluginIds` bookkeeping, which would otherwise leak the fact of the
+   * grant into the next launch and silently promote a staged plugin to known.
+   */
   private persist(projectId: string, entry: ProjectEntry): boolean {
     if (entry.decision !== "enabled" && entry.decision !== "disabled") return true;
     const stored = this.deps.writeTrust(projectId, {

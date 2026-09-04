@@ -43,6 +43,16 @@ export interface ProjectPluginStoreState {
   trust: ProjectPluginTrustState | null;
   /** The pending consent prompt. Written only by {@link ProjectPluginActions.openPrompt}. */
   prompt: ProjectPluginTrustPromptEvent | null;
+  /**
+   * The project whose banner the user closed with "Decide later", held for the
+   * life of this view. Main re-emits the prompt from every watcher settle while
+   * a project is undecided, so without this the dismissal is undone by the next
+   * write into `.daintree/plugins/` — an agent editing a plugin, or a `dist/`
+   * build watch churning the folder. It hides the banner, never the offer:
+   * `ProjectPluginIndicator` still carries both grants for as long as the
+   * plugins stay blocked.
+   */
+  dismissedPromptProjectId: string | null;
   /** Decision currently in flight, so the dialog can show which button was pressed. */
   deciding: ProjectPluginTrustDecision | null;
   /** Manifest ids whose staged-activation call has not resolved yet. */
@@ -66,7 +76,11 @@ export interface ProjectPluginActions {
   setViewProjectId: (projectId: string | null) => void;
   applySnapshot: (event: ProjectPluginsChangedEvent) => void;
   openPrompt: (event: ProjectPluginTrustPromptEvent) => void;
-  /** Close the dialog without recording anything. Nothing runs; main may ask again. */
+  /**
+   * Close the banner. Nothing runs and main records nothing, so the gate is
+   * still shut — but this view stops raising the banner for that project, so a
+   * watcher re-emit cannot undo the dismissal.
+   */
   dismissPrompt: () => void;
   decide: (decision: ProjectPluginTrustDecision) => Promise<void>;
   activateStaged: (pluginId: string) => Promise<void>;
@@ -93,6 +107,7 @@ const INITIAL: ProjectPluginStoreState = {
   plugins: [],
   trust: null,
   prompt: null,
+  dismissedPromptProjectId: null,
   deciding: null,
   activating: EMPTY_ACTIVATING,
   muting: EMPTY_ACTIVATING,
@@ -127,6 +142,7 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       set({
         viewProjectId: projectId,
         ...(foreign(state.prompt?.projectId) ? { prompt: null } : {}),
+        ...(foreign(state.dismissedPromptProjectId) ? { dismissedPromptProjectId: null } : {}),
         ...(foreign(state.projectId)
           ? { projectId: null, plugins: [], trust: null, visibility: EMPTY_VISIBILITY }
           : {}),
@@ -157,14 +173,23 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       // Main does not re-emit after a decision is stored, so a prompt arriving
       // on top of a recorded one is a replayed straggler, not a new question.
       if (state.trust?.projectId === event.projectId && state.trust.decision !== null) return;
+      // "Decide later" is an answer to the banner, not to the gate. Main keeps
+      // re-emitting while the project is undecided, so honouring every re-emit
+      // would re-pop the banner on every debounce cycle of the folder watcher.
+      if (state.dismissedPromptProjectId === event.projectId) return;
       set({ prompt: event });
     },
 
     dismissPrompt: () => {
+      const state = get();
       // A decision already on the wire owns the gate until it settles. Clearing
       // here would let a rejected call leave the user believing they answered.
-      if (get().deciding !== null) return;
-      set({ prompt: null });
+      if (state.deciding !== null) return;
+      const dismissed = state.prompt?.projectId;
+      set({
+        prompt: null,
+        ...(dismissed !== undefined ? { dismissedPromptProjectId: dismissed } : {}),
+      });
     },
 
     decide: async (decision) => {
@@ -172,7 +197,10 @@ export const useProjectPluginStore = create<ProjectPluginStoreState & ProjectPlu
       const target = state.prompt?.projectId ?? state.trust?.projectId ?? state.projectId;
       if (target !== null && target !== undefined && !belongsToView(state, target)) return;
       if (state.deciding !== null) return;
-      set({ deciding: decision, error: null });
+      // The user is answering the gate, so a "decide later" from earlier in the
+      // session stops applying: if this call fails, the next re-emit should be
+      // allowed to put the banner back.
+      set({ deciding: decision, error: null, dismissedPromptProjectId: null });
       try {
         await window.electron.plugin.setProjectPluginTrust(decision);
         // Clear the prompt only after main has the decision. Clearing first
