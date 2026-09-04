@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -44,6 +44,14 @@ import {
   isPanelButtonOnToolbar,
   isLauncherPanelButtonId,
 } from "@shared/types/toolbar";
+import {
+  subscribeToPanelKindRegistry,
+  getPanelKindRegistrySnapshot,
+} from "@shared/config/panelKindRegistry";
+import {
+  subscribeToPluginAgentRegistry,
+  getPluginAgentRegistrySnapshot,
+} from "@shared/config/pluginAgentRegistry";
 import { useRecipeStore } from "@/store/recipeStore";
 import { resolveLauncherItemMetadata } from "@/components/Layout/launcherToolbarCatalog";
 import { LAUNCHABLE_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
@@ -365,7 +373,29 @@ export function ToolbarSettingsTab() {
   // renders nothing, matching the toolbar's own registry gate. Its pin is left
   // alone rather than swept: "not live in this project" is not "gone".
   const recipes = useRecipeStore((s) => s.recipes);
+  const currentProjectId = useRecipeStore((s) => s.currentProjectId);
+  // `resolveLauncherItemMetadata` reads both registries, so the rows have to
+  // re-derive when either mutates. Without these the tab keeps a stale label,
+  // icon and row for a plugin panel or agent that unloaded while Settings was
+  // open, while the toolbar — which does subscribe — has already dropped it.
+  const panelKindRegistry = useSyncExternalStore(
+    subscribeToPanelKindRegistry,
+    getPanelKindRegistrySnapshot,
+    getPanelKindRegistrySnapshot
+  );
+  const pluginAgentRegistry = useSyncExternalStore(
+    subscribeToPluginAgentRegistry,
+    getPluginAgentRegistrySnapshot,
+    getPluginAgentRegistrySnapshot
+  );
   const launcherItemRows = useMemo(() => {
+    // Referenced, not merely listed as dependencies. `resolveLauncherItemMetadata`
+    // reads both registries itself, so these snapshots exist only to invalidate
+    // this memo when one mutates — and a value the body never mentions is one
+    // the React Compiler is free to drop, which would restore the stale row
+    // they are here to prevent.
+    void panelKindRegistry;
+    void pluginAgentRegistry;
     const rows: Array<{ id: LauncherItemToolbarButtonId; metadata: ToolbarButtonMetadata }> = [];
     // `Object.entries` plus the guard rather than a filter over `Object.keys`:
     // both hand back a bare `string`, but only the guard narrows it, and the
@@ -374,14 +404,14 @@ export function ToolbarSettingsTab() {
     for (const [id, isPinned] of Object.entries(layout.pinnedButtons)) {
       if (isPinned !== true) continue;
       if (!isLauncherItemToolbarButtonId(id)) continue;
-      const metadata = resolveLauncherItemMetadata(id, recipes);
+      const metadata = resolveLauncherItemMetadata(id, recipes, currentProjectId);
       if (!metadata) continue;
       rows.push({ id, metadata });
     }
     // Alphabetical, because the pin map's key order is insertion order and the
     // user has no way to see or reason about that.
     return rows.sort((a, b) => a.metadata.label.localeCompare(b.metadata.label));
-  }, [layout.pinnedButtons, recipes]);
+  }, [layout.pinnedButtons, recipes, currentProjectId, panelKindRegistry, pluginAgentRegistry]);
 
   const resolveGroup = useCallback(
     (id: AnyToolbarButtonId) => getToolbarButtonGroup(id, pluginConfigs.has(id)),

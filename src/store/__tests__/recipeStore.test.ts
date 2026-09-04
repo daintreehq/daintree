@@ -2638,6 +2638,80 @@ describe("recipeStore", () => {
       expect(state.recipes).toHaveLength(1);
     });
 
+    it("clears a deleted recipe's toolbar pin only after the backend confirms (#12217)", async () => {
+      // Sequencing, not just outcome: cleanup beside the optimistic removal
+      // would delete the user's explicit pin on a disk failure that restores
+      // the recipe.
+      const { useToolbarPreferencesStore } = await import("../toolbarPreferencesStore");
+      const inRepoRecipe = {
+        id: "inrepo-pinned",
+        name: "Pinned Recipe",
+        terminals: [{ type: "terminal" as const, title: "Shell", env: {} }],
+        createdAt: 500,
+        projectId: "project-1",
+      };
+      const buttonId = "launcher:recipe:project-1:inrepo-pinned" as const;
+      useRecipeStore.setState({
+        inRepoRecipes: [inRepoRecipe],
+        globalRecipes: [],
+        projectRecipes: [],
+        recipes: [inRepoRecipe],
+        currentProjectId: "project-1",
+      });
+      useToolbarPreferencesStore.getState().setLauncherItemOnToolbar(buttonId, true);
+      expect(useToolbarPreferencesStore.getState().layout.pinnedButtons[buttonId]).toBe(true);
+
+      let releaseDelete: () => void = () => {};
+      deleteInRepoRecipeMock.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          releaseDelete = resolve;
+        })
+      );
+      const pending = useRecipeStore.getState().deleteRecipe("inrepo-pinned");
+
+      // Optimistically gone from the list, but the pin is still the user's
+      // until the write lands.
+      expect(useRecipeStore.getState().recipes).toHaveLength(0);
+      expect(useToolbarPreferencesStore.getState().layout.pinnedButtons[buttonId]).toBe(true);
+
+      releaseDelete();
+      await pending;
+
+      const { pinnedButtons, leftButtons, rightButtons } =
+        useToolbarPreferencesStore.getState().layout;
+      expect(buttonId in pinnedButtons).toBe(false);
+      expect([...leftButtons, ...rightButtons]).not.toContain(buttonId);
+    });
+
+    it("keeps the toolbar pin when the delete fails and rolls back (#12217)", async () => {
+      const { useToolbarPreferencesStore } = await import("../toolbarPreferencesStore");
+      const inRepoRecipe = {
+        id: "inrepo-kept",
+        name: "Kept Recipe",
+        terminals: [{ type: "terminal" as const, title: "Shell", env: {} }],
+        createdAt: 500,
+        projectId: "project-1",
+      };
+      const buttonId = "launcher:recipe:project-1:inrepo-kept" as const;
+      useRecipeStore.setState({
+        inRepoRecipes: [inRepoRecipe],
+        globalRecipes: [],
+        projectRecipes: [],
+        recipes: [inRepoRecipe],
+        currentProjectId: "project-1",
+      });
+      useToolbarPreferencesStore.getState().setLauncherItemOnToolbar(buttonId, true);
+
+      deleteInRepoRecipeMock.mockRejectedValueOnce(new Error("disk error"));
+      await expect(useRecipeStore.getState().deleteRecipe("inrepo-kept")).rejects.toThrow(
+        "disk error"
+      );
+
+      // The recipe came back, so its pin must still describe something real.
+      expect(useRecipeStore.getState().recipes).toHaveLength(1);
+      expect(useToolbarPreferencesStore.getState().layout.pinnedButtons[buttonId]).toBe(true);
+    });
+
     it("deleteRecipe drops the ProjectFileStore mirror so no ghost row survives (#11993)", async () => {
       // The mirror shares the canonical recipe's id and carries the frecency the
       // git-tracked file deliberately omits. `mergeRecipes` only hides it while

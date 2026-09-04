@@ -11,6 +11,8 @@ import {
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { getAgentConfig } from "@/config/agents";
+import { getRecipeScope, recipeToolbarSourceId } from "@/utils/recipeScope";
+import type { TerminalRecipe } from "@shared/types";
 import { DEFAULT_PANEL_ICON, resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
 import { Workflow } from "@/components/icons";
 import type { ToolbarButtonMetadata } from "./toolbarButtonMetadata";
@@ -34,9 +36,13 @@ import type { DockLaunchItem } from "./dockLaunchItems";
  * without an `item`. It is kept as a return value so a future category added to
  * `DockLaunchItem` fails closed rather than minting an id nothing renders.
  */
-export function resolveLauncherToolbarButtonId(item: DockLaunchItem): AnyToolbarButtonId | null {
+export function resolveLauncherToolbarButtonId(
+  item: DockLaunchItem,
+  currentProjectId: string | null | undefined
+): AnyToolbarButtonId | null {
   if (item.category === "agent") {
     if (isBuiltInAgentId(item.agent.id)) return item.agent.id;
+    if (item.agent.id.length === 0) return null;
     return launcherItemToolbarButtonId("agent", item.agent.id);
   }
   if (item.category === "panel") {
@@ -44,13 +50,19 @@ export function resolveLauncherToolbarButtonId(item: DockLaunchItem): AnyToolbar
     // dev preview kind is `dev-preview` and its button is `dev-server`, so the
     // direct test would hand that row a synthetic id alongside the fixed one it
     // already has, and two ids for one button disagree about its state.
-    return (
-      getLauncherPanelButtonIdForKind(item.kindId) ??
-      launcherItemToolbarButtonId("panel", item.kindId)
-    );
+    const fixed = getLauncherPanelButtonIdForKind(item.kindId);
+    if (fixed) return fixed;
+    if (item.kindId.length === 0) return null;
+    return launcherItemToolbarButtonId("panel", item.kindId);
   }
   if (item.category === "recipe") {
-    return launcherItemToolbarButtonId("recipe", item.recipe.id);
+    // The scoped identity, never the bare `recipe.id` — see
+    // `recipeToolbarSourceId` on why a legacy in-repo id aliases across
+    // projects.
+    return launcherItemToolbarButtonId(
+      "recipe",
+      recipeToolbarSourceId(item.recipe, currentProjectId)
+    );
   }
   return null;
 }
@@ -92,11 +104,12 @@ const EMPTY_CATALOG: LauncherToolbarCatalog = new Map();
  * wrong: "not live right now" and "gone for good" are not the same fact.
  */
 export function buildLauncherToolbarCatalog(
-  items: readonly DockLaunchItem[]
+  items: readonly DockLaunchItem[],
+  currentProjectId: string | null | undefined
 ): LauncherToolbarCatalog {
   const catalog = new Map<LauncherItemToolbarButtonId, LauncherToolbarEntry>();
   for (const item of items) {
-    const buttonId = resolveLauncherToolbarButtonId(item);
+    const buttonId = resolveLauncherToolbarButtonId(item, currentProjectId);
     if (buttonId === null) continue;
     // Built-in agents and the four fixed panels resolve to ids this catalog
     // does not own — they already have renderers and settings rows.
@@ -111,9 +124,13 @@ export function buildLauncherToolbarCatalog(
 
 /** Memoized {@link buildLauncherToolbarCatalog} over a launcher model's items. */
 export function useLauncherToolbarCatalog(
-  items: readonly DockLaunchItem[]
+  items: readonly DockLaunchItem[],
+  currentProjectId: string | null | undefined
 ): LauncherToolbarCatalog {
-  return useMemo(() => buildLauncherToolbarCatalog(items), [items]);
+  return useMemo(
+    () => buildLauncherToolbarCatalog(items, currentProjectId),
+    [items, currentProjectId]
+  );
 }
 
 /**
@@ -127,6 +144,20 @@ const LAUNCHER_ITEM_ACTION_LABEL = {
   panel: "Open",
   recipe: "Run",
 } as const;
+
+/**
+ * What pressing the button does, plus whatever it takes to tell two rows apart.
+ *
+ * Two recipes can share a name across scopes — a Project "Deploy" and a Team
+ * "Deploy" are different recipes and both are pinnable — and the toolbar shows
+ * only a glyph, so without the scope the two buttons, their tooltips and their
+ * Settings switches would all read identically (#12217).
+ */
+function launcherItemDescription(item: DockLaunchItem): string {
+  const verb = LAUNCHER_ITEM_ACTION_LABEL[item.category];
+  if (item.category === "recipe") return `${verb} ${item.name} (${item.scopeLabel})`;
+  return `${verb} ${item.name}`;
+}
 
 /** The glyph a catalog entry renders, resolved from whatever its category carries. */
 function launcherItemIcon(item: DockLaunchItem): ToolbarButtonMetadata["icon"] {
@@ -153,7 +184,7 @@ export function buildLauncherToolbarMeta(
     meta[entry.buttonId] = {
       label: item.name,
       icon: launcherItemIcon(item),
-      description: `${LAUNCHER_ITEM_ACTION_LABEL[item.category]} ${item.name}`,
+      description: launcherItemDescription(item),
     };
   }
   return meta;
@@ -176,7 +207,8 @@ export function buildLauncherToolbarMeta(
  */
 export function resolveLauncherItemMetadata(
   buttonId: string,
-  recipes: ReadonlyArray<{ id: string; name: string }>
+  recipes: ReadonlyArray<TerminalRecipe>,
+  currentProjectId: string | null | undefined
 ): ToolbarButtonMetadata | undefined {
   const decoded = decodeLauncherItemToolbarButtonId(buttonId);
   if (!decoded) return undefined;
@@ -202,14 +234,21 @@ export function resolveLauncherItemMetadata(
     };
   }
 
-  // Linear scan rather than a keyed lookup built here: a plain-object index
+  // Compared through `recipeToolbarSourceId`, the same function that minted the
+  // id — matching on `candidate.id` would reintroduce the legacy-in-repo
+  // aliasing the scoping exists to close, and would also never match a scoped
+  // id at all. Linear rather than a keyed lookup because a plain-object index
   // keyed by recipe id would inherit `Object.prototype`, and the list is the
   // handful a project holds.
-  const recipe = recipes.find((candidate) => candidate.id === sourceId);
+  const recipe = recipes.find(
+    (candidate) => recipeToolbarSourceId(candidate, currentProjectId) === sourceId
+  );
   if (!recipe) return undefined;
   return {
     label: recipe.name,
     icon: Workflow,
-    description: `${LAUNCHER_ITEM_ACTION_LABEL.recipe} ${recipe.name}`,
+    // Same scope suffix the catalog builds, through the same classifier, so the
+    // two surfaces name a recipe identically.
+    description: `${LAUNCHER_ITEM_ACTION_LABEL.recipe} ${recipe.name} (${getRecipeScope(recipe).label})`,
   };
 }

@@ -176,7 +176,8 @@ const BUILT_IN_TOOLBAR_GROUPS: ReadonlyMap<AnyToolbarButtonId, ToolbarButtonGrou
  *
  * Dispatch order mirrors `isToolbarButtonVisible` below: agent ids first,
  * registered plugin contributions second (registry membership is the
- * discriminator, never string-parsing the dotted id), then the built-in table,
+ * discriminator, never string-parsing the dotted id), launcher items third
+ * (#12217 — a prefix the other two can never carry), then the built-in table,
  * and finally the trailing `utilities` fallback for anything unclassified.
  */
 export function getToolbarButtonGroup(

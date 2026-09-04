@@ -432,15 +432,57 @@ describe("toolbarPreferencesStore", () => {
       expect(Object.keys(store.getState().layout.pinnedButtons)).toEqual([recipeId]);
     });
 
-    it("keeps an existing position rather than adding a second one", async () => {
+    it("adopts an existing right-side position instead of inserting a second one", async () => {
+      // Seeded directly, because the obvious construction — pin, move right,
+      // unpin, repin — deletes the position on the unpin, so the branch under
+      // test never sees one and an implementation that always inserted left
+      // would pass.
       const store = await loadStore();
-      store.getState().setLauncherItemOnToolbar(recipeId, true);
-      store.getState().moveButton(recipeId, "left", "right", 0);
-      store.getState().setLauncherItemOnToolbar(recipeId, false);
+      store.setState((state) => ({
+        layout: { ...state.layout, rightButtons: [...state.layout.rightButtons, recipeId] },
+      }));
+
       store.getState().setLauncherItemOnToolbar(recipeId, true);
 
       const { leftButtons, rightButtons } = store.getState().layout;
-      expect([...leftButtons, ...rightButtons].filter((id) => id === recipeId)).toHaveLength(1);
+      expect(rightButtons.filter((id) => id === recipeId)).toHaveLength(1);
+      expect(leftButtons).not.toContain(recipeId);
+      expect(store.getState().layout.pinnedButtons[recipeId]).toBe(true);
+    });
+
+    it("strips the id from BOTH arrays on unpin", async () => {
+      // A cross-side duplicate is reachable from older profiles, and filtering
+      // only the side the pin happened to create would leave the other behind
+      // rendering a button whose pin is gone.
+      const store = await loadStore();
+      store.setState((state) => ({
+        layout: {
+          ...state.layout,
+          leftButtons: [...state.layout.leftButtons, recipeId],
+          rightButtons: [...state.layout.rightButtons, recipeId],
+          pinnedButtons: { ...state.layout.pinnedButtons, [recipeId]: true },
+        },
+      }));
+
+      store.getState().setLauncherItemOnToolbar(recipeId, false);
+
+      const { leftButtons, rightButtons, pinnedButtons } = store.getState().layout;
+      expect(leftButtons).not.toContain(recipeId);
+      expect(rightButtons).not.toContain(recipeId);
+      expect(recipeId in pinnedButtons).toBe(false);
+    });
+
+    it("clears a position left behind with no pin entry", async () => {
+      // The other half of the same repair: an id positioned but unpinned is a
+      // dead slot, and the unpin path is what removes it.
+      const store = await loadStore();
+      store.setState((state) => ({
+        layout: { ...state.layout, leftButtons: [...state.layout.leftButtons, recipeId] },
+      }));
+
+      store.getState().setLauncherItemOnToolbar(recipeId, false);
+
+      expect(store.getState().layout.leftButtons).not.toContain(recipeId);
     });
   });
 

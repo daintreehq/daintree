@@ -52,6 +52,7 @@ import {
 import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
 import { deriveAgentDominantStates } from "@/lib/agentDominantStates";
 import { DockLaunchButton } from "./DockLaunchButton";
+import { useRecipeStore } from "@/store/recipeStore";
 import { useLauncherData } from "./useLauncherData";
 import {
   activateDockLaunchItem,
@@ -1048,6 +1049,9 @@ export function Toolbar({
 
   const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
 
+  // Scopes a project-owned recipe's pin id — see `recipeToolbarSourceId`.
+  const currentRecipeProjectId = useRecipeStore((s) => s.currentProjectId);
+
   // The same model the launcher builds, from the same inputs, so the toolbar
   // can never offer a button for a row the launcher isn't showing — or drop one
   // it is. `surface: "grid"` matches the launcher this toolbar renders.
@@ -1060,7 +1064,10 @@ export function Toolbar({
     hasWorkspace: launcherData.hasWorkspace,
     hasProject: launcherData.hasProject,
   });
-  const launcherCatalog = useLauncherToolbarCatalog(launcherModel.searchItems);
+  const launcherCatalog = useLauncherToolbarCatalog(
+    launcherModel.searchItems,
+    currentRecipeProjectId
+  );
   const launcherActivationContext = useMemo<ActivateDockLaunchItemContext>(
     () => ({
       cwd: launcherData.cwd,
@@ -1591,6 +1598,30 @@ export function Toolbar({
     toolbarLayout.rightButtons.includes("launcher") &&
     !toolbarLayout.leftButtons.includes("launcher");
 
+  // The same repair as `unpositionedAgentPins`, for the same window, over the
+  // ids a launcher item pins under (#12217). Only entries in the live catalog:
+  // a pin whose recipe belongs to another project has nothing to position, and
+  // giving it a slot here would put a dead id in the arrays every project
+  // switch.
+  const unpositionedLauncherItemPins = useMemo(() => {
+    const onEitherSide = new Set([...toolbarLayout.leftButtons, ...toolbarLayout.rightButtons]);
+    return [...launcherCatalog.keys()].filter(
+      (id) => !onEitherSide.has(id) && pinnedButtons[id] === true
+    );
+  }, [toolbarLayout.leftButtons, toolbarLayout.rightButtons, launcherCatalog, pinnedButtons]);
+
+  // Materialized for the same reason the agent repair above is: a
+  // rendered-but-unpositioned button is inert to `moveButton`, which reads the
+  // arrays, so leaving it as a render-time ghost would make a pinned recipe
+  // permanently un-reorderable. `positionAgentButton` is generic over button
+  // ids despite its name — it no-ops on an id that already holds a position and
+  // writes nothing to `pinnedButtons`.
+  useEffect(() => {
+    if (unpositionedLauncherItemPins.length > 0) {
+      positionAgentButton(unpositionedLauncherItemPins);
+    }
+  }, [unpositionedLauncherItemPins, positionAgentButton]);
+
   // Declared group per button, resolved against the live plugin registry so a
   // contribution is classified by membership rather than by parsing its id.
   const resolveToolbarGroup = useCallback(
@@ -1604,7 +1635,10 @@ export function Toolbar({
     // belt-and-suspenders at the render boundary.
     const positioned = Array.from(new Set(toolbarLayout.leftButtons));
 
-    if (!launcherOnRight && unpositionedAgentPins.length > 0) {
+    const unpositionedLeftPins = launcherOnRight
+      ? []
+      : [...unpositionedAgentPins, ...unpositionedLauncherItemPins];
+    if (unpositionedLeftPins.length > 0) {
       // Right after the launcher they were pinned out of, so they lead the
       // agent run in registry order rather than trailing the positioned ones.
       // Grouping below is what keeps the brand marks contiguous; this only
@@ -1613,7 +1647,7 @@ export function Toolbar({
       positioned.splice(
         launcherIndex === -1 ? positioned.length : launcherIndex + 1,
         0,
-        ...unpositionedAgentPins
+        ...unpositionedLeftPins
       );
     }
 
@@ -1637,6 +1671,7 @@ export function Toolbar({
     toolbarLayout.leftButtons,
     launcherOnRight,
     unpositionedAgentPins,
+    unpositionedLauncherItemPins,
     pinnedButtons,
     effectiveAgentSettings,
     agentAvailability,
@@ -1648,12 +1683,16 @@ export function Toolbar({
     // Dedupe the persisted base before appending plugin extras, so duplicate
     // ids (e.g. repeated `forge-stats`, #10937) can't render twice.
     const base = Array.from(new Set(toolbarLayout.rightButtons));
-    if (launcherOnRight && unpositionedAgentPins.length > 0) {
+    if (
+      launcherOnRight &&
+      (unpositionedAgentPins.length > 0 || unpositionedLauncherItemPins.length > 0)
+    ) {
       const launcherIndex = base.indexOf("launcher");
       base.splice(
         launcherIndex === -1 ? base.length : launcherIndex + 1,
         0,
-        ...unpositionedAgentPins
+        ...unpositionedAgentPins,
+        ...unpositionedLauncherItemPins
       );
     }
     const positioned = new Set([...base, ...toolbarLayout.leftButtons]);
@@ -1663,18 +1702,7 @@ export function Toolbar({
     // replaced. Buttons the user already dragged into a side list keep that
     // position and are filtered on promotion below like any other id.
     const extra = pluginButtonIds.filter((id) => !positioned.has(id) && pinnedButtons[id] === true);
-    // Same append, same reason, for a pinned launcher item whose position a
-    // stale cross-view write dropped (#12217). The arrays reconcile
-    // last-writer-wins while `pinnedButtons` merges per key, so the explicit
-    // `true` is the durable record and the slot is rebuilt from it here.
-    // Rebuilt at render rather than written back like `restorePromotedPanelButtons`
-    // does: only the live catalog knows which of these ids exist in this
-    // project, and a hydration that can't tell would either resurrect a
-    // position for a row that isn't here or drop one that is.
-    const launcherExtra = [...launcherCatalog.keys()].filter(
-      (id) => !positioned.has(id) && pinnedButtons[id] === true
-    );
-    return [...base, ...extra, ...launcherExtra].filter((id) =>
+    return [...base, ...extra].filter((id) =>
       isToolbarButtonVisible(
         id,
         pinnedButtons,
@@ -1688,8 +1716,8 @@ export function Toolbar({
     toolbarLayout.leftButtons,
     launcherOnRight,
     unpositionedAgentPins,
+    unpositionedLauncherItemPins,
     pluginButtonIds,
-    launcherCatalog,
     pinnedButtons,
     effectiveAgentSettings,
     agentAvailability,

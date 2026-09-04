@@ -49,6 +49,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
+import { useRecipeStore } from "@/store/recipeStore";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { dispatchToolbarVisibility } from "@/lib/toolbarVisibilityDispatch";
 import { normalizeKeyForBinding } from "@/services/keybindingUtils";
@@ -214,6 +215,8 @@ export function DockLaunchButton({
   const rightButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.rightButtons));
   const setPanelButtonOnToolbar = useToolbarPreferencesStore((s) => s.setPanelButtonOnToolbar);
   const setLauncherItemOnToolbar = useToolbarPreferencesStore((s) => s.setLauncherItemOnToolbar);
+  // Scopes a project-owned recipe's pin id — see `recipeToolbarSourceId`.
+  const currentProjectId = useRecipeStore((s) => s.currentProjectId);
   const positionAgentButton = useToolbarPreferencesStore((s) => s.positionAgentButton);
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
 
@@ -306,7 +309,7 @@ export function DockLaunchButton({
       // One resolver decides which of the three id spaces a row belongs to, so
       // the launcher's pin affordance and the toolbar's button registry can't
       // disagree about what a row is called (#12217).
-      const id = resolveLauncherToolbarButtonId(item);
+      const id = resolveLauncherToolbarButtonId(item, currentProjectId);
       if (id === null) return null;
 
       if (isLauncherItemToolbarButtonId(id)) {
@@ -350,7 +353,7 @@ export function DockLaunchButton({
         onToolbar: isPanelButtonOnToolbar(id, pinnedButtons, leftButtons, rightButtons),
       };
     },
-    [agentSettings, leftButtons, pinnedButtons, rightButtons]
+    [agentSettings, currentProjectId, leftButtons, pinnedButtons, rightButtons]
   );
 
   // Deliberately undebounced, unlike the menu launcher's old `guardPinAction`:

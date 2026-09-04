@@ -62,11 +62,22 @@ export function sortAgentsByToolbarPin<T extends PinnableAgent>(
 
   const pinned: T[] = [];
   const unpinned: T[] = [];
+  // The id the arrays actually hold, which for a non-built-in agent is not its
+  // agent id: a plugin agent sits in `leftButtons` as
+  // `launcher:agent:{id}` (#12217). Resolved once per agent and used for BOTH
+  // the position test and the ordering lookup below — reading `agent.id` in the
+  // sort would score every pinned plugin agent as unpositioned and drop it to
+  // the end of the group, contradicting the toolbar it is supposed to mirror.
+  const toolbarIdFor = (agent: PinnableAgent): string =>
+    isBuiltInAgentId(agent.id) ? agent.id : launcherItemToolbarButtonId("agent", agent.id);
+
   for (const agent of agents) {
     const onToolbar = isBuiltInAgentId(agent.id)
       ? isAgentButtonOnToolbar(
           agentSettings?.agents?.[agent.id],
           agent.availability,
+          // Identical to `toolbarIdFor(agent)` on this branch — a built-in
+          // agent's toolbar id is its agent id.
           positioned.has(agent.id)
         )
       : isLauncherItemOnToolbar(launcherItemToolbarButtonId("agent", agent.id), pinnedButtons);
@@ -77,7 +88,9 @@ export function sortAgentsByToolbarPin<T extends PinnableAgent>(
     }
   }
 
-  pinned.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
+  pinned.sort(
+    (a, b) => (order.get(toolbarIdFor(a)) ?? Infinity) - (order.get(toolbarIdFor(b)) ?? Infinity)
+  );
 
   return { sorted: [...pinned, ...unpinned], pinnedCount: pinned.length };
 }

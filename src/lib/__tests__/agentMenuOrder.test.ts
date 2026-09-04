@@ -172,13 +172,14 @@ describe("sortAgentsByToolbarPin", () => {
     // pin lives under a launcher-item id (#12217). An entry sitting in
     // `agentSettings` under its raw id is not that pin and must not count.
     const agents = [agent("my-plugin-agent", "ready"), agent("claude", "ready")];
-    const { pinnedCount } = sortAgentsByToolbarPin(
+    const { sorted, pinnedCount } = sortAgentsByToolbarPin(
       agents,
       ["my-plugin-agent", "claude"],
       settings({ "my-plugin-agent": { pinned: true } }),
       [],
       {}
     );
+    expect(sorted.map((a) => a.id)).toEqual(["claude", "my-plugin-agent"]);
     expect(pinnedCount).toBe(1);
   });
 
@@ -192,6 +193,26 @@ describe("sortAgentsByToolbarPin", () => {
     // `claude` holds index 0 in leftButtons; the plugin agent has no position
     // yet, so it trails within the pinned group like any unpositioned pin.
     expect(sorted.map((a) => a.id)).toEqual(["claude", "my-plugin-agent"]);
+    expect(pinnedCount).toBe(2);
+  });
+
+  it("orders a pinned non-built-in agent by its synthetic toolbar id (#12217)", () => {
+    // `leftButtons` holds `launcher:agent:<id>`, not the raw agent id. Looking
+    // the order up by `agent.id` scores every pinned plugin agent as
+    // unpositioned and drops it to the end — the launcher then contradicts the
+    // toolbar it is meant to mirror.
+    const pluginId = launcherItemToolbarButtonId("agent", "my-plugin-agent");
+    const agents = [agent("claude", "ready"), agent("my-plugin-agent", "ready")];
+    const { sorted, pinnedCount } = sortAgentsByToolbarPin(
+      agents,
+      [pluginId, "claude"],
+      settings({}),
+      [],
+      { [pluginId]: true }
+    );
+    // Input order is claude-first; the toolbar order is plugin-first, and the
+    // toolbar wins.
+    expect(sorted.map((a) => a.id)).toEqual(["my-plugin-agent", "claude"]);
     expect(pinnedCount).toBe(2);
   });
 
