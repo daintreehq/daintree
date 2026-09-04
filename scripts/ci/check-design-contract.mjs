@@ -4,8 +4,8 @@
  * host and every plugin view share.
  *
  * The file is compiled twice from the same bytes: `src/index.css` imports it for
- * the host build, and the renderer's plugin Tailwind compiler imports it as text
- * (`?raw`) to compile plugin utility classes. That second consumer is what makes
+ * the host build, and the renderer's plugin Tailwind compiler receives it as text
+ * (through `scripts/lib/plugin-style-contract.mjs`) to compile plugin classes. That second consumer is what makes
  * the contents a contract rather than a stylistic choice. Anything that is not a
  * token or a variant would either be silently dropped on the plugin side (the
  * compiler emits utilities only) or leak host chrome into every plugin root, so
@@ -34,9 +34,20 @@ function fail(message) {
   failed = true;
 }
 
-/** Strip `/* … *\/` comments, preserving newlines so line numbers survive. */
-function stripComments(source) {
-  return source.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, " "));
+/**
+ * Blank out comments and quoted strings, preserving length and newlines so both
+ * line numbers and brace depth stay meaningful.
+ *
+ * Strings have to go too, not just comments. A brace inside a quoted value —
+ * `--example: url("data:text/plain,{")` is legal CSS — would otherwise raise the
+ * depth counter and never come back down, so every later top-level rule would
+ * read as nested and slip past the structural check entirely. A quoted `}` fails
+ * the other way, reporting rules that are not there.
+ */
+function blankNonStructural(source) {
+  return source.replace(/\/\*[\s\S]*?\*\/|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g, (match) =>
+    match.replace(/[^\n]/g, " ")
+  );
 }
 
 /**
@@ -80,7 +91,7 @@ function topLevelConstructs(source) {
 }
 
 const contractSource = readFileSync(path.join(root, CONTRACT), "utf-8");
-const stripped = stripComments(contractSource);
+const stripped = blankNonStructural(contractSource);
 
 for (const { line, text } of topLevelConstructs(stripped)) {
   if (!text.startsWith("@")) {
@@ -133,7 +144,7 @@ if (!indexSource.includes(`@import "./styles/design-contract.css"`)) {
 
 // A token or variant left behind in index.css is not shared with plugins, which
 // is the drift this split exists to prevent.
-const strippedIndex = stripComments(indexSource);
+const strippedIndex = blankNonStructural(indexSource);
 for (const { line, text } of topLevelConstructs(strippedIndex)) {
   const name = /^@([\w-]+)/.exec(text)?.[1] ?? "";
   if (name === "theme" || name === "custom-variant") {

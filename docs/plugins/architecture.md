@@ -252,7 +252,10 @@ Sharing the cascade is what lets Tailwind be the styling contract for plugin vie
 
 Three steps, deliberately kept separate:
 
-1. **Collect candidates.** Two sources. The view module's source text is fetched and tokenised before the module is imported, which is what makes the first paint styled; and one `MutationObserver`, attached to plugin roots only, reads `classList` as the DOM changes. The observer is authoritative — it sees template literals, sibling modules and runtime-computed names that source tokenisation cannot. Its callback is a microtask, so a class toggled on by state is styled before the next paint.
+1. **Collect candidates.** Two sources. The view module's source text is fetched and tokenised before the module is imported, which is what makes the first paint styled; and one `MutationObserver` reads `classList` as the DOM changes. The observer is authoritative — it sees template literals, sibling modules and runtime-computed names that source tokenisation cannot. Its callback is a microtask, so a class toggled on by state is styled before the next paint.
+
+   The observer watches the document and keeps only what sits inside a marked style root, one `closest()` call per record. Watching each registered root instead is tempting and wrong twice over: a `MutationObserver` cannot drop a single target, so unregistering one view has to `disconnect()`, silently discarding every other root's queued records; and a `createPortal` container is never a descendant of the wrapper it was rendered from, so a portal would be scoped by the generated CSS but never observed. Filtering on the marker is what keeps the observed set identical to the set the CSS is scoped to.
+
 2. **Compile.** `src/services/plugin/tailwind/pluginTailwindAdapter.ts` is the only place Tailwind's programmatic API is called. It compiles the host's own `src/styles/design-contract.css` — the same bytes `index.css` imports — with the stock theme pulled in as `reference`, so no `:root` variables and no preflight are re-emitted. Utilities land nested in `@layer utilities { @scope ([data-daintree-plugin-style-root]) { … } }`.
 3. **Install.** One constructed `CSSStyleSheet` per document on `adoptedStyleSheets`, shared by every plugin root in it, replaced wholesale on each build because `build()` returns a cumulative sheet whose order can change.
 

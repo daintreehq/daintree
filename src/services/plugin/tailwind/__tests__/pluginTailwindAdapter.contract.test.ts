@@ -242,13 +242,12 @@ describe("plugin Tailwind adapter — candidate validation for diagnostics", () 
 function topLevelConstructs(css: string): string[] {
   const constructs: string[] = [];
   let depth = 0;
-  let pending = "";
 
   for (const line of css.split("\n")) {
     const trimmed = line.trim();
     if (depth === 0 && trimmed && !trimmed.startsWith("/*")) {
-      pending = trimmed.replace(/\s*\{$/, "");
-      if (pending) constructs.push(pending);
+      const construct = trimmed.replace(/\s*\{$/, "");
+      if (construct) constructs.push(construct);
     }
     depth += (line.match(/\{/g)?.length ?? 0) - (line.match(/\}/g)?.length ?? 0);
   }

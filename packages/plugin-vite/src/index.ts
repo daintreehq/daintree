@@ -84,16 +84,34 @@ const NODE_BUILTIN_EXTERNALS: readonly string[] = [
  * like a plugin that is mostly styled, which is precisely the failure mode the
  * runtime contract exists to remove.
  */
-const TAILWIND_PLUGIN_NAMES = ["@tailwindcss/vite", "tailwindcss"] as const;
+function isTailwindPluginName(name: string): boolean {
+  // `@tailwindcss/vite` does not register a plugin under its own package name —
+  // it contributes `@tailwindcss/vite:scan`, `@tailwindcss/vite:generate:serve`
+  // and `@tailwindcss/vite:generate:build`. An equality check against the
+  // package name matches none of them and silently never fires.
+  return name === "tailwindcss" || name.startsWith("@tailwindcss/vite");
+}
 
-/** Tailwind's stylesheet entry points, in both v3 and v4 spelling. */
-const TAILWIND_CSS_DIRECTIVES = [
-  '@import "tailwindcss"',
-  "@import 'tailwindcss'",
-  "@tailwind base",
-  "@tailwind components",
-  "@tailwind utilities",
-] as const;
+/**
+ * Tailwind's stylesheet entry points, in both v4 and v3 spelling.
+ *
+ * Matched as at-rules with a token boundary rather than as substrings, so
+ * `@tailwind utilities-extra` and a migration note in a comment are not builds
+ * this refuses.
+ */
+const TAILWIND_IMPORT = /@import\s+["']tailwindcss["/']/;
+const TAILWIND_DIRECTIVE = /@tailwind\s+(?:base|components|utilities|screens|variants)\s*;/;
+
+/** CSS comments — where a directive is being discussed, not compiled. */
+const CSS_COMMENTS = /\/\*[\s\S]*?\*\//g;
+
+/** Quoted strings, which is how a directive appears inside `content: '…'`. */
+const CSS_STRINGS = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+
+/** Replace a match with spaces, keeping offsets and line numbers intact. */
+function blank(match: string): string {
+  return match.replace(/[^\n]/g, " ");
+}
 
 const CONTRACT_POINTER =
   "Daintree compiles the Tailwind classes your view uses at runtime, against the host's own " +
@@ -193,9 +211,7 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
     // once Vite has merged every source of configuration, so this is the first
     // point at which "is Tailwind wired into this build" has a true answer.
     configResolved(resolved) {
-      const offender = resolved.plugins.find((plugin) =>
-        (TAILWIND_PLUGIN_NAMES as readonly string[]).includes(plugin.name)
-      );
+      const offender = resolved.plugins.find((plugin) => isTailwindPluginName(plugin.name));
       if (offender) {
         throw new Error(
           `[daintree-plugin-vite] this build wires the "${offender.name}" Vite plugin. ` +
@@ -204,16 +220,40 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
       }
     },
     // Catches the other half: a stylesheet pulling Tailwind in directly, which
-    // no plugin entry in the config would reveal.
-    transform(code, id) {
-      if (!/\.(?:css|pcss|postcss|scss|sass|less|styl|stylus)(?:\?|$)/.test(id)) return null;
-      const directive = TAILWIND_CSS_DIRECTIVES.find((candidate) => code.includes(candidate));
-      if (directive) {
-        throw new Error(
-          `[daintree-plugin-vite] ${id} contains \`${directive}\`. ` + CONTRACT_POINTER
-        );
-      }
-      return null;
+    // no plugin entry in the config would reveal — `@tailwindcss/postcss`, say,
+    // which runs inside Vite's CSS compilation and never appears in the plugin
+    // list at all.
+    //
+    // `order: "pre"` is required, not tidiness. Tailwind's own plugins declare
+    // `enforce: "pre"`, and Vite's core `vite:css` runs ahead of normal user
+    // plugins, so a plain transform would be handed CSS with the directive
+    // already compiled away and would wave the build through.
+    transform: {
+      order: "pre",
+      handler(code, id) {
+        if (!/\.(?:css|pcss|postcss|scss|sass|less|styl|stylus)(?:\?|$)/.test(id)) return null;
+        // Comments always go: a migration note saying "remove the old
+        // @tailwind utilities directive" is prose, not a build step, and
+        // refusing it would be a false accusation the author cannot act on.
+        const withoutComments = code.replace(CSS_COMMENTS, blank);
+        // The two families need different treatment. `@import "tailwindcss"`
+        // carries its specifier IN a string, so blanking strings would erase
+        // the thing being matched; `@tailwind utilities` is unquoted, so a
+        // quoted occurrence (`content: '@tailwind utilities;'`) is prose.
+        const directive = TAILWIND_IMPORT.test(withoutComments)
+          ? TAILWIND_IMPORT
+          : TAILWIND_DIRECTIVE.test(withoutComments.replace(CSS_STRINGS, blank))
+            ? TAILWIND_DIRECTIVE
+            : null;
+        if (directive) {
+          throw new Error(
+            `[daintree-plugin-vite] ${id} compiles Tailwind itself ` +
+              `(matched ${String(directive)}). ` +
+              CONTRACT_POINTER
+          );
+        }
+        return null;
+      },
     },
     // Fail the build on any React subpath that is externalized (matched by the
     // regexes above) but is NOT served by the host import map. Without this the

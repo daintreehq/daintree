@@ -1057,6 +1057,12 @@ function buildPluginHeaders(
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": cacheControl,
     ...(stats ? { "Last-Modified": toHttpDate(stats.mtime) } : {}),
+    // Unconditional, not paired with the header below: the RESPONSE varies by
+    // request `Origin` whether or not this particular one carries the echo, and
+    // content-hashed plugin assets are served `immutable`. Without it a cached
+    // entry stored for a tag load (no Origin, no echo) can be replayed to the
+    // renderer's fetch(), which then fails CORS for no visible reason.
+    Vary: "Origin",
     ...(corsOrigin ? { "Access-Control-Allow-Origin": corsOrigin } : {}),
   };
 }

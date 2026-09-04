@@ -25,7 +25,6 @@ import { fileURLToPath } from "node:url";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
-const INDEX_CSS = path.join(REPO_ROOT, "src/index.css");
 const SKELETON = path.join(REPO_ROOT, "src/components/ui/Skeleton.tsx");
 
 /** Every `--color-x: var(--y)` mapping declared in index.css. */

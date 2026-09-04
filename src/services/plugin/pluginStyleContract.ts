@@ -16,6 +16,7 @@
 
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
 import { logWarn } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type {
   PluginStyleReport,
   PluginStyleRuntime,
@@ -52,7 +53,16 @@ const preparedSources = new Map<string, Promise<void>>();
 
 function runtime(): Promise<PluginStyleRuntime | null> {
   runtimePromise ??= loadRuntimeModule()
-    .then((module) => module.createPluginStyleRuntime())
+    .then((module) =>
+      module.createPluginStyleRuntime(document, {
+        // Compaction rebuilds from live DOM, which necessarily forgets classes
+        // that only ever came from a view's source text. Without dropping the
+        // memo, a view that was prepared, unmounted and remounted would be
+        // handed a resolved "already prepared" promise against a compiler that
+        // no longer has its classes — and its first paint would be unstyled.
+        onCompacted: () => preparedSources.clear(),
+      })
+    )
     .then((created) => {
       readyRuntime = created;
       return created;
@@ -61,7 +71,7 @@ function runtime(): Promise<PluginStyleRuntime | null> {
       // Left non-null so a failed load is not retried on every plugin mount;
       // the renderer would fail the same way each time.
       logWarn("[pluginStyleContract] Tailwind runtime unavailable; plugin views render unstyled", {
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error, "unknown error"),
       });
       return null;
     });

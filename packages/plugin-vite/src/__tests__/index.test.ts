@@ -164,44 +164,82 @@ describe("@daintreehq/plugin-vite — node target", () => {
 });
 
 describe("@daintreehq/plugin-vite — Tailwind is a runtime contract, not a build step", () => {
-  /** Invoke a hook that Vite would normally call with its own context. */
+  /** Invoke a hook Vite would normally call with its own plugin context. */
   function callHook<T>(hook: unknown, ...args: unknown[]): T {
     const fn = typeof hook === "function" ? hook : (hook as { handler: unknown }).handler;
     return (fn as (...a: unknown[]) => T).call({}, ...args);
   }
 
-  function configResolvedWithPlugins(names: string[]): void {
-    const plugin = daintreePlugin();
-    callHook(plugin.configResolved, { plugins: names.map((name) => ({ name })) });
+  function configResolvedWith(plugins: { name: string }[]): void {
+    callHook(daintreePlugin().configResolved, { plugins });
   }
 
-  it("rejects a build that wires the Tailwind Vite plugin", () => {
-    expect(() => configResolvedWithPlugins(["vite:react-babel", "@tailwindcss/vite"])).toThrow(
-      /@tailwindcss\/vite/
-    );
-    // The message has to say what to do instead, or the author's next move is
-    // to work around the error rather than adopt the contract.
-    expect(() => configResolvedWithPlugins(["@tailwindcss/vite"])).toThrow(
+  it("rejects a build that wires the real Tailwind Vite plugin", async () => {
+    // Against the REAL factory, not a fabricated plugin name. `@tailwindcss/vite`
+    // registers `@tailwindcss/vite:scan` and `@tailwindcss/vite:generate:*` and
+    // never its own package name, so an equality check silently never fires —
+    // which is exactly what a hand-written `{ name: "@tailwindcss/vite" }`
+    // fixture would fail to notice.
+    const { default: tailwindcss } = await import("@tailwindcss/vite");
+    const contributed = [tailwindcss()].flat() as { name: string }[];
+
+    expect(contributed.length).toBeGreaterThan(0);
+    expect(contributed.every((p) => p.name !== "@tailwindcss/vite")).toBe(true);
+    expect(() => configResolvedWith(contributed)).toThrow(/@tailwindcss\/vite/);
+  });
+
+  it("names the runtime contract in the refusal", () => {
+    // The author's next move should be to adopt the contract, not to work
+    // around the error, so the message has to say what to do instead.
+    expect(() => configResolvedWith([{ name: "@tailwindcss/vite:scan" }])).toThrow(
       /compiles the Tailwind classes your view uses at runtime/
     );
   });
 
   it("allows a build with no Tailwind plugin", () => {
     expect(() =>
-      configResolvedWithPlugins(["vite:react-babel", "daintree-plugin-vite"])
+      configResolvedWith([{ name: "vite:react-babel" }, { name: "daintree-plugin-vite" }])
     ).not.toThrow();
+  });
+
+  it("runs its stylesheet check before Tailwind and vite:css compile it away", () => {
+    // Tailwind's plugins are `enforce: "pre"` and vite:css runs ahead of normal
+    // user plugins, so a plain transform would only ever see output CSS with the
+    // directive already resolved.
+    const transform = daintreePlugin().transform;
+    expect(typeof transform).toBe("object");
+    expect((transform as { order?: string }).order).toBe("pre");
   });
 
   it("rejects a stylesheet that pulls Tailwind in directly", () => {
     const plugin = daintreePlugin();
-    const transform = (code: string, id: string) => () => callHook(plugin.transform, code, id);
+    const run = (code: string, id: string) => () => callHook(plugin.transform, code, id);
 
-    expect(transform('@import "tailwindcss";', "/p/src/panel.css")).toThrow(/tailwindcss/);
-    expect(transform("@tailwind utilities;", "/p/src/panel.css")).toThrow(/@tailwind utilities/);
+    expect(run('@import "tailwindcss";', "/p/src/panel.css")).toThrow(/compiles Tailwind itself/);
+    expect(run("@import 'tailwindcss';", "/p/src/panel.css")).toThrow(/compiles Tailwind itself/);
     // v3 spelling too — an author copying an old template is the likely case.
-    expect(transform("@tailwind base;\n@tailwind components;", "/p/a.scss")).toThrow(
-      /@tailwind base/
+    expect(run("@tailwind base;\n@tailwind components;", "/p/a.scss")).toThrow(
+      /compiles Tailwind itself/
     );
+    // Query suffixes are how Vite addresses CSS in a module graph.
+    expect(run("@tailwind utilities;", "/p/a.css?used")).toThrow(/compiles Tailwind itself/);
+  });
+
+  it("does not refuse a build over a directive that is only mentioned", () => {
+    // A false accusation here is worse than a miss: the author cannot act on it,
+    // and the DOM observer means a missed case still styles correctly.
+    const plugin = daintreePlugin();
+    const run =
+      (code: string, id = "/p/src/panel.css") =>
+      () =>
+        callHook(plugin.transform, code, id);
+
+    expect(
+      run("/* Migration: drop the old @tailwind utilities; line. */\n.a{color:red}")
+    ).not.toThrow();
+    expect(run(".a::after { content: '@tailwind utilities;' }")).not.toThrow();
+    expect(run('@import "tailwindcss-preset-x";')).not.toThrow();
+    expect(run("@tailwind utilities-extra;")).not.toThrow();
   });
 
   it("leaves ordinary plugin CSS and non-CSS modules alone", () => {
@@ -210,9 +248,8 @@ describe("@daintreehq/plugin-vite — Tailwind is a runtime contract, not a buil
     expect(
       callHook(plugin.transform, "@layer components { .panel { color: red } }", "/p/src/panel.css")
     ).toBeNull();
-    // A JS module mentioning the string must not trip the guard.
     expect(
-      callHook(plugin.transform, 'const doc = "@tailwind utilities";', "/p/src/a.ts")
+      callHook(plugin.transform, 'const doc = "@tailwind utilities;";', "/p/src/a.ts")
     ).toBeNull();
   });
 

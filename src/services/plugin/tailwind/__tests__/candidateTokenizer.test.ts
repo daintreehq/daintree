@@ -140,3 +140,59 @@ describe("tokenizePluginSource", () => {
     expect(() => tokenizePluginSource("`p-4 ${unclosed")).not.toThrow();
   });
 });
+
+describe("tokenizePluginSource — staying in sync with JavaScript's lexical structure", () => {
+  it("does not let a quote inside a regex literal swallow the next real string", () => {
+    // The failure this guards is not a miss but an INVERSION: the quote in the
+    // regex reads as an opener, so the next string's opening quote reads as its
+    // closer and every literal after it is inside-out. On a minified single-line
+    // bundle that is most of the file.
+    expect(tokenizePluginSource(`const re = /"/; const cls = "p-4 gap-2";`)).toEqual(
+      expect.arrayContaining(["p-4", "gap-2"])
+    );
+    expect(tokenizePluginSource(`s.replace(/'/g, ""); const c = "rounded-md";`)).toContain(
+      "rounded-md"
+    );
+  });
+
+  it("still reads division as division", () => {
+    // The regex heuristic must not swing the other way and treat `/` in an
+    // expression as opening a literal that runs to the next slash.
+    expect(tokenizePluginSource(`const w = total / count; const c = "p-4";`)).toContain("p-4");
+    expect(tokenizePluginSource(`const w = (a) / (b); const c = "gap-2";`)).toContain("gap-2");
+  });
+
+  it("ignores strings and apostrophes inside comments", () => {
+    expect(tokenizePluginSource(`// it's a "comment" with p-99\nconst c = "p-4";`)).not.toContain(
+      "p-99"
+    );
+    expect(tokenizePluginSource(`/* "block" it's fine */\nconst c = "gap-2";`)).toContain("gap-2");
+    // …and the code after a comment is still read.
+    expect(tokenizePluginSource(`// it's fine\nconst c = "p-4";`)).toContain("p-4");
+  });
+
+  it("balances interpolation braces around a string containing a brace", () => {
+    // `}` inside a string used to close the interpolation early, after which the
+    // nested template's opener was mistaken for the outer template's closer.
+    const tokens = tokenizePluginSource('`before ${obj["}"] ? `p-4` : `m-2`} gap-2`');
+
+    expect(tokens).toContain("p-4");
+    expect(tokens).toContain("m-2");
+    expect(tokens).toContain("gap-2");
+  });
+
+  it("survives deeply nested templates without exhausting the stack", () => {
+    // Recursion here overflowed at a few thousand levels and rescanned each
+    // parent expression — a synchronous stall on the mount path for a pass that
+    // is only ever an optimisation.
+    const source = "`${".repeat(5000) + '"p-4"' + "}`".repeat(5000);
+
+    expect(() => tokenizePluginSource(source)).not.toThrow();
+    expect(tokenizePluginSource(source)).toContain("p-4");
+  });
+
+  it("reads classes that follow an unterminated construct", () => {
+    // Truncated or unusual source must cost the classes after it, not the file.
+    expect(tokenizePluginSource(`const a = /unterminated\nconst c = "p-4";`)).toContain("p-4");
+  });
+});

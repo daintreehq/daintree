@@ -18,6 +18,13 @@
  * them removes the identifier noise that would otherwise dominate the candidate
  * set. It is also exactly the rule the plugin docs give authors: a conditional
  * class must be a complete string, never a concatenated fragment.
+ *
+ * The scanner tracks comments and regular-expression literals as well as
+ * strings, because it must not merely be approximate — it must not DESYNCHRONISE.
+ * A quote inside a regex (`.replace(/"/g, …)`) or an apostrophe in a comment
+ * would otherwise be read as opening a string, and every real string after it
+ * inverts: openers become closers, and the classes inside them vanish from the
+ * pass. In a minified single-line bundle that is most of the file.
  */
 
 /** Source larger than this is not tokenised; the DOM observer still covers it. */
@@ -45,6 +52,57 @@ const CANDIDATE_CHARACTER = /[A-Za-z0-9_\-:./!@*%()#]/;
 const CANDIDATE_START = /^[A-Za-z@\-!['*]/;
 
 /**
+ * Words after which a `/` begins a regular expression rather than division.
+ * The rest of the decision is made from the previous significant character.
+ */
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  "return",
+  "typeof",
+  "instanceof",
+  "in",
+  "of",
+  "new",
+  "delete",
+  "void",
+  "case",
+  "do",
+  "else",
+  "yield",
+  "await",
+]);
+
+/** Characters after which a `/` begins a regular expression. */
+const REGEX_PRECEDING_PUNCTUATION = new Set([
+  "",
+  "(",
+  ",",
+  "=",
+  ":",
+  "[",
+  "!",
+  "&",
+  "|",
+  "?",
+  "{",
+  "}",
+  ";",
+  "+",
+  "-",
+  "*",
+  "%",
+  "^",
+  "~",
+  "<",
+  ">",
+]);
+
+/** What the scanner is currently inside. */
+type Frame =
+  | { readonly kind: "code" }
+  | { readonly kind: "template" }
+  | { kind: "expression"; braceDepth: number };
+
+/**
  * Extract every candidate-shaped token from plugin source text.
  *
  * Returns a de-duplicated array in first-seen order. Order is not significant to
@@ -55,90 +113,178 @@ export function tokenizePluginSource(source: string): string[] {
   const candidates = new Set<string>();
   if (source.length === 0 || source.length > MAX_SOURCE_BYTES) return [];
 
-  for (const literal of stringLiteralContents(source)) {
-    for (const token of splitCandidates(literal)) {
-      if (candidates.size >= MAX_CANDIDATES) return [...candidates];
-      candidates.add(token);
-    }
-  }
-  return [...candidates];
-}
-
-/**
- * Contents of every string literal in `source`.
- *
- * A deliberately forgiving scanner, not a JavaScript parser: it recognises the
- * three quote forms and backslash escapes, and treats `${` inside a template as
- * a boundary so an interpolated expression is never mistaken for class text. It
- * does not track comments or regex literals — a class-looking token harvested
- * from a comment is harmless, and the alternative is parsing the language.
- */
-function* stringLiteralContents(source: string): Generator<string> {
+  // An explicit stack, not recursion. Template literals nest without bound in
+  // valid JavaScript (`` `${`${…}`}` ``), and a recursive scanner over a 4 MB
+  // source both overflows the stack and rescans each parent expression — a
+  // synchronous stall on the mount path, for a pass that is only an optimisation.
+  const stack: Frame[] = [{ kind: "code" }];
+  /** Last non-whitespace, non-comment character, for the regex/division call. */
+  let previousSignificant = "";
   let index = 0;
 
-  while (index < source.length) {
-    const quote = source[index];
-    if (quote !== '"' && quote !== "'" && quote !== "`") {
-      index++;
-      continue;
+  const collect = (start: number, end: number): boolean => {
+    for (const token of splitCandidates(source.slice(start, end))) {
+      if (candidates.size >= MAX_CANDIDATES) return false;
+      candidates.add(token);
     }
+    return true;
+  };
 
-    index++;
-    let start = index;
-    let closed = false;
+  while (index < source.length) {
+    const frame = stack[stack.length - 1]!;
+    const char = source[index]!;
 
-    while (index < source.length) {
-      const char = source[index];
-
+    if (frame.kind === "template") {
       if (char === "\\") {
         index += 2;
         continue;
       }
-      if (char === quote) {
-        yield source.slice(start, index);
+      if (char === "`") {
+        stack.pop();
+        previousSignificant = "`";
         index++;
-        closed = true;
-        break;
-      }
-      // A non-template literal never spans a newline; an unterminated quote is
-      // far more likely a lone apostrophe in prose than a real string, so end
-      // the literal at the line break rather than swallowing the rest of the file.
-      if (quote !== "`" && (char === "\n" || char === "\r")) {
-        yield source.slice(start, index);
-        closed = true;
-        break;
-      }
-      // `${expr}` is not class text itself, but it very often CONTAINS class
-      // text — `${active ? "bg-surface-active" : ""}` is the ordinary way to
-      // write a conditional class. So yield the static run before it, then
-      // scan the expression for its own string literals rather than skipping
-      // it, and resume after the matching brace. Recursing handles nesting
-      // (a template inside a template) for free.
-      if (quote === "`" && char === "$" && source[index + 1] === "{") {
-        yield source.slice(start, index);
-        const expressionStart = index + 2;
-        index = skipInterpolation(source, expressionStart);
-        // `index` sits past the closing brace; the expression is what precedes it.
-        yield* stringLiteralContents(
-          source.slice(expressionStart, Math.max(expressionStart, index - 1))
-        );
-        start = index;
         continue;
       }
-      index++;
+      if (char === "$" && source[index + 1] === "{") {
+        stack.push({ kind: "expression", braceDepth: 0 });
+        previousSignificant = "{";
+        index += 2;
+        continue;
+      }
+      // Static run of the template, up to the next boundary.
+      const start = index;
+      while (index < source.length) {
+        const c = source[index]!;
+        if (c === "\\") {
+          index += 2;
+          continue;
+        }
+        if (c === "`" || (c === "$" && source[index + 1] === "{")) break;
+        index++;
+      }
+      if (!collect(start, Math.min(index, source.length))) break;
+      continue;
     }
 
-    if (!closed && start < source.length) yield source.slice(start);
+    // `code` and `expression` behave identically except that an expression
+    // closes on the `}` that balances its opening `${`.
+    if (char === "/" && source[index + 1] === "/") {
+      index += 2;
+      while (index < source.length && source[index] !== "\n") index++;
+      continue;
+    }
+    if (char === "/" && source[index + 1] === "*") {
+      index += 2;
+      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/"))
+        index++;
+      index += 2;
+      continue;
+    }
+    if (char === "/" && startsRegex(source, index, previousSignificant)) {
+      index = skipRegex(source, index);
+      previousSignificant = "/";
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      const literal = skipQuoted(source, index, char);
+      if (!collect(index + 1, literal.contentEnd)) break;
+      index = literal.next;
+      previousSignificant = char;
+      continue;
+    }
+    if (char === "`") {
+      stack.push({ kind: "template" });
+      index++;
+      continue;
+    }
+    if (frame.kind === "expression") {
+      if (char === "{") {
+        frame.braceDepth++;
+      } else if (char === "}") {
+        if (frame.braceDepth === 0) {
+          stack.pop();
+          previousSignificant = "}";
+          index++;
+          continue;
+        }
+        frame.braceDepth--;
+      }
+    }
+    if (!/\s/.test(char)) previousSignificant = char;
+    index++;
   }
+
+  return [...candidates];
 }
 
-/** Index just past the `}` closing an interpolation opened at `index`. */
-function skipInterpolation(source: string, index: number): number {
-  let depth = 1;
-  while (index < source.length && depth > 0) {
-    const char = source[index];
-    if (char === "{") depth++;
-    else if (char === "}") depth--;
+/**
+ * Where the literal opening at `openIndex` ends: `contentEnd` is exclusive of
+ * the closing quote, `next` is where scanning resumes.
+ *
+ * A single- or double-quoted literal cannot span a raw newline, so an
+ * unterminated one ends at the line break rather than swallowing the rest of the
+ * file — a lone apostrophe in prose is far likelier than a real string.
+ */
+function skipQuoted(
+  source: string,
+  openIndex: number,
+  quote: string
+): { contentEnd: number; next: number } {
+  let index = openIndex + 1;
+  while (index < source.length) {
+    const char = source[index]!;
+    if (char === "\\") {
+      index += 2;
+      continue;
+    }
+    if (char === quote) return { contentEnd: index, next: index + 1 };
+    // Unterminated: the content ends at the line break and scanning resumes
+    // there, rather than one character short of it.
+    if (char === "\n" || char === "\r") return { contentEnd: index, next: index };
+    index++;
+  }
+  return { contentEnd: source.length, next: source.length };
+}
+
+/**
+ * Whether the `/` at `index` opens a regular expression rather than dividing.
+ *
+ * The standard heuristic: a regex can only appear where a value is expected, so
+ * the previous significant character decides it. Getting this wrong in the
+ * conservative direction (reading a regex as division) merely risks a
+ * desynchronised quote; the point is to catch the common `/"/` and `/'/` forms.
+ */
+function startsRegex(source: string, index: number, previousSignificant: string): boolean {
+  if (REGEX_PRECEDING_PUNCTUATION.has(previousSignificant)) return true;
+  if (!/[A-Za-z0-9_$]/.test(previousSignificant)) return false;
+  // An identifier before `/` is division (`total / count`) unless the identifier
+  // is a keyword after which a value is expected (`return /".."/`).
+  let end = index - 1;
+  while (end >= 0 && /\s/.test(source[end]!)) end--;
+  let start = end;
+  while (start >= 0 && /[A-Za-z0-9_$]/.test(source[start]!)) start--;
+  return REGEX_PRECEDING_KEYWORDS.has(source.slice(start + 1, end + 1));
+}
+
+/** Index just past the closing `/` of the regex literal opening at `openIndex`. */
+function skipRegex(source: string, openIndex: number): number {
+  let index = openIndex + 1;
+  let inClass = false;
+  while (index < source.length) {
+    const char = source[index]!;
+    if (char === "\\") {
+      index += 2;
+      continue;
+    }
+    if (char === "\n" || char === "\r") return index;
+    if (char === "[") inClass = true;
+    else if (char === "]") inClass = false;
+    else if (char === "/" && !inClass) {
+      index++;
+      // Flags.
+      while (index < source.length && /[a-z]/i.test(source[index]!)) index++;
+      return index;
+    }
     index++;
   }
   return index;

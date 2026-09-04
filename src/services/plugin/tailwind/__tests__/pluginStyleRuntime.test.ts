@@ -163,22 +163,39 @@ describe("pluginStyleRuntime — the sheet", () => {
 });
 
 describe("pluginStyleRuntime — lifecycle", () => {
-  it("stops observing a root once it unregisters", async () => {
+  it("keeps watching the other roots when one unregisters", async () => {
+    // The scope the CSS is generated for is "inside a marked root", so that is
+    // what the observer follows. Unregistering is liveness bookkeeping — it must
+    // never leave a still-mounted sibling unwatched, which is exactly what
+    // per-root observation did: `MutationObserver` cannot drop one target, so
+    // detaching one root meant disconnecting from all of them.
     const kept = mountRoot();
     const removed = mountRoot();
     runtime.registerRoot(kept);
     const unregister = runtime.registerRoot(removed);
 
     unregister();
-    removed.innerHTML = `<span class="tracking-tight"></span>`;
-    await afterObserver();
-    expect(installedCss()).not.toContain("tracking-tight");
+    removed.remove();
 
-    // Unregistering one root must not deafen the others — the observer is
-    // shared, so it is disconnected and re-attached to what remains.
     kept.innerHTML = `<span class="uppercase"></span>`;
     await afterObserver();
     expect(installedCss()).toContain("uppercase");
+  });
+
+  it("styles a marked portal container rendered outside the view wrapper", async () => {
+    // `createPortal` escapes the wrapper the host registered, which is why
+    // `PanelViewProps.styleRootAttributes` exists. The generated CSS is scoped to
+    // the marker, so the observer has to follow the marker too — otherwise the
+    // contract compiles rules for a subtree it never looks at.
+    runtime.registerRoot(mountRoot());
+
+    const portal = document.createElement("div");
+    portal.setAttribute(PLUGIN_STYLE_ROOT_ATTRIBUTE, "");
+    portal.innerHTML = `<span class="tracking-tight"></span>`;
+    document.body.appendChild(portal);
+    await afterObserver();
+
+    expect(installedCss()).toContain("tracking-tight");
   });
 
   it("removes its stylesheet and stops observing on dispose", async () => {

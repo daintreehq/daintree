@@ -135,6 +135,32 @@ describe("check-design-contract", () => {
     expect(result.output).toContain("belongs in src/styles/design-contract.css");
   });
 
+  it("is not fooled by a brace inside a quoted value", () => {
+    // Legal CSS. Counting it as structure would raise the depth permanently, so
+    // every later top-level rule reads as nested and the check waves it through
+    // — the guard silently stops guarding.
+    const result = runCheck(`@theme {
+  --example: url("data:text/plain,{");
+}
+.forbidden {
+  color: red;
+}
+`);
+
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain(".forbidden");
+  });
+
+  it("is not fooled by a closing brace inside a quoted value", () => {
+    const result = runCheck(`@theme {
+  --example: url("data:text/plain,}");
+  --text-2xs: 0.6875rem;
+}
+`);
+
+    expect(result.ok, result.output).toBe(true);
+  });
+
   it("passes against the repository's real contract file", () => {
     expect(() =>
       execFileSync(process.execPath, [SCRIPT], { cwd: REPO_ROOT, encoding: "utf-8", stdio: "pipe" })
