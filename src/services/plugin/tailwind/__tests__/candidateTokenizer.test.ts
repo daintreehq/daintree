@@ -155,6 +155,18 @@ describe("tokenizePluginSource — staying in sync with JavaScript's lexical str
     );
   });
 
+  it("reads division after an increment as division", () => {
+    // `++` ends an expression, so the `/` after it divides. Judging on the single
+    // previous character (`+`) reads it as opening a regex, which then runs to
+    // end of file and takes every class after it.
+    expect(tokenizePluginSource(`const n = i++ / divisor; const cls = "gap-2";`)).toContain(
+      "gap-2"
+    );
+    expect(tokenizePluginSource(`const n = i-- / d; const cls = "p-4";`)).toContain("p-4");
+    // …while a genuine regex after `+` is still a regex.
+    expect(tokenizePluginSource(`const n = 1 + /"/.source; const cls = "m-2";`)).toContain("m-2");
+  });
+
   it("still reads division as division", () => {
     // The regex heuristic must not swing the other way and treat `/` in an
     // expression as opening a literal that runs to the next slash.

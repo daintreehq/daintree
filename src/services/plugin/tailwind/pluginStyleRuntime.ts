@@ -189,6 +189,15 @@ export async function createPluginStyleRuntime(
   let disposed = false;
   /** Candidate count at which compaction is worth attempting again. */
   let compactionFloor = compactionThreshold;
+  /**
+   * Whether plugin DOM has been removed since the last compaction attempt.
+   *
+   * Removal is the only thing that can make a tracked candidate dead, so it is
+   * the precise trigger. Growth alone misses the common case entirely: a hot
+   * reload that swaps a generation's classes for a same-sized set of different
+   * ones has everything to drop and never crosses a size threshold.
+   */
+  let sawRemoval = false;
 
   const observer = new MutationObserver((records) => {
     const pending = new Set<string>();
@@ -208,6 +217,9 @@ export async function createPluginStyleRuntime(
         }
         continue;
       }
+      for (const node of record.removedNodes) {
+        if (node instanceof Element) sawRemoval = true;
+      }
       for (const node of record.addedNodes) {
         if (!(node instanceof Element)) continue;
         if (node.closest(STYLE_ROOT_SELECTOR)) {
@@ -223,6 +235,7 @@ export async function createPluginStyleRuntime(
       }
     }
     if (pending.size > 0) ingest(pending, true);
+    else if (sawRemoval) maybeCompact();
   });
 
   // One observer over the document, not one per registered root. Per-root
@@ -331,7 +344,12 @@ export async function createPluginStyleRuntime(
    */
   function maybeCompact(): void {
     if (compiled.size <= compactionThreshold) return;
-    if (compiled.size < compactionFloor) return;
+    // Either something died, or the set has grown enough to be worth re-checking
+    // even though nothing obviously did. The growth floor alone re-ran a full DOM
+    // harvest on every ingest past the threshold, because a compaction that finds
+    // nothing to drop leaves the trigger condition true.
+    if (!sawRemoval && compiled.size < compactionFloor) return;
+    sawRemoval = false;
     compactionFloor = compiled.size + COMPACTION_RETRY_GROWTH;
     void compact();
   }
@@ -352,7 +370,11 @@ export async function createPluginStyleRuntime(
     if (compacting || disposed) return;
     compacting = true;
     try {
-      if (liveClasses().size >= compiled.size) return;
+      // Membership, not cardinality. A generation that swaps one set of classes
+      // for a same-sized disjoint set — 16k arbitrary widths replaced by 16k
+      // arbitrary heights — has everything to drop and identical counts, and a
+      // size comparison would decline exactly when compaction matters most.
+      if (!hasDeadCandidates(liveClasses())) return;
 
       const fresh = await createPluginCssCompiler();
       if (disposed) return;
@@ -389,6 +411,14 @@ export async function createPluginStyleRuntime(
     } finally {
       compacting = false;
     }
+  }
+
+  /** Whether anything the compiler holds is no longer anywhere in the document. */
+  function hasDeadCandidates(live: Set<string>): boolean {
+    for (const token of compiled) {
+      if (!live.has(token)) return true;
+    }
+    return false;
   }
 
   /**

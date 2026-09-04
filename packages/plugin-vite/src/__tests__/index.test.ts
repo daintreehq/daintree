@@ -242,6 +242,35 @@ describe("@daintreehq/plugin-vite — Tailwind is a runtime contract, not a buil
     expect(run("@tailwind utilities-extra;")).not.toThrow();
   });
 
+  it("reads the stylesheet lexically, not by blanking comments with a regex", () => {
+    const plugin = daintreePlugin();
+    const run =
+      (code: string, id = "/p/src/panel.css") =>
+      () =>
+        callHook(plugin.transform, code, id);
+
+    // Quoted `/*` and `*/` are content, not a comment. A comment regex pairs
+    // them and erases the real directive between — which Tailwind then compiles.
+    expect(run('.a{content:"/*"} @tailwind utilities; .b{content:"*/"}')).toThrow(
+      /compiles Tailwind itself/
+    );
+    // An at-rule inside a string is text. Refusing the build over it is an
+    // accusation the author cannot act on.
+    expect(run(`.a::after { content: '@import "tailwindcss"'; }`)).not.toThrow();
+    // `//` is a comment in SCSS and friends, and not in plain CSS.
+    expect(run("// Remove @tailwind utilities;\n.a{color:red}", "/p/a.scss")).not.toThrow();
+  });
+
+  it("catches a directive with no trailing semicolon", () => {
+    // Tailwind accepts `@tailwind utilities` at end of file, so requiring the
+    // semicolon left a bypass that compiled the whole utility set.
+    const plugin = daintreePlugin();
+
+    expect(() => callHook(plugin.transform, "@tailwind utilities", "/p/a.css")).toThrow(
+      /compiles Tailwind itself/
+    );
+  });
+
   it("leaves ordinary plugin CSS and non-CSS modules alone", () => {
     const plugin = daintreePlugin();
 

@@ -92,25 +92,91 @@ function isTailwindPluginName(name: string): boolean {
   return name === "tailwindcss" || name.startsWith("@tailwindcss/vite");
 }
 
+/** Tailwind's `@tailwind` layer names, in v4 and v3 spelling. */
+const TAILWIND_LAYERS = new Set(["base", "components", "utilities", "screens", "variants"]);
+
+/** Stylesheet languages whose `//` runs to end of line. Plain CSS has no such form. */
+const LINE_COMMENT_EXTENSIONS = /\.(?:scss|sass|less|styl|stylus)(?:\?|$)/;
+
 /**
- * Tailwind's stylesheet entry points, in both v4 and v3 spelling.
+ * The Tailwind entry directive this stylesheet compiles, or `null`.
  *
- * Matched as at-rules with a token boundary rather than as substrings, so
- * `@tailwind utilities-extra` and a migration note in a comment are not builds
- * this refuses.
+ * A real scanner rather than regexes over blanked text, because blanking is not
+ * lexical and fails in BOTH directions — each of these is a case a regex pass
+ * got wrong:
+ *
+ *   - `.a{content:"/*"} @tailwind utilities; .b{content:"*\/"}` — the quoted
+ *     fragments are not a comment, but a comment regex reads them as one and
+ *     erases the real directive between them. Tailwind compiles that file.
+ *   - `.a::after { content: '@import "tailwindcss"' }` — an at-rule inside a
+ *     string is text, and refusing the build over it is an accusation the
+ *     author cannot act on.
+ *   - `// Remove @tailwind utilities;` in a `.scss` file — a line comment, which
+ *     a CSS-only comment regex does not recognise at all.
+ *
+ * Walking the source keeps strings and comments out of consideration by
+ * construction, so only an at-rule the compiler would actually see is reported.
  */
-const TAILWIND_IMPORT = /@import\s+["']tailwindcss["/']/;
-const TAILWIND_DIRECTIVE = /@tailwind\s+(?:base|components|utilities|screens|variants)\s*;/;
+function findTailwindEntry(code: string, id: string): string | null {
+  const lineComments = LINE_COMMENT_EXTENSIONS.test(id);
+  let index = 0;
 
-/** CSS comments — where a directive is being discussed, not compiled. */
-const CSS_COMMENTS = /\/\*[\s\S]*?\*\//g;
+  while (index < code.length) {
+    const char = code[index];
 
-/** Quoted strings, which is how a directive appears inside `content: '…'`. */
-const CSS_STRINGS = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+    if (char === "/" && code[index + 1] === "*") {
+      const end = code.indexOf("*/", index + 2);
+      index = end === -1 ? code.length : end + 2;
+      continue;
+    }
+    if (lineComments && char === "/" && code[index + 1] === "/") {
+      const end = code.indexOf("\n", index + 2);
+      index = end === -1 ? code.length : end + 1;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      index = skipCssString(code, index);
+      continue;
+    }
+    if (char === "@") {
+      const rule = /^@([a-zA-Z-]+)([^;{]*)/.exec(code.slice(index));
+      if (rule) {
+        const [matched, name, params] = rule as unknown as [string, string, string];
+        if (name === "import" && /^\s*["']tailwindcss["'/]/.test(params)) {
+          return '@import "tailwindcss"';
+        }
+        // No trailing `;` required: Tailwind accepts `@tailwind utilities` at
+        // end of file, so demanding the semicolon left a bypass open.
+        const layer = /^\s+([a-zA-Z-]+)\s*$/.exec(params)?.[1];
+        if (name === "tailwind" && layer && TAILWIND_LAYERS.has(layer)) {
+          return `@tailwind ${layer}`;
+        }
+        index += matched.length;
+        continue;
+      }
+    }
+    index++;
+  }
+  return null;
+}
 
-/** Replace a match with spaces, keeping offsets and line numbers intact. */
-function blank(match: string): string {
-  return match.replace(/[^\n]/g, " ");
+/** Index just past the closing quote of the CSS string opening at `openIndex`. */
+function skipCssString(code: string, openIndex: number): number {
+  const quote = code[openIndex];
+  let index = openIndex + 1;
+  while (index < code.length) {
+    const char = code[index];
+    if (char === "\\") {
+      index += 2;
+      continue;
+    }
+    if (char === quote) return index + 1;
+    // A CSS string cannot span a raw newline; stopping here keeps an
+    // unterminated quote from swallowing the rest of the file.
+    if (char === "\n") return index;
+    index++;
+  }
+  return index;
 }
 
 const CONTRACT_POINTER =
@@ -232,23 +298,11 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
       order: "pre",
       handler(code, id) {
         if (!/\.(?:css|pcss|postcss|scss|sass|less|styl|stylus)(?:\?|$)/.test(id)) return null;
-        // Comments always go: a migration note saying "remove the old
-        // @tailwind utilities directive" is prose, not a build step, and
-        // refusing it would be a false accusation the author cannot act on.
-        const withoutComments = code.replace(CSS_COMMENTS, blank);
-        // The two families need different treatment. `@import "tailwindcss"`
-        // carries its specifier IN a string, so blanking strings would erase
-        // the thing being matched; `@tailwind utilities` is unquoted, so a
-        // quoted occurrence (`content: '@tailwind utilities;'`) is prose.
-        const directive = TAILWIND_IMPORT.test(withoutComments)
-          ? TAILWIND_IMPORT
-          : TAILWIND_DIRECTIVE.test(withoutComments.replace(CSS_STRINGS, blank))
-            ? TAILWIND_DIRECTIVE
-            : null;
+        const directive = findTailwindEntry(code, id);
         if (directive) {
           throw new Error(
             `[daintree-plugin-vite] ${id} compiles Tailwind itself ` +
-              `(matched ${String(directive)}). ` +
+              `(found \`${directive}\`). ` +
               CONTRACT_POINTER
           );
         }

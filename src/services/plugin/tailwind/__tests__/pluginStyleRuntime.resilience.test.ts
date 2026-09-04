@@ -42,9 +42,7 @@ vi.mock("@/services/plugin/tailwind/pluginTailwindAdapter", () => ({
     candidates.map((candidate) => ({ candidate, generated: !candidate.startsWith("bad-") })),
 }));
 
-const { createPluginStyleRuntime } = await import(
-  "@/services/plugin/tailwind/pluginStyleRuntime"
-);
+const { createPluginStyleRuntime } = await import("@/services/plugin/tailwind/pluginStyleRuntime");
 
 function installedCss(): string {
   return document.querySelector("style[data-daintree-plugin-styles]")?.textContent ?? "";
@@ -181,23 +179,48 @@ describe("pluginStyleRuntime — compaction", () => {
     }
   });
 
-  it("does not re-harvest on every ingest once past the threshold", async () => {
-    // Compaction that finds nothing to drop leaves the set the same size, so
-    // without a high-water mark the trigger stays true and every later ingest
-    // pays for a full DOM walk plus a discarded compiler build.
+  it("compacts when a generation swaps in a same-sized, disjoint class set", async () => {
+    // The trigger compared set SIZES. A hot reload that replaces every class
+    // with an equal number of different ones has everything to drop and
+    // identical counts, so a size check declines exactly when it matters — and
+    // at the ceiling that leaves the new generation permanently unstyled.
+    const runtime = await createPluginStyleRuntime(document, { compactionThreshold: 2 });
+    try {
+      const root = mountRoot(`<span class="w-1 w-2 w-3"></span>`);
+      runtime.registerRoot(root);
+      expect(installedCss()).toContain(".w-1");
+
+      root.innerHTML = `<span class="h-1 h-2 h-3"></span>`;
+      await afterObserver();
+      await afterObserver();
+      await afterObserver();
+
+      expect(installedCss()).toContain(".h-1");
+      expect(installedCss()).not.toContain(".w-1");
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it("does not compact while classes are only being added", async () => {
+    // Nothing can be dead if nothing was removed, so a purely additive run must
+    // not pay for a DOM harvest and a discarded compiler build on every ingest —
+    // which is what a size-only trigger did, since a compaction that drops
+    // nothing leaves the trigger condition true.
     const runtime = await createPluginStyleRuntime(document, { compactionThreshold: 1 });
     try {
-      const root = mountRoot(`<span class="p-1"></span>`);
+      const root = mountRoot();
       runtime.registerRoot(root);
 
       for (let i = 0; i < 12; i++) {
-        root.innerHTML = `<span class="${Array.from({ length: i + 2 }, (_, n) => `m-${n}`).join(" ")}"></span>`;
+        const span = document.createElement("span");
+        span.className = `m-${i}`;
+        root.appendChild(span);
         await afterObserver();
       }
 
-      // Every compaction that actually ran would append a fresh cumulative
-      // build; a thrashing loop shows up as far more builds than ingests.
-      expect(compilerLog.length).toBeLessThan(24);
+      // One build per ingest, and no compaction builds on top.
+      expect(compilerLog.length).toBeLessThanOrEqual(13);
     } finally {
       runtime.dispose();
     }

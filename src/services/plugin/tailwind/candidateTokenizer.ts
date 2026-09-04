@@ -255,6 +255,15 @@ function skipQuoted(
  * desynchronised quote; the point is to catch the common `/"/` and `/'/` forms.
  */
 function startsRegex(source: string, index: number, previousSignificant: string): boolean {
+  // `++` and `--` END an expression, so the `/` after one is division. Judging
+  // on the single previous character reads the `+` of `i++ / divisor` as
+  // regex-leading and then runs to end of file looking for a closing slash,
+  // taking every class after it.
+  if (previousSignificant === "+" || previousSignificant === "-") {
+    let back = index - 1;
+    while (back >= 0 && /\s/.test(source[back]!)) back--;
+    if (source[back - 1] === previousSignificant) return false;
+  }
   if (REGEX_PRECEDING_PUNCTUATION.has(previousSignificant)) return true;
   if (!/[A-Za-z0-9_$]/.test(previousSignificant)) return false;
   // An identifier before `/` is division (`total / count`) unless the identifier
