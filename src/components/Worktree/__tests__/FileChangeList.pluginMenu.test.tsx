@@ -27,7 +27,11 @@ vi.mock("@/hooks/usePluginContextMenuItems", () => ({
 // stand up; the menu item's enabled/disabled branch is covered in the hook's
 // own suite.
 vi.mock("@/hooks/useInsertFileReference", () => ({
-  useInsertFileReference: () => ({ canInsert: false, insert: () => false }),
+  useInsertFileReference: () => ({
+    canInsert: false,
+    refusalReason: "no-eligible-agent",
+    insert: () => false,
+  }),
 }));
 
 import {

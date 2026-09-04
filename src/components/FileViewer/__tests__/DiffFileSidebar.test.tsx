@@ -17,7 +17,11 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/hooks/useInsertFileReference", () => ({
-  useInsertFileReference: () => ({ canInsert: false, insert: () => false }),
+  useInsertFileReference: () => ({
+    canInsert: false,
+    refusalReason: "no-eligible-agent",
+    insert: () => false,
+  }),
 }));
 
 const { itemsRef } = vi.hoisted(() => ({

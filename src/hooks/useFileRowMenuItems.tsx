@@ -6,6 +6,7 @@ import {
   ContextMenuActionItem,
   ContextMenuItem,
   ContextMenuLabel,
+  ContextMenuMeta,
   ContextMenuSeparator,
   ContextMenuShortcut,
   ContextMenuSub,
@@ -17,7 +18,10 @@ import {
   usePluginContextMenuItems,
   type PluginContextMenuItemEntry,
 } from "@/hooks/usePluginContextMenuItems";
-import { useInsertFileReference } from "@/hooks/useInsertFileReference";
+import {
+  useInsertFileReference,
+  type InsertFileReferenceRefusalReason,
+} from "@/hooks/useInsertFileReference";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { isFileContentsCopyCandidate } from "@/components/FileViewer/filePreviewKinds";
@@ -30,6 +34,40 @@ import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { CopyTreeRunSource, GitStatus } from "@shared/types";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2";
+
+const INSERT_LABEL = "Insert file reference";
+
+/**
+ * Why the row can't insert a reference, in the two registers the menu needs.
+ *
+ * `meta` is the trailing muted slot a sighted user reads; `detail` is folded
+ * into the item's accessible name because `ContextMenuMeta` is `aria-hidden`,
+ * so the visible reason would otherwise be silent to a screen reader. One
+ * entry per gate: a single "nothing resolved" is what made the item read as
+ * broken rather than conditional (#12207).
+ */
+const INSERT_REFUSAL_COPY = {
+  "workspace-unavailable": { meta: "No workspace", detail: "no workspace" },
+  "fleet-broadcast-armed": { meta: "Fleet armed", detail: "the fleet is armed" },
+  "hybrid-input-disabled": { meta: "Input bar off", detail: "the hybrid input bar is off" },
+  // One string for `disconnected` and `recovering` alike. The distinction that
+  // matters — wait, or act — is already on screen: `HostCrashBanner` renders
+  // for every non-connected status and says which, so a menu row repeating it
+  // in four words could only get it wrong.
+  "backend-unavailable": {
+    meta: "No terminal service",
+    detail: "the terminal service is unavailable",
+  },
+  "recorded-target-unavailable": {
+    meta: "Agent unavailable",
+    detail: "that agent can't take input",
+  },
+  // Deliberately not "no agent in the grid": this also fires when agents are
+  // there but none can take input — locked, restarting, mid-voice-submit — and
+  // naming the grid would then be false.
+  "no-eligible-agent": { meta: "No agent available", detail: "no agent is available" },
+  "multiple-eligible-agents": { meta: "Type to an agent", detail: "type to an agent first" },
+} as const satisfies Record<InsertFileReferenceRefusalReason, { meta: string; detail: string }>;
 
 /**
  * Dispatch an action for the clicked row and, if it fails, say so with a Retry
@@ -203,7 +241,15 @@ export function isFileRowMenuKey(event: {
 export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuController {
   const { worktreePath, worktreeId, copyTreeRunSource } = surface;
   const filePluginItems = usePluginContextMenuItems("file");
-  const { canInsert, insert } = useInsertFileReference();
+  const { canInsert, refusalReason, insert } = useInsertFileReference();
+  // Narrowed here, where the discriminated pair still correlates, and reduced
+  // to two primitives so `renderItems` keeps a stable dependency list.
+  // `undefined` rather than `null` for the absent case: that is what a DOM
+  // attribute prop takes to mean "don't render me".
+  const insertRefusalMeta = canInsert ? undefined : INSERT_REFUSAL_COPY[refusalReason].meta;
+  const insertRefusalLabel = canInsert
+    ? undefined
+    : `${INSERT_LABEL}, ${INSERT_REFUSAL_COPY[refusalReason].detail}`;
 
   // Bucketed here rather than in `renderItems`: that runs once per row, and a
   // Review Hub listing thousands of changed files would rebuild the same map
@@ -343,16 +389,27 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
           </ContextMenuItem>
           {/* Disabled rather than hidden when nothing resolves: the gesture is
               the point of the menu entry, and a row that silently drops it
-              would read as broken. The agent is resolved from typing history,
-              so this is off until the user has actually talked to one. */}
+              would read as broken. The reason rides along so the row accounts
+              for itself — seven different gates used to share one grey item
+              (#12207). It takes the trailing slot from the shortcut hint
+              rather than sitting beside it: two `ml-auto` siblings split the
+              free space into two ragged columns, and advertising a keybinding
+              on an item that cannot run is the same lie `aria-keyshortcuts`
+              already declines to tell. */}
           <ContextMenuItem
             onSelect={() => insert(absolutePath)}
             disabled={!canInsert}
-            {...(canInsert ? { "aria-keyshortcuts": insertAriaKeyshortcuts } : {})}
+            {...(canInsert
+              ? { "aria-keyshortcuts": insertAriaKeyshortcuts }
+              : { "aria-label": insertRefusalLabel })}
           >
             <AtSign className={ICON_CLASS} />
-            Insert file reference
-            <ContextMenuShortcut>{insertShortcutHint}</ContextMenuShortcut>
+            {INSERT_LABEL}
+            {canInsert ? (
+              <ContextMenuShortcut>{insertShortcutHint}</ContextMenuShortcut>
+            ) : (
+              <ContextMenuMeta>{insertRefusalMeta}</ContextMenuMeta>
+            )}
           </ContextMenuItem>
           {/* Reveal and Insert render unconditionally, so the direct-action
               block above is never empty and this separator never leads. */}
@@ -453,6 +510,8 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       worktreeId,
       pluginGroups,
       canInsert,
+      insertRefusalMeta,
+      insertRefusalLabel,
       insert,
       insertAriaKeyshortcuts,
       insertShortcutHint,

@@ -4,6 +4,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
 import { render, screen, cleanup, fireEvent, within, waitFor } from "@testing-library/react";
 import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuItems";
+import type {
+  InsertFileReference,
+  InsertFileReferenceRefusalReason,
+} from "@/hooks/useInsertFileReference";
 
 // Typed rather than bare `vi.fn()`: the destructuring below reads positional
 // args off `mock.calls`, and an untyped double makes those `unknown[]` — which
@@ -52,7 +56,13 @@ vi.mock("@/hooks/useWorktreeActions", () => ({
 
 const { itemsRef, insertRef } = vi.hoisted(() => ({
   itemsRef: { current: [] as PluginContextMenuItemEntry[] },
-  insertRef: { current: { canInsert: true, insert: vi.fn(() => true) } },
+  insertRef: {
+    current: {
+      canInsert: true,
+      refusalReason: null,
+      insert: vi.fn(() => true),
+    } as InsertFileReference,
+  },
 }));
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({
   usePluginContextMenuItems: () => itemsRef.current,
@@ -184,7 +194,7 @@ beforeEach(() => {
   notifyMock.mockClear();
   copyContextMock.mockClear();
   itemsRef.current = [];
-  insertRef.current = { canInsert: true, insert: vi.fn(() => true) };
+  insertRef.current = { canInsert: true, refusalReason: null, insert: vi.fn(() => true) };
   writeTextMock.mockReset();
   writeTextMock.mockResolvedValue(undefined);
   Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
@@ -376,11 +386,91 @@ describe("useFileRowMenuItems — conditional items", () => {
   });
 
   it("disables Insert file reference when no agent resolves", async () => {
-    insertRef.current = { canInsert: false, insert: vi.fn(() => false) };
+    insertRef.current = {
+      canInsert: false,
+      refusalReason: "no-eligible-agent",
+      insert: vi.fn(() => false),
+    };
     const menu = await openMenu();
 
     const item = within(menu).getByRole("menuitem", { name: /Insert file reference/ });
     expect(item.getAttribute("data-disabled")).not.toBeNull();
+  });
+});
+
+/**
+ * #12207: seven different gates used to share one grey item with nothing on the
+ * row to tell them apart. Each reason has to reach BOTH registers — the visible
+ * meta slot and the accessible name — because `ContextMenuMeta` is `aria-hidden`
+ * and a screen reader would otherwise hear the same bare label every time.
+ */
+describe("useFileRowMenuItems — Insert file reference refusal reasons", () => {
+  const CASES: Array<[InsertFileReferenceRefusalReason, string, string]> = [
+    ["workspace-unavailable", "No workspace", "Insert file reference, no workspace"],
+    ["fleet-broadcast-armed", "Fleet armed", "Insert file reference, the fleet is armed"],
+    [
+      "hybrid-input-disabled",
+      "Input bar off",
+      "Insert file reference, the hybrid input bar is off",
+    ],
+    [
+      "backend-unavailable",
+      "No terminal service",
+      "Insert file reference, the terminal service is unavailable",
+    ],
+    [
+      "recorded-target-unavailable",
+      "Agent unavailable",
+      "Insert file reference, that agent can't take input",
+    ],
+    ["no-eligible-agent", "No agent available", "Insert file reference, no agent is available"],
+    [
+      "multiple-eligible-agents",
+      "Type to an agent",
+      "Insert file reference, type to an agent first",
+    ],
+  ];
+
+  async function openDisabled(reason: InsertFileReferenceRefusalReason): Promise<HTMLElement> {
+    insertRef.current = { canInsert: false, refusalReason: reason, insert: vi.fn(() => false) };
+    const menu = await openMenu();
+    return within(menu).getByRole("menuitem", { name: /^Insert file reference/ });
+  }
+
+  for (const [reason, meta, ariaLabel] of CASES) {
+    it(`says "${meta}" when the refusal is ${reason}`, async () => {
+      const item = await openDisabled(reason);
+
+      expect(item.getAttribute("data-disabled")).not.toBeNull();
+      expect(item.getAttribute("aria-label")).toBe(ariaLabel);
+      // The element, not just the text: the reason has to be in the trailing
+      // meta slot, and it has to stay hidden from assistive tech because the
+      // accessible name above already carries it. A second announced copy is
+      // the failure `ContextMenuMeta` is `aria-hidden` to prevent.
+      const metaEl = within(item).getByText(meta);
+      expect(metaEl.getAttribute("aria-hidden")).toBe("true");
+    });
+  }
+
+  it("drops the shortcut hint while disabled — the keybinding would be a lie", async () => {
+    const item = await openDisabled("no-eligible-agent");
+
+    expect(item.textContent).not.toContain("⌘I");
+    expect(item.hasAttribute("aria-keyshortcuts")).toBe(false);
+  });
+
+  it("shows the shortcut and no reason once a target resolves", async () => {
+    const menu = await openMenu();
+    const item = within(menu).getByRole("menuitem", { name: /Insert file reference/ });
+
+    expect(item.getAttribute("data-disabled")).toBeNull();
+    expect(item.textContent).toContain("⌘I");
+    expect(item.getAttribute("aria-keyshortcuts")).toBeTruthy();
+    // No `aria-label` override: the label plus the shortcut is the whole name.
+    expect(item.hasAttribute("aria-label")).toBe(false);
+    for (const [, meta] of CASES) {
+      expect(item.textContent).not.toContain(meta);
+    }
   });
 });
 

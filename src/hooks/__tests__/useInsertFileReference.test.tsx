@@ -11,34 +11,49 @@ vi.mock("@/store/viewWorkspaceId", () => ({ getViewWorkspaceId: getViewWorkspace
 
 // The real store graph pulls the whole app in; these four are all the hook
 // reads, and driving them directly is what makes the refusal matrix legible.
-const { asStore, panelState, inputState, fleetState, projectState } = vi.hoisted(() => ({
-  // Stands in for a Zustand hook: callable with a selector and carrying
-  // `getState`, which is the only shape this hook uses.
-  asStore: <S,>(state: S) => {
-    const hook = (selector: (s: S) => unknown) => selector(state);
-    hook.getState = () => state;
-    return hook;
-  },
-  panelState: {
-    panelsById: {} as Record<string, unknown>,
-    panelIds: [] as string[],
-    backendStatus: "connected" as string,
-    pingTerminal: vi.fn<(id: string) => void>(),
-  },
-  inputState: {
-    hybridInputEnabled: true,
-    voiceSubmittingPanels: new Set<string>(),
-    lastTypedAgentTarget: null as { workspaceId: string; terminalId: string } | null,
-    getDraftInput: vi.fn<(id: string, projectId?: string) => string>(() => ""),
-    setDraftInput: vi.fn<(id: string, value: string, projectId?: string) => void>(),
-    bumpExternalDraftRevision: vi.fn(),
-    recordLastTypedAgentTarget: vi.fn(),
-  },
-  fleetState: { armedIds: new Set<string>() },
-  projectState: { currentProject: { id: "proj-1" } as { id: string } | undefined },
-}));
+const { asStore, panelState, inputState, fleetState, projectState, panelSelectorRef } = vi.hoisted(
+  () => ({
+    // Stands in for a Zustand hook: callable with a selector and carrying
+    // `getState`, which is the only shape this hook uses.
+    asStore: <S,>(state: S) => {
+      const hook = (selector: (s: S) => unknown) => selector(state);
+      hook.getState = () => state;
+      return hook;
+    },
+    panelState: {
+      panelsById: {} as Record<string, unknown>,
+      panelIds: [] as string[],
+      backendStatus: "connected" as string,
+      pingTerminal: vi.fn<(id: string) => void>(),
+    },
+    inputState: {
+      hybridInputEnabled: true,
+      voiceSubmittingPanels: new Set<string>(),
+      lastTypedAgentTarget: null as { workspaceId: string; terminalId: string } | null,
+      getDraftInput: vi.fn<(id: string, projectId?: string) => string>(() => ""),
+      setDraftInput: vi.fn<(id: string, value: string, projectId?: string) => void>(),
+      bumpExternalDraftRevision: vi.fn(),
+      recordLastTypedAgentTarget: vi.fn(),
+    },
+    fleetState: { armedIds: new Set<string>() },
+    projectState: { currentProject: { id: "proj-1" } as { id: string } | undefined },
+    // Holds the hook's selector already bound to the live panel state, so a
+    // test can re-read the verdict without restating the store's shape.
+    panelSelectorRef: { current: null as (() => unknown) | null },
+  })
+);
 
-vi.mock("@/store", () => ({ usePanelStore: asStore(panelState) }));
+// Records the selector the hook hands over, which is the only handle a test has
+// on the `useShallow` wrapper the pane's re-render behaviour depends on.
+vi.mock("@/store", () => {
+  const store = asStore(panelState);
+  const usePanelStore = (selector: (s: typeof panelState) => unknown) => {
+    panelSelectorRef.current = () => selector(panelState);
+    return store(selector);
+  };
+  usePanelStore.getState = store.getState;
+  return { usePanelStore };
+});
 vi.mock("@/store/terminalInputStore", () => ({ useTerminalInputStore: asStore(inputState) }));
 vi.mock("@/store/fleetArmingStore", () => ({ useFleetArmingStore: asStore(fleetState) }));
 vi.mock("@/store/projectStore", () => ({ useProjectStore: asStore(projectState) }));
@@ -55,7 +70,8 @@ vi.mock("@/store/accessibilityAnnouncerStore", () => ({
 }));
 
 import type { PtyPanelData } from "@shared/types/panel";
-import { useInsertFileReference } from "../useInsertFileReference";
+import { shallow } from "zustand/shallow";
+import { resolveInsertTarget, useInsertFileReference } from "../useInsertFileReference";
 
 /**
  * Mirrors the fixture `typeAnywhere.test.ts` uses: PTY panels are
@@ -195,6 +211,221 @@ describe("useInsertFileReference — target resolution", () => {
     getViewWorkspaceIdMock.mockReturnValue(null);
     const { result } = renderHook(() => useInsertFileReference());
     expect(result.current.canInsert).toBe(false);
+  });
+});
+
+/**
+ * #12207: the menu could say "no" but never why, so one grey item stood in for
+ * seven unrelated situations. Each gate has to be distinguishable, and the
+ * order matters — the first gate reached is the one the user is told about.
+ */
+describe("useInsertFileReference — refusal reasons", () => {
+  it.each([
+    [
+      "no workspace identity",
+      () => getViewWorkspaceIdMock.mockReturnValue(null),
+      "workspace-unavailable",
+    ],
+    [
+      "a live fleet broadcast",
+      () => (fleetState.armedIds = new Set(["t-1", "t-2"])),
+      "fleet-broadcast-armed",
+    ],
+    [
+      "hybrid input switched off",
+      () => (inputState.hybridInputEnabled = false),
+      "hybrid-input-disabled",
+    ],
+    [
+      "a disconnected backend",
+      () => (panelState.backendStatus = "disconnected"),
+      "backend-unavailable",
+    ],
+    [
+      "a recovering backend",
+      () => (panelState.backendStatus = "recovering"),
+      "backend-unavailable",
+    ],
+    ["no agent at all", () => seedPanels(), "no-eligible-agent"],
+    [
+      "only a docked agent",
+      () => seedPanels(agentPanel("t-1", { location: "dock" })),
+      "no-eligible-agent",
+    ],
+    [
+      "two agents and no typing history",
+      () => seedPanels(agentPanel("t-1"), agentPanel("t-2")),
+      "multiple-eligible-agents",
+    ],
+  ])("names %s", (_label, seed, reason) => {
+    seed();
+    const { result } = renderHook(() => useInsertFileReference());
+    expect(result.current.canInsert).toBe(false);
+    expect(result.current.refusalReason).toBe(reason);
+  });
+
+  it.each([
+    ["locked", { isInputLocked: true }],
+    ["restarting", { isRestarting: true }],
+    ["exited", { runtimeStatus: "exited" as const }],
+  ])("blames the recorded agent, not the room, when it is %s", (_label, overrides) => {
+    seedPanels(agentPanel("t-1"), agentPanel("t-2", overrides));
+    inputState.lastTypedAgentTarget = { workspaceId: WORKSPACE_ID, terminalId: "t-2" };
+
+    const { result } = renderHook(() => useInsertFileReference());
+    expect(result.current.refusalReason).toBe("recorded-target-unavailable");
+  });
+
+  it("blames the recorded agent while it is mid-voice-submit", () => {
+    seedPanels(agentPanel("t-1"), agentPanel("t-2"));
+    inputState.lastTypedAgentTarget = { workspaceId: WORKSPACE_ID, terminalId: "t-2" };
+    inputState.voiceSubmittingPanels = new Set(["t-2"]);
+
+    const { result } = renderHook(() => useInsertFileReference());
+    expect(result.current.refusalReason).toBe("recorded-target-unavailable");
+  });
+
+  it("treats a sibling view's record as no record, so the refusal is the ambiguity", () => {
+    seedPanels(agentPanel("t-1"), agentPanel("t-2"));
+    inputState.lastTypedAgentTarget = { workspaceId: "ws-other", terminalId: "t-2" };
+
+    const { result } = renderHook(() => useInsertFileReference());
+    expect(result.current.refusalReason).toBe("multiple-eligible-agents");
+  });
+
+  /**
+   * The gate ORDER is the contract, not an accident of how the branches fell
+   * out: with several shut at once the user is told about the one nearest the
+   * front. Pinned as adjacent pairs so an inversion anywhere in the chain
+   * fails a test that names both sides of it.
+   */
+  it.each([
+    [
+      "workspace over fleet",
+      () => {
+        getViewWorkspaceIdMock.mockReturnValue(null);
+        fleetState.armedIds = new Set(["t-1", "t-2"]);
+      },
+      "workspace-unavailable",
+    ],
+    [
+      "fleet over hybrid-off",
+      () => {
+        fleetState.armedIds = new Set(["t-1", "t-2"]);
+        inputState.hybridInputEnabled = false;
+      },
+      "fleet-broadcast-armed",
+    ],
+    [
+      "hybrid-off over backend",
+      () => {
+        inputState.hybridInputEnabled = false;
+        panelState.backendStatus = "disconnected";
+      },
+      "hybrid-input-disabled",
+    ],
+    [
+      "backend over an unroutable recorded target",
+      () => {
+        panelState.backendStatus = "disconnected";
+        seedPanels(agentPanel("t-1", { isInputLocked: true }));
+        inputState.lastTypedAgentTarget = { workspaceId: WORKSPACE_ID, terminalId: "t-1" };
+      },
+      "backend-unavailable",
+    ],
+    [
+      "an unroutable recorded target over the ambiguity behind it",
+      () => {
+        seedPanels(agentPanel("t-1"), agentPanel("t-2", { isRestarting: true }));
+        inputState.lastTypedAgentTarget = { workspaceId: WORKSPACE_ID, terminalId: "t-2" };
+      },
+      "recorded-target-unavailable",
+    ],
+    [
+      "fleet over the ambiguity behind it",
+      () => {
+        fleetState.armedIds = new Set(["t-1", "t-2"]);
+        seedPanels(agentPanel("t-1"), agentPanel("t-2"));
+      },
+      "fleet-broadcast-armed",
+    ],
+  ])("reports %s", (_label, seed, reason) => {
+    seed();
+    const { result } = renderHook(() => useInsertFileReference());
+    expect(result.current.refusalReason).toBe(reason);
+  });
+
+  it.each([
+    [
+      "the recorded agent",
+      () => {
+        seedPanels(agentPanel("t-1"), agentPanel("t-2"));
+        inputState.lastTypedAgentTarget = { workspaceId: WORKSPACE_ID, terminalId: "t-2" };
+      },
+    ],
+    ["the sole open agent", () => seedPanels(agentPanel("t-1"))],
+  ])("carries no reason once %s resolves", (_label, seed) => {
+    seed();
+    const { result } = renderHook(() => useInsertFileReference());
+    expect(result.current.canInsert).toBe(true);
+    expect(result.current.refusalReason).toBeNull();
+  });
+
+  /**
+   * The verdict reaches the pane through `useShallow`, which hands back the
+   * PREVIOUS object whenever both halves still compare equal. Identity is the
+   * whole mechanism: a fresh object on every panel-store update would re-render
+   * the file browser on every agent-state flip and status flush, which is the
+   * cost the original one-string selector was written to avoid.
+   *
+   * Asserted through the selector the hook actually registered, so removing
+   * `useShallow` from the hook fails this test — comparing two resolver results
+   * by value would not.
+   */
+  it("hands the panel store a selector that keeps its verdict's identity across unrelated churn", () => {
+    seedPanels(agentPanel("t-1"), agentPanel("t-2"));
+    renderHook(() => useInsertFileReference());
+    const readVerdict = panelSelectorRef.current;
+    expect(readVerdict).not.toBeNull();
+    if (readVerdict === null) return;
+
+    const first = readVerdict();
+
+    // An agent-state flip on a panel that changes no part of the verdict.
+    seedPanels(agentPanel("t-1", { agentState: "working" }), agentPanel("t-2"));
+    expect(readVerdict()).toBe(first);
+
+    // A change that DOES move the verdict must not be memoised away.
+    seedPanels(agentPanel("t-1"));
+    expect(readVerdict()).not.toBe(first);
+  });
+
+  /**
+   * The other half of the same mechanism: `useShallow` can only bail if the
+   * resolver is itself stable under churn it does not care about.
+   */
+  it("resolves the same verdict either side of unrelated panel churn", () => {
+    // Built here rather than read back off the store double: the resolver is
+    // pure, and this keeps the panels the assertion talks about in one place.
+    const inputs = (...panels: PtyPanelData[]) => ({
+      panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
+      panelIds: panels.map((p) => p.id),
+      backendStatus: "connected" as const,
+      hybridInputEnabled: true,
+      voiceSubmittingIds: new Set<string>(),
+      lastTypedAgentTarget: null,
+      armedCount: 0,
+    });
+
+    const before = resolveInsertTarget(inputs(agentPanel("t-1"), agentPanel("t-2")));
+
+    const churned = resolveInsertTarget(
+      inputs(agentPanel("t-1", { agentState: "working" }), agentPanel("t-2"))
+    );
+    expect(shallow(before, churned)).toBe(true);
+
+    // A verdict that genuinely changed must NOT compare equal.
+    expect(shallow(before, resolveInsertTarget(inputs(agentPanel("t-1"))))).toBe(false);
   });
 });
 
