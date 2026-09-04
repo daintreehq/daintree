@@ -5,7 +5,7 @@ import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
-import { activateE2EPlugin } from "../../helpers/plugins";
+import { activateE2EPlugin, SAMPLE_PLUGIN_LABEL } from "../../helpers/plugins";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 const ROOT = path.resolve(import.meta.dirname, "../../..");
@@ -200,10 +200,10 @@ test.describe.serial("Core: Plugin host-contract harness", () => {
     await greetOption.first().click();
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
 
-    // The handler calls host.showToast — same provenance prefix applies.
+    // The handler calls host.showToast — its human-readable provenance prefix applies.
     const notificationInbox = await openNotificationInbox(window);
     await expect(
-      window.locator("text=daintree.hello: Hello from the greet action").first()
+      window.locator(`text=${SAMPLE_PLUGIN_LABEL}: Hello from the greet action`).first()
     ).toBeVisible({ timeout: T_LONG });
 
     await closeNotificationInbox(window, notificationInbox);
