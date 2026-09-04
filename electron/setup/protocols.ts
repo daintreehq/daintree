@@ -581,16 +581,19 @@ async function readContainedDaintreeFile(
 }
 
 /**
- * The origin allowed to read this daintree-file:// response via cross-origin
- * fetch(), or null for everyone else. The scheme is corsEnabled so the file
- * viewer can fetch() media bytes for blob-URL playback, but eligibility alone
- * must not grant reads: a browser panel hosting an arbitrary remote site
- * shares the scheme registration, and echoing its origin here would hand it
- * the user's local files. Only the trusted app document qualifies — app:// in
- * production, the Vite dev-server origins in development. Tag loads (<img>,
- * <video>) are no-cors and never consult this.
+ * The origin allowed to read this response via cross-origin fetch(), or null
+ * for everyone else. Shared by the two corsEnabled schemes that need it:
+ * daintree-file:// (the file viewer fetches media bytes for blob-URL playback)
+ * and plugin:// (the renderer reads a view module's text to compile its
+ * Tailwind classes, #12220).
+ *
+ * Eligibility alone must not grant reads: a browser panel hosting an arbitrary
+ * remote site shares the scheme registration, and echoing its origin here would
+ * hand it the user's local files. Only the trusted app document qualifies —
+ * app:// in production, the Vite dev-server origins in development. Tag loads
+ * (<img>, <video>) and ESM imports are no-cors and never consult this.
  */
-function daintreeFileCorsOrigin(request: GlobalRequest): string | null {
+function trustedAppCorsOrigin(request: GlobalRequest): string | null {
   const origin = request.headers.get("origin");
   if (!origin) return null;
   if (origin === "app://daintree") return origin;
@@ -617,7 +620,7 @@ function createDaintreeFileProtocolHandler() {
     // Constructed Responses have mutable headers, so the CORS grant rides on
     // every path (success and error alike) — a blocked error response would
     // otherwise surface as an opaque TypeError instead of a readable status.
-    const corsOrigin = daintreeFileCorsOrigin(request);
+    const corsOrigin = trustedAppCorsOrigin(request);
     if (corsOrigin) response.headers.set("Access-Control-Allow-Origin", corsOrigin);
     return response;
   };
@@ -1033,7 +1036,8 @@ const PLUGIN_REVALIDATE_DIRECTIVE = "no-cache";
 function buildPluginHeaders(
   mimeType: string,
   filePath: string,
-  stats?: { mtime: Date }
+  stats?: { mtime: Date },
+  corsOrigin?: string | null
 ): Record<string, string> {
   // Vite content-hashed assets (`assets/<name>-<hash>.<ext>`) are immutable;
   // everything else is `no-cache` so plugin reloads pick up fresh bundles.
@@ -1053,6 +1057,13 @@ function buildPluginHeaders(
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": cacheControl,
     ...(stats ? { "Last-Modified": toHttpDate(stats.mtime) } : {}),
+    // Unconditional, not paired with the header below: the RESPONSE varies by
+    // request `Origin` whether or not this particular one carries the echo, and
+    // content-hashed plugin assets are served `immutable`. Without it a cached
+    // entry stored for a tag load (no Origin, no echo) can be replayed to the
+    // renderer's fetch(), which then fails CORS for no visible reason.
+    Vary: "Origin",
+    ...(corsOrigin ? { "Access-Control-Allow-Origin": corsOrigin } : {}),
   };
 }
 
@@ -1236,18 +1247,27 @@ export function createPluginProtocolHandler(getPluginRoot: GetPluginRootByAuthor
       }
 
       const mimeType = getMimeType(realFile);
+      // The renderer reads a view module's own text over fetch() to compile its
+      // Tailwind classes before the view mounts (#12220). Tag loads and ESM
+      // imports never consult this; a cross-origin fetch() does, and the scheme
+      // is corsEnabled, so without the echo the read fails. Scoped to the
+      // trusted app document exactly as daintree-file:// is — that document
+      // already imports these same bytes as a module, so this grants it nothing
+      // it did not have, and grants a browser panel hosting a remote site
+      // nothing at all.
+      const corsOrigin = trustedAppCorsOrigin(request);
       const ifModifiedSince = request.headers.get("If-Modified-Since");
       if (isNotModified(ifModifiedSince, fileStats.mtime)) {
         return new Response(null, {
           status: 304,
-          headers: buildPluginHeaders(mimeType, realFile, fileStats),
+          headers: buildPluginHeaders(mimeType, realFile, fileStats, corsOrigin),
         });
       }
 
       const buffer = await fileHandle.readFile();
       return new Response(buffer, {
         status: 200,
-        headers: buildPluginHeaders(mimeType, realFile, fileStats),
+        headers: buildPluginHeaders(mimeType, realFile, fileStats, corsOrigin),
       });
     } catch (err) {
       console.error("[MAIN] plugin protocol read failed:", candidatePath, err);

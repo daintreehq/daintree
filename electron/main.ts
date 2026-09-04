@@ -158,7 +158,7 @@ protocol.registerSchemesAsPrivileged([
     // range requests — electron#51442). It only makes the scheme *eligible*
     // for cross-origin fetch: reads still require the handler to echo
     // Access-Control-Allow-Origin, which it does solely for trusted app
-    // origins (see daintreeFileCorsOrigin in setup/protocols.ts), so browser
+    // origins (see trustedAppCorsOrigin in setup/protocols.ts), so browser
     // panels hosting remote sites gain no access.
     scheme: "daintree-file",
     privileges: {
@@ -203,6 +203,10 @@ protocol.registerSchemesAsPrivileged([
     // as `id`. codeCache enables V8 bytecode persistence for JS bundles (same
     // rationale as app://). bypassCSP intentionally omitted — defaults to false
     // (#3757: never opt back in; add `plugin:` to source directives if needed).
+    // corsEnabled only makes the scheme ELIGIBLE for cross-origin fetch(); the
+    // handler still echoes Access-Control-Allow-Origin solely for the trusted
+    // app document (trustedAppCorsOrigin), which is what lets the renderer read
+    // a view module's own text to compile its Tailwind classes (#12220).
     scheme: "plugin",
     privileges: {
       standard: true,

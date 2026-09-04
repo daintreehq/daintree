@@ -1,8 +1,14 @@
 import { defineConfig } from "vitest/config";
 import { availableParallelism } from "os";
 import path from "path";
+// Same virtual module the renderer build uses for the plugin Tailwind
+// compiler's stylesheets. Without it the adapter's contract tests compile
+// against empty strings: Vitest stubs every `.css` specifier — `?raw` included
+// — so the bytes have to arrive as a virtual JS module instead.
+import { pluginStyleContract } from "./scripts/lib/plugin-style-contract.mjs";
 
 export default defineConfig({
+  plugins: [pluginStyleContract()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

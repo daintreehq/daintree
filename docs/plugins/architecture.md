@@ -246,6 +246,25 @@ Views render inline in Daintree's React tree. Plugins share Daintree's DOM, CSS 
 
 An iframe model would isolate plugins behind a `postMessage` bridge at the cost of heavy DX friction and rebuilt UI components per frame. That's the right trade for an untrusted-plugin model — if Daintree ever opens to fully untrusted third-party plugins, iframe isolation via a `plugin://` protocol handler is the upgrade path. Nothing in the current manifest shape needs to change — `componentPath` resolves differently for trusted vs untrusted plugins, but the field is the same.
 
+### Plugin styling: a scoped runtime Tailwind sheet
+
+Sharing the cascade is what lets Tailwind be the styling contract for plugin views (#12220). Tailwind v4 emits only the classes its build-time scan finds in this repo, so before this a plugin's class worked if and only if the host happened to use it too — which changed every release. Instead, the renderer compiles plugin classes itself, at runtime.
+
+Three steps, deliberately kept separate:
+
+1. **Collect candidates.** Two sources. The view module's source text is fetched and tokenised before the module is imported, which is what makes the first paint styled; and one `MutationObserver` reads `classList` as the DOM changes. The observer is authoritative — it sees template literals, sibling modules and runtime-computed names that source tokenisation cannot. Its callback is a microtask, so a class toggled on by state is styled before the next paint.
+
+   The observer watches the document and keeps only what sits inside a marked style root, one `closest()` call per record. Watching each registered root instead is tempting and wrong twice over: a `MutationObserver` cannot drop a single target, so unregistering one view has to `disconnect()`, silently discarding every other root's queued records; and a `createPortal` container is never a descendant of the wrapper it was rendered from, so a portal would be scoped by the generated CSS but never observed. Filtering on the marker is what keeps the observed set identical to the set the CSS is scoped to.
+
+2. **Compile.** `src/services/plugin/tailwind/pluginTailwindAdapter.ts` is the only place Tailwind's programmatic API is called. It compiles the host's own `src/styles/design-contract.css` — the same bytes `index.css` imports — with the stock theme pulled in as `reference`, so no `:root` variables and no preflight are re-emitted. Utilities land nested in `@layer utilities { @scope ([data-daintree-plugin-style-root]) { … } }`.
+3. **Install.** One constructed `CSSStyleSheet` per document on `adoptedStyleSheets`, shared by every plugin root in it, replaced wholesale on each build because `build()` returns a cumulative sheet whose order can change.
+
+Two properties are load-bearing. `@layer utilities` is a document-global layer name, so plugin utilities join the host's at the host's declared priority — layer membership, not specificity, decides the cascade here. And the `@scope` wrapper is what makes duplicate emission safe: a plugin using `p-4` emits its own `.p-4`, and without the scope that late rule would override a host element carrying `p-4 px-3`.
+
+Each project view is its own `WebContentsView`, so each document compiles once (~10 ms) and owns its own sheet; a constructed stylesheet belongs to the document that made it and is never shared across them. The compiler chunk is lazy and loads in parallel with plugin activation.
+
+**What a future iframe view host would need.** Keeping collection, compilation and installation separate is what makes that a wiring change rather than a rewrite: the same service runs inside the frame, or compiled CSS is handed across. But none of the ambient context crosses a frame boundary, so an explicit snapshot of the theme variables, the baseline CSS, the fonts and the approved extensions would have to cross with it.
+
 ## MCP supervisor
 
 `PluginMcpSupervisor` (`electron/services/PluginMcpSupervisor.ts`) manages plugin-shipped MCP servers.

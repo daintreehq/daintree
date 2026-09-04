@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readHostCss } from "@/__tests__/support/hostCss";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,7 +7,7 @@ import { APP_THEME_TOKEN_KEYS, PANEL_KIND_BRAND_COLORS } from "@shared/theme";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
-const INDEX_CSS_PATH = path.join(REPO_ROOT, "src/index.css");
+
 const SRC_ROOT = path.join(REPO_ROOT, "src");
 const RENDERER_ROOTS = [SRC_ROOT, path.join(REPO_ROOT, "plugins/builtin/github/renderer")];
 const NON_COLOR_THEME_TOKENS = new Set([
@@ -60,7 +61,10 @@ function collectSourceFiles(dir: string): string[] {
 }
 
 describe("color system contract", () => {
-  const indexCss = fs.readFileSync(INDEX_CSS_PATH, "utf8");
+  // index.css plus the design contract it imports: the `@theme` blocks this
+  // whole suite scans moved into the contract so the plugin Tailwind compiler
+  // could read the same bytes (#12220).
+  const indexCss = readHostCss();
   const exportedColorVars = new Set(
     Array.from(indexCss.matchAll(/--color-([a-z0-9-]+):/g), (match) => match[1]!)
   );

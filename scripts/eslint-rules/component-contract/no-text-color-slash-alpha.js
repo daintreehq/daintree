@@ -8,7 +8,7 @@
  * tree cannot recover it. De-emphasise with a solid token one step down the text
  * hierarchy (`text-text-secondary`, `text-text-muted`) instead.
  *
- * This is not theoretical: `src/index.css` already carries a
+ * This is not theoretical: the host CSS already carries a
  * `[class*="text-daintree-text/"] { color: … !important }` override inside the
  * `prefers-contrast: more` block, added to claw back the legibility this pattern
  * costs under macOS Increase Contrast. The rule stops the override's surface

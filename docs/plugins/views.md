@@ -8,29 +8,114 @@ Views render **inline** in Daintree's React tree, not in an iframe. Same documen
 
 The host mounts your default export under an error boundary and a `Suspense` boundary, inside a container that is `flex flex-col flex-1 min-h-0 w-full`. Make your root element fill it: `height: 100%` with `display: flex; flex-direction: column; min-height: 0` is the shape that scrolls correctly, because `min-height: 0` is what lets a flex child shrink below its content and hand the overflow to an inner scroller. A root that is only `height: 100%` will push the panel's own scrollbar around instead of owning it.
 
-You receive [`PanelViewProps`](./contribution-points.md#views--shipped-panel-surface): `panelId`, `pluginId`, `disposeSignal`, `panelRemovedSignal`, `initialArgs`, `persistState`. Two of these are misread in every first plugin. `pluginId` is your host-side id, which for a project plugin is the instance key, not your manifest name; pass it through to the bridge as given. `disposeSignal` aborts on every unmount, including the temporary ones (a sibling pane maximised, a dock tab left), so it is for cancelling fetches, never for deciding something is finished.
+You receive [`PanelViewProps`](./contribution-points.md#views--shipped-panel-surface): `panelId`, `pluginId`, `disposeSignal`, `panelRemovedSignal`, `initialArgs`, `persistState`, `styleRootAttributes`. Two of these are misread in every first plugin. `pluginId` is your host-side id, which for a project plugin is the instance key, not your manifest name; pass it through to the bridge as given. `disposeSignal` aborts on every unmount, including the temporary ones (a sibling pane maximised, a dock tab left), so it is for cancelling fetches, never for deciding something is finished.
 
 A render error shows the host's diagnostics pane with a Try again that re-imports the module, Close panel, Copy diagnostics and View logs. The rest of Daintree keeps working.
 
 ## Styling
 
-Every colour, radius, font and spacing in Daintree is a CSS custom property, and your view sees all of them. Build on the tokens and the panel follows the active theme, light or dark, with no work on your side. The names that matter most:
+**Tailwind utility classes are how you style a plugin view.** Write `className="flex gap-2 p-4 bg-surface-panel"` and it works — in a hand-written `dist/panel.js` exactly as in a bundled view, with no build step and no configuration on your side.
 
-| Family | Examples | Use for |
-| --- | --- | --- |
-| Surfaces | `--color-surface`, `--color-surface-canvas`, `--color-surface-active`, `--color-surface-dialog` | Backgrounds, hover and selected rows |
-| Text | `--color-text-primary`, `--color-text-secondary`, `--color-text-muted`, `--color-text-placeholder`, `--color-text-link` | Body, labels, hints. `--color-text-muted` has no contrast floor in dark themes; keep it to decoration, never to something the user has to read |
-| Borders and overlays | `--color-border-subtle`, `--color-overlay` | Dividers, backdrops |
-| Category colour | `--color-category-<hue>-subtle`, `-text`, `-border` and `--theme-category-<hue>` (`amber`, `blue`, `cyan`, `green`, `indigo`, `orange`, `pink`, `purple`, `rose`, …) | Chips, stage badges, the panel `color` in your manifest |
-| Shape and type | `--radius-md`, `--font-mono`, `--text-2xs`, `--text-3xs` | Radii, code, the micro-label sizes Daintree's own chrome uses |
+Daintree compiles the classes your view uses at runtime, in the renderer, against the host's own Tailwind and the host's own theme. Two consequences worth understanding, because they are what the rest of this section follows from:
 
-`src/index.css` in the Daintree repo is the authoritative list; grep it for `--color-` when you need one that isn't here.
+- **You get Daintree's vocabulary, not Tailwind's stock one.** The design system is enforced by the compiler. `bg-surface-panel` compiles; `bg-red-500` compiles to nothing at all, because the host's theme deletes the stock palette. This is deliberate — it is what keeps plugin panels looking like the app.
+- **The generated rules are scoped to your view.** They apply inside the element the host marks as your style root and nowhere else, so a plugin can never restyle host chrome.
+
+Semantic colours resolve to live theme variables, so a panel built on them follows a theme switch with no work on your side. Ordinary layout, spacing, sizing, typography, flexbox, grid, state variants (`hover:`, `focus-visible:`, `disabled:`, `group-hover:`), arbitrary values (`w-[327px]`), dynamic scales (`grid-cols-47`) and container queries all behave exactly as Tailwind documents them.
+
+**Not part of the vocabulary:** stock palette colours (`bg-red-500`, `text-blue-600`); `dark:` — Daintree themes are runtime tokens, not a class, so a semantic token is already theme-aware and `dark:` is never the answer; `prose` (`@tailwindcss/typography` is not in the plugin contract); `@apply`, which needs a build step this path does not have.
+
+Prefer **container queries** (`@container`, `@sm:`, `@md:`) over viewport breakpoints (`sm:`, `md:`). A breakpoint describes the whole window; your panel is one pane in a grid and can be narrow while the window is wide.
+
+### The vocabulary
+
+<!-- BEGIN generated: plugin-style-vocabulary -->
+
+**Surfaces** — `bg-`, `border-`, `text-`
+
+`surface-canvas` `surface-sidebar` `surface-toolbar` `surface-panel` `surface-panel-elevated` `surface-dialog` `surface-grid` `surface-input` `surface-inset` `surface-hover` `surface-active` `surface-disabled` `surface-highlight`
+
+**Text** — `text-`
+
+`text-primary` `text-secondary` `text-muted` `text-placeholder` `text-inverse` `text-link`
+
+**Borders** — `border-`, `divide-`, `ring-`
+
+`border-default` `border-subtle` `border-strong` `border-divider` `border-interactive`
+
+**Status** — `bg-`, `text-`, `border-`
+
+`status-success` `status-warning` `status-danger` `status-info` `status-danger-surface` `status-success-surface` `status-warning-surface` `status-info-surface` `status-error` `status-error-surface`
+
+**Accent** — `bg-`, `text-`, `border-`
+
+`accent-primary` `accent-hover` `accent-foreground` `accent-primary-foreground` `accent-soft` `accent-muted` `accent-secondary` `accent-secondary-soft` `accent-secondary-muted`
+
+**Radii** — `rounded-`
+
+`xs` `sm` `md` `lg` `xl` `2xl` `3xl` `4xl`
+
+**Type scale below Tailwind's floor** — `text-`
+
+`2xs` `3xs` `4xs`
+
+**Durations** — `duration-`
+
+`75` `100` `120` `150` `200` `250` `300`
+
+**Easings** — `ease-`
+
+`snappy` `spring-critical` `out-expo` `exit` `panel-minimize`
+
+**Category hues** — `bg-`, `text-`, `border-`, as `category-<hue>` plus a variant suffix
+
+hues: `blue` `purple` `cyan` `green` `amber` `orange` `teal` `indigo` `rose` `pink` `violet` `slate`
+
+variants: `(bare)` `-subtle` `-text` `-border`
+
+**Custom variants** — write as `variant:utility`
+
+`reduce-motion:`
+
+<!-- END generated: plugin-style-vocabulary -->
+
+Everything else Tailwind ships that does not name a colour works too — this list is the part that is Daintree's rather than Tailwind's.
+
+### Copy-ready shapes
+
+```jsx
+// Panel root. `flex flex-col flex-1 min-h-0` is what makes an inner scroller own
+// the overflow instead of pushing the panel's own scrollbar around.
+<div className="flex flex-col flex-1 min-h-0 bg-surface-panel text-text-primary">
+
+// Row
+<div className="flex items-center gap-2 px-3 py-2 hover:bg-surface-hover">
+
+// Subtle button
+<button className="rounded-md border border-border-subtle px-3 py-1.5 text-xs hover:bg-surface-hover">
+
+// Badge
+<span className="rounded-full bg-surface-inset px-2 py-0.5 text-2xs text-text-muted">
+```
+
+**Conditional classes must be complete strings.** `isActive ? "bg-surface-active" : ""` works. `` `bg-surface-${tone}` `` does not — the compiler sees the class in your source or in the DOM, and a name assembled from fragments exists in neither until it is too late to matter. The same rule applies to a lookup table, which is fine, and to string concatenation, which is not.
+
+**Portals need a marked container.** Anything you render with `createPortal` leaves your style root, so its classes generate CSS that never matches. Spread `styleRootAttributes` from `PanelViewProps` onto the container:
+
+```jsx
+createPortal(
+  <div {...styleRootAttributes} className="p-4 bg-surface-dialog">
+    …
+  </div>,
+  document.body
+);
+```
+
+**A `<style>` element still works**, for the things utilities do not cover — a keyframe, a complex selector, a third-party widget's stylesheet. Scope your selectors under a class on your root so you don't restyle the host. Do not ship compiled Tailwind CSS: `@daintreehq/plugin-vite` fails the build if you wire Tailwind into it, because two independently-compiled copies of the same utilities lose Tailwind's own ordering rules.
+
+**Custom properties are still there** if you prefer to write plain CSS on tokens. Every `--theme-*` and `--color-*` the host defines is readable from your view; `src/styles/design-contract.css` in the Daintree repo is the authoritative list.
 
 Two rules from the design contract that apply to plugins as much as to the host: accent colour is at most one load-bearing signal per region, so in doubt use no accent; and a plugin panel that reads as native copies the host's own treatments for rows, chips, section labels and subtle buttons rather than inventing new ones. The components under `src/components/ui/` and the file browser are the reference.
-
-**A `<style>` element works.** Ship your stylesheet as a string and inject it once from the view; it lands in the same document and the cascade applies. Scope selectors under a class on your root so you don't restyle the host.
-
-**Tailwind utility classes do not work.** The host is built with Tailwind v4, which emits only the classes Daintree's own source uses. A class your view uses that the host happens to use too will style itself; one it doesn't will do nothing, and which is which changes with every Daintree release. Treat the utilities as unavailable and write CSS on the tokens.
 
 **Icons.** There is no icon component to import in a raw view. Inline SVG (lucide's paths are what Daintree uses) with `currentColor` is the portable answer; the `iconId` in your manifest covers the panel tab and toolbar, not the inside of your view.
 

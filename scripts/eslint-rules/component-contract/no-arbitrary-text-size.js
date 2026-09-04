@@ -9,7 +9,7 @@
  *
  * When a design genuinely needs a step the scale lacks (the 10-11px label sizes
  * are the real case here), add a named step to the `@theme` block in
- * `src/index.css` — `--text-2xs` — and use it. That keeps one list of legal
+ * `src/styles/design-contract.css` — `--text-2xs` — and use it. That keeps one list of legal
  * sizes instead of an open set of brackets.
  *
  * Flagged: `text-[<length>]` and the explicit `text-[length:…]` hint, in any
@@ -39,7 +39,7 @@ export default {
     schema: [],
     messages: {
       arbitrarySize:
-        "`{{token}}` sets a font size off the type scale. Use a named step (`text-xs`, `text-sm`, …), or add one to the `@theme` block in `src/index.css` if the scale genuinely lacks it. Genuine exceptions opt out with `// eslint-disable-next-line component-contract/no-arbitrary-text-size -- <reason>`.",
+        "`{{token}}` sets a font size off the type scale. Use a named step (`text-xs`, `text-sm`, …), or add one to the `@theme` block in `src/styles/design-contract.css` if the scale genuinely lacks it. Genuine exceptions opt out with `// eslint-disable-next-line component-contract/no-arbitrary-text-size -- <reason>`.",
     },
   },
 

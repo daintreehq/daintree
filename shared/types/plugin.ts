@@ -210,6 +210,19 @@ export interface ProjectSurfaceClaim {
 export type ProjectSurfaceSnapshot = Partial<Record<ProjectSurfaceSlot, ProjectSurfaceClaim>>;
 
 /**
+ * The attribute the host stamps on the element a plugin view renders into, and
+ * the only DOM attribute this styling contract adds.
+ *
+ * Daintree compiles the Tailwind classes a plugin uses at runtime and emits them
+ * inside `@scope ([data-daintree-plugin-style-root])`, so the generated rules
+ * apply within a plugin's own subtree and can never reach host chrome. The host
+ * marks the view wrapper itself; the only place an author needs this is a
+ * container rendered through `createPortal`, which escapes that subtree. See
+ * {@link PanelViewProps.styleRootAttributes} for the spreadable form.
+ */
+export const PLUGIN_STYLE_ROOT_ATTRIBUTE = "data-daintree-plugin-style-root";
+
+/**
  * Props every plugin-contributed panel view receives from the renderer host.
  * Intentionally narrower than the host-internal `PanelComponentProps` so the
  * SDK surface stays stable across a future `plugin://` → trusted-iframe
@@ -317,6 +330,22 @@ export interface PanelViewProps {
    * or restored panel. `undefined` for a panel spawned without a worktree.
    */
   readonly worktreeId?: string;
+  /**
+   * Spread onto any container you render through `createPortal`, so the
+   * portalled subtree stays inside Daintree's styling contract.
+   *
+   * Tailwind classes in a plugin view are compiled at runtime and scoped to the
+   * element the host marks as the view's style root. A portal renders outside
+   * that element — into `document.body`, or a container of your own — so
+   * without this its classes generate CSS that never matches, and the subtree
+   * paints unstyled. Everything rendered normally is already inside the root
+   * and needs nothing.
+   *
+   * ```tsx
+   * createPortal(<div {...styleRootAttributes}>…</div>, document.body)
+   * ```
+   */
+  readonly styleRootAttributes: Readonly<Record<string, string>>;
 }
 
 /**
