@@ -120,7 +120,11 @@ export function ProjectPluginSelectorDropdown({
           className={cn(
             "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
             "border border-border-default bg-surface-canvas text-text-primary",
-            "hover:border-accent-primary/50 transition-colors",
+            // Hover is neutral on purpose. Accent is at most one load-bearing
+            // signal per focus region, and here that one is the focus ring
+            // below — spending it on a hover border as well would make the
+            // colour mean "you could click this" and "this is focused" at once.
+            "hover:border-border-strong transition-colors",
             "focus:outline-hidden focus:ring-2 focus:ring-accent-primary/50"
           )}
         >
