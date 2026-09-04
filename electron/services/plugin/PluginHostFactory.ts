@@ -431,7 +431,8 @@ export function createHost(
    * Not every worktree-derived surface routes through here — worktree-scoped
    * *storage* resolves its target through `resolveBoundWorktreeTarget`, which
    * reads the projected `getWorktreesResult` so it can name one worktree rather
-   * than flatten the set (#12229).
+   * than flatten the set (#12229). Unbound storage skips both and stays on the
+   * manager's own app-global lookup.
    */
   const fetchWorktreeSnapshots = async (): Promise<WorktreeSnapshot[]> => {
     const result = await fetchWorktreeSnapshotsResult();
@@ -572,13 +573,14 @@ export function createHost(
    * lifetime; the active worktree is not — the user switches it while the host
    * stays alive — so this resolves per call rather than once at construction.
    *
-   * Deliberately reads `getWorktreesResult`, the same source `getActiveWorktree`
-   * projects from, so a plugin's storage target and its active-worktree read can
-   * never name different worktrees. Every unavailable reason (including a
-   * projection that threw, and an unload caught by that method's own liveness
-   * re-checks) collapses to `""`, which the manager rejects: for a filesystem
-   * target, failing closed beats salvaging a path out of a snapshot set the
-   * binding boundary already called malformed.
+   * Deliberately reads `getWorktreesResult`, the same project-filtered source
+   * `getActiveWorktree` projects from, so the two agree about which worktree is
+   * active at the moment either resolves. (Only at that moment: calls straddling
+   * a switch see different worktrees, which is the point of resolving per call.)
+   * Every unavailable reason (including a projection that threw, and an unload
+   * caught by that method's own liveness re-checks) collapses to `""`, which the
+   * manager rejects: for a filesystem target, failing closed beats salvaging a
+   * path out of a snapshot set the binding boundary already called malformed.
    *
    * Unbound returns `undefined` so the manager keeps its app-global lookup —
    * an installed or builtin plugin has no project of its own, so the active
@@ -588,7 +590,13 @@ export function createHost(
     if (boundProjectId === null) return undefined;
     const result = await getWorktreesResult();
     if (result.status !== "ok") return "";
-    return result.worktrees.find((w) => w.isCurrent)?.path ?? "";
+    const active = result.worktrees.find((w) => w.isCurrent)?.path;
+    // The projection copies `path` straight off the workspace host's snapshot
+    // without validating it, and this is the one consumer that turns it into a
+    // filesystem root. A non-string would throw out of `path.join`, turning
+    // `storage.get`'s documented quiet "no target" into a rejection; a relative
+    // one would resolve against Electron's cwd, outside every project.
+    return typeof active === "string" && path.isAbsolute(active) ? active : "";
   };
 
   /**

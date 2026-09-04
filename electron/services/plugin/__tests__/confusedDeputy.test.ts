@@ -209,10 +209,21 @@ function fakePlugin(): LoadedPlugin {
  * `webContents.send` and a `host.settings.set` all the way to a file on disk.
  */
 function makeHostDeps(): PluginHostFactoryDeps {
+  // Deliberately adversarial: focused B really does have a current worktree, so
+  // a surface that wrongly reaches for the ambient set SUCCEEDS at writing into
+  // B rather than failing closed by accident and passing the test anyway.
   ambientWorktreeFetch = vi.fn(async () => ({
     status: "ok",
     projectId: PROJECT_B,
-    snapshots: [],
+    snapshots: [
+      {
+        id: path.join(projectRootOf(PROJECT_B), "main"),
+        worktreeId: "wt-b-main",
+        path: path.join(projectRootOf(PROJECT_B), "main"),
+        name: "main",
+        isCurrent: true,
+      },
+    ],
   }));
   projectWorktreeFetch = vi.fn(async () => ({
     status: "ok",
@@ -569,6 +580,28 @@ describe("settings and storage roots", () => {
   /** The ambient worktree, inside focused B — where the bug used to write. */
   const ambientB = (): string => path.join(projectRootOf(PROJECT_B), "main");
 
+  const B_BYTES = JSON.stringify({ cursor: "b-secret", untouched: true });
+
+  /**
+   * Put real data where the bug used to land. "B was never created" only proves
+   * no write; a byte-for-byte comparison against a pre-seeded file also catches
+   * an overwrite, a delete, and a read that leaked B's value back to the plugin.
+   */
+  async function seedAmbientB(): Promise<void> {
+    await fs.mkdir(path.dirname(storageFileIn(ambientB())), { recursive: true });
+    await fs.writeFile(storageFileIn(ambientB()), B_BYTES, "utf8");
+  }
+
+  async function expectBUntouched(): Promise<void> {
+    expect(await fs.readFile(storageFileIn(ambientB()), "utf8")).toBe(B_BYTES);
+  }
+
+  /** Neither app-global worktree source may be consulted for a BOUND host. */
+  function expectAmbientUnconsulted(): void {
+    expect(ambientWorktreeFetch).not.toHaveBeenCalled();
+    expect(ambientWorktreePathLookup).not.toHaveBeenCalled();
+  }
+
   /** `hostBoundTo`, but keeping the deps so a test can unload the plugin. */
   function hostAndDepsBoundTo(binding: PluginHostBinding): {
     host: PluginHostApi;
@@ -690,21 +723,24 @@ describe("settings and storage roots", () => {
       snapshots: [worktreeSnapshot(inA("main")), worktreeSnapshot(inA("feature-x"), true)],
     });
 
+    await seedAmbientB();
+
     await host.storage.set("cursor", 7, "worktree");
 
     expect(JSON.parse(await fs.readFile(storageFileIn(inA("feature-x")), "utf8"))).toEqual({
       cursor: 7,
     });
+    // A read routed to B would answer "b-secret", one routed nowhere undefined —
+    // only A's own file gives 7.
     expect(await host.storage.get("cursor", "worktree")).toBe(7);
-
-    // Nothing anywhere near B, and the ambient lookup was never reached for it.
-    expect(await exists(path.join(projectRootOf(PROJECT_B), ".daintree"))).toBe(false);
-    expect(await exists(storageFileIn(ambientB()))).toBe(false);
-    expect(ambientWorktreePathLookup).not.toHaveBeenCalled();
-    expect(ambientWorktreeFetch).not.toHaveBeenCalled();
 
     await host.storage.delete("cursor", "worktree");
     expect(JSON.parse(await fs.readFile(storageFileIn(inA("feature-x")), "utf8"))).toEqual({});
+
+    // B's file survives all three operations byte for byte.
+    await expectBUntouched();
+    expect(projectWorktreeFetch).toHaveBeenCalledWith(PROJECT_A, projectRootOf(PROJECT_A));
+    expectAmbientUnconsulted();
   });
 
   it("re-resolves A's current worktree on every call, following a mid-session switch", async () => {
@@ -733,7 +769,13 @@ describe("settings and storage roots", () => {
     expect(JSON.parse(await fs.readFile(storageFileIn(inA("feature-x")), "utf8"))).toEqual({
       cursor: 2,
     });
+
+    // Counted, not inferred: a target cached at construction would answer 2 off
+    // the second write's file without ever fetching a third time.
+    expect(projectWorktreeFetch).toHaveBeenCalledTimes(2);
     expect(await host.storage.get("cursor", "worktree")).toBe(2);
+    expect(projectWorktreeFetch).toHaveBeenCalledTimes(3);
+    expectAmbientUnconsulted();
   });
 
   it("fails closed when A has no current worktree rather than falling back to B", async () => {
@@ -744,17 +786,40 @@ describe("settings and storage roots", () => {
       snapshots: [worktreeSnapshot(inA("main")), worktreeSnapshot(inA("feature-x"))],
     });
 
+    await seedAmbientB();
+
     await expect(host.storage.set("cursor", 7, "worktree")).rejects.toThrow(
-      'no active worktree — "worktree" scope has no target'
+      `Plugin "${PLUGIN_ID}" storage.set: no active worktree — "worktree" scope has no target`
     );
     // Read and delete degrade quietly, matching the unset-key / already-absent
     // returns the other scopes give when they have no target.
     expect(await host.storage.get("cursor", "worktree")).toBeUndefined();
     await expect(host.storage.delete("cursor", "worktree")).resolves.toBeUndefined();
 
-    expect(await exists(path.join(projectRootOf(PROJECT_A), ".daintree"))).toBe(false);
-    expect(await exists(path.join(projectRootOf(PROJECT_B), ".daintree"))).toBe(false);
-    expect(ambientWorktreePathLookup).not.toHaveBeenCalled();
+    // B has a current worktree and a populated file; failing closed means the
+    // bound host neither read it nor touched it.
+    await expectBUntouched();
+    expect(await exists(storageFileIn(inA("main")))).toBe(false);
+    expect(await exists(storageFileIn(inA("feature-x")))).toBe(false);
+    expectAmbientUnconsulted();
+  });
+
+  it("fails closed when A's worktree read rejects rather than falling back to B", async () => {
+    // The `fetch-failed` branch: getWorktreesResult swallows the rejection into
+    // an unavailable status, which must reach storage as "" and not as a raw
+    // rejection escaping through get/delete.
+    const host = hostBoundTo({ projectId: PROJECT_A, projectRoot: projectRootOf(PROJECT_A) });
+    projectWorktreeFetch.mockRejectedValue(new Error("workspace host is gone"));
+    await seedAmbientB();
+
+    await expect(host.storage.set("cursor", 7, "worktree")).rejects.toThrow(
+      `Plugin "${PLUGIN_ID}" storage.set: no active worktree — "worktree" scope has no target`
+    );
+    expect(await host.storage.get("cursor", "worktree")).toBeUndefined();
+    await expect(host.storage.delete("cursor", "worktree")).resolves.toBeUndefined();
+
+    await expectBUntouched();
+    expectAmbientUnconsulted();
   });
 
   it("fails closed when the worktree read answers for B through an A-bound host", async () => {
@@ -767,12 +832,16 @@ describe("settings and storage roots", () => {
       snapshots: [worktreeSnapshot(ambientB(), true)],
     });
 
-    await expect(host.storage.set("cursor", 7, "worktree")).rejects.toThrow(
-      'no active worktree — "worktree" scope has no target'
-    );
+    await seedAmbientB();
 
-    expect(await exists(path.join(projectRootOf(PROJECT_B), ".daintree"))).toBe(false);
+    await expect(host.storage.set("cursor", 7, "worktree")).rejects.toThrow(
+      `Plugin "${PLUGIN_ID}" storage.set: no active worktree — "worktree" scope has no target`
+    );
+    expect(await host.storage.get("cursor", "worktree")).toBeUndefined();
+
+    await expectBUntouched();
     expect(await exists(path.join(projectRootOf(PROJECT_A), ".daintree"))).toBe(false);
+    expectAmbientUnconsulted();
   });
 
   it("keeps an UNBOUND host's worktree-scoped storage on the ambient worktree", async () => {
@@ -785,9 +854,11 @@ describe("settings and storage roots", () => {
     await host.storage.set("cursor", 7, "worktree");
 
     expect(JSON.parse(await fs.readFile(storageFileIn(ambientB()), "utf8"))).toEqual({ cursor: 7 });
-    expect(ambientWorktreePathLookup).toHaveBeenCalled();
-    // Unbound short-circuits before the snapshot read — the ambient callback is
-    // the whole resolution.
+    expect(ambientWorktreePathLookup).toHaveBeenCalledTimes(1);
+    // Unbound short-circuits before the snapshot read, so NEITHER fetch runs.
+    // ambientWorktreeFetch is the load-bearing one: an unbound host that
+    // wrongly fell into getWorktreesResult would reach that, not the project fetch.
+    expect(ambientWorktreeFetch).not.toHaveBeenCalled();
     expect(projectWorktreeFetch).not.toHaveBeenCalled();
   });
 
@@ -797,13 +868,26 @@ describe("settings and storage roots", () => {
       projectRoot: projectRootOf(PROJECT_A),
     });
     let release!: (value: unknown) => void;
-    projectWorktreeFetch.mockReturnValue(
-      new Promise((resolve) => {
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    // Deferred INSIDE the implementation: built eagerly by mockReturnValue,
+    // `release` would already be assigned before the fetch ran and the test
+    // would pass without the new await ever being reached.
+    projectWorktreeFetch.mockImplementation(() => {
+      markStarted();
+      return new Promise((resolve) => {
         release = resolve;
-      })
-    );
+      });
+    });
+    await seedAmbientB();
 
     const pending = host.storage.set("cursor", 7, "worktree");
+    // Proof the call really is parked in target resolution before we unload.
+    await started;
+    expect(projectWorktreeFetch).toHaveBeenCalledWith(PROJECT_A, projectRootOf(PROJECT_A));
+
     // Unloaded mid-resolution: the write is dropped rather than surfacing the
     // "no target" throw a genuinely absent worktree would raise.
     deps.plugins.delete(PLUGIN_ID);
@@ -814,8 +898,11 @@ describe("settings and storage roots", () => {
     });
 
     await expect(pending).resolves.toBeUndefined();
-    expect(await exists(path.join(projectRootOf(PROJECT_A), ".daintree"))).toBe(false);
-    expect(await exists(path.join(projectRootOf(PROJECT_B), ".daintree"))).toBe(false);
+    // Both candidate targets, not just their project roots: the write would have
+    // landed in a worktree subdirectory, which a project-root check never sees.
+    expect(await exists(storageFileIn(inA("feature-x")))).toBe(false);
+    await expectBUntouched();
+    expect(ambientWorktreePathLookup).not.toHaveBeenCalled();
   });
 
   it("fails closed for a malformed bound-but-rootless binding rather than writing into B", async () => {

@@ -197,7 +197,7 @@ Installed and builtin plugins keep their existing ambient behaviour — they hav
 
 In-repository files are named by the **manifest id**, never by the instance key: the instance key embeds this machine's project id, and writing that into a tracked filename would commit one developer's local identity into everyone's checkout. The project root already provides the isolation. Files under the user's own directory are keyed by the **instance key**, so two projects shipping the same manifest id keep separate state.
 
-The project root a bound plugin writes to is the one from its binding, not the focused project. The `"worktree"` storage scope is the exception today — it still resolves the app-global active worktree, so it can follow the user's focus rather than your project.
+The project root a bound plugin writes to is the one from its binding, not the focused project. The `"worktree"` storage scope follows the same rule: it resolves your bound project's own current worktree, and fails closed — read `undefined`, write throws — when that project has none, rather than falling back to whichever worktree the app considers active. An installed or builtin plugin, having no project of its own, still resolves the app-global active worktree.
 
 The `${worktree}` and `${project}` tokens in `scopes.fs.allowedPaths` expand against the bound project's own worktrees, so a project plugin's containment roots do not move when the user switches projects. An installed or builtin plugin keeps expanding them ambiently — it has no project of its own.
 

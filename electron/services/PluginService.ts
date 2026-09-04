@@ -948,11 +948,14 @@ export class PluginService {
 
     this.storage = new PluginStorageManager({
       getPluginsRoot: () => this.pluginsRoot,
-      // Resolve the active worktree's path the same way host.getActiveWorktree
-      // does — first isCurrent snapshot — so "worktree"-scoped storage tracks the
-      // user's active worktree. Returns undefined when none is active or the
-      // workspace client isn't wired yet, which the storage API treats as
-      // "no target" (read → undefined, write → throw).
+      // The UNBOUND fallback only: an installed or builtin plugin has no project
+      // of its own, so the app-global active worktree — first isCurrent snapshot,
+      // the same rule host.getActiveWorktree uses — is the only thing its
+      // "worktree" scope can mean. A bound host never reaches this; it resolves
+      // its own project's current worktree in PluginHostFactory (#12229).
+      // Returns undefined when none is active or the workspace client isn't
+      // wired yet, which the storage API treats as "no target" (read →
+      // undefined, write → throw).
       getActiveWorktreePath: async () => {
         const snapshots = await this.fetchAllWorktreeSnapshots();
         return snapshots.find((s) => s.isCurrent === true)?.path;
