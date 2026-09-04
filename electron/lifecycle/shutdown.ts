@@ -501,6 +501,18 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         import("../services/PluginCliServer.js")
           .then(({ stopPluginCliServer }) => stopPluginCliServer())
           .catch(() => {}),
+        // SIGTERM (then SIGKILL) every child a plugin spawned via
+        // host.process.spawn (#12216). Electron signals nothing to a
+        // `child_process.spawn` tree on quit — on any platform — so without
+        // this a plugin's dev server simply outlives the app. Narrower than
+        // pluginService.dispose() on purpose: quit wants the OS children gone,
+        // not a full registry teardown. Bounded internally by the kill grace
+        // window, and by the cleanup race around this Promise.all.
+        import("../services/PluginService.js")
+          .then(({ pluginService }) => pluginService.shutdownManagedProcesses())
+          .catch((err) => {
+            console.warn("[MAIN] Plugin managed-process shutdown failed:", err);
+          }),
         import("../services/IdleBackgroundAutoCloseService.js")
           .then(({ getIdleBackgroundAutoCloseService }) =>
             getIdleBackgroundAutoCloseService().stop()

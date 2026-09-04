@@ -181,7 +181,10 @@ vi.mock("../../services/NotificationService.js", () => ({
   notificationService: notificationServiceMock,
 }));
 
-const pluginServiceMock = vi.hoisted(() => ({ setWorkspaceClient: vi.fn() }));
+const pluginServiceMock = vi.hoisted(() => ({
+  setWorkspaceClient: vi.fn(),
+  shutdownManagedProcesses: vi.fn(async () => {}),
+}));
 vi.mock("../../services/PluginService.js", () => ({
   pluginService: pluginServiceMock,
 }));
@@ -916,6 +919,32 @@ describe("registerShutdownHandler", () => {
       });
 
       expect(pluginServiceMock.setWorkspaceClient).toHaveBeenCalledWith(null);
+    });
+
+    it("kills every plugin-spawned child process before exiting (#12216)", async () => {
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      // Electron signals nothing to a `child_process.spawn` tree on quit, so
+      // without this sweep a plugin's dev server simply outlives the app.
+      expect(pluginServiceMock.shutdownManagedProcesses).toHaveBeenCalled();
+    });
+
+    it("still exits cleanly when the plugin process sweep rejects (#12216)", async () => {
+      pluginServiceMock.shutdownManagedProcesses.mockRejectedValueOnce(new Error("sweep boom"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+      warnSpy.mockRestore();
     });
 
     it("still exits cleanly when a moved disposal throws", async () => {

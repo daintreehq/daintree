@@ -190,6 +190,7 @@ export class PluginDevWorkerMainBridge {
 
     this.workerHost.on("worker-message", this.onWorkerMessage);
     this.workerHost.on("reloading", this.onReloading);
+    this.workerHost.on("exit", this.onWorkerExit);
     this.workerHost.on("crash-loop", this.onCrashLoop);
   }
 
@@ -203,6 +204,7 @@ export class PluginDevWorkerMainBridge {
     this.disposed = true;
     this.workerHost.off("worker-message", this.onWorkerMessage);
     this.workerHost.off("reloading", this.onReloading);
+    this.workerHost.off("exit", this.onWorkerExit);
     this.workerHost.off("crash-loop", this.onCrashLoop);
     for (const dispose of this.subscriptionDisposers.values()) {
       try {
@@ -278,6 +280,37 @@ export class PluginDevWorkerMainBridge {
     this.abortAllHostCalls();
     for (const pending of this.pendingInvokes.values()) {
       pending.reject(new Error("Plugin reloaded before invocation completed"));
+    }
+    this.pendingInvokes.clear();
+  };
+
+  /**
+   * The worker process is gone (#12216). A reload announces itself first via
+   * `reloading` and has already settled everything by the time the exit lands,
+   * but a CRASH does not: the host respawns a fresh worker that has never seen
+   * the outstanding request ids, so without this every in-flight invoke hangs
+   * its caller forever — the renderer's action dispatch or IPC handler never
+   * settles, and nothing ever comes back to settle it.
+   *
+   * Deliberately no wall-clock timeout on `invoke` itself. This bridge carries
+   * actions, IPC handlers and decoration calls whose legitimate durations
+   * differ by orders of magnitude — a plugin action that runs a build or a
+   * clone is not hung — so a blanket deadline would break working plugins to
+   * catch a case the caller can bound better. Callers that DO have a budget
+   * already own one (`DECORATION_PROVIDER_TIMEOUT_MS` in ipc/handlers/plugin.ts).
+   * What was genuinely unbounded is a dead worker, and that is what this fixes.
+   */
+  private onWorkerExit = (code: number, expected: boolean): void => {
+    if (this.disposed) return;
+    if (this.pendingInvokes.size === 0 && this.hostCallAborts.size === 0) return;
+    const reason = expected
+      ? `Plugin "${this.pluginId}" dev worker stopped before invocation completed`
+      : `Plugin "${this.pluginId}" dev worker crashed (code ${code}) before invocation completed`;
+    // In-flight host calls belong to the same dead generation: their results
+    // have nowhere to be delivered, so cancel the I/O rather than let it land.
+    this.abortAllHostCalls();
+    for (const pending of this.pendingInvokes.values()) {
+      pending.reject(new Error(reason));
     }
     this.pendingInvokes.clear();
   };
@@ -467,6 +500,8 @@ export class PluginDevWorkerMainBridge {
       }
       case "fs.readFile":
         return this.host.fs.readFile((params as FsPathParams).path, { signal });
+      case "fs.readFileBytes":
+        return this.host.fs.readFileBytes((params as FsPathParams).path, { signal });
       case "fs.writeFile": {
         const p = params as FsWriteFileParams;
         await this.host.fs.writeFile(p.path, p.contents);

@@ -1264,6 +1264,16 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
         }
         return v;
       },
+      async readFileBytes(filePath, options) {
+        options?.signal?.throwIfAborted();
+        const v = fsFiles.get(filePath);
+        if (v === undefined) {
+          throw new Error(`ENOENT: mock fs has no file "${filePath}"`);
+        }
+        // The mock stores text, so bytes are the UTF-8 encoding of it — enough
+        // to exercise a plugin's byte path without modelling binary storage.
+        return new TextEncoder().encode(v);
+      },
       async writeFile(filePath, contents) {
         fsFiles.set(filePath, contents);
         fsWriteCalls.push({ path: filePath, contents });

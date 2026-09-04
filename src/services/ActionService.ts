@@ -27,6 +27,8 @@ import {
 import { deriveBand } from "../../shared/utils/actionRiskBand.js";
 import {
   RECIPE_DISPATCH_DANGER_RATIONALE,
+  TERMINAL_COMMAND_DISPATCH_DANGER_RATIONALE,
+  dispatchCarriesRecipeId,
   resolveEffectiveActionDanger,
 } from "./actions/effectiveDanger";
 
@@ -391,11 +393,18 @@ export class ActionService {
       // "why this is gated" reasoning the model does (#11342). Omitted when
       // absent so callers/tests observe exactly the populated fields. An
       // elevated dispatch falls back to the elevation's own rationale, since a
-      // statically-safe action has no reason to carry one.
+      // statically-safe action has no reason to carry one — matching
+      // `resolveEffectiveActionDanger`'s own precedence when a dispatch trips
+      // both clauses.
       ...(definition.dangerRationale
         ? { dangerRationale: definition.dangerRationale }
         : elevated
-          ? { dangerRationale: RECIPE_DISPATCH_DANGER_RATIONALE }
+          ? {
+              dangerRationale:
+                dispatch && dispatchCarriesRecipeId(dispatch.args)
+                  ? RECIPE_DISPATCH_DANGER_RATIONALE
+                  : TERMINAL_COMMAND_DISPATCH_DANGER_RATIONALE,
+            }
           : {}),
     };
   }

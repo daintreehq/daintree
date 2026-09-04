@@ -209,6 +209,59 @@ describe("host.fs containment + capability gating", () => {
     await fs.writeFile(target, big);
     expect((await host.fs.readFile(target)).length).toBe(big.length);
   });
+
+  describe("readFileBytes (#12216)", () => {
+    it("returns bytes UTF-8 decoding would have corrupted", async () => {
+      const host = registerPlugin(["fs:project-read"], [allowed]);
+      // A PNG header: byte 0x89 is not valid UTF-8 on its own, so `readFile`
+      // hands back a replacement character and the bytes are unrecoverable.
+      const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const target = join(allowed, "icon.png");
+      await fs.writeFile(target, bytes);
+
+      const read = await host.fs.readFileBytes(target);
+
+      expect(read).toBeInstanceOf(Uint8Array);
+      expect([...read]).toEqual([...bytes]);
+    });
+
+    it("does not share Node's pooled buffer with the caller", async () => {
+      const host = registerPlugin(["fs:project-read"], [allowed]);
+      const target = join(allowed, "small.bin");
+      await fs.writeFile(target, Buffer.from([1, 2, 3]));
+
+      const read = await host.fs.readFileBytes(target);
+
+      // A pooled Buffer's ArrayBuffer is shared with unrelated reads, so a view
+      // handed straight through would expose whatever else the pool holds.
+      expect(read.byteOffset).toBe(0);
+      expect(read.buffer.byteLength).toBe(3);
+    });
+
+    it("enforces the same containment as readFile", async () => {
+      const host = registerPlugin(["fs:project-read"], [allowed]);
+      await fs.writeFile(join(baseDir, "outside.bin"), "secret");
+      await expect(host.fs.readFileBytes(join(allowed, "..", "outside.bin"))).rejects.toThrow(
+        /PATH_NOT_ALLOWED/
+      );
+    });
+
+    it("denies a read when the plugin lacks any read capability", async () => {
+      const host = registerPlugin(["fs:project-write"], [allowed]);
+      const target = join(allowed, "x.bin");
+      await fs.writeFile(target, "x");
+      await expect(host.fs.readFileBytes(target)).rejects.toThrow(/PERMISSION_REQUIRED/);
+    });
+
+    it("honors an already-aborted signal without touching the disk", async () => {
+      const host = registerPlugin(["fs:project-read"], [allowed]);
+      const target = join(allowed, "y.bin");
+      await fs.writeFile(target, "y");
+      await expect(
+        host.fs.readFileBytes(target, { signal: AbortSignal.abort() })
+      ).rejects.toThrow();
+    });
+  });
 });
 
 describe("host.fs.readdir detailed listing", () => {

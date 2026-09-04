@@ -5,6 +5,7 @@ import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
 import {
   PLUGIN_PROCESS_KILL_GRACE_MS,
   PLUGIN_PROCESS_MAX_CONCURRENT,
+  PLUGIN_PROCESS_STDIO_DRAIN_MS,
   type PluginProcessInfo,
   type PluginProcessStatus,
   type PluginProcessStreamEvent,
@@ -60,6 +61,12 @@ export interface ManagedChildProcess {
     event: "exit",
     listener: (code: number | null, signal: NodeJS.Signals | null) => void
   ): unknown;
+  /**
+   * Subscribe to `close` — every stdio stream drained and shut. Node fires this
+   * strictly after `exit`, and the tail of a one-shot command's output arrives
+   * between the two, which is why terminal bookkeeping waits for it.
+   */
+  on(event: "close", listener: () => void): unknown;
   /** Surface async stream/stdio errors (e.g. EPIPE) so they don't crash the host. */
   on(event: "error", listener: (err: Error) => void): unknown;
 }
@@ -261,6 +268,9 @@ export class PluginProcessManager {
   private readonly streamSink: ProcessStreamSink;
   private readonly auditor: ProcessSpawnAuditor;
   private readonly killGraceMs: number;
+  private readonly stdioDrainMs: number;
+  /** Set by `shutdownAll()` — the app is quitting, so no further spawn is honored. */
+  private shuttingDown = false;
 
   constructor(options: {
     streamSink: ProcessStreamSink;
@@ -269,12 +279,14 @@ export class PluginProcessManager {
     ptySpawner?: PtyProcessSpawner | null;
     auditor?: ProcessSpawnAuditor;
     killGraceMs?: number;
+    stdioDrainMs?: number;
   }) {
     this.streamSink = options.streamSink;
     this.spawner = options.spawner ?? defaultSpawner;
     this.ptySpawner = options.ptySpawner ?? null;
     this.auditor = options.auditor ?? (() => {});
     this.killGraceMs = options.killGraceMs ?? PLUGIN_PROCESS_KILL_GRACE_MS;
+    this.stdioDrainMs = options.stdioDrainMs ?? PLUGIN_PROCESS_STDIO_DRAIN_MS;
   }
 
   /** Count of RUNNING processes owned by `pluginId`. */
@@ -292,6 +304,11 @@ export class PluginProcessManager {
    * {@link PluginProcessConcurrencyError} when the per-plugin cap is reached.
    */
   async spawn(pluginId: string, config: ResolvedProcessSpawn): Promise<ManagedProcessHandle> {
+    // The quit sweep has already signalled everything down; a spawn admitted
+    // after it would start a child nothing is left to kill.
+    if (this.shuttingDown) {
+      throw new Error(`Plugin "${pluginId}" process.spawn: the app is shutting down`);
+    }
     if (this.runningCount(pluginId) >= PLUGIN_PROCESS_MAX_CONCURRENT) {
       throw new PluginProcessConcurrencyError(pluginId, PLUGIN_PROCESS_MAX_CONCURRENT);
     }
@@ -760,8 +777,26 @@ export class PluginProcessManager {
     this.attachStream(managed, child, "stdout");
     this.attachStream(managed, child, "stderr");
 
-    child.on("exit", (code, signal) => {
-      // Ignore an exit from a stale child after a restart already replaced it.
+    // `exit` fires as soon as the child is reaped, BEFORE its stdio pipes have
+    // drained — so finalizing there drops the tail of a one-shot command's
+    // output, which is exactly the data a plugin shelling out to a linter or a
+    // formatter cares about. `close` is the correct settle point.
+    //
+    // But `close` is not guaranteed to arrive: a child that hands its stdout to
+    // a surviving grandchild (a daemonizing dev server) holds the pipe open
+    // forever, and waiting on it would strand the handle in `running` for good.
+    // So whichever comes first wins — `close`, or `exit` plus a bounded drain
+    // window long enough for an ordinary flush.
+    let settled = false;
+    let drainTimer: ReturnType<typeof setTimeout> | null = null;
+    const finalize = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (settled) return;
+      settled = true;
+      if (drainTimer) {
+        clearTimeout(drainTimer);
+        drainTimer = null;
+      }
+      // Ignore a settle from a stale child after a restart already replaced it.
       if (managed.child !== child) return;
       if (managed.killTimer) {
         clearTimeout(managed.killTimer);
@@ -776,6 +811,25 @@ export class PluginProcessManager {
       const outcome: ExitInfo = { exitCode: code, signal: signal ?? null };
       managed.terminalOutcome = outcome;
       this.emitTerminal(managed, outcome, crashed);
+    };
+
+    let exitCode: number | null = null;
+    let exitSignal: NodeJS.Signals | null = null;
+    child.on("exit", (code, signal) => {
+      if (settled || managed.child !== child) return;
+      // The exit code/signal are only ever authoritative here — `close` carries
+      // its own arguments in Node, but this interface deliberately doesn't take
+      // them, so the values are captured on the way past.
+      exitCode = code;
+      exitSignal = signal;
+      drainTimer = setTimeout(() => {
+        drainTimer = null;
+        finalize(exitCode, exitSignal);
+      }, this.stdioDrainMs);
+      drainTimer.unref?.();
+    });
+    child.on("close", () => {
+      finalize(exitCode, exitSignal);
     });
   }
 
@@ -1025,6 +1079,101 @@ export class PluginProcessManager {
         this.processes.delete(id);
       }
     }
+  }
+
+  /**
+   * Tear down every managed process across every plugin, for app quit.
+   *
+   * `killAll(pluginId)` cannot stand in for this: it is per-plugin, and its
+   * SIGKILL escalation rides an `unref()`'d timer that by design never holds
+   * the event loop open — fine on unload, useless at quit, where the app exits
+   * before the timer can fire and a child that ignored SIGTERM is simply
+   * orphaned. Electron signals nothing to a `child_process.spawn` tree on quit
+   * on any platform, so this is the only thing standing between a plugin's dev
+   * server and outliving the app that started it.
+   *
+   * So the escalation here is awaited on a REFERENCED timer and the whole sweep
+   * resolves once every plain child is confirmed gone (or force-killed),
+   * bounded by the grace window so it stays well inside the shutdown budget.
+   *
+   * Deliberately does NOT touch `PluginDevWorkerHost`: plugin workers are
+   * `utilityProcess` children that Electron reaps with the app, and its
+   * `.kill()` can block main for ~2s on macOS (#11073). PTY-backed processes
+   * are signalled but not awaited — the pty-host owns their reaping and has its
+   * own descendant sweep (#12203).
+   */
+  async shutdownAll(): Promise<void> {
+    this.shuttingDown = true;
+
+    const awaitingExit: ManagedProcess[] = [];
+    for (const managed of this.processes.values()) {
+      if (managed.status !== "running") continue;
+      managed.killRequested = true;
+      // Drop the unref'd escalation `terminate()` would arm; this sweep owns
+      // the SIGKILL from here, on a timer that can actually fire.
+      if (managed.killTimer) {
+        clearTimeout(managed.killTimer);
+        managed.killTimer = null;
+      }
+      if (managed.mode === "pty") {
+        managed.pendingResize = null;
+        try {
+          managed.ptyBackend?.kill("SIGTERM");
+        } catch {
+          // best-effort — the pty-host reaps its own children regardless
+        }
+        continue;
+      }
+      if (!managed.child) continue;
+      try {
+        managed.child.kill("SIGTERM");
+      } catch {
+        // already gone — its exit handler does the bookkeeping
+      }
+      awaitingExit.push(managed);
+    }
+
+    if (awaitingExit.length === 0) return;
+
+    await new Promise<void>((resolve) => {
+      let remaining = awaitingExit.length;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const settleOne = (): void => {
+        remaining -= 1;
+        if (remaining > 0) return;
+        if (timer) clearTimeout(timer);
+        resolve();
+      };
+      for (const managed of awaitingExit) {
+        const child = managed.child;
+        // Raced its own SIGTERM between the loop above and here.
+        if (!child) {
+          settleOne();
+          continue;
+        }
+        let counted = false;
+        child.on("exit", () => {
+          if (counted) return;
+          counted = true;
+          settleOne();
+        });
+      }
+      // Deliberately NOT unref'd: the whole point is to hold the quit chain
+      // open long enough to prove the children are gone. `settleWithin` in
+      // lifecycle/shutdown.ts backstops it if a child wedges past the grace.
+      timer = setTimeout(() => {
+        timer = null;
+        for (const managed of awaitingExit) {
+          if (managed.status !== "running" || !managed.child) continue;
+          try {
+            managed.child.kill("SIGKILL");
+          } catch {
+            // best-effort
+          }
+        }
+        resolve();
+      }, this.killGraceMs);
+    });
   }
 
   /** Read-only snapshot for the `plugin-process:list` IPC, optionally scoped to one plugin. */

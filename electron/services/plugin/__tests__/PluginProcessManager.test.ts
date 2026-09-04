@@ -109,11 +109,28 @@ function makeFakeChild(opts?: { pid?: number; duplex?: boolean }) {
     stdin,
     writeStdout: (chunk: string) => stdout.write(chunk),
     writeStderr: (chunk: string) => stderr.write(chunk),
+    /**
+     * A normal child's terminal sequence: Node reaps it (`exit`), then closes
+     * its stdio (`close`). Both fire, in that order — see
+     * `emitExitWithoutClose` for the child that never releases its pipes.
+     */
     emitExit: (code: number | null, signal: NodeJS.Signals | null) => {
       if (exited) return;
       exited = true;
       emitter.emit("exit", code, signal);
+      emitter.emit("close");
     },
+    /**
+     * A child that exits while a surviving grandchild still holds its stdout,
+     * so `close` never arrives. Only the drain cap settles this one.
+     */
+    emitExitWithoutClose: (code: number | null, signal: NodeJS.Signals | null) => {
+      if (exited) return;
+      exited = true;
+      emitter.emit("exit", code, signal);
+    },
+    /** Release the pipes after an `emitExitWithoutClose`. */
+    emitClose: () => emitter.emit("close"),
     emitError: (err: Error) => emitter.emit("error", err),
   };
 }
@@ -179,7 +196,11 @@ interface Harness {
   failNextPtySpawn: { value: Error | null };
 }
 
-function makeHarness(opts?: { killGraceMs?: number; noPtySpawner?: boolean }): Harness {
+function makeHarness(opts?: {
+  killGraceMs?: number;
+  noPtySpawner?: boolean;
+  stdioDrainMs?: number;
+}): Harness {
   const events: Harness["events"] = [];
   const spawnConfigs: ResolvedProcessSpawn[] = [];
   const ptyConfigs: Harness["ptyConfigs"] = [];
@@ -212,6 +233,7 @@ function makeHarness(opts?: { killGraceMs?: number; noPtySpawner?: boolean }): H
         },
     auditor: ({ pluginId, command }) => auditCalls.push({ pluginId, command }),
     killGraceMs: opts?.killGraceMs ?? 50,
+    stdioDrainMs: opts?.stdioDrainMs ?? 50,
   });
   return { manager, events, spawnConfigs, ptyConfigs, fakes, ptys, auditCalls, failNextPtySpawn };
 }
@@ -438,6 +460,146 @@ describe("PluginProcessManager", () => {
     const h = makeHarness();
     await h.manager.spawn("acme.tool", pipeConfig());
     expect(h.auditCalls).toEqual([{ pluginId: "acme.tool", command: "node" }]);
+  });
+
+  describe("stdio drain before terminal settle (#12216)", () => {
+    it("delivers output written between exit and close", async () => {
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", pipeConfig());
+      const chunks: PluginProcessDataChunk[] = [];
+      handle.onData((chunk) => chunks.push(chunk));
+      await flushMicrotasks();
+
+      const fake = h.fakes[0]!;
+      // A one-shot linter's verdict: written as the process is going away, so
+      // it lands after `exit` but before the pipes close. Settling on `exit`
+      // dropped exactly this.
+      fake.emitExitWithoutClose(0, null);
+      fake.writeStdout("2 problems found\n");
+      await flushMicrotasks();
+
+      expect(chunks.map((c) => c.chunk).join("")).toContain("2 problems found");
+    });
+
+    it("holds the terminal outcome until close, then reports the exit code", async () => {
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", pipeConfig());
+      const exits: Array<{ exitCode: number | null }> = [];
+      handle.onExit((info) => exits.push({ exitCode: info.exitCode }));
+
+      const fake = h.fakes[0]!;
+      fake.emitExitWithoutClose(7, null);
+      await flushMicrotasks();
+      expect(exits).toEqual([]);
+
+      fake.emitClose();
+      await flushMicrotasks();
+      // The code came from `exit` — `close` only says the pipes are done.
+      expect(exits).toEqual([{ exitCode: 7 }]);
+      expect(h.manager.list("acme.tool")[0]!.status).toBe("exited");
+    });
+
+    it("settles on the drain cap when close never arrives", async () => {
+      // The daemonizing case: the child exits but a surviving grandchild keeps
+      // its stdout open, so `close` is never emitted. Without the cap the
+      // handle would sit in `running` for the rest of the session.
+      const h = makeHarness({ stdioDrainMs: 20 });
+      const handle = await h.manager.spawn("acme.tool", pipeConfig());
+      const exits: Array<{ exitCode: number | null }> = [];
+      handle.onExit((info) => exits.push({ exitCode: info.exitCode }));
+
+      h.fakes[0]!.emitExitWithoutClose(0, null);
+      await flushMicrotasks();
+      expect(exits).toEqual([]);
+
+      await new Promise((r) => setTimeout(r, 40));
+      expect(exits).toEqual([{ exitCode: 0 }]);
+      expect(h.manager.list("acme.tool")[0]!.status).toBe("exited");
+    });
+
+    it("ignores a close from a child a restart already replaced", async () => {
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", pipeConfig());
+      const first = h.fakes[0]!;
+      first.emitExit(0, null);
+      await flushMicrotasks();
+
+      await h.manager.restart(handle.id);
+      const second = h.fakes[1]!;
+
+      const exits: Array<{ exitCode: number | null }> = [];
+      handle.onExit((info) => exits.push({ exitCode: info.exitCode }));
+      exits.length = 0;
+
+      // A late settle from the outgoing incarnation must not terminate the
+      // live one.
+      first.emitClose();
+      await flushMicrotasks();
+      expect(h.manager.list("acme.tool")[0]!.status).toBe("running");
+
+      second.emitExit(0, null);
+      await flushMicrotasks();
+      expect(h.manager.list("acme.tool")[0]!.status).toBe("exited");
+    });
+  });
+
+  describe("shutdownAll (app quit) (#12216)", () => {
+    it("SIGTERMs every plugin's children and resolves once they exit", async () => {
+      const h = makeHarness();
+      await h.manager.spawn("acme.tool", pipeConfig({ command: "a" }));
+      await h.manager.spawn("other.tool", pipeConfig({ command: "b" }));
+
+      const swept = h.manager.shutdownAll();
+      // Unlike killAll, this is not scoped to one plugin — quit takes them all.
+      expect(h.fakes[0]!.killSignals).toContain("SIGTERM");
+      expect(h.fakes[1]!.killSignals).toContain("SIGTERM");
+
+      h.fakes[0]!.emitExit(0, "SIGTERM");
+      h.fakes[1]!.emitExit(0, "SIGTERM");
+      await swept;
+
+      expect(h.fakes[0]!.killSignals).not.toContain("SIGKILL");
+      expect(h.fakes[1]!.killSignals).not.toContain("SIGKILL");
+    });
+
+    it("escalates to SIGKILL for a child that outlives the grace window", async () => {
+      // The escalation `killAll` arms rides an unref'd timer that can never
+      // fire before the app exits. This one is referenced, so a child that
+      // ignores SIGTERM is actually force-killed rather than orphaned.
+      const h = makeHarness({ killGraceMs: 20 });
+      await h.manager.spawn("acme.tool", pipeConfig());
+
+      await h.manager.shutdownAll();
+
+      expect(h.fakes[0]!.killSignals).toEqual(["SIGTERM", "SIGKILL"]);
+    });
+
+    it("signals interactive processes without waiting on the pty host", async () => {
+      const h = makeHarness();
+      await h.manager.spawn("acme.tool", ptyConfig());
+
+      // Resolves without any PTY exit being delivered: the pty-host owns
+      // reaping those, and quit must not block on its round trip.
+      await h.manager.shutdownAll();
+
+      expect(h.ptys[0]!.kills).toContain("SIGTERM");
+    });
+
+    it("resolves immediately when nothing is running", async () => {
+      const h = makeHarness();
+      await h.manager.spawn("acme.tool", pipeConfig());
+      h.fakes[0]!.emitExit(0, null);
+      await flushMicrotasks();
+
+      await expect(h.manager.shutdownAll()).resolves.toBeUndefined();
+    });
+
+    it("refuses a spawn admitted after the sweep", async () => {
+      const h = makeHarness();
+      await h.manager.shutdownAll();
+
+      await expect(h.manager.spawn("acme.tool", pipeConfig())).rejects.toThrow(/shutting down/);
+    });
   });
 
   it("delivers the recorded outcome to a late onExit subscriber", async () => {

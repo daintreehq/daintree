@@ -1943,6 +1943,19 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
       // read itself (Node honors it) as well as the boundary checks above.
       return fs.readFile(resolved, { encoding: "utf-8", signal: options?.signal });
     },
+    readFileBytes: async (filePath, options) => {
+      options?.signal?.throwIfAborted();
+      requireLoaded("readFileBytes");
+      requireAnyReadCap("readFileBytes");
+      const { resolved, rootClass } = await containWithClass(filePath);
+      requireLoaded("readFileBytes");
+      requireReadCapForClass("readFileBytes", rootClass);
+      const buffer = await fs.readFile(resolved, { signal: options?.signal });
+      // Copy out of Node's pooled Buffer allocator: a small read shares its
+      // backing ArrayBuffer with unrelated reads, so handing the view straight
+      // to a plugin would expose whatever else the pool holds.
+      return new Uint8Array(buffer);
+    },
     writeFile: async (filePath, contents) => {
       requireLoaded("writeFile");
       const writeCap = requireWriteCap("writeFile");

@@ -35,27 +35,47 @@ export function registerTerminalSpawnActions(
     id: "terminal.new",
     title: "New Terminal",
     description:
-      "Open a new terminal in the active worktree, ready for commands. This creates a visible panel and starts a shell process that consumes resources until it is closed. Launch an agent instead when the intent is to start an AI CLI rather than a plain shell.",
+      "Open a new terminal, ready for commands. This creates a visible panel and starts a shell process that consumes resources until it is closed. Defaults to the active worktree, and can instead open at a chosen directory and run something there immediately. Launch an agent instead when the intent is to start an AI CLI rather than a plain shell.",
     category: "terminal",
     kind: "command",
+    // Stays statically safe: a plain "New Terminal" must not be gated. A
+    // dispatch carrying `command` is elevated to "confirm" per-dispatch by
+    // `resolveEffectiveActionDanger` — the same argument-keyed shape recipe
+    // dispatches use, so agent-initiated shell execution is gated without
+    // over-gating the ordinary case.
     danger: "safe",
     scope: "renderer",
     argsSchema: z
       .object({
         spawnedBy: TerminalSpawnSourceSchema.optional(),
         focusPolicy: AddPanelFocusPolicySchema.optional(),
+        cwd: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Absolute directory to open the terminal in. Defaults to the active worktree's root."
+          ),
+        command: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Shell command to run in the new terminal immediately, instead of leaving it at a prompt. Supplying this requires a confirmation."
+          ),
       })
       .optional(),
     run: async (args) => {
-      const { spawnedBy, focusPolicy } = args ?? {};
+      const { spawnedBy, focusPolicy, cwd, command } = args ?? {};
       const addPanel = usePanelStore.getState().addPanel;
       const terminalId = await addPanel({
         kind: "terminal",
-        cwd: callbacks.getDefaultCwd(),
+        cwd: cwd ?? callbacks.getDefaultCwd(),
         location: "grid",
         worktreeId: callbacks.getActiveWorktreeId(),
         spawnedBy,
         focusPolicy,
+        ...(command !== undefined && { command }),
       });
       if (!terminalId) return;
       return { terminalId };

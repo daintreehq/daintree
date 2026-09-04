@@ -56,6 +56,13 @@ const persistenceMock = vi.hoisted(() => ({
 }));
 vi.mock("../../../services/pty/terminalSessionPersistence.js", () => persistenceMock);
 
+// Mocked rather than exercised: the real seam dynamically imports the whole
+// PluginService module graph, which this handler test has no business loading.
+const pluginLifecycleMock = vi.hoisted(() => ({
+  notifyProjectPluginsClosed: vi.fn<(projectId: string) => void>(),
+}));
+vi.mock("../../../window/projectPluginLifecycle.js", () => pluginLifecycleMock);
+
 const broadcastMock = vi.hoisted(() => vi.fn());
 // Partial: `typedHandle` — which `defineIpcNamespace` registers through — lives
 // in this same module, so replacing it wholesale strands the registrar.
@@ -271,6 +278,38 @@ describe("project:sleep", () => {
 
       expect(projectStoreMock.clearProjectState).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed");
+    });
+
+    it("unloads the project's plugins, not just its terminals (#12216)", async () => {
+      const { invoke } = setup();
+
+      await invoke("proj-1");
+
+      // Sleeping to free memory has to take the plugin workers, startup timers,
+      // spawned children and the native watcher with it. Before #12216 nothing
+      // ran the unload cascade here, so they survived until the user happened
+      // to switch into a different project.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).toHaveBeenCalledWith("proj-1");
+    });
+
+    it("does not unload plugins for a project it refused to sleep (#12216)", async () => {
+      projectStoreMock.getProjectById.mockReturnValue(null);
+      const { invoke } = setup();
+
+      await expect(invoke("ghost")).rejects.toThrow(/Project not found/);
+
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
+    });
+
+    it("does not re-unload a project that was already asleep (#12216)", async () => {
+      projectStoreMock.getProjectById.mockReturnValue({ ...PROJECT, status: "closed" });
+      const { invoke } = setup();
+
+      await invoke("proj-1");
+
+      // The no-op branch returns before the status write, so nothing was
+      // closed here and there is no cascade to run.
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
     });
 
     it("reclaims the cached views and the workspace host", async () => {

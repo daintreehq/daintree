@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   dispatchCarriesRecipeId,
+  dispatchCarriesTerminalCommand,
   readDispatchRecipeId,
+  readDispatchTerminalCommand,
   resolveEffectiveActionDanger,
 } from "../effectiveDanger";
 
@@ -31,6 +33,52 @@ describe("resolveEffectiveActionDanger (#11860)", () => {
         "restricted"
       );
     }
+  });
+});
+
+describe("terminal.new command elevation (#12216)", () => {
+  it("elevates a safe action to confirm when an agent supplies a command", () => {
+    expect(resolveEffectiveActionDanger("safe", "agent", { command: "npm run build" })).toBe(
+      "confirm"
+    );
+  });
+
+  it("leaves a cwd-only dispatch safe", () => {
+    // Opening a terminal somewhere still runs only what the human types —
+    // the same authority a plain `terminal.new` already has.
+    expect(resolveEffectiveActionDanger("safe", "agent", { cwd: "/repo/packages/ui" })).toBe(
+      "safe"
+    );
+  });
+
+  it("does not elevate for user or plugin sources", () => {
+    expect(resolveEffectiveActionDanger("safe", "user", { command: "rm -rf /" })).toBe("safe");
+    expect(resolveEffectiveActionDanger("safe", "plugin", { command: "rm -rf /" })).toBe("safe");
+  });
+});
+
+describe("readDispatchTerminalCommand / dispatchCarriesTerminalCommand", () => {
+  it("accepts only a non-empty string command", () => {
+    expect(readDispatchTerminalCommand({ command: "ls", cwd: "/repo" })).toBe("ls");
+    expect(readDispatchTerminalCommand({ cwd: "/repo" })).toBeUndefined();
+    expect(dispatchCarriesTerminalCommand({ command: "ls" })).toBe(true);
+    expect(dispatchCarriesTerminalCommand({ command: "" })).toBe(false);
+    expect(dispatchCarriesTerminalCommand({ command: 7 })).toBe(false);
+    expect(dispatchCarriesTerminalCommand({ command: null })).toBe(false);
+  });
+
+  it("ignores non-object argument shapes", () => {
+    for (const args of [undefined, null, "command", 42, ["command"]]) {
+      expect(dispatchCarriesTerminalCommand(args)).toBe(false);
+    }
+  });
+
+  it("still gates on a command reached through the prototype chain", () => {
+    // Same fail-safe direction as the recipe id: under-gating is the failure
+    // that matters.
+    const proto: Record<string, unknown> = { command: "inherited" };
+    const args: unknown = Object.create(proto);
+    expect(dispatchCarriesTerminalCommand(args)).toBe(true);
   });
 });
 

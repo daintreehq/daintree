@@ -693,6 +693,94 @@ describe("PluginDevWorkerMainBridge", () => {
     await expect(pending).rejects.toThrow(/reloaded/);
   });
 
+  it("fails pending invokes when the worker crashes (#12216)", async () => {
+    const { host, workerHost, bridge } = makeBridge();
+    bridge.waitForActivation().catch(() => {});
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerAction",
+      params: {
+        descriptor: {
+          id: "greet",
+          title: "Greet",
+          description: "",
+          category: "Demo",
+          kind: "command",
+          danger: "safe",
+        },
+      },
+    });
+    const wrapper = host.registerAction.mock.calls[0][1] as (a: unknown) => Promise<unknown>;
+    const pending = wrapper({});
+    pending.catch(() => {});
+
+    // A crash, not a reload: the host respawns a worker that has never seen
+    // this request id, so nothing will ever reply to it. Before #12216 the
+    // caller simply waited forever.
+    workerHost.emit("exit", 139, false);
+
+    await expect(pending).rejects.toThrow(/crashed \(code 139\)/);
+  });
+
+  it("fails pending invokes when the worker exits expectedly (#12216)", async () => {
+    const { host, workerHost, bridge } = makeBridge();
+    bridge.waitForActivation().catch(() => {});
+    workerHost.emit("worker-message", {
+      type: "host-notify",
+      method: "registerAction",
+      params: {
+        descriptor: {
+          id: "greet",
+          title: "Greet",
+          description: "",
+          category: "Demo",
+          kind: "command",
+          danger: "safe",
+        },
+      },
+    });
+    const wrapper = host.registerAction.mock.calls[0][1] as (a: unknown) => Promise<unknown>;
+    const pending = wrapper({});
+    pending.catch(() => {});
+
+    workerHost.emit("exit", 0, true);
+
+    await expect(pending).rejects.toThrow(/stopped before invocation completed/);
+  });
+
+  it("aborts in-flight host calls when the worker dies (#12216)", async () => {
+    const { host, workerHost, bridge } = makeBridge();
+    bridge.waitForActivation().catch(() => {});
+    let seenSignal: AbortSignal | undefined;
+    host.fs.readFile.mockImplementation(
+      (_p: string, opts: { signal?: AbortSignal }) =>
+        new Promise(() => {
+          seenSignal = opts.signal;
+        })
+    );
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "h1",
+      method: "fs.readFile",
+      params: { path: "/repo/a.txt" },
+    });
+    await flush();
+
+    workerHost.emit("exit", 139, false);
+    // The worker is gone, so the read has nowhere to deliver — cancel the I/O
+    // rather than let it complete against a dead generation.
+    expect(seenSignal?.aborted).toBe(true);
+  });
+
+  it("does not disturb an idle bridge when the worker exits (#12216)", async () => {
+    const { workerHost, bridge } = makeBridge();
+    bridge.waitForActivation().catch(() => {});
+    workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+
+    // Nothing in flight: the exit handler must be a no-op, not an error path.
+    expect(() => workerHost.emit("exit", 0, true)).not.toThrow();
+  });
+
   it("drops a subscription event queued before a reload (generation guard) (#10526)", async () => {
     const { host, workerHost, bridge } = makeBridge();
     bridge.waitForActivation().catch(() => {});

@@ -1,7 +1,12 @@
 import type { ActionDanger, ActionSource } from "@shared/types/actions";
 import { dispatchCarriesRecipeId } from "@shared/utils/dispatchRecipeId";
+import { dispatchCarriesTerminalCommand } from "@shared/utils/dispatchTerminalCommand";
 
 export { dispatchCarriesRecipeId, readDispatchRecipeId } from "@shared/utils/dispatchRecipeId";
+export {
+  dispatchCarriesTerminalCommand,
+  readDispatchTerminalCommand,
+} from "@shared/utils/dispatchTerminalCommand";
 
 /**
  * Host-derived confirmation tier for one dispatch (#11860).
@@ -38,7 +43,15 @@ export function resolveEffectiveActionDanger(
 ): ActionDanger {
   if (declaredDanger !== "safe") return declaredDanger;
   if (source !== "agent") return declaredDanger;
-  return dispatchCarriesRecipeId(args) ? "confirm" : declaredDanger;
+  if (dispatchCarriesRecipeId(args)) return "confirm";
+  // Same argument-keyed shape for `terminal.new`'s `command` (#12216): opening
+  // a terminal is safe, and opening one at a chosen `cwd` still only runs what
+  // the human types — but a `command` executes on the agent's behalf, which is
+  // the authority `recipe.run` gates. Raising the declared tier instead would
+  // confirmation-gate every plain "New Terminal", the over-gating #10577
+  // rejected.
+  if (dispatchCarriesTerminalCommand(args)) return "confirm";
+  return declaredDanger;
 }
 
 /**
@@ -48,3 +61,7 @@ export function resolveEffectiveActionDanger(
  */
 export const RECIPE_DISPATCH_DANGER_RATIONALE =
   "This call carries a recipe id, so it spawns the recipe's terminals — each running shell commands or launching agents. Agent-initiated runs are confirmation-gated wherever they happen, not only through recipe.run.";
+
+/** Counterpart for a dispatch that asks a new terminal to run a command. */
+export const TERMINAL_COMMAND_DISPATCH_DANGER_RATIONALE =
+  "This call carries a command, so the new terminal runs it immediately rather than waiting for you to type. Agent-initiated shell execution is confirmation-gated wherever it happens.";
