@@ -1418,8 +1418,17 @@ export interface LoadedPluginInfo {
    * manifest is left alone — so `manifest.name` alone cannot tell the two
    * apart, and a consumer that filtered on it would treat a project plugin as
    * an installed one.
+   *
+   * This is also the field renderer-side maps key on. Keying them on
+   * `manifest.name` instead is what made every project-plugin lookup miss and
+   * fall back to rendering the raw instance key (#12211): a contribution never
+   * carries the bare manifest id, so the two never met.
    */
   instanceId: string;
+  /** `"project"` for a `.daintree/plugins` contribution, `"global"` otherwise. */
+  origin: "global" | "project";
+  /** Owning project for a project-owned plugin; `null` when `origin` is `"global"`. */
+  projectId: string | null;
   dir: string;
   loadedAt: number;
   /**
@@ -2702,8 +2711,62 @@ export interface PluginHostActionsApi {
   canDispatch(actionId: ActionId): Promise<PluginCanDispatchResult>;
 }
 
+/**
+ * Who this plugin is, as the host knows it — the facts a plugin previously had
+ * to recover by string-splitting its own {@link PluginHostApi.pluginId}
+ * (#12211). Every field is fixed for the life of the host: the binding is
+ * captured once when the host is built, never resolved per call.
+ */
+export interface PluginIdentity {
+  /**
+   * The key this instance is indexed under host-side, byte-identical to
+   * {@link PluginHostApi.pluginId}. Present so a plugin passing identity around
+   * as one object never has to reach back for the bare id.
+   */
+  readonly instanceId: string;
+  /**
+   * The manifest id (`publisher.name`) — what belongs in anything the
+   * *repository* sees, since a project id is machine-local.
+   */
+  readonly manifestId: string;
+  /** `"project"` for a `.daintree/plugins` contribution, `"global"` otherwise. */
+  readonly origin: "global" | "project";
+  /** Owning project, or `null` for an app-global (installed/builtin) plugin. */
+  readonly projectId: string | null;
+  /** Absolute project root. Null iff `projectId` is null. */
+  readonly projectRoot: string | null;
+}
+
 export interface PluginHostApi extends PluginActivationApi {
   readonly pluginId: string;
+  /**
+   * This plugin's own identity, frozen at activation. Read `manifestId` rather
+   * than parsing {@link pluginId}: for a project-owned plugin the id is an
+   * instance key, and splitting it by hand is exactly the coupling to the
+   * host's internal key format that this exists to remove (#12211).
+   *
+   * Always readable — it is static closure data, not a live registration, so
+   * unlike the registration surface it neither throws after `activate()`
+   * resolves nor goes quiet once the plugin unloads.
+   */
+  readonly pluginInfo: PluginIdentity;
+  /**
+   * Qualify one of this plugin's own `contributes.panels[].id` values into the
+   * runtime panel kind id that {@link PluginHostApi.dispatch}'s
+   * `panel.openPluginPanel` expects — `{manifestId}.{bareId}` for a global
+   * plugin, `project:{projectId}/{manifestId}/{bareId}` for a project-owned one.
+   *
+   * Resolution is scoped to this host's own binding, never inferred from the
+   * shape of the string, so a plugin can hand over a bare id and get back the
+   * qualified form without knowing which of the two it lives under.
+   *
+   * Throws on an empty `bareId`, and on a project-owned plugin whose binding
+   * carries no project (a malformed binding cannot name a project kind) — an
+   * authoring or host error either way, surfaced loudly rather than returning
+   * an id that resolves to nothing. Synchronous: pure closure data, no
+   * round-trip. Always callable, for the same reason as {@link pluginInfo}.
+   */
+  panelKindId(bareId: string): string;
   /**
    * Push a fire-and-forget payload to every renderer subscribed to
    * `(pluginId, channel)` via `window.electron.plugin.on(...)`. This is the

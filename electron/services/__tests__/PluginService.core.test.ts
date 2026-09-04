@@ -446,6 +446,53 @@ describe("PluginService", () => {
     expect(plugins[0].manifest.main).toBe("../evil.js");
   });
 
+  it("carries the host-side instance key and origin on every listPlugins entry", async () => {
+    // #12211: the entries were built from `this.plugins.values()`, so the map
+    // key — the id every contribution carries — never reached the renderer.
+    await writePlugin("origin-test", {
+      name: "acme.origin-test",
+      version: "1.0.0",
+      displayName: "Origin Test",
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const plugins = service.listPlugins();
+    expect(plugins).toHaveLength(1);
+    // An installed plugin's instance key IS its manifest id — this path must
+    // stay byte-identical to the pre-fix behaviour.
+    expect(plugins[0].instanceId).toBe("acme.origin-test");
+    expect(plugins[0].origin).toBe("global");
+    expect(plugins[0].projectId).toBeNull();
+  });
+
+  it("reports a project-owned instance under its instance key, not its manifest name", async () => {
+    await writePlugin("proj-test", {
+      name: "acme.proj-test",
+      version: "1.0.0",
+      displayName: "Project Test",
+    });
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    // Re-key the loaded entry the way the project loader does. Going through
+    // the map directly keeps this a test of listPlugins' projection rather than
+    // of the project-plugin loader, which has its own coverage.
+    const maps = service as unknown as { plugins: Map<string, unknown> };
+    const loaded = maps.plugins.get("acme.proj-test");
+    expect(loaded).toBeDefined();
+    maps.plugins.delete("acme.proj-test");
+    maps.plugins.set("project__b6700c7a__acme.proj-test", loaded);
+
+    const entry = service.listPlugins().find((p) => p.manifest.name === "acme.proj-test");
+    expect(entry).toBeDefined();
+    expect(entry!.instanceId).toBe("project__b6700c7a__acme.proj-test");
+    expect(entry!.origin).toBe("project");
+    expect(entry!.projectId).toBe("b6700c7a");
+  });
+
   it("does not include resolvedMain in listPlugins output", async () => {
     await writePlugin("main-test", {
       name: "acme.main-test",

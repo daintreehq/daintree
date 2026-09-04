@@ -63,6 +63,8 @@ function installed(over: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo {
       contributes: EMPTY_CONTRIBUTES,
     },
     instanceId: "acme.tools",
+    origin: "global",
+    projectId: null,
     dir: "/tmp/acme.tools",
     loadedAt: 0,
     isBuiltin: false,

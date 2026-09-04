@@ -9,6 +9,11 @@
  * method this mock doesn't implement.
  */
 
+import {
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
+} from "../types/plugin.js";
+import { toRuntimePanelKindId } from "../config/panelKindRegistry.js";
 import type {
   ActionDispatchResult,
   ActionId,
@@ -28,6 +33,7 @@ import type {
   PluginChannelSchema,
   PluginConfirmOptions,
   PluginHostApi,
+  PluginIdentity,
   PluginInputBoxOptions,
   PluginIpcHandler,
   PluginProcessHandle,
@@ -737,8 +743,37 @@ export function createMockHost(options: CreateMockHostOptions = {}): PluginHostA
     },
   };
 
+  // Identity mirrors the real host: derived from the id via the canonical
+  // parser, so a mock built with a project instance key answers exactly as
+  // production does.
+  const mockManifestId = pluginManifestIdFromInstanceKey(pluginId);
+  const mockProjectId = projectIdFromPluginInstanceKey(pluginId);
+  const pluginInfo: PluginIdentity = Object.freeze({
+    instanceId: pluginId,
+    manifestId: mockManifestId,
+    origin: mockProjectId === null ? ("global" as const) : ("project" as const),
+    projectId: mockProjectId,
+    projectRoot: null,
+  });
+
   const host: PluginHostApi & MockHostState = {
     pluginId,
+    pluginInfo,
+    panelKindId(bareId: string) {
+      if (typeof bareId !== "string" || bareId.length === 0) {
+        throw new Error(`Plugin "${pluginId}" panelKindId: bareId must be a non-empty string`);
+      }
+      const qualified = toRuntimePanelKindId(
+        { origin: pluginInfo.origin, pluginId: mockManifestId, kindId: bareId },
+        mockProjectId
+      );
+      if (qualified === null) {
+        throw new Error(
+          `Plugin "${pluginId}" panelKindId: cannot qualify panel kind "${bareId}" for this plugin`
+        );
+      }
+      return qualified;
+    },
     registerAction(descriptor, handler) {
       // Mirrors PluginService.createHost L1577-L1631. Validation order matches
       // production: non-object descriptor, non-function handler, non-empty

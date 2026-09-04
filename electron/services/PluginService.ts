@@ -104,6 +104,8 @@ import { store } from "../store.js";
 import {
   makeProjectPluginInstanceKey,
   parseProjectPluginInstanceKey,
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
 } from "../../shared/types/plugin.js";
 import {
   PluginPanelLifecycleBroker,
@@ -2724,16 +2726,13 @@ export class PluginService {
     // buffers and audit records are themselves keyed by the registry key, the
     // one class of plugin whose author is reading these diagnostics (#12214).
     //
-    // Indexed by manifest identity: each load parses and freezes its own
-    // manifest object, so two projects holding the same id still index apart.
-    const keyByManifest = new Map<Readonly<PluginManifest>, string>();
-    for (const [key, plugin] of this.plugins) keyByManifest.set(plugin.manifest, key);
-
+    // `info.instanceId` IS that registry key — `listPlugins` carries it through
+    // (#12211) — so this filters and indexes on the key itself rather than
+    // reconstructing it from manifest object identity.
     const plugins = this.listPlugins()
-      .filter((info) => keyByManifest.has(info.manifest))
+      .filter((info) => this.plugins.has(info.instanceId))
       .map((info) => {
-        // Non-null: the filter above admitted only manifests present in the index.
-        const pluginId = keyByManifest.get(info.manifest) as string;
+        const pluginId = info.instanceId;
         const buffer = this.logBuffers.get(pluginId);
         return {
           pluginId,
@@ -2787,6 +2786,7 @@ export class PluginService {
       recordPluginLog: (boundPlugin, pluginId, level, message, fields) =>
         this.recordPluginLog(boundPlugin, pluginId, level, message, fields),
       serializePluginBadges: (pluginId) => this.serializePluginBadges(pluginId),
+      pluginDisplayName: (pluginId) => this.getPluginDisplayName(pluginId),
       pluginDataDir: (pluginId) => this.pluginDataDir(pluginId),
       isPathUnder: (root, candidate) => this.isPathUnder(root, candidate),
       expandAllowedPathEntries: (pluginId, options) =>
@@ -4559,6 +4559,21 @@ export class PluginService {
   }
 
   /**
+   * The user-facing name of a loaded plugin — what any surface that names a
+   * plugin to a person should print instead of its id.
+   *
+   * The id is an instance key for a project-owned plugin, so printing it raw
+   * leaks `project__{projectId}__{manifestId}` into the UI (#12211). An
+   * unloaded plugin falls back to its manifest id rather than the instance key,
+   * which keeps even the miss path free of the machine-local project id.
+   */
+  getPluginDisplayName(pluginId: string): string {
+    const manifest = this.plugins.get(pluginId)?.manifest;
+    if (!manifest) return pluginManifestIdFromInstanceKey(pluginId);
+    return manifest.displayName ?? manifest.name;
+  }
+
+  /**
    * Resolve a `${settings:<id>}` template by reading the named user-scope
    * setting and stringifying the value. Booleans and numbers become their
    * JSON representation; objects/arrays become JSON-encoded strings. An
@@ -4582,6 +4597,10 @@ export class PluginService {
     const desiredDisabled = this.records.getDisabledIds();
     const installed = this.records.getInstalledRecords();
 
+    // `instanceId` is the MAP KEY, not `manifest.name`: for a project-owned
+    // plugin those differ, and the key is what every contribution carries as
+    // its `pluginId`/`extensionId`. Dropping it here is what left the renderer
+    // unable to match a contribution to its plugin (#12211).
     const toInfo = (
       instanceId: string,
       p: { manifest: PluginManifest; dir: string; isBuiltin: boolean },
@@ -4589,7 +4608,21 @@ export class PluginService {
       isRunning: boolean,
       blocklistReason?: string
     ): LoadedPluginInfo => {
-      const disabled = desiredDisabled.has(p.manifest.name);
+      const projectId = projectIdFromPluginInstanceKey(instanceId);
+      const isProject = projectId !== null;
+      const identity = {
+        instanceId,
+        origin: isProject ? ("project" as const) : ("global" as const),
+        projectId,
+      };
+      // Both of these are keyed by manifest id, and a project plugin is allowed
+      // to share its manifest id with an installed one — so consulting either
+      // for a project row hands it the *other* plugin's state. The disable list
+      // is explicitly about installed and builtin plugins (a project plugin's
+      // gate is its project's trust decision, see the load path), and the
+      // install record belongs to the global copy. A project instance only ever
+      // reaches this projection from the running map, so it is never disabled.
+      const disabled = isProject ? false : desiredDisabled.has(p.manifest.name);
       // pendingRestart: desired state diverges from running state.
       // Running + now-disabled → unload pending; skipped + now-enabled → load pending.
       // Blocklisted plugins are host-refused, not user-toggled — no pending cue.
@@ -4598,8 +4631,8 @@ export class PluginService {
       const pluginDanger = computePluginDanger(p.manifest);
       if (p.isBuiltin) {
         return {
+          ...identity,
           manifest: p.manifest,
-          instanceId,
           dir: p.dir,
           loadedAt,
           isBuiltin: true,
@@ -4617,10 +4650,10 @@ export class PluginService {
           blocklistReason,
         };
       }
-      const record = installed[p.manifest.name];
+      const record = isProject ? undefined : installed[p.manifest.name];
       return {
+        ...identity,
         manifest: p.manifest,
-        instanceId,
         dir: p.dir,
         loadedAt,
         isBuiltin: false,

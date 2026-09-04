@@ -64,6 +64,7 @@ export type { PluginManifest, PluginAuthor } from "./plugin.js";
 export type {
   PluginActivate,
   PluginHostApi,
+  PluginIdentity,
   PluginHostActionsApi,
   PluginActivationApi,
   PluginHostCallOptions,

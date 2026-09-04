@@ -24,15 +24,21 @@ export interface PluginRuntimeMeta {
    * whoever is looking at it is looking at their own build.
    */
   devMode: boolean;
-  /** `manifest.displayName` when the manifest declares one, else the plugin id. */
+  /** `manifest.displayName` when the manifest declares one, else the manifest id. */
   displayName: string;
 }
 
 interface PluginRuntimeState {
   disabledPluginIds: ReadonlySet<string>;
   /**
-   * Keyed by plugin id (`manifest.name`). An absent entry means "no snapshot
-   * yet", not "no such plugin" — read it as non-dev, the conservative default.
+   * Keyed by plugin *instance* id — the host-side key every contribution
+   * carries as its `pluginId`/`extensionId`, which is `manifest.name` for an
+   * installed or builtin plugin and `project__{projectId}__{manifestId}` for a
+   * project-owned one. Keyed on `manifest.name` these lookups missed for every
+   * project plugin and the raw instance key was rendered instead (#12211).
+   *
+   * An absent entry means "no snapshot yet", not "no such plugin" — read it as
+   * non-dev, the conservative default.
    */
   pluginMetaById: ReadonlyMap<string, PluginRuntimeMeta>;
   /** Idempotent: pulls the current snapshot and subscribes to live updates. */
@@ -75,11 +81,19 @@ async function pullPluginRuntimeSnapshot(
     const disabledPluginIds = new Set<string>();
     const pluginMetaById = new Map<string, PluginRuntimeMeta>();
     for (const p of list) {
-      const id = p.manifest.name;
+      // Both maps key on the instance id for the same reason: every consumer
+      // holds a contribution's `pluginId`, which is this key, never the bare
+      // manifest name. Deliberately NOT also keyed by `manifest.name` — a
+      // project plugin may share a manifest id with an installed one
+      // (`ProjectPluginInfo.collidesWithGlobal`), so a second key would let one
+      // silently overwrite the other's metadata.
+      const id = p.instanceId;
       if (p.disabled) disabledPluginIds.add(id);
       pluginMetaById.set(id, {
         devMode: p.devMode,
-        displayName: p.manifest.displayName ?? id,
+        // Falls back to the manifest id, never the instance key: the key
+        // carries a machine-local project id that is not a name for a person.
+        displayName: p.manifest.displayName ?? p.manifest.name,
       });
     }
     // One commit: a consumer must never read a plugin's dev-mode flag from a

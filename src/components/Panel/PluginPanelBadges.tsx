@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import type { PluginPanelBadge, PluginPanelBadgeColor } from "@shared/types/plugin";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelBadges, usePluginPanelBadgeStore } from "@/store/pluginPanelBadgeStore";
+import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 /**
  * Live badges a plugin set on this panel via `host.setPanelBadge` (#10585),
@@ -34,17 +35,26 @@ const LABEL_COLOR: Record<PluginPanelBadgeColor, string> = {
 
 function BadgeIndicator({ pluginId, badge }: { pluginId: string; badge: PluginPanelBadge }) {
   const color = badge.color ?? "default";
+  // A primitive selector, read per badge rather than once over the whole map in
+  // the parent: the meta record is rebuilt on every provenance pull, so
+  // selecting it whole would re-render every badge on pulls that changed
+  // nothing (same reasoning as PluginViewContent). `pluginId` here is the
+  // instance key main broadcasts, which is what the store keys on — and the
+  // `?? pluginId` fallback keeps the pre-snapshot render fail-open.
+  const pluginName = usePluginRuntimeStore(
+    (s) => s.pluginMetaById.get(pluginId)?.displayName ?? pluginId
+  );
   const indicator =
     badge.kind === "dot" ? (
       <span
         role="status"
-        aria-label={badge.tooltip ?? `${pluginId} status`}
+        aria-label={badge.tooltip ?? `${pluginName} status`}
         className={`status-mark w-2 h-2 rounded-full shrink-0 ${DOT_COLOR[color]}`}
       />
     ) : (
       <span
         role="status"
-        aria-label={badge.tooltip ?? `${pluginId}: ${badge.text}`}
+        aria-label={badge.tooltip ?? `${pluginName}: ${badge.text}`}
         className={`shrink-0 rounded px-1 text-3xs font-medium leading-4 ${LABEL_COLOR[color]}`}
       >
         {badge.text}
@@ -63,6 +73,13 @@ function BadgeIndicator({ pluginId, badge }: { pluginId: string; badge: PluginPa
 export function PluginPanelBadges({ panelId }: { panelId: string }) {
   const init = usePluginPanelBadgeStore((s) => s.init);
   useEffect(() => init(), [init]);
+
+  // The badge store and the runtime store are subscribed independently — a
+  // panel can carry badges long before anything else in this view has pulled
+  // the plugin list, and without this the labels would name plugins by raw id
+  // until some other surface happened to initialise it.
+  const initPluginRuntime = usePluginRuntimeStore((s) => s.init);
+  useEffect(() => initPluginRuntime(), [initPluginRuntime]);
 
   const badges = usePanelBadges(panelId);
   const entries = Object.entries(badges).sort(([a], [b]) => a.localeCompare(b));

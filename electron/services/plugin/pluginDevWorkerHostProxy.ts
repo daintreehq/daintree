@@ -18,6 +18,7 @@ import type {
   ActionHandler,
   PluginChannelSchema,
   PluginHostApi,
+  PluginIdentity,
   PluginIpcContext,
   PluginIpcHandler,
   PluginSettingsScope,
@@ -42,6 +43,11 @@ import type {
   PluginProcessDataChunk,
   PluginProcessMode,
 } from "../../../shared/types/plugin.js";
+import {
+  pluginManifestIdFromInstanceKey,
+  projectIdFromPluginInstanceKey,
+} from "./projectPluginIdentity.js";
+import { toRuntimePanelKindId } from "../../../shared/config/panelKindRegistry.js";
 import type {
   FileDecorationProviderDescriptor,
   FileDecorationProviderImpl,
@@ -314,9 +320,37 @@ export class PluginDevWorkerHostProxy {
     // object literal, not this class instance. Every other member is an arrow
     // function that closes over the class `this` lexically.
     const pluginId = this.pluginId;
+    // Mirrors the real host's identity, derived from the same canonical parser.
+    // A dev-attached plugin is app-global, so it has no project root to report;
+    // a project instance key still resolves its manifest id and project id.
+    const manifestId = pluginManifestIdFromInstanceKey(pluginId);
+    const projectId = projectIdFromPluginInstanceKey(pluginId);
+    const pluginInfo: PluginIdentity = Object.freeze({
+      instanceId: pluginId,
+      manifestId,
+      origin: projectId === null ? ("global" as const) : ("project" as const),
+      projectId,
+      projectRoot: null,
+    });
     const host: PluginHostApi = {
       get pluginId() {
         return pluginId;
+      },
+      pluginInfo,
+      panelKindId: (bareId: string) => {
+        if (typeof bareId !== "string" || bareId.length === 0) {
+          throw new Error(`Plugin "${pluginId}" panelKindId: bareId must be a non-empty string`);
+        }
+        const qualified = toRuntimePanelKindId(
+          { origin: pluginInfo.origin, pluginId: manifestId, kindId: bareId },
+          projectId
+        );
+        if (qualified === null) {
+          throw new Error(
+            `Plugin "${pluginId}" panelKindId: cannot qualify panel kind "${bareId}" for this plugin`
+          );
+        }
+        return qualified;
       },
       registerAction: (descriptor, handler) => {
         this.assertActivationOpen("registerAction");
