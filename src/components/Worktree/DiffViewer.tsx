@@ -33,6 +33,7 @@ import type {
   HunkTokens,
   RenderGutter,
   RenderToken,
+  Side,
   TokenNode,
   ViewType,
 } from "react-diff-view";
@@ -134,33 +135,51 @@ export interface DiffViewerProps {
 }
 
 /**
+ * The marker belongs to the side that owns the change. A unified row renders an
+ * old *and* a new gutter cell from the same change object, so a marker keyed
+ * only off change.type prints in both and reads as "+ 1519 +" (#12255). Split
+ * only ever calls the gutter renderer for the side that owns the change, so the
+ * same gate is correct there too — no viewType branching needed.
+ *
+ * The empty string still renders: .diff-line-marker is a fixed 1ch inline-block
+ * in a right-aligned gutter, so dropping the span would shift that column's
+ * number out of line with its neighbour.
+ */
+function getGutterMarker(change: ChangeData, side: Side): "+" | "-" | "" {
+  if (change.type === "insert") return side === "new" ? "+" : "";
+  if (change.type === "delete") return side === "old" ? "-" : "";
+  return "";
+}
+
+/**
  * Default line number plus a textual +/- marker so insert/delete state never
  * relies on color alone (WCAG 1.4.1; survives forced-colors). Gutters are
  * user-select: none, so markers stay out of copied text.
  */
-const renderGutterWithMarker: RenderGutter = ({ change, renderDefault, wrapInAnchor }) => (
+const renderGutterWithMarker: RenderGutter = ({ change, side, renderDefault, wrapInAnchor }) => (
   <>
     <span className="diff-line-number">{wrapInAnchor(renderDefault())}</span>
-    <span className="diff-line-marker">
-      {change.type === "insert" ? "+" : change.type === "delete" ? "-" : ""}
-    </span>
+    <span className="diff-line-marker">{getGutterMarker(change, side)}</span>
   </>
 );
 
 /** Moved-aware variant: adds screen-reader text so relocation isn't styling-only. */
 function makeGutterRenderer(movedKeys: ReadonlySet<string>): RenderGutter {
   if (movedKeys.size === 0) return renderGutterWithMarker;
-  const render: RenderGutter = ({ change, renderDefault, wrapInAnchor }) => (
-    <>
-      <span className="diff-line-number">{wrapInAnchor(renderDefault())}</span>
-      <span className="diff-line-marker">
-        {change.type === "insert" ? "+" : change.type === "delete" ? "-" : ""}
-      </span>
-      {change.type !== "normal" && movedKeys.has(getChangeKey(change)) && (
-        <span className="sr-only">moved</span>
-      )}
-    </>
-  );
+  const render: RenderGutter = ({ change, side, renderDefault, wrapInAnchor }) => {
+    // A non-empty marker means this cell owns the change, which is also the one
+    // cell that should announce the relocation — otherwise both gutters say it.
+    const marker = getGutterMarker(change, side);
+    return (
+      <>
+        <span className="diff-line-number">{wrapInAnchor(renderDefault())}</span>
+        <span className="diff-line-marker">{marker}</span>
+        {marker !== "" && movedKeys.has(getChangeKey(change)) && (
+          <span className="sr-only">moved</span>
+        )}
+      </>
+    );
+  };
   return render;
 }
 
