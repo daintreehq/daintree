@@ -59,8 +59,14 @@ export interface PluginDevArtifactWatcherDeps {
    * and backend together. This is the ordinary dev-load path, not a second
    * loader, so the disabled gate, the view-generation mint and the contribution
    * re-registration all apply to a rebuild for free.
+   *
+   * Resolves `true` only when the artifact on disk was actually adopted. A
+   * reconcile that declined (session stopped, plugin disabled, manifest
+   * unparseable) reports `false` so the watcher does not baseline bytes it
+   * never loaded — that would make the author's next save look like "no
+   * change" and silently swallow the build.
    */
-  reload: (pluginId: string) => Promise<void>;
+  reload: (pluginId: string) => Promise<boolean>;
   /** Called whenever a session's watcher state changes. */
   onStateChange: (pluginId: string, state: PluginDevWatcherState, detail: string | null) => void;
   timings?: Partial<PluginDevArtifactWatcherTimings>;
@@ -91,6 +97,12 @@ interface WatchState {
   sentinel: FSWatcher | null;
   sentinelPath: string | null;
   rearmAttempts: number;
+  /**
+   * Completed arms that actually resolved the directory. The FIRST one seeds
+   * the fingerprint; later ones must not, or a rebuild that landed while the
+   * watch was down becomes the baseline and is never loaded.
+   */
+  armCount: number;
   arming: boolean;
   timer: ReturnType<typeof setTimeout> | null;
   /** Artifact fingerprint as of the last arm or the last successful reload. */
@@ -180,6 +192,7 @@ export class PluginDevArtifactWatcher {
       sentinel: null,
       sentinelPath: null,
       rearmAttempts: 0,
+      armCount: 0,
       arming: false,
       timer: null,
       fingerprint: ABSENT_FINGERPRINT,
@@ -271,12 +284,16 @@ export class PluginDevArtifactWatcher {
     }
     if (this.isStale(state, generation)) return;
     state.realDir = realDir;
+    const isFirstArm = state.armCount === 0;
+    state.armCount++;
 
-    // Seed before the first event can arrive: FSEvents replays recent history
-    // to a new subscription, so without a baseline the arm itself would look
-    // like a rebuild and reload the plugin that just loaded.
-    state.fingerprint = await fingerprintPluginDir(realDir);
-    if (this.isStale(state, generation)) return;
+    if (isFirstArm) {
+      // Seed before the first event can arrive: FSEvents replays recent history
+      // to a new subscription, so without a baseline the arm itself would look
+      // like a rebuild and reload the plugin that just loaded.
+      state.fingerprint = await fingerprintPluginDir(realDir);
+      if (this.isStale(state, generation)) return;
+    }
 
     let subscription: AsyncSubscription;
     try {
@@ -289,7 +306,7 @@ export class PluginDevArtifactWatcher {
               pluginId: state.pluginId,
               error: err.message,
             });
-            this.rearmAfterError(state, generation, err.message);
+            this.rearmAfterError(state, err.message);
             return;
           }
           if (!Array.isArray(events) || events.length === 0) return;
@@ -312,7 +329,9 @@ export class PluginDevArtifactWatcher {
         realDir,
         error: detail,
       });
-      this.setState(state, "degraded", detail);
+      // Same budget as a subscription that errors later: a failed subscribe is
+      // usually a root mid-replacement, which the next attempt resolves.
+      this.rearmAfterError(state, detail);
       return;
     }
 
@@ -326,6 +345,10 @@ export class PluginDevArtifactWatcher {
     state.rearmAttempts = 0;
     this.disarmSentinel(state);
     this.setState(state, "watching", null);
+    // Whatever changed while the watch was down produced no event this
+    // subscription will ever see, so sweep once rather than waiting for the
+    // author's next save to reveal a build that already happened.
+    if (!isFirstArm) this.schedule(state);
   }
 
   /**
@@ -370,8 +393,8 @@ export class PluginDevArtifactWatcher {
    * failure this issue is about. Exhausting the budget reports `degraded`
    * rather than continuing to look healthy.
    */
-  private rearmAfterError(state: WatchState, generation: number, reason: string): void {
-    if (this.isStale(state, generation)) return;
+  private rearmAfterError(state: WatchState, reason: string): void {
+    if (this.disposed || state.stopped) return;
     const subscription = state.subscription;
     state.subscription = null;
     if (subscription) {
@@ -379,6 +402,11 @@ export class PluginDevArtifactWatcher {
         // Already gone; re-arming is what matters.
       });
     }
+    // Retire the failed subscription's generation. A callback still in flight
+    // from it would otherwise pass the staleness check and spend another
+    // attempt from a budget it does not belong to.
+    state.generation++;
+    const generation = state.generation;
     if (state.rearmAttempts >= this.timings.rearmMaxAttempts) {
       this.setState(state, "degraded", `Watcher stopped reporting changes: ${reason}`);
       return;
@@ -440,8 +468,9 @@ export class PluginDevArtifactWatcher {
       return;
     }
 
+    let applied: boolean;
     try {
-      await this.deps.reload(state.pluginId);
+      applied = await this.deps.reload(state.pluginId);
     } catch (err) {
       // A failed reconcile must not become the new baseline, or the fix that
       // follows it looks like "no change" and never reloads.
@@ -451,7 +480,7 @@ export class PluginDevArtifactWatcher {
       });
       return;
     }
-    if (this.isStale(state, generation)) return;
+    if (this.isStale(state, generation) || !applied) return;
     state.fingerprint = settled;
   }
 }

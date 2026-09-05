@@ -48,6 +48,8 @@ async function makePluginDir(): Promise<{ root: string; pluginDir: string }> {
   );
   await fsp.writeFile(path.join(pluginDir, "dist", "index.js"), "export function activate() {}\n");
   await fsp.writeFile(path.join(pluginDir, "dist", "view.js"), "export default () => null;\n");
+  await fsp.mkdir(path.join(pluginDir, "dist", "chunks"), { recursive: true });
+  await fsp.writeFile(path.join(pluginDir, "dist", "chunks", "shared.js"), "export const x = 1;\n");
   await fsp.writeFile(path.join(pluginDir, "src", "index.ts"), "export const a = 1;\n");
   return { root, pluginDir };
 }
@@ -57,7 +59,7 @@ function makeWatcher(overrides: Partial<PluginDevArtifactWatcherDeps> = {}): {
   reload: ReturnType<typeof vi.fn>;
   states: Array<{ pluginId: string; state: string; detail: string | null }>;
 } {
-  const reload = vi.fn(async () => undefined);
+  const reload = vi.fn(async () => true);
   const states: Array<{ pluginId: string; state: string; detail: string | null }> = [];
   const watcher = new PluginDevArtifactWatcher({
     reload,
@@ -95,7 +97,10 @@ async function arm(
   pluginId = PLUGIN_ID
 ): Promise<void> {
   watcher.ensure(pluginId, dir);
-  await waitFor(() => watcher.stateOf(pluginId)?.state === "watching");
+  const armed = await waitFor(() => watcher.stateOf(pluginId)?.state === "watching");
+  // Asserted, not hoped for: an unarmed watcher makes every "never reloads"
+  // case below pass for the wrong reason.
+  expect(armed).toBe(true);
 }
 
 afterEach(async () => {
@@ -171,13 +176,18 @@ describe("PluginDevArtifactWatcher", () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it("reloads on a non-entry backend chunk — the split-chunk case", async () => {
+  it("reloads when only a non-entry chunk changes — the split-chunk case", async () => {
     const { pluginDir } = await makePluginDir();
     const { watcher, reload } = makeWatcher();
     await arm(watcher, pluginDir);
 
-    await fsp.mkdir(path.join(pluginDir, "dist", "chunks"), { recursive: true });
-    await fsp.writeFile(path.join(pluginDir, "dist", "chunks", "shared.js"), "export const x=1;\n");
+    // Modified, not created: the old watcher filtered to the entry file's own
+    // basename, so an existing sibling chunk changing was exactly what it
+    // missed. Creating a new file would also trip a name-only filter.
+    await fsp.writeFile(
+      path.join(pluginDir, "dist", "chunks", "shared.js"),
+      "export const x = 2;\n"
+    );
 
     expect(await waitFor(() => reload.mock.calls.length >= 1)).toBe(true);
     await settleFor(200);
@@ -308,6 +318,7 @@ describe("PluginDevArtifactWatcher", () => {
     const reload = vi.fn(async () => {
       calls++;
       if (calls === 1) throw new Error("manifest broke");
+      return true;
     });
     const { watcher } = makeWatcher({ reload });
     await arm(watcher, pluginDir);
@@ -317,6 +328,72 @@ describe("PluginDevArtifactWatcher", () => {
 
     await fsp.writeFile(path.join(pluginDir, "dist", "index.js"), "//fixed\n");
     expect(await waitFor(() => calls >= 2)).toBe(true);
+  });
+
+  it("does not baseline a rebuild the reconcile declined to apply", async () => {
+    // `false` means "not adopted" (session stopped, plugin disabled, manifest
+    // unparseable). Baselining it would make the author's NEXT save compare
+    // equal against bytes that were never loaded, swallowing the build.
+    const { pluginDir } = await makePluginDir();
+    let applied = false;
+    const reload = vi.fn(async () => applied);
+    const { watcher } = makeWatcher({ reload });
+    await arm(watcher, pluginDir);
+
+    await fsp.writeFile(path.join(pluginDir, "dist", "index.js"), "//declined\n");
+    expect(await waitFor(() => reload.mock.calls.length >= 1)).toBe(true);
+
+    // Same bytes, retried: the declined fingerprint must not have stuck.
+    applied = true;
+    await fsp.writeFile(path.join(pluginDir, "dist", "index.js"), "//declined\n");
+    expect(await waitFor(() => reload.mock.calls.length >= 2)).toBe(true);
+  });
+
+  it("re-arming does not swallow a rebuild that landed while the watch was down", async () => {
+    // The rearm path used to re-seed the fingerprint unconditionally, so a
+    // build finishing during the outage became the new baseline and was never
+    // loaded — hot reload silently skipping one save. Driven through the real
+    // recovery entry point, because a backend error is not reproducible from
+    // outside the subscription.
+    const { pluginDir } = await makePluginDir();
+    const { watcher, reload } = makeWatcher();
+    await arm(watcher, pluginDir);
+
+    const internals = watcher as unknown as {
+      states: Map<string, object>;
+      rearmAfterError(state: object, reason: string): void;
+    };
+    const state = internals.states.get(PLUGIN_ID);
+    expect(state).toBeDefined();
+
+    // Written while the watch is being torn down and re-armed, so the new
+    // subscription never sees an event for it.
+    await fsp.writeFile(path.join(pluginDir, "dist", "index.js"), "//built while blind\n");
+    internals.rearmAfterError(state as object, "simulated backend failure");
+
+    expect(await waitFor(() => reload.mock.calls.length >= 1)).toBe(true);
+    expect(watcher.stateOf(PLUGIN_ID)?.state).toBe("watching");
+  });
+
+  it("reports degraded once the rearm budget is spent", async () => {
+    const { pluginDir } = await makePluginDir();
+    const { watcher } = makeWatcher();
+    await arm(watcher, pluginDir);
+
+    const internals = watcher as unknown as {
+      states: Map<string, object>;
+      rearmAfterError(state: object, reason: string): void;
+    };
+    const state = internals.states.get(PLUGIN_ID) as object;
+
+    // FAST.rearmMaxAttempts is 2, and a successful re-arm resets the budget —
+    // so spend it without letting the retries land.
+    for (let i = 0; i <= FAST.rearmMaxAttempts; i++) {
+      internals.rearmAfterError(state, "simulated backend failure");
+    }
+
+    expect(watcher.stateOf(PLUGIN_ID)?.state).toBe("degraded");
+    expect(watcher.stateOf(PLUGIN_ID)?.detail).toContain("stopped reporting changes");
   });
 
   it("dispose tears every session down", async () => {

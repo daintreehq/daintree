@@ -211,6 +211,14 @@ interface PluginContributionBroadcasterDeps {
   initPromise: Promise<void>;
   /** Live `daintree-plugin dev` sessions, for the cold-start replay (#12277). */
   listPluginDevStatuses: () => import("../../../shared/types/plugin.js").PluginDevStatus[];
+  /**
+   * True while a plugin is being replaced in place (a dev rebuild reconcile).
+   * The unload half of a replacement empties the registries for one turn, and a
+   * `complete` snapshot taken there is a lie the renderer acts on destructively
+   * — it sweeps persisted preferences for contributions that are about to come
+   * straight back (#12277).
+   */
+  isReplacingPlugin: () => boolean;
 }
 
 /**
@@ -409,7 +417,7 @@ export class PluginContributionBroadcaster {
     this.toolbarButtonsBroadcastPending = true;
     queueMicrotask(() => {
       this.toolbarButtonsBroadcastPending = false;
-      const complete = this.toolbarButtonsBroadcastComplete;
+      const complete = this.toolbarButtonsBroadcastComplete && !this.deps.isReplacingPlugin();
       this.toolbarButtonsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginToolbarButtons(complete);
@@ -429,7 +437,7 @@ export class PluginContributionBroadcaster {
     if (this.keybindingsBroadcastPending) return;
     this.keybindingsBroadcastPending = true;
     queueMicrotask(() => {
-      const isComplete = this.keybindingsBroadcastComplete;
+      const isComplete = this.keybindingsBroadcastComplete && !this.deps.isReplacingPlugin();
       this.keybindingsBroadcastPending = false;
       this.keybindingsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
@@ -451,7 +459,7 @@ export class PluginContributionBroadcaster {
     this.contextMenuItemsBroadcastPending = true;
     queueMicrotask(() => {
       this.contextMenuItemsBroadcastPending = false;
-      const drained = this.contextMenuItemsBroadcastComplete;
+      const drained = this.contextMenuItemsBroadcastComplete && !this.deps.isReplacingPlugin();
       this.contextMenuItemsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginContextMenuItems(drained);
@@ -477,7 +485,7 @@ export class PluginContributionBroadcaster {
     this.agentsBroadcastPending = true;
     queueMicrotask(() => {
       this.agentsBroadcastPending = false;
-      const drained = this.agentsBroadcastComplete;
+      const drained = this.agentsBroadcastComplete && !this.deps.isReplacingPlugin();
       this.agentsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginAgents(drained);
@@ -503,7 +511,7 @@ export class PluginContributionBroadcaster {
     this.recipesBroadcastPending = true;
     queueMicrotask(() => {
       this.recipesBroadcastPending = false;
-      const drained = this.recipesBroadcastComplete;
+      const drained = this.recipesBroadcastComplete && !this.deps.isReplacingPlugin();
       this.recipesBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginRecipes(drained);
