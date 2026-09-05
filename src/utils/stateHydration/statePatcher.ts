@@ -42,7 +42,7 @@ import {
   resolveRespawnAgentId,
 } from "@shared/utils/savedAgentIdentity";
 import { isAbsolute } from "@shared/utils/path";
-import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
+import { panelKindIsDockable, type PersistedPanelKindRef } from "@shared/config/panelKindRegistry";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { resolveAgentRuntimeSettings } from "@/utils/agentRuntimeSettings";
@@ -179,7 +179,15 @@ export interface SavedTerminalData {
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
   agentFlavorColor?: string;
   extensionState?: Record<string, unknown>;
+  /** Version {@link extensionState} was persisted at (#12280). */
+  extensionStateVersion?: number;
   pluginId?: string;
+  /**
+   * Portable identity of a plugin-contributed kind (#12280). Restore qualifies
+   * it against the project being restored into; a snapshot written before the
+   * field existed carries the qualification inside `kind` instead.
+   */
+  kindRef?: PersistedPanelKindRef;
   /**
    * User-initiated focus timestamp from the saved snapshot. Read at the
    * hydration boundary and propagated to the live panel via the
@@ -263,7 +271,8 @@ interface AgentSettingsData {
   globalUseAltScreen?: boolean;
 }
 
-export const inferKind: (saved: SavedTerminalData) => PanelKind = inferKindShared;
+export const inferKind: (saved: SavedTerminalData, projectId?: string | null) => PanelKind =
+  inferKindShared;
 
 function resolveSavedCwd(savedCwd: string | undefined, projectRoot: string): string {
   if (savedCwd && isAbsolute(savedCwd)) return savedCwd;
@@ -368,6 +377,7 @@ export function buildArgsForBackendTerminal(
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
+    extensionStateVersion: saved.extensionStateVersion,
     pluginId: saved.pluginId,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
   };
@@ -443,6 +453,7 @@ export function buildArgsForReconnectedFallback(
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
+    extensionStateVersion: saved.extensionStateVersion,
     pluginId: saved.pluginId,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
   };
@@ -769,6 +780,7 @@ export function buildArgsForRespawn(
     // before env was persisted, or when the saved env sanitizes to nothing safe.
     env: sanitizeAgentEnv(saved.env) ?? presetEnv,
     extensionState: saved.extensionState,
+    extensionStateVersion: saved.extensionStateVersion,
     pluginId: saved.pluginId,
     restore: true,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
@@ -810,6 +822,7 @@ export function buildArgsForNonPtyRecreation(
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
+    extensionStateVersion: saved.extensionStateVersion,
     pluginId: saved.pluginId,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
   };

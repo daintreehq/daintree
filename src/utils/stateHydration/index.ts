@@ -459,7 +459,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
             if (!saved || typeof saved.id !== "string" || !saved.id.trim()) return false;
             if (isSmokeTestTerminalId(saved.id)) return false;
             if (backendTerminalMap.has(saved.id)) return false;
-            const kind = inferKind(saved);
+            const kind = inferKind(saved, currentWorkspaceId);
             return kind !== "assistant" && panelKindHasPty(kind);
           })
           .map((saved) => saved.id);
@@ -539,6 +539,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           activeWorktreeId,
           workspaceHasWorktreesPromise,
           projectRoot: projectRoot || "",
+          projectId: currentWorkspaceId,
           agentSettings,
           clipboardDirectory,
           projectPresetsByAgent,

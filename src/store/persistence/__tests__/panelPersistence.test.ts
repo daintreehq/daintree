@@ -1208,4 +1208,190 @@ describe("PanelPersistence", () => {
       expect(saved.devServerTerminalId).toBeUndefined();
     });
   });
+
+  describe("portable plugin kinds (#12280)", () => {
+    const PROJECT_KIND = "project:proj-a/acme.dashboard/overview";
+    const PORTABLE_KIND = "acme.dashboard.overview";
+
+    it("strips the machine-local project id off a project plugin kind", () => {
+      // The bug: the runtime kind embeds THIS install's project id, so the
+      // layout only resolves under the identity that wrote it.
+      const panel = createMockTerminal({
+        id: "proj-panel",
+        kind: PROJECT_KIND,
+        title: "Overview",
+        location: "grid",
+        pluginId: "project-plugin:proj-a::acme.dashboard",
+      });
+
+      const snapshot = panelToSnapshot(panel);
+
+      expect(snapshot.kind).toBe(PORTABLE_KIND);
+      expect(snapshot.kind).not.toContain("proj-a");
+      expect(snapshot.kindRef).toEqual({
+        origin: "project",
+        pluginId: "acme.dashboard",
+        kindId: "overview",
+      });
+    });
+
+    it("persists the manifest id, not the project-scoped plugin instance key", () => {
+      // A project plugin registers under `project__{projectId}__{manifestId}`,
+      // so persisting that verbatim would leave the machine-local project id in
+      // the layout even with `kind` fixed.
+      const panel = createMockTerminal({
+        id: "proj-panel",
+        kind: PROJECT_KIND,
+        location: "grid",
+        pluginId: "project__proj-a__acme.dashboard",
+      });
+
+      const snapshot = panelToSnapshot(panel);
+
+      expect(snapshot.pluginId).toBe("acme.dashboard");
+      expect(JSON.stringify(snapshot)).not.toContain("proj-a");
+    });
+
+    it("keeps the persisted kind of a global plugin panel byte-identical", () => {
+      // Nothing about the global form is machine-local; moving the string would
+      // change what an older build reads back for no gain.
+      const panel = createMockTerminal({
+        id: "global-panel",
+        kind: PORTABLE_KIND,
+        title: "Overview",
+        location: "grid",
+        pluginId: "acme.dashboard",
+      });
+
+      const snapshot = panelToSnapshot(panel);
+
+      expect(snapshot.kind).toBe(PORTABLE_KIND);
+      expect(snapshot.kindRef).toEqual({
+        origin: "global",
+        pluginId: "acme.dashboard",
+        kindId: "overview",
+      });
+    });
+
+    it("mints no kindRef for a built-in or for a dotted kind no plugin owns", () => {
+      expect(panelToSnapshot(createMockTerminal({ id: "b", kind: "browser" }))).not.toHaveProperty(
+        "kindRef"
+      );
+      expect(
+        panelToSnapshot(createMockTerminal({ id: "w", kind: "custom-widget" }))
+      ).not.toHaveProperty("kindRef");
+    });
+
+    it("still preserves the fragment of a project plugin panel whose plugin is gone", () => {
+      // The preserve guard used to compare the persisted kind against the live
+      // runtime kind. Those no longer match for a project kind, and a failed
+      // match silently drops exactly the extension state this branch exists to
+      // keep (#5342).
+      const previous: TerminalSnapshot = {
+        id: "proj-panel",
+        kind: PORTABLE_KIND,
+        kindRef: { origin: "project", pluginId: "acme.dashboard", kindId: "overview" },
+        title: "Stale",
+        location: "grid",
+        customPluginField: "keep-me",
+      } as TerminalSnapshot;
+
+      const panel = createMockTerminal({
+        id: "proj-panel",
+        kind: PROJECT_KIND,
+        title: "Live",
+        location: "grid",
+        pluginId: "project-plugin:proj-a::acme.dashboard",
+      });
+
+      const snapshot = panelToSnapshot(panel, previous) as unknown as Record<string, unknown>;
+
+      expect(snapshot.customPluginField).toBe("keep-me");
+      expect(snapshot.title).toBe("Live");
+    });
+
+    it("preserves the fragment on the first save after upgrading from the old format", () => {
+      // The previous snapshot on disk still carries the qualified form, so the
+      // very first save after the upgrade is the one most at risk.
+      const previous: TerminalSnapshot = {
+        id: "proj-panel",
+        kind: PROJECT_KIND,
+        title: "Stale",
+        location: "grid",
+        customPluginField: "keep-me",
+      } as TerminalSnapshot;
+
+      const panel = createMockTerminal({
+        id: "proj-panel",
+        kind: PROJECT_KIND,
+        title: "Live",
+        location: "grid",
+        pluginId: "project-plugin:proj-a::acme.dashboard",
+      });
+
+      const snapshot = panelToSnapshot(panel, previous) as unknown as Record<string, unknown>;
+
+      expect(snapshot.customPluginField).toBe("keep-me");
+      expect(snapshot.kind).toBe(PORTABLE_KIND);
+    });
+
+    it("does not carry a fragment across a genuine kind change", () => {
+      const previous: TerminalSnapshot = {
+        id: "proj-panel",
+        kind: PORTABLE_KIND,
+        kindRef: { origin: "project", pluginId: "acme.dashboard", kindId: "overview" },
+        title: "Stale",
+        location: "grid",
+        customPluginField: "drop-me",
+      } as TerminalSnapshot;
+
+      const panel = createMockTerminal({
+        id: "proj-panel",
+        kind: "acme.dashboard.settings",
+        title: "Live",
+        location: "grid",
+        pluginId: "acme.dashboard",
+      });
+
+      expect(panelToSnapshot(panel, previous)).not.toHaveProperty("customPluginField");
+    });
+  });
+
+  describe("extension state version (#12280)", () => {
+    it("persists the version the record carries alongside the bag", () => {
+      const panel = createMockTerminal({
+        id: "versioned",
+        kind: "acme.dashboard.overview",
+        pluginId: "acme.dashboard",
+        extensionState: { activeTab: "overview" },
+        extensionStateVersion: 3,
+      });
+
+      expect(panelToSnapshot(panel).extensionStateVersion).toBe(3);
+    });
+
+    it("omits the version when the record carries none", () => {
+      // A legacy bag stays legacy: inventing a version here would claim the bag
+      // matches a schema nobody checked it against.
+      const panel = createMockTerminal({
+        id: "unversioned",
+        kind: "acme.dashboard.overview",
+        pluginId: "acme.dashboard",
+        extensionState: { activeTab: "overview" },
+      });
+
+      expect(panelToSnapshot(panel)).not.toHaveProperty("extensionStateVersion");
+    });
+
+    it("omits the version when there is no bag to version", () => {
+      const panel = createMockTerminal({
+        id: "no-bag",
+        kind: "acme.dashboard.overview",
+        pluginId: "acme.dashboard",
+        extensionStateVersion: 3,
+      });
+
+      expect(panelToSnapshot(panel)).not.toHaveProperty("extensionStateVersion");
+    });
+  });
 });

@@ -146,6 +146,20 @@ export interface PanelKindConfig {
   /** Extension ID if this is an extension-provided panel kind */
   extensionId?: string;
   /**
+   * Version of this kind's `extensionState` schema, from
+   * `contributes.panels[].stateVersion` (#12280). Absent for built-ins and for
+   * plugins that never declare one, which is read as "no opinion" — the bag is
+   * handed over unjudged, exactly as before versioning existed.
+   *
+   * The host stamps this onto the panel record whenever the plugin writes state
+   * and refuses, on restore, to hand a view a bag stamped above what the
+   * installed build declares. That is the whole migration contract: a plugin
+   * bumping the number is telling the host that older bags need migrating, and
+   * `PanelViewProps.stateVersion` tells the view which version it is reading so
+   * it can do so.
+   */
+  stateVersion?: number;
+  /**
    * Owning project, or `null`/absent for global plugin and built-in kinds. Set
    * only for kinds contributed by a project-local plugin, whose `id` is the
    * project-qualified runtime form (`project:{projectId}/{manifestId}/{kindId}`).

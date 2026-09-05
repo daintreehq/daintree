@@ -63,6 +63,8 @@ export interface PanelComponentProps {
   showRestoreControl?: boolean;
   isMultiPanelGrid?: boolean;
   extensionState?: Record<string, unknown>;
+  /** Version `extensionState` was persisted at (#12280). */
+  extensionStateVersion?: number;
   [key: string]: unknown;
 }
 

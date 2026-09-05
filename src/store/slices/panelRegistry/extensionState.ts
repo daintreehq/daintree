@@ -1,6 +1,7 @@
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { saveNormalized } from "./persistence";
 import { logWarn } from "@/utils/logger";
+import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 
 type Set = PanelRegistryStoreApi["setState"];
 
@@ -139,7 +140,23 @@ export const createExtensionStateActions = (
         return state;
       }
 
-      const newById = { ...state.panelsById, [id]: { ...panel, extensionState: merged } };
+      // The write gate is the only place the state version moves (#12280). A
+      // plugin that writes has, by doing so, produced a bag at the version it
+      // currently declares — and it can only reach inside `extensionState`, so
+      // the number is the host's to stamp and not the plugin's to claim. A kind
+      // the registry no longer answers for keeps whatever version the record
+      // already carries rather than being re-stamped as versionless.
+      const declaredStateVersion = getPanelKindConfig(panel.kind ?? "")?.stateVersion;
+      const extensionStateVersion = declaredStateVersion ?? panel.extensionStateVersion;
+
+      const newById = {
+        ...state.panelsById,
+        [id]: {
+          ...panel,
+          extensionState: merged,
+          ...(extensionStateVersion !== undefined && { extensionStateVersion }),
+        },
+      };
       saveNormalized(newById, state.panelIds);
       accepted = true;
       return { panelsById: newById };

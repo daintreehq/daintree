@@ -286,6 +286,23 @@ export interface PanelViewProps {
    */
   readonly initialArgs?: Record<string, unknown>;
   /**
+   * Which version of your `stateVersion` schema {@link initialArgs} was written
+   * against — the other half of declaring one in `contributes.panels` (#12280).
+   *
+   * `0` means the bag predates versioning: it was persisted before the host
+   * stamped anything, so its shape is whatever you were writing at the time.
+   * Absent means you declared no `stateVersion`, so nothing was tracked and
+   * nothing is promised.
+   *
+   * Migrate forward from whatever this says and persist the result; your next
+   * {@link persistState} call re-stamps the bag at your current version. You
+   * never have to handle a value ABOVE the version you declare — the host
+   * refuses that bag rather than hand you state a newer build of your plugin
+   * wrote, and shows the user an error naming both versions. The state is kept
+   * on disk, so reinstalling the newer build brings it back intact.
+   */
+  readonly stateVersion?: number;
+  /**
    * Persist view state onto the panel record, so the next mount of this panel
    * sees it in {@link initialArgs}.
    *

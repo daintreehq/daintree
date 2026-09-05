@@ -55,6 +55,14 @@ export interface PluginViewContentProps {
   panelId: string;
   initialArgs?: Record<string, unknown>;
   /**
+   * Which version of the plugin's declared state schema `initialArgs` holds,
+   * forwarded to the view as `PanelViewProps.stateVersion` so it can migrate an
+   * older bag forward (#12280). Absent when the plugin declares no
+   * `stateVersion`; the host resolves the value and never passes one the view
+   * is not equipped to read.
+   */
+  stateVersion?: number;
+  /**
    * Writes back into the same `extensionState` bag `initialArgs` was read
    * from, so the next mount of this panel restores what the view had. Supplied
    * by the host rather than reached for by the view: a plugin bundle cannot
@@ -374,6 +382,7 @@ export function makePluginViewContent(
   function PluginViewContent({
     panelId,
     initialArgs,
+    stateVersion,
     persistState,
     onRequestClose,
     worktreeId,
@@ -388,6 +397,9 @@ export function makePluginViewContent(
     // loop. The bag exists to restore a view on its NEXT mount; within one
     // mount the view owns its state.
     const [mountArgs] = useState(() => initialArgs);
+    // Frozen with the bag it describes: a live version against a frozen bag
+    // would tell the view its state had migrated when what it holds has not.
+    const [mountStateVersion] = useState(() => stateVersion);
     // Store the lazy component in state so retries can swap in a fresh ref
     // without a useMemo dependency array. Each `lazy()` wrapper caches its
     // import result on its own payload, so a chunk-load failure is sticky for
@@ -543,6 +555,7 @@ export function makePluginViewContent(
                 disposeSignal={controller.signal}
                 panelRemovedSignal={panelRemovedSignal}
                 initialArgs={mountArgs}
+                stateVersion={mountStateVersion}
                 persistState={persistState}
                 worktreeId={worktreeId}
                 styleRootAttributes={PLUGIN_STYLE_ROOT_PROPS}

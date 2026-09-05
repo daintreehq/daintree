@@ -5,6 +5,10 @@ import type { TabInfo } from "@/components/Panel/TabButton";
 import { makePluginViewContent } from "@/components/Plugin/PluginViewContent";
 import { logWarn } from "@/utils/logger";
 import { persistPanelExtensionStateThroughAccessor } from "@/store/storeAccessors";
+import {
+  decodePanelExtensionState,
+  panelExtensionStateVersionMessage,
+} from "@shared/utils/panelExtensionState";
 
 /**
  * Plugin panels are ordinary grid panels: `ContentPanel` owns their chrome and
@@ -15,6 +19,8 @@ import { persistPanelExtensionStateThroughAccessor } from "@/store/storeAccessor
  */
 export interface PluginViewHostProps extends BasePanelProps {
   extensionState?: Record<string, unknown>;
+  /** Version `extensionState` was persisted at (#12280). */
+  extensionStateVersion?: number;
   tabs?: TabInfo[];
   groupId?: string;
   onTabClick?: (tabId: string) => void;
@@ -42,6 +48,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
   const pluginId = config.extensionId;
   const kindId = config.id;
   const displayName = config.name;
+  const stateVersion = config.stateVersion;
 
   if (!componentPath || !pluginId) {
     // The else-branch of usePluginPanelKinds guards this, but a defensive
@@ -65,6 +72,10 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
   // (`useMemo` with a stable dep array would survive ordinary rerenders, but it
   // ties the view's identity to a hook that remounts it whenever a dep changes;
   // the construction belongs outside the component entirely.)
+  // Re-bound inside the guarded region so the narrowing survives into the
+  // component closure below, where the misconfigured branch is already gone.
+  const ownerPluginId: string = pluginId;
+
   const PluginViewContent = makePluginViewContent({
     id: kindId,
     name: displayName,
@@ -72,8 +83,22 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
     extensionId: pluginId,
   });
 
-  function PluginViewHost({ extensionState, ...panelProps }: PluginViewHostProps) {
+  function PluginViewHost({
+    extensionState,
+    extensionStateVersion,
+    ...panelProps
+  }: PluginViewHostProps) {
     const { onClose } = panelProps;
+    // Refuse a bag written by a NEWER build of this plugin rather than hand the
+    // view state it will misread and then overwrite (#12280). The record and
+    // its `extensionState` are untouched by this — reinstalling the newer build
+    // brings the user's state back intact — so the only thing withheld is the
+    // view's chance to corrupt it.
+    const decoded = decodePanelExtensionState({
+      state: extensionState,
+      persistedVersion: extensionStateVersion,
+      declaredVersion: stateVersion,
+    });
     // `ContentPanel`'s own close control already sits in the header; this hands
     // the same action to the diagnostics fallback so a crashed view offers the
     // way out where the failure is actually shown (#11301). Wrapped to drop
@@ -110,13 +135,26 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
         {/* `extensionState` is how the panel store persists a view's spawn
             arguments; the content layer speaks the SDK's presentation-neutral
             `initialArgs` instead, so the mapping happens here at the seam. */}
-        <PluginViewContent
-          panelId={panelProps.id}
-          initialArgs={extensionState}
-          persistState={persistState}
-          onRequestClose={handleRequestClose}
-          worktreeId={panelProps.worktreeId}
-        />
+        {decoded.ok ? (
+          <PluginViewContent
+            panelId={panelProps.id}
+            initialArgs={decoded.state}
+            stateVersion={decoded.version}
+            persistState={persistState}
+            onRequestClose={handleRequestClose}
+            worktreeId={panelProps.worktreeId}
+          />
+        ) : (
+          <PluginViewLoadError
+            pluginId={ownerPluginId}
+            displayName={displayName}
+            message={panelExtensionStateVersionMessage(
+              displayName,
+              decoded.persistedVersion,
+              decoded.declaredVersion
+            )}
+          />
+        )}
       </ContentPanel>
     );
   }

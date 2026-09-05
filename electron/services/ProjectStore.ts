@@ -235,7 +235,11 @@ export class ProjectStore {
       if (!isScratch && !isProjectWorkspaceId(workspaceId)) return;
       const kind = isScratch ? "scratch" : "project";
       const count = state
-        ? countResumableAgentPanels(state.terminals, `resume-count(${kind}:${workspaceId})`)
+        ? countResumableAgentPanels(
+            state.terminals,
+            `resume-count(${kind}:${workspaceId})`,
+            workspaceId
+          )
         : // Cleared state restores nothing. That is an answer, not an absence
           // of one, so it is written rather than left unknown.
           0;

@@ -172,12 +172,21 @@ Panels are full-sized workspaces in Daintree's grid (alongside terminal panels, 
 | `canConvert` | no | Allow conversion between compatible panel kinds. Rarely useful for plugins. |
 | `showInPalette` | no | Include in the "New Panel…" palette. Default `true`. |
 | `dockable` | no | Dockable by default. Declare `false` to opt the kind out of the dock. Rejected together with `hasPty: true` (`pty_panel_dock_opt_out_unsupported`) — a plugin PTY kind renders as a terminal, which is always dockable, so the opt-out could never be honoured. |
+| `stateVersion` | no | Integer &ge; 1 naming the shape your panel writes through `persistState`. Omit it and the host makes no promises about your saved state; declare it and you get the migration contract below. |
 
 **Icon IDs** — one shared set backs every surface that renders a plugin icon (the panel palette, panel headers, tabs, the dock, toolbar buttons, and the toolbar overflow menu), so an ID looks the same everywhere it appears:
 
 `terminal`, `package`, `puzzle`, `globe`, `monitor`, `monitor-play`, `file-text`, `file-diff`, `folder-tree`, `git-branch`, `git-pull-request`, `sticky-note`, `gauge`, `list`, `sparkles`, `layout-panel-top`, `daintree`
 
 `shared/config/pluginIconIds.ts` is authoritative — run `daintree-plugin validate` to check a manifest against the set your installed host actually ships. Panel `iconId` also accepts a built-in agent ID (e.g. `claude`) to render that agent's brand mark.
+
+**Panel state versioning** — `persistState` writes an opaque bag that survives restarts, so a change to its shape meets bags written by every version of your plugin the user has ever run. `stateVersion` is how you tell those apart.
+
+Declare it, and the host stamps that number onto the panel record every time your view persists — the value comes from the manifest, never from your patch, so the bag can never claim a version it is not. On the next mount the view reads `PanelViewProps.stateVersion` and migrates forward from whatever it says: `0` means the bag predates versioning, an absent value means you never declared one. Persisting the migrated result re-stamps it at your current version.
+
+You never have to handle a version _above_ the one you declare. That only happens on a downgrade — the user ran a newer build of your plugin, then went back — and the host refuses the bag rather than let it be misread and overwritten, showing the user an error naming both versions. The state stays on disk, so reinstalling the newer build brings it back intact.
+
+Bump `stateVersion` when the shape changes incompatibly, never for an additive key your view can already tolerate missing.
 
 **Component registration** is covered by the **views** contribution point below — panels declare the slot, views provide the component.
 

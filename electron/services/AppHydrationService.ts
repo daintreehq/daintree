@@ -78,7 +78,7 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
       `switch-hydrate(project:${projectId})`
     ).map((t) => ({
       ...t,
-      kind: inferKind(t),
+      kind: inferKind(t, projectId),
       location: t.location as "grid" | "dock",
     }));
 

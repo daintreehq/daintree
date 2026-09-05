@@ -114,6 +114,7 @@ export function buildPanelProps({
 
     // Extension state
     extensionState: terminal.extensionState,
+    extensionStateVersion: terminal.extensionStateVersion,
 
     // Browser-specific
     initialUrl: browser?.browserUrl || "http://localhost:3000",

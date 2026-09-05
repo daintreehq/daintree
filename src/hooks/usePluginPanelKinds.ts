@@ -56,6 +56,11 @@ const PANEL_KIND_META_KEYS = [
   "extensionId",
   "componentPath",
   "shortcut",
+  // A plugin that ships a new state schema changes only this. The host factory
+  // closes over it to decide whether a persisted bag is readable, so leaving it
+  // out would keep serving a cached host judging state against the version the
+  // PREVIOUS build declared (#12280).
+  "stateVersion",
 ] as const satisfies readonly (keyof PanelKindConfig)[];
 
 function panelKindMetaEqual(a: PanelKindConfig, b: PanelKindConfig): boolean {
