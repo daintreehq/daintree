@@ -31,6 +31,43 @@ vi.mock("@/hooks/usePluginContextMenuItems", () => ({
   usePluginContextMenuItems: () => itemsRef.current,
 }));
 
+/**
+ * The shelf reveals an off-screen row through the virtualizer's imperative
+ * handle, and jsdom measures nothing, so no scroll it performs is observable.
+ * This wraps the REAL `GroupedVirtuoso` rather than replacing it — the grouped
+ * windowing below still has to be the library's own — and only taps the handle
+ * on the way past, so the index the shelf asks for can be asserted.
+ */
+const { scrollIntoViewMock } = vi.hoisted(() => ({
+  scrollIntoViewMock: vi.fn<(location: { index: number; behavior?: string }) => void>(),
+}));
+
+vi.mock("react-virtuoso", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-virtuoso")>();
+  const { createElement, forwardRef, useImperativeHandle, useRef } = await import("react");
+  const Actual = actual.GroupedVirtuoso as unknown as React.ComponentType<
+    Record<string, unknown> & { ref?: unknown }
+  >;
+  return {
+    ...actual,
+    GroupedVirtuoso: forwardRef(function GroupedVirtuosoSpy(
+      props: Record<string, unknown>,
+      ref: React.ForwardedRef<Partial<GroupedVirtuosoHandle>>
+    ) {
+      const inner = useRef<GroupedVirtuosoHandle | null>(null);
+      useImperativeHandle(ref, () => ({
+        scrollIntoView: (location: Parameters<GroupedVirtuosoHandle["scrollIntoView"]>[0]) => {
+          scrollIntoViewMock(location as { index: number; behavior?: string });
+          inner.current?.scrollIntoView(location);
+        },
+        scrollToIndex: (location: Parameters<GroupedVirtuosoHandle["scrollToIndex"]>[0]) =>
+          inner.current?.scrollToIndex(location),
+      }));
+      return createElement(Actual, { ...props, ref: inner });
+    }),
+  };
+});
+
 vi.mock("@/store/diffViewedStore", () => ({
   useDiffViewedStore: (selector?: (state: unknown) => unknown) => {
     const state = { toggleViewed: () => {} };
@@ -39,7 +76,7 @@ vi.mock("@/store/diffViewedStore", () => ({
   selectViewedSet: () => new Set<string>(),
 }));
 
-import { VirtuosoMockContext } from "react-virtuoso";
+import { VirtuosoMockContext, type GroupedVirtuosoHandle } from "react-virtuoso";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { primeRadix } from "@/components/ui/radix-loader";
@@ -96,6 +133,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   dispatchMock.mockClear();
+  scrollIntoViewMock.mockClear();
   itemsRef.current = [];
 });
 
@@ -224,7 +262,7 @@ describe("DiffFileSidebar — windowed file shelf (#12241)", () => {
    */
   const renderWindowed = (files: DiffChangeSetEntry[], currentIndex: number) => {
     const onSelect = vi.fn();
-    render(
+    const { container } = render(
       <TooltipProvider>
         <VirtuosoMockContext.Provider value={{ itemHeight: 32, viewportHeight: 640 }}>
           <DiffFileSidebar
@@ -237,13 +275,30 @@ describe("DiffFileSidebar — windowed file shelf (#12241)", () => {
         </VirtuosoMockContext.Provider>
       </TooltipProvider>
     );
-    return { onSelect };
+    return { onSelect, container };
   };
 
   const reversedGroups = (count: number): DiffChangeSetEntry[] =>
     Array.from({ length: count }, (_, i) =>
       entry(`src/z${String(count - 1 - i).padStart(4, "0")}/file-${String(i).padStart(4, "0")}.ts`)
     );
+
+  /**
+   * `groupCount` directories of `perGroup` files each, named so the directories
+   * sort into the order they were built in. File index and DISPLAY index are
+   * then the same number — which is exactly the confusion this fixture is here
+   * to catch, because neither of them is the SLOT index the virtualizer's
+   * handle speaks. The slot of the nth file is `n + (its group ordinal + 1)`.
+   */
+  const GROUP_COUNT = 20;
+  const PER_GROUP = 10;
+  const groupedFiles = (): DiffChangeSetEntry[] =>
+    Array.from({ length: GROUP_COUNT * PER_GROUP }, (_, i) =>
+      entry(
+        `src/g${String(Math.floor(i / PER_GROUP)).padStart(2, "0")}/file-${String(i).padStart(3, "0")}.ts`
+      )
+    );
+  const slotOf = (fileIndex: number) => fileIndex + Math.floor(fileIndex / PER_GROUP) + 1;
 
   it("renders every row below the windowing threshold", () => {
     renderSidebar({ files: reversedGroups(20), currentIndex: 0 });
@@ -290,5 +345,59 @@ describe("DiffFileSidebar — windowed file shelf (#12241)", () => {
     const rows = screen.getAllByTestId("diff-sidebar-file");
     expect(rows).toHaveLength(1);
     expect(rows[0]!.getAttribute("aria-label")).toContain("file-0001.ts");
+  });
+
+  it("lays its rows out in slot space, group headers included", () => {
+    // The premise every reveal assertion below rests on, taken from the real
+    // virtualizer rather than from the docs: the slots react-virtuoso indexes
+    // COUNT the group headers, so the first file sits at slot 1, not slot 0.
+    const { container } = renderWindowed(groupedFiles(), 0);
+    const slots = Array.from(container.querySelectorAll<HTMLElement>("[data-index]"));
+    const firstFileSlot = slots.find((slot) => slot.querySelector("[data-file-index]"));
+    expect(firstFileSlot?.getAttribute("data-index")).toBe(String(slotOf(0)));
+  });
+
+  it("reveals the open file by its flat slot index, not its file-only index", () => {
+    // File 95 is the sixth file of the tenth directory: ten group headers sit
+    // ahead of it, so its slot is 105 while its position among the files is 95.
+    // Handing the handle 95 scrolls ten rows short of the row the user opened.
+    const target = 95;
+    renderWindowed(groupedFiles(), target);
+
+    expect(scrollIntoViewMock).toHaveBeenCalled();
+    expect(scrollIntoViewMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ index: slotOf(target) })
+    );
+    expect(slotOf(target)).toBe(105);
+  });
+
+  it("counts the header ahead of even the first file when it reveals it", () => {
+    // The smallest version of the same mistake, and the one an off-by-"a few
+    // headers" test can still pass through: file 0 is slot 1.
+    renderWindowed(groupedFiles(), 0);
+
+    expect(scrollIntoViewMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ index: 1, behavior: "auto" })
+    );
+  });
+
+  it("re-reveals in slot space after a filter renumbers the groups", () => {
+    // A filter rebuilds the groups, so the slot has to be rebuilt with them
+    // rather than carried over from the unfiltered list.
+    const target = 155;
+    renderWindowed(groupedFiles(), target);
+    expect(scrollIntoViewMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ index: slotOf(target) })
+    );
+    scrollIntoViewMock.mockClear();
+
+    // Keeps g10..g19 — a hundred files, still windowed — and drops the ten
+    // directories ahead of them. The target is then the sixth file of the sixth
+    // surviving group: display index 55, six headers ahead of it, slot 61.
+    fireEvent.change(screen.getByTestId("diff-sidebar-filter"), {
+      target: { value: "src/g1" },
+    });
+
+    expect(scrollIntoViewMock).toHaveBeenLastCalledWith(expect.objectContaining({ index: 61 }));
   });
 });

@@ -252,32 +252,35 @@ export function DiffFileSidebar({
   );
 
   // The grouped virtualizer wants the same list twice over: the files flat, and
-  // how many of them fall under each directory header. `displayIndexByFileIndex`
-  // is the bridge back — reveal speaks display order, everything else (the open
+  // how many of them fall under each directory header. `slotIndexByFileIndex`
+  // is the bridge back — reveal speaks slot order, everything else (the open
   // file, `onSelect`, `aria-current`) speaks the original changeset's order.
   const flat = useMemo(() => {
     const entries: IndexedEntry[] = [];
     const counts: number[] = [];
     const dirs: string[] = [];
-    const displayIndexByFileIndex = new Map<number, number>();
-    // `computeItemKey` is the odd one out: react-virtuoso calls it with the raw
-    // slot index, which COUNTS GROUP HEADERS, while `itemContent` gets the
-    // file-only index. Indexing the file array with the raw index hands the
-    // first file the second file's key — and a key that names the wrong row is
-    // how React moves one file's open menu onto another file. So the keys are
-    // built once, in slot order, headers included.
+    // `itemContent` is the odd one out: it is called with the file-only index,
+    // while `computeItemKey` and the imperative handle's `scrollIntoView` /
+    // `scrollToIndex` all speak the raw SLOT index, which COUNTS GROUP HEADERS.
+    // Indexing the file array with a slot hands the first file the second
+    // file's key — and a key that names the wrong row is how React moves one
+    // file's open menu onto another file. Handing a file-only index to the
+    // reveal scrolls short by every header ahead of it. So the keys are built
+    // once, in slot order, and `keysBySlot.length` IS the slot the next file
+    // lands on, headers already counted.
     const keysBySlot: string[] = [];
+    const slotIndexByFileIndex = new Map<number, number>();
     for (const group of groups) {
       counts.push(group.files.length);
       dirs.push(group.dir);
       keysBySlot.push(`group:${group.dir || "(root)"}`);
       for (const file of group.files) {
-        displayIndexByFileIndex.set(file.index, entries.length);
+        slotIndexByFileIndex.set(file.index, keysBySlot.length);
         entries.push(file);
         keysBySlot.push(`file:${file.viewedKey}-${file.index}`);
       }
     }
-    return { entries, counts, dirs, displayIndexByFileIndex, keysBySlot };
+    return { entries, counts, dirs, slotIndexByFileIndex, keysBySlot };
   }, [groups]);
 
   const virtuosoRef = useRef<GroupedVirtuosoHandle | null>(null);
@@ -323,14 +326,14 @@ export function DiffFileSidebar({
   // Keep the open file's row in view while stepping with the keyboard.
   // `groups` is a dependency so the row is re-revealed when a filter that hid
   // it is cleared. Windowed, the row may not exist to be queried, so the
-  // virtualizer is asked for it by display index instead; `scrollIntoView`
-  // leaves an already-visible row alone either way.
+  // virtualizer is asked for it by SLOT index instead — the handle counts group
+  // headers; `scrollIntoView` leaves an already-visible row alone either way.
   useEffect(() => {
     if (currentIndex < 0) return;
     if (windowed) {
-      const displayIndex = flat.displayIndexByFileIndex.get(currentIndex);
-      if (displayIndex === undefined) return;
-      virtuosoRef.current?.scrollIntoView({ index: displayIndex, behavior: "auto" });
+      const slotIndex = flat.slotIndexByFileIndex.get(currentIndex);
+      if (slotIndex === undefined) return;
+      virtuosoRef.current?.scrollIntoView({ index: slotIndex, behavior: "auto" });
       return;
     }
     if (!listRef.current) return;
