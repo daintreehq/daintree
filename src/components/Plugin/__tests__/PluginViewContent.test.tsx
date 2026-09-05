@@ -352,7 +352,12 @@ describe("makePluginViewContent", () => {
 
       render(<Content panelId="panel-act" />);
 
-      await waitFor(() => expect(capturedFactory).toBeDefined());
+      // `waitFor` defaults to 1s regardless of vitest's 15s testTimeout, and
+      // capturing the lazy factory through a re-imported module lands right on
+      // that boundary on a loaded CI runner — which shard 1 hit twice, on a
+      // different one of these three waits each time. The assertion is
+      // unchanged; only the polling window is widened.
+      await waitFor(() => expect(capturedFactory).toBeDefined(), { timeout: 5000 });
       // Activation rejects, so the awaited call short-circuits before `import()`.
       // Awaiting to settlement also lets the factory's `finally` clear the 10s
       // timeout rather than leaking an open timer into the next test.
@@ -399,7 +404,7 @@ describe("makePluginViewContent", () => {
 
       render(<Content panelId="panel-act-fail" />);
 
-      await waitFor(() => expect(capturedFactory).toBeDefined());
+      await waitFor(() => expect(capturedFactory).toBeDefined(), { timeout: 5000 });
       // The factory rejects with the real activation error and never reaches the
       // `plugin://` import.
       await expect(capturedFactory!()).rejects.toThrow(/boom/);
@@ -432,7 +437,7 @@ describe("makePluginViewContent", () => {
 
       render(<Content panelId="panel-noact" />);
 
-      await waitFor(() => expect(capturedFactory).toBeDefined());
+      await waitFor(() => expect(capturedFactory).toBeDefined(), { timeout: 5000 });
 
       // The factory still rejects here — jsdom can't resolve a `plugin://` URL —
       // so "did it reject" proves nothing. What matters is the *cause*: with the
