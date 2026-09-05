@@ -45,9 +45,11 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 // A capture that completes can hand a deferred follow-up straight back into the
-// same path, so the chain is longer than one flush drains.
+// same path, so the chain is longer than one flush drains. Advancing the fake
+// clock by zero yields through a real task, draining the whole chain without
+// making any armed deadline due — deterministic where a tick count is a guess.
 async function drainFollowUp(): Promise<void> {
-  for (let i = 0; i < 12; i += 1) await Promise.resolve();
+  await vi.advanceTimersByTimeAsync(0);
 }
 
 function createHost(overrides: Partial<MutableHost> = {}): MutableHost {
@@ -688,7 +690,34 @@ describe("SessionSnapshotter", () => {
       expect(persistAsyncMock).toHaveBeenCalledTimes(2);
     });
 
-    it("clears pending debounced work once an event flush persisted the same buffer", async () => {
+    it("re-arms the debounce when output outlives the event capture in flight", async () => {
+      const host = createHost();
+      host.asyncResolved = false;
+      const snap = new SessionSnapshotter(host);
+
+      snap.schedule();
+      snap.flushEventDriven();
+      await Promise.resolve(); // the event capture stalls in serialize
+
+      // Newer output arrives, then the armed deadline expires while the capture
+      // still holds the gate — so it fires, defers, and leaves nothing armed.
+      host.contentEpoch = 2;
+      snap.schedule();
+      vi.advanceTimersByTime(5001);
+      expect(persistAsyncMock).not.toHaveBeenCalled();
+
+      // The capture covers only its entry epoch, so the newer output needs a
+      // fresh deadline armed on the way out.
+      host.asyncResolve();
+      await drainFollowUp();
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(5001);
+      await flushMicrotasks();
+      expect(persistAsyncMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("still persists a geometry-only change after an event flush covered the output", async () => {
       const host = createHost();
       const snap = new SessionSnapshotter(host);
 
@@ -697,9 +726,32 @@ describe("SessionSnapshotter", () => {
       await flushMicrotasks();
       expect(persistAsyncMock).toHaveBeenCalledTimes(1);
 
-      // Teardown must not rewrite bytes the event flush already wrote.
+      // A resize reflow bumps contentEpoch without calling schedule(). The
+      // capture must not have cleared the pending debounce out from under it,
+      // or the timer bails at `!dirty` before ever seeing the newer epoch.
+      host.contentEpoch = 2;
+      vi.advanceTimersByTime(5001);
+      await flushMicrotasks();
+
+      expect(persistAsyncMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("still persists a geometry-only change from teardown", async () => {
+      const host = createHost();
+      const snap = new SessionSnapshotter(host);
+
+      snap.schedule();
+      snap.flushEventDriven();
+      await flushMicrotasks();
+      expect(persistAsyncMock).toHaveBeenCalledTimes(1);
+
+      // Same reflow, but teardown arrives before the deadline. flushSyncOnDispose
+      // is gated on `dirty`, so clearing it on a successful capture would lose
+      // this write entirely.
+      host.contentEpoch = 2;
       snap.flushSyncOnDispose();
-      expect(persistSyncMock).not.toHaveBeenCalled();
+
+      expect(persistSyncMock).toHaveBeenCalledTimes(1);
     });
 
     it("leaves debounced work pending for teardown when the event flush failed", async () => {

@@ -310,7 +310,7 @@ const FAMILIES: readonly Family[] = [
     kind: "mechanism",
     fidelity: withFidelity({ renderer: "headless" }),
     claim:
-      "The real snapshot coordinator, its real timers and the real session writer against a temporary user-data directory: how many serializes and disk writes an agent turn actually pays for. The triggers are called directly, so nothing here says the pty-host and agent FSM fire them at the right moment, and the write latency is outside the duration.",
+      "The real snapshot coordinator, its real timers and the real session writer against a temporary user-data directory: how many serializes and disk writes an agent turn actually pays for. The duration is summed SerializeAddon time only — write latency and the coordinator's own bookkeeping are outside it. The triggers are called directly, so nothing here says the pty-host and agent FSM fire them at the right moment, and the counts describe terminals eligible for both triggers, not launched agent terminals that were always event-driven only.",
   },
   {
     label: "session restore parser floor",

@@ -200,11 +200,18 @@ export class SessionSnapshotter {
       await persistSessionSnapshotAsync(this.host.id, state);
       // Mark coverage only after a successful persist. Uses the entry epoch, so
       // content that changed mid-serialize (epoch > entry) still triggers a
-      // later flush.
+      // later flush. contentEpoch counts chunk RECEIPT, not parse completion,
+      // so coverage means "the buffer as it serialized" — a chunk still queued
+      // in HeadlessMirrorScheduler lands in the next capture. flushSyncOnKill
+      // is the unconditional backstop on shutdown.
+      //
+      // `dirty` is deliberately NOT cleared here. Resize reflow and mirror
+      // geometry repair bump contentEpoch without calling schedule(), so a
+      // capture that cleared `dirty` would make the pending timer bail at its
+      // `!dirty` guard before ever looking at the newer epoch — and take
+      // flushSyncOnDispose's teardown write with it. The epoch check below is
+      // what makes the pending debounce a no-op when it is genuinely covered.
       this.lastFlushedEpoch = epoch;
-      // A debounced write waiting on these same bytes is now redundant; only
-      // content that arrived mid-capture is still outstanding.
-      if (this.host.contentEpoch === epoch) this.dirty = false;
     } catch (error) {
       console.warn(
         trigger === "periodic"

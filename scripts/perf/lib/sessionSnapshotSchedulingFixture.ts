@@ -41,8 +41,8 @@ const CHUNKS_PER_TURN = 6;
 const LINES_PER_TURN = 120;
 /** Agent state settles this long after the burst, inside the 5s debounce window. */
 const SETTLE_AT_MS = 2000;
-/** Quiet tail: past SESSION_SNAPSHOT_DEBOUNCE_MS (5000) so the debounce deadline lands. */
-const TURN_LENGTH_MS = 5150;
+/** Quiet window after the burst: past SESSION_SNAPSHOT_DEBOUNCE_MS (5000) so every deadline lands. */
+const QUIET_LENGTH_MS = 5150;
 /** Files must appear within this long after the last turn, or the run is broken. */
 const DRAIN_TIMEOUT_MS = 30_000;
 
@@ -65,6 +65,10 @@ export interface SchedulingProbe {
  */
 class ScriptedSnapshotHost implements SessionSnapshotterHost {
   wasKilled = false;
+  // Undefined on purpose: a terminal with launchAgentId set gets no periodic
+  // scheduling in either implementation, so it has no overlap to measure. The
+  // subject is a runtime-detected agent in an ordinary terminal, which receives
+  // both triggers.
   readonly launchAgentId: string | undefined = undefined;
   contentEpoch = 0;
   private captureSeq = 0;
@@ -145,6 +149,70 @@ async function writeBurst(
   }
 }
 
+/** A v2 session file is `DAINTREE_SESSION_v2\n<cols>x<rows>\n<payload>`. */
+const SESSION_HEADER_V2 = "DAINTREE_SESSION_v2\n";
+/** Per terminal, not fleet-average: one healthy payload must not cover eleven empty ones. */
+const MIN_TERMINAL_SNAPSHOT_BYTES = 250_000;
+
+function captureIndex(fileName: string): number {
+  return Number(fileName.slice(fileName.lastIndexOf("-c") + 2, -".restore".length));
+}
+
+/** The newest file this terminal wrote, by capture sequence rather than name order. */
+function latestFileFor(files: string[], terminalIndex: number): string | undefined {
+  return files
+    .filter((name) => name.startsWith(`perf197-${terminalIndex}-c`))
+    .sort((a, b) => captureIndex(a) - captureIndex(b))
+    .at(-1);
+}
+
+/** Wait for the writes behind the captures already counted to land. */
+async function drainWrites(sessionDir: string, probe: SchedulingProbe): Promise<string[]> {
+  const deadline = performance.now() + DRAIN_TIMEOUT_MS;
+  let files = await countSessionFiles(sessionDir);
+  while (files.length < probe.serializeCalls && performance.now() < deadline) {
+    await sleep(10);
+    files = await countSessionFiles(sessionDir);
+  }
+  return files;
+}
+
+/**
+ * Every terminal's newest persisted payload must equal a direct serialize of
+ * its buffer, run after EVERY turn rather than only at the end.
+ *
+ * A final-only check would pass a coordinator that coalesced away whole turns
+ * and happened to write last, reporting fewer serializes and zero misses — the
+ * most flattering possible result for the exact bug this measures. These
+ * serializes bypass the host, so they never enter the workload counters.
+ */
+async function verifyFleet(
+  sources: SnapshotSource[],
+  sessionDir: string,
+  files: string[]
+): Promise<{ misses: number; bytes: number }> {
+  let misses = 0;
+  let bytes = 0;
+  for (let i = 0; i < sources.length; i += 1) {
+    const expected = sources[i]!.addon.serialize();
+    const latest = latestFileFor(files, i);
+    if (!latest) {
+      misses += 1;
+      continue;
+    }
+    const raw = await readFile(path.join(sessionDir, latest), "utf8");
+    if (!raw.startsWith(SESSION_HEADER_V2)) {
+      misses += 1;
+      continue;
+    }
+    const payload = raw.slice(raw.indexOf("\n", SESSION_HEADER_V2.length) + 1);
+    const payloadBytes = Buffer.byteLength(payload, "utf8");
+    bytes += payloadBytes;
+    if (payload !== expected || payloadBytes < MIN_TERMINAL_SNAPSHOT_BYTES) misses += 1;
+  }
+  return { misses, bytes };
+}
+
 /**
  * Drive `turns` scripted agent turns across the fleet concurrently.
  *
@@ -165,54 +233,33 @@ export async function runScriptedTurns(
   const hosts = sources.map((source, i) => new ScriptedSnapshotHost(`perf197-${i}`, source, probe));
   const snapshotters = hosts.map((host) => new SessionSnapshotter(host));
 
+  let payloadMisses = 0;
+  let totalPayloadBytes = 0;
+  let files: string[] = [];
+
   try {
     for (let turn = 0; turn < turns; turn += 1) {
-      const turnStart = performance.now();
       await Promise.all(
         sources.map((source, i) =>
           writeBurst(source, hosts[i]!, snapshotters[i]!, 4200 + turn * 100 + i)
         )
       );
 
+      // Anchored AFTER the burst on purpose. `schedule()` runs during it, so
+      // the latest deadline any terminal armed is burstEnd + 5000; timing the
+      // quiet window from here keeps every one of them inside the turn. Timing
+      // it from the burst START would let a slow burst push a deadline past the
+      // window, and the duplicate it would have produced would go uncounted.
+      const quietStart = performance.now();
+      await sleep(SETTLE_AT_MS);
       // The agent's FSM settles inside the debounce window — the overlap.
-      await sleep(Math.max(0, SETTLE_AT_MS - (performance.now() - turnStart)));
       snapshotters.forEach((snapshotter) => snapshotter.flushEventDriven());
+      await sleep(Math.max(0, QUIET_LENGTH_MS - (performance.now() - quietStart)));
 
-      // Quiet past the debounce deadline, so its capture (or its skip) lands.
-      await sleep(Math.max(0, TURN_LENGTH_MS - (performance.now() - turnStart)));
-    }
-
-    // Every capture writes its own file, so the run is drained when the file
-    // count stops trailing the serialize count.
-    const drainDeadline = performance.now() + DRAIN_TIMEOUT_MS;
-    let files = await countSessionFiles(sessionDir);
-    while (files.length < probe.serializeCalls && performance.now() < drainDeadline) {
-      await sleep(10);
-      files = await countSessionFiles(sessionDir);
-    }
-
-    // Oracle: the LAST file each terminal wrote must be byte-identical to a
-    // direct serialize of its buffer. A coordinator that coalesced too
-    // aggressively would leave a stale payload on disk and still post a
-    // flattering serialize count. These serializes bypass the host, so they
-    // never enter the workload counters.
-    let payloadMisses = 0;
-    let totalPayloadBytes = 0;
-    for (let i = 0; i < sources.length; i += 1) {
-      const expected = sources[i]!.addon.serialize();
-      const mine = files
-        .filter((name) => name.startsWith(`perf197-${i}-c`))
-        .sort((a, b) => captureIndex(a) - captureIndex(b));
-      const latest = mine[mine.length - 1];
-      if (!latest) {
-        payloadMisses += 1;
-        continue;
-      }
-      const raw = await readFile(path.join(sessionDir, latest), "utf8");
-      // DAINTREE_SESSION_v2\n<cols>x<rows>\n<payload>
-      const payload = raw.slice(raw.indexOf("\n", raw.indexOf("\n") + 1) + 1);
-      totalPayloadBytes += Buffer.byteLength(payload, "utf8");
-      if (payload !== expected) payloadMisses += 1;
+      files = await drainWrites(sessionDir, probe);
+      const verdict = await verifyFleet(sources, sessionDir, files);
+      payloadMisses += verdict.misses;
+      totalPayloadBytes = verdict.bytes;
     }
 
     return {
@@ -229,8 +276,4 @@ export async function runScriptedTurns(
     else process.env.DAINTREE_USER_DATA = previousUserData;
     await rm(userData, { recursive: true, force: true });
   }
-}
-
-function captureIndex(fileName: string): number {
-  return Number(fileName.slice(fileName.lastIndexOf("-c") + 2, -".restore".length));
 }

@@ -197,9 +197,12 @@ export const scrollbackSnapshotScenarios: PerfScenario[] = [
       "output burst arming the 5s debounce, FSM settle firing the event-driven flush 2s later, " +
       "then quiet past the debounce deadline — across a 12-terminal fleet at maximum scrollback. " +
       "serializeCallsPerTurn is the subject: two independent scheduling paths pay for the same " +
-      "buffer twice, one coordinator pays once. payloadMisses checks each terminal's final " +
-      "persisted bytes against a direct serialize, so coalescing cannot be bought with a stale " +
-      "snapshot; writeMisses catches a writer that serialized and quietly wrote nothing.",
+      "buffer twice, one coordinator pays once. The hosts have no launchAgentId, so this measures " +
+      "the terminals that get BOTH triggers — a runtime-detected agent in an ordinary terminal. " +
+      "Explicitly launched agent terminals are event-driven only and never had the periodic half " +
+      "to remove. payloadMisses re-checks every terminal's persisted bytes against a direct " +
+      "serialize after EVERY turn, so coalescing cannot be bought with a stale snapshot or a " +
+      "skipped turn; writeMisses catches a writer that serialized and quietly wrote nothing.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 4, nightly: 6 },
