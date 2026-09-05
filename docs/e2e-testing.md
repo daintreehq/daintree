@@ -48,7 +48,7 @@ Tests are split into twelve Playwright projects:
 
 ### Mechanism checks (separate config)
 
-`playwright.mechanism.config.ts` holds checks that answer "does the platform actually behave this way" rather than "does the product still work" — currently `e2e/mechanism/media-range-streaming.spec.ts`, which verifies that Chromium issues real follow-up byte ranges against the `standard: true` `daintree-media://` scheme (#12242). Run it with `npm run test:e2e:mechanism`, after `npm run build:e2e`.
+`playwright.mechanism.config.ts` holds checks that answer "does the platform actually behave this way" rather than "does the product still work" — currently `e2e/mechanism/media-range-streaming.spec.ts`, which is intended to establish whether Chromium issues real follow-up byte ranges against the `standard: true` `daintree-media://` scheme (#12242). Run it with `npm run test:e2e:mechanism`, after `npm run build:e2e`.
 
 It is a second config rather than a thirteenth project on purpose: `npm run test:e2e` is a bare `npx playwright test`, which runs _every_ project in `playwright.config.ts`, and these generate several hundred megabytes of encoded fixtures per run. Don't fold it in.
 

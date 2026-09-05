@@ -82,11 +82,17 @@ describe("useMediaSourceUrl", () => {
     await waitFor(() => expect(getByTestId("probe").dataset.url).not.toBe(""));
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
+    const resolved = getByTestId("probe").dataset.url;
+
     // Callers pass inline closures; re-running the effect would tear down the
     // element and restart playback every time the parent re-renders.
     rerender(<Probe onError={() => {}} label="second" />);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Not just "no reprobe" — the source has to survive too. Clearing it back
+    // to null without reprobeing would satisfy the call count alone.
+    expect(getByTestId("probe").dataset.url).toBe(resolved);
+    expect(getByTestId("probe").dataset.probing).toBe("false");
   });
 
   it("reports an over-cap declared length as the caller's specific error", async () => {
@@ -109,7 +115,7 @@ describe("useMediaSourceUrl", () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
-  it("plays a file whose length the probe did not declare", async () => {
+  it("resolves a media URL when the probe declares no length", async () => {
     // Nothing is buffered whole any more, so an unmeasurable size costs a few
     // ranges rather than a gigabyte of blob storage. Failing closed here would
     // turn an unrelated header regression into "no media plays at all".

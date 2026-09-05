@@ -3,11 +3,11 @@ import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useMediaSourceUrl } from "./useMediaSourceUrl";
 import type { MediaPreviewError } from "./useMediaSourceUrl";
 
-// Playback streams byte ranges now, so this no longer bounds anything held in
-// memory. It survives as a preview-scope judgement: past ~1GiB a file is a
-// deliverable rather than something to skim in a pane, and the viewer says so
-// plainly instead of scrubbing a multi-hour recording through a docked panel.
-// A 4K screen recording runs ~10MB/min, so this clears an hour either way.
+// The hook no longer builds a whole-file Blob, so this is no longer a bound on
+// what one preview holds — native buffering is the element's business and has
+// not been measured. It survives as a preview-scope judgement: past ~1GiB a file
+// is a deliverable rather than something to skim in a pane, and the viewer says
+// so plainly. A 4K screen recording runs ~10MB/min, so this clears an hour.
 const VIDEO_PREVIEW_MAX_BYTES = 1024 * 1024 * 1024;
 
 /** Why a preview couldn't play, split so callers can render a headline and a way forward. */
@@ -88,10 +88,10 @@ export function FileVideoPreview({
     return () => reportPlaying(false);
   }, [filePath, rootPath, reloadKey]);
 
-  // Detaching the source is what actually stops an in-flight range request.
-  // Unmounting the node alone leaves Chromium's media loader pulling bytes
-  // until the element is collected — and "closed the pane after two seconds"
-  // is precisely the case direct streaming exists to make cheap. The element
+  // Reset the element rather than trusting the node's removal to end its
+  // requests: the hook's AbortController governs the size probe only, and
+  // nothing else here would tell the media loader to stop. "Closed the pane
+  // after two seconds" is precisely the case this exists for. The element
   // is captured in the effect body, not read from the ref in the cleanup: a
   // `key` change swaps the ref to the new node before cleanup runs, so reading
   // it there would release the element that just took over.
@@ -144,10 +144,10 @@ export function FileVideoPreview({
           }}
         />
       ) : probing ? (
-        // Only the size probe stands between mount and playback now — a single
-        // HEAD answered from an fd stat, so this is normally imperceptible and
-        // `SkeletonBone`'s 400ms gate swallows it. It still earns its place on a
-        // cold or contended disk, where the stat is the one thing that stalls.
+        // Covers the size probe — a HEAD answered from a realpath and an fd
+        // stat, so `SkeletonBone`'s 400ms gate normally swallows it entirely. It
+        // earns its place on a cold or contended disk. The mounted player still
+        // loads its own metadata afterwards; that wait is the element's.
         <div className="flex w-full max-w-md flex-col items-center gap-3">
           <Skeleton label="Loading video" className="w-full">
             <SkeletonBone className="aspect-video w-full" />

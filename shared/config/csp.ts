@@ -18,14 +18,13 @@ const HTML_PREVIEW_SCHEME = "daintree-html:";
 // `application/pdf`, so this allowance can never resolve to anything else.
 const PDF_PREVIEW_SCHEME = "daintree-pdf:";
 
-// Direct range-streamed media playback (#12242). Only appears in `media-src`,
-// so `<video>`/`<audio>` can point straight at `daintree-media://load?…` and let
-// Chromium's media loader pull byte ranges as it needs them. Kept off
-// `daintree-file:` so that scheme's other consumers (markdown images, WebAudio
-// fetch, the file viewer) keep their existing registration; the media scheme is
-// the one registered `standard: true`, which is what makes the loader issue
-// follow-up ranges instead of treating the first response as the whole file.
-// The handler serves nothing but audio/video inside a registered root.
+// Direct media playback (#12242). Only appears in `media-src`, so
+// `<video>`/`<audio>` can point straight at `daintree-media://load/?…` instead
+// of playing a blob of the whole file. `standard: true` — the privilege the
+// upstream report behind that blob detour identified as missing — lives on this
+// scheme rather than `daintree-file:` so that scheme's consumers (markdown
+// images, WebAudio fetch, the file viewer) keep their existing registration.
+// The handler serves nothing but audio/video under a caller-supplied root.
 const MEDIA_SCHEME = "daintree-media:";
 
 // Plugin-served renderer modules. `plugin:` is a hardened first-party scheme
@@ -125,10 +124,10 @@ export function getDaintreeAppProdCSP(options?: DaintreeCspOptions): string {
     `img-src 'self' ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
     "font-src 'self' data:",
     // daintree-media:: the file viewer points <video>/<audio> straight at the
-    // range-streaming scheme, so playback starts on the first few ranges instead
-    // of downloading the whole file into a blob (#12242). FILE_SCHEMES stays for
-    // WebAudio-style consumers that read media bytes through fetch(); blob:
-    // stays for renderer-minted object URLs (recorded clips, generated audio).
+    // range-serving scheme rather than a blob of the whole file (#12242).
+    // FILE_SCHEMES stays here for media loaded by tag from that scheme; the
+    // viewer's size probe and WebAudio read it via fetch(), which connect-src
+    // governs. blob: stays for renderer-minted object URLs.
     `media-src 'self' ${MEDIA_SCHEME} ${FILE_SCHEMES} blob:`,
     "worker-src 'self' blob:",
     `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${PDF_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,

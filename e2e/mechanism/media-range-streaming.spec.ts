@@ -1,5 +1,5 @@
 /**
- * Mechanism check: direct range-streamed media playback (#12242).
+ * Mechanism check: direct range-served media playback (#12242).
  *
  * Not part of any CI bucket and not in `playwright.config.ts` — it lives behind
  * `playwright.mechanism.config.ts` so a bare `npx playwright test` can never
@@ -9,15 +9,23 @@
  *   npm run test:e2e:mechanism
  *
  * What it answers, which no unit test can: does Chromium's media loader issue
- * real follow-up byte ranges against a `standard: true` custom scheme? The
- * whole blob detour existed because it appeared not to. Everything here is
- * measured against the app's own CSP and session, with real encoded fixtures.
+ * real follow-up byte ranges against a `standard: true` custom scheme? The whole
+ * blob detour existed because it appeared not to. Everything here runs against
+ * the app's own CSP and session, with real encoded fixtures.
  *
- * Byte counts come from `webRequest` listeners installed in the main process at
- * test time — the app ships no instrumentation for this. `onHeadersReceived` is
- * deliberately not used: the app registers its own CSP overlay there and
- * Electron allows one listener per event, so taking it would disable that
- * overlay mid-test.
+ * WHAT IS ASSERTED VS WHAT IS REPORTED — the distinction matters, because
+ * getting it wrong once already produced a spec that would have failed a working
+ * implementation. Requests are observed through `webRequest` listeners installed
+ * in the main process at test time; the app ships no instrumentation for this.
+ * That yields the *requested* `Range` headers exactly, so the range pattern is
+ * asserted. It does NOT yield bytes actually transferred: an opening
+ * `Range: bytes=0-` is answered with a `Content-Length` of the entire remainder
+ * even if Chromium reads a megabyte and cancels. So byte totals are REPORTED as
+ * advertised-length upper bounds, never asserted against a threshold — such a
+ * threshold would fail precisely when cancellation works best.
+ *
+ * `onHeadersReceived` is deliberately untouched: the app registers its own CSP
+ * overlay there and Electron allows one listener per event per session.
  */
 import { test, expect } from "@playwright/test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -26,11 +34,15 @@ import path from "node:path";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createMediaFixtures, type MediaFixture } from "../helpers/mediaFixtures";
 
-interface RangeRecord {
+interface MediaRequestRecord {
+  id: number;
   url: string;
-  range: string | null;
-  bytes: number;
-  at: number;
+  /** The `Range` header Chromium actually sent, or null for an unranged GET. */
+  requestedRange: string | null;
+  status?: number;
+  contentRange?: string | null;
+  /** `Content-Length` of the response — an upper bound on bytes transferred. */
+  advertisedBytes?: number;
 }
 
 let ctx: AppContext;
@@ -40,94 +52,154 @@ let large: MediaFixture;
 let ffmpegVersion: string;
 let versions: { electron: string; chrome: string; platform: string };
 
-function mediaUrl(fixture: MediaFixture): string {
-  return `daintree-media://load/?path=${encodeURIComponent(fixture.filePath)}&root=${encodeURIComponent(fixtureRoot)}`;
+let tokenSeq = 0;
+/**
+ * Every case gets its own token in the query string. The listener outlives each
+ * test, and a late response start from a torn-down element would otherwise land
+ * in the next case's tally — the two large-file cases reuse the same file, so
+ * filtering on the path alone would not separate them.
+ */
+function nextToken(): string {
+  tokenSeq += 1;
+  return `t${tokenSeq}`;
 }
 
-/** Arm the main-process recorder, clearing anything a previous case left. */
-async function armRecorder(): Promise<void> {
+function mediaUrl(fixture: MediaFixture, token: string): string {
+  return (
+    `daintree-media://load/?path=${encodeURIComponent(fixture.filePath)}` +
+    `&root=${encodeURIComponent(fixtureRoot)}&t=${token}`
+  );
+}
+
+/** Install the request recorder once; it accumulates for the whole run. */
+async function installRecorder(): Promise<void> {
   await ctx.app.evaluate(({ session }) => {
-    const g = globalThis as unknown as { __mediaRanges?: RangeRecord[]; __mediaArmed?: boolean };
-    g.__mediaRanges = [];
+    const g = globalThis as unknown as {
+      __mediaRequests?: MediaRequestRecord[];
+      __mediaArmed?: boolean;
+    };
+    g.__mediaRequests ??= [];
     if (g.__mediaArmed) return;
     g.__mediaArmed = true;
+
+    const header = (headers: Record<string, string | string[]> | undefined, name: string) => {
+      if (!headers) return null;
+      const key = Object.keys(headers).find((h) => h.toLowerCase() === name);
+      if (!key) return null;
+      const value = headers[key];
+      return (Array.isArray(value) ? value[0] : value) ?? null;
+    };
+
+    // `<all_urls>` plus an explicit prefix test rather than a
+    // `daintree-media://*/*` pattern: Chromium's match-pattern parser is built
+    // around the schemes it knows, and the app's own CSP overlay already
+    // demonstrates that `<all_urls>` reaches custom-scheme responses.
     const sessions = [session.defaultSession, session.fromPartition("persist:daintree")];
     for (const ses of new Set(sessions)) {
-      // `<all_urls>` plus an explicit prefix test rather than a
-      // `daintree-media://*/*` pattern: Chromium's match-pattern parser is
-      // built around the schemes it knows, and the app's own CSP overlay
-      // already demonstrates that `<all_urls>` reaches custom-scheme responses.
+      ses.webRequest.onBeforeSendHeaders({ urls: ["<all_urls>"] }, (details, callback) => {
+        if (details.url.startsWith("daintree-media://")) {
+          (g.__mediaRequests ??= []).push({
+            id: details.id,
+            url: details.url,
+            requestedRange: header(details.requestHeaders, "range"),
+          });
+        }
+        // Blocking listener: the request stalls unless this always runs.
+        callback({});
+      });
       ses.webRequest.onResponseStarted({ urls: ["<all_urls>"] }, (details) => {
         if (!details.url.startsWith("daintree-media://")) return;
-        const headers = details.responseHeaders ?? {};
-        const key = Object.keys(headers).find((h) => h.toLowerCase() === "content-length");
-        const raw = key ? headers[key] : undefined;
-        const value = Array.isArray(raw) ? raw[0] : raw;
-        (g.__mediaRanges ??= []).push({
-          url: details.url,
-          // The request's own Range header is not exposed here; Content-Range
-          // on the response carries the same fact and is enough to tell a
-          // follow-up range from an opening read.
-          range: (() => {
-            const k = Object.keys(headers).find((h) => h.toLowerCase() === "content-range");
-            const v = k ? headers[k] : undefined;
-            return (Array.isArray(v) ? v[0] : v) ?? null;
-          })(),
-          bytes: Number(value ?? 0),
-          at: Date.now(),
-        });
+        const record = (g.__mediaRequests ??= []).find((r) => r.id === details.id);
+        if (!record) return;
+        record.status = details.statusCode;
+        record.contentRange = header(details.responseHeaders, "content-range");
+        const length = header(details.responseHeaders, "content-length");
+        record.advertisedBytes = length === null ? undefined : Number(length);
       });
     }
   });
 }
 
-async function readRanges(): Promise<RangeRecord[]> {
-  return ctx.app.evaluate(() => {
-    const g = globalThis as unknown as { __mediaRanges?: RangeRecord[] };
-    return g.__mediaRanges ?? [];
-  });
+/** Everything recorded for one case, identified by its token. */
+async function requestsFor(token: string): Promise<MediaRequestRecord[]> {
+  return ctx.app.evaluate((t) => {
+    const g = globalThis as unknown as { __mediaRequests?: MediaRequestRecord[] };
+    return (g.__mediaRequests ?? []).filter((r) => r.url.includes(`t=${t}`));
+  }, token);
 }
+
+/** Start offset of a `Range: bytes=<start>-…` header, or null. */
+function rangeStart(range: string | null | undefined): number | null {
+  if (!range) return null;
+  const match = /^bytes=(\d*)-/.exec(range.trim());
+  if (!match || match[1] === "") return null;
+  return Number(match[1]);
+}
+
+function advertisedTotal(records: MediaRequestRecord[]): number {
+  return records.reduce((sum, r) => sum + (r.advertisedBytes ?? 0), 0);
+}
+
+type FirstFrame = { timeToFirstFrameMs: number; duration: number; playing: boolean };
 
 /**
  * Mount a real media element in the app document and drive it to first frame.
  *
- * Returns null when the element errors, so a failing shape is reported as a
- * failing shape rather than a timeout with no diagnosis — the issue asks for
- * the failing case by name if this doesn't work.
+ * Resolves to an `{ error }` shape rather than throwing, so a failing container
+ * is reported as that container failing — the issue asks for the failing case by
+ * name if this does not work, not for an undiagnosed timeout.
  */
 async function playToFirstFrame(
   url: string,
   tag: "video" | "audio"
-): Promise<{ timeToFirstFrameMs: number; duration: number } | { error: string }> {
+): Promise<FirstFrame | { error: string }> {
   return ctx.window.evaluate(
     ([src, kind]) =>
-      new Promise<{ timeToFirstFrameMs: number; duration: number } | { error: string }>(
-        (resolve) => {
-          const started = performance.now();
-          const el = document.createElement(kind as "video" | "audio");
-          el.id = "mechanism-media";
-          el.preload = "metadata";
-          el.muted = true;
-          el.style.position = "fixed";
-          el.style.opacity = "0";
-          el.style.pointerEvents = "none";
-          const done = (
-            value: { timeToFirstFrameMs: number; duration: number } | { error: string }
-          ) => {
-            resolve(value);
-          };
-          el.addEventListener("loadeddata", () =>
-            done({ timeToFirstFrameMs: performance.now() - started, duration: el.duration })
-          );
-          el.addEventListener("error", () =>
-            done({ error: el.error ? `code ${el.error.code}: ${el.error.message}` : "unknown" })
-          );
-          setTimeout(() => done({ error: "timed out before loadeddata" }), 30_000);
-          el.src = src as string;
-          document.body.appendChild(el);
-          void el.play().catch(() => {});
-        }
-      ),
+      new Promise<FirstFrame | { error: string }>((resolve) => {
+        const started = performance.now();
+        const el = document.createElement(kind as "video" | "audio");
+        el.id = "mechanism-media";
+        el.preload = "metadata";
+        el.muted = true;
+        el.style.position = "fixed";
+        el.style.opacity = "0";
+        el.style.pointerEvents = "none";
+
+        let timer = 0;
+        let playRejection: string | null = null;
+        const done = (value: FirstFrame | { error: string }) => {
+          window.clearTimeout(timer);
+          resolve(value);
+        };
+        el.addEventListener("loadeddata", () =>
+          done({
+            timeToFirstFrameMs: performance.now() - started,
+            duration: el.duration,
+            // `loadeddata` can fire on a still-paused element, so whether
+            // playback actually started is reported rather than assumed.
+            playing: !el.paused && playRejection === null,
+          })
+        );
+        el.addEventListener("error", () =>
+          done({ error: el.error ? `code ${el.error.code}: ${el.error.message}` : "unknown" })
+        );
+        timer = window.setTimeout(
+          () =>
+            done({
+              error: playRejection
+                ? `timed out before loadeddata; play() rejected: ${playRejection}`
+                : "timed out before loadeddata",
+            }),
+          30_000
+        );
+        el.src = src as string;
+        document.body.appendChild(el);
+        // A rejected play() is recorded, not swallowed — autoplay policy is a
+        // plausible reason for a confusing result and should be visible.
+        void el.play().catch((err: unknown) => {
+          playRejection = err instanceof Error ? err.message : String(err);
+        });
+      }),
     [url, tag] as const
   );
 }
@@ -143,15 +215,20 @@ async function seekTo(
         if (!el) return resolve({ error: "element gone" });
         if (!Number.isFinite(el.duration)) return resolve({ error: "duration not known" });
         const target = el.duration * f;
-        // Listener before the assignment: a seek that completes synchronously
+        let timer = 0;
+        const done = (v: { currentTime: number; target: number } | { error: string }) => {
+          window.clearTimeout(timer);
+          resolve(v);
+        };
+        // Listener before the assignment: a seek that completed synchronously
         // would otherwise resolve before anything was listening.
-        el.addEventListener("seeked", () => resolve({ currentTime: el.currentTime, target }), {
+        el.addEventListener("seeked", () => done({ currentTime: el.currentTime, target }), {
           once: true,
         });
-        el.addEventListener("error", () => resolve({ error: "element errored during seek" }), {
+        el.addEventListener("error", () => done({ error: "element errored during seek" }), {
           once: true,
         });
-        setTimeout(() => resolve({ error: "timed out before seeked" }), 30_000);
+        timer = window.setTimeout(() => done({ error: "timed out before seeked" }), 30_000);
         el.currentTime = target;
       }),
     fraction
@@ -169,7 +246,7 @@ async function teardownElement(): Promise<void> {
   });
 }
 
-test.describe.serial("Mechanism: direct range-streamed media (#12242)", () => {
+test.describe.serial("Mechanism: direct range-served media (#12242)", () => {
   test.beforeAll(async () => {
     fixtureRoot = mkdtempSync(path.join(tmpdir(), "daintree-media-mechanism-"));
     const generated = createMediaFixtures(fixtureRoot, {
@@ -185,10 +262,10 @@ test.describe.serial("Mechanism: direct range-streamed media (#12242)", () => {
       chrome: process.versions.chrome,
       platform: `${process.platform}/${process.arch}`,
     }));
-    await armRecorder();
+    await installRecorder();
 
-    // The premise of the whole experiment is version-specific; record it rather
-    // than let a result be quoted against the wrong build.
+    // The premise is version-specific; record it rather than let a result be
+    // quoted against the wrong build.
     console.log(
       `[mechanism] Electron ${versions.electron} / Chromium ${versions.chrome} on ${versions.platform}`
     );
@@ -205,41 +282,56 @@ test.describe.serial("Mechanism: direct range-streamed media (#12242)", () => {
     if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true });
   });
 
-  test("the trailing-moov mp4 that motivated the blob detour plays and seeks", async () => {
-    // The decisive case. Its index sits at EOF, so it cannot reach a first
-    // frame without the loader fetching the end and then coming back — the
-    // follow-up range a non-standard scheme never issued.
-    const fixture = fixtures.find((f) => f.name === "trailing-moov mp4")!;
-    expect(fixture.moov, "fixture must actually have a trailing moov to prove anything").toBe(
-      "trailing"
-    );
+  test("a large trailing-moov mp4 plays and issues a follow-up range", async () => {
+    // The decisive case, and it has to be the LARGE fixture. A three-second clip
+    // fits in one response, so Chromium could satisfy a trailing index and every
+    // seek from its buffer without ever issuing a second request — and a working
+    // implementation would then fail this test for the wrong reason.
+    expect(large.moov, "the fixture must really have a trailing moov").toBe("trailing");
+    const token = nextToken();
 
-    await armRecorder();
-    const first = await playToFirstFrame(mediaUrl(fixture), "video");
-    expect(first, `trailing-moov mp4 failed on Electron ${versions.electron}`).not.toHaveProperty(
-      "error"
-    );
+    const first = await playToFirstFrame(mediaUrl(large, token), "video");
+    expect(
+      first,
+      `large trailing-moov mp4 failed on Electron ${versions.electron}`
+    ).not.toHaveProperty("error");
 
+    // Seek far outside anything buffered at startup, forcing a real range.
     const seek = await seekTo(0.95);
-    expect(seek).not.toHaveProperty("error");
+    expect(seek, "seek to 95%").not.toHaveProperty("error");
     if ("currentTime" in seek) {
       expect(Math.abs(seek.currentTime - seek.target)).toBeLessThanOrEqual(1);
     }
 
-    const ranges = await readRanges();
-    // More than one response for the same resource IS the disproof of the
-    // single-shot behaviour the blob detour was built around.
-    expect(ranges.length).toBeGreaterThan(1);
-    console.log(`[mechanism] trailing-moov mp4: ${ranges.length} responses`);
+    const records = await requestsFor(token);
+    console.log(
+      `[mechanism] large trailing-moov: ${records.length} requests — ` +
+        records.map((r) => `${r.requestedRange ?? "no-range"}→${r.status ?? "?"}`).join(", ")
+    );
+
+    // More than one request for the same resource, at least one at a non-zero
+    // offset, IS the disproof of the single-shot behaviour the blob detour was
+    // built around. Asserted on the requested Range headers, which are observed
+    // exactly — unlike transferred bytes.
+    expect(records.length, "no daintree-media requests recorded").toBeGreaterThan(1);
+    const offsets = records
+      .map((r) => rangeStart(r.requestedRange))
+      .filter((n): n is number => n !== null);
+    expect(
+      offsets.some((n) => n > 0),
+      `no follow-up range at a non-zero offset: ${JSON.stringify(records.map((r) => r.requestedRange))}`
+    ).toBe(true);
+    expect(records.every((r) => r.status === undefined || r.status < 400)).toBe(true);
+
     await teardownElement();
   });
 
-  for (const name of ["leading-moov mp4", "webm", "m4a", "mp3"]) {
-    test(`${name} plays, seeks to 95% and seeks backwards`, async () => {
+  for (const name of ["trailing-moov mp4", "leading-moov mp4", "webm", "m4a", "mp3"]) {
+    test(`${name} reaches loadeddata, seeks to 95% and seeks backwards`, async () => {
       const fixture = fixtures.find((f) => f.name === name)!;
-      await armRecorder();
+      const token = nextToken();
 
-      const first = await playToFirstFrame(mediaUrl(fixture), fixture.kind);
+      const first = await playToFirstFrame(mediaUrl(fixture, token), fixture.kind);
       expect(first, `${name} failed on Electron ${versions.electron}`).not.toHaveProperty("error");
 
       const forward = await seekTo(0.95);
@@ -254,66 +346,83 @@ test.describe.serial("Mechanism: direct range-streamed media (#12242)", () => {
         expect(Math.abs(backward.currentTime - backward.target)).toBeLessThanOrEqual(1);
       }
 
+      const records = await requestsFor(token);
+      console.log(
+        `[mechanism] ${name}: ${fixture.size} bytes, ${records.length} requests, ` +
+          `first frame ${"timeToFirstFrameMs" in first ? first.timeToFirstFrameMs.toFixed(0) : "?"}ms`
+      );
+
       await teardownElement();
     });
   }
 
-  test("a large recording reaches its first frame on a fraction of the file", async () => {
-    // The headline claim. The blob path read every byte of this file before
-    // showing anything; this asserts the streamed path does not.
-    await armRecorder();
-    const first = await playToFirstFrame(mediaUrl(large), "video");
+  test("reports startup cost for a large recording", async () => {
+    // The headline number for the PR table. Reported, not gated: an opening
+    // `bytes=0-` is answered with the whole remaining length regardless of how
+    // little Chromium consumes, so no threshold on this figure would mean what
+    // it appears to mean. The assertion here is the honest one — a large file
+    // reaches its first frame promptly, which the blob path could not do.
+    const token = nextToken();
+    const first = await playToFirstFrame(mediaUrl(large, token), "video");
     expect(first).not.toHaveProperty("error");
 
-    const atFirstFrame = await readRanges();
-    const bytesBeforeFirstFrame = atFirstFrame.reduce((sum, r) => sum + r.bytes, 0);
-
+    const records = await requestsFor(token);
+    const advertised = advertisedTotal(records);
     console.log(
-      `[mechanism] large fixture: ${large.size} bytes on disk, ` +
-        `${bytesBeforeFirstFrame} bytes served before first frame ` +
-        `(${((bytesBeforeFirstFrame / large.size) * 100).toFixed(2)}%), ` +
-        `${"timeToFirstFrameMs" in first ? first.timeToFirstFrameMs.toFixed(0) : "?"}ms, ` +
-        `${atFirstFrame.length} responses`
+      `[mechanism] startup: file ${large.size} bytes; ` +
+        `${records.length} requests; advertised ${advertised} bytes ` +
+        `(${((advertised / large.size) * 100).toFixed(2)}% — UPPER BOUND, not bytes transferred); ` +
+        `first frame ${"timeToFirstFrameMs" in first ? first.timeToFirstFrameMs.toFixed(0) : "?"}ms; ` +
+        `playing=${"playing" in first ? first.playing : "?"}`
     );
 
-    // Content-Length counts what the handler offered, not what Chromium
-    // consumed before cancelling, so this is an upper bound — which is the
-    // conservative direction for the claim being made.
-    expect(bytesBeforeFirstFrame).toBeLessThan(large.size / 2);
+    expect(records.length, "no daintree-media requests recorded").toBeGreaterThan(0);
+    if ("timeToFirstFrameMs" in first) {
+      // The blob path had to read the entire file first; anything in this range
+      // is categorically different behaviour, without over-claiming a target.
+      expect(first.timeToFirstFrameMs).toBeLessThan(10_000);
+    }
+
     await teardownElement();
   });
 
-  test("closing a preview after two seconds abandons the rest of the file", async () => {
-    await armRecorder();
-    const first = await playToFirstFrame(mediaUrl(large), "video");
+  test("reports what a preview closed after two seconds costs", async () => {
+    const token = nextToken();
+    const first = await playToFirstFrame(mediaUrl(large, token), "video");
     expect(first).not.toHaveProperty("error");
 
     await ctx.window.waitForTimeout(2000);
     await teardownElement();
-    // Let any cancelled range settle before reading the tally.
+    // Let any cancelled request settle before reading the tally.
     await ctx.window.waitForTimeout(500);
 
-    const ranges = await readRanges();
-    const bytesOnClose = ranges.reduce((sum, r) => sum + r.bytes, 0);
+    const records = await requestsFor(token);
+    const advertised = advertisedTotal(records);
     console.log(
-      `[mechanism] quick close: ${bytesOnClose} bytes served of ${large.size} ` +
-        `(${((bytesOnClose / large.size) * 100).toFixed(2)}%)`
+      `[mechanism] quick close: file ${large.size} bytes; ${records.length} requests; ` +
+        `advertised ${advertised} bytes (${((advertised / large.size) * 100).toFixed(2)}% — ` +
+        `UPPER BOUND; cancellation is not observable through response starts)`
     );
-    expect(bytesOnClose).toBeLessThan(large.size);
+
+    expect(records.length, "no daintree-media requests recorded").toBeGreaterThan(0);
   });
 
-  test("two previews play at once without disturbing each other", async () => {
+  test("two previews reach loadeddata at once without disturbing each other", async () => {
     const a = fixtures.find((f) => f.name === "leading-moov mp4")!;
     const b = fixtures.find((f) => f.name === "webm")!;
-    await armRecorder();
+    const token = nextToken();
 
     const result = await ctx.window.evaluate(
       ([urlA, urlB]) =>
         new Promise<{ ready: number; errored: number }>((resolve) => {
           let ready = 0;
           let errored = 0;
+          let timer = 0;
           const settle = () => {
-            if (ready + errored === 2) resolve({ ready, errored });
+            if (ready + errored === 2) {
+              window.clearTimeout(timer);
+              resolve({ ready, errored });
+            }
           };
           for (const src of [urlA, urlB]) {
             const el = document.createElement("video");
@@ -334,9 +443,9 @@ test.describe.serial("Mechanism: direct range-streamed media (#12242)", () => {
             document.body.appendChild(el);
             void el.play().catch(() => {});
           }
-          setTimeout(() => resolve({ ready, errored }), 30_000);
+          timer = window.setTimeout(() => resolve({ ready, errored }), 30_000);
         }),
-      [mediaUrl(a), mediaUrl(b)] as const
+      [mediaUrl(a, token), mediaUrl(b, token)] as const
     );
 
     expect(result).toEqual({ ready: 2, errored: 0 });

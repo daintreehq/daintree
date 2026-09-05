@@ -184,13 +184,15 @@ protocol.registerSchemesAsPrivileged([
   },
   {
     // Direct range-streamed media playback (#12242). `standard: true` is the
-    // load-bearing flag: registering without it is what made Chromium's media
-    // loader look single-shot, killing any mp4 whose `moov` trails the payload
-    // (electron#51442, closed once the reporter found the missing privilege).
-    // With it the loader issues real follow-up ranges, so <video>/<audio> can
-    // point straight at the protocol instead of downloading the whole file into
-    // a blob first. `stream` is the documented privilege for serving media
-    // bodies. Deliberately no supportFetchAPI/corsEnabled: tag loads are
+    // load-bearing flag: electron#51442 reported a custom-scheme media loader
+    // that appeared single-shot, and closed when the reporter traced it to a
+    // registration missing exactly this privilege. This applies that fix so
+    // <video>/<audio> can point straight at the protocol instead of downloading
+    // the whole file into a blob first. Whether the loader really issues
+    // follow-up ranges on this build is measured by
+    // e2e/mechanism/media-range-streaming.spec.ts, not assumed here.
+    // `stream` is the documented privilege for serving media bodies.
+    // Deliberately no supportFetchAPI/corsEnabled: tag loads are
     // no-cors and never consult CORS, so the fetch surface would be dead weight
     // (see trustedAppCorsOrigin in setup/protocols.ts). Kept off daintree-file://
     // on purpose — adding `standard` there would change URL parsing and origin

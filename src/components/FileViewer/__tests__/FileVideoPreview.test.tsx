@@ -3,10 +3,10 @@
  * Shared video preview (#11382, #12242).
  *
  * jsdom does not decode media, so these tests pin the probe→src contract — the
- * HEAD that enforces the size cap, and the daintree-media:// URL handed to the
+ * HEAD that applies the size cap, and the daintree-media:// URL handed to the
  * element — and dispatch the error event manually rather than waiting on
- * playback. That the ranges actually stream is a real-Chromium question,
- * answered by e2e/mechanism/media-range-streaming.spec.ts.
+ * playback. Whether ranges actually stream is a real-Chromium question these
+ * cannot answer; e2e/mechanism/media-range-streaming.spec.ts is meant to.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 describe("FileVideoPreview", () => {
-  it("probes with HEAD and points the element straight at daintree-media://", async () => {
+  it("probes with HEAD and gives the element a daintree-media:// URL", async () => {
     probeOk();
     const { container } = render(
       <FileVideoPreview filePath="/repo/demo.mp4" rootPath="/repo" label="demo.mp4" />
@@ -59,7 +59,9 @@ describe("FileVideoPreview", () => {
       expect.objectContaining({ method: "HEAD", signal: expect.any(AbortSignal) })
     );
     const video = container.querySelector("video");
-    // The element streams from the standard scheme; no blob URL is minted.
+    // The scheme is the point of the change, asserted independently of how the
+    // builder happens to spell the rest of the URL.
+    expect(new URL(video!.getAttribute("src")!).protocol).toBe("daintree-media:");
     expect(video?.getAttribute("src")).toBe(MEDIA_URL);
     expect(video?.hasAttribute("controls")).toBe(true);
     expect(video?.getAttribute("controlslist")).toBe("nofullscreen");
@@ -96,10 +98,10 @@ describe("FileVideoPreview", () => {
     expect(fetchMock.mock.calls[1]?.[0]).toContain("&v=2");
   });
 
-  it("carries the cache-busting param onto the element src so the reload actually reloads", async () => {
-    // The bust has to reach the media URL, not just the probe: the element
-    // holds the bytes it already buffered, so an unchanged src would keep
-    // playing the stale file however many times the probe re-ran.
+  it("moves the element src when the reload key changes", async () => {
+    // The bust has to reach the media URL, not just the probe: the element holds
+    // the bytes it already buffered, so a src left unchanged would go on playing
+    // the stale file however many times the probe re-ran.
     probeOk();
     const { rerender, container } = render(
       <FileVideoPreview filePath="/repo/demo.mp4" rootPath="/repo" label="demo.mp4" reloadKey={1} />
@@ -114,6 +116,55 @@ describe("FileVideoPreview", () => {
     await waitFor(() =>
       expect(container.querySelector("video")?.getAttribute("src")).toBe(`${MEDIA_URL}&v=2`)
     );
+  });
+
+  it("releases the video element when the source is replaced, and releases the old node", async () => {
+    // Without this the media loader keeps pulling bytes for a preview the user
+    // has already navigated away from — the exact waste #12242 set out to end,
+    // and invisible to every other test here. jsdom leaves pause()/load()
+    // unimplemented, so they are spied rather than observed.
+    probeOk();
+    const { rerender, container } = render(
+      <FileVideoPreview filePath="/repo/demo.mp4" rootPath="/repo" label="demo.mp4" reloadKey={1} />
+    );
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+
+    const first = container.querySelector("video")!;
+    const pause = vi.fn();
+    const load = vi.fn();
+    first.pause = pause;
+    first.load = load;
+
+    rerender(
+      <FileVideoPreview filePath="/repo/demo.mp4" rootPath="/repo" label="demo.mp4" reloadKey={2} />
+    );
+
+    await waitFor(() => expect(pause).toHaveBeenCalledTimes(1));
+    // The old node is the one reset — reading the ref in the cleanup would have
+    // grabbed the replacement, silently leaving the abandoned element loading.
+    expect(first.hasAttribute("src")).toBe(false);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("video")!.getAttribute("src")).toBe(`${MEDIA_URL}&v=2`);
+  });
+
+  it("releases the video element on unmount", async () => {
+    probeOk();
+    const { container, unmount } = render(
+      <FileVideoPreview filePath="/repo/demo.mp4" rootPath="/repo" label="demo.mp4" />
+    );
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+
+    const element = container.querySelector("video")!;
+    const pause = vi.fn();
+    const load = vi.fn();
+    element.pause = pause;
+    element.load = load;
+
+    unmount();
+
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(element.hasAttribute("src")).toBe(false);
+    expect(load).toHaveBeenCalledTimes(1);
   });
 
   it("reports a probe failure to onError", async () => {
@@ -157,7 +208,7 @@ describe("FileVideoPreview", () => {
     expect(container.querySelector("video")).toBeNull();
   });
 
-  it("plays a file whose length the probe did not declare", async () => {
+  it("mounts the video element when the probe declares no length", async () => {
     // Without a length there is nothing to measure the cap against. Streaming
     // makes that safe to allow — an unknown size costs a few ranges, not a
     // gigabyte of blob storage — so it must not be treated as a failure.

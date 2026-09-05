@@ -3,10 +3,10 @@
  * Shared audio preview (#11425, #12242).
  *
  * jsdom does not decode media, so these tests pin the probe→src contract — the
- * HEAD that enforces the size cap, and the daintree-media:// URL handed to the
+ * HEAD that applies the size cap, and the daintree-media:// URL handed to the
  * element — and dispatch the error event manually rather than waiting on
- * playback. That the ranges actually stream is a real-Chromium question,
- * answered by e2e/mechanism/media-range-streaming.spec.ts.
+ * playback. Whether ranges actually stream is a real-Chromium question these
+ * cannot answer; e2e/mechanism/media-range-streaming.spec.ts is meant to.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
@@ -45,18 +45,21 @@ afterEach(() => {
 });
 
 describe("FileAudioPreview", () => {
-  it("probes with HEAD and points the element straight at daintree-media://", async () => {
+  it("probes with HEAD and gives the element a daintree-media:// URL", async () => {
     probeOk();
     const { container } = render(
       <FileAudioPreview filePath="/repo/track.mp3" rootPath="/repo" label="track.mp3" />
     );
 
     await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+    // HEAD, not GET: the probe reads Content-Length off an fd stat and must
+    // never pull the body — that download is the whole thing #12242 removed.
     expect(fetchMock).toHaveBeenCalledWith(
       PROBE_URL,
-      expect.objectContaining({ signal: expect.any(AbortSignal) })
+      expect.objectContaining({ method: "HEAD", signal: expect.any(AbortSignal) })
     );
     const audio = container.querySelector("audio");
+    expect(new URL(audio!.getAttribute("src")!).protocol).toBe("daintree-media:");
     expect(audio?.getAttribute("src")).toBe(MEDIA_URL);
     expect(audio?.hasAttribute("controls")).toBe(true);
     expect(audio?.getAttribute("aria-label")).toBe("track.mp3");
@@ -98,7 +101,7 @@ describe("FileAudioPreview", () => {
     expect(fetchMock.mock.calls[1]?.[0]).toContain("&v=2");
   });
 
-  it("carries the cache-busting param onto the element src so the reload actually reloads", async () => {
+  it("moves the element src when the reload key changes", async () => {
     probeOk();
     const { rerender, container } = render(
       <FileAudioPreview
@@ -126,6 +129,65 @@ describe("FileAudioPreview", () => {
     await waitFor(() =>
       expect(container.querySelector("audio")?.getAttribute("src")).toBe(`${MEDIA_URL}&v=2`)
     );
+  });
+
+  it("releases the audio element when the source is replaced, and releases the old node", async () => {
+    // Without this the media loader keeps pulling bytes for a preview the user
+    // has already navigated away from — the exact waste #12242 set out to end,
+    // and invisible to every other test here. jsdom leaves pause()/load()
+    // unimplemented, so they are spied rather than observed.
+    probeOk();
+    const { rerender, container } = render(
+      <FileAudioPreview
+        filePath="/repo/track.mp3"
+        rootPath="/repo"
+        label="track.mp3"
+        reloadKey={1}
+      />
+    );
+    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+
+    const first = container.querySelector("audio")!;
+    const pause = vi.fn();
+    const load = vi.fn();
+    first.pause = pause;
+    first.load = load;
+
+    rerender(
+      <FileAudioPreview
+        filePath="/repo/track.mp3"
+        rootPath="/repo"
+        label="track.mp3"
+        reloadKey={2}
+      />
+    );
+
+    await waitFor(() => expect(pause).toHaveBeenCalledTimes(1));
+    // The old node is the one reset — reading the ref in the cleanup would have
+    // grabbed the replacement, silently leaving the abandoned element loading.
+    expect(first.hasAttribute("src")).toBe(false);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("audio")!.getAttribute("src")).toBe(`${MEDIA_URL}&v=2`);
+  });
+
+  it("releases the audio element on unmount", async () => {
+    probeOk();
+    const { container, unmount } = render(
+      <FileAudioPreview filePath="/repo/track.mp3" rootPath="/repo" label="track.mp3" />
+    );
+    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+
+    const element = container.querySelector("audio")!;
+    const pause = vi.fn();
+    const load = vi.fn();
+    element.pause = pause;
+    element.load = load;
+
+    unmount();
+
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(element.hasAttribute("src")).toBe(false);
+    expect(load).toHaveBeenCalledTimes(1);
   });
 
   it("reports a probe failure to onError without naming a reason", async () => {
@@ -172,7 +234,7 @@ describe("FileAudioPreview", () => {
     expect(container.querySelector("audio")).toBeNull();
   });
 
-  it("plays a file whose length the probe did not declare", async () => {
+  it("mounts the audio element when the probe declares no length", async () => {
     // Without a length there is nothing to measure the cap against. Streaming
     // makes that safe to allow — an unknown size costs a few ranges, not a
     // gigabyte of blob storage — so it must not be treated as a failure.

@@ -3,9 +3,9 @@ import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useMediaSourceUrl } from "./useMediaSourceUrl";
 import type { MediaPreviewError } from "./useMediaSourceUrl";
 
-// Matches the video ceiling. Nothing is buffered whole any more, so this is a
-// preview-scope judgement rather than a memory bound — and an hour of 48kHz
-// 24-bit stereo PCM lands just under 1GiB, so a tighter cap would reject
+// Matches the video ceiling. The hook no longer builds a whole-file Blob, so
+// this is a preview-scope judgement rather than a memory bound — and an hour of
+// 48kHz 24-bit stereo PCM lands just under 1GiB, so a tighter cap would reject
 // whole-session lossless recordings for no gain.
 const AUDIO_PREVIEW_MAX_BYTES = 1024 * 1024 * 1024;
 
@@ -84,10 +84,10 @@ export function FileAudioPreview({
     return () => reportPlaying(false);
   }, [filePath, rootPath, reloadKey]);
 
-  // Detaching the source is what actually stops an in-flight range request.
-  // Unmounting the node alone leaves Chromium's media loader pulling bytes
-  // until the element is collected — and "closed the pane after two seconds"
-  // is precisely the case direct streaming exists to make cheap. The element
+  // Reset the element rather than trusting the node's removal to end its
+  // requests: the hook's AbortController governs the size probe only, and
+  // nothing else here would tell the media loader to stop. "Closed the pane
+  // after two seconds" is precisely the case this exists for. The element
   // is captured in the effect body, not read from the ref in the cleanup: a
   // `key` change swaps the ref to the new node before cleanup runs, so reading
   // it there would release the element that just took over.
@@ -140,10 +140,10 @@ export function FileAudioPreview({
           }}
         />
       ) : probing ? (
-        // Only the size probe stands between mount and playback now — a single
-        // HEAD answered from an fd stat, so this is normally imperceptible and
-        // `SkeletonBone`'s 400ms gate swallows it. It still earns its place on a
-        // cold or contended disk, where the stat is the one thing that stalls.
+        // Covers the size probe — a HEAD answered from a realpath and an fd
+        // stat, so `SkeletonBone`'s 400ms gate normally swallows it entirely. It
+        // earns its place on a cold or contended disk. The mounted control still
+        // loads its own metadata afterwards; that wait is the element's.
         <div className="flex w-full max-w-md min-w-[300px] flex-col items-center gap-3">
           <Skeleton label="Loading audio" className="w-full">
             <SkeletonBone className="h-[54px] w-full rounded-full" />

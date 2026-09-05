@@ -666,7 +666,7 @@ function parseContainedFileRequest(
  * serve an arbitrary repo file the way daintree-file:// legitimately does. That
  * is the same narrowing daintree-pdf:// applies, and it is what makes the extra
  * `standard: true` privilege cheap — the scheme's whole reachable surface is
- * media files inside a registered root.
+ * media files under a caller-supplied root.
  *
  * The streaming, containment, O_NOFOLLOW and range handling are
  * streamContainedMediaFile's, unchanged and shared with daintree-file://.

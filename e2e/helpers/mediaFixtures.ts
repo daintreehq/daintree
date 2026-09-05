@@ -55,6 +55,9 @@ export function readMoovPlacement(filePath: string): "leading" | "trailing" {
     const size = statSync(filePath).size;
     const header = Buffer.alloc(16);
     let offset = 0;
+    let sawMoov = false;
+    let sawMdat = false;
+    let seenMoovFirst: boolean | undefined;
     while (offset < size) {
       const read = readSync(fd, header, 0, 16, offset);
       if (read < 8) break;
@@ -70,12 +73,18 @@ export function readMoovPlacement(filePath: string): "leading" | "trailing" {
       } else if (boxSize === 0) {
         boxSize = size - offset;
       }
-      if (type === "moov") return "leading";
-      if (type === "mdat") return "trailing";
+      // Both boxes must be seen before an order is claimed. Returning on the
+      // first `mdat` would label a file with no `moov` at all as "trailing" —
+      // and that label is what makes the decisive test case decisive.
+      if (type === "moov") seenMoovFirst ??= true;
+      if (type === "mdat") seenMoovFirst ??= false;
+      if (type === "moov") sawMoov = true;
+      if (type === "mdat") sawMdat = true;
+      if (sawMoov && sawMdat) return seenMoovFirst ? "leading" : "trailing";
       if (boxSize < headerBytes) break;
       offset += boxSize;
     }
-    throw new Error(`no moov/mdat box found in ${filePath}`);
+    throw new Error(`did not find both a moov and an mdat box in ${filePath}`);
   } finally {
     closeSync(fd);
   }
@@ -159,10 +168,13 @@ export function createMediaFixtures(
     sized("mp3", at("tone.mp3"), "audio"),
   ];
 
-  // One high-bitrate seed clip, then looped by remux until it clears the
-  // target. Encoding a gigabyte directly would dominate the run for no gain —
-  // the byte accounting only cares that the file is far larger than the ranges
-  // playback actually pulls.
+  // One seed clip, then looped by remux until it clears the target. Encoding a
+  // gigabyte directly would dominate the run for no gain — the byte accounting
+  // only cares that the file is far larger than the ranges playback pulls. The
+  // loop count is derived from the seed's real size rather than a requested
+  // bitrate: `testsrc` compresses so well that libx264 ignores `-b:v` here, so
+  // asking for one would describe something that doesn't happen. `-c copy`
+  // keeps timestamps coherent, so the result has a real duration.
   const seed = at("seed.mp4");
   run([
     "-f",
@@ -175,8 +187,6 @@ export function createMediaFixtures(
     "ultrafast",
     "-pix_fmt",
     "yuv420p",
-    "-b:v",
-    "8M",
     seed,
   ]);
   const targetBytes = options.largeTargetBytes ?? 600 * 1024 * 1024;

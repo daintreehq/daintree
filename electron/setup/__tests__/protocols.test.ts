@@ -2687,7 +2687,7 @@ describe("createDaintreeMediaProtocolHandler — direct range streaming (#12242)
     expect(await response.text()).toBe(MEDIA_BYTES.toString());
   });
 
-  it("serves an exact byte range as a 206 — the request every seek makes", async () => {
+  it("serves an explicitly bounded range as a 206", async () => {
     const handler = await captureHandler();
     const response = await handler(
       makeMediaRequest("/project/clip.mp4", "/project", { range: "bytes=4-9" })
@@ -2699,7 +2699,7 @@ describe("createDaintreeMediaProtocolHandler — direct range streaming (#12242)
     expect(await response.text()).toBe("456789");
   });
 
-  it("serves an open-ended range to EOF — the loader's opening request", async () => {
+  it("serves an open-ended range through to EOF", async () => {
     const handler = await captureHandler();
     const response = await handler(
       makeMediaRequest("/project/clip.mp4", "/project", { range: "bytes=10-" })
@@ -2710,7 +2710,7 @@ describe("createDaintreeMediaProtocolHandler — direct range streaming (#12242)
     expect(await response.text()).toBe("abcdef");
   });
 
-  it("serves a suffix range — how a trailing-moov mp4 finds its index", async () => {
+  it("serves a suffix range, the form that reads a trailing index", async () => {
     const handler = await captureHandler();
     const response = await handler(
       makeMediaRequest("/project/clip.mp4", "/project", { range: "bytes=-4" })
@@ -2719,6 +2719,22 @@ describe("createDaintreeMediaProtocolHandler — direct range streaming (#12242)
     expect(response.status).toBe(206);
     expect(response.headers.get("Content-Range")).toBe(`bytes 12-15/${String(MEDIA_BYTES.length)}`);
     expect(await response.text()).toBe("cdef");
+  });
+
+  it("streams audio through the same path, not just video", async () => {
+    // Every other success case here mocks video/mp4, so a regression that
+    // rejected audio outright would sail through them — the file scheme's audio
+    // coverage is a different handler.
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("audio/mpeg");
+
+    const handler = await captureHandler();
+    const response = await handler(makeMediaRequest("/project/track.mp3", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("audio/mpeg");
+    expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(await response.text()).toBe(MEDIA_BYTES.toString());
   });
 
   it("answers HEAD with the size and Accept-Ranges without reading bytes", async () => {
@@ -2829,6 +2845,9 @@ describe("createDaintreeMediaProtocolHandler — direct range streaming (#12242)
       makeMediaRequest("/project/clip.mp4", "/project", { origin: "app://daintree" })
     );
 
+    // Pinned against a success, not just any response: error responses carry
+    // no ACAO either, so a handler that rejected everything would pass this.
+    expect(response.status).toBe(200);
     expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
   });
 
@@ -2836,6 +2855,7 @@ describe("createDaintreeMediaProtocolHandler — direct range streaming (#12242)
     const handler = await captureHandler();
     const response = await handler(makeMediaRequest("/project/clip.mp4", "/project"));
 
+    expect(response.status).toBe(200);
     expect(response.headers.get("Content-Security-Policy")).toBe("sandbox; default-src 'none'");
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(response.headers.get("Cross-Origin-Resource-Policy")).toBe("cross-origin");

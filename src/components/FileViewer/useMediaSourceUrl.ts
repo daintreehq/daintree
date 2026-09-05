@@ -38,23 +38,29 @@ interface UseMediaSourceUrlOptions {
  * sequencing and error surface have exactly one owner — the parts that are easy
  * to get subtly wrong and impossible to notice when they drift.
  *
- * The element's `src` points at the protocol, and Chromium's media loader pulls
- * byte ranges as it needs them: a few megabytes to start playing, and a fresh
- * range on every seek. That only works because `daintree-media://` is registered
- * `standard: true`. Without it the loader consumes one response and never
- * re-requests, which is why this hook used to fetch the whole file into a Blob —
- * the missing privilege, not a Chromium limit, is what killed every mp4 whose
- * `moov` atom trails its payload (electron/electron#51442, closed once the
- * reporter isolated the flag). Confirming that against this build needs a real
- * media pipeline: `npm run test:e2e:mechanism`.
+ * The element's `src` points at the protocol and the media loader requests byte
+ * ranges as it needs them, rather than this hook reading the file whole. That
+ * rests on `daintree-media://` being registered `standard: true`: the upstream
+ * report behind the old blob detour (electron/electron#51442) closed when its
+ * author traced the single-shot behaviour to a registration missing that flag.
+ * How many ranges a start actually costs, and whether a seek issues one at all
+ * rather than reading buffered data, are measurements — not claims to make
+ * here. `npm run test:e2e:mechanism` is what answers them.
  *
- * The cap is enforced by a `HEAD` on `daintree-file://` rather than on the media
+ * The cap is applied by a `HEAD` on `daintree-file://` rather than on the media
  * scheme itself. That scheme already carries the `supportFetchAPI`/`corsEnabled`
- * privileges and the `connect-src` allowance a `fetch()` needs, and answers HEAD
- * from an fd stat without reading a byte, so the media scheme stays minimal —
- * no fetch surface at all, since tag loads are no-cors and never consult it.
- * The probe doubles as the error surface: a missing or uncontained file fails
- * here with a readable status, before the element is ever mounted.
+ * privileges and the `connect-src` allowance a `fetch()` needs, and its media
+ * branch answers HEAD from an fd stat without reading the file, so the media
+ * scheme stays minimal — no fetch surface at all, since tag loads are no-cors
+ * and never consult it. The probe doubles as the error surface: a missing or
+ * uncontained file fails here with a readable status, before the element is
+ * ever mounted.
+ *
+ * The cap is admission-time only. It is measured on the file the probe saw, and
+ * the stream that follows is a separate open — a file that grows past the
+ * ceiling in between is still served. That was acceptable to leave as is:
+ * nothing is buffered whole any more, so an over-cap file costs ranges rather
+ * than a gigabyte of blob storage.
  */
 export function useMediaSourceUrl({
   filePath,

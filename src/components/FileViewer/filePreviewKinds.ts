@@ -62,7 +62,7 @@ export function isSvgFilePath(filePath: string): boolean {
   return extensionOf(filePath) === SVG_EXTENSION;
 }
 
-/** Videos Chromium plays natively — range-streamed from daintree-media:// to a <video> element. */
+/** Videos Chromium plays natively — served from daintree-media:// to a <video> element. */
 export function isVideoFilePath(filePath: string): boolean {
   return VIDEO_EXTENSIONS.has(extensionOf(filePath));
 }
@@ -81,7 +81,7 @@ export function isPdfFilePath(filePath: string): boolean {
 export const UNSUPPORTED_VIDEO_MESSAGE =
   "Can't play this video format — only MP4, WebM, and Ogg are supported";
 
-/** Audio Chromium plays natively — range-streamed from daintree-media:// to an <audio> element. */
+/** Audio Chromium plays natively — served from daintree-media:// to an <audio> element. */
 export function isAudioFilePath(filePath: string): boolean {
   return AUDIO_EXTENSIONS.has(extensionOf(filePath));
 }
@@ -133,11 +133,11 @@ export function buildDaintreeFileUrl(filePath: string, rootPath: string): string
 }
 
 /**
- * URL for the custom `daintree-media://` protocol — the range-streaming sibling
- * of `daintree-file://`, used directly as a `<video>`/`<audio>` src so playback
- * starts on the first few byte ranges instead of downloading the whole file.
- * It is the one scheme registered `standard: true`, which is what makes
- * Chromium's media loader issue follow-up ranges (#12242).
+ * URL for the custom `daintree-media://` protocol — the range-serving sibling of
+ * `daintree-file://`, used directly as a `<video>`/`<audio>` src so the element
+ * requests what it needs instead of this side downloading the whole file
+ * (#12242). It is registered `standard: true`, the privilege the upstream report
+ * behind the old blob detour identified as the missing one.
  */
 export function buildDaintreeMediaUrl(filePath: string, rootPath: string): string {
   // Trailing `/` on the authority is written out rather than left to Chromium:
