@@ -414,7 +414,7 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
       className={cn(
         "flex min-h-0 flex-col",
         "rounded-sm border border-[var(--assistant-border-strong)] bg-[var(--assistant-raised)]",
-        "px-3 pb-2 pt-2.5 outline-hidden"
+        "px-3 pb-2 pt-2.5 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
       )}
     >
       <div className="flex shrink-0 items-center gap-2">

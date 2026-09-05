@@ -1269,9 +1269,10 @@ test.describe.serial("Assistant: native panel", () => {
     await ask(window, "/scenario crash");
     await expect(panel.getByText(/stopped unexpectedly/)).toBeVisible({ timeout: T_LONG });
 
-    // "+ New session" is the way back. A panel that reports a crash and cannot restart
-    // is a dead pane with an explanation in it.
-    await panel.getByRole("button", { name: "Start new session" }).click();
+    // Restart goes through the overflow and confirms discarding the crashed turn.
+    await panel.getByTestId("assistant-header-more").click();
+    await window.getByRole("menuitem", { name: "Restart conversation" }).click();
+    await window.getByRole("dialog").getByRole("button", { name: "Restart conversation" }).click();
     await waitForSession(window);
     await ask(window, "which worktrees are ready?");
     await expect(window.getByText(/Three worktrees are ready/)).toBeVisible({
