@@ -141,7 +141,6 @@ Signals that depend on forge data report as `unknown` when that data hasn't arri
 - Terminal recipes for repeatable setups
 - Themes and visual customization
 - Embedded browser and dev server preview
-- Workflow engine and automation
 
 ## Spotting Good Ideas
 

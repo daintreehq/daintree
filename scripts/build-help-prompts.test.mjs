@@ -43,7 +43,8 @@ describe("help prompt outputs", () => {
     it.each(ALL_GENERATED)("%s lists the canonical topics", (_name, body) => {
       expect(body).toContain("## Topics You Can Help With");
       expect(body).toContain("Getting started and first-run setup");
-      expect(body).toContain("Workflow engine and automation");
+      expect(body).toContain("Terminal recipes for repeatable setups");
+      expect(body).not.toContain("Workflow engine");
     });
   });
 
