@@ -17,22 +17,26 @@ const IPV6_UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
   "EINVAL",
 ]);
 
-function classifyBindError(err: NodeJS.ErrnoException, ipv6Only: boolean): FamilyProbeResult {
+function classifyBindError(err: NodeJS.ErrnoException, ipv6: boolean): FamilyProbeResult {
   if (err.code === "EADDRINUSE") return "busy";
-  if (ipv6Only && err.code && IPV6_UNAVAILABLE_CODES.has(err.code)) return "unavailable";
+  if (ipv6 && err.code && IPV6_UNAVAILABLE_CODES.has(err.code)) return "unavailable";
   return "error";
 }
 
+interface ProbeAddress {
+  host: string;
+  ipv6: boolean;
+  ipv6Only?: boolean;
+}
+
 /**
- * Try to bind one address family and report what the kernel said. Binding
- * `0.0.0.0` never also claims `::` (and whether `::` claims IPv4 depends on
- * IPV6_V6ONLY), so the two families need independent probes — `ipv6Only` keeps
- * the IPv6 leg from dual-claiming and confusing the two answers.
+ * Try one binding mode and report what the kernel said. IPv6-only and
+ * dual-stack listeners need separate probes on Windows: a bind in one mode
+ * can succeed while the other mode still owns the port.
  */
 function probeFamily(
   port: number,
-  host: string,
-  ipv6Only: boolean,
+  { host, ipv6, ipv6Only = ipv6 }: ProbeAddress,
   signal?: AbortSignal
 ): Promise<FamilyProbeResult> {
   return new Promise<FamilyProbeResult>((resolve) => {
@@ -50,7 +54,7 @@ function probeFamily(
     }
     const srv = net.createServer();
     srv.unref();
-    srv.once("error", (err) => settle(classifyBindError(err as NodeJS.ErrnoException, ipv6Only)));
+    srv.once("error", (err) => settle(classifyBindError(err as NodeJS.ErrnoException, ipv6)));
     onAbort = () => {
       try {
         srv.close();
@@ -75,11 +79,12 @@ function probeFamily(
  * The wildcards alone therefore miss exactly the servers that matter here
  * (Vite binds `[::1]` on macOS — see #9752), so each address is probed.
  */
-const PROBE_ADDRESSES: ReadonlyArray<{ host: string; ipv6: boolean }> = [
+const PROBE_ADDRESSES: ReadonlyArray<ProbeAddress> = [
   { host: "0.0.0.0", ipv6: false },
   { host: "127.0.0.1", ipv6: false },
   { host: "::", ipv6: true },
   { host: "::1", ipv6: true },
+  { host: "::", ipv6: true, ipv6Only: false },
 ];
 
 /**
@@ -95,11 +100,11 @@ export async function probePortFree(port: number, signal?: AbortSignal): Promise
   // them together would have the wildcard probe hold the port while its own
   // loopback probe binds, and Linux refuses that overlap — the allocator
   // would then reject every port as busy, including ones nothing is using.
-  for (const { host, ipv6 } of PROBE_ADDRESSES) {
-    const result = await probeFamily(port, host, ipv6, signal);
+  for (const address of PROBE_ADDRESSES) {
+    const result = await probeFamily(port, address, signal);
     if (signal?.aborted) return false;
     if (result === "free") continue;
-    if (ipv6 && result === "unavailable") continue;
+    if (address.ipv6 && result === "unavailable") continue;
     return false;
   }
   return true;

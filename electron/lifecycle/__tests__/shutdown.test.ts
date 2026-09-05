@@ -346,16 +346,19 @@ describe("registerShutdownHandler", () => {
   it("runs cleanup without dialog when no window and no signal", async () => {
     const { beforeQuitCb } = await setup();
     const event = makeEvent();
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
     await beforeQuitCb(event);
 
     // Should still preventDefault and run cleanup
     expect(event.preventDefault).toHaveBeenCalled();
     expect(quitWarningMock.showQuitWarning).not.toHaveBeenCalled();
 
-    // Wait for cleanup promise chain to settle
-    await vi.waitFor(() => {
-      expect(appMock.exit).toHaveBeenCalledWith(0);
-    });
+    // Shutdown loads cleanup services asynchronously; await its completion
+    // instead of racing vi.waitFor's one-second polling deadline under load.
+    await exited;
+    expect(appMock.exit).toHaveBeenCalledWith(0);
     expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalled();
   });
 
@@ -370,14 +373,16 @@ describe("registerShutdownHandler", () => {
       } as unknown as ShutdownDeps["windowRegistry"],
     });
     const event = makeEvent();
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
     await beforeQuitCb(event);
 
     expect(event.preventDefault).toHaveBeenCalled();
     expect(quitWarningMock.showQuitWarning).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => {
-      expect(appMock.exit).toHaveBeenCalledWith(0);
-    });
+    await exited;
+    expect(appMock.exit).toHaveBeenCalledWith(0);
     expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalled();
   });
 

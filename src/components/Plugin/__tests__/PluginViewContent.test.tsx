@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import type { PluginViewContentConfig } from "../PluginViewContent";
@@ -12,6 +12,11 @@ vi.mock("@/components/ui/Skeleton", () => ({
 }));
 vi.mock("@/components/ui/ContentFadeIn", () => ({
   ContentFadeIn: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+// Its own lazy banner must not overwrite the plugin-view factory captured by
+// the React mocks below. Runtime-status behavior has a dedicated suite.
+vi.mock("@/components/Plugin/PluginViewRuntimeStatus", () => ({
+  PluginViewRuntimeStatus: () => null,
 }));
 
 // Note what is absent: this suite mocks none of the worktree/preferences/tooltip
@@ -126,7 +131,11 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  cleanup();
+  // A late dependency import can refill the module cache with the previous
+  // React mock after resetModules, bypassing the next test's lazy factory.
+  await vi.dynamicImportSettled();
   vi.resetModules();
   vi.unstubAllGlobals();
 });

@@ -18,6 +18,7 @@ import https from "node:https";
 import net from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DevPreviewSessionService } from "../DevPreviewSessionService.js";
+import { probePortFree } from "../DevPreviewPortAllocator.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { DevPreviewSessionState } from "../../../shared/types/ipc/devPreview.js";
 
@@ -279,9 +280,13 @@ describe("DevPreviewSessionService — port registry (adversarial)", () => {
     const portBefore = first.predictedUrl;
     expect(portBefore).toBeTruthy();
 
-    // Snapshot call count after initial allocation.
+    // Measure one availability check so this invariant is independent of the
+    // address families and binding modes the allocator must probe.
     const callsAfterEnsure = vi.mocked(net.createServer).mock.calls.length;
     expect(callsAfterEnsure).toBeGreaterThanOrEqual(1);
+    await probePortFree(Number(new URL(portBefore!).port));
+    const callsBeforeRestart = vi.mocked(net.createServer).mock.calls.length;
+    const callsPerProbe = callsBeforeRestart - callsAfterEnsure;
 
     await service.restart(base);
     const second = service.getState(base);
@@ -293,7 +298,7 @@ describe("DevPreviewSessionService — port registry (adversarial)", () => {
     // released the port on every address a dev server could hold it — one
     // socket per PROBE_ADDRESSES entry. allocatePort itself does no extra work.
     const callsAfterRestart = vi.mocked(net.createServer).mock.calls.length;
-    expect(callsAfterRestart).toBe(callsAfterEnsure + 4);
+    expect(callsAfterRestart - callsBeforeRestart).toBe(callsPerProbe);
   });
 
   // ── Positive baseline ──────────────────────────────────────────────────────

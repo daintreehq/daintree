@@ -273,9 +273,11 @@ describe("PluginDevArtifactWatcher", () => {
     roots.push(root);
     const pluginDir = path.join(root, PLUGIN_ID);
 
-    const { watcher } = makeWatcher();
+    const { watcher, states } = makeWatcher();
     watcher.ensure(PLUGIN_ID, pluginDir);
-    expect(await waitFor(() => watcher.stateOf(PLUGIN_ID)?.state === "waiting")).toBe(true);
+    // ensure starts in "waiting" before async setup has installed the parent
+    // watch. Its notification confirms the watch can observe the mkdir below.
+    expect(await waitFor(() => states.some((entry) => entry.state === "waiting"))).toBe(true);
 
     await fsp.mkdir(path.join(pluginDir, "dist"), { recursive: true });
     await fsp.writeFile(path.join(pluginDir, "plugin.json"), "{}");

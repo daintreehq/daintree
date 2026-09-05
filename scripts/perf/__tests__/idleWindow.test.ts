@@ -128,12 +128,13 @@ describe("idleWindow metric naming", () => {
 
 describe("idleFixture drives the real ProcessTreeCache", () => {
   it("spawns real probes over an idle window, discovers a live child, and stops cleanly", async () => {
+    // Include startup: Windows reuses its census helper after the first spawn.
+    const window = openIdleWindow();
     const harness = await createProcessTreeHarness(300);
     let child: ReturnType<typeof spawnProbeChild> | null = null;
     try {
       expect(await waitForRefresh(harness)).toBe(true);
 
-      const window = openIdleWindow();
       // Wait for product work rather than assuming two PowerShell probes fit
       // inside a 1.5s wall-clock sleep on a loaded Windows runner.
       expect(await waitForRefresh(harness)).toBe(true);
@@ -184,15 +185,18 @@ describe("idleFixture probe fault", () => {
 
   it("blinds the real cache while it is live, and the cache recovers when it heals", async () => {
     const harness = await createProcessTreeHarness(300);
-    const fault = installProcessProbeFault();
+    let fault: ReturnType<typeof installProcessProbeFault> | null = null;
     let child: ReturnType<typeof spawnProbeChild> | null = null;
     try {
+      expect(await waitForRefresh(harness)).toBe(true);
+      expect(harness.isHealthy()).toBe(true);
+      fault = installProcessProbeFault(harness.cache.getCensusHelperPid());
       // A poll that started before the shim went in resolves against a healthy
       // `ps`, and `ps` enumerates when it actually execs — late enough to list
       // a child spawned microseconds after the shim. Draining that poll first
       // is what makes the blindness assertion below mean anything, and is why
       // PERF-093 does the same before it spawns its probe.
-      await waitForRefresh(harness);
+      expect(await waitForRefresh(harness)).toBe(true);
       child = spawnProbeChild(20_000);
 
       // Long enough for several poll attempts against the failing shim.
@@ -207,7 +211,7 @@ describe("idleFixture probe fault", () => {
       removeProcessProbeFault(fault);
       expect(await waitForProcessDiscovery(harness.cache, child.pid!, 20_000)).not.toBeNull();
     } finally {
-      removeProcessProbeFault(fault);
+      if (fault) removeProcessProbeFault(fault);
       harness.stop();
       child?.kill();
     }

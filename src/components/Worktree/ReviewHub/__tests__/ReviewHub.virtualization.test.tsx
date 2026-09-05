@@ -646,12 +646,10 @@ describe("ReviewHub windowed file list (#12241)", () => {
   it("does not re-reveal a stationary cursor when the list renumbers", async () => {
     virtuosoRange.current = { startIndex: 0, endIndex: 59 };
     const listbox = await renderLargeHub();
-    // Park the cursor in the unstaged section, so a new STAGED file lands above
-    // it and shifts its index.
-    for (let i = 0; i < 62; i++) {
-      act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
-    }
-    expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-61");
+    // ArrowUp from no cursor selects the last unstaged row in one render.
+    // Walking all staged rows first made setup exceed the CI test timeout.
+    act(() => void fireEvent.keyDown(document, { key: "ArrowUp" }));
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-119");
     scrollToIndexMock.mockClear();
 
     // A background refresh that adds a file above the cursor renumbers every
@@ -678,7 +676,7 @@ describe("ReviewHub windowed file list (#12241)", () => {
     await waitFor(() => screen.getByTestId("file-stage-row-src/staged/aaa-added.ts"));
 
     // The renumber happened — same file, new index — and nothing scrolled.
-    expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-62");
+    expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-120");
     expect(scrollToIndexMock).not.toHaveBeenCalled();
   });
 

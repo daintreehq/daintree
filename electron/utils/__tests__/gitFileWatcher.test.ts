@@ -1048,7 +1048,7 @@ describe("GitFileWatcher", () => {
       const onWorktreeFilesChanged = vi.fn<(dirs: readonly string[] | null) => void>();
       const mock = setupSubscribeMock();
       const gitWatcher = new GitFileWatcher({
-        worktreePath: "/repo",
+        worktreePath: pathJoin("/repo"),
         branch: "main",
         debounceMs: 300,
         onChange,

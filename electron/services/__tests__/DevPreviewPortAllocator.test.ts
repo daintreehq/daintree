@@ -42,7 +42,8 @@ vi.mock("node:net", () => {
         });
         queueMicrotask(() => {
           if (closed) return;
-          let code = netMock.busy.get(key);
+          const modeKey = `${key}|${options.ipv6Only === true}`;
+          let code = netMock.busy.get(modeKey) ?? netMock.busy.get(key);
           const remaining = netMock.busyForCalls.get(key);
           if (remaining !== undefined && remaining > 0) {
             code = code ?? "EADDRINUSE";
@@ -88,7 +89,7 @@ afterEach(() => {
 });
 
 describe("probePortFree", () => {
-  it("probes every address a dev server could bind, ipv6Only on the IPv6 legs", async () => {
+  it("probes every address and both IPv6 binding modes a dev server could use", async () => {
     await probePortFree(4100);
 
     expect(netMock.listens).toEqual([
@@ -96,7 +97,13 @@ describe("probePortFree", () => {
       { port: 4100, host: "127.0.0.1", ipv6Only: false },
       { port: 4100, host: "::", ipv6Only: true },
       { port: 4100, host: "::1", ipv6Only: true },
+      { port: 4100, host: "::", ipv6Only: false },
     ]);
+  });
+
+  it("reports busy when only the dual-stack binding detects an occupied port", async () => {
+    netMock.busy.set("::|4110|false", "EADDRINUSE");
+    expect(await probePortFree(4110)).toBe(false);
   });
 
   it("reports busy when only the IPv6 loopback is occupied", async () => {

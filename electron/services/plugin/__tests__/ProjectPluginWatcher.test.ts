@@ -292,7 +292,12 @@ describe("ProjectPluginWatcher", () => {
     loaded.add("acme.other");
     await watcher.ensure(PROJECT_ID, root);
 
-    await fsp.writeFile(path.join(otherDir, "dist", "index.js"), "export const o = 2;\n");
+    // Attribution must not depend on two equal-size writes getting distinct
+    // filesystem timestamps on a fast Windows runner.
+    await fsp.writeFile(
+      path.join(otherDir, "dist", "index.js"),
+      "export const updatedOther = 2;\n"
+    );
     expect(await waitFor(() => reload.mock.calls.length > 0)).toBe(true);
     expect((reload.mock.calls[0] as [string, string, string[]])[2]).toEqual(["acme.other"]);
   });

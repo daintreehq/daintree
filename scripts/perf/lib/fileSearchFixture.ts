@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createPerfTempRoot } from "./tempRoots";
 import { createRng } from "./workloads";
@@ -173,21 +173,33 @@ function buildRepo(root: string, name: string, fileCount: number, seed: number):
   const repoPath = join(root, name);
   mkdirSync(repoPath, { recursive: true });
   git(repoPath, ["init", "-b", "main"]);
-  git(repoPath, ["config", "commit.gpgsign", "false"]);
-  git(repoPath, ["config", "core.fsmonitor", "false"]);
+  appendFileSync(
+    join(repoPath, ".git", "config"),
+    "\n[commit]\n\tgpgsign = false\n[core]\n\tfsmonitor = false\n"
+  );
 
   const relativePaths = buildRelativePaths(fileCount, seed);
-  // FileSearchService reads the index through `git ls-files`; it never opens
-  // these files. Register every path against one real blob in a single index
-  // transaction instead of creating ~15k two-byte files. That preserves the
-  // exact measured path corpus while avoiding minutes of Defender-bound setup
-  // on Windows hosted runners.
-  const blob = git(repoPath, ["hash-object", "-w", "--stdin"], "//\n").trim();
-  const indexInfo = [...relativePaths, GIT_ONLY_SENTINEL]
-    .map((relative) => `100644 ${blob}\t${relative}\n`)
-    .join("");
-  git(repoPath, ["update-index", "--index-info"], indexInfo);
-  git(repoPath, ["commit", "-m", "fixture tree"]);
+  // Import the same committed corpus directly into a pack, then populate the
+  // index without a checkout. The 30-repo retention fixture otherwise spends
+  // its Windows liveness deadline on Git startup and object-file setup.
+  const contents = "//\n";
+  const message = "fixture tree\n";
+  const importStream = [
+    "blob",
+    "mark :1",
+    `data ${Buffer.byteLength(contents)}`,
+    contents,
+    "commit refs/heads/main",
+    "committer perf <perf@example.invalid> 1 +0000",
+    `data ${Buffer.byteLength(message)}`,
+    message,
+    ...[...relativePaths, GIT_ONLY_SENTINEL].map((relative) => `M 100644 :1 ${relative}`),
+    "",
+    "done",
+    "",
+  ].join("\n");
+  git(repoPath, ["fast-import", "--quiet"], importStream);
+  git(repoPath, ["read-tree", "HEAD"]);
 
   return { path: repoPath, fileCount: relativePaths.length };
 }
@@ -223,8 +235,8 @@ let retentionRepos: FileSearchRepo[] | null = null;
 /**
  * A fleet of distinct worktrees, one cache entry each.
  *
- * Built with the same index-only trick as `buildRepo`: `update-index
- * --index-info` registers every path against one shared blob and nothing is
+ * Built with the same index-only fixture as `buildRepo`: `fast-import`
+ * commits every path against one shared blob and nothing is
  * written to the working tree, so thirty 3,200-path repos cost thirty git
  * inits rather than 96,000 files on disk. `git ls-files --cached` still returns
  * the full corpus, which is what `FileSearchService` reads, so each entry is

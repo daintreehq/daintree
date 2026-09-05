@@ -149,7 +149,7 @@ const KNOWN_DEAD: Readonly<Record<string, string>> = {};
  *
  * `run.ts:799` substitutes its own wall-clock bracket for any non-positive
  * `durationMs`: `sample.durationMs > 0 ? sample.durationMs : wallClockMs`. That
- * sentinel is legitimate, and these sixteen use it on purpose. It is also,
+ * sentinel is legitimate, and these scenarios use it on purpose. It is also,
  * character for character, what a scenario rewritten to hardcode
  * `durationMs: 0` returns — the shape that zeroed a p95 once already, when a
  * `>= 0` filter read the sentinel as a measurement.
@@ -182,6 +182,7 @@ const WALL_CLOCK_TIMED: Readonly<Record<string, string>> = {
   "PERF-075": "0 — counts only: no renderer, so no phase on the switch path has an honest duration",
   "PERF-076": "0 — counts only: no renderer, so no phase on the switch path has an honest duration",
   "PERF-077": "0 — counts only: no renderer, so no phase on the switch path has an honest duration",
+  "PERF-409": "0 — census transport reports spawn counts and CPU totals over a fixed idle window",
 };
 
 /**
