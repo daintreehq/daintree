@@ -33,7 +33,7 @@ import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
 import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
 import { FilePdfPreview } from "@/components/FileViewer/FilePdfPreview";
-import type { MediaPreviewError } from "@/components/FileViewer/useMediaBlobUrl";
+import type { MediaPreviewError } from "@/components/FileViewer/useMediaSourceUrl";
 import {
   isAudioFilePath,
   isPdfFilePath,

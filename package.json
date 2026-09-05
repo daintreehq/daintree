@@ -137,6 +137,7 @@
     "test:e2e:nightly": "npx playwright test --project=nightly --workers=1",
     "test:e2e:screenshots": "npx playwright test --project=screenshots",
     "test:e2e:demo": "npx playwright test --project=demo --workers=1",
+    "test:e2e:mechanism": "npx playwright test --config=playwright.mechanism.config.ts",
     "screenshots:dev": "cross-env DAINTREE_SCREENSHOT_SCALE=2 npx playwright test --project=screenshots",
     "perf": "tsx scripts/perf/index.ts",
     "pattern-discovery:run": "tsx scripts/pattern-discovery/runner.ts",

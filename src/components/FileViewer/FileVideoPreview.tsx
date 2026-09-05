@@ -1,11 +1,13 @@
-import { useEffect, useEffectEvent } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
-import { useMediaBlobUrl } from "./useMediaBlobUrl";
-import type { MediaPreviewError } from "./useMediaBlobUrl";
+import { useMediaSourceUrl } from "./useMediaSourceUrl";
+import type { MediaPreviewError } from "./useMediaSourceUrl";
 
-// Blob previews hold the whole file in Chromium's blob storage (memory, then
-// disk-backed), so cap what one preview may pull in. A 4K screen recording
-// runs ~10MB/min; 1GiB covers over an hour before the viewer says no.
+// Playback streams byte ranges now, so this no longer bounds anything held in
+// memory. It survives as a preview-scope judgement: past ~1GiB a file is a
+// deliverable rather than something to skim in a pane, and the viewer says so
+// plainly instead of scrubbing a multi-hour recording through a docked panel.
+// A 4K screen recording runs ~10MB/min, so this clears an hour either way.
 const VIDEO_PREVIEW_MAX_BYTES = 1024 * 1024 * 1024;
 
 /** Why a preview couldn't play, split so callers can render a headline and a way forward. */
@@ -20,14 +22,14 @@ const VIDEO_TOO_LARGE_ERROR: MediaPreviewError = {
 interface FileVideoPreviewProps {
   /** Absolute path of the video being previewed. */
   filePath: string;
-  /** Known root the `daintree-file://` protocol resolves the path against. */
+  /** Known root the media protocol resolves the path against. */
   rootPath: string;
   /** Accessible label — the file name, so a failed video still names its file. */
   label: string;
   /**
-   * Changed to force a fresh media request for the same path — the protocol
-   * serves `no-store`, but the blob is a byte-snapshot of the fetch, so a
-   * rewritten file needs a new URL to show new bytes.
+   * Changed to force a fresh media request for the same path. The protocol
+   * serves `no-store`, but the element holds the buffered bytes of the source
+   * it is already playing, so a rewritten file needs a new URL.
    */
   reloadKey?: string | number;
   /** Called when the video can't be fetched or played; an error overrides the caller's generic copy. */
@@ -53,7 +55,7 @@ interface FileVideoPreviewProps {
  *
  * Shared by `FilePane`, `FileBrowserViewer`, and `DiffPane` so every surface
  * plays the same files the same way — mirroring `FileImagePreview`'s role for
- * images. `useMediaBlobUrl` owns the fetch-to-blob contract this and
+ * images. `useMediaSourceUrl` owns the size-cap and error contract this and
  * `FileAudioPreview` both depend on.
  */
 export function FileVideoPreview({
@@ -65,7 +67,7 @@ export function FileVideoPreview({
   onPlayingChange,
   maxHeightClassName = "max-h-[70vh]",
 }: FileVideoPreviewProps) {
-  const { objectUrl, fetching } = useMediaBlobUrl({
+  const { sourceUrl, probing } = useMediaSourceUrl({
     filePath,
     rootPath,
     reloadKey,
@@ -74,24 +76,44 @@ export function FileVideoPreview({
     onError,
   });
 
+  const mediaRef = useRef<HTMLVideoElement>(null);
+
   // Effect event so this keys on the source alone — callers pass inline
   // closures, and re-running on every parent render would report a stop the
   // element never made.
   const reportPlaying = useEffectEvent((playing: boolean) => onPlayingChange?.(playing));
-  // Scoped to the same identity the fetch is: whatever moves the source
+  // Scoped to the same identity the probe is: whatever moves the source
   // replaces the element, and the replacement starts paused.
   useEffect(() => {
     return () => reportPlaying(false);
   }, [filePath, rootPath, reloadKey]);
 
+  // Detaching the source is what actually stops an in-flight range request.
+  // Unmounting the node alone leaves Chromium's media loader pulling bytes
+  // until the element is collected — and "closed the pane after two seconds"
+  // is precisely the case direct streaming exists to make cheap. The element
+  // is captured in the effect body, not read from the ref in the cleanup: a
+  // `key` change swaps the ref to the new node before cleanup runs, so reading
+  // it there would release the element that just took over.
+  useEffect(() => {
+    const element = mediaRef.current;
+    if (!element) return;
+    return () => {
+      element.pause();
+      element.removeAttribute("src");
+      element.load();
+    };
+  }, [sourceUrl]);
+
   return (
     <div className="flex items-center justify-center p-6 min-h-[300px]">
-      {objectUrl ? (
+      {sourceUrl ? (
         <video
-          // Keyed by the object URL so switching files (or reloading) remounts
+          // Keyed by the source URL so switching files (or reloading) remounts
           // the element rather than continuing playback of the previous source.
-          key={objectUrl}
-          src={objectUrl}
+          key={sourceUrl}
+          ref={mediaRef}
+          src={sourceUrl}
           controls
           // No fullscreen or PiP: both detach playback from the pane into
           // window-level surfaces the IDE's window/view management doesn't own.
@@ -121,11 +143,11 @@ export function FileVideoPreview({
             onError?.();
           }}
         />
-      ) : fetching ? (
-        // The whole file downloads before playback starts, so this wait is
-        // routinely past a second and, on a long recording, past five — a
-        // skeleton in the player's shape, not a spinner. `SkeletonBone` carries
-        // the 400ms anti-flicker gate.
+      ) : probing ? (
+        // Only the size probe stands between mount and playback now — a single
+        // HEAD answered from an fd stat, so this is normally imperceptible and
+        // `SkeletonBone`'s 400ms gate swallows it. It still earns its place on a
+        // cold or contended disk, where the stat is the one thing that stalls.
         <div className="flex w-full max-w-md flex-col items-center gap-3">
           <Skeleton label="Loading video" className="w-full">
             <SkeletonBone className="aspect-video w-full" />

@@ -147,6 +147,7 @@ import {
   createPluginProtocolHandler,
   registerAppProtocol,
   registerDaintreeFileProtocol,
+  registerDaintreeMediaProtocol,
   registerDaintreePdfProtocol,
   registerPluginProtocol,
   registerProtocolsForSession,
@@ -1474,7 +1475,7 @@ describe("protocol registration", () => {
     // in app.whenReady() before any per-project session is created.
     const schemes = handle.mock.calls.map((c) => c[0] as string);
     expect(new Set(schemes)).toEqual(
-      new Set(["app", "daintree-file", "daintree-html", "daintree-pdf"])
+      new Set(["app", "daintree-file", "daintree-html", "daintree-pdf", "daintree-media"])
     );
     // Each exactly once: a duplicate handle() for one scheme throws in Electron.
     expect(schemes).toHaveLength(new Set(schemes).size);
@@ -1509,6 +1510,14 @@ describe("protocol registration", () => {
     registerDaintreePdfProtocol();
 
     expect(protocol.handle).toHaveBeenCalledWith("daintree-pdf", expect.any(Function));
+  });
+
+  it("registers the default-session daintree-media protocol", async () => {
+    const { protocol } = await import("electron");
+
+    registerDaintreeMediaProtocol();
+
+    expect(protocol.handle).toHaveBeenCalledWith("daintree-media", expect.any(Function));
   });
 
   it("registers the default-session plugin protocol", async () => {
@@ -2606,6 +2615,241 @@ describe("createDaintreeFileProtocolHandler — video streaming (#11382)", () =>
     expect(response.headers.get("Content-Type")).toBe("text/plain");
     // Buffered semantics: the whole (capped) read, not a stream.
     expect(bufferedHandle.readFile).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createDaintreeMediaProtocolHandler — direct range streaming (#12242)", () => {
+  // The scheme <video>/<audio> point at directly. It reuses
+  // streamContainedMediaFile wholesale, so these pin what is *different* about
+  // it: media-only routing with no buffered fallback, and no CORS grant.
+  type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
+
+  async function captureHandler(): Promise<ProtocolHandler> {
+    const handle = vi.fn();
+    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
+    registerProtocolsForSession(mockSession, "/tmp/dist");
+    const call = handle.mock.calls.find((c) => c[0] === "daintree-media");
+    if (!call) throw new Error("handler for daintree-media not registered");
+    return call[1] as ProtocolHandler;
+  }
+
+  function makeMediaRequest(
+    filePath: string,
+    rootPath: string | null,
+    init?: { method?: string; range?: string; origin?: string }
+  ): GlobalRequest {
+    // The authority-plus-slash shape a standard scheme canonicalizes to, which
+    // is what the renderer's builder emits and what the handler really sees.
+    const url = new URL("daintree-media://load/");
+    url.searchParams.set("path", filePath);
+    if (rootPath !== null) url.searchParams.set("root", rootPath);
+    return new Request(url.toString(), {
+      method: init?.method ?? "GET",
+      headers: {
+        ...(init?.range && { Range: init.range }),
+        ...(init?.origin && { Origin: init.origin }),
+      },
+    }) as GlobalRequest;
+  }
+
+  const MEDIA_BYTES = Buffer.from("0123456789abcdef");
+
+  function makeMediaHandle(content: Buffer = MEDIA_BYTES, { size = content.length } = {}) {
+    return {
+      stat: vi.fn().mockResolvedValue({ size, isFile: () => true }),
+      createReadStream: vi.fn(({ start, end }: { start: number; end: number }) =>
+        Readable.from([content.subarray(start, Math.min(end + 1, content.length))])
+      ),
+      close: vi.fn().mockResolvedValue(undefined),
+      // The buffered core's entry point — this scheme must never reach it.
+      readFile: vi.fn(),
+    };
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+    vi.mocked(fs.open).mockResolvedValue(
+      makeMediaHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
+    );
+    const appProtocol = await import("../../utils/appProtocol.js");
+    vi.mocked(appProtocol.getMimeType).mockReturnValue("video/mp4");
+  });
+
+  it("streams the whole file as a 200 offering ranges", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeMediaRequest("/project/clip.mp4", "/project"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("video/mp4");
+    expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(await response.text()).toBe(MEDIA_BYTES.toString());
+  });
+
+  it("serves an exact byte range as a 206 — the request every seek makes", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeMediaRequest("/project/clip.mp4", "/project", { range: "bytes=4-9" })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe(`bytes 4-9/${String(MEDIA_BYTES.length)}`);
+    expect(response.headers.get("Content-Length")).toBe("6");
+    expect(await response.text()).toBe("456789");
+  });
+
+  it("serves an open-ended range to EOF — the loader's opening request", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeMediaRequest("/project/clip.mp4", "/project", { range: "bytes=10-" })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe(`bytes 10-15/${String(MEDIA_BYTES.length)}`);
+    expect(await response.text()).toBe("abcdef");
+  });
+
+  it("serves a suffix range — how a trailing-moov mp4 finds its index", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeMediaRequest("/project/clip.mp4", "/project", { range: "bytes=-4" })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe(`bytes 12-15/${String(MEDIA_BYTES.length)}`);
+    expect(await response.text()).toBe("cdef");
+  });
+
+  it("answers HEAD with the size and Accept-Ranges without reading bytes", async () => {
+    const handle = makeMediaHandle();
+    const fs = await import("fs/promises");
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = await captureHandler();
+    const response = await handler(
+      makeMediaRequest("/project/clip.mp4", "/project", { method: "HEAD" })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Length")).toBe(String(MEDIA_BYTES.length));
+    expect(response.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(handle.createReadStream).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unsatisfiable range with 416", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeMediaRequest("/project/clip.mp4", "/project", { range: "bytes=99-" })
+    );
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get("Content-Range")).toBe(`bytes */${String(MEDIA_BYTES.length)}`);
+  });
+
+  it("404s a non-media canonical path instead of falling back to a buffered read", async () => {
+    // The narrowing that pays for the extra `standard: true` privilege: unlike
+    // daintree-file://, this scheme has no buffered path to fall through to, so
+    // it can never serve an arbitrary repo file. Classification follows the
+    // canonical target because O_NOFOLLOW is a no-op on Windows, where a
+    // `clip.mp4 → secrets.env` symlink would otherwise open fine.
+    const fs = await import("fs/promises");
+    const appProtocol = await import("../../utils/appProtocol.js");
+    const alias = path.normalize("/project/clip.mp4");
+    const target = path.normalize("/project/secrets.env");
+    vi.mocked(fs.realpath).mockImplementation((p) =>
+      Promise.resolve(p === alias ? target : (p as string))
+    );
+    vi.mocked(appProtocol.getMimeType).mockImplementation((p: string) =>
+      p.endsWith(".mp4") ? "video/mp4" : "text/plain"
+    );
+    const handle = makeMediaHandle();
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+    const handler = await captureHandler();
+    const response = await handler(makeMediaRequest("/project/clip.mp4", "/project"));
+
+    expect(response.status).toBe(404);
+    expect(handle.readFile).not.toHaveBeenCalled();
+    expect(handle.createReadStream).not.toHaveBeenCalled();
+  });
+
+  it("404s a file outside the root after realpath resolution", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.realpath).mockImplementation((p) =>
+      Promise.resolve(
+        p === path.normalize("/project/clip.mp4")
+          ? path.normalize("/elsewhere/clip.mp4")
+          : (p as string)
+      )
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(makeMediaRequest("/project/clip.mp4", "/project"));
+
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects a write method with 405", async () => {
+    const handler = await captureHandler();
+    const response = await handler(
+      makeMediaRequest("/project/clip.mp4", "/project", { method: "POST" })
+    );
+
+    expect(response.status).toBe(405);
+  });
+
+  it("rejects a missing root with 400", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeMediaRequest("/project/clip.mp4", null));
+
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a relative path with 400", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeMediaRequest("clip.mp4", "/project"));
+
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a NUL byte in the path with 400", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeMediaRequest("/project/clip\0.mp4", "/project"));
+
+    expect(response.status).toBe(400);
+  });
+
+  it("never grants CORS, even to the trusted app origin", async () => {
+    // The scheme is registered without supportFetchAPI/corsEnabled precisely
+    // because tag loads are no-cors. An ACAO echo here would be the first step
+    // back toward a fetch surface this scheme has no need for.
+    const handler = await captureHandler();
+    const response = await handler(
+      makeMediaRequest("/project/clip.mp4", "/project", { origin: "app://daintree" })
+    );
+
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+  });
+
+  it("carries the hardened response headers the file scheme uses", async () => {
+    const handler = await captureHandler();
+    const response = await handler(makeMediaRequest("/project/clip.mp4", "/project"));
+
+    expect(response.headers.get("Content-Security-Policy")).toBe("sandbox; default-src 'none'");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Cross-Origin-Resource-Policy")).toBe("cross-origin");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("opens with O_RDONLY | O_NOFOLLOW | O_NONBLOCK, sharing the file scheme's hardening", async () => {
+    const fs = await import("fs/promises");
+    const handler = await captureHandler();
+    await handler(makeMediaRequest("/project/clip.mp4", "/project"));
+
+    expect(vi.mocked(fs.open).mock.calls[0][1]).toBe(
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
+    );
   });
 });
 

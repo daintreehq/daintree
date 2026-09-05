@@ -25,6 +25,7 @@ import {
   registerAppProtocol,
   registerDaintreeFileProtocol,
   registerDaintreeHtmlProtocol,
+  registerDaintreeMediaProtocol,
   registerDaintreePdfProtocol,
   registerDeepLinkProtocolClient,
   registerPluginProtocol,
@@ -179,6 +180,26 @@ protocol.registerSchemesAsPrivileged([
     privileges: {
       standard: true,
       secure: true,
+    },
+  },
+  {
+    // Direct range-streamed media playback (#12242). `standard: true` is the
+    // load-bearing flag: registering without it is what made Chromium's media
+    // loader look single-shot, killing any mp4 whose `moov` trails the payload
+    // (electron#51442, closed once the reporter found the missing privilege).
+    // With it the loader issues real follow-up ranges, so <video>/<audio> can
+    // point straight at the protocol instead of downloading the whole file into
+    // a blob first. `stream` is the documented privilege for serving media
+    // bodies. Deliberately no supportFetchAPI/corsEnabled: tag loads are
+    // no-cors and never consult CORS, so the fetch surface would be dead weight
+    // (see trustedAppCorsOrigin in setup/protocols.ts). Kept off daintree-file://
+    // on purpose — adding `standard` there would change URL parsing and origin
+    // semantics for markdown images, WebAudio and the file viewer all at once.
+    scheme: "daintree-media",
+    privileges: {
+      standard: true,
+      secure: true,
+      stream: true,
     },
   },
   {
@@ -720,6 +741,7 @@ if (!gotTheLock) {
       registerDaintreeFileProtocol();
       registerDaintreeHtmlProtocol();
       registerDaintreePdfProtocol();
+      registerDaintreeMediaProtocol();
       // Register `plugin://` with a placeholder resolver that 404s every
       // request, keeping the heavy ~2900-line PluginService module off the
       // first-paint critical path (#10322). The handler must exist before
