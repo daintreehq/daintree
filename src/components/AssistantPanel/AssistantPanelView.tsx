@@ -30,6 +30,7 @@ import type {
 } from "@/store/assistantStore";
 import { HybridInputBar, type HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { useProjectStore } from "@/store";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { AssistantBootSplash } from "./AssistantBootSplash";
 import { AssistantQuestionCard } from "./AssistantQuestionCard";
@@ -917,17 +918,24 @@ export function AssistantPanelView({
     // reader who is pinned to the bottom and expects to stay there.
   }, [visible, state.turns, state.approvals, state.notices, state.toolCalls, deckOpen]);
 
+  const fillComposer = useCallback(
+    (text: string) => {
+      const input = useTerminalInputStore.getState();
+      input.setDraftInput(composerId, text, useProjectStore.getState().currentProject?.id);
+      input.bumpExternalDraftRevision();
+      composerRef.current?.focus();
+    },
+    [composerId]
+  );
+
   // A follow-up the engine handed back lands in the composer for editing. Taken once
   // and cleared at the source, so a later render cannot re-fill the box over whatever
   // the user has started typing since.
   useEffect(() => {
     if (state.retractedDraft === null) return;
-    // Written into the input bar's own draft store rather than to local state: the bar
-    // owns the editor now, and its draft for this surface is keyed by `composerId`.
-    useTerminalInputStore.getState().setDraftInput(composerId, state.retractedDraft);
-    composerRef.current?.focus();
+    fillComposer(state.retractedDraft);
     onRetractedDraftConsumed?.();
-  }, [state.retractedDraft, onRetractedDraftConsumed, composerId]);
+  }, [state.retractedDraft, onRetractedDraftConsumed, fillComposer]);
 
   /**
    * ^O opens the operations deck, as it did in the cockpit.
@@ -1438,10 +1446,7 @@ export function AssistantPanelView({
                       type="button"
                       disabled={!live}
                       className="assistant-starter assistant-text-control"
-                      onClick={() => {
-                        useTerminalInputStore.getState().setDraftInput(composerId, prompt);
-                        composerRef.current?.focus();
-                      }}
+                      onClick={() => fillComposer(prompt)}
                     >
                       <ChevronRight aria-hidden="true" className="size-3" />
                       {label}
