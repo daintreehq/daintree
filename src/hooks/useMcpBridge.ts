@@ -44,6 +44,7 @@ import {
   type TerminalLaunchPreview,
 } from "@/lib/mcpTerminalLaunchPreview";
 import { useRecipeStore } from "@/store/recipeStore";
+import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import {
   resolveWorktreeLocation,
   type WorktreeLocationArgs,
@@ -99,11 +100,16 @@ const TIMEOUT_RESULT: ActionDispatchResult = {
 
 /**
  * Of the gated actions that carry a `recipeId`, the ones that actually START
- * the recipe's terminals. Purely a wording concern for the confirm preview:
- * `recipe.delete` and `recipe.saveToRepo` are also gated and preview the same
- * content, but telling the approver those terminals are about to run would be
- * false. Getting this list wrong understates a dispatch's framing; it can never
- * skip a gate, which `resolveEffectiveActionDanger` owns from the args alone.
+ * the recipe's terminals. `recipe.delete` and `recipe.saveToRepo` are gated too
+ * and preview the same content, but telling the approver those terminals are
+ * about to run would be false.
+ *
+ * No longer only a wording concern: membership is also what issues the run
+ * approval (#12263), so an action dropped from this list previews its recipe
+ * honestly and then silently falls back to the three-terminal unapproved cap.
+ * Still cannot skip a gate in either direction — `resolveEffectiveActionDanger`
+ * owns that from the args alone — and a wrongly-added action would issue an
+ * approval nothing reads, since only the three launch paths forward it.
  */
 const RECIPE_SPAWNING_ACTIONS = new Set([
   "recipe.run",
@@ -724,6 +730,7 @@ export async function buildMcpConfirmPreview(
             approvedRecipeRun: {
               recipeId: recipe.id,
               terminalCount: recipe.terminals.length,
+              terminalsDigest: recipeApprovalDigest(recipe.terminals),
             },
           }
         : {}),

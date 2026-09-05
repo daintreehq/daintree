@@ -636,7 +636,7 @@ describe("worktree.createWithRecipe", () => {
 
     await def.run({ source: newBranch("feature/foo"), recipeId: "recipe-1" }, {
       dispatchSource: "agent",
-      hostApprovedRecipeRun: { recipeId: "recipe-1", terminalCount: 6 },
+      hostApprovedRecipeRun: { recipeId: "recipe-1", terminalCount: 6, terminalsDigest: "deadbeef" },
     } as never);
 
     expect(runRecipeWithResults).toHaveBeenCalledWith(
@@ -646,7 +646,7 @@ describe("worktree.createWithRecipe", () => {
       expect.any(Object),
       expect.objectContaining({
         dispatchSource: "agent",
-        hostApprovedRecipeRun: { recipeId: "recipe-1", terminalCount: 6 },
+        hostApprovedRecipeRun: { recipeId: "recipe-1", terminalCount: 6, terminalsDigest: "deadbeef" },
       })
     );
   });
@@ -959,13 +959,13 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
       {
         source: "agent",
         confirmed: true,
-        hostApprovedRecipeRun: { recipeId: "recipe-1", terminalCount: 8 },
+        hostApprovedRecipeRun: { recipeId: "recipe-1", terminalCount: 8, terminalsDigest: "deadbeef" },
       }
     );
     expect(approved.ok).toBe(true);
     expect(
       (runRecipeWithResults.mock.calls[1]?.[4] as Record<string, unknown>).hostApprovedRecipeRun
-    ).toEqual({ recipeId: "recipe-1", terminalCount: 8 });
+    ).toEqual({ recipeId: "recipe-1", terminalCount: 8, terminalsDigest: "deadbeef" });
   });
 });
 

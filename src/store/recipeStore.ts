@@ -8,6 +8,7 @@ import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
 import { recipeToolbarSourceId } from "@/utils/recipeScope";
 import { preflightSpawnBatchLimit } from "./panelLimitStore";
 import { countPanelsTowardLimit } from "./slices/panelRegistry/panelCount";
+import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
 import { isAssistantFocused } from "./macroFocusStore";
 import {
@@ -277,6 +278,29 @@ export { MAX_TERMINALS_PER_RECIPE };
  * caller has shown nobody anything, so it keeps the conservative ceiling.
  */
 export const MAX_AGENT_RECIPE_TERMINALS = 3;
+
+/**
+ * Whether a host approval still describes the recipe about to run (#12263).
+ *
+ * All three parts must hold, and the numeric one is checked rather than
+ * trusted: `validIndices.length > cap` is silently false for `NaN`, so a
+ * malformed count would wave the whole recipe through, and `splice(-1)` would
+ * drop one terminal instead of all of them. No producer sends those today —
+ * the bridge reads `recipe.terminals.length` — but this is the consumer of an
+ * authority token, and #8331's rule for those is that a malformed field fails
+ * safe rather than fails open.
+ */
+function approvalCoversRecipe(
+  approval: HostApprovedRecipeRun,
+  recipe: Pick<TerminalRecipe, "id" | "terminals">
+): boolean {
+  return (
+    approval.recipeId === recipe.id &&
+    Number.isSafeInteger(approval.terminalCount) &&
+    approval.terminalCount >= 0 &&
+    approval.terminalsDigest === recipeApprovalDigest(recipe.terminals)
+  );
+}
 
 /**
  * Drop a permanently-deleted recipe's toolbar pin (#12217).
@@ -1024,13 +1048,16 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     // Blast-radius cap for agent-dispatched runs, sized by what a human was
     // actually shown. recipe.run's danger:"confirm" gate already requires an
-    // approval for agent sources; when that approval came from a dialog that
-    // listed this recipe's terminals, it covers the number it listed. Anything
-    // else — no approval record, or one naming a different recipe than the id
-    // resolved to here (getRecipeById follows shadowing, #8725) — falls back to
-    // MAX_AGENT_RECIPE_TERMINALS. Fail-safe by direction: a mismatch grants
-    // less, never more, and behaves exactly like an unapproved run instead of
-    // turning a shadowing race into a hard failure (#8331).
+    // approval for agent sources; when that approval still covers the recipe
+    // resolved here, it authorizes the number of terminals it listed.
+    //
+    // Three outcomes, not two. No approval at all is the conservative default:
+    // nobody was shown anything, so MAX_AGENT_RECIPE_TERMINALS. An approval
+    // that covers this recipe grants its count. An approval that does NOT
+    // grants zero — the tempting fallback to the smaller cap would be wrong,
+    // because a one-terminal offer whose recipe has since been shadowed by a
+    // ten-terminal winner would start three terminals nobody previewed. A
+    // failed approval is evidence about THIS run, not the absence of one.
     //
     // Ordered before preflightSpawnBatchLimit so the cap bounds the batch the
     // limit gate sizes, not the other way round. That is ALL it does. This used
@@ -1042,14 +1069,21 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // with no timeout on the dialog and a 30s deadline on the dispatch behind
     // it. Left alone deliberately: it is a separate defect from this cap, and
     // widening the approved ceiling only changes how often it is reached.
-    const agentTerminalCap =
-      options?.hostApprovedRecipeRun?.recipeId === resolvedId
-        ? options.hostApprovedRecipeRun.terminalCount
-        : MAX_AGENT_RECIPE_TERMINALS;
+    const approval = options?.hostApprovedRecipeRun;
+    const approvalCovers = approval !== undefined && approvalCoversRecipe(approval, recipe);
+    const agentTerminalCap = approval
+      ? approvalCovers
+        ? approval.terminalCount
+        : 0
+      : MAX_AGENT_RECIPE_TERMINALS;
     if (options?.dispatchSource === "agent" && validIndices.length > agentTerminalCap) {
       const dropped = validIndices.splice(agentTerminalCap);
+      const error =
+        approval && !approvalCovers
+          ? "Recipe changed since it was approved"
+          : "Agent recipe terminal cap reached";
       for (const index of dropped) {
-        results.failed.push({ index, error: "Agent recipe terminal cap reached" });
+        results.failed.push({ index, error });
       }
     }
 

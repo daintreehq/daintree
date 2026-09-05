@@ -211,25 +211,33 @@ export interface ActionContext {
 /**
  * The recipe run one human approval in the host confirm dialog covers (#12263).
  *
- * Names WHAT was offered, not merely that something was: the resolved recipe
- * whose terminals the dialog listed, and how many of them it said would start.
- * Both halves are load-bearing. `getRecipeById` follows shadowing, so the id a
- * caller asked for and the recipe that actually runs can differ (#8725) —
- * matching on the resolved id is what stops an approval for one recipe from
- * authorizing a different winner that appeared since. The count is the blast
- * radius the approver was shown, so a recipe that grew between the preview and
- * the run cannot start terminals nobody was offered.
+ * Names WHAT was offered, not merely that something was, in three parts that
+ * together pin the offer to one recipe, one size and one set of commands.
  *
- * A mismatch on either half falls back to the unapproved ceiling rather than
- * failing the run: granting less than was asked for is the safe direction, and
- * it leaves a benign shadowing race behaving exactly like an unapproved call
- * instead of turning it into a hard error (#8331).
+ * `recipeId` is the RESOLVED winner: `getRecipeById` follows shadowing, so the
+ * id a caller asked for and the recipe that actually runs can differ (#8725).
+ * `terminalCount` is the blast radius the approver read, so a recipe that grew
+ * between the preview and the run cannot start terminals nobody was offered.
+ * `terminalsDigest` covers the contents, because the first two are satisfied by
+ * a recipe whose commands were rewritten under the same id while the dialog
+ * waited — which is a live window, not a theoretical one, since the composites
+ * await a worktree creation before their recipe runs.
+ *
+ * An approval that fails ANY of the three authorizes nothing at all — not the
+ * unapproved ceiling. The two cases are genuinely different: an absent approval
+ * means nobody was shown anything and the conservative default applies, while a
+ * failed one is positive evidence that what will run is not what was approved.
+ * Falling back there would start terminals off the back of an approval for
+ * something else, so the run reports every index as a failure and the caller
+ * asks again (#8331).
  */
 export interface HostApprovedRecipeRun {
   /** The recipe the dialog previewed, after shadow resolution (#8725). */
   recipeId: string;
   /** How many terminals the dialog said would start. */
   terminalCount: number;
+  /** Fingerprint of the terminals it listed — see `recipeApprovalDigest`. */
+  terminalsDigest: string;
 }
 
 /**

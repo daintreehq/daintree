@@ -194,7 +194,7 @@ describe("recipeActions adversarial", () => {
       {
         dispatchSource: "agent",
         projectPath: "/repo",
-        hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 7 },
+        hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 7, terminalsDigest: "deadbeef" },
       }
     );
 
@@ -205,15 +205,17 @@ describe("recipeActions adversarial", () => {
       expect.any(Object),
       expect.objectContaining({
         dispatchSource: "agent",
-        hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 7 },
+        hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 7, terminalsDigest: "deadbeef" },
       })
     );
   });
 
   it("recipe.run reads the approval only from ctx, never from its own args", async () => {
     // hostApprovedRecipeRun is deliberately absent from recipe.run's argsSchema:
-    // published there, a model could name its own approval. Zod strips it, so
-    // what reaches the store is the context stamp — here, nothing.
+    // published there, a model could name its own approval. This calls run()
+    // with the forged field already past any parsing, so it proves the stronger
+    // property — the handler never reads its args for authority, whatever the
+    // schema does. The schema's own silence is asserted separately below.
     const runRecipeWithResults = vi.fn().mockResolvedValue(OK_SPAWN_RESULTS);
     setRecipeState({ runRecipeWithResults });
     setWorktreeMap(new Map([["wt-1", { path: "/repo/wt", branch: "feat/x" }]]));
@@ -231,6 +233,18 @@ describe("recipeActions adversarial", () => {
 
     const options = runRecipeWithResults.mock.calls[0]?.[4] as Record<string, unknown>;
     expect(options.hostApprovedRecipeRun).toBeUndefined();
+  });
+
+  it("recipe.run never advertises the approval on its published arg schema", () => {
+    // The other half: even if run() were rewritten to read its args, the field
+    // a model could name has to not exist. Zod strips what it does not declare.
+    const parsed = definitionFor("recipe.run").argsSchema?.parse({
+      recipeId: "r1",
+      hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 10, terminalsDigest: "deadbeef" },
+    }) as Record<string, unknown>;
+
+    expect(parsed.recipeId).toBe("r1");
+    expect("hostApprovedRecipeRun" in parsed).toBe(false);
   });
 
   it("recipe.run falls back to ctx.projectPath when the target worktree is missing from the view store", async () => {
