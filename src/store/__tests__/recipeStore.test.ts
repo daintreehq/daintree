@@ -151,6 +151,22 @@ import { useRecipeStore } from "../recipeStore";
 import { usePanelLimitStore } from "../panelLimitStore";
 import type { RecipeTerminal } from "@shared/types/project";
 
+/** A ten-terminal recipe — the shape the agent terminal cap is measured against. */
+function tenTerminalRecipe() {
+  return {
+    id: "recipe-1",
+    name: "Ten Terminals",
+    projectId: "project-1",
+    terminals: Array.from({ length: 10 }, (_, i) => ({
+      type: "terminal" as const,
+      title: `Shell ${i}`,
+      command: "echo",
+      env: {},
+    })),
+    createdAt: Date.now(),
+  };
+}
+
 describe("recipeStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1304,7 +1320,7 @@ describe("recipeStore", () => {
       }
     });
 
-    it("caps an agent-dispatched run at MAX_AGENT_RECIPE_TERMINALS and never prompts", async () => {
+    it("caps an agent-dispatched run with no host approval behind it", async () => {
       const requestConfirmationSpy = vi.fn().mockResolvedValue(true);
       const previousRequestConfirmation = usePanelLimitStore.getState().requestConfirmation;
       usePanelLimitStore.setState({ requestConfirmation: requestConfirmationSpy });
@@ -1313,20 +1329,7 @@ describe("recipeStore", () => {
         addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
 
         useRecipeStore.setState({
-          recipes: [
-            {
-              id: "recipe-1",
-              name: "Ten Terminals",
-              projectId: "project-1",
-              terminals: Array.from({ length: 10 }, (_, i) => ({
-                type: "terminal" as const,
-                title: `Shell ${i}`,
-                command: "echo",
-                env: {},
-              })),
-              createdAt: Date.now(),
-            },
-          ],
+          recipes: [tenTerminalRecipe()],
           isLoading: false,
           currentProjectId: "project-1",
         });
@@ -1344,9 +1347,151 @@ describe("recipeStore", () => {
         expect(results.failed.every((f) => f.error === "Agent recipe terminal cap reached")).toBe(
           true
         );
-        // Cap runs before preflightSpawnBatchLimit, so the projected count never
-        // crosses the confirm threshold — a headless agent dispatch can't hang.
+        // No prompt HERE only because nothing else is open: the ambient panel
+        // count is empty in this suite, so 0 + 3 stays under the confirm
+        // threshold. Deliberately not stated as a property of the cap — see the
+        // 18-ambient-panel case below, which is the same capped run prompting.
         expect(requestConfirmationSpy).not.toHaveBeenCalled();
+      } finally {
+        usePanelLimitStore.setState({ requestConfirmation: previousRequestConfirmation });
+      }
+    });
+
+    it("starts every terminal a host approval covered (#12263)", async () => {
+      let callIndex = 0;
+      addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+
+      useRecipeStore.setState({
+        recipes: [tenTerminalRecipe()],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      const results = await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+          dispatchSource: "agent",
+          hostApprovedRecipeRun: { recipeId: "recipe-1", terminalCount: 10 },
+        });
+
+      expect(addTerminalMock).toHaveBeenCalledTimes(10);
+      expect(results.spawned).toHaveLength(10);
+      expect(results.failed).toHaveLength(0);
+    });
+
+    it("grants only the count the approver was shown, not the recipe's current size", async () => {
+      // The dialog previewed a four-terminal recipe; by the time the run lands
+      // the recipe has ten. The approval covers what was on screen, so the six
+      // terminals nobody was offered come back as failures.
+      let callIndex = 0;
+      addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+
+      useRecipeStore.setState({
+        recipes: [tenTerminalRecipe()],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      const results = await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+          dispatchSource: "agent",
+          hostApprovedRecipeRun: { recipeId: "recipe-1", terminalCount: 4 },
+        });
+
+      expect(addTerminalMock).toHaveBeenCalledTimes(4);
+      expect(results.spawned).toHaveLength(4);
+      expect(results.failed.map((f) => f.index)).toEqual([4, 5, 6, 7, 8, 9]);
+    });
+
+    it("falls back to the unapproved cap when the approval names another recipe", async () => {
+      // getRecipeById follows shadowing (#8725), so the recipe that runs can
+      // differ from the one previewed. An approval for a different id grants
+      // nothing extra — and falls back rather than failing, so a shadowing race
+      // behaves exactly like an unapproved run.
+      let callIndex = 0;
+      addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+
+      useRecipeStore.setState({
+        recipes: [tenTerminalRecipe()],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      const results = await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+          dispatchSource: "agent",
+          hostApprovedRecipeRun: { recipeId: "some-other-recipe", terminalCount: 10 },
+        });
+
+      expect(addTerminalMock).toHaveBeenCalledTimes(3);
+      expect(results.spawned).toHaveLength(3);
+      expect(results.failed).toHaveLength(7);
+      expect(results.failed.every((f) => f.error === "Agent recipe terminal cap reached")).toBe(
+        true
+      );
+    });
+
+    it("does not lift the cap for an approval carrying no agent dispatch source", async () => {
+      // The two halves are independent: the cap keys on dispatchSource, and the
+      // approval only sizes it. A user run was never capped and must not start
+      // reading an approval record to decide how many terminals it may open.
+      let callIndex = 0;
+      addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+
+      useRecipeStore.setState({
+        recipes: [tenTerminalRecipe()],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      const results = await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+          dispatchSource: "user",
+          hostApprovedRecipeRun: { recipeId: "recipe-1", terminalCount: 2 },
+        });
+
+      expect(addTerminalMock).toHaveBeenCalledTimes(10);
+      expect(results.failed).toHaveLength(0);
+    });
+
+    it("still reaches the panel-limit prompt when the ambient count is high (#12263)", async () => {
+      // Pins the defect the removed comment denied. The agent cap bounds the
+      // BATCH, never `currentCount` — the workspace's ambient panel count —
+      // so preflightSpawnBatchLimit prompts on 18 + 3 = 21 > 20 for a run the
+      // cap has already trimmed to three. Left unfixed on purpose: it is a
+      // separate defect from the cap, and this test is here so the next reader
+      // finds the behaviour instead of the old claim that it cannot happen.
+      const requestConfirmationSpy = vi.fn().mockResolvedValue(true);
+      const previousRequestConfirmation = usePanelLimitStore.getState().requestConfirmation;
+      usePanelLimitStore.setState({ requestConfirmation: requestConfirmationSpy });
+      try {
+        let callIndex = 0;
+        addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+
+        const ambientIds = Array.from({ length: 18 }, (_, i) => `ambient-${i}`);
+        panelStoreState.panelIds = ambientIds;
+        panelStoreState.panelsById = Object.fromEntries(
+          ambientIds.map((id) => [id, { location: "grid" }])
+        );
+
+        useRecipeStore.setState({
+          recipes: [tenTerminalRecipe()],
+          isLoading: false,
+          currentProjectId: "project-1",
+        });
+
+        const results = await useRecipeStore
+          .getState()
+          .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+            dispatchSource: "agent",
+          });
+
+        // The cap trimmed the batch to three, and the prompt fired anyway.
+        expect(requestConfirmationSpy).toHaveBeenCalledWith(21, null);
+        expect(results.spawned).toHaveLength(3);
       } finally {
         usePanelLimitStore.setState({ requestConfirmation: previousRequestConfirmation });
       }
@@ -1391,20 +1536,7 @@ describe("recipeStore", () => {
       addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
 
       useRecipeStore.setState({
-        recipes: [
-          {
-            id: "recipe-1",
-            name: "Ten Terminals",
-            projectId: "project-1",
-            terminals: Array.from({ length: 10 }, (_, i) => ({
-              type: "terminal" as const,
-              title: `Shell ${i}`,
-              command: "echo",
-              env: {},
-            })),
-            createdAt: Date.now(),
-          },
-        ],
+        recipes: [tenTerminalRecipe()],
         isLoading: false,
         currentProjectId: "project-1",
       });

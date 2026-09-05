@@ -178,7 +178,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       id: "recipe.run",
       title: "Run Recipe",
       description:
-        "Launch the terminals a saved recipe defines, in one worktree, as a repeatable multi-pane setup. Launch a single agent or a plain terminal instead when only one pane is wanted. This creates several panels at once and starts their configured commands or agents. An automated caller gets at most the first three of them; the rest come back as failures, so check what actually started.",
+        "Launch the terminals a saved recipe defines, in one worktree, as a repeatable multi-pane setup. Launch a single agent or a plain terminal instead when only one pane is wanted. This creates several panels at once and starts their configured commands or agents. Approving its prompt starts every terminal; a pre-authorized call starts at most three, so check what actually started.",
       category: "recipes",
       kind: "command",
       danger: "confirm",
@@ -236,8 +236,10 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
           branchName: worktree?.branch,
         };
         // Always forward dispatchSource so runRecipeWithResults can apply the
-        // agent-source terminal cap. ActionService sets ctx.dispatchSource on
-        // every dispatch, so this is the live path for all real invocations.
+        // agent-source terminal cap, and the host's record of what an approver
+        // was shown so the cap is sized to that rather than to the unapproved
+        // floor (#12263). Both are stamped by ActionService on every dispatch,
+        // so this is the live path for all real invocations.
         const recipeName = useRecipeStore.getState().getRecipeById(recipeId)?.name;
         const results = await useRecipeStore
           .getState()
@@ -245,6 +247,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
             spawnedBy,
             focusPolicy,
             dispatchSource: ctx.dispatchSource,
+            hostApprovedRecipeRun: ctx.hostApprovedRecipeRun,
           });
 
         // Toast/inbox first so palette users see the failure even though the

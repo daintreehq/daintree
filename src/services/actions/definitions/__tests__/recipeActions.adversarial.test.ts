@@ -179,6 +179,60 @@ describe("recipeActions adversarial", () => {
     );
   });
 
+  it("recipe.run threads ctx.hostApprovedRecipeRun into the run options (#12263)", async () => {
+    // The cap and the approval that sizes it are two separate stamps, and a
+    // launch path that forwards one but not the other previews terminals it
+    // then refuses to start — the failure class #10110 already caught once.
+    const runRecipeWithResults = vi.fn().mockResolvedValue(OK_SPAWN_RESULTS);
+    setRecipeState({ runRecipeWithResults });
+    setWorktreeMap(new Map([["wt-1", { path: "/repo/wt", branch: "feat/x" }]]));
+
+    const run = setupActions();
+    await run(
+      "recipe.run",
+      { recipeId: "r1", worktreeId: "wt-1" },
+      {
+        dispatchSource: "agent",
+        projectPath: "/repo",
+        hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 7 },
+      }
+    );
+
+    expect(runRecipeWithResults).toHaveBeenCalledWith(
+      "r1",
+      "/repo/wt",
+      "wt-1",
+      expect.any(Object),
+      expect.objectContaining({
+        dispatchSource: "agent",
+        hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 7 },
+      })
+    );
+  });
+
+  it("recipe.run reads the approval only from ctx, never from its own args", async () => {
+    // hostApprovedRecipeRun is deliberately absent from recipe.run's argsSchema:
+    // published there, a model could name its own approval. Zod strips it, so
+    // what reaches the store is the context stamp — here, nothing.
+    const runRecipeWithResults = vi.fn().mockResolvedValue(OK_SPAWN_RESULTS);
+    setRecipeState({ runRecipeWithResults });
+    setWorktreeMap(new Map([["wt-1", { path: "/repo/wt", branch: "feat/x" }]]));
+
+    const run = setupActions();
+    await run(
+      "recipe.run",
+      {
+        recipeId: "r1",
+        worktreeId: "wt-1",
+        hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 10 },
+      } as never,
+      { dispatchSource: "agent", projectPath: "/repo" }
+    );
+
+    const options = runRecipeWithResults.mock.calls[0]?.[4] as Record<string, unknown>;
+    expect(options.hostApprovedRecipeRun).toBeUndefined();
+  });
+
   it("recipe.run falls back to ctx.projectPath when the target worktree is missing from the view store", async () => {
     const runRecipeWithResults = vi.fn().mockResolvedValue(OK_SPAWN_RESULTS);
     setRecipeState({ runRecipeWithResults });

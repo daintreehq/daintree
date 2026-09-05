@@ -39,7 +39,7 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { sanitizeTerminalName } from "@/utils/agentLaunchValidation";
 import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
-import type { ActionSource } from "@shared/types/actions";
+import type { ActionSource, HostApprovedRecipeRun } from "@shared/types/actions";
 import type { AgentCliDetail } from "@shared/types/ipc";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
 import { isInRepoRecipeId, safeRecipeFilename } from "@shared/utils/recipeFilename";
@@ -77,11 +77,23 @@ export interface RecipeRunOptions {
   spawnBatch?: { id: string; size: number };
   /**
    * The action dispatch source that triggered this run. When `"agent"`, a
-   * lower per-run terminal cap ({@link MAX_AGENT_RECIPE_TERMINALS}) is applied
-   * to bound the blast radius of MCP-driven recipe runs. Forwarded from
-   * `recipe.run`'s `ActionContext.dispatchSource`.
+   * per-run terminal cap is applied to bound the blast radius of MCP-driven
+   * recipe runs — {@link MAX_AGENT_RECIPE_TERMINALS}, unless
+   * {@link hostApprovedRecipeRun} raises it to what an approver was shown.
+   * Forwarded from `recipe.run`'s `ActionContext.dispatchSource`.
    */
   dispatchSource?: ActionSource;
+  /**
+   * The recipe run a human approved in the host confirm dialog, forwarded from
+   * `ActionContext.hostApprovedRecipeRun` (#12263). When it names the recipe
+   * actually resolved here, the agent cap becomes the terminal count the
+   * approver was shown instead of {@link MAX_AGENT_RECIPE_TERMINALS}.
+   *
+   * Host-set and unspoofable at the source — `ActionService` stamps it from the
+   * dispatch options, so it cannot arrive from an action's args or from a
+   * `contextOverride`. Absent or mismatched falls back to the smaller cap.
+   */
+  hostApprovedRecipeRun?: HostApprovedRecipeRun;
 }
 
 function isAgentRecipeType(type: RecipeTerminalType): boolean {
@@ -248,10 +260,21 @@ interface RecipeState {
 export { MAX_TERMINALS_PER_RECIPE };
 
 /**
- * Per-run terminal cap for agent-dispatched recipe runs. A single MCP-approved
- * `recipe.run` shouldn't authorize a full {@link MAX_TERMINALS_PER_RECIPE}-wide
- * spawn — an agent context needs at most a handful of panels. Bounds the blast
- * radius without blocking legitimate agent use.
+ * Per-run terminal cap for an agent-dispatched recipe run that NO human was
+ * shown (#12263).
+ *
+ * Every agent `recipe.run` is confirmation-gated, so the cap was never what
+ * stood between an agent and a spawn — the dialog was. What the cap did was
+ * shrink the offer: a five-pane recipe was previewed as "starts 3 of 5", so a
+ * human clicking Approve authorized three, and the recipe meant something
+ * different depending on who ran it. An approver reading every terminal the
+ * dialog lists can authorize all of them, and
+ * `RecipeRunOptions.hostApprovedRecipeRun` is how that approval reaches here.
+ *
+ * This number is what remains for a run with no such approval behind it: one
+ * pre-authorized by a standing automation grant, which names a tool in Settings
+ * with no arguments and no preview in front of the person who issued it. That
+ * caller has shown nobody anything, so it keeps the conservative ceiling.
  */
 export const MAX_AGENT_RECIPE_TERMINALS = 3;
 
@@ -999,13 +1022,32 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       }
     }
 
-    // Defense-in-depth blast-radius cap for agent-dispatched runs. recipe.run's
-    // danger:"confirm" gate already requires user approval for agent sources,
-    // but one approval shouldn't authorize a full 10-terminal recipe. Apply the
-    // cap BEFORE preflightSpawnBatchLimit so a capped agent run can never reach
-    // the confirmation-dialog path (which would hang a headless MCP dispatch).
-    if (options?.dispatchSource === "agent" && validIndices.length > MAX_AGENT_RECIPE_TERMINALS) {
-      const dropped = validIndices.splice(MAX_AGENT_RECIPE_TERMINALS);
+    // Blast-radius cap for agent-dispatched runs, sized by what a human was
+    // actually shown. recipe.run's danger:"confirm" gate already requires an
+    // approval for agent sources; when that approval came from a dialog that
+    // listed this recipe's terminals, it covers the number it listed. Anything
+    // else — no approval record, or one naming a different recipe than the id
+    // resolved to here (getRecipeById follows shadowing, #8725) — falls back to
+    // MAX_AGENT_RECIPE_TERMINALS. Fail-safe by direction: a mismatch grants
+    // less, never more, and behaves exactly like an unapproved run instead of
+    // turning a shadowing race into a hard failure (#8331).
+    //
+    // Ordered before preflightSpawnBatchLimit so the cap bounds the batch the
+    // limit gate sizes, not the other way round. That is ALL it does. This used
+    // to claim a capped agent run "can never reach the confirmation-dialog
+    // path", which is false: preflightSpawnBatchLimit prompts on
+    // `currentCount + allowed > DEFAULT_CONFIRMATION_LIMIT`, and `currentCount`
+    // is the workspace's ambient panel count, which no per-recipe cap bounds.
+    // 18 panels already open plus a capped 3 is 21, and that prompts today —
+    // with no timeout on the dialog and a 30s deadline on the dispatch behind
+    // it. Left alone deliberately: it is a separate defect from this cap, and
+    // widening the approved ceiling only changes how often it is reached.
+    const agentTerminalCap =
+      options?.hostApprovedRecipeRun?.recipeId === resolvedId
+        ? options.hostApprovedRecipeRun.terminalCount
+        : MAX_AGENT_RECIPE_TERMINALS;
+    if (options?.dispatchSource === "agent" && validIndices.length > agentTerminalCap) {
+      const dropped = validIndices.splice(agentTerminalCap);
       for (const index of dropped) {
         results.failed.push({ index, error: "Agent recipe terminal cap reached" });
       }

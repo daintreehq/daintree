@@ -190,6 +190,46 @@ export interface ActionContext {
    * list as permission to act on the full request.
    */
   hostApprovedTargets?: readonly HostApprovedTarget[];
+  /**
+   * The recipe run a human approved in the host confirm dialog, for a dispatch
+   * that spawns a recipe's terminals (#12263). Set by `ActionService.dispatch`
+   * from {@link ActionDispatchOptions.hostApprovedRecipeRun} on the same terms
+   * as {@link hostApprovedTargets}: host-only, never on any `argsSchema`, and
+   * stamped over whatever a `contextOverride` claimed.
+   *
+   * Absent is the default and the fail-safe. It means no dialog listed this
+   * recipe's terminals — an unconfirmed call, or one pre-authorized by a
+   * standing automation grant, which names a tool in Settings and shows nobody
+   * a preview. Those keep the smaller unapproved ceiling
+   * (`MAX_AGENT_RECIPE_TERMINALS`). Present means a human read the terminals
+   * the dialog listed and approved starting them, so the run may start that
+   * many rather than the first three.
+   */
+  hostApprovedRecipeRun?: HostApprovedRecipeRun;
+}
+
+/**
+ * The recipe run one human approval in the host confirm dialog covers (#12263).
+ *
+ * Names WHAT was offered, not merely that something was: the resolved recipe
+ * whose terminals the dialog listed, and how many of them it said would start.
+ * Both halves are load-bearing. `getRecipeById` follows shadowing, so the id a
+ * caller asked for and the recipe that actually runs can differ (#8725) —
+ * matching on the resolved id is what stops an approval for one recipe from
+ * authorizing a different winner that appeared since. The count is the blast
+ * radius the approver was shown, so a recipe that grew between the preview and
+ * the run cannot start terminals nobody was offered.
+ *
+ * A mismatch on either half falls back to the unapproved ceiling rather than
+ * failing the run: granting less than was asked for is the safe direction, and
+ * it leaves a benign shadowing race behaving exactly like an unapproved call
+ * instead of turning it into a hard error (#8331).
+ */
+export interface HostApprovedRecipeRun {
+  /** The recipe the dialog previewed, after shadow resolution (#8725). */
+  recipeId: string;
+  /** How many terminals the dialog said would start. */
+  terminalCount: number;
 }
 
 /**
@@ -513,6 +553,13 @@ export interface ActionDispatchOptions {
    * only by the MCP renderer bridge, from the rows the approver left checked.
    */
   hostApprovedTargets?: readonly HostApprovedTarget[];
+  /**
+   * Trusted record of the recipe a host confirmation offered and a human
+   * approved — NOT a client-supplied value. See
+   * {@link ActionContext.hostApprovedRecipeRun}. Set only by the MCP renderer
+   * bridge, from the preview the approver actually read.
+   */
+  hostApprovedRecipeRun?: HostApprovedRecipeRun;
 }
 
 export interface ActionDispatchPayload {

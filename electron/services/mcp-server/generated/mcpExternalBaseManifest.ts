@@ -1153,7 +1153,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     dangerRationale:
       "Spawns the recipe's terminals, each running shell commands or launching agents. Agent-initiated runs are confirmation-gated so a single dispatch can't open many terminals unprompted.",
     description:
-      "Launch the terminals a saved recipe defines, in one worktree, as a repeatable multi-pane setup. Launch a single agent or a plain terminal instead when only one pane is wanted. This creates several panels at once and starts their configured commands or agents. An automated caller gets at most the first three of them; the rest come back as failures, so check what actually started.",
+      "Launch the terminals a saved recipe defines, in one worktree, as a repeatable multi-pane setup. Launch a single agent or a plain terminal instead when only one pane is wanted. This creates several panels at once and starts their configured commands or agents. Approving its prompt starts every terminal; a pre-authorized call starts at most three, so check what actually started.",
     enabled: true,
     id: "recipe.run",
     inputSchema: {

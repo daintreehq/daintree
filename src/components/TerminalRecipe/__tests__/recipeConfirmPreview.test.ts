@@ -37,7 +37,7 @@ describe("formatRecipePreviewLines (#11860)", () => {
           { type: "dev-preview", devCommand: "npm run preview" },
         ],
       }),
-      { agentTerminalCap: 3, spawns: true }
+      { spawns: true }
     ).join("\n");
     expect(lines).toContain("npm run dev -- --port 5173");
     expect(lines).toContain("npm run preview");
@@ -52,7 +52,7 @@ describe("formatRecipePreviewLines (#11860)", () => {
           { type: "terminal", command: "deploy", env: { API_TOKEN: "sk-secret", REGION: "eu" } },
         ],
       }),
-      { agentTerminalCap: 3, spawns: true }
+      { spawns: true }
     ).join("\n");
     expect(lines).toContain("API_TOKEN");
     expect(lines).toContain("REGION");
@@ -60,7 +60,11 @@ describe("formatRecipePreviewLines (#11860)", () => {
     expect(lines).not.toContain("eu");
   });
 
-  it("marks the terminals the agent cap will not start", () => {
+  it("offers every terminal, with none struck off the tail (#12263)", () => {
+    // Approving this dialog is what lifts the unapproved agent cap, so the
+    // offer is the whole recipe. The old "Starts 2 of 4 … at most 2" framing
+    // with a struck-through tail would now understate what the click buys,
+    // which misleads an approver exactly as badly as overstating it.
     const lines = formatRecipePreviewLines(
       recipe({
         terminals: [
@@ -70,19 +74,23 @@ describe("formatRecipePreviewLines (#11860)", () => {
           { type: "terminal", command: "four" },
         ],
       }),
-      { agentTerminalCap: 2, spawns: true }
+      { spawns: true }
     );
-    const skipped = lines.filter((line) => line.includes("not started"));
-    expect(skipped).toHaveLength(2);
-    expect(skipped.every((line) => /three|four/.test(line))).toBe(true);
-    expect(lines.join("\n")).toContain("2 of 4");
+    const joined = lines.join("\n");
+    expect(joined).toContain("Starts 4 terminals");
+    expect(joined).not.toContain("not started");
+    expect(joined).not.toContain("of 4");
+    expect(joined).not.toContain("at most");
+    // Every command is still listed — the count is the claim, the commands are
+    // the evidence for it.
+    for (const command of ["one", "two", "three", "four"]) {
+      expect(joined).toContain(command);
+    }
   });
 
-  it("does not claim a cap applies when every terminal runs", () => {
-    const lines = formatRecipePreviewLines(recipe(), { agentTerminalCap: 3, spawns: true }).join(
-      "\n"
-    );
-    expect(lines).not.toContain("of 1");
+  it("says one terminal, not one terminals", () => {
+    const lines = formatRecipePreviewLines(recipe(), { spawns: true }).join("\n");
+    expect(lines).toContain("Starts 1 terminal:");
     expect(lines).not.toContain("not started");
   });
 
@@ -91,7 +99,7 @@ describe("formatRecipePreviewLines (#11860)", () => {
       recipe({
         terminals: [{ type: "claude", args: "--model opus", initialPrompt: "fix the bug" }],
       }),
-      { agentTerminalCap: 3, spawns: true }
+      { spawns: true }
     ).join("\n");
     expect(lines).toContain("claude --model opus");
     expect(lines).toContain("fix the bug");
@@ -101,7 +109,7 @@ describe("formatRecipePreviewLines (#11860)", () => {
     const long = "x".repeat(500);
     const lines = formatRecipePreviewLines(
       recipe({ terminals: [{ type: "terminal", command: long }] }),
-      { agentTerminalCap: 3, spawns: true }
+      { spawns: true }
     );
     const commandLine = lines.find((line) => line.includes("x"))!;
     expect(commandLine.length).toBeLessThan(long.length);
@@ -110,7 +118,7 @@ describe("formatRecipePreviewLines (#11860)", () => {
 
   it("says so explicitly when the recipe could not be resolved", () => {
     // An empty preview would read as "this recipe does nothing".
-    const lines = formatRecipePreviewLines(null, { agentTerminalCap: 3, spawns: true });
+    const lines = formatRecipePreviewLines(null, { spawns: true });
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(/couldn't resolve/i);
   });
@@ -118,7 +126,7 @@ describe("formatRecipePreviewLines (#11860)", () => {
   it("does not claim a non-spawning dispatch will start anything", () => {
     // recipe.delete and recipe.saveToRepo are gated and preview the same
     // content; telling the approver those terminals are about to run would be
-    // false, and the agent cap does not apply to them at all.
+    // false, since these dispatches start nothing at all.
     const lines = formatRecipePreviewLines(
       recipe({
         terminals: [
@@ -128,7 +136,7 @@ describe("formatRecipePreviewLines (#11860)", () => {
           { type: "terminal", command: "four" },
         ],
       }),
-      { agentTerminalCap: 2, spawns: false }
+      { spawns: false }
     );
     const joined = lines.join("\n");
     expect(joined).not.toContain("Starts");
