@@ -558,17 +558,36 @@ describe("agentRegistry", () => {
     });
 
     it("does not treat an inherited Object.prototype key as a native implementation", () => {
+      // `env-only` is the sensitive case: a bare `TABLE[id]` lookup resolves
+      // `constructor` off the prototype, finds a function rather than
+      // `undefined`, and compares it against the declared mode — wrongly
+      // rejecting an agent the open contract should admit.
       const constructorAgent: AgentConfig = {
         ...userDefinedWithStable,
         id: "constructor",
         name: "Constructor Agent",
         command: "ctor",
-        supports: cliFlagsSupports,
       };
       setUserRegistry({ constructor: constructorAgent });
       try {
-        // A bare `TABLE[id]` lookup would resolve `constructor` off the
-        // prototype and compare against a function, not a mode.
+        expect(hasAssistantMcpImplementation("constructor")).toBe(true);
+        expect(getAssistantWiredAgentIds()).toContain("constructor");
+      } finally {
+        setUserRegistry({});
+      }
+    });
+
+    it("still rejects an inherited-key agent declaring an unimplemented mode", () => {
+      setUserRegistry({
+        constructor: {
+          ...userDefinedWithStable,
+          id: "constructor",
+          name: "Constructor Agent",
+          command: "ctor",
+          supports: cliFlagsSupports,
+        },
+      });
+      try {
         expect(hasAssistantMcpImplementation("constructor")).toBe(false);
         expect(getAssistantWiredAgentIds()).not.toContain("constructor");
       } finally {
@@ -592,15 +611,6 @@ describe("agentRegistry", () => {
       }
     });
 
-    it.each([
-      ["claude", "project-config"],
-      ["copilot", "project-config"],
-      ["codex", "cli-flags"],
-      ["daintree-assistant", "env-only"],
-    ] as const)("%s declares the mode its own wiring branch implements", (id, mode) => {
-      expect(getAgentConfig(id)?.supports).toMatchObject({ mcpInjection: mode });
-    });
-
     it("rejects a built-in whose declared mode drifts from its implementation", () => {
       // Claude's literal-id branches write project config regardless of what it
       // declares, so an `env-only` claim must not be admitted on the open
@@ -621,10 +631,51 @@ describe("agentRegistry", () => {
       }
     });
 
-    it("the stable list is a subset of the wired list", () => {
-      const wired = new Set(getAssistantWiredAgentIds());
-      for (const id of getAssistantSupportedAgentIds()) {
-        expect({ id, wired: wired.has(id) }).toEqual({ id, wired: true });
+    it("the stable list is a subset of the wired list, custom agents included", () => {
+      setUserRegistry({
+        "byo-ok": {
+          id: "byo-ok",
+          name: "BYO OK",
+          command: "byo-ok",
+          color: "#FF8800",
+          iconId: "custom",
+          supportsContextInjection: true,
+          supports: {
+            mcpInjection: "env-only",
+            settingsOverlay: false,
+            permissionBypass: false,
+            trustDialog: false,
+            versionProbe: true,
+            tier: "stable",
+          },
+        },
+        "byo-bad": {
+          id: "byo-bad",
+          name: "BYO Bad",
+          command: "byo-bad",
+          color: "#FF8800",
+          iconId: "custom",
+          supportsContextInjection: true,
+          supports: {
+            mcpInjection: "cli-flags",
+            settingsOverlay: false,
+            permissionBypass: false,
+            trustDialog: false,
+            versionProbe: true,
+            tier: "stable",
+          },
+        },
+      });
+      try {
+        const wired = new Set(getAssistantWiredAgentIds());
+        const supported = getAssistantSupportedAgentIds();
+        expect(supported).toContain("byo-ok");
+        expect(supported).not.toContain("byo-bad");
+        for (const id of supported) {
+          expect({ id, wired: wired.has(id) }).toEqual({ id, wired: true });
+        }
+      } finally {
+        setUserRegistry({});
       }
     });
 

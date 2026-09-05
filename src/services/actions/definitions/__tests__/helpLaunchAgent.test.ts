@@ -233,7 +233,7 @@ describe("help.launchAgent", () => {
     );
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
-      expect.objectContaining({ cwd: "/mock/help", location: "overlay" }),
+      expect.objectContaining({ agentId: "claude", cwd: "/mock/help", location: "overlay" }),
       { source: "user" }
     );
   });
@@ -242,9 +242,9 @@ describe("help.launchAgent", () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
-    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "gemini" });
+    mockGetAgentPrefsState.mockReturnValue({ defaultAgent: "codex" });
     mockGetCliAvailabilityState.mockReturnValue({
-      availability: allAvailability({ gemini: "missing" }),
+      availability: allAvailability({ codex: "missing" }),
       isInitialized: true,
     });
 

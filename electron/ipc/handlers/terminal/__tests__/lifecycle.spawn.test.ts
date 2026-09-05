@@ -175,21 +175,6 @@ vi.mock("../../../../shared/config/agentRegistry.js", () => ({
         },
       };
     }
-    if (id === "gemini") {
-      // Declares a full wiring shape but at deprecated tier, so it is absent
-      // from `getAssistantWiredAgentIds()` above — the exact shape that used to
-      // fall through the help-token rejection (#12262).
-      return {
-        supports: {
-          mcpInjection: "project-config",
-          settingsOverlay: true,
-          permissionBypass: false,
-          trustDialog: true,
-          versionProbe: true,
-          tier: "deprecated",
-        },
-      };
-    }
     return undefined;
   }),
 }));
@@ -256,8 +241,8 @@ vi.mock("../../../../services/HelpSessionService.js", () => ({
     getAssistantScratchEnv: (token: string) => mockGetAssistantScratchEnv(token),
     getBypassPermissions: (token: string) => mockGetBypassPermissions(token),
     getDebugLogging: (token: string) => mockGetDebugLogging(token),
-    markTerminalForToken: (token: string, terminalId: string) =>
-      mockMarkTerminalForToken(token, terminalId),
+    markTerminalForToken: (token: string, terminalId: string, expectedAgentId?: string) =>
+      mockMarkTerminalForToken(token, terminalId, expectedAgentId),
     unbindTerminal: (terminalId: string) => mockUnbindTerminal(terminalId),
     isHelpTerminal: (terminalId: string) => mockIsHelpTerminal(terminalId),
   },
@@ -310,6 +295,7 @@ import {
   registerPluginAgents,
   clearPluginAgentRegistryForTests,
 } from "../../../../../shared/config/pluginAgentRegistry.js";
+import { setUserRegistry } from "../../../../../shared/config/agentRegistry.js";
 import { CHANNELS } from "../../../channels.js";
 import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
 import type { HandlerDependencies } from "../../../types.js";
@@ -1671,15 +1657,31 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
-  it("refuses a help token on an agent that declares wiring but is not admitted (#12262)", async () => {
+  it("refuses a help token on a stable agent excluded for its injection mode (#12262)", async () => {
     // The token is VALID here — the refusal is about the agent, not the bearer.
-    // Gemini declares a wiring shape but its deprecated tier keeps it out of
-    // the wired list, so `isAssistantAgent` is false. The rejection used to be
-    // conditioned on that same flag, so this spawn sailed past it and landed on
-    // the ordinary launch path with a live help bearer still in its env and no
-    // MCP wiring of any kind. Narrowing the wired list for unimplemented
-    // injection modes would have widened that hole, so the rejection now keys
-    // off whether the agent claims assistant wiring at all.
+    // This agent clears the tier gate but declares a mode Daintree implements
+    // for no third party, so narrowing `getAssistantWiredAgentIds` drops it and
+    // `isAssistantAgent` goes false. The rejection used to hang off that same
+    // flag, which would have let this spawn land on the ordinary launch path
+    // with a live help bearer in its env and no MCP wiring of any kind.
+    setUserRegistry({
+      "byo-agent": {
+        id: "byo-agent",
+        name: "BYO Agent",
+        command: "byo",
+        color: "#FF8800",
+        iconId: "custom",
+        supportsContextInjection: true,
+        supports: {
+          mcpInjection: "cli-flags",
+          settingsOverlay: false,
+          permissionBypass: false,
+          trustDialog: false,
+          versionProbe: true,
+          tier: "stable",
+        },
+      },
+    });
     mockValidateToken.mockReturnValue("action");
     mockIsRunning.mockReturnValue(true);
     mockCurrentPort.mockReturnValue(45454);
@@ -1689,27 +1691,60 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     registerTerminalLifecycleHandlers(deps);
 
     const handler = getSpawnHandler();
-    await expect(
-      handler(
-        {} as Electron.IpcMainInvokeEvent,
-        {
-          cols: 80,
-          rows: 24,
-          cwd: tmpDir,
-          command: "gemini",
-          launchAgentId: "gemini",
-          env: { DAINTREE_MCP_TOKEN: "live-help-token" },
-        } as unknown as Parameters<typeof handler>[1]
-      )
-    ).rejects.toThrow(/Daintree Assistant session token is invalid/);
+    try {
+      await expect(
+        handler(
+          {} as Electron.IpcMainInvokeEvent,
+          {
+            cols: 80,
+            rows: 24,
+            cwd: tmpDir,
+            command: "byo",
+            launchAgentId: "byo-agent",
+            env: { DAINTREE_MCP_TOKEN: "live-help-token" },
+          } as unknown as Parameters<typeof handler>[1]
+        )
+      ).rejects.toThrow(/Daintree Assistant session token is invalid/);
+    } finally {
+      setUserRegistry({});
+    }
 
     expect(ptyClient.spawn).not.toHaveBeenCalled();
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
+  it("still launches a deprecated-tier agent carrying a user's own DAINTREE_MCP_TOKEN (#12262)", async () => {
+    // Gemini could never provision a help session, so it must keep launching
+    // even when the user has that variable in a preset or project env. Keying
+    // the rejection off "declares any supports" instead of the pre-#12262
+    // admission set would have broken this ordinary launch.
+    mockValidateToken.mockReturnValue(false);
+    mockIsRunning.mockReturnValue(true);
+    mockCurrentPort.mockReturnValue(45454);
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "gemini",
+        launchAgentId: "gemini",
+        env: { DAINTREE_MCP_TOKEN: "users-own-external-key" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn).toHaveBeenCalled();
+  });
+
   it("leaves a plain shell carrying a stray DAINTREE_MCP_TOKEN alone (#12262)", async () => {
-    // The rejection keys off the agent declaring `supports`, so a terminal that
-    // merely inherited the var from the user's own environment still spawns.
+    // A terminal with no launch agent declares no `supports` at all, so it is
+    // outside the rejection either way.
     mockValidateToken.mockReturnValue(false);
     mockIsRunning.mockReturnValue(true);
     mockCurrentPort.mockReturnValue(45454);
@@ -2131,7 +2166,9 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
       } as unknown as Parameters<typeof handler>[1]
     );
 
-    expect(mockMarkTerminalForToken).toHaveBeenCalledWith("help-token", id);
+    // The third argument is the cross-agent token-reuse guard for env-only
+    // agents, which have no launch-arg getter to supply one (#12262).
+    expect(mockMarkTerminalForToken).toHaveBeenCalledWith("help-token", id, "claude");
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
   });
 

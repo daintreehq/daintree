@@ -1011,6 +1011,23 @@ export function hasAssistantMcpImplementation(agentId: string): boolean {
 }
 
 /**
+ * Whether the agent declares assistant wiring at a tier that is still active —
+ * the admission set as it stood before `mcpInjection` became a precondition.
+ *
+ * `lifecycle.ts` needs this rather than `getAssistantWiredAgentIds` for its
+ * help-token rejection: an agent newly excluded for an unimplemented injection
+ * mode must still be refused rather than falling through to the ordinary launch
+ * path, but a `deprecated`-tier agent was never admitted in the first place and
+ * must keep launching normally even if the user happens to carry a
+ * `DAINTREE_MCP_TOKEN` in their own environment.
+ */
+export function declaresActiveAssistantTier(agentId: string): boolean {
+  const supports = getEffectiveAgentConfig(agentId)?.supports;
+  if (!supports) return false;
+  return supports.tier === "stable" || supports.tier === "experimental";
+}
+
+/**
  * IDs of agents (built-in and user-defined) whose assistant wiring is at the
  * `"stable"` tier. Used by the HelpPanel agent picker to filter the visible
  * options and by the `helpPanelStore` rehydration guard to drop stale

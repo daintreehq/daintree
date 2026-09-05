@@ -2787,14 +2787,25 @@ describe("HelpSessionService", () => {
       "refuses a user-defined agent declaring %s before any side effect",
       async (mcpInjection) => {
         setUserRegistry({ "byo-agent": userAgent({ ...baseSupports, mcpInjection }) });
-        await expect(
-          service.provisionSession({ ...provisionInput(), agentId: "byo-agent" })
-        ).rejects.toThrow(
+        const before = await fs.readdir(userData, { recursive: true });
+
+        const rejection = service
+          .provisionSession({ ...provisionInput(), agentId: "byo-agent" })
+          .catch((err: unknown) => err);
+        const err = (await rejection) as Error & { code?: string };
+
+        // A plain Error carrying the same message would satisfy a message-only
+        // assertion, so pin the typed refusal the renderer decodes.
+        expect(err).toBeInstanceOf(Error);
+        expect(err.name).toBe("HelpSessionError");
+        expect(err.code).toBe("UNSUPPORTED_ASSISTANT_AGENT");
+        expect(err.message).toMatch(
           new RegExp(`not assistant-supported.*no "${mcpInjection}" MCP wiring`)
         );
-        // Refused at the gate, so nothing was minted or probed: before the fix
-        // this agent got a session dir, a bearer and a live probe, then matched
-        // no wiring branch and launched with nothing.
+        // Refused at the gate, so nothing was written, minted or probed: before
+        // the fix this agent got a session dir, a bearer and a live probe, then
+        // matched no wiring branch and launched with nothing.
+        expect(await fs.readdir(userData, { recursive: true })).toEqual(before);
         expect(mockProbeMcpServer).not.toHaveBeenCalled();
         expect(mockProbeMcpSseServer).not.toHaveBeenCalled();
       }
