@@ -49,4 +49,48 @@ describe("inferKind", () => {
   it("infers browser from empty-string browserUrl (defined means browser)", () => {
     expect(inferKind({ browserUrl: "" })).toBe("browser");
   });
+
+  describe("plugin kind re-qualification (#12280)", () => {
+    const projectRef = {
+      origin: "project",
+      pluginId: "acme.dashboard",
+      kindId: "overview",
+    } as const;
+
+    it("qualifies a portable project kind against the project being restored into", () => {
+      expect(inferKind({ kind: "acme.dashboard.overview", kindRef: projectRef }, "proj-b")).toBe(
+        "project:proj-b/acme.dashboard/overview"
+      );
+    });
+
+    it("migrates a legacy snapshot that still carries another project's id", () => {
+      expect(inferKind({ kind: "project:proj-a/acme.dashboard/overview" }, "proj-b")).toBe(
+        "project:proj-b/acme.dashboard/overview"
+      );
+    });
+
+    it("never aliases onto a global kind when no project is in scope", () => {
+      // Degrades to the missing-plugin placeholder rather than dropping the
+      // panel — but must not hand back the portable form, which an installed
+      // global plugin of the same manifest and kind id would answer for.
+      const resolved = inferKind({ kind: "acme.dashboard.overview", kindRef: projectRef });
+      expect(resolved).not.toBe("acme.dashboard.overview");
+      expect(resolved.startsWith("project:")).toBe(true);
+    });
+
+    it("leaves a global plugin kind and every built-in alone", () => {
+      expect(
+        inferKind(
+          { kind: "acme.dashboard.overview", kindRef: { ...projectRef, origin: "global" } },
+          "proj-b"
+        )
+      ).toBe("acme.dashboard.overview");
+      expect(inferKind({ kind: "browser" }, "proj-b")).toBe("browser");
+    });
+
+    it("still runs the legacy kind migrations ahead of re-qualification", () => {
+      expect(inferKind({ kind: "agent" }, "proj-b")).toBe("terminal");
+      expect(inferKind({ kind: "markdown" }, "proj-b")).toBe("file");
+    });
+  });
 });

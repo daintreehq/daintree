@@ -191,6 +191,7 @@ function electResumeSuppression(
   panels: readonly (TerminalState | undefined)[],
   context: {
     projectRoot: string;
+    projectId: string | null;
     backendTerminalMap: Map<string, BackendTerminalInfo>;
     prefetchedReconnectResults?: Record<string, TerminalReconnectResult>;
   }
@@ -247,9 +248,9 @@ function electResumeSuppression(
     // neither is something the fallback can collide with.
     const holdsLiveSession = reconnects && record.hasPty !== false;
 
-    const kind = record?.kind ?? inferKind(saved);
+    const kind = record?.kind ?? inferKind(saved, context.projectId);
     if (kind === "assistant" || !panelKindHasPty(kind)) continue;
-    const savedAgentId = resolveRespawnAgentId(saved, inferKind(saved));
+    const savedAgentId = resolveRespawnAgentId(saved, inferKind(saved, context.projectId));
 
     if (reconnects) {
       if (!holdsLiveSession) continue;
@@ -442,6 +443,18 @@ export interface PanelRestoreContext {
    */
   workspaceHasWorktreesPromise: Promise<boolean>;
   projectRoot: string;
+  /**
+   * Identity of the project being restored INTO, as distinct from
+   * {@link projectRoot}, which is its path. A plugin-contributed panel kind is
+   * persisted portably and re-qualified against this (#12280), so a layout
+   * written under one project identity resolves under whichever one opens it.
+   * `null` for a restore with no project in scope: `requalifyPersistedKind`
+   * then qualifies a project-local kind against an unresolvable sentinel
+   * project rather than leaving it portable, where it would alias onto an
+   * installed global plugin's kind. The panel reaches the missing-plugin
+   * placeholder with its state intact, as an uninstalled plugin's would.
+   */
+  projectId: string | null;
   agentSettings: AgentSettings | undefined;
   clipboardDirectory: string | undefined;
   projectPresetsByAgent: Record<string, AgentPreset[]>;
@@ -518,6 +531,7 @@ export async function restorePanelsPhase(
     activeWorktreeId,
     workspaceHasWorktreesPromise,
     projectRoot,
+    projectId,
     agentSettings,
     clipboardDirectory,
     projectPresetsByAgent,
@@ -723,6 +737,7 @@ export async function restorePanelsPhase(
     // the common single-pane case — is never touched.
     const resumeSuppression = electResumeSuppression(panels, {
       projectRoot: projectRoot || "",
+      projectId,
       backendTerminalMap,
       prefetchedReconnectResults,
     });
@@ -756,7 +771,7 @@ export async function restorePanelsPhase(
       if (backendTerminal) {
         taskIsPty = true;
       } else {
-        const inferredKind = inferKind(saved);
+        const inferredKind = inferKind(saved, projectId);
         taskIsPty = inferredKind === "assistant" ? false : panelKindHasPty(inferredKind);
       }
 
@@ -833,7 +848,7 @@ export async function restorePanelsPhase(
 
             backendTerminalMap.delete(saved.id);
           } else {
-            const kind = inferKind(saved);
+            const kind = inferKind(saved, projectId);
 
             if (kind === "assistant") {
               logHydrationInfo(`Skipping legacy assistant panel: ${saved.id}`);

@@ -83,6 +83,15 @@ export const PanelContributionObjectSchema = z
     // of the dock — no default so absence flows through as `undefined` and
     // `panelKindIsDockable` treats it as dockable.
     dockable: z.boolean().optional(),
+    // Version of the shape this panel writes through `persistState` (#12280).
+    // No default: absence means "no opinion", and the host then hands a
+    // persisted bag over unjudged exactly as it did before versioning existed.
+    // Declaring one buys the migration contract — the host stamps this number
+    // onto every write, tells the view which version it is reading via
+    // `PanelViewProps.stateVersion`, and refuses to hand over a bag written by
+    // a NEWER build of the plugin rather than let it be misread and rewritten.
+    // Bump it when the shape changes incompatibly, never for an additive key.
+    stateVersion: z.number().int().min(1).max(1_000_000).optional(),
   })
   .strict();
 

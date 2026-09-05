@@ -13,6 +13,7 @@ import type {
   FileBrowserSortKey,
   FileBrowserTreeSnapshot,
 } from "./panel.js";
+import type { PersistedPanelKindRef } from "../config/panelKindRegistry.js";
 import type { CommandOverride } from "./commands.js";
 import type { GitignoreTemplateId } from "../config/gitignoreTemplates.js";
 import type { GitStatus } from "./git.js";
@@ -302,11 +303,42 @@ export interface PanelSnapshot {
   /** Opaque state bag for extension panels — survives the save/restore round-trip */
   extensionState?: Record<string, unknown>;
   /**
+   * Which version of the owning plugin's state schema `extensionState` was
+   * written against (#12280). Stamped by the host from the kind's registered
+   * `stateVersion` at the moment the plugin writes, never from the plugin's own
+   * patch — a plugin can only reach inside `extensionState`, so it cannot claim
+   * a version its bag is not. Absent on bags written before versioning existed,
+   * which read as version 0.
+   *
+   * Restore refuses to hand the view a bag stamped ABOVE what the installed
+   * plugin declares: that is a downgrade, and the alternative to an error the
+   * user can act on is the plugin quietly rewriting state it misread. The bag
+   * itself is retained either way — see `decodePanelExtensionState`.
+   */
+  extensionStateVersion?: number;
+  /**
    * Extension ID of the plugin that registered this panel's kind, if applicable.
    * Preserved across save/restore so the placeholder can name the missing plugin
    * when its registration is gone.
    */
   pluginId?: string;
+  /**
+   * Portable identity of a plugin-contributed panel kind: origin, manifest id
+   * and bare kind id (#12280).
+   *
+   * `kind` alone cannot express a project-local plugin's kind portably — its
+   * runtime form is `project:{projectId}/{manifestId}/{kindId}`, so persisting
+   * it verbatim writes this machine's project id into the layout and every
+   * plugin panel orphans the moment the layout is opened under a different
+   * identity. `kind` therefore stores the project id STRIPPED — leaving the
+   * dotted `{manifestId}.{kindId}`, which also keeps the missing-plugin escape
+   * hatch tripping — and this ref carries what restore needs to qualify it
+   * again against whichever project it is being restored into.
+   *
+   * Absent for built-ins, and for legacy snapshots whose `kind` still carries
+   * the qualified form — `requalifyPersistedKind` migrates those on read.
+   */
+  kindRef?: PersistedPanelKindRef;
   /**
    * Timestamp (ms) of the last user-initiated focus on this panel. Used by
    * panel restore to promote the most-recently-active panel per worktree to

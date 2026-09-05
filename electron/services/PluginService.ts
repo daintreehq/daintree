@@ -1900,6 +1900,11 @@ export class PluginService {
         // absence stays `undefined` and `panelKindIsDockable` applies the
         // default. #11332.
         ...(panel.dockable !== undefined ? { dockable: panel.dockable } : {}),
+        // Absence has to survive as `undefined` for the same reason as
+        // `dockable`: a plugin that declares no state version gets its bag
+        // handed over unjudged, and defaulting to 1 here would start refusing
+        // bags on a promise the author never made (#12280).
+        ...(panel.stateVersion !== undefined ? { stateVersion: panel.stateVersion } : {}),
         // Keyed by the INSTANCE, because `unregisterPluginPanelKinds` matches
         // on `extensionId` alone: keying by manifest id would make one
         // project's unload sweep every other project's copies of the same kind.

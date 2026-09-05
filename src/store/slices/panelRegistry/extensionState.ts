@@ -1,6 +1,7 @@
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { saveNormalized } from "./persistence";
 import { logWarn } from "@/utils/logger";
+import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 
 type Set = PanelRegistryStoreApi["setState"];
 
@@ -131,15 +132,43 @@ export const createExtensionStateActions = (
       } catch {
         currentSerialized = undefined;
       }
+      // The write gate is the only place the state version moves (#12280). A
+      // plugin that writes has, by doing so, produced a bag at the version it
+      // currently declares — and it can only reach inside `extensionState`, so
+      // the number is the host's to stamp and not the plugin's to claim.
+      //
+      // A REGISTERED kind's declared version wins outright, absence included: a
+      // build that declares none has just written a bag of unknown shape, and
+      // keeping the number the previous build stamped would present that
+      // rewrite as state the older schema never produced. Only an unregistered
+      // kind carries its stamp forward, having written nothing to invalidate it.
+      const kindConfig = getPanelKindConfig(panel.kind ?? "");
+      const extensionStateVersion =
+        kindConfig !== undefined ? kindConfig.stateVersion : panel.extensionStateVersion;
+
       if (currentSerialized === serialized) {
         // Nothing to write, but the caller's desired state IS what is stored —
         // reporting failure here would make every idempotent re-persist look
         // like a rejection.
         accepted = true;
-        return state;
+        // ...unless the VERSION still has to move. A migration whose result is
+        // byte-identical to what it read is a real migration — the plugin has
+        // confirmed the bag matches its current schema — and returning here
+        // without re-stamping would leave the record on the old version, so the
+        // plugin would migrate the same bag again on every single mount.
+        if (extensionStateVersion === panel.extensionStateVersion) return state;
+        const restamped = {
+          ...state.panelsById,
+          [id]: { ...panel, extensionStateVersion },
+        };
+        saveNormalized(restamped, state.panelIds);
+        return { panelsById: restamped };
       }
 
-      const newById = { ...state.panelsById, [id]: { ...panel, extensionState: merged } };
+      const newById = {
+        ...state.panelsById,
+        [id]: { ...panel, extensionState: merged, extensionStateVersion },
+      };
       saveNormalized(newById, state.panelIds);
       accepted = true;
       return { panelsById: newById };

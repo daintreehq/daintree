@@ -63,6 +63,13 @@ export interface AddPanelOptionsBase {
   /** Opaque state bag for extension panels — survives the save/restore round-trip */
   extensionState?: Record<string, unknown>;
   /**
+   * Version {@link extensionState} was written against, carried in from a
+   * restored snapshot (#12280). Omitted when spawning fresh — `addPanel` stamps
+   * the registered kind's current `stateVersion` instead, because a bag built
+   * from spawn arguments is by definition current.
+   */
+  extensionStateVersion?: number;
+  /**
    * Extension ID of the plugin that registered this panel's kind, if applicable.
    * Preserved across save/restore so the placeholder can name the missing plugin
    * when its registration is gone.

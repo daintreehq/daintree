@@ -308,6 +308,13 @@ interface BasePanelData {
   /** Opaque state bag for extension panels — survives the save/restore round-trip */
   extensionState?: Record<string, unknown>;
   /**
+   * Which version of the owning plugin's state schema {@link extensionState}
+   * holds (#12280). Host-owned: stamped from the kind's registered
+   * `stateVersion` at the write gate, carried forward untouched when the plugin
+   * is not there to re-stamp it. Never read from the plugin's own patch.
+   */
+  extensionStateVersion?: number;
+  /**
    * Extension ID of the plugin that registered this panel's kind, if applicable.
    * Preserved across save/restore so the placeholder can name the missing plugin
    * when its registration is gone.
@@ -1118,6 +1125,13 @@ export interface TerminalInstance {
   fallbackChainIndex?: number;
   /** Opaque state bag for extension panels — survives the save/restore round-trip */
   extensionState?: Record<string, unknown>;
+  /**
+   * Which version of the owning plugin's state schema {@link extensionState}
+   * holds (#12280). Host-owned: stamped from the kind's registered
+   * `stateVersion` at the write gate, carried forward untouched when the plugin
+   * is not there to re-stamp it. Never read from the plugin's own patch.
+   */
+  extensionStateVersion?: number;
   /**
    * Extension ID of the plugin that registered this panel's kind, if applicable.
    * Preserved across save/restore so the placeholder can name the missing plugin

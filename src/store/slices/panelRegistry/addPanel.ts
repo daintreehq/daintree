@@ -355,6 +355,15 @@ export const createAddPanelActions = (
       // of an unregistered kind) wins over a live registry lookup only when the
       // registry has no matching entry.
       const pluginId = kindConfig?.extensionId ?? options.pluginId;
+      // A restored bag keeps the version it was written at; a bag built from
+      // spawn arguments is current by definition, so it takes the registered
+      // one. Neither is invented for a kind the registry can't answer for —
+      // an absent version reads as legacy and is handed over unjudged, which
+      // is the right outcome for a bag nobody has declared a schema for
+      // (#12280).
+      const extensionStateVersion =
+        options.extensionStateVersion ??
+        (options.extensionState !== undefined ? kindConfig?.stateVersion : undefined);
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- panel shape is guaranteed by the registered createDefaults factory
       const terminal = {
         id,
@@ -371,6 +380,7 @@ export const createAddPanelActions = (
         isVisible: location === "grid",
         runtimeStatus,
         extensionState: options.extensionState,
+        extensionStateVersion,
         pluginId,
         excludeFromPersistence: options.excludeFromPersistence,
         removeOnExit: options.removeOnExit,
@@ -571,6 +581,9 @@ export const createAddPanelActions = (
     // if the registry has an entry so the panel survives plugin removal.
     const ptyKindConfig = getPanelKindConfig(kind);
     const ptyPluginId = ptyKindConfig?.extensionId ?? options.pluginId;
+    const ptyExtensionStateVersion =
+      options.extensionStateVersion ??
+      (options.extensionState !== undefined ? ptyKindConfig?.stateVersion : undefined);
     // Reconnects don't go through a fresh spawn — mark them "ready" directly.
     const spawnStatus: "spawning" | "ready" | "failed" = isReconnect ? "ready" : "spawning";
 
@@ -665,6 +678,7 @@ export const createAddPanelActions = (
       fallbackChainIndex: options.fallbackChainIndex,
       sessionLostOnRestore: options.sessionLostOnRestore,
       extensionState: options.extensionState,
+      extensionStateVersion: ptyExtensionStateVersion,
       pluginId: ptyPluginId,
       spawnedBy: options.spawnedBy,
       focusPolicy: options.focusPolicy,
@@ -711,6 +725,13 @@ export const createAddPanelActions = (
                 lastStateChange: ptyTerminal.lastStateChange ?? existingPty?.lastStateChange,
                 exitBehavior: ptyTerminal.exitBehavior ?? existingPty?.exitBehavior,
                 extensionState: ptyTerminal.extensionState ?? existing.extensionState,
+                // Recovered with the bag it describes. Keeping one without
+                // the other would leave a stamped bag looking legacy, and a
+                // reconnect is not a plugin write (#12280).
+                extensionStateVersion:
+                  ptyTerminal.extensionState !== undefined
+                    ? ptyTerminal.extensionStateVersion
+                    : existing.extensionStateVersion,
                 // Sticky: once detected, never downgrade on a partial reconnect payload.
                 everDetectedAgent: ptyTerminal.everDetectedAgent || existingPty?.everDetectedAgent,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
@@ -766,6 +787,13 @@ export const createAddPanelActions = (
                 lastStateChange: ptyTerminal.lastStateChange ?? existingPty2?.lastStateChange,
                 exitBehavior: ptyTerminal.exitBehavior ?? existingPty2?.exitBehavior,
                 extensionState: ptyTerminal.extensionState ?? existing.extensionState,
+                // Recovered with the bag it describes. Keeping one without
+                // the other would leave a stamped bag looking legacy, and a
+                // reconnect is not a plugin write (#12280).
+                extensionStateVersion:
+                  ptyTerminal.extensionState !== undefined
+                    ? ptyTerminal.extensionStateVersion
+                    : existing.extensionStateVersion,
                 // Sticky: once detected, never downgrade on a partial reconnect payload.
                 everDetectedAgent: ptyTerminal.everDetectedAgent || existingPty2?.everDetectedAgent,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing

@@ -135,7 +135,11 @@ function reconcileResumableAgentCounts(projects: Project[], states: (ProjectStat
     const count = projectStore.wasStateUnreadableThisSession(project.id)
       ? null
       : state
-        ? countResumableAgentPanels(state.terminals, `resume-count-backfill(project:${project.id})`)
+        ? countResumableAgentPanels(
+            state.terminals,
+            `resume-count-backfill(project:${project.id})`,
+            project.id
+          )
         : 0;
 
     try {
@@ -176,7 +180,11 @@ function reconcileScratchResumableAgentCounts(
     const count = projectStore.wasStateUnreadableThisSession(scratch.id)
       ? null
       : state
-        ? countResumableAgentPanels(state.terminals, `resume-count-backfill(scratch:${scratch.id})`)
+        ? countResumableAgentPanels(
+            state.terminals,
+            `resume-count-backfill(scratch:${scratch.id})`,
+            scratch.id
+          )
         : 0;
 
     try {

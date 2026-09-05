@@ -246,6 +246,11 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop) → registerPanelKind" }],
       note: "Registered as the panel kind dock eligibility; undefined defaults to dockable, false opts out (panelKindIsDockable).",
     },
+    stateVersion: {
+      mode: "verbatim",
+      consumers: [{ file: PLUGIN_SERVICE, symbol: "loadPlugin (panels loop) → registerPanelKind" }],
+      note: "Registered as the panel kind's extensionState schema version; stamped onto the panel record at the write gate (setPanelExtensionState) and enforced on restore by decodePanelExtensionState, which refuses a bag written above it (#12280).",
+    },
   },
   toolbarButtons: {
     id: {

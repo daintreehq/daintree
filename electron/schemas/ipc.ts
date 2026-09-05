@@ -43,6 +43,17 @@ export const TerminalLocationSchema = z.enum(["grid", "dock", "overlay", "trash"
 /**
  * Schema for panel/terminal kind - distinguishes built-in panel types.
  */
+/**
+ * Whether a passthrough `kindRef` marks this snapshot as a project-local
+ * plugin's panel (#12280). Deliberately structural rather than schema-validated:
+ * `kindRef` is never declared on the snapshot schemas, because a malformed one
+ * would fail validation and take the whole panel with it.
+ */
+function isProjectPanelKindRef(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  return (value as { origin?: unknown }).origin === "project";
+}
+
 export const PanelKindSchema = z.union([
   z.enum(BUILT_IN_PANEL_KINDS),
   z.string(), // Allow extension-provided kinds
@@ -108,6 +119,16 @@ export const AppStateTerminalEntrySchema = z
         }
       }
 
+      // A project-local plugin's kind is persisted PORTABLY (#12280), and that
+      // portable form is byte-identical to a global plugin's runtime form. So a
+      // registry lookup here can answer from a DIFFERENT plugin that happens to
+      // share the manifest and kind id — an ordinary situation while developing
+      // a plugin in `.daintree/plugins` with the published one still installed.
+      // If that global kind declares `hasPty`, this refinement would demand a
+      // `cwd` the project panel never had and `filterValidTerminalEntries` would
+      // drop the panel outright. Plugin panels are not PTY-backed in v1 (their
+      // kind collapses to `terminal` at creation), so a project ref is exempt.
+      if (isProjectPanelKindRef(data.kindRef)) return true;
       if (panelKindHasPty(kind)) {
         return data.cwd !== undefined;
       }
@@ -180,6 +201,16 @@ export const TerminalSnapshotSchema = z
         }
       }
 
+      // A project-local plugin's kind is persisted PORTABLY (#12280), and that
+      // portable form is byte-identical to a global plugin's runtime form. So a
+      // registry lookup here can answer from a DIFFERENT plugin that happens to
+      // share the manifest and kind id — an ordinary situation while developing
+      // a plugin in `.daintree/plugins` with the published one still installed.
+      // If that global kind declares `hasPty`, this refinement would demand a
+      // `cwd` the project panel never had and `filterValidTerminalEntries` would
+      // drop the panel outright. Plugin panels are not PTY-backed in v1 (their
+      // kind collapses to `terminal` at creation), so a project ref is exempt.
+      if (isProjectPanelKindRef(data.kindRef)) return true;
       if (panelKindHasPty(kind)) {
         return data.cwd !== undefined;
       }
