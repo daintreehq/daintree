@@ -290,6 +290,7 @@ describe("WindowsProcessCensus", () => {
     });
 
     it("waits for the LF half of a CRLF split across chunks", async () => {
+      vi.useFakeTimers();
       const census = new WindowsProcessCensus();
       const pending = census.request();
       const id = lastRequestId(children[0]);
@@ -297,11 +298,24 @@ describe("WindowsProcessCensus", () => {
       void pending.then(settled, settled);
 
       children[0].stdout.emit("data", `[]\r\n${CENSUS_SENTINEL_PREFIX}${id}\r`);
-      await Promise.resolve();
+      // A full drain, not one microtask: adoption of an `async` function's
+      // promise takes more than a turn, so a single `await Promise.resolve()`
+      // would report "not settled" even against an implementation that had
+      // already resolved.
+      await vi.advanceTimersByTimeAsync(0);
       expect(settled).not.toHaveBeenCalled();
 
       children[0].stdout.emit("data", "\n");
+      await vi.advanceTimersByTimeAsync(0);
       expect(await pending).toBe("[]");
+      // The assertion that actually catches the old behaviour: resolving on the
+      // CR would leave the LF to arrive with nothing outstanding, and that
+      // retires the helper.
+      expect(census.isRunning).toBe(true);
+      const next = census.request();
+      respond(children[0], "[]");
+      await next;
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
     });
 
     it("does not accept a longer id that starts with the one it asked for", async () => {
@@ -618,10 +632,16 @@ describe("WindowsProcessCensus", () => {
       });
       const census = new WindowsProcessCensus();
 
-      for (let i = 0; i < CENSUS_FAILURES_BEFORE_COOLDOWN; i++) {
-        await expect(census.request()).rejects.toThrow(/ENOENT/);
+      try {
+        for (let i = 0; i < CENSUS_FAILURES_BEFORE_COOLDOWN; i++) {
+          await expect(census.request()).rejects.toThrow(/ENOENT/);
+        }
+        await expect(census.request()).rejects.toThrow(/cooling down/);
+      } finally {
+        // This case runs on real timers, and the third failure arms a real
+        // 15s cooldown. `useRealTimers()` would not clear it.
+        census.dispose();
       }
-      await expect(census.request()).rejects.toThrow(/cooling down/);
     });
 
     it("rejects a request when the write to stdin throws", async () => {

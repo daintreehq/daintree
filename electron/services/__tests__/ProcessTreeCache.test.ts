@@ -1108,6 +1108,7 @@ describe("ProcessTreeCache command/env construction", () => {
       // The pre-existing CPU tests drive a copied formula over hand-built maps.
       // This one goes through the real transport, which is what changed.
       vi.useFakeTimers();
+      const cores = vi.spyOn(os, "availableParallelism").mockReturnValue(12);
       try {
         vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
         const { cache, internals } = windowsCache();
@@ -1132,9 +1133,13 @@ describe("ProcessTreeCache command/env construction", () => {
 
         vi.setSystemTime(new Date("2026-01-01T00:00:01.000Z"));
         await refreshOnce(internals, row("5000000", "2026-01-01T00:00:00.000Z"));
-        // 5,000,000 100ns ticks = 500ms of CPU over 1000ms of wall clock.
-        const cores = Math.max(os.availableParallelism(), 1);
-        expect(cache.getProcess(100)?.cpuPercent).toBeCloseTo(50 / cores, 5);
+        // 5,000,000 100ns ticks = 500ms of CPU over 1000ms of wall clock on 12
+        // cores. The core count is pinned rather than read from the machine,
+        // and the expectation is a literal rather than the formula restated:
+        // the production maths divides in BigInt before scaling, so the real
+        // answer is floor(5000 / 12) / 100 = 4.16, not 4.1666…, and a test that
+        // recomputed it would agree with the code however wrong the code was.
+        expect(cache.getProcess(100)?.cpuPercent).toBe(4.16);
 
         // Same PID, new incarnation: the snapshot key changes with
         // CreationDate, so the delta starts over rather than reading the dead
@@ -1144,6 +1149,7 @@ describe("ProcessTreeCache command/env construction", () => {
         expect(cache.getProcess(100)?.cpuPercent).toBe(0);
         expect(cache.getProcess(100)?.startTime).toBe("2026-01-01T00:00:01.500Z");
       } finally {
+        cores.mockRestore();
         vi.useRealTimers();
       }
     });

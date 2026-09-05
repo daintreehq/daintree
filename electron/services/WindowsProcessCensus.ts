@@ -392,6 +392,10 @@ export class WindowsProcessCensus {
     this.cooldownTimer = setTimeout(() => {
       this.cooldownTimer = null;
     }, delayMs);
+    // Nothing should stay alive just to end a cooldown: the cache owns a
+    // referenced poll timer whenever a census is actually wanted, and this one
+    // outliving it would only delay the host's exit.
+    this.cooldownTimer.unref?.();
   }
 
   /**

@@ -56,16 +56,19 @@ const execFileAsync = promisify(execFile);
  * is taken before teardown, so the baseline arm is UNDERCOUNTED — the bias runs
  * against the finding, which is the safe direction.
  *
- * The two totals do NOT cover the same boundaries: the persistent arm's delta
- * runs between two tick samples and so spans one fewer census than it made,
- * and it excludes the startup CPU the baseline charges to every one of its
- * processes. Both effects flatter the persistent arm, which is the unsafe
- * direction — so the comparison is published per census
- * (`censusCpuMsPerRefresh` against `baselineCpuMsPerRefresh`, and the ratio
- * between those), where the spans are equalised, rather than as two raw totals
- * a reader would divide differently. If the helper is replaced mid-window the
- * two samples belong to different processes, so the reading is discarded
- * outright rather than reported as a delta across an identity change.
+ * The two totals do NOT cover the same boundaries. The persistent arm's delta
+ * runs between two tick samples, so it spans fewer censuses than it made, and
+ * it excludes the one-time startup the baseline charges to every one of its
+ * forty processes. Publishing the comparison per census
+ * (`censusCpuMsPerRefresh` against `baselineCpuMsPerRefresh`) equalises the
+ * SPANS — it does not restore the persistent arm's startup. So read the
+ * persistent figure as a STEADY-STATE per-census cost, and the ratio as
+ * "what a census costs once the helper is warm" rather than as total CPU saved
+ * over a window; the startup is paid once and amortises over the app's life,
+ * which is the whole argument, but it is not in this number. If the helper is
+ * replaced mid-window, or a sample is missing, the reading is discarded
+ * outright (`censusCpuSampleMisses`) rather than reported as a delta across an
+ * identity change or divided by a span it does not cover.
  *
  * Neither CPU figure includes work done inside the WMI provider processes on
  * the other side of the CIM call. That work is real and is charged to
@@ -92,6 +95,17 @@ export const CENSUS_REQUIRED_CPU_REDUCTION = 2;
 
 /** Live children the fixture keeps in the tree for the oracle to find. */
 const FIXTURE_CHILDREN = 3;
+
+/**
+ * How long those children live.
+ *
+ * Generously past the nominal 60s window, because the loop runs all forty
+ * iterations even when it falls behind: two seconds of persistent refresh plus
+ * two of baseline is a healthy machine under load, and it is also a ~160s run.
+ * The default 120s lifetime would have the fixture exit under it and book
+ * discovery misses with nothing actually wrong.
+ */
+const FIXTURE_LIFETIME_MS = 15 * 60_000;
 
 /** Long enough for a slow first CIM enumeration on a cold machine. */
 const BASELINE_TIMEOUT_MS = 20_000;
@@ -335,7 +349,9 @@ export const windowsCensusScenarios: PerfScenario[] = [
       // sample and leave the count of refreshes to the scheduler. The idle
       // cadence itself is PERF-092's subject, not this one's.
       const harness = await createProcessTreeHarness(SELF_POLL_DISABLED_MS);
-      const children = Array.from({ length: FIXTURE_CHILDREN }, () => spawnProbeChild());
+      const children = Array.from({ length: FIXTURE_CHILDREN }, () =>
+        spawnProbeChild(FIXTURE_LIFETIME_MS)
+      );
       const expected: FixtureExpectation[] = children
         .map((child) => child.pid)
         .filter((pid): pid is number => pid !== null)
@@ -383,6 +399,9 @@ export const windowsCensusScenarios: PerfScenario[] = [
         let helperTickPid: number | null = null;
         let helperTickSamples = 0;
         let helperTickIdentityBroke = false;
+        let helperTickGapSeen = false;
+        let helperFirstSampleAt = -1;
+        let helperLastSampleAt = -1;
         let helperRssKb = 0;
         let censusHealthMisses = 0;
 
@@ -434,9 +453,14 @@ export const windowsCensusScenarios: PerfScenario[] = [
             );
             const parsed = parseBaselineResponse(stdout);
             rows = parsed.rows;
-            baselineCpuMs += parsed.cpuMs;
-            baselineRefreshes += 1;
-            baselineLatencies.push(performance.now() - baselineStart);
+            // A response that enumerated nothing is not a census. Suppressed
+            // CIM errors produce exactly that shape, and counting it would let
+            // forty empty answers satisfy every predicate here.
+            if (rows.length > 0 && parsed.cpuMs > 0) {
+              baselineCpuMs += parsed.cpuMs;
+              baselineRefreshes += 1;
+              baselineLatencies.push(performance.now() - baselineStart);
+            }
           } catch {
             // A failed reference refresh still counts its start below; it just
             // contributes no rows, and `baselineFidelityMisses` reports the gap.
@@ -445,21 +469,30 @@ export const windowsCensusScenarios: PerfScenario[] = [
 
           // Raw CPU ticks for the fixture children, and for the persistent
           // helper, out of the payload that enumerated the whole machine.
-          if (rows.length > 0) {
-            fixtureCpuMisses += gradeCpuTicks(rows, expected);
-            if (helperPid !== null) {
-              const ticks = cpuTicksForPid(rows, helperPid);
-              if (ticks !== null) {
-                // Anchored to ONE process. A helper replaced mid-window would
-                // otherwise have the old process's first sample subtracted from
-                // the new one's last, which is not a delta of anything and can
-                // even come out negative.
-                if (helperTickPid === null) helperTickPid = helperPid;
-                if (helperTickPid !== helperPid) helperTickIdentityBroke = true;
-                helperFirstTicks ??= ticks;
-                helperLastTicks = ticks;
-                helperTickSamples += 1;
+          // Graded unconditionally: an empty payload means the fixture children
+          // were not found, which is a miss, not a reading to skip.
+          fixtureCpuMisses += gradeCpuTicks(rows, expected);
+
+          if (helperPid !== null) {
+            const ticks = rows.length > 0 ? cpuTicksForPid(rows, helperPid) : null;
+            if (ticks === null) {
+              // A gap makes the sample count stop describing the span, so the
+              // delta stops being divisible by anything meaningful.
+              if (helperTickSamples > 0) helperTickGapSeen = true;
+            } else {
+              // Anchored to ONE process. A helper replaced mid-window would
+              // otherwise have the old process's first sample subtracted from
+              // the new one's last, which is not a delta of anything and can
+              // even come out negative.
+              if (helperTickPid === null) helperTickPid = helperPid;
+              if (helperTickPid !== helperPid) helperTickIdentityBroke = true;
+              if (helperFirstTicks === null) {
+                helperFirstTicks = ticks;
+                helperFirstSampleAt = read;
               }
+              helperLastTicks = ticks;
+              helperLastSampleAt = read;
+              helperTickSamples += 1;
             }
           }
         }
@@ -468,15 +501,21 @@ export const windowsCensusScenarios: PerfScenario[] = [
         const censusLaunches = powerShellStarts(allSpawnsSince(windowMark)) - baselineLaunches;
         const censusCpuUsable =
           !helperTickIdentityBroke &&
+          !helperTickGapSeen &&
           helperTickSamples >= 2 &&
           helperFirstTicks !== null &&
           helperLastTicks !== null;
         const censusCpuMs = censusCpuUsable
           ? ticksToMs((helperLastTicks as bigint) - (helperFirstTicks as bigint))
           : 0;
-        // The delta spans the censuses BETWEEN its two samples, which is one
-        // fewer than the samples themselves.
-        const censusCpuSpanRefreshes = censusCpuUsable ? helperTickSamples - 1 : 0;
+        // The delta spans the censuses BETWEEN its two samples — counted by
+        // WHERE those samples fell, not by how many there were. A missing
+        // sample in the middle leaves the count short while the span is
+        // unchanged, which would divide the same CPU by a smaller number and
+        // report the helper as more expensive than it was.
+        const censusCpuSpanRefreshes = censusCpuUsable
+          ? helperLastSampleAt - helperFirstSampleAt
+          : 0;
         const censusCpuMsPerRefresh =
           censusCpuSpanRefreshes > 0 ? censusCpuMs / censusCpuSpanRefreshes : 0;
         const baselineCpuMsPerRefresh =
@@ -516,6 +555,7 @@ export const windowsCensusScenarios: PerfScenario[] = [
           censusCpuMsPerRefresh,
           baselineCpuMsPerRefresh,
           censusCpuSpanRefreshes,
+          censusCpuSampleMisses: censusCpuUsable ? 0 : 1,
           baselineToSustainedCpuRatio:
             censusCpuMsPerRefresh > 0 ? baselineCpuMsPerRefresh / censusCpuMsPerRefresh : 0,
           censusLatencyMsP95: nearestRankPercentile(censusLatencies, 0.95),
