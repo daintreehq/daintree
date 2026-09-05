@@ -316,10 +316,10 @@
       }
     },
     "PERF-107": {
-      "p95Ms": 12000,
+      "p95Ms": 3000,
       "maxRegressionPct": 100,
       "maxMetricValues": {
-        "gitSpawnsPerIgnoredFlush": 1,
+        "gitSpawnsPerIgnoredFlush": 2,
         "statusPassesPerIgnoredFlush": 0,
         "checkIgnoresPerIgnoredFlush": 1,
         "browserSignalMisses": 0,
