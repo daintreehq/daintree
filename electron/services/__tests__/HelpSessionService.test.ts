@@ -2840,9 +2840,7 @@ describe("HelpSessionService", () => {
       if (!result) throw new Error("expected result");
       // Claude/Codex/Copilot get this check from their launch-arg getters;
       // env-only agents have none, so the binding itself has to enforce it.
-      expect(service.markTerminalForToken(result.token, "term-1", "some-other-agent")).toBe(
-        false
-      );
+      expect(service.markTerminalForToken(result.token, "term-1", "some-other-agent")).toBe(false);
       expect(service.markTerminalForToken(result.token, "term-1", "byo-agent")).toBe(true);
       // Omitting the expected agent keeps the pre-existing call shape working.
       expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
