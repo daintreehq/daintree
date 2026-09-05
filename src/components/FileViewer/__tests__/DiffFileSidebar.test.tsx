@@ -39,6 +39,7 @@ vi.mock("@/store/diffViewedStore", () => ({
   selectViewedSet: () => new Set<string>(),
 }));
 
+import { VirtuosoMockContext } from "react-virtuoso";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { primeRadix } from "@/components/ui/radix-loader";
@@ -204,5 +205,84 @@ describe("DiffFileSidebar — file row menu", () => {
     const call = dispatchMock.mock.calls.find(([id]) => id === "acme.do");
     expect(call).toBeDefined();
     expect(call![1]).toMatchObject({ path: "/repo/src/index.ts", worktreePath: WORKTREE });
+  });
+});
+
+describe("DiffFileSidebar — windowed file shelf (#12241)", () => {
+  /**
+   * Directory names that sort in the OPPOSITE order to their files' changeset
+   * indices. Display position and file index are then genuinely different
+   * numbers, which is the only way to prove the shelf keeps them apart: it
+   * reveals by display position and selects by file index.
+   */
+  /**
+   * jsdom measures nothing, so the real virtualizer would see a zero-height
+   * viewport and mount no rows at all. `VirtuosoMockContext` is react-virtuoso's
+   * own answer to that — it supplies fixed dimensions and lets the REAL grouped
+   * windowing run, which is the point: these tests are about the group/item
+   * index arithmetic, and a stub would be asserting the stub.
+   */
+  const renderWindowed = (files: DiffChangeSetEntry[], currentIndex: number) => {
+    const onSelect = vi.fn();
+    render(
+      <TooltipProvider>
+        <VirtuosoMockContext.Provider value={{ itemHeight: 32, viewportHeight: 640 }}>
+          <DiffFileSidebar
+            files={files}
+            currentIndex={currentIndex}
+            worktreePath={WORKTREE}
+            worktreeId="wt-1"
+            onSelect={onSelect}
+          />
+        </VirtuosoMockContext.Provider>
+      </TooltipProvider>
+    );
+    return { onSelect };
+  };
+
+  const reversedGroups = (count: number): DiffChangeSetEntry[] =>
+    Array.from({ length: count }, (_, i) =>
+      entry(`src/z${String(count - 1 - i).padStart(4, "0")}/file-${String(i).padStart(4, "0")}.ts`)
+    );
+
+  it("renders every row below the windowing threshold", () => {
+    renderSidebar({ files: reversedGroups(20), currentIndex: 0 });
+    expect(screen.getAllByTestId("diff-sidebar-file")).toHaveLength(20);
+  });
+
+  it("keeps the directory headers and the file's own index once it windows", () => {
+    const files = reversedGroups(120);
+    const { onSelect } = renderWindowed(files, 0);
+
+    // A row per directory here, so headers and rows are 1:1 — what matters is
+    // that the headers survived windowing at all.
+    expect(screen.getAllByText(/^src\/z\d{4}$/).length).toBeGreaterThan(0);
+
+    const rows = screen.getAllByTestId("diff-sidebar-file");
+    expect(rows.length).toBeLessThan(120);
+
+    // The first row on screen is the LAST file in the changeset, because the
+    // directories sort in reverse. Clicking it must report 119, not 0.
+    fireEvent.click(rows[0]!);
+    expect(onSelect).toHaveBeenCalledWith(119);
+  });
+
+  it("marks the open file current even when it is not the first row shown", () => {
+    const files = reversedGroups(120);
+    renderWindowed(files, 119);
+    const current = screen
+      .getAllByTestId("diff-sidebar-file")
+      .find((row) => row.getAttribute("aria-current") === "true");
+    expect(current?.getAttribute("aria-label")).toBe(`Open ${files[119]!.path}`);
+  });
+
+  it("still filters, and falls back to every row when the filter narrows it", () => {
+    renderWindowed(reversedGroups(120), 0);
+    fireEvent.change(screen.getByTestId("diff-sidebar-filter"), {
+      target: { value: "file-0001." },
+    });
+    const rows = screen.getAllByTestId("diff-sidebar-file");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.getAttribute("aria-label")).toContain("file-0001.ts");
   });
 });

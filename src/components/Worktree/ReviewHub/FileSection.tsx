@@ -1,5 +1,7 @@
 import type React from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import type { Dispatch, Ref, RefObject, SetStateAction } from "react";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { GitStatus, StagingFileEntry } from "@shared/types";
 import { ChevronDown, ChevronUp, Minus, Plus, Search, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -73,6 +75,118 @@ interface FileSectionProps {
     section: FileStageRowSection,
     triggerRef: RefObject<HTMLElement | null>
   ) => React.ReactNode;
+  /**
+   * Whether this section's rows window. Decided by the hub across BOTH
+   * sections, not per section — they share one scroll container and one
+   * keyboard cursor, so windowing one and not the other would leave the cursor
+   * crossing a boundary between two different reveal mechanisms.
+   */
+  virtualized?: boolean;
+  /**
+   * The hub's scroll container. Virtuoso windows against it rather than owning
+   * a scroller of its own, which is what keeps the section headers, the
+   * conflict banner and the two sections in one continuous scroll the way they
+   * render today.
+   */
+  scrollParent?: HTMLElement | null;
+  /** Reveal handle for the hub's keyboard cursor. Unused on the static path. */
+  listRef?: RefObject<VirtuosoHandle | null>;
+  /**
+   * The slice Virtuoso currently has MOUNTED, in this section's local index
+   * space. `null` means "every row is mounted" — the static path, and the state
+   * the hub must assume before the first `rangeChanged`.
+   */
+  onRenderedRangeChange?: (range: { start: number; end: number } | null) => void;
+}
+
+/**
+ * Rows kept mounted above and below the viewport.
+ *
+ * Sized in pixels rather than rows because the two densities are 24px and 32px:
+ * ~200px is six compact rows or four comfortable ones either side, which is
+ * enough that stepping the keyboard cursor past the fold finds a mounted row
+ * and the reveal only has to scroll, never to mount-then-find.
+ */
+const VIRTUALIZED_OVERSCAN_PX = 200;
+
+/** Per-row inputs, passed through Virtuoso's `context` rather than closed over per row. */
+interface SectionRowContext {
+  section: FileStageRowSection;
+  isStaged: boolean;
+  indexOffset: number;
+  focusedIndex: number;
+  selectionSection: FileStageRowSection | null;
+  selectedPaths: Set<string>;
+  density: SectionViewState["density"];
+  virtualized: boolean;
+  viewedFiles: ReadonlySet<string>;
+  onToggle: (filePath: string) => void;
+  onRowClick: (
+    section: FileStageRowSection,
+    filePath: string,
+    status: GitStatus,
+    e: React.MouseEvent
+  ) => void;
+  onViewedChange: (viewedKey: string, viewed: boolean) => void;
+  renderRowMenu: (
+    file: StagingFileEntry,
+    section: FileStageRowSection,
+    triggerRef: RefObject<HTMLElement | null>
+  ) => React.ReactNode;
+}
+
+/**
+ * Keyed by section and path, never by index: an index key makes Virtuoso reuse
+ * a row's DOM for a different file the moment a filter, a sort or a stage
+ * changes the list's length, and the height it cached with it.
+ */
+function computeSectionRowKey(_index: number, file: StagingFileEntry, ctx: SectionRowContext) {
+  return `${ctx.section}-${file.path}`;
+}
+
+/**
+ * The one row renderer, shared by the static and windowed paths so the markup
+ * cannot drift between them. `index` is section-local; `rowIndex` is the flat
+ * staged+unstaged coordinate the hub's cursor and `aria-activedescendant` use.
+ */
+function renderSectionRow(index: number, file: StagingFileEntry, ctx: SectionRowContext) {
+  const rowIndex = ctx.indexOffset + index;
+  const viewedKey = `${ctx.section}:${file.path}`;
+  return (
+    <FileStageRow
+      id={`review-hub-row-${rowIndex}`}
+      rowIndex={rowIndex}
+      isFocused={ctx.focusedIndex === rowIndex}
+      file={file}
+      section={ctx.section}
+      isStaged={ctx.isStaged}
+      isSelected={ctx.selectionSection === ctx.section && ctx.selectedPaths.has(file.path)}
+      onToggle={ctx.onToggle}
+      onRowClick={ctx.onRowClick}
+      density={ctx.density}
+      virtualized={ctx.virtualized}
+      viewed={ctx.viewedFiles.has(viewedKey)}
+      onViewedChange={(v) => ctx.onViewedChange(viewedKey, v)}
+      renderRowMenu={ctx.renderRowMenu}
+    />
+  );
+}
+
+/**
+ * The windowed path's per-row wrapper.
+ *
+ * The static path spaces rows with a flex `gap`, which a virtualizer cannot
+ * reproduce — it stacks absolutely positioned items and measures each one, so a
+ * gap between them is height it never sees. The same space is applied as
+ * bottom padding INSIDE the measured item instead, which keeps the two paths
+ * pixel-identical and the height cache honest.
+ */
+function renderVirtualizedRow(index: number, file: StagingFileEntry, ctx: SectionRowContext) {
+  return (
+    <div className={ctx.density === "compact" ? undefined : "pb-0.5"}>
+      {renderSectionRow(index, file, ctx)}
+    </div>
+  );
 }
 
 export function FileSection({
@@ -96,6 +210,10 @@ export function FileSection({
   onViewedChange,
   sectionRef,
   renderRowMenu,
+  virtualized = false,
+  scrollParent = null,
+  listRef,
+  onRenderedRangeChange,
 }: FileSectionProps) {
   const section: FileStageRowSection = isStaged ? "staged" : "unstaged";
   const title = isStaged ? "Staged" : "Changes";
@@ -149,6 +267,68 @@ export function FileSection({
   // at any width; a user cannot clear what they cannot see.
   const churnDropClass = "@max-[560px]/file-section:hidden";
   const filterDropClass = view.filterQuery ? "" : "@max-[460px]/file-section:hidden";
+
+  // Windowing needs the scroll container it windows against, and that element
+  // only exists after the hub's first commit — so a section can be over the
+  // threshold for one render and still have nowhere to window. Rendering the
+  // static list for that render is correct, not a fallback: it is what the
+  // list looked like a frame earlier.
+  const windowed = virtualized && scrollParent !== null;
+
+  const rowContext: SectionRowContext = useMemo(
+    () => ({
+      section,
+      isStaged,
+      indexOffset,
+      focusedIndex,
+      selectionSection,
+      selectedPaths,
+      density: view.density,
+      virtualized: windowed,
+      viewedFiles,
+      onToggle,
+      onRowClick,
+      onViewedChange,
+      renderRowMenu,
+    }),
+    [
+      section,
+      isStaged,
+      indexOffset,
+      focusedIndex,
+      selectionSection,
+      selectedPaths,
+      view.density,
+      windowed,
+      viewedFiles,
+      onToggle,
+      onRowClick,
+      onViewedChange,
+      renderRowMenu,
+    ]
+  );
+
+  // Reported during render rather than from an effect: the hub gates
+  // `aria-activedescendant` on this range, and an effect would leave it
+  // pointing at an id that is not in the document for a commit. `null` is the
+  // static path's honest answer — every row is mounted — and it is also what
+  // the windowed path must report before Virtuoso's first `rangeChanged`,
+  // which is why the transition out of windowing clears it here.
+  const reportRange = onRenderedRangeChange;
+  useEffect(() => {
+    if (!windowed || files.length === 0) reportRange?.(null);
+  }, [windowed, files.length, reportRange]);
+
+  // A plain callback, not a `useEffectEvent`: Virtuoso takes this as a prop,
+  // and an effect event cannot be passed down. Identity is stable as long as
+  // the hub's own handler is, which is what keeps Virtuoso from resubscribing
+  // on every scroll frame.
+  const handleRangeChanged = useCallback(
+    ({ startIndex, endIndex }: { startIndex: number; endIndex: number }) => {
+      reportRange?.({ start: startIndex, end: endIndex });
+    },
+    [reportRange]
+  );
 
   return (
     <div
@@ -357,21 +537,36 @@ export function FileSection({
         </div>
       </div>
       {files.length > 0 ? (
-        <div
-          className={cn(
-            "px-2 py-1 flex flex-col",
-            view.density === "compact" ? "gap-0" : "gap-0.5"
-          )}
-        >
-          {files.map((file, i) => {
-            const viewedKey = `${section}:${file.path}`;
-            const rowIndex = indexOffset + i;
-            return (
+        windowed ? (
+          <div className="px-2 py-1">
+            <Virtuoso<StagingFileEntry, SectionRowContext>
+              ref={listRef}
+              data={files}
+              context={rowContext}
+              customScrollParent={scrollParent ?? undefined}
+              computeItemKey={computeSectionRowKey}
+              itemContent={renderVirtualizedRow}
+              // Keeps a screenful of rows mounted either side of the viewport so
+              // an arrow key that steps just past the fold lands on a row that
+              // already exists, rather than on one the reveal has to conjure.
+              increaseViewportBy={VIRTUALIZED_OVERSCAN_PX}
+              rangeChanged={handleRangeChanged}
+              skipAnimationFrameInResizeObserver
+            />
+          </div>
+        ) : (
+          <div
+            className={cn(
+              "px-2 py-1 flex flex-col",
+              view.density === "compact" ? "gap-0" : "gap-0.5"
+            )}
+          >
+            {files.map((file, i) => (
               <FileStageRow
                 key={`${section}-${file.path}`}
-                id={`review-hub-row-${rowIndex}`}
-                rowIndex={rowIndex}
-                isFocused={focusedIndex === rowIndex}
+                id={`review-hub-row-${indexOffset + i}`}
+                rowIndex={indexOffset + i}
+                isFocused={focusedIndex === indexOffset + i}
                 file={file}
                 section={section}
                 isStaged={isStaged}
@@ -379,13 +574,13 @@ export function FileSection({
                 onToggle={onToggle}
                 onRowClick={onRowClick}
                 density={view.density}
-                viewed={viewedFiles.has(viewedKey)}
-                onViewedChange={(v) => onViewedChange(viewedKey, v)}
+                viewed={viewedFiles.has(`${section}:${file.path}`)}
+                onViewedChange={(v) => onViewedChange(`${section}:${file.path}`, v)}
                 renderRowMenu={renderRowMenu}
               />
-            );
-          })}
-        </div>
+            ))}
+          </div>
+        )
       ) : hiddenGeneratedMatches > 0 ? (
         /* The query DOES match — those matches are just hidden as generated.
            Reaching the plain filter branch here would name the wrong cause and
