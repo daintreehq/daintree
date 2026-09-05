@@ -342,6 +342,48 @@ describe("PluginDevWorkerHost", () => {
     host.dispose();
   });
 
+  it("ignores a `ready` from a child already being killed for a reload (#12282)", async () => {
+    vi.useFakeTimers();
+    const { PluginDevWorkerHost } = await loadModule();
+    const host = new PluginDevWorkerHost(OPTS);
+    const ready = vi.fn();
+    host.on("ready", ready);
+    const started = host.start();
+    let rejected: unknown = null;
+    started.catch((e) => (rejected = e));
+    const child = mockChildren[0] as MockUtilityChild;
+
+    // A rebuild lands while the first child is still booting, so it is killed
+    // before it ever announced itself.
+    watchCalls[0].cb("change", "index.js");
+    vi.advanceTimersByTime(250);
+
+    // Its `ready` arrives anyway. Telling it to `start` would have it import and
+    // activate against its own teardown, and the outcome it then posts would be
+    // attributed to the replacement that has not even forked yet.
+    child.emit("message", { type: "ready" });
+    expect(child.postMessage.mock.calls.find((c) => c[0]?.type === "start")).toBeUndefined();
+    expect(ready).not.toHaveBeenCalled();
+
+    // Suppressing that `ready` must not strand the boot gate. The doomed child's
+    // exit reaches `handleExit` with the original waiter still armed, and a
+    // rejection there is fatal: `activateViaDevWorker` reads it as a hard fork
+    // failure and disposes the bridge, host and watcher, killing the dev plugin
+    // with no auto-recovery.
+    child.emit("exit", 0);
+    await vi.runOnlyPendingTimersAsync();
+    expect(rejected).toBeNull();
+
+    // The replacement announces itself normally and settles the original wait.
+    const replacement = mockChildren[1] as MockUtilityChild;
+    replacement.emit("message", { type: "ready" });
+
+    expect(replacement.postMessage.mock.calls.find((c) => c[0]?.type === "start")).toBeTruthy();
+    expect(ready).toHaveBeenCalledTimes(1);
+    await expect(started).resolves.toBeUndefined();
+    host.dispose();
+  });
+
   it("gives up after the crash threshold of unexpected exits", async () => {
     const { PluginDevWorkerHost, CRASH_WINDOW_MS } = await loadModule();
     expect(CRASH_WINDOW_MS).toBeGreaterThan(0);

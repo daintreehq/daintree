@@ -22,8 +22,11 @@ class FakeWorkerHost extends EventEmitter {
 function makeHost() {
   return {
     pluginId: "acme.demo",
-    registerAction: vi.fn(),
-    registerHandler: vi.fn(),
+    // Annotated `Promise<void>` so a test can drive the deep-validation outcome
+    // (`mockReturnValueOnce` a still-pending promise, `mockRejectedValueOnce` a
+    // rejection); the default-inferred `undefined` return would reject both.
+    registerAction: vi.fn((_descriptor: any, _handler: any): Promise<void> => Promise.resolve()),
+    registerHandler: vi.fn((_channel: any, _handler: any): Promise<void> => Promise.resolve()),
     broadcastToRenderer: vi.fn(),
     getActiveWorktree: vi.fn(async () => null),
     getWorktrees: vi.fn(async () => [{ id: "w1" }]),
@@ -594,6 +597,361 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(onActivationResult).toHaveBeenCalledWith({
       ok: false,
       error: expect.stringContaining("crash loop (code 7)"),
+    });
+  });
+
+  describe("required registration activation (#12282)", () => {
+    /** A registration whose main-side deep validation the test drives by hand. */
+    function deferred(): {
+      promise: Promise<void>;
+      resolve: () => void;
+      reject: (error: Error) => void;
+    } {
+      let resolve!: () => void;
+      let reject!: (error: Error) => void;
+      const promise = new Promise<void>((res, rej) => {
+        resolve = () => res();
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    /** The shape the worker proxy posts for `registerAction` — keyed, so it is a
+     * required registration the activation commit has to account for. */
+    const ACTION_NOTIFY = {
+      type: "host-notify",
+      method: "registerAction",
+      registrationKey: "action:acme.demo.greet",
+      params: {
+        descriptor: {
+          id: "greet",
+          title: "Greet",
+          description: "",
+          category: "Demo",
+          kind: "command",
+          danger: "safe",
+        },
+      },
+    };
+
+    it("holds activation open until a required registration settles", async () => {
+      const onActivationResult = vi.fn();
+      const { host, workerHost, bridge } = makeBridge({ onActivationResult });
+      const gate = deferred();
+      host.registerAction.mockReturnValueOnce(gate.promise);
+      let resolved = false;
+      const activation = bridge.waitForActivation().then(() => {
+        resolved = true;
+      });
+
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      await flush();
+
+      // `activated` has landed, but the contribution the plugin believes it made
+      // is still unvalidated — committing here is the bug.
+      expect(resolved).toBe(false);
+      expect(onActivationResult).not.toHaveBeenCalled();
+
+      gate.resolve();
+      await activation;
+      expect(onActivationResult).toHaveBeenCalledWith({ ok: true });
+    });
+
+    it("tracks two proposals of the same registration key independently", async () => {
+      const onActivationResult = vi.fn();
+      const { host, workerHost, bridge } = makeBridge({ onActivationResult });
+      const first = deferred();
+      const second = deferred();
+      host.registerAction.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+      bridge.waitForActivation().catch(() => {});
+
+      // Re-registering an id is legal (replace semantics), so the key is not a
+      // unique handle — only object identity stops one proposal from releasing
+      // the other's slot and committing while validation is still outstanding.
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+
+      second.resolve();
+      await flush();
+      expect(onActivationResult).not.toHaveBeenCalled();
+
+      first.resolve();
+      await flush();
+      expect(onActivationResult).toHaveBeenCalledTimes(1);
+      expect(onActivationResult).toHaveBeenCalledWith({ ok: true });
+    });
+
+    it("does not commit before `activated`, even with every registration settled", async () => {
+      const onActivationResult = vi.fn();
+      const { workerHost, bridge } = makeBridge({ onActivationResult });
+      let resolved = false;
+      const activation = bridge.waitForActivation().then(() => {
+        resolved = true;
+      });
+
+      // activate() registered early and is still awaiting other work. A settled
+      // registration is not an activation.
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      await flush();
+      expect(resolved).toBe(false);
+      expect(onActivationResult).not.toHaveBeenCalled();
+
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      await activation;
+      expect(onActivationResult).toHaveBeenCalledWith({ ok: true });
+    });
+
+    it("drops a required registration that settles after dispose", async () => {
+      const onActivationResult = vi.fn();
+      const { host, workerHost, bridge } = makeBridge({ onActivationResult });
+      const gate = deferred();
+      host.registerAction.mockReturnValueOnce(gate.promise);
+      const activation = bridge.waitForActivation();
+
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      bridge.dispose();
+      await expect(activation).rejects.toThrow(/disposed/);
+
+      onActivationResult.mockClear();
+      workerHost.sent.length = 0;
+      gate.reject(new Error("host went away"));
+      await flush();
+
+      expect(onActivationResult).not.toHaveBeenCalled();
+      expect(workerHost.sent).toEqual([]);
+    });
+
+    it("fails activation naming the contribution when a required registration is rejected", async () => {
+      const onActivationResult = vi.fn();
+      const { host, workerHost, bridge } = makeBridge({ onActivationResult });
+      host.registerAction.mockRejectedValueOnce(
+        new Error('descriptor.id "greet" is not declared in contributes.actions')
+      );
+      const activation = bridge.waitForActivation();
+
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+
+      await expect(activation).rejects.toThrow(/action:acme\.demo\.greet/);
+      expect(onActivationResult).toHaveBeenCalledTimes(1);
+      expect(onActivationResult).toHaveBeenCalledWith({
+        ok: false,
+        error: expect.stringContaining('registration "action:acme.demo.greet" was rejected'),
+        stack: expect.any(String),
+      });
+      expect(onActivationResult.mock.calls[0][0].error).toContain("contributes.actions");
+      // The worker's own terminal feedback must not regress.
+      expect(workerHost.sent.find((m) => m.type === "register-error")).toMatchObject({
+        registrationKey: "action:acme.demo.greet",
+      });
+    });
+
+    it("remembers a registration rejection that lands before `activated`", async () => {
+      const onActivationResult = vi.fn();
+      const { host, workerHost, bridge } = makeBridge({ onActivationResult });
+      host.registerAction.mockRejectedValueOnce(new Error("not declared"));
+      bridge.waitForActivation().catch(() => {});
+
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      await flush();
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      await flush();
+
+      expect(onActivationResult).toHaveBeenCalledTimes(1);
+      expect(onActivationResult).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
+    });
+
+    it("neither waits for nor fails activation on notifications without a registration key", async () => {
+      const onActivationResult = vi.fn();
+      const { host, workerHost, bridge } = makeBridge({ onActivationResult });
+      // A never-settling call and a rejecting one. Neither is a contribution, so
+      // neither participates in the activation commit.
+      host.setPanelBadge
+        .mockReturnValueOnce(deferred().promise)
+        .mockRejectedValueOnce(new Error("bad badge"));
+      const activation = bridge.waitForActivation();
+
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "setPanelBadge",
+        params: { panelId: "p1", badge: { kind: "label", text: "CI", color: "success" } },
+      });
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "setPanelBadge",
+        params: { panelId: "p2", badge: null },
+      });
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+
+      await expect(activation).resolves.toBeUndefined();
+      await flush();
+      expect(onActivationResult).toHaveBeenCalledTimes(1);
+      expect(onActivationResult).toHaveBeenCalledWith({ ok: true });
+      expect(workerHost.sent.find((m) => m.type === "register-error")).toBeUndefined();
+    });
+
+    it("keeps the contribution-specific failure when activate-error follows it", async () => {
+      const onActivationResult = vi.fn();
+      const { host, workerHost, bridge } = makeBridge({ onActivationResult });
+      host.registerAction.mockRejectedValueOnce(new Error("not declared"));
+      bridge.waitForActivation().catch(() => {});
+
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      await flush();
+      workerHost.emit("worker-message", { type: "activate-error", error: "activate() threw" });
+
+      // The rejected contribution names what the author has to fix; the vaguer
+      // activate-error that follows must not overwrite it.
+      expect(onActivationResult).toHaveBeenCalledTimes(1);
+      expect(onActivationResult.mock.calls[0][0].error).toContain("action:acme.demo.greet");
+    });
+
+    it("keeps activate-error terminal while a required registration is still pending", async () => {
+      const onActivationResult = vi.fn();
+      const { host, workerHost, bridge } = makeBridge({ onActivationResult });
+      const gate = deferred();
+      host.registerAction.mockReturnValueOnce(gate.promise);
+      bridge.waitForActivation().catch(() => {});
+
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      workerHost.emit("worker-message", { type: "activate-error", error: "boom" });
+      // The straggler settling successfully must not commit over the failure.
+      gate.resolve();
+      await flush();
+
+      expect(onActivationResult).toHaveBeenCalledTimes(1);
+      expect(onActivationResult).toHaveBeenCalledWith(
+        expect.objectContaining({ ok: false, error: "boom" })
+      );
+    });
+
+    it("ignores a required registration that rejects after a reload", async () => {
+      const onActivationResult = vi.fn();
+      const { host, workerHost, bridge } = makeBridge({ onActivationResult });
+      const stale = deferred();
+      host.registerAction.mockReturnValueOnce(stale.promise);
+      bridge.waitForActivation().catch(() => {});
+
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      workerHost.emit("reloading");
+      // The replacement boots, re-proposes the same contribution, activates.
+      workerHost.emit("ready");
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      await flush();
+      expect(onActivationResult).toHaveBeenCalledWith({ ok: true });
+
+      onActivationResult.mockClear();
+      workerHost.sent.length = 0;
+      stale.reject(new Error("dead generation"));
+      await flush();
+
+      expect(onActivationResult).not.toHaveBeenCalled();
+      expect(workerHost.sent.find((m) => m.type === "register-error")).toBeUndefined();
+    });
+
+    it("reports a registration rejected after activation already succeeded", async () => {
+      const onActivationResult = vi.fn();
+      const { host, workerHost, bridge } = makeBridge({ onActivationResult });
+      const activation = bridge.waitForActivation();
+
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      await expect(activation).resolves.toBeUndefined();
+
+      host.registerAction.mockRejectedValueOnce(new Error("too late"));
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      await flush();
+
+      // The activation promise has settled and has no listener left, so
+      // provenance is the only channel that still reaches the author.
+      expect(onActivationResult).toHaveBeenNthCalledWith(1, { ok: true });
+      expect(onActivationResult).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          ok: false,
+          error: expect.stringContaining("action:acme.demo.greet"),
+        })
+      );
+    });
+
+    it("lets a dying worker's activate-error veto neither the replacement nor its success", async () => {
+      const onActivationResult = vi.fn();
+      const { workerHost, bridge } = makeBridge({ onActivationResult });
+      bridge.waitForActivation().catch(() => {});
+
+      // A reload lands while activate() is still awaiting a host call: worker
+      // disposal rejects that call, so the OUTGOING child posts activate-error
+      // after `reloading` already bumped the generation. It describes a worker
+      // that no longer exists and must not bind the one now booting.
+      workerHost.emit("reloading");
+      workerHost.emit("worker-message", { type: "activate-error", error: "torn down mid-await" });
+      workerHost.emit("exit", 0, true);
+      // What the outgoing child died of still reaches provenance...
+      expect(onActivationResult).toHaveBeenCalledWith(
+        expect.objectContaining({ ok: false, error: "torn down mid-await" })
+      );
+      onActivationResult.mockClear();
+
+      // ...but it must not veto the replacement, whose success clears it again.
+      workerHost.emit("ready");
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      await flush();
+
+      expect(onActivationResult).toHaveBeenCalledTimes(1);
+      expect(onActivationResult).toHaveBeenCalledWith({ ok: true });
+    });
+
+    it("does not enlist a required registration posted by a retired worker", async () => {
+      const onActivationResult = vi.fn();
+      const { host, workerHost, bridge } = makeBridge({ onActivationResult });
+      bridge.waitForActivation().catch(() => {});
+
+      // Same gap, a keyed host-notify this time: the straggler's rejection is
+      // still reported to the worker, but it is not the booting generation's
+      // contribution and cannot fail its activation.
+      workerHost.emit("reloading");
+      host.registerAction.mockRejectedValueOnce(new Error("not declared"));
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      await flush();
+      expect(onActivationResult).not.toHaveBeenCalled();
+      // The worker still gets told, exactly as before.
+      expect(workerHost.sent.find((m) => m.type === "register-error")).toMatchObject({
+        registrationKey: "action:acme.demo.greet",
+      });
+
+      workerHost.emit("ready");
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      await flush();
+
+      expect(onActivationResult).toHaveBeenCalledTimes(1);
+      expect(onActivationResult).toHaveBeenCalledWith({ ok: true });
+    });
+
+    it("clears a registration failure so the next generation can activate", async () => {
+      const onActivationResult = vi.fn();
+      const { host, workerHost, bridge } = makeBridge({ onActivationResult });
+      host.registerAction.mockRejectedValueOnce(new Error("not declared"));
+      bridge.waitForActivation().catch(() => {});
+
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      await flush();
+      expect(onActivationResult).toHaveBeenCalledWith(expect.objectContaining({ ok: false }));
+
+      // The author fixes the manifest and saves — the reloaded generation starts
+      // from a clean verdict.
+      workerHost.emit("reloading");
+      workerHost.emit("ready");
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      await flush();
+
+      expect(onActivationResult).toHaveBeenLastCalledWith({ ok: true });
     });
   });
 
