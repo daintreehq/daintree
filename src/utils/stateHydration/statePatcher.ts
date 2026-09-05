@@ -43,6 +43,7 @@ import {
 } from "@shared/utils/savedAgentIdentity";
 import { isAbsolute } from "@shared/utils/path";
 import { panelKindIsDockable, type PersistedPanelKindRef } from "@shared/config/panelKindRegistry";
+import { restoredExtensionStateVersion } from "@shared/utils/panelExtensionState";
 import { getDeserializer } from "@/config/panelKindSerialisers";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { resolveAgentRuntimeSettings } from "@/utils/agentRuntimeSettings";
@@ -377,7 +378,7 @@ export function buildArgsForBackendTerminal(
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
-    extensionStateVersion: saved.extensionStateVersion,
+    extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
   };
@@ -453,7 +454,7 @@ export function buildArgsForReconnectedFallback(
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
-    extensionStateVersion: saved.extensionStateVersion,
+    extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
   };
@@ -780,7 +781,7 @@ export function buildArgsForRespawn(
     // before env was persisted, or when the saved env sanitizes to nothing safe.
     env: sanitizeAgentEnv(saved.env) ?? presetEnv,
     extensionState: saved.extensionState,
-    extensionStateVersion: saved.extensionStateVersion,
+    extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,
     restore: true,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
@@ -822,7 +823,7 @@ export function buildArgsForNonPtyRecreation(
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
-    extensionStateVersion: saved.extensionStateVersion,
+    extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
   };

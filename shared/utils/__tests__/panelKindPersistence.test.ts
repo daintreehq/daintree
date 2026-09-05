@@ -124,15 +124,18 @@ describe("requalifyPersistedKind", () => {
     expect(requalifyPersistedKind({ kind: undefined }, "proj-b")).toBeUndefined();
   });
 
-  it("falls back to the persisted kind when the ref cannot be qualified", () => {
-    // A slash cannot appear in a validated manifest or panel id, so qualifying
-    // this would mint an id that parses back into a different ref.
+  it("treats a ref the qualifier would refuse as no ref at all", () => {
+    // A slash cannot appear in a validated manifest or panel id. Honouring such
+    // a ref would fail BOTH qualification attempts and drop through to the bare
+    // portable kind — the aliasing outcome the sentinel exists to prevent — so
+    // it is rejected up front and the kind string speaks for itself instead.
+    const corrupt = { origin: "project", pluginId: "a/b", kindId: "c" } as const;
     expect(
       requalifyPersistedKind(
-        { kind: PORTABLE_KIND, kindRef: { origin: "project", pluginId: "a/b", kindId: "c" } },
+        { kind: "project:proj-a/acme.dashboard/overview", kindRef: corrupt },
         "proj-b"
       )
-    ).toBe(PORTABLE_KIND);
+    ).toBe("project:proj-b/acme.dashboard/overview");
   });
 });
 
@@ -162,6 +165,24 @@ describe("persistedKindKey", () => {
     );
   });
 
+  it("separates two kinds of the same origin and plugin", () => {
+    // Origin alone is not identity: keying on it would let one contribution's
+    // fragment be preserved onto a sibling kind from the same plugin.
+    const base = { origin: "project", pluginId: "acme.dashboard", kindId: "overview" } as const;
+    expect(persistedKindKey({ kind: PORTABLE_KIND, kindRef: base })).not.toBe(
+      persistedKindKey({
+        kind: "acme.dashboard.settings",
+        kindRef: { ...base, kindId: "settings" },
+      })
+    );
+    expect(persistedKindKey({ kind: PORTABLE_KIND, kindRef: base })).not.toBe(
+      persistedKindKey({
+        kind: "other.plugin.overview",
+        kindRef: { ...base, pluginId: "other.plugin" },
+      })
+    );
+  });
+
   it("still separates two unrelated non-plugin kinds", () => {
     expect(persistedKindKey({ kind: "terminal" })).not.toBe(persistedKindKey({ kind: "browser" }));
     expect(persistedKindKey({ kind: "terminal" })).toBe(persistedKindKey({ kind: "terminal" }));
@@ -172,6 +193,57 @@ describe("persistedKindKey", () => {
     // of the same contribution must not look like a kind change.
     expect(persistedKindKey({ kind: "project:proj-a/acme.dashboard/overview" })).toBe(
       persistedKindKey({ kind: "project:proj-b/acme.dashboard/overview" })
+    );
+  });
+});
+
+describe("untrusted input (#12280)", () => {
+  // `kindRef` rides the snapshot schemas' passthrough and is never validated
+  // there, on purpose: declaring it would let one malformed ref make
+  // `filterValidTerminalEntries` drop the whole panel. So these arrive raw.
+  const MALFORMED = [
+    {},
+    { origin: "project" },
+    { origin: "nonsense", pluginId: "a", kindId: "b" },
+    { origin: "project", pluginId: 7, kindId: "b" },
+    null,
+    "not-an-object",
+  ];
+
+  it("never throws on a malformed kindRef, whatever is on disk", () => {
+    // `inferKind` runs inside a `.map()` over every terminal in a hydration, so
+    // a throw here would take the entire project's layout down, not one panel.
+    for (const kindRef of MALFORMED) {
+      expect(() =>
+        requalifyPersistedKind({ kind: PORTABLE_KIND, kindRef: kindRef as never }, "proj-b")
+      ).not.toThrow();
+      expect(() =>
+        persistedKindKey({ kind: PORTABLE_KIND, kindRef: kindRef as never })
+      ).not.toThrow();
+    }
+  });
+
+  it("falls back to the persisted kind when the ref is unusable", () => {
+    expect(requalifyPersistedKind({ kind: "terminal", kindRef: {} as never }, "proj-b")).toBe(
+      "terminal"
+    );
+  });
+});
+
+describe("legacy dotted kinds under a non-scoped manifest id (#12280)", () => {
+  // `myplugin.a` matches the scoped-manifest shape, so a hint-less parse splits
+  // it there. The previous snapshot has no `kindRef` to short-circuit that, so
+  // both sides must reach the same key through the `pluginId` hint or the guard
+  // sees a kind change that never happened.
+  it("keys a hint-less legacy snapshot the same as its re-serialized form", () => {
+    const previous = { kind: "myplugin.a.b", pluginId: "myplugin" };
+    const next = toPersistedKindFields("myplugin.a.b", true, "myplugin");
+    expect(persistedKindKey(previous)).toBe(persistedKindKey(next));
+  });
+
+  it("still separates two genuinely different kinds under that manifest", () => {
+    expect(persistedKindKey({ kind: "myplugin.a.b", pluginId: "myplugin" })).not.toBe(
+      persistedKindKey({ kind: "myplugin.a.c", pluginId: "myplugin" })
     );
   });
 });

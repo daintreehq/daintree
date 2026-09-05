@@ -1335,6 +1335,56 @@ describe("PanelPersistence", () => {
       expect(snapshot.kind).toBe(PORTABLE_KIND);
     });
 
+    it("does not carry a fragment across a same-origin, same-plugin kind change", () => {
+      // The origin is identical here, so an implementation keying plugin
+      // identity on origin alone would preserve one contribution's fragment
+      // onto a sibling kind of the same plugin.
+      const previous: TerminalSnapshot = {
+        id: "proj-panel",
+        kind: PORTABLE_KIND,
+        kindRef: { origin: "project", pluginId: "acme.dashboard", kindId: "overview" },
+        title: "Stale",
+        location: "grid",
+        customPluginField: "drop-me",
+      } as TerminalSnapshot;
+
+      const panel = createMockTerminal({
+        id: "proj-panel",
+        kind: "project:proj-a/acme.dashboard/settings",
+        title: "Live",
+        location: "grid",
+        pluginId: "project__proj-a__acme.dashboard",
+      });
+
+      expect(panelToSnapshot(panel, previous)).not.toHaveProperty("customPluginField");
+    });
+
+    it("preserves a legacy global fragment whose manifest id is not scoped", () => {
+      // `myplugin.a` matches the scoped-manifest shape, so a hint-less parse of
+      // the previous snapshot splits it there while the freshly-serialized side
+      // splits on the hint. Divergent keys read as a kind change that never
+      // happened and erase the fragment (#5342).
+      const previous: TerminalSnapshot = {
+        id: "legacy-global",
+        kind: "myplugin.a.b",
+        pluginId: "myplugin",
+        title: "Stale",
+        location: "grid",
+        customPluginField: "keep-me",
+      } as TerminalSnapshot;
+
+      const panel = createMockTerminal({
+        id: "legacy-global",
+        kind: "myplugin.a.b",
+        title: "Live",
+        location: "grid",
+        pluginId: "myplugin",
+      });
+
+      const snapshot = panelToSnapshot(panel, previous) as unknown as Record<string, unknown>;
+      expect(snapshot.customPluginField).toBe("keep-me");
+    });
+
     it("does not carry a fragment across a genuine kind change", () => {
       const previous: TerminalSnapshot = {
         id: "proj-panel",

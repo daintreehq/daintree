@@ -6,6 +6,32 @@
  */
 export const LEGACY_PANEL_EXTENSION_STATE_VERSION = 0;
 
+function readVersion(value: unknown): number | undefined {
+  if (typeof value !== "number") return undefined;
+  if (!Number.isSafeInteger(value) || value < 0) return undefined;
+  return value;
+}
+
+/**
+ * The version to restore a persisted bag at, distinguishing "no bag" from "a
+ * bag nobody stamped".
+ *
+ * `addPanel` treats an absent version on a bag as "fresh spawn" and stamps the
+ * kind's currently-declared version, which is right for arguments the caller
+ * just built and catastrophic for a bag read off disk: a legacy bag would be
+ * relabelled as current, the view would be told no migration is needed, and the
+ * next save would persist that lie. Restore therefore resolves the absence
+ * HERE, to explicit legacy v0, so the number reaching `addPanel` always
+ * describes the bag rather than the plugin.
+ */
+export function restoredExtensionStateVersion(saved: {
+  extensionState?: Record<string, unknown>;
+  extensionStateVersion?: number;
+}): number | undefined {
+  if (saved.extensionState === undefined) return undefined;
+  return readVersion(saved.extensionStateVersion) ?? LEGACY_PANEL_EXTENSION_STATE_VERSION;
+}
+
 /**
  * The outcome of reading a panel's `extensionState` back.
  *
@@ -31,12 +57,6 @@ export interface PanelExtensionStateInput {
   persistedVersion?: number;
   /** `contributes.panels[].stateVersion` of the kind as currently registered. */
   declaredVersion?: number;
-}
-
-function readVersion(value: unknown): number | undefined {
-  if (typeof value !== "number") return undefined;
-  if (!Number.isSafeInteger(value) || value < 0) return undefined;
-  return value;
 }
 
 /**

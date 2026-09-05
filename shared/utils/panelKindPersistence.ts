@@ -55,6 +55,37 @@ export function toPersistedKindFields(
 export interface PersistedKindSource {
   kind?: PanelKind;
   kindRef?: PersistedPanelKindRef;
+  /**
+   * The owning plugin's manifest id, used as the parse hint. Load-bearing for a
+   * legacy snapshot whose `kind` is dotted under a manifest id that predates the
+   * scoped-name rule: `myplugin.a.b` splits as `myplugin.a` + `b` without it,
+   * and as `myplugin` + `a.b` with it.
+   */
+  pluginId?: string;
+}
+
+/**
+ * Whether an untrusted value really is a {@link PersistedPanelKindRef}.
+ *
+ * `kindRef` rides the snapshot schemas' `.passthrough()` and is never validated
+ * against them, deliberately — declaring it would let one malformed ref make
+ * `filterValidTerminalEntries` drop the whole panel. So it arrives here as
+ * whatever was on disk, and the qualifier would throw on `ref.pluginId.length`
+ * for a `{}`. That throw is not local: `inferKind` runs inside a `.map()` over
+ * every terminal in a hydration, so one bad ref would take the entire project's
+ * layout down with it.
+ */
+function isPanelKindRef(value: unknown): value is PersistedPanelKindRef {
+  if (typeof value !== "object" || value === null) return false;
+  const ref = value as Partial<PersistedPanelKindRef>;
+  if (ref.origin !== "global" && ref.origin !== "project") return false;
+  if (typeof ref.pluginId !== "string" || typeof ref.kindId !== "string") return false;
+  // Exactly what `toRuntimePanelKindId` refuses. Accepting a ref it will reject
+  // buys nothing and costs the anti-aliasing guarantee: qualification would fail
+  // for BOTH the real project and the sentinel, dropping through to the portable
+  // kind an installed global plugin can answer for.
+  if (ref.pluginId.length === 0 || ref.kindId.length === 0) return false;
+  return !ref.pluginId.includes("/") && !ref.kindId.includes("/");
 }
 
 /**
@@ -105,9 +136,12 @@ export function requalifyPersistedKind(
 ): PanelKind | undefined {
   const kind = saved.kind;
   if (kind === undefined) return undefined;
-  const ref =
-    saved.kindRef ?? (isProjectQualifiedPanelKindId(kind) ? toPersistedPanelKindRef(kind) : null);
-  if (ref === null || ref === undefined) return kind;
+  const ref = isPanelKindRef(saved.kindRef)
+    ? saved.kindRef
+    : isProjectQualifiedPanelKindId(kind)
+      ? toPersistedPanelKindRef(kind, saved.pluginId)
+      : null;
+  if (ref === null) return kind;
   const qualified = toRuntimePanelKindId(ref, projectId ?? null);
   if (qualified !== null) return qualified;
   // Only a project ref reaches here, and only with no project to qualify it
@@ -129,7 +163,13 @@ export function requalifyPersistedKind(
  */
 export function persistedKindKey(saved: PersistedKindSource): string {
   const kind = saved.kind ?? "";
-  const ref = saved.kindRef ?? toPersistedPanelKindRef(kind);
-  if (ref === null || ref === undefined) return `raw ${kind}`;
+  const ref = isPanelKindRef(saved.kindRef)
+    ? saved.kindRef
+    : // The hint matters here as much as on the write side. Without it a legacy
+      // `myplugin.a.b` keys as `myplugin.a` + `b` while the freshly-serialized
+      // side keys as `myplugin` + `a.b`, so the guard sees a kind change that
+      // never happened and drops the fragment it exists to preserve.
+      toPersistedPanelKindRef(kind, saved.pluginId);
+  if (ref === null) return `raw ${kind}`;
   return `${ref.origin} ${ref.pluginId} ${ref.kindId}`;
 }

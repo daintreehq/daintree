@@ -75,6 +75,8 @@ const {
   buildArgsForOrphanedTerminal,
   inferWorktreeIdFromCwd,
 } = await import("../statePatcher");
+type SavedTerminalData = import("../statePatcher").SavedTerminalData;
+type AddTerminalArgs = import("../statePatcher").AddTerminalArgs;
 
 beforeEach(() => {
   buildResumeCommandMock.mockReset();
@@ -3522,4 +3524,61 @@ describe("buildArgsForRespawn — a named resume-latest session (#12178)", () =>
     expect(result.command).toBe("codex resume saved-1");
     expect(result.agentSessionId).toBe("saved-1");
   });
+});
+
+describe("extension state and its version travel together (#12280)", () => {
+  // Every restore path must carry the bag AND the version that describes it. A
+  // builder that forwards only the bag leaves `addPanel` reading the absent
+  // version as "fresh spawn" and stamping whatever the plugin declares TODAY,
+  // relabelling a legacy bag as current and skipping the plugin's migration.
+  const BAG = { activeTab: "overview" };
+
+  function saved(extra: Partial<SavedTerminalData> = {}): SavedTerminalData {
+    return { id: "t1", location: "grid", cwd: "/project", ...extra };
+  }
+
+  const builders: ReadonlyArray<{
+    name: string;
+    build: (s: SavedTerminalData) => AddTerminalArgs;
+  }> = [
+    {
+      name: "buildArgsForNonPtyRecreation",
+      build: (s) => buildArgsForNonPtyRecreation(s, "acme.dash.overview", "/project"),
+    },
+    {
+      name: "buildArgsForRespawn",
+      build: (s) => buildArgsForRespawn(s, "terminal", "/project", undefined, false, undefined),
+    },
+    {
+      name: "buildArgsForBackendTerminal",
+      build: (s) =>
+        buildArgsForBackendTerminal(
+          { id: "t1", kind: "terminal", title: "Shell", cwd: "/project" },
+          s,
+          "/project"
+        ),
+    },
+    {
+      name: "buildArgsForReconnectedFallback",
+      build: (s) => buildArgsForReconnectedFallback({ id: "t1", cwd: "/project" }, s, "/project"),
+    },
+  ];
+
+  for (const { name, build } of builders) {
+    it(`${name} keeps a stamped version with its bag`, () => {
+      expect(
+        build(saved({ extensionState: BAG, extensionStateVersion: 3 })).extensionStateVersion
+      ).toBe(3);
+    });
+
+    it(`${name} resolves an unstamped restored bag to explicit legacy v0`, () => {
+      // Absent, `addPanel` would read it as a fresh spawn and stamp the version
+      // the plugin declares now — the silent relabel this exists to stop.
+      expect(build(saved({ extensionState: BAG })).extensionStateVersion).toBe(0);
+    });
+
+    it(`${name} leaves the version absent when there is no bag`, () => {
+      expect(build(saved()).extensionStateVersion).toBeUndefined();
+    });
+  }
 });

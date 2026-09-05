@@ -725,6 +725,13 @@ export const createAddPanelActions = (
                 lastStateChange: ptyTerminal.lastStateChange ?? existingPty?.lastStateChange,
                 exitBehavior: ptyTerminal.exitBehavior ?? existingPty?.exitBehavior,
                 extensionState: ptyTerminal.extensionState ?? existing.extensionState,
+                // Recovered with the bag it describes. Keeping one without
+                // the other would leave a stamped bag looking legacy, and a
+                // reconnect is not a plugin write (#12280).
+                extensionStateVersion:
+                  ptyTerminal.extensionState !== undefined
+                    ? ptyTerminal.extensionStateVersion
+                    : existing.extensionStateVersion,
                 // Sticky: once detected, never downgrade on a partial reconnect payload.
                 everDetectedAgent: ptyTerminal.everDetectedAgent || existingPty?.everDetectedAgent,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing
@@ -780,6 +787,13 @@ export const createAddPanelActions = (
                 lastStateChange: ptyTerminal.lastStateChange ?? existingPty2?.lastStateChange,
                 exitBehavior: ptyTerminal.exitBehavior ?? existingPty2?.exitBehavior,
                 extensionState: ptyTerminal.extensionState ?? existing.extensionState,
+                // Recovered with the bag it describes. Keeping one without
+                // the other would leave a stamped bag looking legacy, and a
+                // reconnect is not a plugin write (#12280).
+                extensionStateVersion:
+                  ptyTerminal.extensionState !== undefined
+                    ? ptyTerminal.extensionStateVersion
+                    : existing.extensionStateVersion,
                 // Sticky: once detected, never downgrade on a partial reconnect payload.
                 everDetectedAgent: ptyTerminal.everDetectedAgent || existingPty2?.everDetectedAgent,
                 // Prefer the fresh reconnect value if present; otherwise keep an existing

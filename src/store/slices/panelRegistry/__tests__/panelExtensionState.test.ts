@@ -10,7 +10,8 @@
  * effect free.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 import type { FilePanelData, PanelInstance } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
@@ -281,5 +282,119 @@ describe("setPanelExtensionState", () => {
       usePanelStore.getState().setPanelExtensionState("gone", { root: "src" })
     ).not.toThrow();
     expect(usePanelStore.getState().panelsById["gone"]).toBeUndefined();
+  });
+});
+
+describe("setPanelExtensionState state versioning (#12280)", () => {
+  const KIND = "acme.explorer";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal("window", {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      electron: {},
+    });
+  });
+
+  afterEach(() => {
+    unregisterPanelKind(KIND);
+  });
+
+  function registerKind(stateVersion: number | undefined): void {
+    registerPanelKind({
+      id: KIND,
+      name: "Explorer",
+      iconId: "folder-tree",
+      color: "var(--theme-category-orange)",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme.explorer-plugin",
+      ...(stateVersion !== undefined ? { stateVersion } : {}),
+    });
+  }
+
+  function versionOf(id: string): number | undefined {
+    return usePanelStore.getState().panelsById[id]?.extensionStateVersion;
+  }
+
+  it("stamps the registered kind's declared version when the plugin writes", () => {
+    registerKind(2);
+    seed([makePluginPanel()]);
+
+    usePanelStore.getState().setPanelExtensionState("p1", { root: "src" });
+
+    expect(versionOf("p1")).toBe(2);
+  });
+
+  it("re-stamps a legacy bag at the declared version once the plugin rewrites it", () => {
+    // The write is what makes the bag current — before it, the stored shape is
+    // whatever an older build wrote and must keep reading as legacy.
+    registerKind(3);
+    seed([makePluginPanel({ extensionState: { root: "old" } })]);
+    expect(versionOf("p1")).toBeUndefined();
+
+    usePanelStore.getState().setPanelExtensionState("p1", { root: "new" });
+
+    expect(versionOf("p1")).toBe(3);
+  });
+
+  it("clears the stamp when the registered build declares no version", () => {
+    // A downgrade to an unversioned build has just written a bag of unknown
+    // shape. Keeping the previous build's number would present that rewrite as
+    // state the older schema never produced, and skip migration on re-upgrade.
+    registerKind(undefined);
+    seed([makePluginPanel({ extensionStateVersion: 3 } as Partial<PanelInstance>)]);
+
+    usePanelStore.getState().setPanelExtensionState("p1", { root: "src" });
+
+    expect(versionOf("p1")).toBeUndefined();
+  });
+
+  it("carries the stamp forward for a kind the registry cannot answer for", () => {
+    // Nothing has written against a schema here, so there is nothing to
+    // invalidate — the number still describes the bag on the record.
+    seed([makePluginPanel({ extensionStateVersion: 3 } as Partial<PanelInstance>)]);
+
+    usePanelStore.getState().setPanelExtensionState("p1", { root: "src" });
+
+    expect(versionOf("p1")).toBe(3);
+  });
+
+  it("advances a stale version even when the migrated bag is byte-identical", () => {
+    // A migration whose result matches what it read is still a migration: the
+    // plugin has confirmed the bag matches its current schema. Returning early
+    // on the content compare would leave the record on the old version and make
+    // the plugin migrate the same bag again on every single mount.
+    registerKind(2);
+    seed([
+      makePluginPanel({
+        extensionState: { root: "src" },
+        extensionStateVersion: 1,
+      } as Partial<PanelInstance>),
+    ]);
+
+    usePanelStore.getState().setPanelExtensionState("p1", { root: "src" });
+
+    expect(versionOf("p1")).toBe(2);
+    expect(stateOf("p1")).toEqual({ root: "src" });
+  });
+
+  it("stays free when an identical write is already at the current version", () => {
+    // The no-op short-circuit is what makes persisting from a render-derived
+    // effect cheap; only a version that actually has to move may bypass it.
+    registerKind(2);
+    seed([
+      makePluginPanel({
+        extensionState: { root: "src" },
+        extensionStateVersion: 2,
+      } as Partial<PanelInstance>),
+    ]);
+    const before = usePanelStore.getState().panelsById["p1"];
+
+    usePanelStore.getState().setPanelExtensionState("p1", { root: "src" });
+
+    expect(usePanelStore.getState().panelsById["p1"]).toBe(before);
   });
 });

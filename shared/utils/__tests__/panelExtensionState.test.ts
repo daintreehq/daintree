@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   decodePanelExtensionState,
   panelExtensionStateVersionMessage,
+  restoredExtensionStateVersion,
 } from "../panelExtensionState.js";
 
 const BAG = { activeTab: "overview" };
@@ -110,5 +111,31 @@ describe("panelExtensionStateVersionMessage", () => {
     // The action, and the reassurance that waiting costs nothing.
     expect(message).toContain("Update the plugin");
     expect(message).toContain("kept");
+  });
+});
+
+describe("restoredExtensionStateVersion", () => {
+  it("resolves an unstamped restored bag to explicit legacy v0", () => {
+    // Left absent, `addPanel` reads it as a fresh spawn and stamps the version
+    // the plugin declares TODAY — relabelling a legacy bag as current, telling
+    // the view no migration is needed, and persisting the lie on the next save.
+    expect(restoredExtensionStateVersion({ extensionState: { a: 1 } })).toBe(0);
+  });
+
+  it("keeps the stamped version of a restored bag", () => {
+    expect(
+      restoredExtensionStateVersion({ extensionState: { a: 1 }, extensionStateVersion: 3 })
+    ).toBe(3);
+  });
+
+  it("stays absent when there is no bag, so a fresh spawn stamps its own", () => {
+    expect(restoredExtensionStateVersion({})).toBeUndefined();
+    expect(restoredExtensionStateVersion({ extensionStateVersion: 3 })).toBeUndefined();
+  });
+
+  it("treats a corrupt stamp as legacy rather than trusting it", () => {
+    expect(
+      restoredExtensionStateVersion({ extensionState: { a: 1 }, extensionStateVersion: -2 })
+    ).toBe(0);
   });
 });
