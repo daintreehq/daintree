@@ -421,7 +421,7 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
       className={cn(
         "flex min-h-0 flex-col",
         "rounded-sm border border-[var(--assistant-border-strong)] bg-[var(--assistant-raised)]",
-        "px-3 pb-2 pt-2.5 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
+        "px-2 pb-2 pt-2.5 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
       )}
     >
       <div className="flex shrink-0 items-center gap-2">
@@ -584,7 +584,11 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
                   onClick={() => answer(row.index)}
                   disabled={submitted !== null}
                   className={cn(
-                    "relative flex min-h-7 w-full items-start gap-2 rounded-sm py-1.5 pl-3 pr-2 text-left assistant-text-base",
+                    // `pl-2`, not `pl-3`: the sheet's frame, its answer well and this
+                    // row each added their own inset, and stacked they pushed option
+                    // text a long way inboard of the panel's own axis. The rail is 2px
+                    // and absolutely positioned, so it does not need the clearance.
+                    "relative flex min-h-7 w-full items-start gap-2 rounded-sm py-1.5 pl-2 pr-2 text-left assistant-text-base",
                     "transition-colors duration-150 ease-out",
                     active ? "bg-[var(--assistant-hover)]" : "hover:bg-[var(--assistant-hover)]/60"
                   )}
