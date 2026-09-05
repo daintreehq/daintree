@@ -413,3 +413,92 @@ describe("buildPluginViewDiagnostics — value shapes", () => {
     expect(report).toContain("Module: plugin://acme/dashboard.js");
   });
 });
+
+describe("buildPluginViewDiagnostics — secrets the leaf pass alone cannot see", () => {
+  // Scrubbing each leaf in isolation is necessary but not sufficient: some
+  // patterns match a key and its value together, and some values are objects
+  // that would otherwise be walked apart character by character.
+
+  it("catches a secret only recognizable from its key and value together", () => {
+    const secret = "Q".repeat(40);
+    const { trace, report } = build({
+      error: errorWith("boom", "s", { cause: { SecretAccessKey: secret } }),
+    });
+
+    expect(trace).not.toContain(secret);
+    expect(report).not.toContain(secret);
+  });
+
+  it("redacts before truncating, so a cut cannot expose a secret's prefix", () => {
+    const secret = "Q".repeat(40);
+    // Padded so the secret straddles the output cap: truncating the raw text
+    // first would leave a handful of its characters behind. No `[Truncated]`
+    // assertion — redacting first shrinks the payload back under the cap, which
+    // is the point.
+    const { trace } = build({
+      error: errorWith("boom", "s", {
+        cause: { padding: "p".repeat(3960), SecretAccessKey: secret },
+      }),
+    });
+
+    // A partial survivor at the cut is the dangerous case, not the whole value.
+    expect(trace).not.toContain(secret.slice(0, 10));
+    expect(trace).toContain("ppp");
+  });
+
+  it("unboxes a boxed string instead of spelling it out one property per character", () => {
+    const { trace } = build({
+      // A boxed string is exactly what a plugin can hand us as a cause.
+      error: errorWith("boom", "s", { cause: new String(CAUSE_TOKEN) }),
+    });
+
+    expect(trace).not.toContain(CAUSE_TOKEN);
+    expect(trace).not.toContain('"0":');
+  });
+
+  it("keeps only the frames of an Error nested inside an object cause", () => {
+    // The stack's `Name: message` header carries a second copy of the message
+    // that is no longer at a line start, so the line-anchored patterns miss it.
+    const nested = errorWith(
+      "access_token=opaque-secret-value",
+      "Error: access_token=opaque-secret-value\n    at f (nested.js:7:7)"
+    );
+    const { trace, report } = build({ error: errorWith("boom", "s", { cause: { err: nested } }) });
+
+    expect(trace).not.toContain("opaque-secret-value");
+    expect(report).not.toContain("opaque-secret-value");
+    // Stripping the header must not cost the location.
+    expect(trace).toContain("nested.js:7:7");
+  });
+
+  it("scrubs a symbol's description before the Symbol() wrapper unanchors it", () => {
+    const { trace } = build({
+      error: errorWith("boom", "s", { cause: Symbol("access_token=opaque-secret-value") }),
+    });
+
+    expect(trace).not.toContain("opaque-secret-value");
+  });
+
+  it("keeps distinct entries whose keys redact to the same text", () => {
+    const { trace } = build({
+      error: errorWith("boom", "s", {
+        cause: { "/Users/alice/f": "ENOENT", "/Users/bob/f": "EACCES" },
+      }),
+    });
+
+    // Rewriting keys in place collapsed these two onto one entry.
+    expect(trace).toContain("ENOENT");
+    expect(trace).toContain("EACCES");
+    expect(trace).not.toContain("/Users/alice");
+    expect(trace).not.toContain("/Users/bob");
+  });
+
+  it("bounds an object too wide to serialize whole", () => {
+    const wide: Record<string, string> = {};
+    for (let i = 0; i < 5_000; i += 1) wide[`k${i}`] = "v".repeat(100);
+    const { trace } = build({ error: errorWith("boom", "s", { cause: wide }) });
+
+    expect(trace).toContain("[Truncated]");
+    expect(trace.length).toBeLessThan(20_000);
+  });
+});

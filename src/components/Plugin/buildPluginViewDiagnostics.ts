@@ -14,6 +14,7 @@ const MAX_CAUSE_DEPTH = 8;
  * park `JSON.stringify` on billions of holes during render.
  */
 const MAX_ARRAY_ENTRIES = 50;
+const MAX_OBJECT_KEYS = 50;
 const MAX_VALUE_CHARS = 4000;
 
 /** Sentinels, spelled as `logErrorNormalization` and `ipcErrorSerialization` spell them. */
@@ -104,9 +105,17 @@ function stringifyObject(value: object, scrub: Scrub): string {
           return {
             name: readString(item, "name") ?? "Error",
             message: readString(item, "message") ?? "",
-            stack: readString(item, "stack"),
+            // Frames only. A stack's `Name: message` header carries a second,
+            // unanchored copy of the message, which the line-anchored patterns
+            // then miss — and the `message` field above already has it.
+            stack: stackFrames(readString(item, "stack")),
           };
         }
+        // A boxed primitive is an object with indexed own properties, so the
+        // record branch below would explode `new String(token)` into one
+        // property per character and scrub none of them.
+        const boxed = unboxPrimitive(item);
+        if (boxed !== undefined) return typeof boxed === "string" ? scrub(boxed) : boxed;
         if (!isRecord(item)) return item;
         if (seen.has(item)) return CIRCULAR;
         seen.add(item);
@@ -115,12 +124,17 @@ function stringifyObject(value: object, scrub: Scrub): string {
             ? [...item.slice(0, MAX_ARRAY_ENTRIES), TRUNCATED]
             : item;
         }
-        // Rebuilt so the keys are scrubbed too — `JSON.stringify` writes a key
-        // verbatim and never offers it to the replacer. Cycle detection stays
-        // on the original object, which is already in `seen`.
-        const scrubbed: Record<string, unknown> = {};
-        for (const [key, child] of Object.entries(item)) scrubbed[scrub(key)] = child;
-        return scrubbed;
+        const entries = Object.entries(item);
+        if (entries.length <= MAX_OBJECT_KEYS) return item;
+        // Only the over-wide case is rebuilt, and it keeps the original keys:
+        // rewriting them collapses `/Users/alice/f` and `/Users/bob/f` onto one
+        // entry, silently dropping a diagnostic. Keys are covered by the text
+        // pass below instead. Null-prototype so an own `__proto__` entry lands
+        // as data rather than hitting the setter.
+        const capped: Record<string, unknown> = Object.create(null);
+        for (const [key, child] of entries.slice(0, MAX_OBJECT_KEYS)) capped[key] = child;
+        capped[TRUNCATED] = entries.length - MAX_OBJECT_KEYS;
+        return capped;
       },
       2
     );
@@ -128,9 +142,32 @@ function stringifyObject(value: object, scrub: Scrub): string {
     return UNSERIALIZABLE;
   }
   if (json === undefined) return UNSERIALIZABLE;
-  // Safe to cut: every string inside was scrubbed on the way in, so a slice
-  // cannot expose the leading bytes of a secret that straddled the boundary.
-  return json.length > MAX_VALUE_CHARS ? `${json.slice(0, MAX_VALUE_CHARS)}\n${TRUNCATED}` : json;
+  // A second pass over the encoded text, because some patterns match a key and
+  // its value together (`"SecretAccessKey": "…"`) and so can never fire while
+  // each leaf is scrubbed in isolation. This also covers the keys.
+  const scrubbed = scrub(json);
+  // Safe to cut only after both passes: a slice through raw text would leave
+  // the leading bytes of a secret that straddled the boundary.
+  return scrubbed.length > MAX_VALUE_CHARS
+    ? `${scrubbed.slice(0, MAX_VALUE_CHARS)}\n${TRUNCATED}`
+    : scrubbed;
+}
+
+/** The primitive inside a boxed `String`/`Number`/`Boolean`, else undefined. */
+function unboxPrimitive(value: unknown): string | number | boolean | undefined {
+  if (!isRecord(value)) return undefined;
+  // Tag rather than `instanceof`: a value from another realm has its own
+  // constructors, and these arrive from plugin code.
+  switch (Object.prototype.toString.call(value)) {
+    case "[object String]":
+      return String(value);
+    case "[object Number]":
+      return Number(value);
+    case "[object Boolean]":
+      return value.valueOf() === true;
+    default:
+      return undefined;
+  }
 }
 
 /** Render a cause that is not an Error, keeping its type legible. */
@@ -142,8 +179,10 @@ function formatValue(value: unknown, scrub: Scrub): string {
   if (typeof value === "string") return JSON.stringify(scrub(value));
   if (typeof value === "object") return stringifyObject(value, scrub);
   if (typeof value === "function") return "[Function]";
+  // The description alone, then wrapped: scrubbing `Symbol(access_token=…)`
+  // would already have moved the value off the anchor its pattern needs.
+  if (typeof value === "symbol") return `Symbol(${scrub(value.description ?? "")})`;
   try {
-    // A symbol's description is author-supplied text like any other.
     return scrub(String(value));
   } catch {
     return UNSERIALIZABLE;
@@ -331,7 +370,7 @@ export function buildPluginViewDiagnostics({
   const message = extractMessage(error, scrub);
   const rawCode = extractCode(error);
   const code = rawCode === undefined ? undefined : scrub(rawCode);
-  const trace = buildTrace(error, componentStack, scrub);
+  const trace = scrub(buildTrace(error, componentStack, scrub));
   const mode = devMode ? "raw (dev mode)" : "redacted";
 
   const report = [
