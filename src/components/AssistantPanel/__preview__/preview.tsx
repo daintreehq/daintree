@@ -76,6 +76,14 @@ const width = Math.max(320, Math.min(960, Number(params.get("width")) || 380));
 const fontSize = Math.max(11, Math.min(24, Number(params.get("fontSize")) || 12));
 const fixtureParam = params.get("fixture");
 const single: StateName | null = fixtureParam && isStateName(fixtureParam) ? fixtureParam : null;
+/**
+ * Force the auto-approve banner on, whatever the fixture captured.
+ *
+ * The banner is a session SETTING, not a frame the engine ever sends, so no captured
+ * state carries it and the masthead below the welcome block cannot otherwise be
+ * reviewed with the row that sits there in the product for most real users.
+ */
+const forceAutoApprove = params.get("autoApprove") === "1";
 
 /**
  * Stable no-op route for the specimen's references.
@@ -89,7 +97,8 @@ const noopRoute = () => {};
 
 function Panel({ name }: { name: StateName }) {
   const state = useMemo(() => {
-    const captured = STATES[name]!;
+    const base = STATES[name]!;
+    const captured = forceAutoApprove ? { ...base, autoApprove: true } : base;
     if (captured.turnStartedAt === null) return captured;
     // Rebase the live clock so an old capture does not appear to have run for weeks.
     const offset = Date.now() - (captured.lastActivityAt ?? captured.turnStartedAt);
