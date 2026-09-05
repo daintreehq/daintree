@@ -3,9 +3,9 @@ import React from "react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import type { ChangeData, HunkData, RenderToken } from "react-diff-view";
-import type { InsertChange, DeleteChange } from "gitdiff-parser";
+import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import type { ChangeData, HunkData, RenderGutter, RenderToken, ViewType } from "react-diff-view";
+import type { InsertChange, DeleteChange, NormalChange } from "gitdiff-parser";
 import { DiffViewer, _resetLangStateForTests, _flushLangLoadsForTests } from "../DiffViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -585,22 +585,63 @@ describe("DiffViewer hunk copy", () => {
 // .diff-line-number), so the test asserts the static DOM/CSS contract:
 // renderGutter always wraps the line number in a .diff-line-number span and
 // always emits a sibling .diff-line-marker span carrying the +/- glyph.
+// Typed as the library's own RenderGutter rather than a local shape: the
+// hand-rolled params type used here previously had no `side` field, which is
+// exactly how #12255 slipped past these tests.
+function getRenderGutter({ diff = SMALL_DIFF, viewType = "split" as ViewType } = {}): RenderGutter {
+  render(wrap(<DiffViewer diff={diff} viewType={viewType} />));
+  return capturedDiffProps.renderGutter as RenderGutter;
+}
+
+/**
+ * Mirrors react-diff-view's UnifiedChange: two gutter cells built from ONE
+ * change object, differing only by `side`. Numbers are supplied per side because
+ * the library's renderDefaultBy yields undefined for the side a change doesn't
+ * belong to.
+ */
+function renderGutterPair(
+  renderGutter: RenderGutter,
+  change: ChangeData,
+  numbers: { old?: string; new?: string } = {}
+) {
+  const { container } = render(
+    <table>
+      <tbody>
+        <tr>
+          {(["old", "new"] as const).map((side) => (
+            <td key={side} className="diff-gutter">
+              {renderGutter({
+                change,
+                side,
+                inHoverState: false,
+                renderDefault: () => numbers[side],
+                wrapInAnchor: (node) => node,
+              })}
+            </td>
+          ))}
+        </tr>
+      </tbody>
+    </table>
+  );
+  const cells = [...container.querySelectorAll("td.diff-gutter")];
+  const markerSpans = cells.map((cell) => [...cell.querySelectorAll(".diff-line-marker")]);
+  return {
+    // Counted, not just read: a cell rendering two marker spans is its own bug.
+    markerCounts: markerSpans.map((spans) => spans.length),
+    markers: markerSpans.map((spans) => spans[0]?.textContent ?? null),
+    numbers: cells.map((cell) => cell.querySelector(".diff-line-number")?.textContent ?? null),
+    // Label text, so an empty <span class="sr-only"> can't pass as an announcement.
+    movedLabels: cells.map((cell) =>
+      [...cell.querySelectorAll(".sr-only")].map((label) => label.textContent ?? "")
+    ),
+  };
+}
+
 describe("DiffViewer gutter marker never wraps (#10422)", () => {
   beforeEach(() => {
     _resetLangStateForTests();
     clearCapturedDiffProps();
   });
-
-  type RenderGutterParams = {
-    change: ChangeData;
-    renderDefault: () => React.ReactNode;
-    wrapInAnchor: (node: React.ReactNode) => React.ReactNode;
-  };
-  type RenderGutterFn = (params: RenderGutterParams) => React.ReactNode;
-  function getRenderGutter(): RenderGutterFn {
-    render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
-    return capturedDiffProps.renderGutter as RenderGutterFn;
-  }
 
   it("wraps the line number in a .diff-line-number span for insert rows", () => {
     const renderGutter = getRenderGutter();
@@ -612,6 +653,8 @@ describe("DiffViewer gutter marker never wraps (#10422)", () => {
     };
     const result = renderGutter({
       change,
+      side: "new",
+      inHoverState: false,
       renderDefault: () => "2",
       wrapInAnchor: (n) => <a href="#L2">{n}</a>,
     });
@@ -636,6 +679,8 @@ describe("DiffViewer gutter marker never wraps (#10422)", () => {
     };
     const result = renderGutter({
       change,
+      side: "old",
+      inHoverState: false,
       renderDefault: () => "1",
       wrapInAnchor: (n) => <a href="#L1">{n}</a>,
     });
@@ -660,6 +705,8 @@ describe("DiffViewer gutter marker never wraps (#10422)", () => {
     };
     const result = renderGutter({
       change,
+      side: "new",
+      inHoverState: false,
       renderDefault: () => "2",
       wrapInAnchor: (n) => <a href="#L2">{n}</a>,
     });
@@ -674,6 +721,242 @@ describe("DiffViewer gutter marker never wraps (#10422)", () => {
     // gutter cell is what enforces nowrap; the marker span itself is the
     // element that would wrap if the cell allowed it.
     expect(lineNumberSpans[0]!.querySelector(".diff-line-marker")).toBeNull();
+  });
+});
+
+// A unified row renders an old AND a new gutter cell from the same change, so a
+// marker keyed only off change.type printed in both ("+  1519 +"). Split calls
+// the renderer once per insert/delete change, for its owning side only, so one
+// side-gate serves both view types.
+describe("DiffViewer gutter side ownership (#12255)", () => {
+  beforeEach(() => {
+    _resetLangStateForTests();
+    clearCapturedDiffProps();
+  });
+
+  it("marks an insert only in the new gutter", () => {
+    const renderGutter = getRenderGutter({ viewType: "unified" });
+    const change: InsertChange = {
+      type: "insert",
+      content: "added",
+      lineNumber: 1519,
+      isInsert: true,
+    };
+
+    const { markers, numbers, markerCounts, movedLabels } = renderGutterPair(renderGutter, change, {
+      new: "1519",
+    });
+
+    expect(markers).toEqual(["", "+"]);
+    expect(numbers).toEqual(["", "1519"]);
+    expect(markerCounts).toEqual([1, 1]);
+    expect(movedLabels).toEqual([[], []]);
+  });
+
+  it("marks a delete only in the old gutter", () => {
+    const renderGutter = getRenderGutter({ viewType: "unified" });
+    const change: DeleteChange = {
+      type: "delete",
+      content: "removed",
+      lineNumber: 1519,
+      isDelete: true,
+    };
+
+    const { markers, numbers, markerCounts, movedLabels } = renderGutterPair(renderGutter, change, {
+      old: "1519",
+    });
+
+    expect(markers).toEqual(["-", ""]);
+    expect(numbers).toEqual(["1519", ""]);
+    expect(markerCounts).toEqual([1, 1]);
+    expect(movedLabels).toEqual([[], []]);
+  });
+
+  it("leaves context rows unmarked while keeping both line numbers", () => {
+    const renderGutter = getRenderGutter({ viewType: "unified" });
+    const change: NormalChange = {
+      type: "normal",
+      content: " context",
+      oldLineNumber: 12,
+      newLineNumber: 14,
+      isNormal: true,
+    };
+
+    const { markers, numbers, markerCounts, movedLabels } = renderGutterPair(renderGutter, change, {
+      old: "12",
+      new: "14",
+    });
+
+    // Both numbers are real and may differ once earlier edits shift the file;
+    // neither cell earns a marker.
+    expect(markers).toEqual(["", ""]);
+    expect(numbers).toEqual(["12", "14"]);
+    expect(markerCounts).toEqual([1, 1]);
+    expect(movedLabels).toEqual([[], []]);
+  });
+
+  it("announces a moved insert once, in the new gutter", () => {
+    const renderGutter = getRenderGutter({ diff: MOVED_DIFF, viewType: "unified" });
+    const hunks = capturedDiffProps.hunks as HunkData[];
+    const ins = hunks[1]!.changes.find((c) => c.type === "insert")!;
+
+    const { markers, markerCounts, movedLabels } = renderGutterPair(renderGutter, ins, {
+      new: "19",
+    });
+
+    expect(markers).toEqual(["", "+"]);
+    expect(markerCounts).toEqual([1, 1]);
+    expect(movedLabels).toEqual([[], ["moved"]]);
+  });
+
+  it("announces a moved delete once, in the old gutter", () => {
+    const renderGutter = getRenderGutter({ diff: MOVED_DIFF, viewType: "unified" });
+    const hunks = capturedDiffProps.hunks as HunkData[];
+    const del = hunks[0]!.changes.find((c) => c.type === "delete")!;
+
+    const { markers, markerCounts, movedLabels } = renderGutterPair(renderGutter, del, {
+      old: "2",
+    });
+
+    expect(markers).toEqual(["-", ""]);
+    expect(markerCounts).toEqual([1, 1]);
+    expect(movedLabels).toEqual([["moved"], []]);
+  });
+
+  it("keeps the moved label off changes that did not move", () => {
+    const renderGutter = getRenderGutter({ diff: MOVED_DIFF, viewType: "unified" });
+    const change: InsertChange = {
+      type: "insert",
+      content: "unrelated",
+      lineNumber: 9999,
+      isInsert: true,
+    };
+
+    const { markers, markerCounts, movedLabels } = renderGutterPair(renderGutter, change, {
+      new: "9999",
+    });
+
+    expect(markers).toEqual(["", "+"]);
+    expect(markerCounts).toEqual([1, 1]);
+    expect(movedLabels).toEqual([[], []]);
+  });
+});
+
+// The callback tests above simulate the library's two calls; the file-level mock
+// swaps <Hunk> for a placeholder with no gutter cells, so nothing there proves
+// react-diff-view actually invokes the renderer that way. These pull the real
+// Diff/Hunk in and assert against genuine unified and split markup.
+describe("DiffViewer real gutter rows (#12255)", () => {
+  beforeEach(() => {
+    _resetLangStateForTests();
+    clearCapturedDiffProps();
+  });
+
+  type GutterCell = { marker: string; markerSpans: number; number: string; movedLabels: string[] };
+  type GutterRow = { cells: GutterCell[]; markers: string[]; movedLabels: string[] };
+
+  let RealDiff: typeof import("react-diff-view").Diff;
+  let RealHunk: typeof import("react-diff-view").Hunk;
+
+  // Resolved once up front so renderRealDiff stays synchronous: an await between
+  // the capture render and the real one would leave a mounted DiffViewer
+  // tokenizing across the gap, landing its setState outside act().
+  beforeAll(async () => {
+    const actual = await vi.importActual<typeof import("react-diff-view")>("react-diff-view");
+    RealDiff = actual.Diff;
+    RealHunk = actual.Hunk;
+  });
+
+  function renderRealDiff(diff: string, viewType: ViewType): GutterRow[] {
+    const renderGutter = getRenderGutter({ diff, viewType });
+    const hunks = capturedDiffProps.hunks as HunkData[];
+
+    const { container } = render(
+      <RealDiff viewType={viewType} diffType="modify" hunks={hunks} renderGutter={renderGutter}>
+        {(rendered) => rendered.map((hunk) => <RealHunk key={hunk.content} hunk={hunk} />)}
+      </RealDiff>
+    );
+
+    return [...container.querySelectorAll("tr")].map((row) => {
+      const cells: GutterCell[] = [...row.querySelectorAll("td.diff-gutter")].map((cell) => ({
+        marker: cell.querySelector(".diff-line-marker")?.textContent ?? "",
+        markerSpans: cell.querySelectorAll(".diff-line-marker").length,
+        number: cell.querySelector(".diff-line-number")?.textContent ?? "",
+        movedLabels: [...cell.querySelectorAll(".sr-only")].map((label) => label.textContent ?? ""),
+      }));
+      return {
+        cells,
+        markers: cells.map((cell) => cell.marker).filter((marker) => marker !== ""),
+        movedLabels: cells.flatMap((cell) => cell.movedLabels),
+      };
+    });
+  }
+
+  /** The label belongs to the cell that owns the change — the one with a marker. */
+  function labelsFollowMarkers(rows: GutterRow[]): boolean {
+    return rows.every((row) =>
+      row.cells.every((cell) => cell.movedLabels.length === (cell.marker === "" ? 0 : 1))
+    );
+  }
+
+  it("gives a unified row one marker and keeps both context numbers", () => {
+    const rows = renderRealDiff(SMALL_DIFF, "unified");
+
+    expect(rows.every((row) => row.cells.length === 2)).toBe(true);
+    expect(rows.every((row) => row.cells.every((cell) => cell.markerSpans === 1))).toBe(true);
+    expect(rows.filter((row) => row.markers.length > 0).map((row) => row.markers)).toEqual([
+      ["+"],
+      ["-"],
+    ]);
+
+    const context = rows.filter((row) => row.markers.length === 0);
+    expect(context.length).toBeGreaterThan(0);
+    expect(context.every((row) => row.cells.every((cell) => cell.number !== ""))).toBe(true);
+  });
+
+  it("announces every moved unified row exactly once", () => {
+    const rows = renderRealDiff(MOVED_DIFF, "unified");
+
+    // MOVED_DIFF relocates a 3-line function and detectMovedLines marks every
+    // line of a matched block, so all 3 deletes and all 3 inserts announce.
+    const announced = rows.filter((row) => row.movedLabels.length > 0);
+    expect(announced.map((row) => row.movedLabels)).toEqual([
+      ["moved"],
+      ["moved"],
+      ["moved"],
+      ["moved"],
+      ["moved"],
+      ["moved"],
+    ]);
+    expect(labelsFollowMarkers(rows)).toBe(true);
+    expect(rows.every((row) => row.markers.length <= 1)).toBe(true);
+    // Guards labelsFollowMarkers against passing vacuously on a row with no
+    // gutter cells at all.
+    expect(rows.every((row) => row.cells.length === 2)).toBe(true);
+    expect(rows.every((row) => row.cells.every((cell) => cell.markerSpans === 1))).toBe(true);
+  });
+
+  it("leaves split gutters marking only the owning side", () => {
+    const rows = renderRealDiff(SMALL_DIFF, "split");
+    expect(rows.flatMap((row) => row.markers).sort()).toEqual(["+", "-"]);
+    expect(rows.every((row) => row.cells.every((cell) => cell.markerSpans <= 1))).toBe(true);
+
+    const moved = renderRealDiff(MOVED_DIFF, "split");
+    expect(moved.flatMap((row) => row.movedLabels)).toHaveLength(6);
+    expect(labelsFollowMarkers(moved)).toBe(true);
+    expect(moved.every((row) => row.cells.length === 2)).toBe(true);
+    // <=1 not ===1: the non-owning side is the library's own empty placeholder,
+    // which our renderer never touches.
+    expect(moved.every((row) => row.cells.every((cell) => cell.markerSpans <= 1))).toBe(true);
+  });
+
+  it("keeps both markers when a split row pairs a delete with an insert", () => {
+    // Two markers on one row is correct here — they are two different changes,
+    // so the invariant is one marker per owning cell, not per row.
+    const paired = renderRealDiff(jsDiff, "split").filter((row) => row.markers.length === 2);
+
+    expect(paired).toHaveLength(1);
+    expect(paired[0]!.cells.map((cell) => cell.marker)).toEqual(["-", "+"]);
   });
 });
 
