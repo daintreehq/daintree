@@ -4099,6 +4099,9 @@ export class PluginService {
       await this.activatePlugin(pluginId);
     } finally {
       this.devReplaceDepth--;
+      // The registries are whole again, so anything the replacement held back
+      // can be published for real.
+      if (this.devReplaceDepth === 0) this.broadcaster.flushDeferredCompleteSnapshots();
     }
 
     // A stop admitted during the load leaves the plugin running behind a

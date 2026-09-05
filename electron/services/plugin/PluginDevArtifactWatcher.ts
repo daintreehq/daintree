@@ -445,6 +445,14 @@ export class PluginDevArtifactWatcher {
       } while (state.rerunRequested);
     } finally {
       state.running = false;
+      // A burst that arrived mid-settle — including the recovery sweep a
+      // re-arm schedules — only sets `rerunRequested`. The loop above exits on
+      // the staleness check without servicing it, so without this the sweep is
+      // dropped and an outage-time build waits for an unrelated save.
+      if (state.rerunRequested && !this.disposed && !state.stopped) {
+        state.rerunRequested = false;
+        this.schedule(state);
+      }
     }
   }
 

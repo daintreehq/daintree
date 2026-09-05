@@ -363,6 +363,20 @@ export class PluginContributionBroadcaster {
     this.scheduleContextMenuItemsBroadcast(true);
   }
 
+  /**
+   * Re-publish any authoritative snapshot that was held back while a plugin was
+   * being replaced. Called once the replacement completes; a no-op when nothing
+   * was suppressed.
+   */
+  flushDeferredCompleteSnapshots(): void {
+    if (this.deps.isDisposed() || this.deps.isReplacingPlugin()) return;
+    if (this.toolbarButtonsBroadcastComplete) this.scheduleToolbarButtonsBroadcast(true);
+    if (this.keybindingsBroadcastComplete) this.scheduleKeybindingsBroadcast(true);
+    if (this.contextMenuItemsBroadcastComplete) this.scheduleContextMenuItemsBroadcast(true);
+    if (this.agentsBroadcastComplete) this.scheduleAgentsBroadcast(true);
+    if (this.recipesBroadcastComplete) this.scheduleRecipesBroadcast(true);
+  }
+
   broadcastProvenanceChanged(): void {
     if (this.deps.isDisposed()) return;
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
@@ -418,7 +432,10 @@ export class PluginContributionBroadcaster {
     queueMicrotask(() => {
       this.toolbarButtonsBroadcastPending = false;
       const complete = this.toolbarButtonsBroadcastComplete && !this.deps.isReplacingPlugin();
-      this.toolbarButtonsBroadcastComplete = false;
+      // Cleared only when it was actually published: a `complete` suppressed
+      // mid-replacement is still owed, and dropping it here would leave the
+      // renderer's stale entries un-swept until some later authoritative event.
+      if (complete) this.toolbarButtonsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginToolbarButtons(complete);
     });
@@ -439,7 +456,7 @@ export class PluginContributionBroadcaster {
     queueMicrotask(() => {
       const isComplete = this.keybindingsBroadcastComplete && !this.deps.isReplacingPlugin();
       this.keybindingsBroadcastPending = false;
-      this.keybindingsBroadcastComplete = false;
+      if (isComplete) this.keybindingsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.emitScoped("plugin:keybindings-changed", (projectId) => ({
         keybindings: forProject(getPluginKeybindings(), (e) => e.pluginId, projectId),
@@ -460,7 +477,7 @@ export class PluginContributionBroadcaster {
     queueMicrotask(() => {
       this.contextMenuItemsBroadcastPending = false;
       const drained = this.contextMenuItemsBroadcastComplete && !this.deps.isReplacingPlugin();
-      this.contextMenuItemsBroadcastComplete = false;
+      if (drained) this.contextMenuItemsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginContextMenuItems(drained);
     });
@@ -486,7 +503,7 @@ export class PluginContributionBroadcaster {
     queueMicrotask(() => {
       this.agentsBroadcastPending = false;
       const drained = this.agentsBroadcastComplete && !this.deps.isReplacingPlugin();
-      this.agentsBroadcastComplete = false;
+      if (drained) this.agentsBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginAgents(drained);
     });
@@ -512,7 +529,7 @@ export class PluginContributionBroadcaster {
     queueMicrotask(() => {
       this.recipesBroadcastPending = false;
       const drained = this.recipesBroadcastComplete && !this.deps.isReplacingPlugin();
-      this.recipesBroadcastComplete = false;
+      if (drained) this.recipesBroadcastComplete = false;
       if (this.deps.isDisposed()) return;
       this.broadcastPluginRecipes(drained);
     });
@@ -586,7 +603,10 @@ export class PluginContributionBroadcaster {
         name: "plugin:keybindings-changed",
         payload: {
           keybindings: forProject(getPluginKeybindings(), (e) => e.pluginId, target),
-          complete: true,
+          // Authoritative only when the registries are whole. A view attaching
+          // mid-replacement would otherwise be handed a snapshot missing the
+          // plugin being rebuilt and sweep its preferences against it.
+          complete: !this.deps.isReplacingPlugin(),
         },
       },
       {
