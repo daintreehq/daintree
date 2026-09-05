@@ -1522,7 +1522,7 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
         });
       }
 
-      // A project-local plugin runs in the sandboxed worker, and
+      // A project-local plugin runs out-of-process in the plugin worker, and
       // `host.registerForgeProvider` is unavailable there: forge providers
       // require synchronous host methods (`parseRemote`, the URL builders) that
       // cannot cross the worker's async message port — see the same refusal in
