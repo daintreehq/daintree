@@ -453,13 +453,39 @@ export class PluginDevWorkerHost extends EventEmitter {
 
     this.installLogForwarding();
 
-    this.child.on("message", (msg: PluginWorkerToHostMessage) => {
+    // Bind both listeners to THIS child so a superseded or retiring worker can
+    // never speak for the host (#12279).
+    const child = this.child;
+
+    child.on("message", (msg: PluginWorkerToHostMessage) => {
+      if (!this.hasAuthority(child)) return;
       this.handleWorkerMessage(msg);
     });
 
-    this.child.on("exit", (code) => {
+    child.on("exit", (code) => {
+      if (this.child !== child) return;
       this.handleExit(code);
     });
+  }
+
+  /**
+   * Whether messages from `child` still carry authority.
+   *
+   * A reload asks the worker to dispose cooperatively and only force-kills it
+   * after a grace period, so the outgoing worker stays alive and connected well
+   * after `reloading` announced its retirement — and its `dispose` handler runs
+   * the plugin's cleanup, which can itself call the host. Those calls must not
+   * be forwarded: the bridge stamps every host call with the CURRENT generation,
+   * which by then is the incoming one, so a late prompt, settings/storage write
+   * or delegated action from the dead generation would pass every downstream
+   * staleness check and commit with full authority.
+   *
+   * Gating on child identity is self-clearing — the replacement becomes
+   * `this.child` and is served immediately, including the host calls its
+   * `activate()` makes, so this cannot deadlock activation.
+   */
+  private hasAuthority(child: UtilityProcess): boolean {
+    return !this.isDisposed && !this.isReloading && this.child === child;
   }
 
   private handleWorkerMessage(msg: PluginWorkerToHostMessage): void {

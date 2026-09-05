@@ -40,6 +40,9 @@ function makeHost() {
     invalidateFileDecorations: vi.fn(),
     setPanelBadge: vi.fn(async () => {}),
     showToast: vi.fn(async () => {}),
+    showQuickPick: vi.fn(async (): Promise<unknown> => undefined),
+    showInputBox: vi.fn(async (): Promise<unknown> => undefined),
+    showConfirm: vi.fn(async () => false),
     dispatch: vi.fn(async () => ({ ok: true, result: undefined })),
     actions: {
       list: vi.fn(async () => [{ id: "terminal.new", danger: "safe", requiresArgs: false }]),
@@ -768,6 +771,82 @@ describe("PluginDevWorkerMainBridge", () => {
     // The worker is gone, so the read has nowhere to deliver — cancel the I/O
     // rather than let it complete against a dead generation.
     expect(seenSignal?.aborted).toBe(true);
+  });
+
+  // #12279: a prompt is the one host call the user can SEE. Retiring the
+  // generation that asked must take the question off the screen, not just drop
+  // the answer — otherwise the user is left answering a dead worker, and the
+  // per-plugin one-prompt cap makes the successor's first prompt resolve
+  // instantly to its cancel value.
+  describe.each([
+    { method: "showQuickPick", params: { items: [{ id: "a", label: "A" }] }, signalArg: 2 },
+    { method: "showInputBox", params: { options: {} }, signalArg: 1 },
+    { method: "showConfirm", params: { options: { title: "Sure?" } }, signalArg: 1 },
+  ])("$method cancellation (#12279)", ({ method, params, signalArg }) => {
+    const openPrompt = async (host: any, workerHost: FakeWorkerHost) => {
+      let seenSignal: AbortSignal | undefined;
+      host[method].mockImplementation((...args: any[]) => {
+        seenSignal = args[signalArg]?.signal;
+        // A prompt has no deadline — it stays open until the user answers.
+        return new Promise(() => {});
+      });
+      workerHost.emit("worker-message", {
+        type: "host-call",
+        requestId: "p1",
+        method,
+        params,
+      });
+      await flush();
+      return () => seenSignal;
+    };
+
+    it("forwards a signal that the reload boundary aborts", async () => {
+      const { host, workerHost, bridge } = makeBridge();
+      bridge.waitForActivation().catch(() => {});
+      const signal = await openPrompt(host, workerHost);
+      expect(signal()).toBeDefined();
+      expect(signal()?.aborted).toBe(false);
+
+      workerHost.emit("reloading");
+
+      expect(signal()?.aborted).toBe(true);
+    });
+
+    it("aborts the prompt when the worker crashes instead", async () => {
+      const { host, workerHost, bridge } = makeBridge();
+      bridge.waitForActivation().catch(() => {});
+      const signal = await openPrompt(host, workerHost);
+
+      workerHost.emit("exit", 139, false);
+
+      expect(signal()?.aborted).toBe(true);
+    });
+  });
+
+  it("still cancels prompts when registration cleanup throws on reload (#12279)", async () => {
+    const clear = vi.fn(() => {
+      throw new Error("registration cleanup exploded");
+    });
+    const { host, workerHost, bridge } = makeBridge({ clear });
+    bridge.waitForActivation().catch(() => {});
+    let seenSignal: AbortSignal | undefined;
+    (host.showConfirm as any).mockImplementation((_o: any, call?: any) => {
+      seenSignal = call?.signal;
+      return new Promise(() => {});
+    });
+    workerHost.emit("worker-message", {
+      type: "host-call",
+      requestId: "p1",
+      method: "showConfirm",
+      params: { options: { title: "Sure?" } },
+    });
+    await flush();
+
+    // A throwing teardown step must not strand a dialog on the user's screen,
+    // nor skip the rest of the cascade (#9322).
+    expect(() => workerHost.emit("reloading")).not.toThrow();
+    expect(seenSignal?.aborted).toBe(true);
+    expect(clear).toHaveBeenCalled();
   });
 
   it("retires the crashed generation's registrations and subscriptions (#12216)", async () => {

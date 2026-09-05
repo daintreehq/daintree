@@ -26,6 +26,7 @@ import type {
   PluginToastOptions,
   PluginQuickPickItem,
   PluginQuickPickOptions,
+  PluginHostCallOptions,
   PluginTypedIpcHandler,
   PluginWorktreeSnapshot,
   PluginWorktreeStatus,
@@ -241,12 +242,22 @@ export class PluginDevWorkerHostProxy {
   private callWithGrace<T>(
     method: PluginHostCallMethod,
     params: unknown,
-    graceValue: T
+    graceValue: T,
+    signal?: AbortSignal
   ): Promise<T> {
     if (this.disposed) {
       return Promise.resolve(graceValue);
     }
-    return this.call<T>(method, params, undefined, { value: graceValue });
+    if (signal?.aborted) {
+      return Promise.resolve(graceValue);
+    }
+    return this.call<T>(method, params, signal, { value: graceValue }).catch((err: unknown) => {
+      // A cancelled prompt is a dismissal, not a failure (#12279): settle the
+      // grace value so the never-throws contract holds. Only an abort of THIS
+      // call's signal is swallowed — validation and transport errors still throw.
+      if (signal?.aborted) return graceValue;
+      throw err;
+    });
   }
 
   private call<T>(
@@ -663,15 +674,26 @@ export class PluginDevWorkerHostProxy {
       // assertActivationOpen): plugins prompt from command handlers. They use
       // callWithGrace so a plugin unload mid-prompt resolves the dismiss value
       // (undefined / false) instead of rejecting — matching the host contract.
-      showQuickPick: ((items: PluginQuickPickItem[], options?: PluginQuickPickOptions) =>
+      showQuickPick: ((
+        items: PluginQuickPickItem[],
+        options?: PluginQuickPickOptions,
+        callOptions?: PluginHostCallOptions
+      ) =>
         this.callWithGrace<PluginQuickPickItem | PluginQuickPickItem[] | undefined>(
           "showQuickPick",
           { items, options },
-          undefined
+          undefined,
+          callOptions?.signal
         )) as PluginHostApi["showQuickPick"],
-      showInputBox: (options) =>
-        this.callWithGrace<string | undefined>("showInputBox", { options }, undefined),
-      showConfirm: (options) => this.callWithGrace<boolean>("showConfirm", { options }, false),
+      showInputBox: (options, callOptions) =>
+        this.callWithGrace<string | undefined>(
+          "showInputBox",
+          { options },
+          undefined,
+          callOptions?.signal
+        ),
+      showConfirm: (options, callOptions) =>
+        this.callWithGrace<boolean>("showConfirm", { options }, false, callOptions?.signal),
       logger: {
         info: (message, fields) => this.notify("logger.info", { message, fields }),
         warn: (message, fields) => this.notify("logger.warn", { message, fields }),

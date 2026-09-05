@@ -241,6 +241,81 @@ describe("PluginUIPromptDispatcher", () => {
     await expect(other).resolves.toEqual({ id: "k", label: "Kept" });
   });
 
+  it("never opens a prompt whose signal is already aborted (#12279)", async () => {
+    const wc = makeWebContents(7);
+    setActiveWebContents(wc);
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(d.requestPrompt("mine", CONFIRM, undefined, controller.signal)).resolves.toBe(
+      false
+    );
+
+    expect(
+      wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST)
+    ).toHaveLength(0);
+    // The one-prompt-per-plugin cap must not have been spent on a dialog that
+    // was never shown — the next request still gets through.
+    const next = d.requestPrompt("mine", CONFIRM);
+    expect(
+      wc.send.mock.calls.filter((c) => c[0] === CHANNELS.PLUGIN_UI_PROMPT_REQUEST)
+    ).toHaveLength(1);
+    d.cancelForPlugin("mine");
+    await expect(next).resolves.toBe(false);
+  });
+
+  it("aborting a prompt dismisses that one request and settles it (#12279)", async () => {
+    const wc = makeWebContents(7);
+    setActiveWebContents(wc);
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+    const controller = new AbortController();
+
+    const promise = d.requestPrompt("mine", CONFIRM, undefined, controller.signal);
+    const promptId = lastPromptId(wc);
+
+    controller.abort();
+
+    await expect(promise).resolves.toBe(false);
+    // Scoped by promptId so the renderer drops exactly this dialog.
+    expect(wc.send).toHaveBeenCalledWith(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, {
+      pluginId: "mine",
+      promptId,
+    });
+  });
+
+  it("a late abort cannot dismiss a replacement prompt (#12279)", async () => {
+    const wc = makeWebContents(7);
+    setActiveWebContents(wc);
+    const d = new PluginUIPromptDispatcher({ isDisposed: () => false });
+    const controller = new AbortController();
+
+    const first = d.requestPrompt("mine", CONFIRM, undefined, controller.signal);
+    const firstId = lastPromptId(wc);
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+      { sender: { id: 7 } },
+      { promptId: firstId, result: true }
+    );
+    await expect(first).resolves.toBe(true);
+
+    // Same plugin asks again; the earlier caller only now gives up.
+    const second = d.requestPrompt("mine", CONFIRM);
+    const secondId = lastPromptId(wc);
+    expect(secondId).not.toBe(firstId);
+
+    controller.abort();
+
+    // The stale signal must not reach the successor's dialog.
+    expect(wc.send).not.toHaveBeenCalledWith(CHANNELS.PLUGIN_UI_PROMPT_CANCEL, expect.anything());
+    ipcMainMock._emit(
+      CHANNELS.PLUGIN_UI_PROMPT_RESPONSE,
+      { sender: { id: 7 } },
+      { promptId: secondId, result: false }
+    );
+    await expect(second).resolves.toBe(false);
+  });
+
   it("cancelForPlugin dismisses on the ORIGINAL window even after focus switches", async () => {
     const wc1 = makeWebContents(7);
     setActiveWebContents(wc1);
