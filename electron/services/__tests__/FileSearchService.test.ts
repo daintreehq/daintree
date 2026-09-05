@@ -40,16 +40,27 @@ describe("FileSearchService", () => {
   // service awaits real git and fs work.
   const realDateNow = Date.now;
   let clockOffsetMs = 0;
+  let frozenNowMs: number | null = null;
 
   function advanceClock(ms: number): void {
     clockOffsetMs += ms;
+  }
+
+  /**
+   * Stop real time as well as offsetting it. An offset alone cannot pin an exact
+   * expiry boundary: real milliseconds elapse between writing the entry and
+   * reading it back, so a `now === expiresAt` probe lands just past the edge.
+   */
+  function freezeClock(): void {
+    frozenNowMs = realDateNow.call(Date);
   }
 
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
     clockOffsetMs = 0;
-    Date.now = () => realDateNow.call(Date) + clockOffsetMs;
+    frozenNowMs = null;
+    Date.now = () => (frozenNowMs ?? realDateNow.call(Date)) + clockOffsetMs;
     simpleGitMock.mockImplementation(() => gitClientMock);
     gitClientMock.env.mockReturnValue(gitClientMock);
     gitClientMock.checkIsRepo.mockResolvedValue(false);
@@ -75,6 +86,31 @@ describe("FileSearchService", () => {
     const service = new FileSearchService();
     services.push(service);
     return service;
+  }
+
+  /**
+   * Hold the next git listing open, and signal when the load actually reaches
+   * it. `loadFileList` awaits an fs.stat and the hardened-git construction
+   * first, so a test that invalidates without waiting for this signal is acting
+   * before the load is genuinely in flight and proves nothing.
+   */
+  function deferGitListing(): {
+    reached: Promise<void>;
+    release: (listing: string) => void;
+  } {
+    let release!: (listing: string) => void;
+    let markReached!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      markReached = resolve;
+    });
+    gitClientMock.raw.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          release = resolve;
+          markReached();
+        })
+    );
+    return { reached, release: (listing: string) => release(listing) };
   }
 
   function gitRepo(dir: string, listing: string): void {
@@ -394,6 +430,27 @@ describe("FileSearchService", () => {
       expect(gitClientMock.raw).toHaveBeenCalledTimes(2);
     });
 
+    it("holds the entry right up to the five-minute boundary", async () => {
+      // Bounds either side of the actual value: a shorter TTL fails the first
+      // assertion, a longer one the second. `Cache.get` expires on
+      // `now > expiresAt`, so the boundary itself is still a hit.
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "README.md\0");
+
+      const service = await createService();
+      freezeClock();
+      await service.search({ cwd: dir, query: "read", limit: 5 });
+
+      advanceClock(300_000);
+      await service.search({ cwd: dir, query: "read", limit: 5 });
+      expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
+
+      advanceClock(1);
+      await service.search({ cwd: dir, query: "read", limit: 5 });
+      expect(gitClientMock.raw).toHaveBeenCalledTimes(2);
+    });
+
     it("does not let a read extend the entry's life", async () => {
       // Expiry is absolute, not sliding. A sliding window would let a steadily
       // searched worktree with no watcher hold a stale index open forever.
@@ -466,6 +523,10 @@ describe("FileSearchService", () => {
       await service.search({ cwd: dir, query: "read", limit: 5 });
 
       service.invalidateUnder(dir);
+      // Across a macrotask, not synchronously: an eager rebuild would await an
+      // fs.stat and the git-client construction before reaching `raw`, so an
+      // immediate assertion cannot tell it apart from doing nothing.
+      await new Promise((resolve) => setTimeout(resolve, 0));
       expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
 
       gitRepo(dir, "README.md\0src/NewlyAdded.ts\0");
@@ -480,27 +541,13 @@ describe("FileSearchService", () => {
       tempDirs.push(dir);
       gitClientMock.checkIsRepo.mockResolvedValue(true);
       gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
-      let releaseFirst!: (value: string) => void;
-      let markRawStarted!: () => void;
-      // `loadFileList` awaits an fs.stat and the hardened-git construction
-      // before it reaches `raw`, so the invalidation has to wait for the load to
-      // genuinely be in flight — firing it a tick early would test nothing.
-      const rawStarted = new Promise<void>((resolve) => {
-        markRawStarted = resolve;
-      });
-      gitClientMock.raw.mockImplementationOnce(
-        () =>
-          new Promise<string>((resolve) => {
-            releaseFirst = resolve;
-            markRawStarted();
-          })
-      );
+      const first = deferGitListing();
 
       const service = await createService();
       const inFlight = service.search({ cwd: dir, query: "stale", limit: 5 });
-      await rawStarted;
+      await first.reached;
       service.invalidateUnder(dir);
-      releaseFirst("stale.ts\0");
+      first.release("stale.ts\0");
       await inFlight;
 
       gitClientMock.raw.mockResolvedValue("fresh.ts\0");
@@ -509,6 +556,50 @@ describe("FileSearchService", () => {
       // The fenced load must not have seeded the cache: the next search sees
       // the post-change listing, not the one that was already in flight.
       expect(afterFence).toEqual(["fresh.ts"]);
+    });
+
+    it("fences a descendant load in flight when its ancestor is invalidated", async () => {
+      // The root is always in the invalidation set, so a root-scoped test passes
+      // even with the in-flight descendant loop deleted. Only a nested cwd
+      // exercises it.
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      const nested = path.join(dir, "src");
+      fs.mkdirSync(nested, { recursive: true });
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      const first = deferGitListing();
+
+      const service = await createService();
+      const inFlight = service.search({ cwd: nested, query: "stale", limit: 5 });
+      await first.reached;
+      service.invalidateUnder(dir);
+      first.release("stale.ts\0");
+      await inFlight;
+
+      gitClientMock.raw.mockResolvedValue("fresh.ts\0");
+      const afterFence = await service.search({ cwd: nested, query: "", limit: 5 });
+
+      expect(afterFence).toEqual(["fresh.ts"]);
+    });
+
+    it("fences a load still settling when dispose runs", async () => {
+      // Disposal that only forgot the in-flight entry would let the load's
+      // completion reseed the cache — and rearm the sweep — after teardown.
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitClientMock.checkIsRepo.mockResolvedValue(true);
+      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
+      const first = deferGitListing();
+
+      const service = await createService();
+      const inFlight = service.search({ cwd: dir, query: "stale", limit: 5 });
+      await first.reached;
+      service.dispose();
+      first.release("stale.ts\0");
+      await inFlight;
+
+      expect(service.getCacheStats().size).toBe(0);
     });
   });
 
@@ -544,6 +635,110 @@ describe("FileSearchService", () => {
       expect(service.getCacheStats().size).toBe(1);
       await service.search({ cwd: dir, query: "read", limit: 5 });
       expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
+    });
+
+    describe("sweep timer", () => {
+      // Only the interval APIs are faked. The service awaits real fs work on
+      // every search, and faking setTimeout/Promise scheduling alongside it
+      // strands those awaits — so the clock moves via `advanceClock` and only the
+      // sweep's own scheduling is under vitest's control.
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      });
+
+      afterEach(() => {
+        // Before real timers come back: disposal calls clearInterval, and it has
+        // to reach the fake one that armed the interval. The outer afterEach runs
+        // after this and would be too late.
+        for (const service of services) service.dispose();
+        services.length = 0;
+        vi.useRealTimers();
+      });
+
+      it("frees an expired index on its own, without anyone calling sweep", async () => {
+        // The timer is the whole mechanism: every other test here calls `sweep()`
+        // by hand, so removing `armFileListSweep()` or its interval would leave
+        // them all green while nothing ever ran in the app.
+        const dir = makeTempDir();
+        tempDirs.push(dir);
+        gitRepo(dir, "README.md\0");
+
+        const service = await createService();
+        await service.search({ cwd: dir, query: "read", limit: 5 });
+        expect(service.getCacheStats().size).toBe(1);
+
+        // 60s is the cadence; the entry is only expired once the clock is past
+        // the 5-minute TTL, so both have to move.
+        advanceClock(300_001);
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(service.getCacheStats().size).toBe(0);
+      });
+
+      it("leaves a live index alone when the sweep fires", async () => {
+        const dir = makeTempDir();
+        tempDirs.push(dir);
+        gitRepo(dir, "README.md\0");
+
+        const service = await createService();
+        await service.search({ cwd: dir, query: "read", limit: 5 });
+
+        advanceClock(120_000);
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(service.getCacheStats().size).toBe(1);
+      });
+
+      it("stops sweeping once the cache drains, and starts again when it refills", async () => {
+        // A timer that kept firing forever would wake an idle app every minute for
+        // an empty map; one that never re-armed would leave the next session's
+        // indexes to sit there.
+        const dir = makeTempDir();
+        tempDirs.push(dir);
+        gitRepo(dir, "README.md\0");
+
+        const service = await createService();
+        await service.search({ cwd: dir, query: "read", limit: 5 });
+        expect(vi.getTimerCount()).toBe(1);
+
+        service.invalidate(dir);
+        expect(vi.getTimerCount()).toBe(0);
+
+        await service.search({ cwd: dir, query: "read", limit: 5 });
+        expect(vi.getTimerCount()).toBe(1);
+
+        // And exactly one, however many entries it is covering.
+        const second = makeTempDir();
+        tempDirs.push(second);
+        await service.search({ cwd: second, query: "read", limit: 5 });
+        expect(vi.getTimerCount()).toBe(1);
+      });
+
+      it("stops sweeping when the sweep itself empties the cache", async () => {
+        const dir = makeTempDir();
+        tempDirs.push(dir);
+        gitRepo(dir, "README.md\0");
+
+        const service = await createService();
+        await service.search({ cwd: dir, query: "read", limit: 5 });
+
+        advanceClock(300_001);
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(vi.getTimerCount()).toBe(0);
+      });
+
+      it("dispose stops the sweep", async () => {
+        const dir = makeTempDir();
+        tempDirs.push(dir);
+        gitRepo(dir, "README.md\0");
+
+        const service = await createService();
+        await service.search({ cwd: dir, query: "read", limit: 5 });
+        service.dispose();
+
+        expect(vi.getTimerCount()).toBe(0);
+      });
     });
 
     it("dispose drops every index", async () => {

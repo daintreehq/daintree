@@ -250,11 +250,21 @@ export function getFileSearchRetentionRepos(): FileSearchRepo[] {
  * Add a tracked path to a fixture repo and return it, so a scenario can prove
  * an invalidated listing actually got rebuilt rather than merely re-timed.
  * Index-only, matching how the repo was built.
+ *
+ * Pair every call with `removeTrackedPath` in a `finally`: the fixture is built
+ * once per process and shared across every iteration, so a probe left behind
+ * grows the measured corpus with each one and two runs of the same scenario
+ * would no longer be measuring the same repository.
  */
 export function addTrackedPath(repo: FileSearchRepo, relativePath: string): string {
   const blob = git(repo.path, ["hash-object", "-w", "--stdin"], "//\n").trim();
   git(repo.path, ["update-index", "--add", "--index-info"], `100644 ${blob}\t${relativePath}\n`);
   return relativePath;
+}
+
+/** Undo `addTrackedPath`, restoring the repo to its generated corpus. */
+export function removeTrackedPath(repo: FileSearchRepo, relativePath: string): void {
+  git(repo.path, ["update-index", "--force-remove", relativePath]);
 }
 
 /**

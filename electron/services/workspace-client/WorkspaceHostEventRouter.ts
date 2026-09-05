@@ -74,7 +74,21 @@ export class WorkspaceHostEventRouter {
         // the dropped index instead of the stale one, and the invalidator's own
         // timestamp check is what keeps unrelated snapshots from costing a
         // rebuild.
-        fileSearchCacheInvalidator.handleWorktreeUpdate(worktree);
+        // Guarded because this is the hot path: `worktree-update` streams at
+        // 10-50/s under multi-agent load and everything below it — the plugin
+        // bus emit, the sys-bus queue, the cloud-teardown notification — would
+        // be lost with it if a cache drop ever threw.
+        try {
+          fileSearchCacheInvalidator.handleWorktreeUpdate(worktree, {
+            projectPath: entry.projectPath,
+            // `epoch` is reminted on every workspace-host start, so a change of
+            // it is the only evidence main gets that the host was down and may
+            // have missed filesystem writes entirely.
+            hostEpoch: event.epoch,
+          });
+        } catch (error) {
+          console.warn("[workspace-host] file search cache invalidation failed:", error);
+        }
         // No renderer relay: the host already fans every worktree-update
         // directly to each per-view worktree MessagePort
         // (DIRECT_RENDERER_EVENTS in electron/workspace-host.ts), and the

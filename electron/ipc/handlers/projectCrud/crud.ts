@@ -150,8 +150,14 @@ export async function removeProjectWithCleanup(
     pruneWindowStateForPath(removedPath);
     // The project's file indexes are megabytes apiece and nothing will read
     // them again — the worktree-delete path invalidates per worktree, but a
-    // project removed whole never goes through it (#12240).
-    fileSearchCacheInvalidator.handleProjectClosed(removedPath);
+    // project removed whole never goes through it (#12240). Best-effort, like
+    // the worktree lifecycle handlers: a cache drop must not fail a removal the
+    // user asked for and that has already deleted the row.
+    try {
+      fileSearchCacheInvalidator.handleProjectClosed(removedPath);
+    } catch (error) {
+      console.warn("[project.remove] Failed to invalidate file search cache:", error);
+    }
   }
   broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
   // The row is gone, so a window still bound to it no longer has a project open.
@@ -375,11 +381,15 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
         // decision is not forgotten here; a close is not a revoke.
         notifyProjectPluginsClosed(projectId);
 
-        // Its worktrees stop receiving watcher signals the moment the project
-        // closes, so a retained index can only go stale while holding memory
-        // (#12240). The next search after a reopen pays a cold load, which is
-        // the correct price for a listing we could no longer keep fresh.
-        fileSearchCacheInvalidator.handleProjectClosed(project.path);
+        // Its worktrees stop being watched as the project closes, so a retained
+        // index can only go stale while holding memory (#12240). The next search
+        // after a reopen pays a cold load, which is the correct price for a
+        // listing we could no longer keep fresh.
+        try {
+          fileSearchCacheInvalidator.handleProjectClosed(project.path);
+        } catch (error) {
+          logError("project-close-file-search-invalidate-failed", error, { projectId });
+        }
 
         // After the "closed" write, not merely after clearCurrentProject(): the
         // closing window's ProjectViewManager still points at this project, so
@@ -416,10 +426,15 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
         if (deps.worktreeService) {
           deps.worktreeService.pauseProject(project.path);
         }
-        // Backgrounding pauses the workspace host, so the watcher stops
-        // reporting for this project. Same reasoning as the close branch: an
-        // index nothing can invalidate is worse than no index (#12240).
-        fileSearchCacheInvalidator.handleProjectClosed(project.path);
+        // A backgrounded project is on no screen, so nothing is searching it and
+        // its indexes are pure memory — several megabytes per worktree, held for
+        // a picker session that is not happening (#12240). Reopening it pays one
+        // cold load.
+        try {
+          fileSearchCacheInvalidator.handleProjectClosed(project.path);
+        } catch (error) {
+          logError("project-close-file-search-invalidate-failed", error, { projectId });
+        }
 
         console.log(
           `[IPC] project:close: Backgrounded project with ${ptyStats.terminalCount} running terminals`

@@ -82,6 +82,27 @@ function sweepFileListCache(): void {
 }
 
 /**
+ * Do two resolved scopes overlap — is either one inside the other?
+ *
+ * Both directions, because the cache is keyed by whatever cwd a caller
+ * searched. A change under a worktree invalidates listings taken INSIDE it, and
+ * also any wider listing that already contains the changed subtree — an MCP
+ * search rooted at a parent directory caches exactly that.
+ *
+ * Case-folded on Windows only, where the filesystem is case-insensitive and
+ * `path.resolve` preserves whatever spelling the caller used, so `C:\\Repo` and
+ * `c:\\repo` are one directory that would otherwise never match each other.
+ * Symlink aliases (`/var` vs `/private/var` on macOS) are still distinct keys
+ * and fall back to the TTL; canonicalising would put a `realpath` syscall on
+ * this path and cannot resolve a directory that has just been deleted.
+ */
+function scopesOverlap(a: string, b: string): boolean {
+  const left = process.platform === "win32" ? a.toLowerCase() : a;
+  const right = process.platform === "win32" ? b.toLowerCase() : b;
+  return isPathInside(left, right) || isPathInside(right, left);
+}
+
+/**
  * Drop one already-resolved cwd.
  *
  * The epoch is bumped even when nothing was cached: a load already in flight
@@ -476,14 +497,15 @@ export class FileSearchService {
   }
 
   /**
-   * Drop `root`'s index and every cached index beneath it.
+   * Drop every cached index whose scope overlaps `root` — the root itself, the
+   * listings taken beneath it, and any wider listing that contains it.
    *
    * The watcher reports a change against a worktree root, but the cache is
    * keyed by whatever cwd a caller searched, and `files.search` is an
    * ActionService action — so it is also an MCP tool, whose `cwd` is supplied by
-   * the caller (`systemActions.ts`). An agent that searches a subdirectory
-   * caches an entry under that subpath, and a root-scoped drop would leave it
-   * to outlive every change made to it.
+   * the caller (`systemActions.ts`). An agent can cache an index under a
+   * subdirectory or over a parent directory, and a root-only drop would leave
+   * either one to outlive every change made to it.
    */
   invalidateUnder(root: string): void {
     const resolvedRoot = path.resolve(root);
@@ -496,10 +518,10 @@ export class FileSearchService {
     // survive the invalidation that was supposed to remove it.
     FILE_LIST_CACHE.cleanup();
     FILE_LIST_CACHE.forEach((_entry, key) => {
-      if (isPathInside(key, resolvedRoot)) targets.add(key);
+      if (scopesOverlap(key, resolvedRoot)) targets.add(key);
     });
     for (const key of FILE_LIST_IN_FLIGHT.keys()) {
-      if (isPathInside(key, resolvedRoot)) targets.add(key);
+      if (scopesOverlap(key, resolvedRoot)) targets.add(key);
     }
 
     for (const target of targets) invalidateResolvedCwd(target);

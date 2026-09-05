@@ -121,7 +121,10 @@ describe("WorkspaceHostEventRouter", () => {
       router.routeHostEvent(entry, event);
 
       expect(fileSearchCacheInvalidatorMock.handleWorktreeUpdate).toHaveBeenCalledWith(
-        event.worktree
+        event.worktree,
+        // The producer identity the invalidator needs to tell one host's stream
+        // from another's, and to notice a host restart.
+        { projectPath: entry.projectPath, hostEpoch: event.epoch }
       );
     });
 
@@ -141,7 +144,12 @@ describe("WorkspaceHostEventRouter", () => {
       // WORKTREE_DELETE handler's own invalidate call never sees.
       const entry = makeEntry();
 
-      router.routeHostEvent(entry, { type: "worktree-removed", worktreeId: "/project/test/wt" });
+      router.routeHostEvent(entry, {
+        type: "worktree-removed",
+        worktreeId: "/project/test/wt",
+        epoch: "550e8400-e29b-41d4-a716-446655440000",
+        seq: 2,
+      });
 
       expect(fileSearchCacheInvalidatorMock.handleWorktreeRemoved).toHaveBeenCalledWith(
         "/project/test/wt"
