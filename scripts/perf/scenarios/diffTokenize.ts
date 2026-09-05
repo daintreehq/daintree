@@ -6,6 +6,15 @@ import {
   runDiffTokenize,
   MAX_INTRALINE_CHANGES,
 } from "../../../src/components/Worktree/diffTokenizer";
+import type {
+  DiffTokenizeRequest,
+  DiffTokenizeResult,
+} from "../../../src/components/Worktree/diffTokenizer";
+import { DiffTokenizeClient } from "../../../src/services/DiffTokenizeService";
+import {
+  createNodeDiffTokenizeWorker,
+  requestSample,
+} from "../lib/nodeDiffTokenizeWorkerTransport";
 
 // Diff tokenization — the syntax-highlight + intra-line edit-marking pass that
 // the review workspace runs for every file diff (runDiffTokenize, the one
@@ -808,6 +817,53 @@ function addTokenGrade(into: TokenGrade, from: TokenGrade): TokenGrade {
   return into;
 }
 
+/** How many selections PERF-164's burst issues under one key. */
+const BURST_REQUESTS = 20;
+
+/** One consumer key: a reviewer holding j/k down inside ONE diff viewer. */
+const BURST_KEY = "perf-164-review-viewer";
+
+/**
+ * The entries of the review changeset whose fixture REQUIRES syntax tokens.
+ *
+ * PERF-164 grades only its final selection, so that selection has to be one
+ * the strict oracle applies to. Cycling all five entries over twenty requests
+ * would land the last one on markdown, whose entry deliberately declines to
+ * assert highlighting over this corpus.
+ */
+const HIGHLIGHTED_REVIEW_FILES = REVIEW_CHANGESET.filter(
+  (file) => file.syntaxTokens === "required"
+);
+
+/**
+ * PERF-162's changeset, scaled to twenty distinct selections.
+ *
+ * Every entry gets its own path and seed. `generateUnifiedDiff` writes the seed
+ * into each changed line, so a client that resolved an EARLIER selection's
+ * token tree fails the content term rather than passing quietly.
+ */
+const ADMISSION_BURST: ReadonlyArray<{
+  spec: DiffSpec;
+  language: string;
+  syntaxTokens: SyntaxTokenExpectation;
+  reservedWords: readonly string[];
+}> = Array.from({ length: BURST_REQUESTS }, (_unused, index) => {
+  const source = HIGHLIGHTED_REVIEW_FILES[index % HIGHLIGHTED_REVIEW_FILES.length]!;
+  return {
+    spec: {
+      path: `burst-${index}/${source.spec.path}`,
+      changedLines: source.spec.changedLines,
+      seed: source.spec.seed + index * 97,
+    },
+    language: source.language,
+    syntaxTokens: source.syntaxTokens,
+    reservedWords: source.reservedWords,
+  };
+});
+
+/** Every grammar the burst touches, warmed before the bracket opens. */
+const BURST_LANGUAGES = [...new Set(ADMISSION_BURST.map((file) => file.language))];
+
 export const diffTokenizeScenarios: PerfScenario[] = [
   {
     id: "PERF-160",
@@ -1121,6 +1177,187 @@ export const diffTokenizeScenarios: PerfScenario[] = [
             ? `only ${filesTokenized}/${prepared.length} files tokenized`
             : `longest block ${underLoad.longestStallMs.toFixed(1)}ms vs ${idle.longestStallMs.toFixed(1)}ms idle`,
       };
+    },
+  },
+  {
+    id: "PERF-164",
+    name: "Diff Tokenize - Superseded Selection Burst",
+    description:
+      "Twenty tokenize requests under ONE consumer key, issued back to back with no await between " +
+      "them. One key is one MOUNTED FILE DIFF, not a whole review: DiffViewer's useTokens takes its " +
+      "key from useId(), so each file gets its own and different files are independent consumers by " +
+      "design. What re-requests the same key twenty times is a search query being typed — " +
+      "extraRanges is deliberately ungated in that effect, so every keystroke re-tokenizes the file " +
+      "— along with collapse, wrap and view-type changes. The subject is DiffTokenizeClient's " +
+      "admission control, not the tokenizer: PERF-160..163 all call runDiffTokenize directly and " +
+      "none of them post work the client has already given up on. The client is driven UNMODIFIED " +
+      "against a real node:worker_threads thread running the production tokenizer, so executedJobs " +
+      "is counted where the work happens rather than inferred from what the client posted — the " +
+      "client's own bookkeeping is the thing under test and cannot also be the oracle. " +
+      "finalSelectionMs is the last tokenize() call to its resolved result: a service-level " +
+      "completion time, NOT keystroke-to-paint — there is no renderer, no Chromium scheduler and no " +
+      "React commit here. executedJobs and supersededPosted are raw counts and deliberately NOT " +
+      "correctness terms — a predicate asserting 'exactly two jobs ran' would fail on an unmodified " +
+      "client, which is precisely the arm this scenario has to be able to measure. Only the final " +
+      "selection is graded, on PERF-162's terms: it is the one result a caller consumes, each entry " +
+      "carries its own seed so an earlier selection's tree fails the content term instead of " +
+      "passing quietly, and that seed is also how the oracle identifies WHICH posted request was " +
+      "the final one rather than trusting id order.",
+    tier: "heavy",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 8, ci: 8, nightly: 12 },
+    warmups: 1,
+    correctness: [
+      "tokenizeMisses",
+      "supersededResolutionMisses",
+      "executionAccountingMisses",
+      "workerRoutingMisses",
+      "tokenLineMisses",
+      "tokenContentMisses",
+      "tokenHighlightMisses",
+      "tokenCategoryMisses",
+      "tokenLexicalMisses",
+      "tokenStringMisses",
+    ],
+    // The burst IS the workload. A fixture that quietly issued two requests
+    // would report executedJobs: 2 with every predicate at zero — the best
+    // result this scenario can post, from doing none of the work.
+    workloadFloors: {
+      requestCount: BURST_REQUESTS,
+      fileCount: BURST_REQUESTS,
+      changedLines: 6_400,
+      minChangedLinesPerRequest: 320,
+    },
+    async run() {
+      const prepared = ADMISSION_BURST.map((file) => ({
+        ...hunksFor(file.spec),
+        language: file.language,
+        syntaxTokens: file.syntaxTokens,
+        reservedWords: file.reservedWords,
+      }));
+      const requestFor = (file: (typeof prepared)[number]): DiffTokenizeRequest => ({
+        hunks: file.hunks,
+        language: file.language,
+        highlight: true,
+        extraRanges: null,
+      });
+
+      const { harness, factory } = createNodeDiffTokenizeWorker();
+      let factoryCalls = 0;
+      const client = new DiffTokenizeClient(() => {
+        factoryCalls += 1;
+        return factory();
+      });
+
+      try {
+        // Warm every grammar the burst uses, outside the bracket. The worker
+        // lazy-loads a language on first use, and that import inside the
+        // measurement would report a grammar load as tokenize latency.
+        for (const language of BURST_LANGUAGES) {
+          await client.tokenize(`perf-164-warmup-${language}`, {
+            ...requestFor(prepared[0]!),
+            language,
+          });
+        }
+        const warm = await harness.stats();
+        const postedBeforeBurst = harness.posted.length;
+        const deliveredBeforeBurst = harness.delivered.length;
+
+        // The workload has to be counted where the calls are MADE, not read off
+        // the prepared fixture. A submission loop that quietly issued two
+        // requests would still let the fixture report twenty — the exact
+        // flattering shortfall the floors below exist to catch.
+        const issued: number[] = [];
+        const supersededPromises: Array<Promise<DiffTokenizeResult | null>> = [];
+        const start = performance.now();
+        for (let index = 0; index < prepared.length - 1; index += 1) {
+          // No await between calls. A loop that waited would measure a queue
+          // nobody has, and would never supersede anything.
+          issued.push(index);
+          supersededPromises.push(client.tokenize(BURST_KEY, requestFor(prepared[index]!)));
+        }
+        const finalIndex = prepared.length - 1;
+        const finalFile = prepared[finalIndex]!;
+        issued.push(finalIndex);
+        const finalStart = performance.now();
+        const finalResult = await client.tokenize(BURST_KEY, requestFor(finalFile));
+        const finished = performance.now();
+        const finalSelectionMs = finished - finalStart;
+        const durationMs = finished - start;
+
+        // Graded HERE, before any further await. A client that resolved early
+        // with a stale tree and repaired it once the real response landed would
+        // otherwise report the early timestamp and still pass the content term.
+        const tokenizeMisses =
+          finalResult && finalResult.tokens && !finalResult.langLoadFailed ? 0 : 1;
+        const tokenGrade = gradeTokens(
+          finalResult?.tokens ?? null,
+          finalFile.hunks,
+          finalFile.syntaxTokens,
+          finalFile.reservedWords
+        );
+
+        // Everything below is outside both clocks: the superseded promises are
+        // already settled, and the tally is the oracle, not the subject.
+        const superseded = await Promise.all(supersededPromises);
+        const after = await harness.stats();
+
+        const burstPosted = harness.posted.slice(postedBeforeBurst);
+        const burstDelivered = harness.delivered.slice(deliveredBeforeBurst);
+        const burstExecuted = after.executedIds.slice(warm.executedIds.length);
+        // Identify the final selection by its CONTENT, not by id order. Correct
+        // final tokens are not by themselves evidence the worker produced them:
+        // a client that ran the held request in-thread would return the right
+        // tree, resolve the other nineteen null and post a flattering count
+        // with every term at zero. Matching the seed the generator wrote into
+        // the fixture, and requiring that id's response to have been delivered,
+        // is what makes the route part of the measurement.
+        const finalSample = requestSample(finalFile.hunks);
+        const finalPost = burstPosted.find((post) => post.sample === finalSample);
+        const finalId = finalPost?.id ?? -1;
+
+        const postedIds = new Set(burstPosted.map((post) => post.id));
+        const deliveredIds = new Set(burstDelivered);
+        const executedIds = new Set(burstExecuted);
+        let executionAccountingMisses =
+          burstPosted.length - postedIds.size + (burstExecuted.length - executedIds.size);
+        for (const id of postedIds) if (!executedIds.has(id)) executionAccountingMisses += 1;
+        for (const id of executedIds) if (!postedIds.has(id)) executionAccountingMisses += 1;
+        if (finalId < 0) executionAccountingMisses += 1;
+        else if (!executedIds.has(finalId) || !deliveredIds.has(finalId)) {
+          executionAccountingMisses += 1;
+        }
+
+        const issuedFiles = issued.map((index) => prepared[index]!);
+        const changedLines = issuedFiles.reduce((total, file) => total + file.changedLines, 0);
+
+        return {
+          durationMs,
+          metrics: {
+            finalSelectionMs,
+            executedJobs: burstExecuted.length,
+            postedJobs: burstPosted.length,
+            // Jobs that DID cross postMessage and whose result nobody used. A
+            // request held back and never posted is not one of these — that is
+            // the whole difference the gate makes.
+            supersededPosted: burstPosted.filter((post) => post.id !== finalId).length,
+            requestCount: issued.length,
+            fileCount: new Set(issued.map((index) => ADMISSION_BURST[index]!.spec.path)).size,
+            changedLines,
+            minChangedLinesPerRequest: Math.min(...issuedFiles.map((file) => file.changedLines)),
+            tokenizeMisses,
+            supersededResolutionMisses: superseded.filter((result) => result !== null).length,
+            executionAccountingMisses,
+            workerRoutingMisses: (factoryCalls === 1 ? 0 : 1) + harness.failures.length,
+            ...tokenGrade,
+          },
+          notes: `${burstExecuted.length}/${issued.length} selections reached the worker`,
+        };
+      } finally {
+        // The thread holds the process open, and the liveness driver's own
+        // process.exit would mask that rather than prove it was cleaned up.
+        await harness.close();
+      }
     },
   },
 ];

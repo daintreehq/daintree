@@ -109,20 +109,68 @@ describe("DiffTokenizeClient worker path", () => {
     expect(mockRunDiffTokenize).not.toHaveBeenCalled();
   });
 
-  it("discards a superseded request and keeps the latest for the same key", async () => {
+  it("holds a superseded request off the worker and posts only the latest", async () => {
     const { client, worker } = createClient();
     const first = client.tokenize("viewer-1", makeRequest());
     const second = client.tokenize("viewer-1", makeRequest());
 
     await expect(first).resolves.toBeNull();
+    // The key already had a job in flight, so the second never reached the
+    // worker at all. Before admission control both were posted and the worker
+    // ran the obsolete one ahead of the one the user is waiting for.
+    expect(worker.posted).toHaveLength(1);
 
-    const [firstMessage, secondMessage] = worker.posted;
-    worker.respond({ id: secondMessage!.id, ok: true, ...tokensA });
-    await expect(second).resolves.toEqual(tokensA);
+    worker.respond({ id: worker.posted[0]!.id, ok: true, tokens: null, langLoadFailed: true });
 
-    // A late response for the superseded id is ignored without side effects.
-    worker.respond({ id: firstMessage!.id, ok: true, tokens: null, langLoadFailed: true });
+    // The in-flight job's result is discarded, side effects included: its
+    // caller was settled null the moment it was superseded.
     expect(mockMarkLanguageFailed).not.toHaveBeenCalled();
+
+    // Releasing the slot is what posts the request held behind it.
+    expect(worker.posted).toHaveLength(2);
+    worker.respond({ id: worker.posted[1]!.id, ok: true, ...tokensA });
+    await expect(second).resolves.toEqual(tokensA);
+  });
+
+  it("posts two messages for a burst of ten requests under one key", async () => {
+    const { client, worker } = createClient();
+    const burst = Array.from({ length: 10 }, () => client.tokenize("viewer-1", makeRequest()));
+
+    // One in flight; the other nine collapse into a single held slot.
+    expect(worker.posted).toHaveLength(1);
+    await expect(Promise.all(burst.slice(0, 9))).resolves.toEqual(Array(9).fill(null));
+
+    worker.respond({ id: worker.posted[0]!.id, ok: true, ...tokensA });
+
+    expect(worker.posted).toHaveLength(2);
+    // The survivor is the NEWEST request, not the second one issued — the held
+    // slot holds one request and every arrival replaces it.
+    expect(worker.posted[1]!.id).toBe(worker.posted[0]!.id + 9);
+
+    worker.respond({ id: worker.posted[1]!.id, ok: true, ...tokensA });
+    await expect(burst[9]!).resolves.toEqual(tokensA);
+    expect(mockRunDiffTokenize).not.toHaveBeenCalled();
+  });
+
+  it("ignores an error from a superseded job instead of failing over", async () => {
+    const { client, worker, factory } = createClient();
+    const first = client.tokenize("viewer-1", makeRequest());
+    const second = client.tokenize("viewer-1", makeRequest());
+    await expect(first).resolves.toBeNull();
+
+    worker.respond({ id: worker.posted[0]!.id, ok: false, error: "tokenize blew up" });
+
+    // The superseded entry survives in `pending` only to release the key's
+    // slot, so its error has to stay as ignored as its tokens are. Treating it
+    // as evidence the environment is broken would cost the session its worker
+    // over a request nobody is waiting for.
+    expect(worker.terminated).toBe(false);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(worker.posted).toHaveLength(2);
+
+    worker.respond({ id: worker.posted[1]!.id, ok: true, ...tokensA });
+    await expect(second).resolves.toEqual(tokensA);
+    expect(mockRunDiffTokenize).not.toHaveBeenCalled();
   });
 
   it("keeps requests under different keys independent", async () => {
@@ -261,6 +309,24 @@ describe("DiffTokenizeClient fallback", () => {
     expect(order).toEqual(["replacement"]);
   });
 
+  it("moves a held request in-thread when the worker dies", async () => {
+    vi.useFakeTimers();
+    const { client, worker } = createClient();
+    mockRunDiffTokenize.mockResolvedValue(tokensA);
+
+    const superseded = client.tokenize("viewer-a", makeRequest("stale"));
+    const held = client.tokenize("viewer-a", makeRequest("held"));
+
+    worker.fail("worker crashed");
+    await vi.runAllTimersAsync();
+
+    await expect(superseded).resolves.toBeNull();
+    // A held request carries no `pending` row, so a failover sweep that walked
+    // only `pending` would leave this promise unsettled for the whole session.
+    await expect(held).resolves.toEqual(tokensA);
+    expect(mockRunDiffTokenize).toHaveBeenCalledTimes(1);
+  });
+
   it("re-runs only newest-per-key requests sequentially on failover", async () => {
     vi.useFakeTimers();
     const { client, worker } = createClient();
@@ -334,6 +400,58 @@ describe("DiffTokenizeClient timeout", () => {
     workers[1]!.respond({ id: workers[1]!.posted[0]!.id, ok: true, ...tokensA });
     await expect(queued).resolves.toEqual(tokensA);
     expect(mockRunDiffTokenize).not.toHaveBeenCalled();
+  });
+
+  it("starts no timeout for a request it never posted", async () => {
+    vi.useFakeTimers();
+    const { client, workers } = createReplacingClient();
+    const wedged = client.tokenize("viewer-1", makeRequest());
+    const held = client.tokenize("viewer-1", makeRequest());
+    await expect(wedged).resolves.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    // One watchdog fired, not two: a request that was never posted cannot have
+    // wedged anything, so it spends none of the replacement budget.
+    expect(workers).toHaveLength(2);
+    // It goes to the replacement, and only now does its own timeout start.
+    expect(workers[1]!.posted).toHaveLength(1);
+
+    workers[1]!.respond({ id: workers[1]!.posted[0]!.id, ok: true, ...tokensA });
+    await expect(held).resolves.toEqual(tokensA);
+    expect(mockRunDiffTokenize).not.toHaveBeenCalled();
+  });
+
+  it("never hands a held successor to the fallback once the budget is exhausted", async () => {
+    vi.useFakeTimers();
+    const { client, workers } = createReplacingClient();
+    mockRunDiffTokenize.mockResolvedValue(tokensA);
+
+    // Same key throughout: one wedging request on the worker and one identical
+    // successor held behind it, re-held after each replacement.
+    const first = client.tokenize("viewer-1", makeRequest());
+    let held = client.tokenize("viewer-1", makeRequest());
+    await expect(first).resolves.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const second = held;
+    held = client.tokenize("viewer-1", makeRequest());
+    await expect(second).resolves.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const third = held;
+    held = client.tokenize("viewer-1", makeRequest());
+    await expect(third).resolves.toBeNull();
+
+    // Budget exhausted: the client gives up on the worker. The successor is
+    // the same viewer asking for the same file that wedged three workers, and
+    // the fallback runs on the main thread — so it is dropped, not run.
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.runAllTimersAsync();
+
+    await expect(held).resolves.toBeNull();
+    expect(mockRunDiffTokenize).not.toHaveBeenCalled();
+    expect(workers).toHaveLength(3);
   });
 
   it("falls back permanently once the replacement budget is exhausted", async () => {

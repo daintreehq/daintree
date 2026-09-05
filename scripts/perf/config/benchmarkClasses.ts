@@ -232,6 +232,14 @@ const FAMILIES: readonly Family[] = [
       "The real tokenizer and its oversized fallback. PERF-163 additionally measures how long the main thread was unavailable while it ran, against an idle calibration window — main-thread availability, not painted latency.",
   },
   {
+    label: "diff tokenize admission",
+    ids: ["PERF-164"],
+    kind: "mechanism",
+    fidelity: withFidelity({ entryPoint: "public-api", electronTransport: "node-channel" }),
+    claim:
+      "The real DiffTokenizeClient, unmodified, admitting work to a real worker thread running the real tokenizer. Its own family because the subject is the CLIENT, not the tokenizer, and the transport is node:worker_threads rather than a Chromium Web Worker — so the latency includes real cross-thread serialization but nothing about Chromium's scheduler. It ends at a resolved token tree, not at a highlighted diff on screen.",
+  },
+  {
     label: "action palette ranking",
     ids: ["PERF-170", "PERF-171"],
     kind: "mechanism",
