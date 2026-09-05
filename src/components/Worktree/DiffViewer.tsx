@@ -141,9 +141,9 @@ export interface DiffViewerProps {
  * only ever calls the gutter renderer for the side that owns the change, so the
  * same gate is correct there too — no viewType branching needed.
  *
- * The empty string still renders: .diff-line-marker is a fixed 1ch inline-block
- * in a right-aligned gutter, so dropping the span would shift that column's
- * number out of line with its neighbour.
+ * Returns "" rather than null so the span still renders: .diff-line-marker is a
+ * fixed 1ch inline-block in a right-aligned gutter, so every cell has to reserve
+ * the slot or numbered context rows would sit 1ch+4px right of changed ones.
  */
 function getGutterMarker(change: ChangeData, side: Side): "+" | "-" | "" {
   if (change.type === "insert") return side === "new" ? "+" : "";
