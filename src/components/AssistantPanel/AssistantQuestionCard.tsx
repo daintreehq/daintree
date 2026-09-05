@@ -413,7 +413,7 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
       // but the list is fixed, so the list is what gives way.
       className={cn(
         "flex min-h-0 flex-col",
-        "rounded-lg border border-[var(--assistant-border-strong)] bg-[var(--assistant-raised)]",
+        "rounded-sm border border-[var(--assistant-border-strong)] bg-[var(--assistant-raised)]",
         "px-3 pb-2 pt-2.5 outline-hidden"
       )}
     >
@@ -577,7 +577,7 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
                   onClick={() => answer(row.index)}
                   disabled={submitted !== null}
                   className={cn(
-                    "relative flex w-full items-start gap-2 rounded-md py-1.5 pl-3 pr-2 text-left assistant-text-base",
+                    "relative flex min-h-7 w-full items-start gap-2 rounded-sm py-1.5 pl-3 pr-2 text-left assistant-text-base",
                     "transition-colors duration-150 ease-out",
                     active ? "bg-[var(--assistant-hover)]" : "hover:bg-[var(--assistant-hover)]/60"
                   )}
