@@ -9,7 +9,7 @@ import {
   normalize as pathNormalize,
 } from "path";
 import { getGitDir } from "./gitUtils.js";
-import { checkIgnoredPaths } from "./gitCheckIgnore.js";
+import { checkIgnoredPaths, hasTrackedIgnoredPaths } from "./gitCheckIgnore.js";
 import { OPERATION_SENTINEL_NAMES } from "./gitRepoOperationState.js";
 import { subscribeParcelWatcher } from "./parcelWatcherBackend.js";
 import { logWarn } from "./logger.js";
@@ -77,6 +77,9 @@ const WORKTREE_CLASSIFY_TIMEOUT_MS = 2_000;
 
 /** Minimum gap between classification-failure warnings, per watcher. */
 const CLASSIFY_WARN_THROTTLE_MS = 30_000;
+
+/** The ignore-rule file, at any depth. A burst touching one always refreshes. */
+const GITIGNORE_FILE_NAME = ".gitignore";
 
 /** A `@parcel/watcher` event as far as this file needs to read it. */
 interface WorktreeEvent {
@@ -185,6 +188,13 @@ export class GitFileWatcher {
   /** Bumped on every flush and on disposal so a stale result cannot act. */
   private classifyGeneration = 0;
   private lastClassifyWarnAt = 0;
+  /**
+   * Cached "does this repo contain tracked files that match an ignore rule?".
+   * Dropped whenever a git-internal file changes, which is where `git add -f`
+   * shows up (the index is watched). Null means "ask again on the next skip
+   * opportunity".
+   */
+  private trackedIgnoredProbe: Promise<boolean> | null = null;
   /** Directory holding `.git/config` — always the common dir. */
   private gitConfigDir: string | null = null;
   private readonly onWatcherFailed: (() => void) | undefined;
@@ -338,6 +348,7 @@ export class GitFileWatcher {
     // to run out its deadline against a worktree nobody is watching.
     this.abortClassification();
     this.pendingWorktreePaths = new Set();
+    this.trackedIgnoredProbe = null;
 
     for (const watcher of this.watchers) {
       try {
@@ -595,6 +606,12 @@ export class GitFileWatcher {
       return;
     }
 
+    // A git-internal write is where the tracked/ignored overlap can change:
+    // `git add -f` of an ignored file writes the index, and a checkout can
+    // move a tracked file into an ignored directory. Drop the cached answer
+    // rather than reasoning about which write it was.
+    this.trackedIgnoredProbe = null;
+
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
@@ -694,6 +711,17 @@ export class GitFileWatcher {
         this.pendingWorktreePaths = null;
         return;
       }
+      // A `.gitignore` write changes what git considers ignored, so the burst
+      // can move OTHER files in or out of the status listing while touching
+      // only this one path. It cannot be classified on its own membership:
+      // a `.gitignore` that is itself ignored — by `.git/info/exclude`, or by
+      // a rule inside it naming itself — is untracked and ignored, so plain
+      // check-ignore reports it, and the burst would skip a refresh that the
+      // rule change made necessary. Verified against git 2.55.0.
+      if (basename(path) === GITIGNORE_FILE_NAME) {
+        this.pendingWorktreePaths = null;
+        return;
+      }
       pending.add(path);
       if (pending.size > WORKTREE_BURST_PATH_CAP) {
         this.pendingWorktreePaths = null;
@@ -715,6 +743,35 @@ export class GitFileWatcher {
       if (path.startsWith(prefix) && path.length > prefix.length) return true;
     }
     return false;
+  }
+
+  /**
+   * Whether check-ignore's answer can be trusted outright for this repo.
+   *
+   * git exempts tracked paths from check-ignore via a case-SENSITIVE index
+   * lookup, even on a case-insensitive filesystem. So a file force-added as
+   * `.output/Keep.txt` and renamed on disk to `.output/keep.txt` stays tracked
+   * and shows as modified, while check-ignore reports the on-disk spelling as
+   * ignored — skipping a refresh that was needed. Reproduced on APFS with git
+   * 2.55.0.
+   *
+   * The hazard needs a tracked file matching an ignore rule to exist at all,
+   * which is empty for essentially every repo, so the answer is cached and
+   * costs nothing per flush. It is dropped on any git-internal write, which is
+   * where `git add -f` lands.
+   */
+  private probeTrackedIgnored(): Promise<boolean> {
+    if (!this.trackedIgnoredProbe) {
+      this.trackedIgnoredProbe = hasTrackedIgnoredPaths(this.worktreePath, {
+        timeoutMs: WORKTREE_CLASSIFY_TIMEOUT_MS,
+      }).catch((error: unknown) => {
+        // Fail closed and do not cache the failure: an unanswerable probe must
+        // mean "refresh", not "assume safe forever".
+        this.trackedIgnoredProbe = null;
+        throw error;
+      });
+    }
+    return this.trackedIgnoredProbe;
   }
 
   private abortClassification(): void {
@@ -778,24 +835,33 @@ export class GitFileWatcher {
     // its own and needs no special case: a `.gitignore` edit (nothing ignores
     // it), a delete of a tracked file (still in the index), the create half of
     // a rename into a tracked location.
-    void checkIgnoredPaths(this.worktreePath, paths, {
-      signal: controller.signal,
-      timeoutMs: WORKTREE_CLASSIFY_TIMEOUT_MS,
-    })
-      .then((ignored) => {
+    // Both run concurrently so the guard costs no extra latency, and the probe
+    // is cached across flushes so it usually costs no extra spawn either.
+    void Promise.all([
+      checkIgnoredPaths(this.worktreePath, paths, {
+        signal: controller.signal,
+        timeoutMs: WORKTREE_CLASSIFY_TIMEOUT_MS,
+      }),
+      this.probeTrackedIgnored(),
+    ]).then(
+      ([ignored, hasTrackedIgnored]) => {
         if (this.disposed || generation !== this.classifyGeneration) return;
         this.classifyController = null;
         // Skip only when EVERY path is provably irrelevant. A mixed burst
         // exits 0 too, so the exit code is not the test — membership is.
-        if (paths.every((path) => ignored.has(path))) return;
+        if (!hasTrackedIgnored && paths.every((path) => ignored.has(path))) return;
         this.onChange();
-      })
-      .catch((error: unknown) => {
+      },
+      // Two-argument form, not `.catch`: a `.catch` chained after the success
+      // handler would also catch an exception thrown by `onChange()` itself
+      // and call it a second time.
+      (error: unknown) => {
         if (this.disposed || generation !== this.classifyGeneration) return;
         this.classifyController = null;
         this.warnClassifyFailure(error);
         this.onChange();
-      });
+      }
+    );
   }
 
   /**

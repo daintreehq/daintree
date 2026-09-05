@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { watch, type FSWatcher } from "fs";
 import { readFile, realpath } from "fs/promises";
-import { join as pathJoin } from "path";
+import { join as pathJoin, resolve as pathResolve } from "path";
 import { getGitDir } from "../gitUtils.js";
-import { checkIgnoredPaths } from "../gitCheckIgnore.js";
+import { logWarn } from "../logger.js";
+import { checkIgnoredPaths, hasTrackedIgnoredPaths } from "../gitCheckIgnore.js";
 import { GitFileWatcher } from "../gitFileWatcher.js";
 import { settleParcelWatcherLifecycle } from "../parcelWatcherBackend.js";
 
@@ -41,6 +42,7 @@ vi.mock("../logger.js", () => ({
 
 vi.mock("../gitCheckIgnore.js", () => ({
   checkIgnoredPaths: vi.fn(),
+  hasTrackedIgnoredPaths: vi.fn(),
 }));
 
 function createMockWatcher() {
@@ -152,6 +154,9 @@ describe("GitFileWatcher", () => {
     // refreshes. `clearAllMocks` resets calls but not implementations, so the
     // implementation is (re)installed here rather than once at module scope.
     vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set());
+    // No tracked file matches an ignore rule — the state of essentially every
+    // repo, and the precondition that makes check-ignore's answer trustworthy.
+    vi.mocked(hasTrackedIgnoredPaths).mockResolvedValue(false);
     vi.mocked(watch).mockImplementation(() => createMockWatcher());
     // Default subscribe: resolve immediately so non-worktree tests don't hang
     subscribeMock.mockResolvedValue(createMockSubscription());
@@ -1697,6 +1702,19 @@ describe("GitFileWatcher", () => {
   // ---- Ignored-burst classification (#12235) ----
 
   describe("worktree burst ignore classification", () => {
+    // Native separators throughout: containment builds its prefix with the
+    // platform separator, so POSIX literals would make every event on Windows
+    // fall out as "outside the worktree" and the tests would pass through the
+    // unknown branch instead of exercising classification at all.
+    const REPO = pathResolve("/repo");
+    const p = (...parts: string[]) => pathJoin(REPO, ...parts);
+    const IGNORED_A = p(".output", "a.js");
+    const IGNORED_B = p(".output", "b.js");
+    const TRACKED = p("src", "main.ts");
+    const VAR_WT = pathResolve("/var/wt");
+    const PRIVATE_VAR_WT = pathResolve("/private/var/wt");
+    const ALIASED_A = pathJoin(PRIVATE_VAR_WT, ".output", "a.js");
+
     /** Start a watcher whose worktree bursts are eligible for classification. */
     async function startClassifyingWatcher(overrides: {
       onChange: () => void;
@@ -1704,7 +1722,7 @@ describe("GitFileWatcher", () => {
     }) {
       const mock = setupSubscribeMock();
       const gitWatcher = new GitFileWatcher({
-        worktreePath: "/repo",
+        worktreePath: REPO,
         branch: "main",
         debounceMs: 300,
         watchWorktree: true,
@@ -1722,13 +1740,13 @@ describe("GitFileWatcher", () => {
       const onChange = vi.fn();
       const onWorktreeFilesChanged = vi.fn();
       vi.mocked(checkIgnoredPaths).mockResolvedValue(
-        new Set(["/repo/.output/a.js", "/repo/.output/b.js"])
+        new Set([IGNORED_A, IGNORED_B])
       );
 
       const { cb } = await startClassifyingWatcher({ onChange, onWorktreeFilesChanged });
       fireEvents(cb, [
-        { type: "create", path: "/repo/.output/a.js" },
-        { type: "update", path: "/repo/.output/b.js" },
+        { type: "create", path: IGNORED_A },
+        { type: "update", path: IGNORED_B },
       ]);
       await vi.advanceTimersByTimeAsync(100);
       // The file browser's signal is never gated on the classification: it
@@ -1742,20 +1760,20 @@ describe("GitFileWatcher", () => {
 
       expect(checkIgnoredPaths).toHaveBeenCalledTimes(1);
       const [cwd, paths] = vi.mocked(checkIgnoredPaths).mock.calls[0];
-      expect(cwd).toBe("/repo");
-      expect([...paths].sort()).toEqual(["/repo/.output/a.js", "/repo/.output/b.js"]);
+      expect(cwd).toBe(REPO);
+      expect([...paths].sort()).toEqual([IGNORED_A, IGNORED_B]);
     });
 
     it("refreshes when one path in the burst is not ignored", async () => {
       const onChange = vi.fn();
       // Mixed bursts exit 0 too, so the exit code cannot be the test —
       // membership is. `src/main.ts` is absent from the ignored set.
-      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set(["/repo/.output/a.js"]));
+      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([IGNORED_A]));
 
       const { cb } = await startClassifyingWatcher({ onChange });
       fireEvents(cb, [
-        { type: "create", path: "/repo/.output/a.js" },
-        { type: "update", path: "/repo/src/main.ts" },
+        { type: "create", path: IGNORED_A },
+        { type: "update", path: TRACKED },
       ]);
       await vi.advanceTimersByTimeAsync(100);
       await flushClassification();
@@ -1768,9 +1786,12 @@ describe("GitFileWatcher", () => {
       // tracked-but-matching file is simply absent from the result set — the
       // whole reason no separate index lookup is needed.
       vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set());
+    // No tracked file matches an ignore rule — the state of essentially every
+    // repo, and the precondition that makes check-ignore's answer trustworthy.
+    vi.mocked(hasTrackedIgnoredPaths).mockResolvedValue(false);
 
       const { cb } = await startClassifyingWatcher({ onChange });
-      fireEvents(cb, [{ type: "update", path: "/repo/build/tracked.log" }]);
+      fireEvents(cb, [{ type: "update", path: p(".output", "tracked.log") }]);
       await vi.advanceTimersByTimeAsync(100);
       await flushClassification();
       expect(onChange).toHaveBeenCalledTimes(1);
@@ -1780,12 +1801,12 @@ describe("GitFileWatcher", () => {
       const onChange = vi.fn();
       // Nothing ignores `.gitignore`, so it fails membership on its own. No
       // filename special-case is involved.
-      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set(["/repo/.output/a.js"]));
+      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([IGNORED_A]));
 
       const { cb } = await startClassifyingWatcher({ onChange });
       fireEvents(cb, [
-        { type: "update", path: "/repo/.output/a.js" },
-        { type: "update", path: "/repo/.gitignore" },
+        { type: "update", path: IGNORED_A },
+        { type: "update", path: p(".gitignore") },
       ]);
       await vi.advanceTimersByTimeAsync(100);
       await flushClassification();
@@ -1796,7 +1817,7 @@ describe("GitFileWatcher", () => {
       const onChange = vi.fn();
       const { cb } = await startClassifyingWatcher({ onChange });
 
-      fireEvents(cb, [{ type: "update", path: "/repo/.output/a.js" }, { type: "update" }]);
+      fireEvents(cb, [{ type: "update", path: IGNORED_A }, { type: "update" }]);
       await vi.advanceTimersByTimeAsync(100);
       // Unknown is sticky for the whole burst and resolved synchronously, so
       // onChange lands without waiting on a classification that never runs.
@@ -1810,13 +1831,13 @@ describe("GitFileWatcher", () => {
 
       // `/repo-other` must not read as living under `/repo`, and the watch
       // root itself is the Windows "unknown filename" signal.
-      fireEvents(cb, [{ type: "update", path: "/repo-other/a.js" }]);
+      fireEvents(cb, [{ type: "update", path: pathResolve("/repo-other/a.js") }]);
       await vi.advanceTimersByTimeAsync(100);
       expect(onChange).toHaveBeenCalledTimes(1);
       expect(checkIgnoredPaths).not.toHaveBeenCalled();
 
       onChange.mockClear();
-      fireEvents(cb, [{ type: "update", path: "/repo" }]);
+      fireEvents(cb, [{ type: "update", path: REPO }]);
       await vi.advanceTimersByTimeAsync(100);
       expect(onChange).toHaveBeenCalledTimes(1);
       expect(checkIgnoredPaths).not.toHaveBeenCalled();
@@ -1827,14 +1848,14 @@ describe("GitFileWatcher", () => {
       // a symlinked ancestor emits events under /private/var while the
       // configured root is /var. Without the alias the optimisation would
       // never fire on any temp-dir worktree.
-      vi.mocked(realpath).mockResolvedValue("/private/var/wt" as never);
-      vi.mocked(getGitDir).mockResolvedValue(pathJoin("/var/wt", ".git"));
-      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set(["/private/var/wt/.output/a.js"]));
+      vi.mocked(realpath).mockResolvedValue(PRIVATE_VAR_WT as never);
+      vi.mocked(getGitDir).mockResolvedValue(pathJoin(VAR_WT, ".git"));
+      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([ALIASED_A]));
       const onChange = vi.fn();
       const mock = setupSubscribeMock();
 
       const gitWatcher = new GitFileWatcher({
-        worktreePath: "/var/wt",
+        worktreePath: VAR_WT,
         branch: "main",
         debounceMs: 300,
         onChange,
@@ -1847,13 +1868,13 @@ describe("GitFileWatcher", () => {
       await flushParcelWatcherCallbacks();
 
       fireEvents(mock.getCallback(), [
-        { type: "create", path: "/private/var/wt/.output/a.js" },
+        { type: "create", path: ALIASED_A },
       ]);
       await vi.advanceTimersByTimeAsync(100);
       await flushClassification();
       expect(onChange).not.toHaveBeenCalled();
       // cwd stays the configured root; git resolves it itself.
-      expect(vi.mocked(checkIgnoredPaths).mock.calls[0][0]).toBe("/var/wt");
+      expect(vi.mocked(checkIgnoredPaths).mock.calls[0][0]).toBe(VAR_WT);
     });
 
     it("degrades to a full refresh past the burst path cap", async () => {
@@ -1866,7 +1887,7 @@ describe("GitFileWatcher", () => {
         cb,
         Array.from({ length: 2049 }, (_, i) => ({
           type: "create",
-          path: `/repo/.output/f-${i}.js`,
+          path: p(".output", `f-${i}.js`),
         }))
       );
       await vi.advanceTimersByTimeAsync(100);
@@ -1885,7 +1906,7 @@ describe("GitFileWatcher", () => {
         cb,
         Array.from({ length: 2048 }, (_, i) => ({
           type: "create",
-          path: `/repo/.output/f-${i}.js`,
+          path: p(".output", `f-${i}.js`),
         }))
       );
       await vi.advanceTimersByTimeAsync(100);
@@ -1895,13 +1916,13 @@ describe("GitFileWatcher", () => {
     });
 
     it("unions paths across batches and starts the next burst clean", async () => {
-      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set(["/repo/.output/a.js"]));
+      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([IGNORED_A]));
       const onChange = vi.fn();
       const { cb } = await startClassifyingWatcher({ onChange });
 
-      fireEvents(cb, [{ type: "create", path: "/repo/.output/a.js" }]);
-      fireEvents(cb, [{ type: "update", path: "/repo/.output/a.js" }]);
-      fireEvents(cb, [{ type: "update", path: "/repo/src/main.ts" }]);
+      fireEvents(cb, [{ type: "create", path: IGNORED_A }]);
+      fireEvents(cb, [{ type: "update", path: IGNORED_A }]);
+      fireEvents(cb, [{ type: "update", path: TRACKED }]);
       await vi.advanceTimersByTimeAsync(100);
       await flushClassification();
       // Deduplicated union of all three batches, and the un-ignored member
@@ -1912,10 +1933,10 @@ describe("GitFileWatcher", () => {
       // The second burst must not inherit the first burst's paths.
       onChange.mockClear();
       vi.mocked(checkIgnoredPaths).mockClear();
-      fireEvents(cb, [{ type: "update", path: "/repo/.output/a.js" }]);
+      fireEvents(cb, [{ type: "update", path: IGNORED_A }]);
       await vi.advanceTimersByTimeAsync(100);
       await flushClassification();
-      expect(vi.mocked(checkIgnoredPaths).mock.calls[0][1]).toEqual(["/repo/.output/a.js"]);
+      expect(vi.mocked(checkIgnoredPaths).mock.calls[0][1]).toEqual([IGNORED_A]);
       expect(onChange).not.toHaveBeenCalled();
     });
 
@@ -1926,7 +1947,7 @@ describe("GitFileWatcher", () => {
 
       // Events were LOST, so the burst's paths are unknowable even though the
       // batch that follows may look ignored-only.
-      fireEvents(cb, [{ type: "create", path: "/repo/.output/a.js" }]);
+      fireEvents(cb, [{ type: "create", path: IGNORED_A }]);
       fireError(cb, new Error("Events were dropped and must be re-scanned"));
       await vi.advanceTimersByTimeAsync(100);
       expect(onChange).toHaveBeenCalledTimes(1);
@@ -1939,7 +1960,7 @@ describe("GitFileWatcher", () => {
       vi.mocked(checkIgnoredPaths).mockRejectedValue(new Error("exit 128: outside repository"));
 
       const { cb } = await startClassifyingWatcher({ onChange });
-      fireEvents(cb, [{ type: "create", path: "/repo/.output/a.js" }]);
+      fireEvents(cb, [{ type: "create", path: IGNORED_A }]);
       await vi.advanceTimersByTimeAsync(100);
       await flushClassification();
       expect(onChange).toHaveBeenCalledTimes(1);
@@ -1955,10 +1976,10 @@ describe("GitFileWatcher", () => {
               releaseFirst = resolve;
             }) as never
         )
-        .mockResolvedValue(new Set(["/repo/.output/b.js"]));
+        .mockResolvedValue(new Set([IGNORED_B]));
 
       const { cb } = await startClassifyingWatcher({ onChange });
-      fireEvents(cb, [{ type: "create", path: "/repo/.output/a.js" }]);
+      fireEvents(cb, [{ type: "create", path: IGNORED_A }]);
       await vi.advanceTimersByTimeAsync(100);
       expect(onChange).not.toHaveBeenCalled();
 
@@ -1966,13 +1987,16 @@ describe("GitFileWatcher", () => {
       // first burst's refresh was never fired and its decision is now lost, so
       // the flush that supersedes it must refresh for both rather than
       // classify itself.
-      fireEvents(cb, [{ type: "create", path: "/repo/.output/b.js" }]);
+      fireEvents(cb, [{ type: "create", path: IGNORED_B }]);
       await vi.advanceTimersByTimeAsync(100);
       expect(onChange).toHaveBeenCalledTimes(1);
       expect(checkIgnoredPaths).toHaveBeenCalledTimes(1);
 
-      // The retired verdict must not fire a second, duplicate refresh.
-      releaseFirst?.(new Set(["/repo/.output/a.js"]));
+      // The retired verdict lands with an EMPTY set — i.e. "nothing was
+      // ignored, refresh". If the generation guard were missing it would call
+      // onChange a second time; resolving it as all-ignored would have passed
+      // either way and tested nothing.
+      releaseFirst?.(new Set());
       await flushClassification();
       expect(onChange).toHaveBeenCalledTimes(1);
     });
@@ -1988,7 +2012,7 @@ describe("GitFileWatcher", () => {
       );
 
       const { gitWatcher, cb } = await startClassifyingWatcher({ onChange });
-      fireEvents(cb, [{ type: "update", path: "/repo/src/main.ts" }]);
+      fireEvents(cb, [{ type: "update", path: TRACKED }]);
       await vi.advanceTimersByTimeAsync(100);
       expect(onChange).not.toHaveBeenCalled();
 
@@ -2011,7 +2035,7 @@ describe("GitFileWatcher", () => {
       }) as never);
 
       const { gitWatcher, cb } = await startClassifyingWatcher({ onChange: vi.fn() });
-      fireEvents(cb, [{ type: "update", path: "/repo/src/main.ts" }]);
+      fireEvents(cb, [{ type: "update", path: TRACKED }]);
       await vi.advanceTimersByTimeAsync(100);
       expect(captured?.aborted).toBe(false);
 
@@ -2020,11 +2044,135 @@ describe("GitFileWatcher", () => {
       await flushParcelWatcherCallbacks();
     });
 
+    it("refreshes for a .gitignore write even when git reports it as ignored", async () => {
+      const onChange = vi.fn();
+      // A `.gitignore` that is itself ignored — by `.git/info/exclude`, or by a
+      // rule inside it naming itself — is untracked and ignored, so plain
+      // check-ignore DOES report it. Classifying on that membership would skip
+      // a refresh the rule change just made necessary.
+      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([p(".gitignore"), IGNORED_A]));
+
+      const { cb } = await startClassifyingWatcher({ onChange });
+      fireEvents(cb, [
+        { type: "update", path: IGNORED_A },
+        { type: "update", path: p(".gitignore") },
+      ]);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(checkIgnoredPaths).not.toHaveBeenCalled();
+    });
+
+    it("refreshes for a nested .gitignore write", async () => {
+      const onChange = vi.fn();
+      const { cb } = await startClassifyingWatcher({ onChange });
+      // Rules apply per-directory, so a nested file changes status too.
+      fireEvents(cb, [{ type: "update", path: p("packages", "web", ".gitignore") }]);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(checkIgnoredPaths).not.toHaveBeenCalled();
+    });
+
+    it("refuses to skip while the repo has tracked files matching an ignore rule", async () => {
+      const onChange = vi.fn();
+      // git's tracked-file exemption is a case-SENSITIVE index lookup, so on a
+      // case-insensitive filesystem a force-added `.output/Keep.txt` renamed to
+      // `.output/keep.txt` is still tracked and still reports as ignored. The
+      // skip is only sound while no tracked file matches an ignore rule.
+      vi.mocked(hasTrackedIgnoredPaths).mockResolvedValue(true);
+      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([IGNORED_A]));
+
+      const { cb } = await startClassifyingWatcher({ onChange });
+      fireEvents(cb, [{ type: "create", path: IGNORED_A }]);
+      await vi.advanceTimersByTimeAsync(100);
+      await flushClassification();
+      expect(onChange).toHaveBeenCalledTimes(1);
+    });
+
+    it("refreshes when the tracked-ignored probe fails, and retries it next burst", async () => {
+      const onChange = vi.fn();
+      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([IGNORED_A]));
+      vi.mocked(hasTrackedIgnoredPaths).mockRejectedValueOnce(new Error("probe failed"));
+
+      const { cb } = await startClassifyingWatcher({ onChange });
+      fireEvents(cb, [{ type: "create", path: IGNORED_A }]);
+      await vi.advanceTimersByTimeAsync(100);
+      await flushClassification();
+      expect(onChange).toHaveBeenCalledTimes(1);
+
+      // A failed probe must not be cached as "safe" — nor as permanently
+      // broken. The next burst asks again and can skip.
+      vi.mocked(hasTrackedIgnoredPaths).mockResolvedValue(false);
+      onChange.mockClear();
+      fireEvents(cb, [{ type: "update", path: IGNORED_A }]);
+      await vi.advanceTimersByTimeAsync(100);
+      await flushClassification();
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("keeps a burst unknown once any event in it was unclassifiable", async () => {
+      const onChange = vi.fn();
+      const { cb } = await startClassifyingWatcher({ onChange });
+
+      // Unknown is sticky for the rest of the burst: a later well-formed batch
+      // must not rehabilitate a burst that already lost a path.
+      fireEvents(cb, [{ type: "update" }]);
+      fireEvents(cb, [{ type: "update", path: IGNORED_A }]);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(checkIgnoredPaths).not.toHaveBeenCalled();
+
+      // …and it must not leak into the next burst.
+      vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([IGNORED_A]));
+      onChange.mockClear();
+      fireEvents(cb, [{ type: "update", path: IGNORED_A }]);
+      await vi.advanceTimersByTimeAsync(100);
+      await flushClassification();
+      expect(onChange).not.toHaveBeenCalled();
+      expect(checkIgnoredPaths).toHaveBeenCalledTimes(1);
+    });
+
+    it("stays silent when a classification rejects after dispose", async () => {
+      let reject: ((error: Error) => void) | undefined;
+      vi.mocked(checkIgnoredPaths).mockImplementation(
+        () =>
+          new Promise<Set<string>>((_resolve, rej) => {
+            reject = rej;
+          }) as never
+      );
+      const onChange = vi.fn();
+      const { gitWatcher, cb } = await startClassifyingWatcher({ onChange });
+      fireEvents(cb, [{ type: "update", path: TRACKED }]);
+      await vi.advanceTimersByTimeAsync(100);
+
+      gitWatcher.dispose();
+      reject?.(new Error("spawn failed"));
+      await flushClassification();
+      expect(onChange).not.toHaveBeenCalled();
+      expect(logWarn).not.toHaveBeenCalled();
+      await flushParcelWatcherCallbacks();
+    });
+
+    it("throttles the classification-failure warning but never the refresh", async () => {
+      const onChange = vi.fn();
+      vi.mocked(checkIgnoredPaths).mockRejectedValue(new Error("exit 128"));
+      const { cb } = await startClassifyingWatcher({ onChange });
+
+      for (let burst = 0; burst < 3; burst++) {
+        fireEvents(cb, [{ type: "update", path: IGNORED_A }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+      }
+      // Every failure still refreshes — only the log line is rate-limited,
+      // because this fires per flush rather than on demand.
+      expect(onChange).toHaveBeenCalledTimes(3);
+      expect(vi.mocked(logWarn).mock.calls.length).toBe(1);
+    });
+
     it("keeps the adaptive debounce ramp driven by raw event count", async () => {
       const onChange = vi.fn();
       const mock = setupSubscribeMock();
       const gitWatcher = new GitFileWatcher({
-        worktreePath: "/repo",
+        worktreePath: REPO,
         branch: "main",
         debounceMs: 300,
         onChange,
@@ -2040,7 +2188,7 @@ describe("GitFileWatcher", () => {
       // carrying a deduplicated set must not shorten the delay.
       fireEvents(
         mock.getCallback(),
-        Array.from({ length: 10 }, () => ({ type: "update", path: "/repo/.output/a.js" }))
+        Array.from({ length: 10 }, () => ({ type: "update", path: IGNORED_A }))
       );
       await vi.advanceTimersByTimeAsync(150);
       expect(onChange).not.toHaveBeenCalled();
@@ -2121,8 +2269,11 @@ describe("GitFileWatcher", () => {
       mock.resolve();
       const cb = mock.getCallback();
 
-      fireEvents(cb, [{ type: "update" }]);
+      // A real path, so this exercises the classification path rejecting an
+      // un-ignored file rather than the anonymous-event fallback.
+      fireEvents(cb, [{ type: "update", path: pathJoin(pathResolve("/repo"), "src", "app.ts") }]);
       await vi.advanceTimersByTimeAsync(100);
+      await flushClassification();
       expect(onChange).toHaveBeenCalledTimes(1);
     });
 

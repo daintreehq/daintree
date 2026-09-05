@@ -2,7 +2,7 @@ import { basename, join } from "node:path";
 import type { PerfScenario, ScenarioSample } from "../types";
 import type PQueueType from "p-queue";
 import type { WorktreeMonitor } from "../../../electron/workspace-host/WorktreeMonitor";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import {
   IGNORED_BURST_DIR,
   SCALING_WORKTREE_COUNTS,
@@ -73,6 +73,8 @@ const IGNORED_BURST_FILES = 40;
  *  push a single run() past the ~12s the guard's cost exclusions are drawn at. */
 const BURST_FLUSH_TIMEOUT_MS = 6_000;
 const BURST_SETTLE_MS = 1_200;
+/** Mirrors WORKTREE_CLASSIFY_TIMEOUT_MS in gitFileWatcher.ts. */
+const WORKTREE_CLASSIFY_DEADLINE_MS = 2_000;
 
 /**
  * Count of distinct file-browser notifications in a window.
@@ -82,13 +84,28 @@ const BURST_SETTLE_MS = 1_200;
  * emits would not: a status pass emits too, which is exactly the thing this
  * scenario is trying to prove did NOT happen.
  */
-function browserSignals(recorder: EmitRecorder, from: number): number {
+function browserSignals(recorder: EmitRecorder, from: number, since: number): number {
   const stamps = new Set<number>();
   for (const emit of recorder.emits.slice(from)) {
     const at = emit.snapshot.workingTreeChangedAt;
-    if (typeof at === "number" && at > 0) stamps.add(at);
+    // Strictly newer than the window's baseline, not merely present: a
+    // status-only emit landing after the cursor still carries the PREVIOUS
+    // flush's stamp, and counting it would invent a flush that never happened
+    // and halve the reported per-flush cost. The stamp is strictly increasing
+    // (WorktreeMonitor bumps it with Math.max(now, prev + 1)), so ">" is exact.
+    if (typeof at === "number" && at > since) stamps.add(at);
   }
   return stamps.size;
+}
+
+/** The newest file-browser stamp the recorder has seen, or 0. */
+function latestBrowserStamp(recorder: EmitRecorder): number {
+  let latest = 0;
+  for (const emit of recorder.emits) {
+    const at = emit.snapshot.workingTreeChangedAt;
+    if (typeof at === "number" && at > latest) latest = at;
+  }
+  return latest;
 }
 
 // --- Idle spawn-rate scenarios (PERF-105/106) --------------------------------
@@ -561,8 +578,14 @@ export const gitPipelineScenarios: PerfScenario[] = [
         onUpdate: (snapshot) => recorder.record(snapshot),
       });
       const outputDir = join(fixture.ignoredPath, IGNORED_BURST_DIR);
-      const trackedFile = join(fixture.ignoredPath, "module-0", "file-0.txt");
+      // module-11/file-9.txt is the one (dir, file) pair the standing dirty
+      // loop misses: it writes (i % 12, i % 10) for i < 40, and that pair needs
+      // i = 59. Editing a CLEAN tracked file is what lets the control assert a
+      // strict increase in the changed-file count — editing an already-dirty
+      // one leaves the count flat, which the standing set satisfies anyway.
+      const trackedFile = join(fixture.ignoredPath, "module-11", "file-9.txt");
       const gitignoreFile = join(fixture.ignoredPath, ".gitignore");
+      const trackedOriginal = readFileSync(trackedFile, "utf8");
       const stamp = uid();
 
       /**
@@ -580,12 +603,20 @@ export const gitPipelineScenarios: PerfScenario[] = [
         settled: boolean;
       }> {
         const from = recorder.cursor();
+        const since = latestBrowserStamp(recorder);
         const mark = gitSpawnMark();
         write();
         const sawSignal = await pollUntil(
-          () => browserSignals(recorder, from) > 0,
+          () => browserSignals(recorder, from, since) > 0,
           BURST_FLUSH_TIMEOUT_MS
         );
+        // `quiesceGitSpawns` watches process STARTS, not completions, so a
+        // classifier that is still running looks identical to one that
+        // finished. Waiting past the classifier's own deadline is what closes
+        // that hole: if it hung, its 2s timeout has fired by now and the
+        // fallback refresh it triggers is inside this window, where it counts
+        // against this arm instead of contaminating the next one.
+        await sleep(WORKTREE_CLASSIFY_DEADLINE_MS);
         const settled = await quiesceGitSpawns(BURST_SETTLE_MS, BURST_FLUSH_TIMEOUT_MS);
         const window = gitSpawnsSince(mark);
         // One write burst does not produce one flush: the leading-edge fast
@@ -594,7 +625,7 @@ export const gitPipelineScenarios: PerfScenario[] = [
         // Dividing by the observed flush count is what makes these numbers
         // per-flush, which is how the issue frames the cost — a raw per-burst
         // tally would read as double the real figure.
-        const flushes = sawSignal ? browserSignals(recorder, from) : 0;
+        const flushes = sawSignal ? browserSignals(recorder, from, since) : 0;
         const per = (n: number) => (flushes > 0 ? n / flushes : 0);
         return {
           spawns: per(window.count),
@@ -626,16 +657,43 @@ export const gitPipelineScenarios: PerfScenario[] = [
         });
         const durationMs = performance.now() - start;
 
-        // Arm 2 — tracked control. A real edit inside the same burst shape must
-        // still produce the correct snapshot, not just any refresh. The file is
-        // already in the standing dirty set, so this changes its content again
-        // rather than adding to the change count.
+        // A dead watcher makes every later arm wait out its full deadline for
+        // a signal that cannot come. Stop here and report the miss instead:
+        // three timed-out arms would cost ~18s and add nothing the first miss
+        // has not already said.
+        if (ignoredArm.flushes === 0) {
+          return {
+            durationMs,
+            metrics: {
+              gitSpawnsPerIgnoredFlush: 0,
+              statusPassesPerIgnoredFlush: 0,
+              checkIgnoresPerIgnoredFlush: 0,
+              ignoredFlushes: 0,
+              gitSpawnsPerTrackedFlush: 0,
+              statusPassesPerTrackedFlush: 0,
+              gitSpawnsPerIgnoreEditFlush: 0,
+              browserSignalMisses: 1,
+              trackedRefreshMisses: 1,
+              ignoreEditRefreshMisses: 1,
+              spawnObserverMisses: observerMisses,
+            },
+            notes: "no file-browser signal observed for the ignored burst",
+          };
+        }
+
+        // Arm 2 — tracked control. A real edit must produce the correct
+        // snapshot, not merely some refresh. The oracle is a STRICT increase in
+        // the changed-file count: `> 0` was already true of the standing dirty
+        // set before the arm ran, so it would have been satisfied by the
+        // browser notification re-emitting the old snapshot, even if the status
+        // recompute that followed had failed outright.
         const trackedFrom = recorder.cursor();
+        const changedBefore = snapshotChangedFileCount(monitor.getSnapshot());
         const trackedArm = await runBurst(() => {
           writeFileSync(trackedFile, `tracked edit ${stamp}\n`.repeat(8));
         });
         const trackedRefreshed = await recorder.waitFor(
-          (snapshot) => snapshotChangedFileCount(snapshot) > 0,
+          (snapshot) => snapshotChangedFileCount(snapshot) > changedBefore,
           BURST_FLUSH_TIMEOUT_MS,
           trackedFrom
         );
@@ -673,8 +731,13 @@ export const gitPipelineScenarios: PerfScenario[] = [
         };
       } finally {
         monitor.stop();
-        // Leave the fixture as the next iteration expects to find it.
+        // Leave the fixture exactly as the next iteration expects to find it.
+        // Without this the ignored directory grows by 40 files per iteration,
+        // so later iterations watch a bigger tree than earlier ones and the
+        // samples stop being comparable.
         writeFileSync(gitignoreFile, `${IGNORED_BURST_DIR}/\n`);
+        writeFileSync(trackedFile, trackedOriginal);
+        rmSync(outputDir, { recursive: true, force: true });
       }
     },
   },
