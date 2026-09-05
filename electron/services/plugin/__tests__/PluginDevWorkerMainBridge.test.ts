@@ -846,6 +846,34 @@ describe("PluginDevWorkerMainBridge", () => {
       );
     });
 
+    it("keeps a rejected registration as the reported failure when the worker then breaks the protocol", async () => {
+      // #12276 × #12282: a protocol violation is terminal, but it reports a
+      // generic phrase — it must go through the same latch, so the rejected
+      // contribution (the thing the author can actually fix) stays the recorded
+      // loadError rather than being relabelled by the teardown behind it.
+      const onActivationResult = vi.fn();
+      const { host, workerHost, bridge, onTerminalFailure } = makeBridge({ onActivationResult });
+      host.registerAction.mockRejectedValueOnce(
+        new Error('descriptor.id "greet" is not declared in contributes.actions')
+      );
+      const activation = bridge.waitForActivation();
+
+      workerHost.emit("worker-message", ACTION_NOTIFY);
+      workerHost.emit("worker-message", { type: "activated", hasCleanup: false });
+      await expect(activation).rejects.toThrow(/action:acme\.demo\.greet/);
+
+      workerHost.emit("worker-message", null);
+
+      const failures = onActivationResult.mock.calls
+        .map(([r]: any[]) => r)
+        .filter((r: any) => !r.ok);
+      expect(failures).toHaveLength(1);
+      expect(failures[0].error).toContain('registration "action:acme.demo.greet" was rejected');
+      // Latched reporting, not latched teardown: the worker still stops.
+      expect(workerHost.dispose).toHaveBeenCalledTimes(1);
+      expect(onTerminalFailure).toHaveBeenCalledTimes(1);
+    });
+
     it("ignores a required registration that rejects after a reload", async () => {
       const onActivationResult = vi.fn();
       const { host, workerHost, bridge } = makeBridge({ onActivationResult });

@@ -473,9 +473,15 @@ export class PluginDevWorkerMainBridge {
     // very fatal recovery this whole path exists to prevent.
     try {
       this.contain("failure log", () => logger.error(`[${this.pluginId}] ${error}`));
-      this.contain("activation-result listener", () =>
-        this.onActivationResult?.({ ok: false, error })
-      );
+      // Through the latch, not around it (#12282): a registration this
+      // generation already rejected names the thing the author has to fix, and
+      // this phrase is the vaguer of the two. Latching also stops a later
+      // `activated` clearing the loadError.
+      this.contain("activation failure report", () => this.failActivation(error));
+      // Belt and braces on the gate itself: `failActivation` skips its own
+      // rejection when the latch already held, and skips the rest if the
+      // provenance listener throws. `rejectActivation` is idempotent, so a
+      // second call is inert once the promise has settled.
       this.contain("activation rejection", () => this.rejectActivation(new Error(error)));
       this.contain("generation retire", () => this.retireGeneration(error));
       this.contain("bridge dispose", () => this.dispose());
@@ -582,7 +588,9 @@ export class PluginDevWorkerMainBridge {
             ? { registrationKey: msg.registrationKey }
             : undefined;
         if (registration) this.pendingRegistrations.add(registration);
-        void this.handleHostNotify(msg, registration).catch((err) => this.failHandlerException(err));
+        void this.handleHostNotify(msg, registration).catch((err) =>
+          this.failHandlerException(err)
+        );
         return;
       }
       case "subscribe":
