@@ -1391,8 +1391,10 @@ describe("recipeStore", () => {
     });
 
     it("grants only the count the approver was shown, not the recipe's current size", async () => {
-      // The dialog previewed four terminals; the approval covers what was on
-      // screen, so the six nobody was offered come back as failures.
+      // A count below the recipe's own size is honoured as the ceiling: the six
+      // beyond it come back as failures rather than starting. Not a growth
+      // scenario — a recipe that actually grew after the preview moves its
+      // digest, which is the case two tests below.
       let callIndex = 0;
       addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
 

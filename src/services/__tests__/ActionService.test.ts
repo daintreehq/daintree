@@ -970,7 +970,11 @@ describe("ActionService", () => {
         expect(mockRun).toHaveBeenCalledWith(
           undefined,
           expect.objectContaining({
-            hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 10, terminalsDigest: "deadbeef" },
+            hostApprovedRecipeRun: {
+              recipeId: "r1",
+              terminalCount: 10,
+              terminalsDigest: "deadbeef",
+            },
           })
         );
       });
@@ -983,7 +987,11 @@ describe("ActionService", () => {
           source: "agent",
           confirmed: true,
           contextOverride: {
-            hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 10, terminalsDigest: "deadbeef" },
+            hostApprovedRecipeRun: {
+              recipeId: "r1",
+              terminalCount: 10,
+              terminalsDigest: "deadbeef",
+            },
           },
         });
 

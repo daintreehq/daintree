@@ -1945,7 +1945,7 @@ describe("useMcpBridge", () => {
       expect.objectContaining({ recipeId: "winner" }),
       // The approval names the winner too, not the id the caller asked for —
       // recipeStore matches on the resolved id, so a scope naming "shadowed"
-      // would silently fall back to the unapproved cap (#12263).
+      // would authorize nothing at all rather than the recipe here (#12263).
       expect.objectContaining({
         confirmed: true,
         hostApprovedRecipeRun: expect.objectContaining({
@@ -3113,7 +3113,7 @@ describe("forge write previews (#12118)", () => {
     expect(spawning.approvedRecipeRun).toEqual({
       recipeId: "recipe-1",
       terminalCount: 2,
-      terminalsDigest: expect.stringMatching(/^[0-9a-f]{8}$/),
+      terminalsDigest: expect.stringMatching(/^[0-9a-f]{16}$/),
     });
 
     // recipe.delete / recipe.saveToRepo are gated and preview the same content,

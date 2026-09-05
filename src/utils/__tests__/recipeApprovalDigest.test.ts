@@ -28,10 +28,7 @@ describe("recipeApprovalDigest (#12263)", () => {
   });
 
   it("moves when terminals are reordered, added, or removed", () => {
-    const one = terminals(
-      { type: "terminal", command: "a" },
-      { type: "terminal", command: "b" }
-    );
+    const one = terminals({ type: "terminal", command: "a" }, { type: "terminal", command: "b" });
     const reordered = terminals(
       { type: "terminal", command: "b" },
       { type: "terminal", command: "a" }
@@ -55,12 +52,15 @@ describe("recipeApprovalDigest (#12263)", () => {
     expect(recipeApprovalDigest(swapped)).not.toBe(recipeApprovalDigest(previewed));
   });
 
-  it("moves when a field the formatter never renders changes", () => {
+  it("moves when a field the confirm preview never renders changes", () => {
     // Digesting the whole terminal rather than a hand-listed subset is what
     // keeps a field added later from silently falling outside the approval.
-    const previewed = terminals({ type: "claude", args: "--model sonnet" });
-    const escalated = terminals({ type: "claude", args: "--dangerously-skip-permissions" });
-    expect(recipeApprovalDigest(escalated)).not.toBe(recipeApprovalDigest(previewed));
+    // `exitBehavior` is the discriminator: the dialog renders type, command,
+    // args, prompt and env keys, so a digest narrowed to "what was shown"
+    // would pass every other case in this file and miss this one.
+    const previewed = terminals({ type: "terminal", command: "a", exitBehavior: "keep" });
+    const changed = terminals({ type: "terminal", command: "a", exitBehavior: "remove" });
+    expect(recipeApprovalDigest(changed)).not.toBe(recipeApprovalDigest(previewed));
   });
 
   it("does not confuse an absent field with an explicitly undefined one", () => {
@@ -69,10 +69,10 @@ describe("recipeApprovalDigest (#12263)", () => {
     expect(recipeApprovalDigest(explicit)).toBe(recipeApprovalDigest(absent));
   });
 
-  it("returns eight hex characters, including for an empty recipe", () => {
-    expect(recipeApprovalDigest([])).toMatch(/^[0-9a-f]{8}$/);
+  it("returns sixteen hex characters, including for an empty recipe", () => {
+    expect(recipeApprovalDigest([])).toMatch(/^[0-9a-f]{16}$/);
     expect(recipeApprovalDigest(terminals({ type: "terminal", command: "a" }))).toMatch(
-      /^[0-9a-f]{8}$/
+      /^[0-9a-f]{16}$/
     );
   });
 });

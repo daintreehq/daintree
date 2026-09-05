@@ -92,7 +92,8 @@ export interface RecipeRunOptions {
    *
    * Host-set and unspoofable at the source — `ActionService` stamps it from the
    * dispatch options, so it cannot arrive from an action's args or from a
-   * `contextOverride`. Absent or mismatched falls back to the smaller cap.
+   * `contextOverride`. Absent falls back to {@link MAX_AGENT_RECIPE_TERMINALS};
+   * present but no longer covering this recipe authorizes nothing at all.
    */
   hostApprovedRecipeRun?: HostApprovedRecipeRun;
 }

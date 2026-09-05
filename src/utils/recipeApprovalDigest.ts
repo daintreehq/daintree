@@ -12,16 +12,19 @@ import type { RecipeTerminal } from "@shared/types/project";
  * runs at all. Without a content check, the same-count-same-id case would run
  * commands nobody was shown.
  *
- * DRIFT DETECTION, NOT A MAC. It answers "is this still the recipe the dialog
- * rendered?", and the answer only ever withdraws authority. The recipe editing
- * that would move it is either the user's own or an agent's — and an agent's
- * needs its own approval first, since `recipe.editor.open` and
- * `recipe.saveToRepo` are `danger: "safe"` but carry a `recipeId`, so
- * `resolveEffectiveActionDanger` raises them to `"confirm"` for agent sources.
- * Nothing here rests on a collision being hard to find, so a short non-crypto
- * hash is the right size: no async, no crypto import in the preview path, and
- * no recipe content retained on the approval record — a recipe is a plausible
- * home for a token, and a digest keeps values out of the object that travels.
+ * Drift detection: it answers "is this still the recipe the dialog rendered?",
+ * and the answer only ever withdraws authority. Non-crypto on purpose — no
+ * async and no crypto import in a path the modal's approve button waits on —
+ * but 64 bits rather than 32, because a 32-bit digest is collidable by hand.
+ * The editing that moves a recipe needs a human either way (an agent's
+ * `recipe.editor.open` and `recipe.saveToRepo` are `danger: "safe"` but carry a
+ * `recipeId`, so `resolveEffectiveActionDanger` raises them to `"confirm"`),
+ * yet a width someone could grind against while a dialog waits is a bad shape
+ * for an authority token whatever the surrounding gates are.
+ *
+ * A digest rather than the terminals themselves keeps recipe content off the
+ * record that travels: a recipe is a plausible home for a token, and the
+ * preview hides env VALUES precisely because a dialog is not where they belong.
  *
  * Digests the WHOLE terminal, not a hand-listed subset of launch-relevant
  * fields. A subset would silently stop covering any field added later, which is
@@ -38,19 +41,29 @@ export function recipeApprovalDigest(terminals: readonly RecipeTerminal[]): stri
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
+  const record: Record<string, unknown> = { ...value };
+  const entries = Object.entries(record)
     .filter(([, v]) => v !== undefined)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`);
   return `{${entries.join(",")}}`;
 }
 
-/** FNV-1a, 32-bit, as 8 hex characters. */
+/**
+ * FNV-1a as 16 hex characters.
+ *
+ * Two 32-bit lanes with different offset bases rather than true 64-bit FNV:
+ * JavaScript numbers cannot hold the 64-bit prime multiply without BigInt, and
+ * two independent lanes over the same input reach the width that matters here
+ * at the cost of one extra multiply per character.
+ */
 function fnv1a(input: string): string {
-  let hash = 0x811c9dc5;
+  let low = 0x811c9dc5;
+  let high = 0x01000193;
   for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
+    const code = input.charCodeAt(i);
+    low = Math.imul(low ^ code, 0x01000193);
+    high = Math.imul(high ^ code, 0x85ebca6b);
   }
-  return (hash >>> 0).toString(16).padStart(8, "0");
+  return (low >>> 0).toString(16).padStart(8, "0") + (high >>> 0).toString(16).padStart(8, "0");
 }
