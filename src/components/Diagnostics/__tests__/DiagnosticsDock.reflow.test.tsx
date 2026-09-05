@@ -6,6 +6,12 @@ import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useErrorStore } from "@/store";
 
 const signalMock = vi.hoisted(() => vi.fn());
+/**
+ * What the DOM looked like at the moment each signal fired. Asserting after
+ * `render()` returns would pass for an implementation that published during
+ * render — the whole point is that subscribers measure a committed box.
+ */
+const observations = vi.hoisted((): Array<{ present: boolean; height: string }> => []);
 
 vi.mock("@/lib/diagnosticsDockLayout", () => ({
   signalDiagnosticsDockLayoutChange: signalMock,
@@ -84,19 +90,16 @@ describe("DiagnosticsDock layout signal (issue #12264)", () => {
     // floor on mount — a real height change that would publish a second,
     // fixture-induced signal. Give the dock a plausible container so the clamp
     // is the no-op it is in the app.
-    rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-      x: 0,
-      y: 0,
-      top: 0,
-      left: 0,
-      right: 1000,
-      bottom: 1200,
-      width: 1000,
-      height: 1200,
-      toJSON: () => ({}),
-    } as DOMRect);
+    rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue(new DOMRect(0, 0, 1000, 1200));
     resetStores();
     signalMock.mockClear();
+    observations.length = 0;
+    signalMock.mockImplementation(() => {
+      const el = document.getElementById(DIAGNOSTICS_DOCK_REGION_ID);
+      observations.push({ present: el !== null, height: el?.style.height ?? "" });
+    });
   });
 
   afterEach(() => {
@@ -107,35 +110,39 @@ describe("DiagnosticsDock layout signal (issue #12264)", () => {
   it("publishes once the opened dock is in the DOM, not when the store flips", () => {
     // The mount IS the open: the dock is lazy-loaded behind a first-open gate,
     // so `isOpen` flips a frame or more before any dock DOM exists to measure.
-    const { container } = render(<DiagnosticsDock />);
+    render(<DiagnosticsDock />);
 
     expect(signalMock).toHaveBeenCalledTimes(1);
-    // Published from a layout effect, so the dock's box is already committed
-    // by the time a subscriber measures.
-    expect(container.querySelector(`#${DIAGNOSTICS_DOCK_REGION_ID}`)).not.toBeNull();
+    // Recorded inside the signal: a publish during render, or before the dock's
+    // height landed on the element, would not see this.
+    expect(observations).toEqual([{ present: true, height: "256px" }]);
   });
 
   it("publishes when the dock closes and gives the space back", () => {
-    const { container } = render(<DiagnosticsDock />);
+    render(<DiagnosticsDock />);
     signalMock.mockClear();
+    observations.length = 0;
 
     act(() => {
       useDiagnosticsStore.getState().closeDock();
     });
 
     expect(signalMock).toHaveBeenCalledTimes(1);
-    expect(container.querySelector(`#${DIAGNOSTICS_DOCK_REGION_ID}`)).toBeNull();
+    // The space is already returned when the grid is told to remeasure.
+    expect(observations).toEqual([{ present: false, height: "" }]);
   });
 
   it("publishes on a height change so a drag- or keyboard-resize reflows the grid", () => {
     render(<DiagnosticsDock />);
     signalMock.mockClear();
+    observations.length = 0;
 
     act(() => {
       useDiagnosticsStore.getState().setHeight(400);
     });
 
     expect(signalMock).toHaveBeenCalledTimes(1);
+    expect(observations).toEqual([{ present: true, height: "400px" }]);
   });
 
   it("stays quiet for a tab switch, which moves nothing", () => {

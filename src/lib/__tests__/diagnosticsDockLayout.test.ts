@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFile } from "fs/promises";
+import { resolve } from "path";
 
 const suppressMock = vi.hoisted(() => vi.fn());
 const getPanelStateMock = vi.hoisted(() => vi.fn());
@@ -23,8 +25,7 @@ vi.mock("@/store/worktreeStore", () => ({
 vi.mock("@/store/helpPanelStore", () => ({
   useHelpPanelStore: { getState: getHelpPanelStateMock },
   selectActiveSlot: (s: { terminalId: string | null }) => s,
-  selectSlotTerminalIds: (s: { terminalId: string | null }) =>
-    s.terminalId ? [s.terminalId] : [],
+  selectSlotTerminalIds: (s: { terminalId: string | null }) => (s.terminalId ? [s.terminalId] : []),
 }));
 
 import {
@@ -96,10 +97,14 @@ describe("diagnostics dock layout signal (issue #12264)", () => {
     expect(durationMs).toBe(DIAGNOSTICS_DOCK_TRANSITION_MS);
   });
 
-  it("keeps the transition window pegged to the dock's CSS height transition", () => {
-    // index.css `.diagnostics-dock { transition: height 200ms }` — a corrective
-    // pass shorter than the animation would measure a mid-transition box.
-    expect(DIAGNOSTICS_DOCK_TRANSITION_MS).toBe(200);
+  it("keeps the transition window pegged to the dock's CSS height transition", async () => {
+    // Read the duration out of the stylesheet rather than restating it: a
+    // corrective pass shorter than the animation measures a mid-transition box,
+    // and the two values drifting apart is exactly how that regresses.
+    const css = await readFile(resolve(__dirname, "../../index.css"), "utf-8");
+    const rule = /\.diagnostics-dock\s*\{[^}]*transition:\s*height\s+(\d+)ms/.exec(css);
+    expect(rule).not.toBeNull();
+    expect(Number(rule![1])).toBe(DIAGNOSTICS_DOCK_TRANSITION_MS);
   });
 
   it("isolates subscribers from each other's failures", () => {
@@ -116,13 +121,20 @@ describe("diagnostics dock layout signal (issue #12264)", () => {
 
   it("tolerates a subscriber unsubscribing during the notification pass", () => {
     const later = vi.fn();
-    let disposeLater: (() => void) | undefined;
-    subscribeDiagnosticsDockLayoutChange(() => disposeLater?.());
-    disposeLater = subscribeDiagnosticsDockLayoutChange(later);
+    // Held in a list so the earlier subscriber can dispose the later one it
+    // cannot yet name — the notify pass must survive the Set mutating under it.
+    const disposers: Array<() => void> = [];
+    subscribeDiagnosticsDockLayoutChange(() => {
+      for (const dispose of disposers) dispose();
+    });
+    disposers.push(subscribeDiagnosticsDockLayoutChange(later));
 
     expect(() => signalDiagnosticsDockLayoutChange()).not.toThrow();
-    // The snapshot means the already-queued listener still runs this pass, but
-    // it must be gone from the next one.
+    // Iterating a snapshot rather than the live Set is what keeps the
+    // already-queued listener running this pass; dropping that would make this
+    // assertion fail rather than merely change ordering.
+    expect(later).toHaveBeenCalledTimes(1);
+
     later.mockClear();
     signalDiagnosticsDockLayoutChange();
     expect(later).not.toHaveBeenCalled();
